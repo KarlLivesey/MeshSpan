@@ -56,6 +56,9 @@ administrator to operate a separate certificate system.
 MeshSpan is a clean-slate, pre-alpha project. No compatibility or stability guarantee applies
 before version 1.0.
 
+The draft requirements, architecture and implementation order are collected in the
+[design review pack](design/README.md). They are not locked until explicitly accepted.
+
 ## GPL-2.0-only
 
 MeshSpan is licensed under [`GPL-2.0-only`](LICENSE).

@@ -1,0 +1,130 @@
+# Identity and access design
+
+Status: **draft for review**.
+
+## Principals and groups
+
+Users and groups share a principal identity. Group membership points from a containing group to a
+member principal, so a member may be a user or another group. The graph rejects self-membership and
+cycles.
+
+A materialised closure records direct and transitive membership with path count and minimum depth.
+It makes access evaluation bounded and preserves diamond-shaped group graphs when one path is
+removed. Membership changes update the edge, affected closure and global identity revision in one
+transaction.
+
+Disabling a principal invalidates its sessions and removes it from effective access without
+destroying audit, ownership or historical references.
+
+## Multiple owners
+
+Ownership is a many-to-many relation:
+
+```text
+object_owners(object_id, owner_principal_id, assigned_by, assigned_at, revision)
+```
+
+- An object has one or more owner principals.
+- Each owner may be a user or group.
+- A user receives effective ownership through direct or transitive membership of an owning group.
+- Ownership is stable rather than time-limited. Temporary control uses a permission grant.
+- Removing the final active owner requires an atomic transfer.
+- Ownership changes are audited and increment the object's authorisation revision.
+
+Folders define a new-child ownership policy: `creator`, `inherit_owners`, or
+`creator_and_inherit_owners`. The proposed default is `creator_and_inherit_owners`.
+
+## Permission model
+
+Permissions are allow-only in the proposed initial model. Absence denies access. A folder may stop
+inheriting parent grants, avoiding complicated deny precedence.
+
+One grant names:
+
+```text
+subject principal
+volume and optional object scope
+rights bitset
+inheritance: object | descendants | object_and_descendants
+optional valid-from instant
+optional valid-until instant
+creator and revision
+```
+
+Rights are protocol-neutral:
+
+```text
+traverse, list, read_data, create_child, write_data, append_data,
+rename, delete, read_attributes, write_attributes,
+read_permissions, change_permissions, change_owner
+```
+
+The UI maps these to reviewed presets such as Read, Contribute, Edit, Manage and Owner. Presets are
+not stored as authority; their expanded rights are.
+
+## Access evaluation
+
+For an operation, authority:
+
+1. validates the session and required authentication assurance;
+2. verifies the user and contributing groups are active;
+3. reads the committed transitive group closure;
+4. collects direct and group grants on the volume, object and bounded ancestor chain;
+5. applies inheritance and authoritative time windows;
+6. adds rights from every effective owner principal;
+7. checks the exact requested right; and
+8. issues a bounded capability tied to identity, group, ACL, object and gateway revisions.
+
+A capability expires no later than its session or earliest contributing grant. A revision change
+invalidates it. A gateway cannot extend it using its local wall clock.
+
+## Authentication methods
+
+One user may enrol multiple independently revocable methods. The common record holds user, kind,
+label, state, service scope, creation, expiry and revision. Secret formats remain in typed tables:
+
+| Method | Stored material |
+| --- | --- |
+| Password | Argon2id verifier and parameters |
+| WebAuthn/passkey | credential ID, public key, counter and authenticator metadata |
+| TOTP | encrypted secret and algorithm parameters |
+| Recovery code | single-use digest and used instant |
+| API token | digest, scopes and expiry |
+| Client certificate | issuer, fingerprint and expiry |
+| SMB credential | encrypted verifier, service scope and generation |
+
+Raw passwords, tokens, recovery codes and session cookies are never stored.
+
+## Two-factor and step-up
+
+Authentication policy is scoped to service and operation class. It specifies allowed factor
+classes, minimum factor count, session lifetime and maximum age for privileged step-up.
+
+Administrative changes use recent strong authentication by default. Because ordinary SMB clients
+cannot perform an interactive second-factor exchange, the proposal is a separately revocable
+SMB-only credential created from a strongly authenticated web/admin session. It cannot administer
+the mesh.
+
+## Sessions and throttling
+
+Session authority stores only a token digest, user, factors satisfied, issue/expiry/revocation
+instants and identity revision. All gateways validate the same session state.
+
+Authentication attempt buckets are keyed conservatively by user claim, source and service. They
+are mesh-wide so changing gateways does not bypass throttling. Errors do not disclose whether a
+user or factor exists.
+
+## Tags
+
+Tag definitions are mesh records. Separate join tables attach tags to namespace objects or
+principals, covering files, folders, users and groups with valid foreign keys.
+
+Tags are descriptive and searchable only. Tag assignment does not grant access. If attribute-based
+access is later required, it receives a separate administrator-owned rule model so users who may
+tag content cannot escalate privileges.
+
+## Administration boundary
+
+The proposal separates system administration from silent data access. Administrators manage
+infrastructure and access rules but do not automatically receive file-read rights. Emergency data
+access is an explicit, strongly authenticated, time-bounded and audited operation.
