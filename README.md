@@ -63,4 +63,7 @@ The draft requirements, architecture and implementation order are collected in t
 
 ## GPL-2.0-only
 
-MeshSpan is licensed under [`GPL-2.0-only`](LICENSE).
+**Valid licence identifier: `GPL-2.0-only`.**
+
+MeshSpan is licensed exclusively under [`GPL-2.0-only`](LICENSE). No
+later-version option is offered.

@@ -575,6 +575,9 @@ Status: **draft for review**.
 - **REL-001** Commits and tags MUST be signed, and releases MUST publish checksums and provenance.
 - **REL-002** Development branches MUST be short-lived, merged promptly and deleted after merge.
 - **REL-003** The project MUST publish a container image and the accepted native platform artefacts.
+- **REL-004** Root licence text, every authored source header, Cargo/npm package metadata, generated
+  OpenAPI, OCI labels, release manifests and SBOMs MUST identify the project as exactly
+  `GPL-2.0-only` and MUST NOT offer a later-version alternative.
 
 ## Development system
 

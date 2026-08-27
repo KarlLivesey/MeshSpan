@@ -67,6 +67,9 @@ MeshSpan-API-Version: 1.0
 MeshSpan-API-Schema: sha256:...
 ```
 
+Every generated OpenAPI `info.license` identifies MeshSpan as exactly
+`GPL-2.0-only`; generated clients preserve the same source/header metadata.
+
 Build/release gates verify the signed manifest and all generated fixtures. The
 daemon performs only a cheap digest check over each embedded OpenAPI document;
 it does not load web-client fixtures at runtime.

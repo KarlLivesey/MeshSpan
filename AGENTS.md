@@ -74,6 +74,10 @@ decision explicitly.
 - Private identity keys are generated locally and never leave their node.
 - Secrets and credentials never appear in logs, diagnostics or protocol errors.
 - All project-authored licence references use exactly `GPL-2.0-only`.
+- Every authored source file uses the language-appropriate
+  `SPDX-License-Identifier: GPL-2.0-only` comment. Cargo, npm, OpenAPI, OCI,
+  release and SBOM metadata use exactly `GPL-2.0-only`; no later-version grant
+  is permitted.
 
 ## Repository shape
 
@@ -143,6 +147,8 @@ operations or storage paths through the private protocol.
   narrate syntax.
 - No new dependency without a concrete need, maintenance/legal review and a
   reason the standard library or current workspace cannot do the job cleanly.
+- Dependency and generated-code licences must be recorded and compatible with
+  distributing the complete MeshSpan artefacts as `GPL-2.0-only`.
 
 ## TypeScript and ESLint contract
 
