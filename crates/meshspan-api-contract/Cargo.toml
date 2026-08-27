@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-api-contract"
+description = "Authoritative public API schemas and boundary validation for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+jsonschema.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
+

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+/target/
+/node_modules/
+/.pnpm-store/
+/coverage/
+*.log
+.DS_Store
+
