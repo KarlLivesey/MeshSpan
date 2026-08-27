@@ -21,7 +21,8 @@ destroying audit, ownership or historical references.
 Ownership is a many-to-many relation:
 
 ```text
-object_owners(object_id, owner_principal_id, assigned_by, assigned_at, revision)
+object_revisions(..., owner_set_id, ...)
+object_owners(owner_set_id, owner_principal_id, assigned_by, assigned_at, revision)
 ```
 
 - An object has one or more owner principals.
@@ -30,6 +31,8 @@ object_owners(object_id, owner_principal_id, assigned_by, assigned_at, revision)
 - Ownership is stable rather than time-limited. Temporary control uses a permission grant.
 - Removing the final active owner requires an atomic transfer.
 - Ownership changes are audited and increment the object's authorisation revision.
+- Ownership changes create a new immutable owner set and object revision; old
+  namespace commits and snapshots retain the prior set.
 
 Folders define a new-child ownership policy: `creator`, `inherit_owners`, or
 `creator_and_inherit_owners`. The proposed default is `creator_and_inherit_owners`.
@@ -77,6 +80,14 @@ For an operation, authority:
 
 A capability expires no later than its session or earliest contributing grant. A revision change
 invalidates it. A gateway cannot extend it using its local wall clock.
+
+During an allowed isolation window, a gateway evaluates ordinary filesystem
+rights against one signed committed identity/group/ACL projection and records
+that exact revision plus its isolation delegation in the branch operation. It
+cannot change users, groups, owners, permissions or roles offline. Delegations
+allocate disjoint byte budgets per node/target and expire no later than the
+projection's isolation limit. Reconciliation applies current visibility rules
+without erasing content validly acknowledged under the recorded revision.
 
 ## Authentication methods
 

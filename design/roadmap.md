@@ -27,7 +27,8 @@ Deliverables:
 - accepted IAM, ownership and authentication rules;
 - explicit write/read/delete/repair/failure flows;
 - decisions for the first SMB profile, consensus implementation, protection
-  policy UI, performance gates and release platforms.
+  policy UI, eventual/strong acknowledgement presets, performance gates and
+  release platforms.
 
 Exit evidence:
 
@@ -48,6 +49,9 @@ Build:
 - one root task runner for format, lint, unit, conformance and integration lanes;
 - domain crates for typed IDs, revisions, outcomes, principals, topology,
   protection scenarios and lifecycle transitions;
+- versioned contracts and conformance harnesses for replaceable storage,
+  connectors, administration clients, persistence, consensus, coding, placement,
+  authentication, certificate and observability implementations;
 - deterministic clock/random/IO interfaces for tests;
 - Protobuf schema generation and compatibility fixture harness;
 - CI split by independent Rust, web, schema/protocol and integration lanes with
@@ -61,8 +65,8 @@ Exit evidence:
 - clean checkout can run the fast suite with one documented command;
 - suite duration is measured and budgeted before more tests accumulate.
 
-Requirements: SYS-002, SYS-004, SYS-006, PER-002, SCL-007, TST-001, REL-001,
-REL-002, DEV-001–006.
+Requirements: SYS-002, SYS-004, SYS-006, SYS-009, PER-002, SCL-007, TST-001, REL-001,
+REL-002, DEV-001–006, EXT-001–005.
 
 ## Stage 2 — authoritative metadata kernel
 
@@ -74,6 +78,8 @@ Build:
 - typed command/query repository boundaries;
 - atomic operation deduplication and committed-result receipts;
 - topology, IAM, namespace and lifecycle record invariants;
+- authoritative component instances, configuration revision history,
+  assignments and desired-versus-observed rollout state;
 - backup/snapshot representation at an exact state revision;
 - engine conformance harness, initially against SQLite and optionally Turso as a
   non-production compatibility lane.
@@ -92,7 +98,8 @@ Exit evidence:
 - migration, integrity, backup/restore and constraint vectors pass;
 - no request-path query is unbounded or lacks its intended index.
 
-Requirements: IAM-001–014, ACL-001–008, PER-001–005, SCL-002, SCL-003.
+Requirements: IAM-001–014, ACL-001–008, PER-001–005, SCL-002, SCL-003,
+CFG-001–008, EXT-002–004, EXT-007.
 
 ## Stage 3 — one-to-many cluster kernel
 
@@ -105,7 +112,11 @@ Build:
 - consensus, typed metadata command/query/status and snapshot streams;
 - one-node bootstrap, administrator join grants and headless enrolment;
 - one-, two- and three-voter operation using the same state model;
-- presence, incarnation fencing and safe membership transitions.
+- presence, incarnation fencing and safe membership transitions;
+- real partition IDs, signed routing epochs and an initial single-partition
+  deployment that can create and hand off a second namespace partition;
+- bounded branch-head comparison and immutable commit/object transfer messages,
+  before filesystem merge behaviour is added in Stage 5.
 
 First vertical proof:
 
@@ -114,14 +125,16 @@ First vertical proof:
 - commit metadata through any node via leader routing;
 - kill the leader, elect another, resolve a lost reply by operation ID and catch
   the old leader up after return.
+- move one test scope to a second metadata partition with no dual-writer window.
 
 Exit evidence:
 
-- deterministic multi-way partition tests prove only a majority commits;
+- deterministic multi-way partition tests prove only a majority advances the
+  converged/control head;
 - stale processes, replayed messages and corrupt snapshots fail closed;
 - control traffic remains responsive during a saturated synthetic data stream.
 
-Requirements: CLU-001–012, OPS-003, TST-003, SCL-005, SCL-006.
+Requirements: CLU-001–027, OPS-003, TST-003, SCL-005, SCL-006, SCL-010.
 
 ## Stage 4 — folder storage and safe shard lifecycle
 
@@ -160,6 +173,10 @@ Build:
 
 - protocol-neutral path resolution and canonical naming;
 - directories, files, immutable versions and staged random writes;
+- persistent CoW directory blocks, namespace commits and atomic volume heads;
+- durable per-partition local branch stores, causal multi-parent commits and
+  deterministic automatic reconciliation;
+- read-only snapshots, schedules/retention and restore-as-new-head;
 - authoritative opens, share modes, locks, rename, delete-on-close and flush;
 - complete permission evaluation over nested groups, multiple owners,
   inheritance and time windows;
@@ -170,7 +187,9 @@ First vertical proof:
 - two in-process adapters acting as different gateways execute conflicting and
   non-conflicting opens against the same files and users;
 - committed flush survives gateway loss and is visible through the other
-  adapter; uncommitted staged content is never visible.
+  adapter; uncommitted staged content is never visible;
+- two isolated nodes both write through the filesystem service, restart, heal
+  and automatically converge with every acknowledged version preserved.
 
 Exit evidence:
 
@@ -178,7 +197,8 @@ Exit evidence:
   right, inheritance shape, group graph and lost-response state;
 - no adapter requires SQL or provider-path knowledge.
 
-Requirements: FS-001–009, IAM-005–011, ACL-003–008, AUTH-006.
+Requirements: FS-001–013, COW-001–009, CON-001–015, IAM-005–011, ACL-003–008,
+AUTH-006.
 
 ## Stage 6 — usable HTTPS appliance slice
 
@@ -191,6 +211,8 @@ Build:
 - user file browser with upload/download/create/rename/delete;
 - administrator panels for users, groups, owners, grants, nodes, targets, fault
   groups, volumes and operation status;
+- a public administration API sufficient for the shipped panel, CLI and a
+  replacement panel without private daemon access;
 - asynchronous progress and safe retry for long operations.
 
 First vertical proof:
@@ -203,9 +225,13 @@ Exit evidence:
 
 - browser and API tests cover the complete flow, malicious inputs, inaccessible
   controls, session revocation and unknown operation outcomes;
-- ordinary healthy operation requires no manual shard or leader choices.
+- ordinary healthy operation requires no manual shard or leader choices;
+- a clean-machine usability test completes create/join, folder registration,
+  user/share creation and an HTTPS file round trip without exposing process
+  roles, consensus, shards or placement internals.
 
-Requirements: ACC-003–005, AUTH-001–009, OPS-001–006.
+Requirements: SIM-001–007, ACC-003–005, AUTH-001–009, OPS-001–016,
+API-001–005, EXT-006.
 
 ## Stage 7 — embedded SMB appliance slice
 
@@ -247,14 +273,22 @@ Build:
 - automatic layout selection from user failure promises and eligible capacity;
 - streaming erasure encode/decode behind a coding interface;
 - immutable stripe manifests and mixed layouts within a volume;
-- degraded verified reads.
+- degraded verified reads;
+- inherited per-scope locality policies, complete local decodable placements and
+  availability-first catch-up;
+- inheritable eventual/strong acknowledgement policies with simple presets and
+  per-zone `required_before_commit`, `eventual` and advanced `excluded` roles.
 
 First vertical proof:
 
 - create a volume promising survival of any two machine failures and any three
   backing-device failures;
+- require a complete locally protected copy of a folder in two availability
+  cells, with both required before one strong publication and a third cell set
+  to eventual;
 - upload through HTTPS and SMB, remove every modelled failure combination and
-  retrieve the exact bytes through both adapters.
+  sever the cell link, then retrieve the exact permitted versions through both
+  adapters.
 
 Exit evidence:
 
@@ -263,7 +297,8 @@ Exit evidence:
 - one-node layout is explicitly unprotected and upgrades data online as nodes
   and fault groups become available.
 
-Requirements: TOP-006–010, DAT-001–008, TST-005.
+Requirements: TOP-006–010, DAT-001–008, DAT-019, EC-001–008, LOC-001–011,
+ACK-001–010, TST-005.
 
 ## Stage 9 — autonomous healing, rebalance and drain
 
@@ -330,8 +365,15 @@ Required evidence:
 - real six-machine survival of two simultaneous machine failures;
 - real corruption, full-disk, partial-write, abrupt power-loss and network
   partition injection;
-- repeated node churn and multi-way partition/rejoin without conflicting
-  committed histories;
+- repeated cable, device and node churn plus multi-way partition/rejoin with
+  deterministic automatic branch convergence and no lost acknowledgement;
+- a two-node Home/Office mesh loses its link for one hour, accepts real HTTPS
+  and SMB eventual writes on both sides through restarts, then reconnects and
+  converges without an administrator or lost version;
+- a multi-cell campus scenario where one building loses its uplink, keeps its
+  owned scopes serving locally and catches remote replicas up automatically;
+- strong writes requiring two selected zones wait for exactly those zones while
+  other eventual zones do not hold acknowledgement;
 - real HTTPS and SMB full cycles for users, groups, permissions, volumes, files,
   failures, repair and deletion;
 - backup/restore plus supported upgrade/rollback from published artefacts;
@@ -348,6 +390,6 @@ Requirements: all non-deferred requirement IDs.
 
 After the first useful product is proven, separately designed extensions may
 include additional access adapters, direct-shard clients, disconnected
-multi-writer sites, more storage-provider implementations and native Windows
-hosting. None may bypass the filesystem, authority, lifecycle or access-control
-contracts established above.
+application-specific semantic merge handlers, more storage-provider
+implementations and native Windows hosting. None may bypass the filesystem,
+authority, lifecycle or access-control contracts established above.

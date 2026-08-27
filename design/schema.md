@@ -30,7 +30,7 @@ These exist independently on each voter and are never replicated by SQL.
 
 ```text
 raft_vote(
-  singleton PK, current_term, voted_for_node_id NULL, persisted_at
+  singleton PK, partition_id, current_term, voted_for_node_id NULL, persisted_at
 )
 
 raft_log(
@@ -42,7 +42,7 @@ raft_membership(
 )
 
 raft_snapshots(
-  snapshot_id PK, last_log_index, last_log_term, membership_payload,
+  snapshot_id PK, partition_id, last_log_index, last_log_term, membership_payload,
   schema_version, state_revision, byte_length, digest, local_path, state,
   created_at, installed_at NULL
 )
@@ -59,13 +59,15 @@ schema_migrations(
 )
 
 applied_state(
-  singleton PK, last_log_index, last_log_term, state_revision, schema_version
+  singleton PK, partition_id, last_log_index, last_log_term,
+  state_revision, schema_version
 )
 
 operations(
-  operation_id PK, actor_principal_id NULL -> principals,
+  operation_id PK, partition_id, actor_principal_id NULL -> principals,
   actor_node_id NULL -> nodes, operation_kind, request_version, request_digest,
-  outcome, started_at, completed_at NULL, committed_log_index NULL,
+  outcome, durability_scope NULL, started_at, completed_at NULL,
+  committed_log_index NULL,
   result_kind NULL, result_version NULL, result_payload NULL,
   error_kind NULL, revision
 )
@@ -81,6 +83,65 @@ audit_events(
 
 One applied command and its operation result/audit entries commit atomically.
 An operation ID may be replayed only with the same request digest.
+
+### Node-local branch kernel
+
+`branches/<partition-id>.sqlite3` is deliberately not the replicated
+state-machine database. It uses:
+
+```text
+local_branch_operations(
+  operation_id PK, partition_id, branch_id,
+  actor_principal_id, actor_session_id, identity_revision, acl_revision,
+  isolation_delegation_id, operation_kind, request_version, request_digest,
+  outcome, started_at, completed_at NULL, result_payload NULL,
+  UNIQUE(operation_id, request_digest)
+)
+
+local_branch_commits(
+  namespace_commit_id PK, partition_id, volume_id, branch_id,
+  root_object_revision_id, operation_id UNIQUE -> local_branch_operations,
+  origin_node_id, origin_cell_id NULL, causal_sequence,
+  created_at, canonical_payload, root_digest, commit_digest UNIQUE, state
+)
+
+local_branch_commit_parents(
+  namespace_commit_id -> local_branch_commits,
+  parent_commit_id, parent_order,
+  PK(namespace_commit_id, parent_commit_id),
+  UNIQUE(namespace_commit_id, parent_order)
+)
+
+local_branch_heads(
+  volume_id, branch_id, namespace_commit_id -> local_branch_commits,
+  durability_scope, head_revision, updated_at,
+  PK(volume_id, branch_id)
+)
+
+local_branch_objects(
+  namespace_commit_id -> local_branch_commits,
+  record_kind, record_id, canonical_payload, record_digest,
+  PK(namespace_commit_id, record_kind, record_id)
+)
+
+local_branch_receipts(
+  receipt_id PK, operation_id -> local_branch_operations,
+  namespace_commit_id -> local_branch_commits,
+  durability_scope, achieved_protection_digest, pending_debt_digest,
+  issued_at, receipt_digest UNIQUE
+)
+```
+
+External partition, volume, principal, session, node, cell, policy and delegation
+IDs in this database are signed/revision-bound references, not cross-database
+foreign keys. The branch transaction validates them against a cached authority
+projection and stores the evidence digest. Local foreign keys still protect all
+relationships inside this file.
+
+Reconciliation validates canonical payloads, imports the same stable commit and
+operation IDs through bounded typed consensus commands, then creates one merge
+commit. It never attaches the local database to the replicated database or
+writes authoritative rows outside the state machine.
 
 ## 4. Mesh, hosts and nodes
 
@@ -133,13 +194,119 @@ join_grants(
 `node_id` is a daemon identity. `host_id` is the physical machine identity.
 Multiple nodes on one host do not count as independent machine failures.
 
-## 5. Storage targets and local registration
+## 5. Metadata partitions and routing
+
+```text
+metadata_partitions(
+  partition_id PK, partition_kind, display_name, state,
+  routing_epoch, current_membership_revision,
+  created_at, retired_at NULL, revision
+)
+
+partition_scopes(
+  scope_kind, scope_id, partition_id -> metadata_partitions,
+  ownership_epoch, handoff_state, source_partition_id NULL,
+  destination_partition_id NULL, fence_log_index NULL, revision,
+  PK(scope_kind, scope_id)
+)
+
+partition_voters(
+  partition_id -> metadata_partitions, node_id -> nodes,
+  membership_revision, member_role, state, revision,
+  PK(partition_id, node_id)
+)
+
+partition_routes(
+  routing_epoch, scope_kind, scope_id,
+  partition_id -> metadata_partitions, ownership_epoch,
+  voter_endpoints_payload, route_digest,
+  PK(routing_epoch, scope_kind, scope_id)
+)
+
+partition_replica_watermarks(
+  partition_id -> metadata_partitions, node_id -> nodes,
+  last_log_index, snapshot_id NULL, observed_at,
+  PK(partition_id, node_id)
+)
+```
+
+Every authoritative database is opened for one `partition_id`; that partition
+identity is also stored in its applied-state/snapshot headers. Foreign references
+inside a partition cannot directly mutate a record owned by another partition.
+Cross-partition references carry stable IDs plus the validated source revision.
+
+`partition_routes` is a signed/cacheable catalogue projection. Only the
+catalogue partition changes scope ownership. Handoff state and fences ensure one
+partition has write authority at every point.
+
+## 6. Component instances and configuration
+
+```text
+component_instances(
+  instance_id PK, component_kind, display_name, canonical_name,
+  implementation_id, contract_major, contract_minor,
+  scope_kind, scope_id NULL, desired_state,
+  active_config_revision, created_by -> principals,
+  created_at, retired_at NULL, revision,
+  UNIQUE(component_kind, canonical_name, scope_kind, scope_id)
+)
+
+component_configurations(
+  instance_id -> component_instances, config_revision,
+  schema_version, canonical_config, config_digest,
+  secret_generation_id NULL, created_by -> principals,
+  created_at, state,
+  PK(instance_id, config_revision)
+)
+
+component_assignments(
+  instance_id -> component_instances, assignment_kind,
+  assignment_id, desired_state, revision,
+  PK(instance_id, assignment_kind, assignment_id)
+)
+
+node_component_support(
+  node_id -> nodes, incarnation, component_kind, implementation_id,
+  implementation_version, minimum_contract_minor, maximum_contract_minor,
+  capabilities, limits, observed_at,
+  PK(node_id, incarnation, component_kind, implementation_id)
+)
+
+component_observations(
+  instance_id -> component_instances, node_id -> nodes, node_incarnation,
+  desired_config_revision, observed_state, active_implementation_version NULL,
+  active_config_revision NULL, error_kind NULL, observed_at,
+  PK(instance_id, node_id, node_incarnation)
+)
+```
+
+`canonical_config` is a bounded, deterministic, schema-versioned component
+record. It is not executable code and contains no plaintext secret. Desired
+configuration is authoritative; support and observations describe node reality
+and never change desired state implicitly.
+
+Node-local `local.sqlite3` also contains:
+
+```text
+local_component_bindings(
+  instance_id, binding_kind, authoritative_config_revision,
+  local_binding_payload, state, updated_at,
+  PK(instance_id, binding_kind)
+)
+```
+
+Local payload holds only irreducibly local values such as a canonical folder
+path, listen socket or protected local key reference. It cannot define volumes,
+exports, users, permissions or protection policy.
+
+## 7. Storage targets and local registration
 
 Authoritative records:
 
 ```text
 storage_targets(
-  target_id PK, node_id -> nodes, host_id -> hosts, display_name,
+  target_id PK, node_id -> nodes, host_id -> hosts,
+  provider_instance_id -> component_instances, display_name,
   state, current_generation, capacity_class NULL, admitted_at,
   draining_at NULL, retired_at NULL, revision
 )
@@ -165,7 +332,8 @@ Node-local `local.sqlite3` records:
 local_node(singleton PK, mesh_id, node_id, incarnation, state_dir_version)
 
 local_targets(
-  target_id PK, generation, canonical_path UNIQUE, marker_fingerprint,
+  target_id PK, provider_instance_id, authoritative_config_revision,
+  generation, canonical_path UNIQUE, marker_fingerprint,
   filesystem_fingerprint NULL, backing_device_fingerprint NULL,
   state, registered_at, last_opened_at
 )
@@ -196,7 +364,7 @@ local_scrub_cursors(
 Only `local_targets` contains host paths. A target generation changes when path
 identity or target marker continuity cannot be proved.
 
-## 6. Fault groups and protection policies
+## 8. Fault groups, cells and placement policies
 
 ```text
 fault_group_classes(
@@ -219,6 +387,28 @@ target_fault_group_memberships(
   evidence_payload NULL, revision, PK(target_id, group_id)
 )
 
+availability_cells(
+  cell_id PK, display_name, canonical_name UNIQUE,
+  parent_cell_id NULL -> availability_cells,
+  state, created_by -> principals, revision
+)
+
+host_cell_memberships(
+  host_id -> hosts, cell_id -> availability_cells,
+  source_kind, revision, PK(host_id, cell_id)
+)
+
+target_cell_memberships(
+  target_id -> storage_targets, cell_id -> availability_cells,
+  source_kind, revision, PK(target_id, cell_id)
+)
+
+partition_cell_placements(
+  partition_id -> metadata_partitions, cell_id -> availability_cells,
+  placement_role, state, revision,
+  PK(partition_id, cell_id, placement_role)
+)
+
 protection_policies(
   policy_id PK, display_name, canonical_name UNIQUE, state,
   created_by -> principals, revision
@@ -234,12 +424,70 @@ protection_scenario_terms(
   class_id -> fault_group_classes, failure_count,
   UNIQUE(scenario_id, class_id)
 )
+
+locality_policies(
+  locality_policy_id PK, display_name, canonical_name UNIQUE,
+  maximum_lag_duration NULL, state, created_by -> principals, revision
+)
+
+locality_requirements(
+  requirement_id PK, locality_policy_id -> locality_policies,
+  cell_id -> availability_cells, requirement_kind,
+  local_protection_policy_id NULL -> protection_policies,
+  requirement_order,
+  UNIQUE(locality_policy_id, cell_id, requirement_kind)
+)
+
+object_locality_bindings(
+  binding_id PK, volume_id -> volumes,
+  object_id NULL -> namespace_objects,
+  locality_policy_id -> locality_policies,
+  inheritance_mode, state, assigned_by -> principals, revision
+)
+
+acknowledgement_policies(
+  acknowledgement_policy_id PK, display_name, canonical_name UNIQUE,
+  consistency_class, minimum_durable_targets, minimum_distinct_nodes,
+  strong_wait_duration NULL, fallback_mode,
+  state, created_by -> principals, revision
+)
+
+acknowledgement_policy_scenarios(
+  acknowledgement_policy_id -> acknowledgement_policies,
+  scenario_id -> protection_scenarios,
+  PK(acknowledgement_policy_id, scenario_id)
+)
+
+acknowledgement_zone_requirements(
+  acknowledgement_policy_id -> acknowledgement_policies,
+  cell_id -> availability_cells,
+  requirement_kind,
+  minimum_durable_targets NULL, minimum_distinct_nodes NULL,
+  local_protection_policy_id NULL -> protection_policies,
+  PK(acknowledgement_policy_id, cell_id)
+)
+
+object_acknowledgement_bindings(
+  binding_id PK, volume_id -> volumes,
+  object_id NULL -> namespace_objects,
+  acknowledgement_policy_id -> acknowledgement_policies,
+  inheritance_mode, state, assigned_by -> principals, revision
+)
+
+cell_availability_status(
+  object_id -> namespace_objects, version_id -> file_versions,
+  cell_id -> availability_cells, policy_revision,
+  placement_revision, status, complete_bytes, required_bytes,
+  latest_available_version_id NULL -> file_versions,
+  observed_at, revision,
+  PK(object_id, version_id, cell_id)
+)
 ```
 
 Terms within one scenario fail simultaneously. Separate scenarios are all
 required promises. Membership may overlap; evaluation removes the union.
 
-## 7. Principals and nested groups
+## 9. Principals and nested groups
 
 ```text
 principals(
@@ -274,7 +522,7 @@ Membership insertion first proves that the reverse closure does not exist.
 `path_count` preserves a transitive relationship until its final independent
 path is removed. A user may have any bounded number of direct group memberships.
 
-## 8. Authentication methods
+## 10. Authentication methods
 
 Common record:
 
@@ -332,7 +580,7 @@ smb_credentials(
 Secrets capable of direct authentication are digests or encrypted typed
 material, never plaintext.
 
-## 9. Authentication policy and sessions
+## 11. Authentication policy and sessions
 
 ```text
 authentication_policies(
@@ -358,13 +606,35 @@ authentication_attempts(
   bucket_digest, service_scope, window_started_at, attempt_count,
   blocked_until NULL, revision, PK(bucket_digest, service_scope)
 )
+
+isolation_delegations(
+  delegation_id PK, partition_id -> metadata_partitions,
+  node_id NULL -> nodes, cell_id NULL -> availability_cells,
+  scope_kind, scope_id, allowed_operation_classes,
+  identity_revision, acl_revision, delegation_epoch,
+  byte_budget, valid_from, valid_until, state,
+  issued_by -> principals, revision
+)
+
+isolation_delegation_target_scopes(
+  delegation_id -> isolation_delegations,
+  target_id -> storage_targets,
+  target_generation, allocated_byte_budget,
+  PK(delegation_id, target_id)
+)
+
+local_isolation_usage(
+  delegation_id, target_id, operation_id,
+  reserved_bytes, committed_bytes, state, updated_at,
+  PK(delegation_id, target_id, operation_id)
+)
 ```
 
 The bucket digest derives from conservative normalized claims and source data;
 it does not preserve raw credentials. Session factor count uses distinct factor
 classes where policy requires it.
 
-## 10. Roles and permission grants
+## 12. Roles and permission grants
 
 Roles grant administrative capabilities. Permission grants govern namespace
 objects. Neither silently implies the other.
@@ -385,55 +655,127 @@ permission_grants(
   grant_id PK, subject_principal_id -> principals,
   volume_id -> volumes, object_id NULL -> namespace_objects,
   rights_bitset, inheritance_mode, valid_from NULL, valid_until NULL,
-  granted_by -> principals, state, revision
+  granted_by -> principals, created_at, supersedes_grant_id NULL,
+  state, revision
+)
+
+permission_sets(
+  permission_set_id PK, set_digest UNIQUE, created_at
+)
+
+permission_set_members(
+  permission_set_id -> permission_sets,
+  grant_id -> permission_grants,
+  PK(permission_set_id, grant_id)
 )
 ```
 
 Initial permissions are allow-only. `object_id = NULL` means volume scope.
 Ending inheritance is an object policy, not a deny grant.
 
-## 11. Volumes and exports
+## 13. Volumes and exports
 
 ```text
 volumes(
   volume_id PK, display_name, canonical_name UNIQUE,
-  root_object_id UNIQUE, protection_policy_id -> protection_policies,
+  root_object_id UNIQUE,
+  current_namespace_commit_id UNIQUE,
+  protection_policy_id -> protection_policies,
+  default_locality_policy_id NULL -> locality_policies,
+  default_acknowledgement_policy_id -> acknowledgement_policies,
   state, quota_bytes NULL, new_child_owner_policy,
   stop_parent_grant_inheritance, revision
 )
 
 exports(
-  export_id PK, volume_id -> volumes, service_kind,
-  display_name, canonical_name, gateway_scope, state,
-  service_options, revision,
-  UNIQUE(service_kind, canonical_name, gateway_scope)
+  export_id PK, volume_id -> volumes,
+  connector_instance_id -> component_instances,
+  protocol_id, display_name, canonical_name,
+  gateway_scope, state, revision,
+  UNIQUE(protocol_id, canonical_name, gateway_scope)
 )
 ```
 
 `gateway_scope` supports all authorised gateways or an explicit gateway set
 without giving each gateway a different namespace truth.
 
-## 12. Namespace, ownership and tags
+## 14. Namespace, ownership and tags
 
 ```text
 namespace_objects(
-  object_id PK, volume_id -> volumes, object_kind, state,
-  current_version_id NULL, created_by -> principals, created_at,
-  authorisation_revision, metadata_revision, revision
+  object_id PK, volume_id -> volumes, object_kind,
+  created_by -> principals, created_at, retired_at NULL
+)
+
+namespace_commits(
+  namespace_commit_id PK, partition_id -> metadata_partitions,
+  volume_id -> volumes, branch_id,
+  root_object_revision_id, operation_id UNIQUE -> operations,
+  origin_node_id -> nodes, origin_cell_id NULL -> availability_cells,
+  identity_revision, causal_sequence, committed_log_index NULL,
+  created_by -> principals, created_at, root_digest, state
+)
+
+namespace_commit_parents(
+  namespace_commit_id -> namespace_commits,
+  parent_commit_id -> namespace_commits, parent_order,
+  PK(namespace_commit_id, parent_commit_id),
+  UNIQUE(namespace_commit_id, parent_order)
+)
+
+namespace_merge_inclusions(
+  merge_commit_id -> namespace_commits,
+  included_commit_id -> namespace_commits,
+  operation_id -> operations,
+  PK(merge_commit_id, included_commit_id),
+  UNIQUE(merge_commit_id, operation_id)
+)
+
+namespace_conflicts(
+  conflict_id PK, merge_commit_id -> namespace_commits,
+  object_id -> namespace_objects,
+  conflict_kind, winning_commit_id -> namespace_commits,
+  alternative_commit_id -> namespace_commits,
+  conflict_sibling_object_id NULL -> namespace_objects,
+  resolution_state, deterministic_digest UNIQUE
+)
+
+object_revisions(
+  object_revision_id PK, object_id -> namespace_objects,
+  parent_object_revision_id NULL -> object_revisions,
+  file_version_id NULL -> file_versions,
+  directory_root_block_id NULL -> directory_blocks,
+  owner_set_id -> owner_sets,
+  permission_set_id -> permission_sets,
+  tag_set_id -> tag_sets,
+  attribute_set_id -> attribute_sets,
+  display_metadata, created_by -> principals, created_at,
+  revision_digest UNIQUE
+)
+
+directory_blocks(
+  directory_block_id PK, format_version, tree_level,
+  entry_count, entries_digest, block_digest UNIQUE
 )
 
 directory_entries(
-  parent_object_id -> namespace_objects, canonical_name,
-  display_name, child_object_id UNIQUE -> namespace_objects,
-  created_at, revision,
-  PK(parent_object_id, canonical_name)
+  directory_block_id -> directory_blocks,
+  canonical_name, display_name,
+  child_object_id -> namespace_objects,
+  child_object_revision_id -> object_revisions,
+  entry_kind, entry_digest,
+  PK(directory_block_id, canonical_name)
+)
+
+owner_sets(
+  owner_set_id PK, set_digest UNIQUE, created_at
 )
 
 object_owners(
-  object_id -> namespace_objects,
+  owner_set_id -> owner_sets,
   owner_principal_id -> principals,
   assigned_by -> principals, assigned_at, revision,
-  PK(object_id, owner_principal_id)
+  PK(owner_set_id, owner_principal_id)
 )
 
 tags(
@@ -441,10 +783,14 @@ tags(
   description, colour NULL, state, revision
 )
 
+tag_sets(
+  tag_set_id PK, set_digest UNIQUE, created_at
+)
+
 object_tags(
-  object_id -> namespace_objects, tag_id -> tags,
+  tag_set_id -> tag_sets, tag_id -> tags,
   assigned_by -> principals, assigned_at,
-  PK(object_id, tag_id)
+  PK(tag_set_id, tag_id)
 )
 
 principal_tags(
@@ -452,12 +798,40 @@ principal_tags(
   assigned_by -> principals, assigned_at,
   PK(principal_id, tag_id)
 )
+
+attribute_sets(
+  attribute_set_id PK, set_digest UNIQUE, created_at
+)
+
+snapshots(
+  snapshot_id PK, volume_id -> volumes,
+  namespace_commit_id -> namespace_commits,
+  originating_branch_id NULL,
+  display_name, canonical_name, state,
+  locality_policy_id NULL -> locality_policies,
+  protected_from_expiry, created_by -> principals,
+  created_at, expires_at NULL, removed_at NULL, revision,
+  UNIQUE(volume_id, canonical_name)
+)
+
+snapshot_schedules(
+  schedule_id PK, volume_id -> volumes,
+  schedule_expression, retention_count NULL,
+  retention_duration NULL, locality_policy_id NULL -> locality_policies,
+  state, revision
+)
 ```
 
 An object must have at least one active effective owner at transaction end. The
 owner can be a user, a group or several of either. Tags confer no authority.
+The volume head points to one immutable globally converged namespace commit.
+Local branch heads live only in the local branch store and may coexist during an
+outage. Validated branch commits retain their IDs when imported. Ordinary
+commits have one parent; deterministic reconciliation commits have two or more.
+Directory blocks and object revisions reachable from any head, snapshot or
+unresolved branch remain immutable.
 
-## 13. File versions, streams and attributes
+## 15. File versions, streams and attributes
 
 ```text
 file_versions(
@@ -468,22 +842,23 @@ file_versions(
 )
 
 named_streams(
-  stream_id PK, object_id -> namespace_objects, canonical_name,
-  display_name, current_version_id NULL -> file_versions,
-  state, revision, UNIQUE(object_id, canonical_name)
+  stream_id PK, object_revision_id -> object_revisions, canonical_name,
+  display_name, file_version_id NULL -> file_versions,
+  state, UNIQUE(object_revision_id, canonical_name)
 )
 
 extended_attributes(
-  object_id -> namespace_objects, namespace, canonical_name,
-  value, value_digest, revision,
-  PK(object_id, namespace, canonical_name)
+  attribute_set_id, namespace, canonical_name,
+  value, value_digest,
+  PK(attribute_set_id, namespace, canonical_name)
 )
 ```
 
-The unnamed data stream uses the file object's current version. Attribute and
-stream names/values are bounded. Content versions are immutable after publish.
+The unnamed data stream is the file version selected by the reachable object
+revision. Attribute and stream names/values are bounded. Content and object
+revisions are immutable after publish.
 
-## 14. Handles, locks and write transactions
+## 16. Handles, locks and write transactions
 
 ```text
 open_handles(
@@ -504,16 +879,32 @@ write_transactions(
   write_id PK, operation_id UNIQUE -> operations,
   object_id -> namespace_objects, stream_id NULL -> named_streams,
   handle_id -> open_handles, base_version_id NULL -> file_versions,
-  expected_object_revision, logical_length, content_digest NULL,
+  expected_object_revision, acknowledgement_policy_id -> acknowledgement_policies,
+  acknowledgement_policy_revision, logical_length, content_digest NULL,
   state, started_at, expires_at, committed_version_id NULL -> file_versions,
   revision
+)
+
+write_acknowledgement_predicates(
+  write_id -> write_transactions, predicate_id,
+  predicate_kind, subject_id NULL, required_value, achieved_value,
+  evidence_digest NULL, state, updated_at,
+  PK(write_id, predicate_id)
+)
+
+write_receipts(
+  receipt_id PK, write_id -> write_transactions,
+  namespace_commit_id -> namespace_commits,
+  durability_scope, policy_committed,
+  achieved_protection_digest, pending_debt_digest,
+  issued_at, receipt_digest UNIQUE
 )
 ```
 
 Overlapping incompatible range locks are forbidden. Handles are fenced; expiry
 does not itself claim a write committed.
 
-## 15. Manifests, stripes and shards
+## 17. Manifests, stripes and shards
 
 ```text
 manifest_roots(
@@ -548,7 +939,7 @@ One stripe generation may temporarily have extra valid locations during repair,
 but a shard index and target pair is unique. Placement validation uses the full
 target/host fault-group membership snapshot recorded for the operation.
 
-## 16. Staging and capacity reservations
+## 18. Staging and capacity reservations
 
 ```text
 placement_reservations(
@@ -570,7 +961,7 @@ provisional_shards(
 A provisional receipt cannot become authoritative under a different write,
 target generation or content identity.
 
-## 17. Cleanup records
+## 19. Cleanup records
 
 ```text
 cleanup_intents(
@@ -598,7 +989,7 @@ cleanup_completions(
 The removal permit is derived from one current cleanup item and leader epoch. It
 is not a generic stored bearer token.
 
-## 18. Repair, scrub and drain
+## 20. Repair, scrub and drain
 
 ```text
 repair_jobs(
@@ -639,7 +1030,7 @@ drain_items(
 Claims are leases; jobs are durable truth. A late claim cannot complete against a
 newer generation or catalogue revision.
 
-## 19. Certificates and encrypted secrets
+## 21. Certificates and encrypted secrets
 
 ```text
 acme_configurations(
@@ -684,7 +1075,7 @@ secret_installations(
 Private keys exist in replicated metadata only inside recipient-specific
 authenticated ciphertext. A node can decrypt only its own envelope.
 
-## 20. Uploads and API work
+## 22. Uploads and API work
 
 ```text
 upload_sessions(
@@ -716,7 +1107,7 @@ Ranges may not overlap inconsistently and their combined coverage never exceeds
 the declared/allowed upload length. Progress is advisory; the operation outcome
 is authoritative.
 
-## 21. Events, notifications and projections
+## 23. Events, notifications and projections
 
 ```text
 domain_events(
@@ -743,7 +1134,7 @@ Projection cursors and metrics may be rebuilt from committed events and current
 state. Delivery retries are bounded and deduplicated; notification ciphertext is
 never included in event payloads.
 
-## 22. Capacity accounting
+## 24. Capacity accounting
 
 ```text
 capacity_accounts(
@@ -765,7 +1156,7 @@ Admission uses the ledger/account revision and observed target capacity. Quotas
 are thin limits, not preallocated bytes. Derived dashboard totals reconcile to
 the ledger and shard catalogue.
 
-## 23. Backup and recovery records
+## 25. Backup and recovery records
 
 ```text
 metadata_backups(
@@ -791,7 +1182,7 @@ recovery_epochs(
 Protected target copies do not vote and cannot appoint authority. Recovery
 material remains encrypted for the administrator-held recovery mechanism.
 
-## 24. Cross-record invariants
+## 26. Cross-record invariants
 
 The command layer and database constraints jointly enforce:
 
@@ -807,7 +1198,28 @@ The command layer and database constraints jointly enforce:
 10. disabled credentials/sessions cannot create new capabilities;
 11. secret envelopes target authorised current node keys; and
 12. no local observation directly creates authoritative membership, placement or
-    deletion state.
+    deletion state;
+13. every selected component implementation satisfies the instance contract and
+    configuration schema version;
+14. every node-local binding names an authoritative instance and configuration
+    revision; and
+15. component observations never overwrite desired configuration;
+16. every authoritative aggregate has exactly one owning metadata partition and
+    every scope handoff has at most one owner able to advance the converged head;
+17. every volume head and snapshot names a complete immutable namespace commit;
+18. every reachable object revision names immutable owner, permission, tag,
+    attribute and content/directory roots; and
+19. every `complete` cell status has a locally decodable verified placement for
+    the exact file version and locality policy revision;
+20. every namespace commit has a complete acyclic causal parent graph and every
+    local branch/converged volume head names a verified immutable commit;
+21. every merge inclusion preserves one stable operation identity exactly once;
+    and
+22. every policy-committed write has immutable evidence satisfying each
+    required acknowledgement predicate, while eventual and excluded zones do
+    not hold its barrier; and
+23. every isolated remote shard receipt is covered by one valid delegation,
+    exact target generation and non-overspent node-local allocation.
 
 Implementation must provide an offline invariant checker used by tests, backup
 verification and recovery tooling. It reports contradictions without attempting

@@ -12,6 +12,69 @@ Status: draft for review. These are semantic contracts, not final Rust traits.
 - Implementations may be replaced only if the same contract suite passes.
 - A boundary is not justified merely by reducing file length.
 
+## Replaceable-component model
+
+Major contracts are implemented through a common lifecycle without turning the
+daemon into an unrestricted plugin host:
+
+```text
+describe() -> implementation ID, contract versions, capabilities and limits
+validate(config version, canonical config) -> valid | bounded field errors
+prepare(instance, desired revision) -> ready | incompatible | failed
+activate(instance, desired revision) -> observed state
+drain(instance, deadline) -> drained | timed_out | failed
+retire(instance, desired revision) -> observed state
+```
+
+The implementation catalogue is compiled/installed code. Authoritative metadata
+selects an implementation and stores its desired configuration; it does not
+contain executable code. Nodes advertise installed support and report observed
+instance state. Authority decides whether enough compatible nodes exist before
+activation.
+
+Replaceability applies to these major boundaries:
+
+| Contract | Initial implementation | Replacement must preserve |
+| --- | --- | --- |
+| Storage provider | registered folder provider | exact shard identity, durable receipt, guarded removal and inventory semantics |
+| Access connector | embedded HTTPS and SMB | filesystem/IAM outcomes and acknowledgement rules |
+| Administration client | shipped Solid web panel | public administration API only |
+| Metadata repository | SQLite | transactions, migrations, snapshots and domain invariants |
+| Consensus engine | selected Raft engine | one converged control/head history, membership and read barriers |
+| Coding scheme | selected Reed–Solomon implementation | recorded layout, deterministic vectors and verified reconstruction |
+| Placement policy | fault-scenario planner | hard protection proof and revision-bound plans |
+| Authentication handler | password, WebAuthn, TOTP and others | typed secret handling, assurance and revocation |
+| Certificate challenge | HTTP-01 and DNS-01 handlers | fenced orders and secret isolation |
+| Notification/metrics output | built-in sinks | redaction, bounded delivery and no authority |
+
+Replacing an implementation is not permission to weaken the contract. If a
+candidate cannot express an existing record or safety guarantee, validation
+rejects the migration before activation.
+
+## Configuration authority
+
+```text
+propose(instance, expected revision, schema version, canonical config)
+  -> committed desired revision | rejected
+
+reconcile(instance, desired revision, node support and local binding)
+  -> pending | active | unsupported | failed
+
+observe(instance, node, desired revision, observed state)
+  -> bounded non-authoritative report
+```
+
+Configuration follows desired-versus-observed semantics. Consensus commits the
+desired record atomically; nodes apply it idempotently and report the exact
+revision they run. A committed desired setting is not falsely reported as active
+everywhere while some nodes are pending or incompatible.
+
+Node-local bindings contain only facts that cannot be portable, such as a folder
+path, listen address, private key or decrypted secret cache. Each binding names
+the authoritative component instance and desired revision. CLI flags and the
+shipped admin panel both submit normal domain operations; neither is a second
+configuration store.
+
 ## Domain command kernel
 
 **Owns:** validation and deterministic transitions of authoritative records.
@@ -34,13 +97,15 @@ command and prior state always produce the same transition.
 
 ```text
 execute(command, actor, operation_id, expected_revision)
-  -> committed | rejected | in_progress | unknown
+  -> policy_committed | globally_converged | rejected | in_progress | unknown
 
 query(typed_query, consistency, page)
   -> revision_bound_result
 
 operation_status(operation_id)
-  -> absent | in_progress | committed(result) | rejected(error) | aborted(error)
+  -> absent | branch_committed(receipt) | in_progress |
+     globally_converged(receipt) | policy_committed(receipt) |
+     rejected(error) | aborted(error)
 
 watch(after_revision, filters)
   -> ordered_events | snapshot_required
@@ -48,6 +113,10 @@ watch(after_revision, filters)
 
 It accepts typed commands only. It does not expose SQL, a generic KV API or a
 leader-specific client contract.
+
+Ordinary isolated filesystem operations use the branch repository/service, not
+an invented successful consensus response. Authority validates and includes
+their immutable commits later.
 
 ## Consensus engine
 
@@ -76,6 +145,24 @@ check_invariants() -> exact_findings
 
 SQLite and a future Turso implementation run the same repository contract. A
 repository transaction never waits on network or shard IO.
+
+## Branch repository and reconciler
+
+**Owns:** durable local filesystem branch heads, causal commit graphs and
+deterministic convergence proposals.
+
+```text
+commit_local(operation, authorised_revision, immutable_roots, local_receipts)
+  -> branch_committed(receipt)
+compare_heads(peer_frontier) -> missing_commit_ids
+validate_branch(commits, objects, bounds) -> eligible | exact_rejections
+merge(converged_head, eligible_heads) -> deterministic_merge_commit
+record_inclusion(merge_commit, converged_position) -> convergence_receipts
+```
+
+It cannot mutate identity, permissions, voters, routing, secrets or global
+configuration. It preserves every acknowledged operation and never uses wall
+clock or message arrival order to choose a winner.
 
 ## Storage provider
 
@@ -125,18 +212,23 @@ locations. Implementations require cross-platform vectors and corruption tests.
 policy at one committed topology/capacity revision.
 
 ```text
-plan_write(policy, topology_snapshot, capacity_snapshot, object_shape)
+plan_write(protection_policy, locality_policy, acknowledgement_policy, topology_snapshot,
+           capacity_snapshot, object_shape)
   -> feasible_plan | explicit_infeasibility
 
-plan_repair(manifest, failed_locations, topology_snapshot, capacity_snapshot)
+plan_repair(manifest, protection_policy, locality_policy, failed_locations,
+            topology_snapshot, capacity_snapshot)
   -> fenced_replacement_plan | explicit_infeasibility
 
 evaluate(policy, layout, topology_snapshot) -> proof
 ```
 
-Fault-group constraints are hard. Capacity, load and locality are weights only
-after safety. The plan contains its evidence revision so later commits can
-reject stale assumptions.
+Strong-barrier predicates are hard constraints for strong publication. An
+eventual write may accept the best safe reachable layout and create exact debt
+for missing desired protection/locality. Capacity, load and preferred locality
+are weights after the applicable acknowledgement constraints. The plan contains its
+topology, policy and capacity evidence revisions so later commits can reject
+stale assumptions.
 
 ## Identity and access service
 
@@ -167,12 +259,14 @@ create_file, create_directory, copy
 rename, move, unlink
 get/set attributes, owners, grants and tags
 lock/unlock byte ranges
+create/list/remove snapshot, restore snapshot scope
 ```
 
 Every operation takes an authenticated session/capability, volume/object or
 bounded path, expected revisions where needed and an operation ID for mutations.
-It returns protocol-neutral records and typed outcomes. It alone coordinates
-metadata, placement, coding and remote shard work for access adapters.
+It returns protocol-neutral records and typed outcomes including branch scope,
+acknowledgement evidence and debt. It alone coordinates metadata, branches,
+placement, coding and remote shard work for access adapters.
 
 ## Access adapter
 
@@ -189,6 +283,16 @@ health(export_id) -> protocol_neutral_health
 HTTPS and SMB are separate adapters using the same filesystem and identity
 services. An adapter cannot read SQL, provider folders or raw shards. Future NFS,
 WebDAV, SFTP and other adapters enter at this boundary.
+
+## Administration client
+
+**Owns:** presentation and orchestration of authorised public API operations.
+
+The shipped Solid panel, a CLI and a replacement third-party panel use the same
+versioned HTTPS API, schemas, authentication, operation status and event stream.
+An administration client may be omitted or replaced without changing daemon
+state. It cannot load SQL, call internal Rust traits or gain rights unavailable
+to its authenticated principal.
 
 ## Work coordinator
 

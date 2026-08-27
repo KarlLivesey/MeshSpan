@@ -29,7 +29,7 @@ rolls back bootstrap; it never exposes a half-created mesh or default password.
 
 **Actor:** an authenticated administrator, then an unenrolled daemon.
 
-**Authority:** metadata voter majority.
+**Authority:** the catalogue/identity partition voter majority.
 
 1. The administrator creates a grant with expiry, allowed roles, use count and
    optional host/fault-group constraints.
@@ -73,7 +73,8 @@ failure does not invalidate other paths in the same invocation.
 
 **Actor:** administrator.
 
-**Authority:** metadata majority and deterministic placement evaluator.
+**Authority:** the owning configuration/namespace partition and deterministic
+placement evaluator.
 
 1. Create named fault-group classes and instances such as building, room,
    circuit, PSU or switch.
@@ -92,7 +93,7 @@ and create repair/rebalance work.
 
 **Actor:** administrator, delegated manager or object owner as authorised.
 
-**Authority:** metadata majority.
+**Authority:** the owning identity or namespace partition.
 
 1. Create users and groups as principals.
 2. Add a user to many groups or a user/group to a containing group. The command
@@ -146,21 +147,26 @@ the same user and expose the same namespace concurrently.
 
 **Actor:** an HTTPS or SMB adapter acting for a session.
 
-**Authority:** common filesystem service backed by metadata majority.
+**Authority:** common filesystem service using the owning namespace partition
+when reachable and a constrained local CoW branch during isolation.
 
 1. `Open` resolves the canonical path, evaluates access, create disposition,
    share modes and delete state, and returns a fenced handle.
 2. Random writes update gateway-local staged content associated with a durable
    write transaction; they do not mutate a published version.
-3. `Flush` chunks/encodes content, places shards, collects durability receipts
-   and atomically publishes one immutable version as defined in
+3. `Flush` resolves the inherited acknowledgement policy, chunks/encodes
+   content, places shards, collects durability receipts and atomically publishes
+   one immutable version to the local branch. A strong policy then waits only
+   for its required zones/protection predicates and the converged ACID head
+   commit, as defined in [`consistency.md`](consistency.md) and
    [`data-lifecycle.md`](data-lifecycle.md).
 4. `Close` flushes if required, releases locks and resolves delete-on-close.
 
-The adapter maps `committed`, `rejected`, `in_progress` and indeterminate
-transport outcomes to protocol-correct responses. It never reports a lost reply
-as a successful save. A subsequent connection to any gateway reads the committed
-version.
+The adapter maps `branch_committed`, `policy_committed`, `rejected`,
+`in_progress` and indeterminate transport outcomes to protocol-correct
+responses. It never reports a lost reply or unmet strong barrier as a successful
+save. A gateway reads its newest authorised local branch; after reconciliation,
+every caught-up gateway reads the same converged version.
 
 ## 9. Read a file
 
@@ -187,29 +193,35 @@ remain; otherwise the caller receives an explicit availability error.
 
 1. The caller submits a stable operation ID and request digest.
 2. If the connection is lost, the local result is `unknown`.
-3. The caller asks `OperationStatus(operation_id)` from current authority.
-4. `committed` returns the original typed result; `rejected`/`aborted` returns the
-   durable terminal reason; `in_progress` is polled with bounded backoff.
+3. The caller asks `OperationStatus(operation_id)` locally and, when reachable,
+   from current authority.
+4. `branch_committed`, `globally_converged` or `policy_committed` returns the
+   original typed receipt at that stage; `rejected`/`aborted` returns the durable
+   terminal reason; `in_progress` is polled with bounded backoff.
 5. If no operation exists, the same ID and identical request may be retried.
 
 The same operation ID with a different digest is always rejected.
 
 ## 12. Majority loss and recovery
 
-- Any connected component with a voter majority elects at most one leader and
-  may continue authoritative mutations.
-- Every component without a majority refuses mutations. It may serve only reads
-  whose stated consistency and available verified data permit it; it never
-  reports a local uncommitted edit as saved.
-- If a five-way partition leaves no majority, all components stop authoritative
-  writes. This is required to avoid conflicting histories.
-- When connectivity returns, Raft selects the committed majority history. Stale
-  log tails are discarded, followers catch up or install a verified snapshot,
-  then shard inventories are reconciled and repaired.
+- For each metadata partition, any connected component with that partition's
+  voter majority elects at most one leader and may advance the converged head and
+  security-critical control state.
+- A component without that majority may durably commit authorised ordinary
+  filesystem operations to its local CoW branch when it has the required base
+  bytes and writable storage. Its response states `node_local` or
+  `cell_replicated`; it never claims global convergence or absent protection.
+- If a five-way split leaves no majority, no component advances the converged
+  head or control metadata, but every physically capable component may continue
+  its own filesystem branch. Unrelated partitions continue independently.
+- When connectivity returns, Raft restores one converged owner, branch summaries
+  and immutable objects are exchanged, and deterministic merge commits include
+  every valid operation. Repair then restores protection and locality debt.
 
-There is no conflict picker because ordinary partitioned components never create
-multiple committed histories. Deliberate disconnected multi-writer operation is
-a separate deferred design.
+No administrator picks an internal history. True concurrent content collisions
+become deterministic conflict siblings while every acknowledged version remains
+available. The exact rules are in
+[`disconnected-writes.md`](disconnected-writes.md).
 
 ## 13. Voter replacement
 
@@ -263,3 +275,89 @@ request per node behind the same address.
 5. Nodes rejoin with their own identities and reconcile target inventories.
 
 Copying an arbitrary live database file is not this flow.
+
+## 17. Replace or reconfigure a component
+
+1. An administrator or authorised automation submits the implementation ID,
+   contract/schema versions and canonical desired configuration through the
+   public API.
+2. Authority validates syntax, permissions, compatibility, secrets and required
+   node support, then commits a new desired revision and audit event.
+3. Assigned nodes prepare the instance using their local binding, activate that
+   exact revision idempotently and publish observed state.
+4. The UI/API reports desired and observed revisions separately until the
+   rollout reaches its declared availability condition.
+5. For a replacement, old and new compatible instances coexist while exports,
+   targets or work are moved through their ordinary drain/activation flows.
+6. Retirement occurs only after authoritative references are gone and safety is
+   proved. Rollback commits a new revision selecting the prior compatible value.
+
+Executable code is deployed and verified separately; metadata never executes a
+payload supplied as configuration. A replacement administration panel simply
+uses the same public API and needs no server-side migration.
+
+## 18. Continuous physical churn
+
+1. A link, node or target disappears during arbitrary foreground/background
+   work. The affected operation becomes typed failure, retryable or unknown; no
+   disconnect itself is success.
+2. Authority and storage availability are recomputed from reachable verified
+   facts. Operations that remain safe continue through other gateways/targets.
+3. Repair is queued according to actual protection risk and grace policy while
+   repeated presence events are coalesced.
+4. The resource returns with stable identity and a new process incarnation where
+   applicable. Stale streams, leases, work claims and configuration observations
+   remain fenced.
+5. Consensus catches up, provider journals resolve, inventories reconcile and
+   current shards/configuration are verified.
+6. Eligible services resume and redundant repair work is cancelled or completed
+   safely without administrator choices.
+
+Below the decode threshold, MeshSpan cannot read the affected existing bytes or
+perform a random modification that requires them. Without any writable durable
+medium it cannot acknowledge new bytes. Loss of quorum alone pauses converged
+head, strong-publication and control operations but does not pause eligible
+eventual branch work. Every limitation is reported exactly and clears
+automatically when resources return.
+
+## 19. Require a complete local copy
+
+1. An authorised principal attaches a locality policy to a volume, folder or
+   file, choosing inheritance, required cells, per-cell protection and commit
+   mode.
+2. The owning metadata partition resolves the effective policy against a fixed
+   namespace/policy revision and commits it as desired state.
+3. The placement planner proves current feasibility and creates bounded copy or
+   recoding work for every existing retained file version in scope.
+4. Workers create verified CoW placements in each cell. Per-version/cell status
+   advances independently from `pending` to `complete` or an exact degraded
+   state.
+5. New writes use the best currently reachable placement and return the exact
+   `node_local`, `cell_replicated` or `globally_converged` receipt scope. Missing
+   required cells become explicit locality/protection debt, not a network wait.
+6. During disconnection, gateways report their exact latest local branch and
+   its achieved protection. Reconnection transfers immutable versions,
+   reconciles branches and restores desired locality automatically.
+
+Policy removal drops the requirement only after an authorised commit. Existing
+bytes remain until the guarded reachability/cleanup lifecycle proves them
+unneeded by protection, another locality rule or a snapshot.
+
+## 20. Create, expire and restore a snapshot
+
+1. A manual request or committed schedule selects one exact current namespace
+   commit in the volume's owning partition.
+2. Authority creates a named snapshot root referencing that commit, captured
+   policy revision and requested retention/locality policy. No file bytes are
+   copied.
+3. The snapshot is immediately listable/read-only. Any additional locality work
+   has its own status and does not mutate the root.
+4. Expiry/removal drops the snapshot reference only after policy and open-handle
+   checks. Reachability and guarded cleanup run later.
+5. Whole-volume restore creates and validates a new namespace commit derived
+   from the snapshot, then atomically advances the current volume head.
+6. File/folder restore path-copies selected historical objects into a new current
+   namespace commit while reusing immutable content.
+
+Restore never rewinds consensus or erases the snapshot/intervening commit
+history.

@@ -8,18 +8,25 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 ## Review order
 
 1. [requirements.md](requirements.md) — normative, testable product and system requirements.
-2. [domain-model.md](domain-model.md) — system concepts and ownership boundaries.
-3. [interfaces.md](interfaces.md) — internal contracts and permitted dependency directions.
-4. [identity-access.md](identity-access.md) — users, groups, authentication, permissions, owners and tags.
-5. [security.md](security.md) — trust boundaries, threats, keys, capabilities and recovery controls.
-6. [metadata.md](metadata.md) — persistence engines and transaction boundaries.
-7. [schema.md](schema.md) — logical records, fields, relations and invariants.
-8. [data-lifecycle.md](data-lifecycle.md) — write, read, deletion, repair and drain state machines.
-9. [protocol.md](protocol.md) — private node protocol over Quinn.
-10. [flows.md](flows.md) — complete create, join, access and failure operation sequences.
-11. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
-12. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
-13. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
+2. [appliance-experience.md](appliance-experience.md) — the simplicity budget and forbidden operator complexity.
+3. [domain-model.md](domain-model.md) — system concepts and ownership boundaries.
+4. [interfaces.md](interfaces.md) — internal contracts and permitted dependency directions.
+5. [identity-access.md](identity-access.md) — users, groups, authentication, permissions, owners and tags.
+6. [security.md](security.md) — trust boundaries, threats, keys, capabilities and recovery controls.
+7. [metadata.md](metadata.md) — persistence engines and transaction boundaries.
+8. [schema.md](schema.md) — logical records, fields, relations and invariants.
+9. [erasure-coding.md](erasure-coding.md) — data/recovery slices and failure-policy proof.
+10. [locality.md](locality.md) — complete local copies, regional availability and placement policy.
+11. [copy-on-write.md](copy-on-write.md) — immutable state roots, snapshots, restore and reclamation.
+12. [disconnected-writes.md](disconnected-writes.md) — availability-first local commits and reconciliation.
+13. [consistency.md](consistency.md) — eventual writes and declarative strong acknowledgement barriers.
+14. [scaling.md](scaling.md) — campus-scale availability cells and metadata partitioning.
+15. [data-lifecycle.md](data-lifecycle.md) — write, read, deletion, repair and drain state machines.
+16. [protocol.md](protocol.md) — private node protocol over Quinn.
+17. [flows.md](flows.md) — complete create, join, access and failure operation sequences.
+18. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
+19. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
+20. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
 
 ## Document rules
 

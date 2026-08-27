@@ -129,8 +129,29 @@ converted at the adapter boundary; they do not weaken canonical permissions.
 - Per-peer failures cannot create unbounded retry loops, log volume or durable
   work duplication.
 - Repair reserve protects the ability to restore existing promises.
-- A majority partition preserves one authoritative history; components without
-  authority cannot spend capacity on acknowledged writes.
+- A majority partition preserves one converged control history. An isolated node
+  may spend its authorised quota and local capacity on ordinary filesystem
+  branch commits, but cannot claim remote durability or mutate identity,
+  permissions, voters, secrets, executable selection or global policy.
+- Offline authorisation uses a signed committed identity/configuration revision,
+  a bounded isolation policy and the actor/session recorded in every branch
+  commit. Reconciliation rejects unauthorised control effects without deleting
+  acknowledged file content.
+- Authority may pre-allocate an isolation delegation to a node/cell. It binds
+  namespace scopes, permitted ordinary operations, identity/ACL revision,
+  target/cell set, per-node byte budget, validity interval and delegation epoch.
+  Each node receives a disjoint budget and records consumption durably, avoiding
+  an offline global counter that could be overspent independently.
+- A storage target accepts an isolated peer write only with an exact
+  operation/shard/target capability derived from such a delegation. The target
+  verifies the signed delegation, mTLS identity, local durable remaining budget,
+  expiry and target generation before writing. Local same-daemon writes still
+  pass the identical branch-policy and quota checks.
+- Revocation cannot cross a severed link instantly. Policy therefore bounds the
+  maximum isolation interval and privileged operations always require live
+  authority. Reconnection applies current access rules to visibility while
+  preserving content that was validly acknowledged under its recorded
+  delegation.
 
 ## Secrets, logs and diagnostics
 
@@ -148,6 +169,23 @@ operation they describe where correctness requires it.
   integration gates before merge.
 - Release commits/tags are signed and artefacts publish checksums and provenance.
 - Runtime updates do not execute arbitrary hooks from mesh metadata.
+
+## Component configuration
+
+- Replicated metadata may select installed implementation IDs and carry bounded,
+  schema-versioned configuration; it never carries executable code or loader
+  paths.
+- Component configuration is hostile input even when submitted by an
+  administrator. Deterministic validation occurs before commit and node-local
+  validation occurs before activation.
+- Secret fields are references or encrypted generations, not plaintext embedded
+  in generic configuration.
+- Local bindings cannot override mesh-level authority and cannot make a component
+  active under a different desired revision.
+- A replacement administration panel has exactly the public API rights of its
+  authenticated principal and no implicit trust from being served by the daemon.
+- Component support/health reports are observations and cannot self-authorise
+  installation, assignment or configuration changes.
 
 ## Recovery and break-glass
 

@@ -12,9 +12,13 @@ Mesh
 │       ├── Voter capability
 │       └── Storage target (registered folder)
 ├── Fault groups (overlapping sets of hosts or targets)
+├── Availability cells (local service/quorum placement domains)
+├── Metadata partitions (single-authority record scopes)
 ├── Principals (users and groups)
 ├── Volumes
-│   └── Namespace objects (folders and files)
+│   ├── Current immutable namespace commit
+│   ├── Snapshot roots
+│   └── Namespace objects (stable identities with immutable revisions)
 │       └── Immutable file versions
 │           └── Stripes
 │               └── Shard generations and locations
@@ -31,22 +35,67 @@ All externally meaningful entities use application-generated 128-bit identifiers
 numbers and paths are never identities. IDs are validated by domain type and cannot be reused after
 retirement.
 
-Every mutable aggregate has an unsigned revision. Commands that can race supply the expected
-revision; mismatches fail rather than merge implicitly.
+Every mutable control aggregate has an unsigned revision. Commands that can race supply the
+expected revision; mismatches fail rather than merge implicitly. Filesystem CoW operations instead
+name causal base commits; concurrent outage branches reconcile through the explicit merge contract.
 
 ## State ownership
 
 | State | Authority | Durable location |
 | --- | --- | --- |
-| Consensus vote, log and snapshot progress | one voter locally, replicated by Raft | voter consensus store |
-| Mesh, identity, namespace and catalogues | committed metadata state machine | every voter metadata store |
+| Consensus vote, log and snapshot progress | one partition voter locally, replicated by that Raft group | partition voter consensus store |
+| Mesh, identity, namespace and catalogues | owning committed metadata partition | voters of that metadata partition |
+| Filesystem outage branch commits, receipts and debt | originating node/cell until inclusion | per-partition local branch store and referenced storage targets |
+| Component selections, desired configuration and revision history | owning committed metadata partition | voters of that metadata partition |
 | Node private identity and decryption keys | owning node only | daemon state directory |
-| Storage path and provider recovery journal | owning node only | daemon state and registered folder |
+| Storage path, socket binding and provider recovery journal | owning node only | daemon state and registered folder |
 | Immutable shard bytes and provider tombstones | owning storage target | registered folder |
 | Connection, heartbeat and latency observations | observing process | memory or bounded node-local state |
 | Staging bytes | write-owning gateway/storage nodes | node-local staging journal until resolved |
 
 Derived caches are disposable. They never become the only copy of an acknowledged fact.
+
+## Availability cells and metadata partitions
+
+An availability cell is a placement domain intended to keep useful work local
+during a wider network outage, for example one university building. It does not
+replace fault groups: a building may contain several rooms, circuits and hosts,
+and a host may participate in services for several cells.
+
+A metadata partition owns one converged Raft head and its control records. Every
+mutable aggregate has one owning partition ID. Small meshes start with one partition;
+larger meshes may place volume/subtree partitions with voter majorities inside
+their availability cells while a separate catalogue/identity configuration
+partition changes less frequently.
+
+A signed routing revision maps scope IDs to partition IDs and voter endpoints.
+Gateways cache it and contact an available local partition when possible. If no
+majority is reachable, ordinary authorised filesystem mutations may still
+publish immutable local branch commits. They do not change partition routing,
+identity, permissions or the converged head. A partition move uses a fenced CoW
+handoff; two partitions never own the converged head for the same scope.
+
+On reconnection, the owner validates and deterministically merges every eligible
+branch. Independent operations commute; incompatible same-object edits preserve
+all acknowledged versions under deterministic conflict rules. This gives both
+sides useful offline work without inventing two control-plane authorities.
+
+## Replaceable components
+
+A component implementation is code that satisfies one versioned internal
+contract. A component instance is authoritative metadata selecting an
+implementation plus validated configuration for a scope. A node binding is the
+local path, socket, private key or other machine-specific material used to realise
+that instance.
+
+```text
+contract -> implementation -> configured instance -> node binding/observation
+```
+
+These identities are separate. Changing the administration panel does not
+change mesh records. Changing an access connector does not change a volume or
+filesystem manifest. Changing a storage provider does not change namespace
+semantics or make its local locator authoritative.
 
 ## Fault model
 
@@ -70,22 +119,38 @@ scenario.
 
 ## Namespace and content
 
-A namespace object is a stable folder or file identity. Directory entries bind a parent and
-canonical name to an object. Initial MeshSpan permits one parent per object; the separation leaves a
-deliberate future boundary for hard links without implying they already work.
+A namespace object is a stable folder or file identity. An immutable object
+revision contains its metadata plus a file-version or directory-block root. An
+immutable namespace commit binds one root object revision and one or more causal
+parents. A branch head selects a locally current commit; the volume head selects
+the current globally converged commit.
+
+Directory blocks bind canonical names to child object revisions. Updating a path
+creates new blocks and object revisions only along that path. Initial MeshSpan
+permits one parent per live object identity; the separation leaves a deliberate
+future boundary for hard links without implying they already work.
 
 A file version is immutable and contains logical length, content digest and a protected manifest
-root. Publishing atomically changes the file object's current version. Rename, tags, owners and
-permissions change object metadata without creating a content version.
+root. Publishing creates a new object revision and namespace commit. Rename,
+tags, owners and permissions similarly create metadata revisions without
+rewriting file content.
+
+A user snapshot pins a namespace commit. A metadata backup packages replicated
+authority for disaster recovery. A Raft snapshot compacts consensus history.
+They share immutable techniques but are not interchangeable authorities.
 
 ## Authority and receipts
 
-Every mutation has an operation ID stable across retries. A committed receipt contains the
-operation ID and committed Raft position. A wire request ID identifies only one attempt.
+Every mutation has an operation ID stable across retries. A receipt contains the
+operation ID, durability/consistency scope and supporting evidence. A converged
+receipt also contains its committed Raft position. A wire request ID identifies
+only one attempt.
 
 Outcomes are:
 
-- `committed`: the typed result is authoritative;
+- `branch_committed`: filesystem result is durable at its exact local/cell scope;
+- `globally_converged`: the owning partition head includes the operation;
+- `policy_committed`: every declared strong acknowledgement predicate is met;
 - `rejected`: no authoritative mutation occurred;
 - `unknown`: the caller must query by operation ID;
 - `staged`: private recoverable bytes exist, but no published file is claimed.

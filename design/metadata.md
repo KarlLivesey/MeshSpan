@@ -11,13 +11,18 @@ suite. Neither engine appears in the private node protocol.
 The proposed local files are:
 
 ```text
-<daemon-state-dir>/consensus.sqlite3  # voter-local vote, log and snapshot metadata
-<daemon-state-dir>/metadata.sqlite3   # replicated authoritative state machine
-<daemon-state-dir>/local.sqlite3      # node-local registration and recovery state
+<daemon-state-dir>/partitions/<partition-id>/consensus.sqlite3
+<daemon-state-dir>/partitions/<partition-id>/metadata.sqlite3
+<daemon-state-dir>/branches/<partition-id>.sqlite3
+<daemon-state-dir>/local.sqlite3
 ```
 
-Storage-only nodes omit the first two unless promoted. Registered folders contain provider records
-and immutable shards, never the authoritative metadata database.
+A node stores the first two files only for metadata partitions it votes for or
+replicates. A node stores a branch database for each partition whose filesystem
+scope it serves while disconnected; those durable commits are later included by
+the partition owner and cannot contain control-plane mutations. Small meshes
+still use a real partition ID. Registered folders contain provider records and
+immutable shards, never a metadata database.
 
 ## SQL rules
 
@@ -52,6 +57,9 @@ applied_state(singleton, log_index, term, state_revision)
 operations(operation_id, actor_id, kind, request_digest, outcome,
            committed_log_index, result_type, result_version, result_payload)
 meshes(mesh_id, display_name, created_at, configuration_revision)
+metadata_partitions(partition_id, kind, state, routing_epoch)
+partition_scopes(partition_id, scope_kind, scope_id, handoff_state)
+partition_voters(partition_id, node_id, membership_revision)
 audit_events(event_id, operation_id, actor_id, kind, subject_id,
              occurred_at, redacted_payload)
 ```
@@ -59,6 +67,14 @@ audit_events(event_id, operation_id, actor_id, kind, subject_id,
 Applying one command updates its domain records, operation result, audit events and `applied_state`
 in one transaction. Replay with the same request digest returns the stored typed result; a different
 digest under the same operation ID is rejected.
+
+The branch store has separate `local_branch_*` tables and applies the same
+crash-safe transaction rule to one immutable namespace commit, its operation
+outcome, local durability evidence, debt and branch-head advance. It does not
+allocate a fake Raft log index or write the replicated `namespace_*` tables.
+Reconciliation copies validated canonical records into the owning state machine
+through bounded typed commands; it never attaches or writes a peer database
+directly.
 
 ## Topology and fault tables
 
@@ -73,6 +89,13 @@ join_grants
 storage_targets
 target_generations
 target_observations
+component_instances
+component_configurations
+component_assignments
+node_component_support
+component_observations
+availability_cells
+availability_cell_memberships
 fault_group_classes
 fault_groups
 host_fault_group_memberships
@@ -80,10 +103,22 @@ target_fault_group_memberships
 protection_policies
 protection_scenarios
 protection_scenario_terms
+locality_policies
+locality_requirements
+object_locality_bindings
+cell_availability_status
+acknowledgement_policies
+acknowledgement_policy_scenarios
+acknowledgement_zone_requirements
+object_acknowledgement_bindings
 ```
 
 Join secrets are stored as digests. Target paths remain in `local.sqlite3`; authoritative target
 records use stable IDs and redacted display information.
+
+Component configuration is replicated desired state. Installed implementation
+support and active revisions are observations. Executable code and irreducibly
+local bindings such as folder paths remain outside authoritative metadata.
 
 ## Identity and access tables
 
@@ -105,6 +140,8 @@ authentication_policies
 authentication_sessions
 session_factors
 authentication_attempts
+isolation_delegations
+isolation_delegation_target_scopes
 roles
 role_grants
 permission_grants
@@ -113,30 +150,58 @@ permission_grants
 Subtype rows share the authentication method's primary key. Constraints ensure exactly the
 permitted subtype for each method kind. Credential ciphertext carries key generation and algorithm.
 
+`local_isolation_usage` lives in `local.sqlite3`. It consumes the disjoint
+allocation issued by replicated `isolation_delegations`; it is not a second
+mesh-wide quota authority.
+
 ## Namespace and tag tables
 
 ```text
 volumes
 namespace_objects
+namespace_commits
+namespace_commit_parents
+namespace_merge_inclusions
+namespace_conflicts
+object_revisions
+directory_blocks
 directory_entries
+owner_sets
 object_owners
+permission_sets
+permission_set_members
 file_versions
+attribute_sets
 extended_attributes
 named_streams
 tags
+tag_sets
 object_tags
 principal_tags
+snapshots
+snapshot_schedules
 exports
 open_handles
 range_locks
 write_transactions
+write_acknowledgement_predicates
+write_receipts
 upload_sessions
 upload_ranges
 ```
 
-`directory_entries(parent_id, canonical_name)` is unique. Initial mode also makes `child_id`
-unique, enforcing one parent. File publication updates `namespace_objects.current_version_id` only
-after its content catalogue is valid.
+The node-local branch database contains `local_branch_operations`,
+`local_branch_commits`, `local_branch_commit_parents`, `local_branch_heads`,
+`local_branch_objects` and `local_branch_receipts`. References to replicated
+IDs carry signed projection evidence because SQLite cannot enforce foreign keys
+across the two files.
+
+Directory blocks and object revisions are immutable and digest-bound. The
+logical directory tree rejects duplicate canonical names and multiple live
+parents. File publication builds a complete new manifest/object path and
+advances a local branch head only after its content catalogue is valid;
+reconciliation later advances the volume's converged head through its owner.
+Snapshots pin namespace commits without copying file bytes.
 
 ## Data and lifecycle tables
 
@@ -196,9 +261,13 @@ backup copies cannot vote or create a new authority by themselves.
 | Transaction | Atomic result |
 | --- | --- |
 | Group edge change | edge, cycle validation, affected closure, identity revision and audit |
-| Ownership transfer | add/remove owners, prevent ownerless object, ACL revision and audit |
+| Ownership transfer | new owner/policy/object revisions, prevent ownerless object, namespace head and audit |
 | Open | target resolution/create reservation, sharing conflict check, handle/fence and receipt |
-| File publish | verified manifest/catalogue, immutable version, current-version swap and receipt |
+| Local file publish | verified manifest/catalogue, immutable file/object/path revisions, branch-head swap, receipt and debt |
+| Converged/strong publish | validated branch inclusions, merge root, converged-head swap, predicate evidence and receipts |
+| Snapshot create | exact namespace-commit root, retention/locality policy and audit |
+| Component configuration | immutable desired revision, instance head, assignments and audit |
+| Scope handoff | frozen source fence and exactly one destination ownership epoch |
 | Abort write | transaction resolution plus bounded provisional cleanup intents |
 | Shard retirement | irreversible cleanup item before any removal permit can exist |
 | Repair completion | generation compare-and-swap, new location publication and old cleanup item |

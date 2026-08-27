@@ -24,6 +24,8 @@ Every request carries, directly or through connection context:
 | --- | --- |
 | `protocol_major`, `protocol_minor` | Compatibility negotiation |
 | `mesh_id` | Prevent cross-mesh requests |
+| `partition_id` | Selects the one metadata/consensus authority for the operation |
+| `routing_epoch` | Detects stale scope-to-partition routing |
 | `sender_node_id` | Must match the mTLS identity |
 | `sender_incarnation` | Fences a restarted or replaced process |
 | `request_id` | Correlates one exchange |
@@ -38,7 +40,12 @@ placed in this envelope.
 
 Every completed request has one of:
 
-- `committed`: the named mutation is durably authoritative;
+- `branch_committed`: the named filesystem mutation is durable at the returned
+  `node_local` or `cell_replicated` scope;
+- `policy_committed`: every configured acknowledgement predicate is proved and
+  the converged head includes the mutation;
+- `globally_converged`: a prior branch operation is now included in the
+  converged head but may still carry declared eventual placement debt;
 - `rejected`: no matching mutation committed;
 - `in_progress`: query again by operation ID;
 - `redirect`: contact the identified leader/authority and term;
@@ -53,8 +60,8 @@ human-readable text is not parsed.
 
 | Message | Essential fields | Result |
 | --- | --- | --- |
-| `NodeHello` | versions, mesh/node/incarnation, roles, feature bits, limits | Authenticates and negotiates |
-| `NodeWelcome` | selected version, peer identity, term/leader hint, limits | Opens normal streams |
+| `NodeHello` | versions, mesh/node/incarnation, roles, component implementations, feature bits, limits | Authenticates and negotiates |
+| `NodeWelcome` | selected version, peer identity, partition route/leader hints, limits | Opens normal streams |
 | `Ping` / `Pong` | nonce, monotonic timings | Liveness and latency sample |
 | `GoAway` | reason, retry hint | Graceful connection retirement |
 | `ProtocolError` | stable code, offending request | Closes invalid traffic safely |
@@ -64,8 +71,9 @@ both peers' advertised safe bounds.
 
 ## 5. Consensus messages
 
-The consensus library owns its algorithm-specific payloads, but the wire
-contract has only these families:
+The consensus library owns its algorithm-specific payloads. Each consensus
+stream is bound to one partition ID; terms and log indices are meaningful only
+inside that partition. The wire contract has only these families:
 
 - `VoteRequest` / `VoteResponse`;
 - `AppendRequest` / `AppendResponse`; and
@@ -81,12 +89,15 @@ bypass consensus by writing a peer database directly.
 operation or an arbitrary serialized function. Initial command families are:
 
 - mesh settings and feature activation;
+- component instance, desired configuration, assignment, activation and
+  retirement changes;
 - join grants, node admission, role and voter-set transitions;
 - host, node, target, fault-group and membership changes;
-- volume, failure-policy and placement-policy changes;
+- availability-cell, metadata-partition route and fenced scope-handoff changes;
+- volume, failure-policy, locality-policy and placement-policy changes;
 - principal, group membership, owner, grant, authentication-method and session
   changes;
-- namespace, object-version, manifest and open-handle changes;
+- namespace commit, object-version, snapshot, manifest and open-handle changes;
 - write staging, durability receipt and publish/abort changes;
 - repair, drain, scrub and cleanup state changes;
 - certificate configuration, encrypted secret envelopes and rotation state; and
@@ -106,11 +117,56 @@ including `OperationStatus`. Queries declare their required consistency:
 domain-specific changes. A compacted cursor returns `snapshot_required` rather
 than silently skipping history.
 
+Component queries return desired configuration separately from per-node support
+and observed active revision. The protocol never treats an observation as a
+configuration mutation and never carries executable plugin code.
+
+A stale partition route returns `moved` with a newer authenticated routing epoch
+or `catalogue_refresh_required`. A gateway never broadcasts a mutation to find
+its owner. Operation IDs are partition-scoped in storage but globally resolvable
+through their encoded/recorded partition ID.
+
+Routing/control message families are:
+
+- `ResolveScopeRoute` / `ScopeRoute`;
+- `FetchRoutingDelta` / `RoutingDelta` / `RoutingSnapshotRequired`;
+- `BeginScopeHandoff`, `FreezeScope`, `ActivateScope`, `AbortScopeHandoff`; and
+- `FetchIdentityProjection` / `IdentityProjection`, each signed and revisioned.
+
+An identity projection is a bounded committed read model for cell isolation, not
+a second writable identity database.
+
+Branch/reconciliation message families are:
+
+- `CompareBranchHeads` / `BranchHeadSummary` with bounded causal frontier;
+- `FetchBranchCommits` / `BranchCommitBatch` with parent and operation digests;
+- `FetchImmutableObjects` / `ImmutableObjectBatch` for missing CoW roots;
+- `ProposeBranchInclusion` / `BranchInclusionResult` at current authority;
+- `FetchMergeCommit` / `MergeCommitResult`; and
+- `PublishConvergenceReceipt` with included operation IDs, achieved
+  acknowledgement predicates and remaining debt.
+
+`PublishIsolationDelegation` distributes signed bounded node/cell allocations;
+`FetchIsolationDelegation` retrieves an exact current generation. An isolated
+`PutShardBegin` names its delegation and allocation evidence in addition to the
+operation-bound capability. Targets durably account use before issuing a
+receipt, so replay cannot spend the allocation twice.
+
+Every batch is resumable and content-addressed. A receiver validates the causal
+graph, originating identity revision, signature, object bounds and immutable
+digests before inclusion. Delivery order cannot change the resulting merge root.
+
+Strong-barrier messages carry a closed set of required predicates and exact
+durability evidence. Zones marked `eventual` never appear as blocking
+predicates; `excluded` zones are rejected as placement targets.
+
 ## 7. Presence and inventory
 
 | Message | Purpose |
 | --- | --- |
 | `PublishPresence` | Node incarnation, addresses, roles and health summary |
+| `PublishComponentSupport` | Installed implementation IDs, contract ranges, capabilities and limits |
+| `PublishComponentObservation` | Desired/active revisions and bounded apply status |
 | `PublishTargetStatus` | Capacity, reservation, IO and filesystem observations |
 | `InventoryBegin/Batch/Finish` | Reconcile locally present shard identities |
 | `ScrubObservation` | Report verified health without changing authority |
@@ -206,9 +262,10 @@ use the private protocol.
 2. Establish mTLS identity binding and `NodeHello` negotiation.
 3. Carry consensus over isolated streams.
 4. Implement typed metadata command/query/status.
-5. Implement shard put/get with durability receipts.
-6. Implement deletion permits, inventory and repair work.
-7. Implement encrypted certificate envelopes.
+5. Implement branch summary, immutable commit exchange and deterministic merge.
+6. Implement shard put/get with durability receipts and acknowledgement barriers.
+7. Implement deletion permits, inventory and repair work.
+8. Implement encrypted certificate envelopes.
 
 Each step requires malformed-message, boundary, replay, stale-epoch, lost-reply
 and cross-version tests before the next family is used by a frontend adapter.

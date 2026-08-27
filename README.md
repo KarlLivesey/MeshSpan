@@ -10,6 +10,8 @@ recovering from routine failures without an administrator repairing internal sta
 - Protect data across independent machine and storage-device failures, then detect damage and heal
   automatically.
 - Start usefully on one machine and grow without requiring a redesign or specialist administration.
+- Keep ordinary file work available on disconnected nodes/sites and reconcile it automatically when
+  links return, while preserving every acknowledged version.
 - Provide simple cluster-wide users, permissions and administration.
 - Serve files through built-in access endpoints, initially HTTPS and SMB, without exposing raw
   storage folders.

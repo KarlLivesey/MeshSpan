@@ -58,6 +58,8 @@ Deterministic tests cover:
 - path/name canonicalisation and rename cycles;
 - placement against overlapping fault-group unions;
 - erasure recovery for every loss subset at and beyond the promised bound;
+- locality inheritance plus per-cell complete/lagging/at-risk status;
+- immutable namespace path-copying, snapshot roots, retention and restore;
 - range/offset/length arithmetic at zero and integer boundaries;
 - repair/delete compare-and-swap and stale worker fencing.
 
@@ -111,14 +113,24 @@ delivery. It can:
 
 After every generated step it checks:
 
-1. at most one committed history exists;
-2. every acknowledged operation is present with the exact result;
-3. no uncommitted version is visible;
+1. at most one globally converged head exists while every durable local branch
+   has a valid causal history;
+2. every acknowledged operation and alternative version remains present with
+   the exact receipt scope;
+3. no staged version is visible and no local branch is mislabelled converged;
 4. each protection status matches actual valid shards/fault groups;
 5. every deletion has an earlier exact cleanup decision;
 6. no stale worker/process changes newer state;
 7. owner/group/permission invariants hold;
-8. bounded queues and reservations reconcile.
+8. bounded queues and reservations reconcile;
+9. every delivery order produces the same merge root and conflict names; and
+10. strong acknowledgement occurs only after every required-zone/protection
+    predicate and the ACID converged-head commit, never after eventual zones.
+
+Multi-partition invariants additionally assert one owner per scope, no
+dual-owner converged-head handoff interval, explicit local branches, direct
+routing without broadcast and continued progress for every component with
+physically writable authorised storage.
 
 Failing seeds are stable regression cases.
 
@@ -137,8 +149,10 @@ The core three-node cycle:
 5. perform file cycles through real HTTPS and SMB clients;
 6. kill processes during writes, flush, repair and deletion;
 7. partition leader/minority and then heal;
-8. corrupt/remove/fill selected targets;
-9. verify exact acknowledged files, outcomes, protection and convergence.
+8. write different and same-name/file content through every isolated component;
+9. corrupt/remove/fill selected targets;
+10. verify exact acknowledged files, deterministic conflict siblings, eventual
+    and strong outcomes, protection and convergence.
 
 Tests allocate dynamic ports and isolated state folders and emit a reproducible
 diagnostic bundle on failure.
@@ -184,6 +198,11 @@ Release gates include:
 - multiple targets per host and three simultaneous backing-device failures;
 - abrupt host power removal rather than process signal only;
 - switch/cable partition into several components for at least one hour;
+- at least two availability cells with independent metadata collectives,
+  gateways and locally complete data, proving every isolated building continues
+  eventual local work and reconciles automatically;
+- strong-policy tests requiring selected zones while other zones remain
+  eventual, proving only required zones hold acknowledgement;
 - real media corruption, out-of-space, read-only and partial-write injection;
 - native Linux and macOS nodes/gateways plus mixed-host operation;
 - supported container deployment;
@@ -194,6 +213,12 @@ Release gates include:
 Expected file digests and operation receipts are stored outside the system under
 test. The lab proves both survival within policy and exact, honest failure beyond
 policy.
+
+For each supported `k+m` geometry, an exhaustive bounded test removes every
+slice subset through `m`, checks exact reconstruction from any `k`, then proves
+the defined failure when fewer than `k` valid slices remain. Separate placement
+oracles remove machine/device/custom-group unions rather than equating parity
+count with fault-domain survival.
 
 ## 11. Soak and churn
 
@@ -206,6 +231,13 @@ The gate measures data/metadata integrity, convergence time, foreground tail
 latency, memory/descriptor/task growth, work amplification and notification
 storms. Any unexplained committed-state divergence or acknowledged-byte mismatch
 is a release blocker.
+
+The physical churn rig must use real controllable power, USB/storage and network
+switching rather than modelling every event as process `SIGKILL`. A randomized
+schedule removes and returns several independent resources during each durable
+transition. It asserts that unaffected services stay live, affected operations
+have exact outcomes, replacement devices at reused paths are rejected, and the
+mesh converges without an administrative repair step.
 
 ## 12. Performance proof
 

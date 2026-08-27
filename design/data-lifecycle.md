@@ -13,53 +13,65 @@ alone.
 Every mutating operation has:
 
 - a client-generated `operation_id` used for idempotency;
-- an authoritative metadata revision;
-- a durable terminal outcome of `committed`, `rejected` or `aborted`;
+- a committed identity/policy revision and causal namespace base;
+- a durable outcome of `branch_committed`, `globally_converged`,
+  `policy_committed`, `rejected` or `aborted`;
 - an explicit `unknown` client-side outcome when the reply is lost; and
 - an operation-status query that resolves `unknown` without repeating effects.
 
 `accepted` and `in_progress` are not success. A user-visible save is complete
-only after the namespace mutation and its data durability requirements are
-committed by the metadata quorum.
+only after the immutable branch mutation and every predicate required at its
+declared receipt scope are durable. Only `policy_committed` satisfies a strong
+publication request.
 
 ## 2. Write state machine
 
 ```text
-requested -> staging -> data_durable -> publishing -> committed
-                 |             |              |
-                 +----------> aborted <-------+
+requested -> staging -> local_data_durable -> branch_committed
+                 |               |                    |
+                 +------------> aborted               +-> reconciling
+                                                         -> globally_converged
+                                                         -> policy_committed
 ```
 
 1. The gateway authenticates the principal, resolves current permissions and
    opens a write transaction against an expected object revision.
-2. The metadata leader creates a durable `staging` operation and returns a
-   placement plan containing target IDs, shard IDs, generation, checksums,
-   expiries and capability-bound write grants.
+2. The filesystem service resolves the acknowledgement policy. The owning
+   namespace leader supplies the plan when reachable; otherwise the local branch
+   planner uses the last valid topology/policy revision and only reachable
+   eligible targets. The plan binds target IDs, shard IDs, generations,
+   checksums, expiries and capability-bound write grants.
 3. The gateway encodes and streams shards directly to the selected storage
    nodes. A target writes to a private temporary name, flushes bytes and required
    directory metadata, atomically installs the shard, then returns a signed or
    mutually authenticated durability receipt.
-4. The gateway submits receipts. The leader verifies identity, generation,
-   checksums, placement constraints and the requested failure budget.
-5. Once sufficient valid receipts exist, the operation becomes `data_durable`.
-6. One metadata transaction publishes the immutable manifest, updates the
-   directory entry/version pointer, records quota usage and marks the operation
-   `committed`.
-7. Only that committed result may be reported as saved. A lost reply produces
-   `unknown`; the caller queries by `operation_id`.
+4. The gateway verifies identity, generation, checksums and the policy predicates
+   proved by those receipts.
+5. Once its local acknowledgement threshold is met, one local ACID transaction
+   publishes the immutable manifest/CoW roots, advances the local branch head,
+   records quota/evidence/debt and marks `branch_committed`.
+6. For an eventual write, that scoped receipt may be reported as saved. Peers
+   later reconcile the branch and strengthen its scope automatically.
+7. For a strong write, required-zone/protection work continues until every
+   blocking predicate has evidence. The owning partition then performs one ACID
+   metadata transaction that includes the branch, advances the converged head
+   and marks `policy_committed`.
+8. A lost reply produces `unknown`; the caller queries by `operation_id` and
+   receives the exact durable stage and receipt.
 
 Retries with the same operation ID and content identity return the existing
 result. Reuse with different inputs is rejected. Expired staging operations are
 aborted durably before unreferenced shards become eligible for reclamation.
 
-`fsync`/SMB flush success means the corresponding MeshSpan write is committed,
-not merely buffered by a gateway.
+`fsync`/SMB flush success means the corresponding MeshSpan write met its
+configured acknowledgement policy, not merely that a gateway buffered bytes.
+An adapter never silently weakens strong to eventual.
 
 ## 3. Read state machine
 
 1. The gateway authenticates and authorises the read at a committed metadata
    revision.
-2. The leader or a sufficiently current read authority returns an immutable
+2. The owning partition leader or a sufficiently current read authority returns an immutable
    manifest and short-lived, object-bound read capabilities.
 3. The gateway requests shards in parallel, verifies each length and checksum,
    and reconstructs once the coding threshold is met.
@@ -82,7 +94,7 @@ Deleting a name and destroying shards are separate operations.
    references. It creates a durable cleanup intent for a specific object,
    version, shard generation and expected catalogue revision.
 3. Immediately before deletion, the worker obtains a short-lived
-   `RemovalPermit` from the current metadata leader. The permit binds:
+   `RemovalPermit` from the current owning metadata-partition leader. The permit binds:
    `mesh_id`, target, object, version, shard, generation, catalogue revision,
    operation ID and expiry.
 4. The storage node validates the permit, current leader epoch and local shard
@@ -160,7 +172,35 @@ proof that a folder is safe to remove; only the committed state is.
 - A node restored from an old state directory must catch up consensus and local
   fencing state before it may serve mutations.
 
-## 9. Resource and IO failures
+Repeated loss and return do not create a new lifecycle or require an
+administrator. Presence changes are debounced for user noise and repair cost,
+but authority and IO failures take effect immediately. Grace periods may defer
+expensive replacement while adequate protection remains; they never make an
+unreachable shard count as available or delay urgent repair below policy.
+
+## 9. Physical target and link churn
+
+- Every provider operation tolerates the backing folder disappearing before
+  open, during a stream, before persistence or after an indeterminate completion.
+- Failure is isolated to that target and operation. Other targets and public
+  services continue when their dependencies remain available.
+- A returning folder is reopened from its durable marker, target ID and
+  generation. Device names, mount points and enumeration order are observations
+  only.
+- A different device appearing at an old path is quarantined as an identity
+  mismatch and is never initialised, adopted or erased automatically.
+- Link flapping retires affected connections and streams without changing node
+  identity. Quinn peers reconnect with a new connection but the same validated
+  node/incarnation rules.
+- In-flight mutations resolve through operation status and durable provider
+  journals after reconnection; they are not guessed from socket failure.
+- Repeated events are coalesced into bounded health/repair work so one loose
+  cable cannot create unbounded tasks, logs, notifications or data movement.
+- Once peers return, branch reconciliation and service strengthening are
+  automatic. Converged/control work uses quorum; local branch work does not wait
+  for it.
+
+## 10. Resource and IO failures
 
 - Reservations account for free space, safety margin and in-flight writes.
 - `ENOSPC`, quota exhaustion and read-only filesystems are typed target failures;
@@ -172,10 +212,17 @@ proof that a folder is safe to remove; only the committed state is.
 - Directory removal, target replacement and path reuse require a new target
   incarnation so stale receipts cannot validate new storage.
 
-## 10. Required proofs
+## 11. Required proofs
 
 Tests must demonstrate lost replies, duplicate requests, gateway crashes at
-every numbered write/delete transition, partial writes, corrupt bytes, full
-targets, stale repair workers, returning old nodes and concurrent unlink/write.
+every numbered write/delete/branch/strong-barrier transition, partial writes,
+corrupt bytes, full targets, stale repair workers, returning old nodes and
+concurrent unlink/write.
 For each case the expected namespace revision, operation outcome, authoritative
 shard set and reclaimable bytes must be asserted explicitly.
+
+The physical gate repeats random cable, host and device removals during every
+slow lifecycle, including configuration rollout and certificate rotation. It
+must prove continued eventual service wherever a local durable commit is
+physically possible, honest pending strong barriers and automatic convergence,
+protection and locality repair after return.

@@ -31,17 +31,36 @@ decision explicitly.
 6. **Validate hypotheses.** Reproduce and isolate failures before changing code.
 7. **Keep paths extensible.** Protocol, storage and access adapters depend on
    narrow domain interfaces, not on one another's implementation details.
+8. **Preserve the appliance.** Internal roles, branches, shards and consensus
+   must not become routine setup or recovery work for users.
 
 ## Safety invariants
 
-- Only a voter majority may commit authoritative metadata mutations.
+- Only a voter majority may advance a partition's converged head or commit
+  security-critical control metadata. Ordinary filesystem work may commit to a
+  durable local CoW branch during isolation and must advertise that exact scope.
+- Authority is per metadata partition; every mutable aggregate has exactly one
+  converged owner. Outage branches never become a second control-plane authority
+  and reconcile into that owner's head without discarding acknowledged content.
+- Eventual convergence is the normal availability-first write policy. Strong
+  publication waits only for predicates and zones explicitly marked required;
+  eventual zones create debt and never hold its barrier.
+- Branch exchange, conflict preservation, convergence and protection repair are
+  automatic. An administrator never selects internal histories or shards.
 - A response is not success unless the operation has a durable committed
-  outcome. Connection loss means unknown, not success or failure.
+  outcome and receipt scope. Connection loss means unknown, not success or
+  failure.
 - One-node and many-node operation use the same records and code paths.
 - Storage location alone never authorises shard deletion.
 - Provider folders contain private chunks, not the user-visible filesystem.
 - Access services use the filesystem/domain service; they do not query database
   tables or provider folders directly.
+- Published content, namespace roots and component configuration are immutable
+  CoW revisions advanced by atomic head changes.
+- A claimed complete local copy must be provably decodable inside the named cell;
+  locality never substitutes for fault-domain protection.
+- Major implementations are replaceable behind versioned contracts; metadata
+  selects installed code and stores desired configuration, never executable code.
 - Node, host, target, device and fault-group identities are distinct.
 - Private identity keys are generated locally and never leave their node.
 - Secrets and credentials never appear in logs, diagnostics or protocol errors.

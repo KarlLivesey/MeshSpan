@@ -9,8 +9,9 @@ Status: **draft for review**.
 - **SYS-002** The same implementation and record model MUST operate from one node to many nodes.
 - **SYS-003** MeshSpan MUST automate ordinary placement, reconstruction, healing, rebalancing,
   certificate handling and membership work.
-- **SYS-004** MeshSpan MUST refuse an operation it cannot perform safely and MUST NOT fabricate
-  durability, authority or success.
+- **SYS-004** MeshSpan MUST NOT fabricate durability, authority or success. Availability-first file
+  writes MAY commit to a local CoW branch with explicitly recorded local durability while wider
+  authority or protection is unavailable.
 - **SYS-005** Routine use MUST NOT require administrators to select erasure geometry, shard
   locations, metadata leaders or conflicting internal versions.
 - **SYS-006** All externally supplied data MUST be treated as hostile and validated before use.
@@ -19,6 +20,27 @@ Status: **draft for review**.
 - **SYS-008** The daemon, including storage, HTTPS and SMB gateway capabilities, MUST run natively on
   supported Linux and macOS hosts and in the supported container image; nodes in one mesh MAY mix
   supported operating systems and architectures.
+- **SYS-009** In healthy operation MeshSpan MUST behave as a storage appliance: users interact with
+  files and folders, while placement, coding, consensus, reconciliation and healing remain
+  automatic implementation details.
+
+## Appliance simplicity
+
+- **SIM-001** Normal deployment MUST use one self-contained daemon per node; users MUST NOT install
+  or coordinate separate storage, metadata, voter, repair, web or SMB processes.
+- **SIM-002** First useful operation MUST require only creating or joining a mesh, registering one or
+  more folders and creating the intended users/exports. It MUST NOT require storage pools,
+  placement groups, shard maps, coding profiles or manual service placement.
+- **SIM-003** Role eligibility, voter tiers, placement, coding, repair priority, rebalance and
+  reconciliation MUST have safe automatic defaults and MUST NOT require routine operator choices.
+- **SIM-004** Advanced diagnostics MAY expose internal evidence, but normal setup/status MUST lead
+  with files, people, safety, places, current impact and automatic action.
+- **SIM-005** A new user-visible distributed-system concept MUST be introduced only when MeshSpan
+  cannot safely derive the decision and no existing intent-level control can express it.
+- **SIM-006** Web, public API, CLI flags and headless flows MUST invoke the same domain operations;
+  none may create a second configuration or recovery authority.
+- **SIM-007** Ordinary churn MUST NOT require recovery commands. Any manual action request MUST name
+  a missing physical resource, user intent or security decision with a stable diagnostic reason.
 
 ## Hosts, nodes and membership
 
@@ -36,8 +58,9 @@ Status: **draft for review**.
 - **CLU-008** A node MUST support headless startup with a daemon state directory, storage paths and
   join material.
 - **CLU-009** Metadata voter membership MUST remain independent of unbounded storage membership.
-- **CLU-010** A side holding voter majority MAY continue authoritative mutations during a partition;
-  a side without authority MUST NOT acknowledge authoritative mutations.
+- **CLU-010** For each metadata partition, only its voter-majority leader may advance the converged
+  authoritative head. A component without that authority MAY acknowledge a causally scoped local
+  filesystem branch commit but MUST NOT present it as globally converged.
 - **CLU-011** A stale node or process incarnation MUST be fenced from publishing state after
   replacement.
 - **CLU-012** Eligible storage nodes SHOULD be promotable to replace unavailable voters through a
@@ -49,6 +72,39 @@ Status: **draft for review**.
 - **CLU-015** Node availability profiles and role restrictions MUST prevent unsuitable intermittent
   nodes from being selected as voters while allowing deliberately registered storage to leave and
   return safely.
+- **CLU-016** Repeated cable unplug/replug, link flapping, address change, multi-way partition,
+  process restart and host power loss MUST be treated as normal recoverable events rather than
+  requiring manual membership repair.
+- **CLU-017** While a voter majority and the required verified shards remain reachable, public
+  services MUST continue within the declared protection policy despite physical churn.
+- **CLU-018** When authority or sufficient data is physically unavailable, surviving daemons MUST
+  remain diagnosable, MUST NOT acknowledge unsafe work and MUST resume eligible service
+  automatically after authority/data return and reconciliation.
+- **CLU-019** Voter placement and count MUST grow automatically across independent eligible hosts
+  using stable odd tiers of 3, 5, 7 and 9; one- and two-voter meshes remain supported establishment
+  states with their exact availability limitations reported.
+- **CLU-020** Adding independent eligible nodes MUST NOT introduce a new mandatory single gateway,
+  storage node or control endpoint. Authority, access and repair work SHOULD become more resilient
+  and distributable as the mesh grows.
+- **CLU-021** One mesh MUST support multiple metadata partitions and availability cells so loss of
+  connectivity to one building, site or network region does not stop unrelated partitions that
+  retain their own voter majority and required data.
+- **CLU-022** Every authoritative record MUST belong to exactly one metadata partition at a time;
+  only that partition's committed log may mutate it.
+- **CLU-023** A one-node/small mesh MAY begin with one metadata partition, but it MUST use the same
+  partition identity, routing and record model required to split online as the mesh grows.
+- **CLU-024** Gateways MUST cache a signed, revisioned partition-routing table and contact the
+  partition owning an operation directly; ordinary local-partition IO MUST NOT require a live
+  campus-wide catalogue transaction.
+- **CLU-025** A cell-local voter majority MAY advance the converged head for its owned scope while
+  disconnected from the wider mesh. Any cell/node with valid isolation authorisation and storage
+  MAY advance an independent local branch, and reconnection MUST reconcile every branch without
+  allowing one to overwrite acknowledged history.
+- **CLU-026** Campus-wide identity/configuration authority MAY become temporarily unavailable during
+  a partition while cell-owned filesystem work continues from an explicitly bounded committed
+  identity/configuration revision.
+- **CLU-027** Moving a scope between metadata partitions MUST be an explicit fenced copy-on-write
+  handoff that gives mutation authority to at most one partition throughout the transition.
 
 ## Storage targets and fault groups
 
@@ -70,6 +126,14 @@ Status: **draft for review**.
   mirror the user-visible namespace or become an alternate access path.
 - **TOP-012** Folder-provider storage layout, indexing, packing and compaction MUST remain behind a
   provider interface and MUST avoid requiring one operating-system file per small shard.
+- **TOP-013** Removing a mounted device, unmounting a filesystem or losing a folder during any IO
+  operation MUST make that target unavailable without crashing the daemon or making sibling targets
+  unavailable.
+- **TOP-014** A returning target MUST be identified by its durable marker and generation rather than
+  device name, mount point or discovery order; path reuse and replaced media MUST fail closed.
+- **TOP-015** Target disappearance MUST NOT authorise retirement, cleanup or replacement of its
+  identity. Repair urgency MUST consider protection risk and flap history without permitting an
+  endless reconnect cycle to postpone critical repair.
 
 ## Protection and data lifecycle
 
@@ -78,8 +142,9 @@ Status: **draft for review**.
 - **DAT-002** A volume MAY contain immutable data encoded with different layouts while retaining one
   user-visible protection promise.
 - **DAT-003** One-node data MUST use an explicitly unprotected layout rather than fake redundancy.
-- **DAT-004** A write MUST NOT become visible until every shard required by its chosen layout is
-  durable and verified and its metadata version is committed.
+- **DAT-004** A write MUST NOT become visible until every shard required by the receipt's declared
+  durability scope is durable and verified and its CoW branch version is committed. Wider
+  convergence and protection MUST be reported separately.
 - **DAT-005** Stored shard identities and contents MUST be immutable after publication.
 - **DAT-006** Logical content and stored shards MUST carry cryptographic integrity digests.
 - **DAT-007** Reads MUST verify content and SHOULD reconstruct from surviving shards without waiting
@@ -104,6 +169,60 @@ Status: **draft for review**.
   MUST block unsafe new writes before consuming space needed to honour existing promises.
 - **DAT-018** Volumes MUST be thin-provisioned with an optional logical quota and MUST report both
   logical and actual protected physical consumption.
+- **DAT-019** Placement MUST distribute stripes and repair options across the available independent
+  failure domains so a larger mesh does not concentrate most availability on a small accidental
+  subset.
+
+## Erasure coding
+
+- **EC-001** A protected stripe MUST use a recorded systematic Reed–Solomon `k+m` layout containing
+  `k` data slices and `m` recovery slices.
+- **EC-002** Any `k` independently verified slices from the `k+m` set MUST reconstruct the exact
+  logical stripe; loss or corruption of any combination of at most `m` slices MUST be recoverable.
+- **EC-003** Checksums MUST distinguish corrupt from valid slices before reconstruction; an invalid
+  slice counts as unavailable and MUST NOT be used merely because it is present.
+- **EC-004** A user failure policy MUST be translated into both coding geometry and placement proof.
+  `m` alone MUST NOT claim machine, drive or custom fault-group survival.
+- **EC-005** Separate failure scenarios are alternative promises. A simultaneous mixed scenario
+  such as two machines plus three additional drives MUST be represented explicitly and proven
+  against the union of all affected targets.
+- **EC-006** The system MUST select `k` and `m` automatically within reviewed bounds, record the
+  layout per stripe and permit different valid layouts within one volume.
+- **EC-007** Encoding, decoding and reconstruction MUST stream in bounded slices and MUST NOT require
+  an entire wide stripe or file in memory.
+- **EC-008** Layout replacement and recoding MUST be copy-on-write: the new complete verified
+  generation becomes authoritative atomically and the old generation is reclaimed later.
+
+## Regional and local availability
+
+- **LOC-001** Administrators and authorised owners MUST be able to attach a locality policy to a
+  volume, folder or file and choose whether descendants inherit or override it.
+- **LOC-002** A `complete_local` requirement for a cell/region MUST ensure every selected committed
+  file version has enough verified slices entirely inside that cell to reconstruct every byte
+  without external connectivity.
+- **LOC-003** Local data availability MUST be paired with a reachable local branch service, valid
+  identity/authorisation material and an access gateway before the system reports the scope locally
+  usable for writes.
+- **LOC-004** A locality policy MAY require several cells simultaneously and MAY specify an
+  independent local fault-survival policy inside each cell.
+- **LOC-005** Eventual writes MUST remain availability-first: the writing cell commits locally and
+  reports other desired cells as lagging until automatic catch-up. Only an explicitly selected
+  strong acknowledgement policy may wait for named required cells.
+- **LOC-006** “Complete local copy” means 100% of selected committed logical bytes are locally
+  decodable; it MUST NOT be presented as an absolute uptime guarantee when the cell itself loses
+  power, gateways, valid authorisation or more storage than its local protection policy permits.
+- **LOC-007** Locality, durability and failure-survival are separate constraints. Extra local copies
+  count toward a protection promise only when their target/fault-group placement proves it.
+- **LOC-008** The planner MAY satisfy locality using systematic data slices, recovery-coded sets or
+  full replicas, but the representation MUST remain hidden behind the recorded layout and storage
+  provider contracts.
+- **LOC-009** Changing or inheriting a locality policy MUST create durable copy/repair work and
+  expose `pending`, `complete`, `lagging`, `at_risk` or `unavailable` per required cell.
+- **LOC-010** Snapshot locality MUST be explicit: a snapshot inherits the captured scope policy by
+  default and MAY be assigned a separate retention/locality policy without rewriting its logical
+  namespace root.
+- **LOC-011** Cell and region names MUST be administrator-defined and composable with overlapping
+  fault groups; the core MUST NOT hard-code buildings, stores, racks or geography.
 
 ## Filesystem namespace
 
@@ -116,9 +235,11 @@ Status: **draft for review**.
 - **FS-005** It MUST support bounded random reads and writes, length changes, flush, close, rename,
   deletion, enumeration and metadata operations.
 - **FS-006** Cross-gateway share modes, byte-range locks and delete-on-close state MUST be governed by
-  authoritative metadata.
-- **FS-007** A dirty flush MUST publish exactly one committed file version or report an unknown
-  outcome resolvable by operation ID.
+  the reachable branch authority. During disconnection, incompatible branch-local operations MAY
+  proceed and MUST reconcile into preserved conflict versions rather than silent overwrite.
+- **FS-007** A dirty flush MUST publish exactly one durable branch file version with a receipt naming
+  its cell/node, achieved protection and convergence scope, or report an unknown outcome resolvable
+  by operation ID.
 - **FS-008** Access adapters MUST use the filesystem service and MUST NOT read provider folders or
   database records directly.
 - **FS-009** Extended attributes and named streams MUST have bounded protocol-neutral representations.
@@ -128,6 +249,107 @@ Status: **draft for review**.
   blocks rather than embedded as unbounded consensus commands.
 - **FS-012** Copy MUST have defined same-volume semantics and MUST preserve permissions, ownership,
   tags and content identity according to an explicit policy.
+- **FS-013** Namespace partition ownership MUST be explicit at volume or subtree boundaries. Same-
+  partition operations retain atomic semantics; cross-partition operations require a typed
+  transaction/handoff and MUST fail rather than partially commit during loss of either authority.
+
+## Copy-on-write and snapshots
+
+- **COW-001** Published file content, manifests, stripe generations, namespace commits and component
+  configuration revisions MUST be immutable. Change creates new records and atomically advances the
+  applicable local branch, converged namespace or configuration head pointer.
+- **COW-002** Namespace mutation MUST path-copy only affected immutable records/blocks and MUST NOT
+  duplicate unchanged file content or the complete directory tree.
+- **COW-003** A volume snapshot MUST pin one exact committed namespace root in constant metadata
+  work independent of the volume's byte size.
+- **COW-004** Initial snapshots MUST be read-only, nameable and listable and MUST support manual and
+  scheduled creation plus count/age retention policies.
+- **COW-005** Snapshot restore MUST create a new namespace commit derived from the selected snapshot;
+  it MUST NOT move consensus backwards, mutate the snapshot or destroy intervening history.
+- **COW-006** Snapshot deletion MUST remove only its root reference. Content becomes reclaimable
+  only after authoritative reachability proves that no live head, snapshot, handle, version or
+  other retained root references it.
+- **COW-007** Snapshot access MUST combine the captured namespace/metadata view with current active
+  principal, authentication and explicit snapshot-access authority so historical permissions cannot
+  resurrect a disabled identity.
+- **COW-008** Mutable coordination state such as leases, presence, throttles, work claims, counters
+  and observations MAY update in place transactionally; it MUST NOT be confused with immutable
+  published state or included as user-restorable snapshot content.
+- **COW-009** Snapshot, backup and consensus snapshot are distinct concepts and MUST use distinct
+  record types, APIs, status text and recovery procedures.
+
+## Disconnected writes and reconciliation
+
+- **CON-001** A valid eventual filesystem create/write MUST remain accepted whenever the serving
+  process can authenticate from an allowed committed identity revision and durably store at least
+  one local CoW branch record plus its data; loss of wider quorum or remote cells alone MUST NOT
+  block it.
+- **CON-002** Every write receipt MUST state its durability scope: `node_local`, `cell_replicated` or
+  `globally_converged`, plus achieved protection and pending locality/protection debt.
+- **CON-003** HTTPS and SMB acknowledgement mappings MUST treat a successful flush as satisfying the
+  scope's configured eventual or strong policy. UI/API status MUST NOT mislabel a local success as
+  globally converged/protected or an unmet strong barrier as success.
+- **CON-004** Each cell/node offline branch MUST be an immutable causally ordered operation/commit
+  log with stable operation IDs, base commit(s), author, identity revision and content roots.
+- **CON-005** Reconnection MUST automatically exchange missing branch heads and operations, validate
+  identity revisions and content, compute deterministic merge commits and enqueue protection and
+  locality repair without administrator action.
+- **CON-006** Causally independent changes to different names or objects MUST merge without conflict;
+  replayed identical operations MUST deduplicate.
+- **CON-007** Concurrent incompatible edits MUST never discard an acknowledged version. Automated
+  reconciliation MUST choose one deterministic visible result and preserve every alternative as
+  immutable version history and, where needed, a deterministic conflict sibling.
+- **CON-008** Concurrent same-name create, rename/rename, edit/delete and permission-sensitive
+  operations MUST have explicit deterministic rules and canonical cross-implementation fixtures.
+- **CON-009** Reconciliation MUST not require an administrator to repair consensus, choose shards or
+  unblock the mesh. Content conflicts MAY be shown to affected users but MUST NOT prevent
+  convergence or unrelated work.
+- **CON-010** Security-critical mesh administration, voter membership, identity, role, ownership,
+  permission, secret and executable-component changes MUST NOT use unrestricted offline merge;
+  they require their owning authority or a separately designed constrained delegation.
+- **CON-011** When an existing file's required base bytes are not locally available, MeshSpan MUST
+  accept new independent files but MUST NOT fabricate a correct random modification of unavailable
+  content. Locality policy SHOULD prevent this for scopes intended to work offline.
+- **CON-012** Eventual local writes can stop only for a concrete physical or policy boundary such as no
+  writable durable medium, exhausted authorised quota/reserve, unavailable required base bytes or
+  invalid authentication—not merely because a remote link or global quorum is down.
+- **CON-013** Protection/locality debt created during isolation MUST be durable, prioritised and
+  repaired as soon as peers or capacity return; repeated churn MUST not lose or duplicate that debt.
+- **CON-014** Offline authorisation MUST use a signed committed identity/ACL revision and bounded
+  node/cell isolation delegation covering exact scopes, operation classes, targets, byte budget,
+  validity interval and epoch; loss of connectivity MUST NOT create new authority.
+- **CON-015** Offline capacity allocations MUST be disjoint and consumed durably per node/target so
+  disconnected components cannot independently overspend one shared quota. Remote shard writes
+  MUST carry an exact operation/shard/target capability derived from the delegation.
+
+## Consistency and acknowledgement policy
+
+- **ACK-001** Every volume, folder or file MUST resolve one inheritable acknowledgement policy with
+  either `eventual` or `strong` consistency class and explicit durable-placement predicates.
+- **ACK-002** Eventual acknowledgement MUST publish one immutable local or cell branch only after
+  its configured minimum durable targets, distinct nodes and local protection predicates are
+  verified; wider merge and placement MUST proceed automatically.
+- **ACK-003** Strong acknowledgement MUST require every configured node, zone, locality and
+  protection predicate to have verified durable receipts before one ACID metadata transaction
+  publishes the manifest and advances the globally converged namespace head.
+- **ACK-004** Each zone in an acknowledgement policy MUST be classified as
+  `required_before_commit`, `eventual` or `excluded`, with optional per-zone minimum targets, nodes
+  and protection scenarios. Only `required_before_commit` zones may hold the barrier.
+- **ACK-005** Counts MUST use proved target, node, zone and fault-group identities and MUST NOT
+  manufacture independence from several paths or targets on one host.
+- **ACK-006** If a strong barrier cannot currently be met, MeshSpan MUST retain any durable local
+  branch work and report the exact operation as pending or failed by deadline; it MUST NOT report
+  strong success or silently fall back unless the policy explicitly permits fallback.
+- **ACK-007** A successful SMB flush and HTTPS strong-write response MUST mean the configured
+  acknowledgement policy was met. Structured APIs MUST expose achieved receipt scope, predicate
+  evidence and remaining eventual-zone/protection debt.
+- **ACK-008** Historical acknowledgement evidence MUST remain immutable. Later loss MAY degrade
+  current health and trigger repair but MUST NOT rewrite what was proved when the version committed.
+- **ACK-009** Reads MUST support latest authorised local branch, exact commit and linearizable latest
+  converged modes; an isolated branch MUST NOT be presented as a successful strong read.
+- **ACK-010** Normal UI setup MUST use a small set of plain-language, topology-aware presets and
+  default to availability-first eventual convergence. Raw predicates and `excluded` zones MUST be
+  advanced controls; users MUST NOT select shards or erasure geometry.
 
 ## Principals, groups, ownership and tags
 
@@ -235,6 +457,15 @@ Status: **draft for review**.
   required for ordinary administration.
 - **OPS-013** Capacity and protection changes MUST show an honest feasibility, capacity and work
   estimate before commit, including uncertainty where prediction is weak.
+- **OPS-014** Churn handling MUST be automatic and idempotent. The ordinary interface MAY explain
+  current impact and action being taken but MUST NOT ask an administrator to choose internal
+  histories, shards, leaders or returning-target conflicts.
+- **OPS-015** As nodes, targets and links return, catch-up, inventory reconciliation, service
+  activation and required healing MUST begin automatically and converge without waiting for an
+  administrator to acknowledge the outage.
+- **OPS-016** The ordinary user experience MUST use files, folders, people, safety and place
+  vocabulary. Branches, shards, Raft terms and coding geometry MAY appear in advanced diagnostics
+  but MUST NOT be required to use the appliance.
 
 ## Persistence, upgrade and recovery
 
@@ -273,6 +504,8 @@ Status: **draft for review**.
   interactive IO are not starved by repair, rebalance, recoding, scrub or compaction.
 - **SCL-009** Ordinary connection capacity MUST derive from available workers, memory, descriptors
   and configured budgets rather than a small hard-coded product ceiling.
+- **SCL-010** Request routing and metadata storage MUST support adding partitions without changing
+  public filesystem semantics or requiring a scan of all metadata partitions.
 
 ## Verification and release
 
@@ -293,6 +526,9 @@ Status: **draft for review**.
 - **TST-009** Native Linux and macOS daemon/gateway acceptance plus the supported container path MUST
   exercise mixed-host meshes; SMB client interoperability MAY use any standards-compliant clients
   and MUST NOT turn a client product into a service requirement.
+- **TST-010** A continuous physical-churn gate MUST repeatedly unplug and reconnect network links,
+  hosts and storage devices during reads, writes, flushes, repair, scrub, drain, configuration
+  rollout and certificate rotation, asserting exact acknowledged bytes and automatic convergence.
 - **REL-001** Commits and tags MUST be signed, and releases MUST publish checksums and provenance.
 - **REL-002** Development branches MUST be short-lived, merged promptly and deleted after merge.
 - **REL-003** The project MUST publish a container image and the accepted native platform artefacts.
@@ -329,12 +565,54 @@ Status: **draft for review**.
 - **API-005** API authentication and authorisation MUST use the same principals, sessions, roles,
   grants and audit rules as the user and administrator interfaces.
 
+## Replaceability and configuration
+
+- **EXT-001** Major subsystems MUST depend on stable capability-oriented contracts rather than a
+  particular implementation. This includes storage providers, access connectors, administration
+  clients, metadata repositories, consensus engines, coding schemes, placement policies,
+  authentication methods, certificate challenge handlers, notification sinks and observability
+  exporters.
+- **EXT-002** Each replaceable implementation MUST have a stable implementation ID, contract
+  version, configuration schema version and declared capabilities and limits.
+- **EXT-003** A component replacement MUST support an explicit validate, stage, activate, observe
+  and retire lifecycle; it MUST NOT require rewriting unrelated domain state.
+- **EXT-004** Old and new implementations MAY coexist during a bounded migration when their
+  contract versions are compatible. Existing data and configuration MUST identify the exact
+  implementation/version needed to read or manage them.
+- **EXT-005** Replaceability MUST NOT allow a component to bypass domain authority, permissions,
+  lifecycle safety, audit, resource bounds or protocol validation.
+- **EXT-006** The shipped administration panel MUST be a replaceable client of the same versioned
+  API available to other authorised administration clients; it MUST NOT use a privileged private
+  database or daemon interface.
+- **EXT-007** Replicated metadata stores component selection and configuration, not executable
+  plugin code. Installing or updating executable code remains an authenticated software deployment
+  operation with normal artefact verification.
+- **CFG-001** Every mesh-wide desired setting MUST be an authoritative, schema-versioned,
+  revisioned metadata record committed through consensus.
+- **CFG-002** Configuration changes MUST be validated, authorised and audited and MUST produce a
+  durable operation outcome. Partial node application MUST be visible as observed state, not
+  mistaken for committed desired state.
+- **CFG-003** Secret configuration MUST be represented in metadata by encrypted generations or
+  secret references and per-node envelopes; plaintext secrets MUST NOT appear in ordinary
+  configuration records, API responses or events.
+- **CFG-004** Node-local state MAY contain only inherently local bindings and recovery material,
+  including folder paths, daemon state paths, locally generated private keys, decrypted secret
+  cache, socket bindings and measured resource observations.
+- **CFG-005** A node-local binding MUST reference the authoritative component instance and revision
+  it implements. Local configuration MUST NOT override mesh authority or manufacture a different
+  volume, permission, connector or protection policy.
+- **CFG-006** Bootstrap flags and environment values MUST converge into the same validated domain
+  operations as the UI/API. After enrolment, replicated desired configuration is authoritative.
+- **CFG-007** Returning and newly enrolled nodes MUST reconcile desired configuration by revision,
+  apply only compatible instances and report exact unsupported, pending, active or failed observed
+  states.
+- **CFG-008** Configuration rollback MUST create a new committed revision selecting a compatible
+  prior value; history MUST remain auditable rather than mutating or deleting the old revision.
+
 ## Deferred capabilities
 
 - **DEF-001** NFS, WebDAV, SFTP, S3 and other access adapters are deferred but MUST use the same
   filesystem service when implemented.
 - **DEF-002** Native direct-shard clients and peer-assisted verified caches are deferred; caches MUST
   never count toward durability.
-- **DEF-003** Disconnected multi-writer sites require an explicit branch-and-reconciliation model and
-  MUST NOT activate implicitly when metadata authority is lost.
 - **DEF-004** Whole-device management and native Windows hosting are not part of the initial MUP.
