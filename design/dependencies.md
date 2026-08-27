@@ -13,7 +13,7 @@ the required platforms/toolchain, passes a `GPL-2.0-only` compatibility review
 and has a bounded interface owned by MeshSpan.
 
 Versions below are resolved and pinned only when implementation begins. Automated
-updates must pass the same local and CI gates as a human change.
+updates must pass the same complete local gates as a human change.
 
 ## Toolchains
 
@@ -199,9 +199,17 @@ native `fetch`, CSS and browser platform APIs are sufficient initially.
 | `@playwright/test` | Real Chromium, Firefox and WebKit journeys with no manual browser interaction |
 | `@axe-core/playwright` | Automated accessibility checks inside the real-browser journeys |
 | `eslint` | JavaScript/TypeScript lint runner |
+| `@eslint/js` | Maintained core JavaScript correctness baseline for flat configuration |
+| `globals` | Explicit browser and Node build-script global sets |
 | `typescript-eslint` | Type-aware TypeScript rules |
 | `eslint-plugin-solid` | Solid-specific correctness rules |
 | `eslint-plugin-jsx-a11y` | Static accessibility checks for JSX |
+| `eslint-plugin-sonarjs` | Cognitive-complexity and maintainability rules not supplied by core ESLint |
+| `eslint-plugin-import-x` | Import graph, dependency and layer-boundary correctness |
+| `eslint-plugin-regexp` | Regular-expression correctness and safety checks |
+| `@eslint-community/eslint-plugin-eslint-comments` | Requires used, described and narrowly scoped lint suppressions |
+| `@vitest/eslint-plugin` | Vitest correctness and prevention of focused or silently disabled tests |
+| `eslint-plugin-n` | Node 26 correctness for build and configuration scripts only |
 | `prettier` | Deterministic Markdown, JSON, CSS and TypeScript formatting |
 
 Unit and component suites are split from real-browser acceptance so routine

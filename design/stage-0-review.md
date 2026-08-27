@@ -277,7 +277,7 @@ Additional gates:
   and makes monotonic progress without quadratic all-node broadcast;
 - no unexplained memory, descriptor, task, branch-log or queue growth in the
   long-duration churn gate; and
-- the local fast-suite/CI budgets in `verification.md` remain release gates.
+- the local fast-suite budgets in `verification.md` remain release gates.
 
 These are minimum MUP proofs, not architectural ceilings. Every result records
 hardware, filesystem, topology, protection geometry, encryption and exact
@@ -306,7 +306,7 @@ outside declared state/storage and without broad host-device access.
 
 Native Windows remains deferred; WSL/container usage is documented without
 being labelled native support. Release signing/notarisation credentials remain
-CI secrets and never enter repository or mesh metadata.
+isolated release-automation secrets and never enter repository or mesh metadata.
 
 ## Review outcome
 

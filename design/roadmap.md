@@ -8,8 +8,8 @@ claim that documentation is product progress.
 - Build vertical, executable slices after the design lock.
 - Use one short-lived branch at a time: branch from `main`, test locally, sign
   commits, push, review, merge and delete before dependent work begins.
-- Keep fast CI suites independent and parallel. Hardware, soak and release tests
-  run on their own schedules and never become the ordinary edit/test loop.
+- Run fast local suites concurrently in independent lanes. Hardware, soak and
+  release tests run separately and never become the ordinary edit/test loop.
 - A stage is complete only when its observable behaviour and exit evidence pass.
   A type, table, handler or mock by itself does not complete a stage.
 - One-node code paths must remain the smallest instance of the same multi-node
@@ -54,13 +54,13 @@ Build:
   authentication, certificate and observability implementations;
 - deterministic clock/random/IO interfaces for tests;
 - Protobuf schema generation and compatibility fixture harness;
-- CI split by independent Rust, web, schema/protocol and integration lanes with
-  path-aware triggers and cancellation of superseded runs.
+- one local scheduler that runs independent Rust, web, schema/protocol and
+  integration lanes concurrently with resource-aware worker limits.
 
 Exit evidence:
 
 - format, warning-denied Rust lint, web format/type/lint and unit tests pass
-  locally and in CI;
+  locally;
 - transition tables prove normal, replay, conflict and hostile-input cases;
 - clean checkout can run the fast suite with one documented command;
 - suite duration is measured and budgeted before more tests accumulate.

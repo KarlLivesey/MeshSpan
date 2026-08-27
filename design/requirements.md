@@ -23,6 +23,9 @@ Status: **draft for review**.
 - **SYS-009** In healthy operation MeshSpan MUST behave as a storage appliance: users interact with
   files and folders, while placement, coding, consensus, reconciliation and healing remain
   automatic implementation details.
+- **SYS-010** Every message and record MUST be treated as hostile input regardless of whether it
+  came from an authenticated client, enrolled node, voter, local database, provider folder or the
+  same process. Authentication proves an identity, not truth, freshness, authority or safety.
 
 ## Appliance simplicity
 
@@ -189,6 +192,10 @@ Status: **draft for review**.
 - **DAT-019** Placement MUST distribute stripes and repair options across the available independent
   failure domains so a larger mesh does not concentrate most availability on a small accidental
   subset.
+- **DAT-020** Every consumer of stored or transferred data MUST independently verify the identity,
+  length, cryptographic integrity, revision/generation, authority, freshness and semantic bounds
+  required for that operation. A successful read, authenticated sender, catalogue entry, receipt,
+  prior scrub or matching path MUST NOT make bytes inherently trusted.
 
 ## Erasure coding
 
@@ -516,8 +523,8 @@ Status: **draft for review**.
 - **SCL-005** Bulk data traffic MUST NOT starve consensus, authentication or control traffic.
 - **SCL-006** Unreachable peers MUST be handled concurrently with bounded timeouts, cancellation and
   backoff.
-- **SCL-007** Local development tests MUST remain partitioned and fast enough to run before push;
-  CI MUST confirm rather than discover ordinary failures.
+- **SCL-007** Local development tests MUST remain partitioned, concurrent and fast enough to run
+  before every push; early development MUST NOT depend on GitHub-hosted CI.
 - **SCL-008** Runtime scheduling MUST use explicit priority classes so metadata, health and
   interactive IO are not starved by repair, rebalance, recoding, scrub or compaction.
 - **SCL-009** Ordinary connection capacity MUST derive from available workers, memory, descriptors
@@ -561,13 +568,29 @@ Status: **draft for review**.
 - **DEV-004** Every Rust workspace crate and web package MUST participate in language-standard
   format, lint, type/build and test gates with warnings treated as failures.
 - **DEV-005** Dependency and toolchain update pull requests MAY merge automatically only after all
-  required gates pass and the update policy has not classified the change for manual review.
+  required gates pass and the update policy has not classified the change for manual review. This
+  automation remains deferred while GitHub Actions are disabled.
 - **DEV-006** Fast checks MUST be runnable locally in independently parallelisable lanes; ordinary
-  feature work MUST NOT depend on a completed `main` workflow before its own relevant tests run.
+  feature work MUST NOT depend on a remote workflow before its own relevant tests run.
 - **DEV-007** The web application MUST use Solid 2.0, remain a compiled static client served by the
   Rust daemon and introduce no production Node.js server.
 - **DEV-008** Rust public API schemas SHOULD generate TypeScript representations so the web client
   does not manually duplicate protocol-facing types.
+- **DEV-009** GitHub Actions MUST remain absent during early implementation. Enabling remote CI
+  requires an explicit decision, measured local-suite timings and a plan that preserves local-first
+  feedback.
+- **DEV-010** Unit, property, conformance, simulation, web and process-integration tests MUST run
+  concurrently by default using isolated state, dynamic ports and bounded worker pools. A serial
+  test MUST document the genuinely exclusive resource that prevents isolation.
+- **DEV-011** Web linting MUST enable type-aware correctness, promise-safety, exhaustiveness,
+  accessibility, Solid-specific, complexity, nesting and source-size rules with warnings treated
+  as failures. Formatting alone is not linting.
+- **DEV-012** A complexity or size violation MUST trigger review of responsibility, data flow and
+  module boundaries. Moving an arbitrary suffix into a helper solely to satisfy a numerical limit
+  is not an acceptable refactor.
+- **DEV-013** Handwritten TypeScript MUST contain no `any` and MUST enable typed rules that reject
+  unsafe `any` assignment, arguments, calls, member access, returns, assertions and operations.
+  Untrusted inputs MUST enter as `unknown` and be validated or narrowed before use.
 
 ## Public API
 

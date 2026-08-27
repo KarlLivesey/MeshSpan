@@ -39,6 +39,10 @@ Status: **draft for review**.
 | D-031 | Normal writes use availability-first eventual convergence; a scope may instead require a declarative strong publication barrier over verified nodes, zones and protection predicates followed by one ACID converged-head commit. Only zones marked required hold that barrier. |
 | D-032 | MeshSpan exposes one appliance daemon and intent-level controls; internal daemon roles, consensus, placement, coding and reconciliation are automatic and do not become routine operator configuration. |
 | D-033 | Consensus MUST support topology-aware flexible/hierarchical quorums and independently model election, consensus-write and linearizable-read quorum families. Every active and transitional plan is mechanically checked for its required intersections before use. |
+| D-034 | Early development uses local verification only. MeshSpan will not add GitHub Actions until an explicit later decision finds that remote automation will accelerate rather than obstruct development. |
+| D-035 | Tests run concurrently by default at lane and test-case level. Serial execution is permitted only for a genuinely exclusive physical resource and must not serialise unrelated tests. |
+| D-036 | Source-size and complexity lint limits are responsibility alarms. A violation is fixed by improving ownership, inputs, outputs or control flow—not by extracting arbitrary lines into meaningless helpers. |
+| D-037 | All bytes, records, observations and messages remain suspect regardless of source, transport authentication or prior validation. Every consumer independently verifies the identity, integrity, authority, freshness, bounds and semantic validity needed for its exact operation. |
 
 ## Proposed defaults requiring review
 

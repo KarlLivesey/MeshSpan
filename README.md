@@ -37,7 +37,7 @@ and heal redundancy automatically. It must never claim protection or durability 
 Normal work must be fast and efficient. Small operations must not stall behind unrelated global
 work, and large transfers must use bounded parallelism without wasting memory, CPU, disk or network
 capacity. The development feedback loop must also stay fast enough to catch failures locally before
-code reaches CI.
+code is pushed.
 
 ### 4. Flexibility enables growth
 

@@ -8,6 +8,12 @@ which authority may destroy bytes. An implementation is not allowed to infer
 success from a connection closing or authorise deletion from a storage location
 alone.
 
+All data is suspect at all times. Durable does not mean trusted forever:
+consumers revalidate the identity, integrity, generation, authority, freshness
+and bounds required for their operation. Verification evidence is recorded and
+useful, but cannot be applied to a different object, revision, operation or
+trust boundary.
+
 ## 1. Common operation rules
 
 Every mutating operation has:

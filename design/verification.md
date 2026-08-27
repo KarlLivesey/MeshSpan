@@ -7,7 +7,7 @@ state; they do not merely exercise lines or check that a process survived.
 
 Proposed budgets on a standard development runner after warm build:
 
-| Lane | Target | Pull-request role |
+| Lane | Target | Local role |
 | --- | ---: | --- |
 | Format and generated-file check | 30 seconds | required, parallel |
 | Rust lint/type/build partitions | 3 minutes each | required, parallel |
@@ -22,9 +22,58 @@ Budgets are gates against accidental serialisation, not reasons to skip proof.
 When a lane grows, split by independent responsibility or remove duplicated
 setup/work; do not hide failures or tie every test to one `main` workflow.
 
-Every local command prints duration and supports focused selection. CI cancels
-superseded runs and uses path-aware jobs without making deployment/release
-workflow edits across feature branches.
+Every local command prints duration and supports focused selection. The root
+runner schedules independent lanes concurrently within explicit CPU, memory and
+IO budgets, avoids nested worker oversubscription and reports one local summary.
+GitHub Actions are absent during early implementation.
+
+### Parallel execution contract
+
+- Rust unit and conformance tests use the normal parallel harness or
+  `cargo-nextest`; no global serial-test mechanism or routine
+  `--test-threads=1` is permitted.
+- Vitest and Playwright use bounded worker pools. Simulation seeds and scenario
+  shards run concurrently within the same resource budget.
+- Every case owns unique temporary folders, databases, mesh/node identities and
+  dynamic loopback ports. Its clock, random source and seed are injected and
+  reproducible.
+- In-process tests do not mutate process-wide working directory, environment or
+  singleton time/identity state. A test that must exercise process globals uses
+  an explicitly configured child process.
+- Serial execution is reserved for a named physical resource that cannot be
+  virtualised or isolated. Its lock does not block unrelated lanes.
+- A race exposed by parallel execution is fixed at the shared-state boundary;
+  the suite is not serialised to hide it.
+- Test partitions follow coherent responsibilities and measured cost. A shard is
+  not a grab bag created merely to make reported duration look smaller.
+
+### Web lint and responsibility limits
+
+The web workspace uses ESLint flat configuration with typed strict and
+stylistic rules, Solid correctness, strict JSX accessibility, promise safety,
+exhaustive unions, import boundaries, regular-expression safety, test
+correctness and described/used suppression rules. All warnings and unused
+disable directives fail the local gate. Formatting remains Prettier's job.
+
+Handwritten TypeScript permits no `any`: explicit `any` and unsafe `any` flows
+through assignments, arguments, calls, member access, returns, assertions and
+operations are errors. Boundary values start as `unknown` and are validated or
+narrowed. `@ts-ignore`, `@ts-nocheck`, floating promises, non-null assertions,
+import cycles and unhandled closed-union cases are errors.
+
+Initial ceilings, excluding blank and comment-only lines, are cyclomatic
+complexity 12, cognitive complexity 15, nesting depth 4, nested callbacks 3,
+five parameters, 40 statements, 80 lines per function, 500 lines per source
+module and one class per module. Tests and generated fixtures may have a
+separately justified module-size ceiling but retain the same control-flow
+limits.
+
+These ceilings trigger design review: identify the operation's responsibility,
+reason to change, inputs, outputs, invariants and side effects; then split,
+recombine or reshape the interface accordingly. Extracting the final lines,
+passing one context bag or creating a generic helper module solely to clear a
+number does not pass review. Exceptions are narrow, described and justified by
+a domain or platform constraint.
 
 ## 2. Behaviour vector format
 
@@ -126,6 +175,9 @@ After every generated step it checks:
 9. every delivery order produces the same merge root and conflict names; and
 10. strong acknowledgement occurs only after every required-zone/protection
     predicate and the ACID converged-head commit, never after eventual zones.
+11. every message and stored-data claim is revalidated for its operation; a
+    corrupt, stale, misbound, oversized, replayed or unauthorised value can
+    neither mutate state nor be returned as valid content.
 
 Multi-partition invariants additionally assert one owner per scope, no
 dual-owner converged-head handoff interval, explicit local branches, direct
@@ -262,5 +314,5 @@ A release candidate records:
 - upgrade/rollback and recovery paths tested;
 - measured MUP targets and soak duration.
 
-CI status alone is not this evidence. Failed or skipped required gates cannot be
-described as passed.
+One aggregate pass/fail indicator alone is not this evidence. Failed or skipped
+required gates cannot be described as passed.

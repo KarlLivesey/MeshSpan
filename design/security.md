@@ -27,6 +27,12 @@ MeshSpan protects:
 | Voters | Crash/partition faults tolerated; malicious majority is out of scope |
 | Build/update source | Untrusted until signature, provenance and gates verify it |
 
+Trust is operation-scoped and non-transitive. Authentication, TLS, a successful
+system call, a database constraint, a catalogue row, a checksum, a durability
+receipt or an earlier scrub can contribute evidence; none converts its subject
+into permanently trusted data. Each boundary validates the exact properties its
+operation relies on.
+
 ## Identity and key hierarchy
 
 - A new node generates its identity private key locally.
@@ -81,6 +87,9 @@ credential blobs are not accepted.
 
 ## Network and protocol threats
 
+- Every public or private message is parsed as hostile, even when sent by an
+  authenticated administrator, enrolled node, current voter or another local
+  component in the same process.
 - Quinn connections require mTLS after enrolment and exact certificate-to-hello
   identity agreement.
 - Every message family has size/count/depth limits before allocation.
@@ -95,6 +104,10 @@ credential blobs are not accepted.
 
 ## Storage and data threats
 
+- All stored bytes and metadata are suspect on every read. Consumers verify
+  bound identity, length, digest, generation/revision and semantic constraints
+  before the bytes can affect visible content, authority, placement, repair,
+  deletion, snapshots, backup or recovery.
 - Provider paths are daemon-private and never mirror user paths.
 - Target markers bind mesh, target ID and generation; path reuse or replaced
   media cannot inherit authority accidentally.

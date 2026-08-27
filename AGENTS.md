@@ -22,8 +22,8 @@ decision explicitly.
 1. **Keep it simple.** Prefer one clear state machine and one source of truth.
 2. **Protect correctness.** Refuse unsafe work; never invent durability,
    authority, identity or success.
-3. **Prove changes locally.** CI confirms a locally tested change; it is not the
-   primary debugging loop.
+3. **Prove changes locally.** Local verification is the sole early-development
+   gate. Do not add or depend on GitHub Actions until an explicit later decision.
 4. **Test behaviour.** Every meaningful change needs a test that fails for the
    missing or incorrect behaviour and passes after the change.
 5. **Assert invariants.** Reject contradictions at the boundary instead of
@@ -36,9 +36,11 @@ decision explicitly.
 
 ## Safety invariants
 
-- Only a voter majority may advance a partition's converged head or commit
-  security-critical control metadata. Ordinary filesystem work may commit to a
-  durable local CoW branch during isolation and must advertise that exact scope.
+- Only a valid leader with an active-plan consensus-write quorum may advance a
+  partition's converged head or commit security-critical control metadata. A
+  leader is valid only after satisfying the active election predicate. Ordinary
+  filesystem work may commit to a durable local CoW branch during isolation and
+  must advertise that exact scope.
 - Authority is per metadata partition; every mutable aggregate has exactly one
   converged owner. Outage branches never become a second control-plane authority
   and reconcile into that owner's head without discarding acknowledged content.
@@ -52,6 +54,10 @@ decision explicitly.
   failure.
 - One-node and many-node operation use the same records and code paths.
 - Storage location alone never authorises shard deletion.
+- Treat every byte and every claim about it as suspect. Presence, a successful
+  system call, an authenticated peer, a database row, a receipt, a checksum or a
+  prior verification result is evidence only within its bound identity,
+  authority, revision and lifetime; revalidate at every trust-boundary crossing.
 - Provider folders contain private chunks, not the user-visible filesystem.
 - Access services use the filesystem/domain service; they do not query database
   tables or provider folders directly.
@@ -112,7 +118,11 @@ operations or storage paths through the private protocol.
 - Use descriptive names and small modules with one clear responsibility.
 - Use plain language. Prefer a longer familiar phrase to compressed project
   jargon that a new contributor cannot infer.
-- Split code along domain operations and invariants, not arbitrary line counts.
+- Complexity and size ceilings are responsibility alarms. Fix a violation by
+  reconsidering ownership, control flow, inputs, outputs and side effects. Split
+  or recombine domain operations where that clarifies the model; never extract an
+  arbitrary suffix into a helper, context bag or generic `utils` module merely to
+  satisfy a number.
 - Within a module, put the public operation before the private helpers it calls
   so the main flow reads from top to bottom.
 - Keep pure decisions separate from IO and make side effects explicit.
@@ -129,6 +139,95 @@ operations or storage paths through the private protocol.
   narrate syntax.
 - No new dependency without a concrete need, maintenance/legal review and a
   reason the standard library or current workspace cannot do the job cleanly.
+
+## TypeScript and ESLint contract
+
+Use ESLint flat configuration with type information. Start from
+`@eslint/js` recommended plus `typescript-eslint` `strictTypeChecked` and
+`stylisticTypeChecked`, then apply Solid, JSX accessibility, regular-expression,
+import, test and ESLint-directive rules. Do not enable an `all` preset blindly;
+every additional rule must have a known purpose and no conflict with the typed
+configuration. Prettier owns formatting; deprecated ESLint formatting rules do
+not.
+
+All warnings fail the local gate. Unused disable directives fail it too.
+Handwritten source and tests follow these rules; generated and vendored files are
+excluded at their directory boundary rather than weakened with inline comments.
+
+Type safety is non-negotiable:
+
+- `any` is forbidden, including explicit `any` and inferred `any` flowing
+  through assignment, arguments, calls, member access, returns, assertions or
+  operations. Untrusted data enters as `unknown` and is narrowed or validated.
+- `@ts-ignore` and `@ts-nocheck` are forbidden. A narrowly scoped
+  `@ts-expect-error` is allowed only in a type-test fixture with a description of
+  the exact error being proved.
+- Floating, misused and unhandled promises, awaiting non-promises, throwing
+  non-errors and unsafe async callbacks are errors.
+- Switches over closed unions are exhaustive. Unnecessary assertions,
+  conditions, type arguments, conversions and non-null assertions are errors.
+- Public module boundaries have explicit return types. Type-only imports and
+  exports are consistent; import cycles, self-imports, duplicate imports and
+  undeclared dependencies are errors.
+- Equality is strict; fallthrough, unreachable loops, accidental constructor
+  returns, prototype-built-in calls, dynamic evaluation and production
+  `console`, `debugger` or `alert` calls are errors.
+- Solid reactivity rules and strict JSX accessibility rules apply to every
+  component. Security-sensitive regular expressions use the recommended regexp
+  rules.
+- Domain date/time arithmetic uses `Temporal`; direct use of JavaScript `Date`
+  for domain logic is a restricted global.
+- Layer boundaries use restricted imports. A gateway, view or persistence
+  module may not bypass its declared domain interface.
+
+Initial maintainability ceilings are:
+
+| Measure | Maximum |
+| --- | ---: |
+| Cyclomatic complexity | 12 |
+| Cognitive complexity | 15 |
+| Nested blocks | 4 |
+| Nested callbacks | 3 |
+| Parameters | 5 |
+| Statements per function | 40 |
+| Non-blank, non-comment lines per function | 80 |
+| Non-blank, non-comment lines per source module | 500 |
+| Classes per module | 1 |
+
+Test vectors and generated fixtures may use a separately justified module-size
+ceiling, but their functions keep the same control-flow limits. A rule exception
+must be the narrowest possible suppression, have a description, and explain the
+domain reason. Raising a ceiling requires a reviewed configuration change; it is
+not an inline escape hatch.
+
+TypeScript compiler projects enable `strict`, `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, `noImplicitOverride`,
+`noFallthroughCasesInSwitch`, `noPropertyAccessFromIndexSignature`,
+`useUnknownInCatchVariables`, `verbatimModuleSyntax` and `isolatedModules`.
+
+## Rust lint contract
+
+- Run `rustfmt --check` and Clippy across the workspace, all targets and all
+  features with warnings denied.
+- Configure workspace lints centrally. Use the normal Clippy groups plus a
+  reviewed pedantic selection; do not enable the complete `restriction` or
+  `nursery` group.
+- Runtime and library code denies `unwrap`, `expect`, `panic!`, `todo!`,
+  `unimplemented!`, debug macros and stray stdout/stderr. A test or statically
+  proved startup constant may use a narrow exception whose reason is evident.
+- Deny unsafe code by default. Any future isolated unsafe boundary needs its own
+  accepted safety contract and must still deny unsafe operations inside an
+  `unsafe fn` unless they appear in an explicit unsafe block.
+- Deny unreachable public items, unexpected configuration names, redundant
+  clones, needless mutable references and undocumented public APIs at exported
+  boundary crates.
+- Configure Clippy responsibility tripwires for excessive arguments, cognitive
+  complexity, type complexity and function length. Resolve them using the same
+  ownership and data-flow review required for TypeScript, not mechanical helper
+  extraction.
+- A lint exception is scoped to the smallest item and states the invariant or
+  platform constraint that requires it. Crate-wide blanket allowances are not
+  acceptable.
 
 ## Database and transaction rules
 
@@ -184,6 +283,17 @@ Keep fast suites independently runnable and parallel. A new slow test belongs in
 an explicitly named suite with its expected duration and reason. Do not make all
 pull requests wait for hardware or soak tests.
 
+Tests run concurrently by default at both lane and case level. Rust tests use the
+normal parallel harness or `cargo-nextest`; do not add a global serial-test
+mechanism or routine `--test-threads=1`. Vitest, Playwright and deterministic
+simulation use bounded worker pools. Each case owns unique temporary folders,
+database files, mesh identities, clocks, random seeds and dynamic loopback ports.
+Do not mutate process-wide working directory or environment from an in-process
+test; use an explicitly configured child process when that behaviour must be
+tested. Serial execution is allowed only around a named, genuinely exclusive
+physical resource and must not block unrelated lanes. If concurrency exposes a
+race, fix the shared state instead of serialising the suite.
+
 ## Local validation
 
 Once the workspace exists, the root task runner will provide canonical commands
@@ -209,6 +319,9 @@ For a defect:
 6. inspect the diff for unrelated churn.
 
 Do not bounce speculative fixes through GitHub Actions.
+
+Do not create `.github/workflows` during early implementation. Release
+automation remains a documented future stage, not a current development gate.
 
 If a test first fails after the current change, investigate it as a regression
 from that change. Do not repeatedly stash, revert or push variants merely to ask

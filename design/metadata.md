@@ -286,7 +286,8 @@ opening public services.
 
 ## Turso eligibility
 
-The same schema and query corpus may run against Turso in CI. Runtime replacement requires:
+The same schema and query corpus may run against Turso in an optional local compatibility lane.
+Runtime replacement requires:
 
 1. identical semantic results and constraint failures;
 2. acknowledged-commit survival under power-loss modelling;

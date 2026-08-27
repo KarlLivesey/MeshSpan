@@ -5,6 +5,16 @@ does not expose the database layout.
 
 ## 1. Transport and encoding
 
+- Every message is hostile input, including one carried over authenticated mTLS
+  by an enrolled node or voter. Authentication establishes sender identity only;
+  it does not establish authority, freshness, correctness or safe structure.
+- Before allocation or state access, decode with canonical framing and hard
+  size/count/depth limits. Then validate mesh and sender binding, protocol
+  version, partition/routing scope, incarnation, epoch/revision, deadline,
+  capability, authorisation, replay identity and message-specific semantics.
+- A receiver independently verifies claims and payload integrity needed for the
+  operation. It never trusts a sender's assertion that bytes were validated,
+  stored, committed, authorised or current.
 - Private node traffic uses QUIC implemented with Quinn.
 - Every established peer connection uses mutual TLS and binds the certificate to
   one mesh ID and node ID.
@@ -55,6 +65,11 @@ Every completed request has one of:
 Transport loss has no implied outcome. Mutating callers use `OperationStatus`
 before deciding whether to retry. Error codes are stable protocol values;
 human-readable text is not parsed.
+
+Malformed or unauthorised traffic produces only bounded, non-secret diagnostic
+detail. Validation failure cannot partially mutate state, allocate from an
+unbounded claim, panic the process or become a protocol oracle for credentials,
+keys, paths, topology or record existence.
 
 ## 4. Connection messages
 
