@@ -99,7 +99,7 @@ guarded cleanup lifecycle.
 
 ## Restore
 
-Restore never rewinds Raft or overwrites the current head in place. It creates a
+Restore never rewinds consensus or overwrites the current head in place. It creates a
 new namespace commit whose content root derives from the snapshot, records the
 pre-restore current head as its parent/audit context, and atomically makes the
 new commit current. The snapshot and intervening commits remain immutable until

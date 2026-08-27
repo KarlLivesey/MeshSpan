@@ -29,15 +29,16 @@ Status: **draft for review**.
 | D-021 | Replicated configuration selects and configures implementations but never distributes executable plugin code. |
 | D-022 | Published data, namespace and configuration use semantic copy-on-write with immutable revisions and atomic head changes; mutable coordination records remain explicitly separate. |
 | D-023 | MeshSpan supports cheap read-only volume snapshots, scheduled retention and restore-as-new-head as core functionality. |
-| D-024 | Stable redundant voter tiers grow automatically through 3, 5, 7 and 9 independent eligible hosts; one and two voters are supported establishment states. |
+| D-024 | Voter sets support every size from one through nine. Automatic plans normally prefer stable odd tiers, but even sets are first-class where separate election/commit/read quorums improve a topology; every plan reports its exact limitations. |
 | D-025 | Erasure coding uses recorded systematic Reed–Solomon `k+m` stripes: any `k` verified slices reconstruct and any `m` slice losses are recoverable, subject to failure-domain placement proof. |
-| D-026 | A growing mesh may use multiple Raft-backed metadata partitions and availability cells; each control record and converged head has exactly one mutation authority, while filesystem outage branches reconcile into it. Small meshes use the same partitioned record model. |
-| D-027 | Campus partition tolerance combines cell-local services with durable filesystem branches: disconnected cells may both write ordinary content, while only one majority-owned converged head and control-plane authority exist. |
+| D-026 | A growing mesh may use multiple consensus-backed metadata partitions and availability cells; each control record and converged head has exactly one mutation authority, while filesystem outage branches reconcile into it. Small meshes use the same partitioned record model. |
+| D-027 | Campus partition tolerance combines cell-local services with durable filesystem branches: disconnected cells may both write ordinary content, while only one quorum-authorised converged head and control-plane authority exist. |
 | D-028 | Volume, folder and file scopes may require complete locally decodable copies in one or more administrator-defined cells; writes remain availability-first and remote cells may be explicitly lagging. |
 | D-029 | Filesystem writes may commit durably to local CoW branches without wider quorum, advertise exact durability scope and reconcile automatically without discarding acknowledged alternatives. |
 | D-030 | Security-critical control-plane mutations remain authority-gated; offline merge is limited to defined filesystem/content operations unless a later constrained delegation is designed. |
 | D-031 | Normal writes use availability-first eventual convergence; a scope may instead require a declarative strong publication barrier over verified nodes, zones and protection predicates followed by one ACID converged-head commit. Only zones marked required hold that barrier. |
 | D-032 | MeshSpan exposes one appliance daemon and intent-level controls; internal daemon roles, consensus, placement, coding and reconciliation are automatic and do not become routine operator configuration. |
+| D-033 | Consensus MUST support topology-aware flexible/hierarchical quorums and independently model election, consensus-write and linearizable-read quorum families. Every active and transitional plan is mechanically checked for its required intersections before use. |
 
 ## Proposed defaults requiring review
 
@@ -57,7 +58,7 @@ Concrete recommendations and proof gates for every item are in
 
 | ID | Question |
 | --- | --- |
-| O-001 | Which Rust Raft implementation meets the storage, membership and testability requirements? |
+| O-001 | Does the proposed small MeshSpan-owned consensus core and its proof programme adequately meet the mandatory quorum contract? |
 | O-002 | What exact simultaneous-failure policy shapes are exposed in the ordinary and advanced UI? |
 | O-003 | Which SMB dialects and optional features are required for the first MUP? |
 | O-004 | What chunk size and erasure geometries meet the first performance and repair targets? |

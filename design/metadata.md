@@ -40,10 +40,11 @@ immutable shards, never a metadata database.
 ## Consensus tables
 
 ```text
-raft_vote(term, voted_for)
-raft_log(log_index, term, entry_kind, payload)
-raft_membership(log_index, configuration)
-raft_snapshots(snapshot_id, last_index, last_term, digest, local_path, state)
+consensus_vote(term, voted_for, membership_epoch)
+consensus_log(log_index, term, entry_kind, payload)
+consensus_quorum_plans(log_index, membership_epoch, canonical_plan, proof_digest)
+consensus_snapshots(snapshot_id, last_index, last_term, membership_epoch,
+                    proof_digest, digest, local_path, state)
 ```
 
 Consensus payloads are versioned semantic commands. Snapshot bytes are streamed, verified and
@@ -71,7 +72,7 @@ digest under the same operation ID is rejected.
 The branch store has separate `local_branch_*` tables and applies the same
 crash-safe transaction rule to one immutable namespace commit, its operation
 outcome, local durability evidence, debt and branch-head advance. It does not
-allocate a fake Raft log index or write the replicated `namespace_*` tables.
+allocate a fake consensus log index or write the replicated `namespace_*` tables.
 Reconciliation copies validated canonical records into the owning state machine
 through bounded typed commands; it never attaches or writes a peer database
 directly.
@@ -278,7 +279,7 @@ backup copies cannot vote or create a new authority by themselves.
 Migrations run before service admission and are transactional where the engine permits. A failed
 migration leaves the previous version usable or fails closed with recovery guidance.
 
-An authoritative backup is a logical state-machine snapshot at an exact applied Raft position plus
+An authoritative backup is a logical state-machine snapshot at an exact applied consensus position plus
 encrypted key material and a manifest digest. Copying a live database file is not the backup
 contract. Restore verifies mesh identity, schema, snapshot digest, membership and secrets before
 opening public services.

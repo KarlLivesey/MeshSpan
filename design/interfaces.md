@@ -40,7 +40,7 @@ Replaceability applies to these major boundaries:
 | Access connector | embedded HTTPS and SMB | filesystem/IAM outcomes and acknowledgement rules |
 | Administration client | shipped Solid web panel | public administration API only |
 | Metadata repository | SQLite | transactions, migrations, snapshots and domain invariants |
-| Consensus engine | selected Raft engine | one converged control/head history, membership and read barriers |
+| Consensus engine | MeshSpan consensus core | one converged control/head history, quorum plans and read barriers |
 | Coding scheme | selected Reed–Solomon implementation | recorded layout, deterministic vectors and verified reconstruction |
 | Placement policy | fault-scenario planner | hard protection proof and revision-bound plans |
 | Authentication handler | password, WebAuthn, TOTP and others | typed secret handling, assurance and revocation |
@@ -120,16 +120,19 @@ their immutable commits later.
 
 ## Consensus engine
 
-**Owns:** terms, log replication, membership and snapshot installation.
+**Owns:** terms, log replication, flexible quorum plans, membership and snapshot
+installation.
 
 ```text
 propose(versioned_command) -> committed_log_position | not_leader | unavailable
 read_barrier() -> committed_log_position
-change_membership(joint_transition) -> committed_configuration
+change_quorum_plan(proved_joint_transition) -> committed_configuration
 ```
 
-The engine does not interpret user permissions, namespace records or shards.
-Application code does not mutate its log/storage directly.
+The engine independently evaluates election, consensus-write and linearizable
+read quorum families. The engine does not interpret user permissions, namespace
+records, fault-placement policy or shards. Application code does not mutate its
+log/storage directly. See [`consensus.md`](consensus.md).
 
 ## Metadata repository
 

@@ -108,7 +108,7 @@ CFG-001–008, EXT-002–004, EXT-007.
 Build:
 
 - Quinn/mTLS node identity negotiation;
-- chosen Raft implementation behind the consensus boundary;
+- MeshSpan's owned leader-based consensus core behind the consensus boundary;
 - consensus, typed metadata command/query/status and snapshot streams;
 - one-node bootstrap, administrator join grants and headless enrolment;
 - one-, two- and three-voter operation using the same state model;

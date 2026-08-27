@@ -58,13 +58,14 @@ Status: **draft for review**.
 - **CLU-008** A node MUST support headless startup with a daemon state directory, storage paths and
   join material.
 - **CLU-009** Metadata voter membership MUST remain independent of unbounded storage membership.
-- **CLU-010** For each metadata partition, only its voter-majority leader may advance the converged
+- **CLU-010** For each metadata partition, only a leader elected under its committed quorum plan
+  and still able to satisfy its consensus-write quorum may advance the converged
   authoritative head. A component without that authority MAY acknowledge a causally scoped local
   filesystem branch commit but MUST NOT present it as globally converged.
 - **CLU-011** A stale node or process incarnation MUST be fenced from publishing state after
   replacement.
-- **CLU-012** Eligible storage nodes SHOULD be promotable to replace unavailable voters through a
-  surviving majority.
+- **CLU-012** Eligible storage nodes SHOULD be promotable to replace unavailable voters through
+  surviving authority after full learner catch-up and a safe quorum-plan transition.
 - **CLU-013** Discovery MAY advertise non-sensitive enrolment endpoints over local IPv4 and IPv6,
   but manual endpoint entry MUST remain available and identity MUST NOT depend on an IP address.
 - **CLU-014** Possession of a valid administrator-issued join grant MUST be sufficient to perform
@@ -75,20 +76,22 @@ Status: **draft for review**.
 - **CLU-016** Repeated cable unplug/replug, link flapping, address change, multi-way partition,
   process restart and host power loss MUST be treated as normal recoverable events rather than
   requiring manual membership repair.
-- **CLU-017** While a voter majority and the required verified shards remain reachable, public
+- **CLU-017** While a valid partition authority, its required consensus-write quorum and the
+  required verified shards remain reachable, public
   services MUST continue within the declared protection policy despite physical churn.
 - **CLU-018** When authority or sufficient data is physically unavailable, surviving daemons MUST
   remain diagnosable, MUST NOT acknowledge unsafe work and MUST resume eligible service
   automatically after authority/data return and reconciliation.
-- **CLU-019** Voter placement and count MUST grow automatically across independent eligible hosts
-  using stable odd tiers of 3, 5, 7 and 9; one- and two-voter meshes remain supported establishment
-  states with their exact availability limitations reported.
+- **CLU-019** Voter placement and count MUST grow automatically across independent eligible hosts.
+  Plans MUST support every voter count from one through nine, normally prefer stable odd tiers and
+  use even counts where a proved flexible plan improves the declared topology. Exact availability
+  limitations MUST be reported.
 - **CLU-020** Adding independent eligible nodes MUST NOT introduce a new mandatory single gateway,
   storage node or control endpoint. Authority, access and repair work SHOULD become more resilient
   and distributable as the mesh grows.
 - **CLU-021** One mesh MUST support multiple metadata partitions and availability cells so loss of
   connectivity to one building, site or network region does not stop unrelated partitions that
-  retain their own voter majority and required data.
+  retain valid authority, their consensus-write quorum and required data.
 - **CLU-022** Every authoritative record MUST belong to exactly one metadata partition at a time;
   only that partition's committed log may mutate it.
 - **CLU-023** A one-node/small mesh MAY begin with one metadata partition, but it MUST use the same
@@ -96,15 +99,29 @@ Status: **draft for review**.
 - **CLU-024** Gateways MUST cache a signed, revisioned partition-routing table and contact the
   partition owning an operation directly; ordinary local-partition IO MUST NOT require a live
   campus-wide catalogue transaction.
-- **CLU-025** A cell-local voter majority MAY advance the converged head for its owned scope while
-  disconnected from the wider mesh. Any cell/node with valid isolation authorisation and storage
-  MAY advance an independent local branch, and reconnection MUST reconcile every branch without
-  allowing one to overwrite acknowledged history.
+- **CLU-025** A cell-local leader with valid authority and its consensus-write quorum MAY advance
+  the converged head for its owned scope while disconnected from the wider mesh. Any cell/node
+  with valid isolation authorisation and storage MAY advance an independent local branch, and
+  reconnection MUST reconcile every branch without allowing one to overwrite acknowledged history.
 - **CLU-026** Campus-wide identity/configuration authority MAY become temporarily unavailable during
   a partition while cell-owned filesystem work continues from an explicitly bounded committed
   identity/configuration revision.
 - **CLU-027** Moving a scope between metadata partitions MUST be an explicit fenced copy-on-write
   handoff that gives mutation authority to at most one partition throughout the transition.
+- **CLU-028** Every metadata partition MUST have separately defined election, consensus-write and
+  linearizable-read quorum families; a majority quorum is one valid plan rather than a fixed rule.
+- **CLU-029** Quorum predicates MUST support nested topology thresholds and weights sufficient to
+  express hierarchical quorums over stable voter identities.
+- **CLU-030** Every election quorum MUST intersect every other election quorum and every
+  consensus-write quorum. Every linearizable-read quorum MUST intersect every election quorum.
+- **CLU-031** A quorum-plan compiler MUST enumerate or otherwise exactly prove all required
+  intersections, minimal cut sets and declared failure-survival properties before activation.
+- **CLU-032** Active quorum meaning MUST be immutable within a committed membership epoch and MUST
+  NOT be recomputed from current reachability, latency, free space or a failure detector.
+- **CLU-033** A voter or quorum-plan change MUST use a committed safe transition that proves the
+  necessary old/new cross-intersections and admits no unsynchronised voter.
+- **CLU-034** Ordinary administration MUST express desired failure survival and locality rather
+  than election, read or write quorum arithmetic; MeshSpan MUST compile and explain the plan.
 
 ## Storage targets and fault groups
 
@@ -464,8 +481,8 @@ Status: **draft for review**.
   activation and required healing MUST begin automatically and converge without waiting for an
   administrator to acknowledge the outage.
 - **OPS-016** The ordinary user experience MUST use files, folders, people, safety and place
-  vocabulary. Branches, shards, Raft terms and coding geometry MAY appear in advanced diagnostics
-  but MUST NOT be required to use the appliance.
+  vocabulary. Branches, shards, consensus terms and coding geometry MAY appear in advanced
+  diagnostics but MUST NOT be required to use the appliance.
 
 ## Persistence, upgrade and recovery
 
@@ -479,8 +496,9 @@ Status: **draft for review**.
   filesystem.
 - **PER-008** Protocol, command, schema, manifest, provider, capability and export formats MUST be
   independently versioned and reject unknown incompatible versions clearly.
-- **PER-009** Rolling upgrade planning MUST preserve voter majority and working gateways, negotiate
-  mixed-version features explicitly and block operations unsupported by any required participant.
+- **PER-009** Rolling upgrade planning MUST preserve a valid election path, consensus-write quorum
+  and working gateways, negotiate mixed-version features explicitly and block operations
+  unsupported by any required participant.
 - **PER-010** Recoverable metadata snapshots SHOULD be copied to protected storage targets without
   allowing those copies to participate in consensus.
 - **PER-011** Catastrophic metadata recovery MUST use an administrator-held recovery bundle plus a

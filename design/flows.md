@@ -29,7 +29,7 @@ rolls back bootstrap; it never exposes a half-created mesh or default password.
 
 **Actor:** an authenticated administrator, then an unenrolled daemon.
 
-**Authority:** the catalogue/identity partition voter majority.
+**Authority:** the catalogue/identity partition's valid leader and consensus-write quorum.
 
 1. The administrator creates a grant with expiry, allowed roles, use count and
    optional host/fault-group constraints.
@@ -202,21 +202,24 @@ remain; otherwise the caller receives an explicit availability error.
 
 The same operation ID with a different digest is always rejected.
 
-## 12. Majority loss and recovery
+## 12. Authority loss and recovery
 
-- For each metadata partition, any connected component with that partition's
-  voter majority elects at most one leader and may advance the converged head and
-  security-critical control state.
-- A component without that majority may durably commit authorised ordinary
-  filesystem operations to its local CoW branch when it has the required base
-  bytes and writable storage. Its response states `node_local` or
+- For each metadata partition, a connected component may elect a leader only if
+  it satisfies the committed election predicate. An already valid leader may
+  advance the converged head and security-critical control state only while its
+  component satisfies the committed consensus-write predicate.
+- A component without either form of authority may durably commit authorised
+  ordinary filesystem operations to its local CoW branch when it has the
+  required base bytes and writable storage. Its response states `node_local` or
   `cell_replicated`; it never claims global convergence or absent protection.
-- If a five-way split leaves no majority, no component advances the converged
+- If a multi-way split leaves no component with a valid leader plus commit
+  quorum and no component able to elect one, no component advances the converged
   head or control metadata, but every physically capable component may continue
   its own filesystem branch. Unrelated partitions continue independently.
-- When connectivity returns, Raft restores one converged owner, branch summaries
-  and immutable objects are exchanged, and deterministic merge commits include
-  every valid operation. Repair then restores protection and locality debt.
+- When connectivity returns, consensus restores one converged owner, branch
+  summaries and immutable objects are exchanged, and deterministic merge commits
+  include every valid operation. Repair then restores protection and locality
+  debt.
 
 No administrator picks an internal history. True concurrent content collisions
 become deterministic conflict siblings while every acknowledged version remains
@@ -228,12 +231,13 @@ available. The exact rules are in
 1. Current authority marks a voter unavailable based on failure policy.
 2. It selects an eligible, caught-up node that has durable state storage and
    validated identity.
-3. Raft joint consensus adds the replacement voter.
-4. After it catches up and the new configuration commits, joint consensus
-   removes the failed voter if requested.
+3. The current plan adds the replacement as a learner and proves full catch-up.
+4. A proved joint old/new quorum-plan transition adds the replacement voter and,
+   when requested, retires the failed voter.
 
-No minority component can promote itself. Stable recommended voter counts are
-odd; transitions remain safe while moving through joint configurations.
+No unauthorised component can promote itself. Automatic plans normally prefer
+odd voter counts, but even counts are first-class when their proved quorum
+families improve the declared topology.
 
 ## 14. Repair and return
 

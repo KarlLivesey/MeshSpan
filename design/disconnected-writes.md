@@ -70,7 +70,7 @@ logical instant for display plus causal clock
 signature/authenticated origin
 ```
 
-One node serializes its own branch. A cell with a local Raft collective may
+One node serializes its own branch. A cell with a local consensus group may
 replicate and order a shared cell branch. Neither requires the wider campus
 partition leader to accept ordinary filesystem content.
 

@@ -14,7 +14,7 @@ has:
 
 - local HTTPS/SMB gateways;
 - local storage for the data it promises to serve during isolation;
-- an odd local voter majority for its owned metadata partitions; and
+- a proved local quorum plan for its owned metadata partitions; and
 - cached signed identity/configuration and routing revisions.
 
 Cells are not hidden failure domains. Buildings, circuits, rooms, switches,
@@ -127,8 +127,10 @@ return a clear unsupported/unavailable result rather than expose half a rename.
 
 ## Growing resilience
 
-- Voters grow through stable 3, 5, 7 and 9 tiers on independent eligible hosts
-  and relevant fault groups.
+- Automatic voter plans normally grow through stable 3, 5, 7 and 9 tiers on
+  independent eligible hosts, while first-class even-sized plans use separate
+  election, consensus-write and read quorums where the topology and declared
+  failure scenarios benefit.
 - Gateways can run in every cell against the same APIs and credentials.
 - Storage placement distributes stripes across eligible independent domains and
   keeps repair alternatives outside each protected failure union.

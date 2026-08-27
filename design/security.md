@@ -1,7 +1,7 @@
 # Security and trust model
 
 Status: draft for review. MeshSpan assumes faults and hostile input everywhere,
-but does not claim Byzantine consensus against a malicious voter majority.
+but does not claim Byzantine consensus against a malicious authorised quorum.
 
 ## Assets
 

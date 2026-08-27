@@ -20,14 +20,16 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 11. [copy-on-write.md](copy-on-write.md) — immutable state roots, snapshots, restore and reclamation.
 12. [disconnected-writes.md](disconnected-writes.md) — availability-first local commits and reconciliation.
 13. [consistency.md](consistency.md) — eventual writes and declarative strong acknowledgement barriers.
-14. [scaling.md](scaling.md) — campus-scale availability cells and metadata partitioning.
-15. [data-lifecycle.md](data-lifecycle.md) — write, read, deletion, repair and drain state machines.
-16. [protocol.md](protocol.md) — private node protocol over Quinn.
-17. [flows.md](flows.md) — complete create, join, access and failure operation sequences.
-18. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
-19. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
-20. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
-21. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
+14. [consensus.md](consensus.md) — owned consensus core, flexible quorums and safety proof obligations.
+15. [scaling.md](scaling.md) — campus-scale availability cells and metadata partitioning.
+16. [data-lifecycle.md](data-lifecycle.md) — write, read, deletion, repair and drain state machines.
+17. [protocol.md](protocol.md) — private node protocol over Quinn.
+18. [flows.md](flows.md) — complete create, join, access and failure operation sequences.
+19. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
+20. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
+21. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
+22. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
+23. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
 
 ## Document rules
 

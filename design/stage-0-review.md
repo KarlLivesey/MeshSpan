@@ -11,7 +11,7 @@ operator surface; advanced options do not create alternate product paths.
 
 | ID | Recommendation | Needed before |
 | --- | --- | --- |
-| O-001 | Use OpenRaft behind MeshSpan's consensus contract, subject to the proof gate below | Stage 3 |
+| O-001 | Build a small MeshSpan-owned consensus core around mechanically proved flexible quorum plans; use established systems as references and differential oracles | Stage 3 |
 | O-002 | Offer plain failure presets; keep arbitrary simultaneous fault scenarios in Advanced | Stage 6 UI, Stage 8 enforcement |
 | O-003 | Implement a bounded SMB 3.1.1/3.0.2 profile over TCP 445; never SMB1 | Stage 7 |
 | O-004 | Use fixed CoW logical extents with benchmark-selected size/layout profiles; no content-defined chunking initially | Stage 8 |
@@ -23,53 +23,55 @@ operator surface; advanced options do not create alternate product paths.
 
 ### Recommendation
 
-Use the current tested stable OpenRaft release as the initial implementation
-behind MeshSpan's versioned consensus interface. Pin the exact dependency in the
-lockfile; upgrades require the same storage, restart, snapshot, membership and
-partition suites as the initial version.
+Implement a deliberately small MeshSpan-owned, leader-based replicated-log core
+behind the versioned consensus interface. Its quorum plan has independent
+election, consensus-write and linearizable-read predicates and supports nested
+topology thresholds. Compile every plan to minimal quorum sets and mechanically
+prove the required intersections before it can be committed.
 
-Why this is the smallest responsible choice:
+This replaces the earlier OpenRaft recommendation. Stock OpenRaft currently
+implements majority-of-each-set joint membership while listing flexible quorum
+and separate read/write quorums as unfinished roadmap work. `raft-rs` exposes a
+smaller core but has the same conventional quorum assumption, so MeshSpan would
+still own invasive election, commitment, read and reconfiguration changes.
 
-- it supplies Raft lifecycle, learners, membership changes, snapshots,
-  linearizable read barriers, metrics and shutdown behaviour;
-- its storage API separates log persistence from the state machine, matching the
-  separate consensus/metadata databases;
-- its network contract can be implemented over MeshSpan's Quinn/mTLS transport;
-- it publishes a storage conformance suite and production checklist; and
-- TiKV's `raft-rs` is highly credible but deliberately supplies only the
-  consensus core, leaving more scheduling, lifecycle and integration machinery
-  for MeshSpan to own.
-
-This is not trust by reputation. A recent OpenRaft release corrected serious
-quorum, snapshot-membership and liveness faults; MeshSpan therefore treats the
-library as replaceable code under adversarial tests, not as a proof of its own
-correctness.
+Use both as references rather than dependencies: OpenRaft for extended
+membership, storage rules, simulation and known failures; `raft-rs` for a small
+deterministic core/driver split. Flexible Paxos, FlexiRaft and ZooKeeper provide
+the quorum constructions. [`consensus.md`](consensus.md) defines the complete
+responsibility and safety boundary.
 
 ### Acceptance gate
 
-Before Stage 3 depends on it, the adapter must pass:
+Before Stage 3 depends on it, the consensus core must pass:
 
-- build, format, warning-denied lint and the complete suite on MeshSpan's latest
-  tested stable Rust toolchain;
-- the upstream storage conformance suite against MeshSpan's actual durable log
-  store;
-- deterministic 1/2/3/5/7/9-voter simulations including every multi-way split;
+- executable formal-model invariants for election uniqueness, leader
+  completeness, state-machine safety and linearizable read barriers;
+- exhaustive compilation and intersection proof for all active and transitional
+  plans through nine voters;
+- deterministic simulations for every voter count from one through nine,
+  including every multi-way split;
 - crash/power-loss injection at vote, append, flush, truncate, purge, apply,
   snapshot build/install and membership transitions;
-- learner catch-up and joint membership changes without admitting a lagging
-  voter into the active quorum;
+- learner catch-up and quorum-plan changes without admitting a lagging voter
+  into the active quorum;
 - stale leader, wrong-node-at-address and node-ID-reuse rejection over Quinn;
-- linearizable, exact-revision and explicitly stale read vectors; and
-- an on-disk migration fixture for every dependency upgrade.
+- linearizable, exact-revision and explicitly stale read vectors;
+- differential majority-plan traces against established Raft implementations;
+  and
+- an on-disk migration fixture for every consensus format change.
 
-Failure selects another consensus implementation through the existing contract;
-it does not weaken these gates.
+Failure blocks the consensus core from becoming authoritative; it does not
+weaken the gates or cause live topology to redefine a quorum.
 
 Primary references:
 
 - [OpenRaft production checklist](https://github.com/databendlabs/openraft/blob/main/openraft/src/docs/getting_started/getting-started.md)
-- [OpenRaft release history](https://github.com/databendlabs/openraft/releases)
+- [OpenRaft roadmap](https://github.com/databendlabs/openraft)
 - [`raft-rs` design boundary](https://github.com/tikv/raft-rs)
+- [Flexible Paxos](https://doi.org/10.4230/LIPIcs.OPODIS.2016.25)
+- [FlexiRaft](https://www.vldb.org/cidrdb/papers/2023/p83-yadav.pdf)
+- [ZooKeeper hierarchical quorums](https://zookeeper.apache.org/doc/current/zookeeperHierarchicalQuorums.html)
 
 ## O-002 — failure-policy user experience
 

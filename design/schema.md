@@ -29,22 +29,25 @@ store both display and canonical forms.
 These exist independently on each voter and are never replicated by SQL.
 
 ```text
-raft_vote(
-  singleton PK, partition_id, current_term, voted_for_node_id NULL, persisted_at
+consensus_vote(
+  singleton PK, partition_id, current_term, voted_for_node_id NULL,
+  membership_epoch, persisted_at
 )
 
-raft_log(
+consensus_log(
   log_index PK, term, entry_kind, entry_version, payload, payload_digest
 )
 
-raft_membership(
-  log_index PK -> raft_log, configuration_version, configuration_payload
+consensus_quorum_plans(
+  log_index PK -> consensus_log, membership_epoch, plan_version,
+  canonical_plan, proof_digest
 )
 
-raft_snapshots(
-  snapshot_id PK, partition_id, last_log_index, last_log_term, membership_payload,
-  schema_version, state_revision, byte_length, digest, local_path, state,
-  created_at, installed_at NULL
+consensus_snapshots(
+  snapshot_id PK, partition_id, last_log_index, last_log_term,
+  membership_epoch, quorum_plan_payload, proof_digest, schema_version,
+  state_revision, byte_length, digest, local_path, state, created_at,
+  installed_at NULL
 )
 ```
 
