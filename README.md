@@ -10,6 +10,8 @@ recovering from routine failures without an administrator repairing internal sta
 - Protect data across independent machine and storage-device failures, then detect damage and heal
   automatically.
 - Start usefully on one machine and grow without requiring a redesign or specialist administration.
+- Keep ordinary file work available on disconnected nodes/sites and reconcile it automatically when
+  links return, while preserving every acknowledged version.
 - Provide simple cluster-wide users, permissions and administration.
 - Serve files through built-in access endpoints, initially HTTPS and SMB, without exposing raw
   storage folders.
@@ -35,7 +37,7 @@ and heal redundancy automatically. It must never claim protection or durability 
 Normal work must be fast and efficient. Small operations must not stall behind unrelated global
 work, and large transfers must use bounded parallelism without wasting memory, CPU, disk or network
 capacity. The development feedback loop must also stay fast enough to catch failures locally before
-code reaches CI.
+code is pushed.
 
 ### 4. Flexibility enables growth
 
@@ -55,6 +57,9 @@ administrator to operate a separate certificate system.
 
 MeshSpan is a clean-slate, pre-alpha project. No compatibility or stability guarantee applies
 before version 1.0.
+
+The draft requirements, architecture and implementation order are collected in the
+[design review pack](design/README.md). They are not locked until explicitly accepted.
 
 ## GPL-2.0-only
 
