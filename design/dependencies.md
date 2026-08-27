@@ -174,7 +174,7 @@ library dependencies.
 | `@solidjs/web` `2.0.0-rc.3` | Solid 2 DOM renderer paired exactly with the runtime prerelease |
 | `@solidjs/router` `2.0.0-next.18` | Solid-2-compatible URL routing and nested user/admin panel layouts |
 | `@js-temporal/polyfill` | Temporal until every supported browser provides the required API natively |
-| `valibot` | Small runtime validation layer for untrusted API, route and form inputs |
+| `zod` 4.x | Runtime validation and type narrowing for untrusted API, route, persisted-browser and form inputs |
 | `openapi-fetch` | Thin typed wrapper over native `fetch`, if OpenAPI is selected as the public API source |
 | `@kobalte/core` | Candidate accessible primitives for dialogs, menus, selects and focus management |
 
