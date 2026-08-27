@@ -24,10 +24,11 @@ updates must pass the same local and CI gates as a human change.
 | TypeScript | 7.x | Strict web application and generated API types |
 | pnpm | Current pinned stable | Reproducible JavaScript dependency and workspace management |
 
-The requested Solid 2 package is not published at the time of this review:
-`solid-js` currently resolves to 1.9.15. Web implementation must not silently
-substitute Solid 1; either Solid 2 must be available or the product decision must
-be explicitly amended before that stage starts.
+Solid 2 is available as the `next` release candidate `solid-js@2.0.0-rc.3`.
+MeshSpan will pin that exact prerelease rather than accidentally resolving the
+`latest` tag, which currently remains on Solid 1. Companion packages must use
+their Solid-2-compatible prerelease lines and pass the complete panel suite
+before any upgrade.
 
 ## Rust production dependencies
 
@@ -169,8 +170,9 @@ library dependencies.
 
 | Direct dependency | Need |
 | --- | --- |
-| `solid-js` 2.x | Requested reactive UI runtime; currently blocked because 2.x is unpublished |
-| `@solidjs/router` | URL routing and nested user/admin panel layouts |
+| `solid-js` `2.0.0-rc.3` | Pinned Solid 2 reactive runtime from the `next` tag |
+| `@solidjs/web` `2.0.0-rc.3` | Solid 2 DOM renderer paired exactly with the runtime prerelease |
+| `@solidjs/router` `2.0.0-next.18` | Solid-2-compatible URL routing and nested user/admin panel layouts |
 | `@js-temporal/polyfill` | Temporal until every supported browser provides the required API natively |
 | `valibot` | Small runtime validation layer for untrusted API, route and form inputs |
 | `openapi-fetch` | Thin typed wrapper over native `fetch`, if OpenAPI is selected as the public API source |
@@ -187,11 +189,11 @@ native `fetch`, CSS and browser platform APIs are sufficient initially.
 | --- | --- |
 | `typescript` 7.x | Strict type checking and project references |
 | `vite` | Fast development/build pipeline and static production bundle |
-| `vite-plugin-solid` | Solid compiler integration |
+| `vite-plugin-solid` `3.0.0-next.27` | Solid-2-compatible compiler integration |
 | `@types/node` | Node 26 build-script types only |
 | `openapi-typescript` | Generated public API types, only if OpenAPI is selected |
 | `vitest` | Fast unit and component tests sharing Vite transforms |
-| `@solidjs/testing-library` | Behaviour-level component tests |
+| `@solidjs/testing-library` | Behaviour-level component tests once its declared peer range accepts the pinned Solid 2 prerelease; tests use Vitest/browser primitives until then |
 | `@testing-library/user-event` | Realistic keyboard/pointer interaction in component tests |
 | `happy-dom` | Fast DOM for non-browser unit/component suites |
 | `@playwright/test` | Real Chromium, Firefox and WebKit journeys with no manual browser interaction |
