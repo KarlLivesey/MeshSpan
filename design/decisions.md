@@ -52,6 +52,9 @@ Status: **draft for review**.
 
 ## Open decisions
 
+Concrete recommendations and proof gates for every item are in
+[`stage-0-review.md`](stage-0-review.md).
+
 | ID | Question |
 | --- | --- |
 | O-001 | Which Rust Raft implementation meets the storage, membership and testability requirements? |

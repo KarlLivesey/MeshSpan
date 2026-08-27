@@ -27,6 +27,7 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 18. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
 19. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
 20. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
+21. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
 
 ## Document rules
 
