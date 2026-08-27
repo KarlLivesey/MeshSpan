@@ -170,6 +170,27 @@ Globally scheduled retention policy is applied after reconciliation. Snapshot
 roots protecting local-only content are not reclaimed while their validity is
 unresolved.
 
+## Delete/edit reconciliation
+
+Causal order decides non-concurrent cases. A deletion after the latest version
+remains deleted; an explicit recreation after observing deletion is a new
+object. For a genuinely concurrent race:
+
+- content write/truncate or rename survives in the visible merged namespace;
+- tag, timestamp, permission or ownership metadata alone does not resurrect the
+  deleted object; and
+- every acknowledged alternative remains immutable version history.
+
+MeshSpan does not initially interpret or merge file formats. It chooses one
+visible version deterministically and exposes alternatives through version
+history, with `restore` and `restore as copy`. A future format-specific merger
+may create a new version from immutable inputs but cannot overwrite them.
+
+An atomic bulk-delete branch commit hides the complete batch together. If any
+member has a concurrent surviving edit during global reconciliation, the global
+all-or-nothing transaction resolves the complete batch rather than deleting only
+uncontested members.
+
 ## Bounds and exhaustion
 
 Offline work is bounded by actual local durable capacity, authorised quota and

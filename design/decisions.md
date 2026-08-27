@@ -43,6 +43,17 @@ Status: **draft for review**.
 | D-035 | Tests run concurrently by default at lane and test-case level. Serial execution is permitted only for a genuinely exclusive physical resource and must not serialise unrelated tests. |
 | D-036 | Source-size and complexity lint limits are responsibility alarms. A violation is fixed by improving ownership, inputs, outputs or control flow—not by extracting arbitrary lines into meaningless helpers. |
 | D-037 | All bytes, records, observations and messages remain suspect regardless of source, transport authentication or prior validation. Every consumer independently verifies the identity, integrity, authority, freshness, bounds and semantic validity needed for its exact operation. |
+| D-038 | Rust boundary types and structural constraints generate OpenAPI; committed OpenAPI then generates the committed strict TypeScript, native-Fetch SDK and Zod 4 request/response schemas. Rust independently validates every public request and outgoing response. |
+| D-039 | Public API routes are direct `/api/latest`, immutable published `/api/vM.m` fixed points and `/api/vM.x` compatible-major pins. Before product 1.0 only `latest` exists. |
+| D-040 | Requests reject unknown fields and implicit coercion; responses discard only declared additive fields. Missing means not supplied and `null` means explicitly blank/clear only where allowed. |
+| D-041 | Every endpoint is default-deny without explicit access metadata. Initial browser auth is secure cookie plus CSRF; headless auth uses scoped bearer tokens or client certificates; SMB credentials remain separate and authentication methods replaceable. |
+| D-042 | Large collections use indexed server-side filters and opaque continuation cursors. Every non-terminal page provides a relative next-page URL and re-applies current permissions without making clients replay hidden pages. |
+| D-043 | Logical bulk operations use bounded chunks and immutable manifests; all-or-nothing mutation is supported across metadata partitions through one recoverable global decision. |
+| D-044 | Deletion reports branch, global and physical-reclamation scopes separately. A concurrent content edit or rename survives deletion; metadata-only changes do not resurrect content. |
+| D-045 | File version history is enabled by default with minimum-age and pressure-based retention, configurable age/count/disable controls, and mandatory minimum retention for acknowledged conflict alternatives. |
+| D-046 | Initial reconciliation never guesses content merges. Alternatives remain in immutable history and may be restored or restored as a copy; future type-specific mergers create new versions from immutable sources. |
+| D-047 | Server-Sent Events are an optional update optimisation. Polling and revision-aware conditional HTTP remain complete, and authenticated validators incorporate current authorisation projection. |
+| D-048 | Every mutation uses an operation ID and exact request digest. File transfers stream bounded frames with incremental integrity and resume only from independently verified ranges. |
 
 ## Proposed defaults requiring review
 

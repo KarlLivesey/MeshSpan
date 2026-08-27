@@ -54,6 +54,8 @@ Build:
   authentication, certificate and observability implementations;
 - deterministic clock/random/IO interfaces for tests;
 - Protobuf schema generation and compatibility fixture harness;
+- Rust-authored OpenAPI generation, server request/response validation and the
+  deterministic committed TypeScript/Fetch/Zod generation harness;
 - one local scheduler that runs independent Rust, web, schema/protocol and
   integration lanes concurrently with resource-aware worker limits.
 
@@ -62,6 +64,7 @@ Exit evidence:
 - format, warning-denied Rust lint, web format/type/lint and unit tests pass
   locally;
 - transition tables prove normal, replay, conflict and hostile-input cases;
+- public API fixtures prove Rust, OpenAPI and generated Zod accept/reject parity;
 - clean checkout can run the fast suite with one documented command;
 - suite duration is measured and budgeted before more tests accumulate.
 

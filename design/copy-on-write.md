@@ -109,6 +109,26 @@ Whole-volume restore is required initially. File/folder restore is a copy from a
 snapshot root into a new current namespace commit and may share unchanged
 content.
 
+## File-version history and retention
+
+Ordinary version history is enabled by default. A volume policy combines:
+
+- an immutable minimum retention age;
+- an optional minimum number of newest versions;
+- `under_pressure` reclamation after the minimum (the default), or
+  `after_age` reclamation;
+- explicit snapshot, user, legal or administrative pins; and
+- a separate minimum safety age for acknowledged concurrent alternatives.
+
+Disabling ordinary history affects future retention eligibility; it does not
+immediately destroy existing versions or permit reconciliation to discard
+acknowledged work. Current content and every version reachable from a snapshot,
+pin, branch, open handle or unresolved conflict remain ineligible for cleanup.
+
+`restore` creates a new current file version derived from the selected immutable
+version. `restore as copy` creates a new object. Neither operation rewinds or
+alters history.
+
 ## Copy-on-write configuration
 
 Changing a component creates a new immutable configuration revision. The

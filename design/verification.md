@@ -230,17 +230,39 @@ names appear in the test matrix, not the product contract.
 
 ## 9. Web and API verification
 
-- Generated TypeScript types compile against the actual API schema.
+- One fixture corpus proves Rust structural validation, generated OpenAPI and
+  generated Zod 4 accept/reject the same request and response cases.
+- Generated OpenAPI, strict TypeScript, native-Fetch SDK and Zod files are
+  committed, regenerate deterministically, contain no `any` and fail on drift or
+  manual modification.
+- Fixtures cover unknown fields/variants, missing versus nullable, no implicit
+  coercion, bounds, formats, discriminators, outgoing-response suppression and
+  stable field-error envelopes.
+- Version fixtures prove `latest`, compatible-major pins and every published
+  exact fixed point; a candidate is not locked until its signed release manifest
+  records exact schema and generated-client digests.
+- Default-deny route tests prove missing access metadata prevents generation and
+  unauthenticated traffic cannot reach expensive parsing/work.
+- Pagination tests jump directly to indexed event time/filter ranges, follow
+  returned next-page URLs and revoke/grant permissions between pages without
+  leaks, skipped authorised results or client request storms.
+- Conditional-request tests change resources and permissions independently and
+  prove stale authorisation never receives `304`.
+- SSE disconnect/replay tests prove events are optional and polling alone reaches
+  the same current state.
 - Browser tests cover create/join, user/admin panels, folder registration,
   protection simulation, repair/drain controls and file operations.
 - Accessibility checks cover keyboard-only use, focus, labels, live status,
   contrast, colour independence, reduced motion and phone viewports.
 - Upload tests cover resume, duplicate ranges, gaps, overlaps, expiry, quota,
-  disconnect and commit replay.
+  disconnect, bounded framing, forged offsets, final digest and commit replay.
 - Download tests cover ranges, validators, cancellation, mutation races and no
   whole-file staging.
 - Security tests cover CSRF, output encoding, hostile filenames/content types,
   cookies and session/step-up transitions.
+- Cross-partition bulk tests stage bounded manifest blocks, fail every prepare and
+  decision boundary, lose the coordinator/participants, and prove one global
+  all-or-nothing result plus eventual guarded physical cleanup.
 
 ## 10. Hardware and destructive fault laboratory
 

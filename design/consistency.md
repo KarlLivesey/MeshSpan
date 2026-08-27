@@ -138,6 +138,20 @@ need a stable cross-gateway view may request the latest globally converged head
 or an exact commit ID. A strong read uses the owning partition's linearizable
 read barrier; it cannot be served from an isolated branch as if it were current.
 
+## Cross-partition atomic operations
+
+An explicit all-or-nothing operation spanning metadata partitions uses a strong
+distributed transaction independently of the volume's normal eventual write
+default. Every participant prepares and fences its affected records before one
+coordinator authority commits the global decision. Prepared/in-doubt records do
+not return an old value or accept a conflicting mutation after another
+participant may expose the commit; they wait or return a typed pending result.
+Unrelated records remain available.
+
+An availability-first caller may separately receive a complete
+`branch_committed`/`branch_deleted` result at its named local scope. That result
+does not pretend the cross-partition transaction is globally committed.
+
 ## Required proof
 
 Tests evaluate every threshold against simple topology and failure-domain

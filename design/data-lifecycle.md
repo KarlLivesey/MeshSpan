@@ -93,6 +93,14 @@ uncommitted version or manufacture success.
 
 Deleting a name and destroying shards are separate operations.
 
+Deletion exposes three honest scopes: `branch_deleted` means the complete
+mutation is durable and hidden on the named local/cell branch;
+`globally_deleted` means every owning metadata partition committed the logical
+transaction; `bytes_reclaimed` means guarded asynchronous cleanup removed all
+known obsolete shards. An offline storage node does not block logical deletion
+unless the acknowledgement policy explicitly requires it; it applies committed
+tombstones and cleanup when it returns.
+
 1. An authorised namespace transaction removes a directory entry or creates a
    tombstoned version. Snapshots, open handles, retention rules and other links
    may keep the manifest reachable.
@@ -111,6 +119,31 @@ Deleting a name and destroying shards are separate operations.
 
 A path, target ID, shard ID or peer identity by itself can never authorise
 deletion. Expired permits and stale epochs fail closed.
+
+### Cross-partition atomic bulk mutation
+
+A bulk manifest is assembled durably from bounded chunks, sealed by digest and
+validated completely. Every owning partition prepares its exact changes and
+preconditions without making them visible. The coordinator then commits one
+replicated `commit` or `abort` decision. No participant publishes before that
+decision; every participant recovers and finishes a committed decision after
+crash or partition.
+
+Preparation fences every affected record. An in-doubt participant blocks or
+returns a typed pending/unavailable result for reads and conflicting mutations
+of those records until it learns the decision; it cannot return its old value
+after another participant may have exposed the committed transaction. This is
+the availability cost of requested cross-partition atomicity and does not block
+unrelated records.
+
+If a required participant remains unreachable before the decision, the
+coordinator keeps the operation pending to its declared deadline and, if it
+retains authority, records an authoritative abort. Otherwise the transaction
+remains in doubt until its decision can be recovered. A participant never
+infers abort from its local timeout because a commit decision may already exist.
+Unrelated records and partitions remain writable. Availability-first policy may
+have already produced an explicitly scoped `branch_deleted` result, but it
+cannot be reported as globally deleted.
 
 ## 5. Repair state machine
 

@@ -24,12 +24,13 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 15. [scaling.md](scaling.md) — campus-scale availability cells and metadata partitioning.
 16. [data-lifecycle.md](data-lifecycle.md) — write, read, deletion, repair and drain state machines.
 17. [protocol.md](protocol.md) — private node protocol over Quinn.
-18. [flows.md](flows.md) — complete create, join, access and failure operation sequences.
-19. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
-20. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
-21. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
-22. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
-23. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
+18. [public-api.md](public-api.md) — Rust-generated OpenAPI, validation, versions, pagination and streaming.
+19. [flows.md](flows.md) — complete create, join, access and failure operation sequences.
+20. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
+21. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
+22. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
+23. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
+24. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
 
 ## Document rules
 

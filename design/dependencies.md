@@ -58,9 +58,11 @@ MeshSpan-owned core.
 | `prost` | Versioned private Protobuf messages; generated types do not cross domain boundaries |
 | `base64` | Strict URL-safe token and wire encodings where the protocol requires them |
 
-Public API client/schema generation remains an open build decision. MeshSpan will
-not add both a Rust schema framework and a TypeScript generator until one
-round-trip/drift test proves the chosen single source of truth.
+Rust boundary types and structural constraints generate OpenAPI 3.1 and drive
+runtime request/response validation. The exact Rust schema crates remain gated
+on one focused round-trip proof: the same declared constraint must appear in
+runtime validation, OpenAPI and hostile fixtures without a second hand-written
+model. Candidate selection happens before the first public route is scaffolded.
 
 ### Persistence and local filesystem
 
@@ -175,7 +177,7 @@ library dependencies.
 | `@solidjs/router` `2.0.0-next.18` | Solid-2-compatible URL routing and nested user/admin panel layouts |
 | `@js-temporal/polyfill` | Temporal until every supported browser provides the required API natively |
 | `zod` 4.x | Runtime validation and type narrowing for untrusted API, route, persisted-browser and form inputs |
-| `openapi-fetch` | Thin typed wrapper over native `fetch`, if OpenAPI is selected as the public API source |
+| `@hey-api/client-fetch` | Native-Fetch runtime used by the generated public API SDK |
 | `@kobalte/core` | Candidate accessible primitives for dialogs, menus, selects and focus management |
 
 `@kobalte/core` is optional until a native implementation proves less risky.
@@ -191,7 +193,7 @@ native `fetch`, CSS and browser platform APIs are sufficient initially.
 | `vite` | Fast development/build pipeline and static production bundle |
 | `vite-plugin-solid` `3.0.0-next.27` | Solid-2-compatible compiler integration |
 | `@types/node` | Node 26 build-script types only |
-| `openapi-typescript` | Generated public API types, only if OpenAPI is selected |
+| `@hey-api/openapi-ts` | Generates committed TypeScript, native-Fetch SDK and Zod 4 schemas from Rust-generated OpenAPI |
 | `vitest` | Fast unit and component tests sharing Vite transforms |
 | `@solidjs/testing-library` | Behaviour-level component tests once its declared peer range accepts the pinned Solid 2 prerelease; tests use Vitest/browser primitives until then |
 | `@testing-library/user-event` | Realistic keyboard/pointer interaction in component tests |
@@ -215,6 +217,11 @@ native `fetch`, CSS and browser platform APIs are sufficient initially.
 Unit and component suites are split from real-browser acceptance so routine
 feedback remains fast. The production daemon embeds only the built static files;
 none of the Node.js toolchain is required on an installed appliance.
+
+Generated OpenAPI and web client/validator output are committed, never edited by
+hand and regenerated deterministically by the local gate. Generated files are
+exempt from responsibility/size lint ceilings but must compile strictly, contain
+no `any` and pass the same valid/invalid contract fixtures as Rust.
 
 ## Explicit non-dependencies
 

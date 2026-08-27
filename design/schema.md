@@ -75,6 +75,44 @@ operations(
   error_kind NULL, revision
 )
 
+bulk_operation_manifests(
+  manifest_id PK, operation_id UNIQUE -> operations,
+  item_count, block_count, manifest_digest UNIQUE,
+  state, sealed_at NULL, revision
+)
+
+bulk_operation_manifest_blocks(
+  manifest_id -> bulk_operation_manifests, block_index,
+  first_item_ordinal, item_count, block_digest,
+  protected_blob_reference, state,
+  PK(manifest_id, block_index),
+  UNIQUE(manifest_id, block_digest)
+)
+
+distributed_transactions(
+  transaction_id PK, operation_id UNIQUE -> operations,
+  coordinator_partition_id -> metadata_partitions,
+  manifest_id -> bulk_operation_manifests,
+  transaction_kind, deadline, state, decision NULL,
+  decision_log_index NULL, decision_digest NULL, revision
+)
+
+distributed_transaction_participants(
+  transaction_id -> distributed_transactions,
+  participant_partition_id -> metadata_partitions,
+  expected_revision, prepared_revision NULL,
+  prepare_digest NULL, state, applied_revision NULL,
+  PK(transaction_id, participant_partition_id)
+)
+
+prepared_distributed_transactions(
+  transaction_id PK,
+  coordinator_partition_id -> metadata_partitions,
+  operation_id, manifest_digest, transaction_kind,
+  expected_revision, prepared_revision, prepare_digest,
+  deadline, state, decision_digest NULL, applied_revision NULL
+)
+
 audit_events(
   event_id PK, operation_id NULL -> operations, sequence,
   actor_principal_id NULL -> principals, actor_node_id NULL -> nodes,
@@ -85,7 +123,11 @@ audit_events(
 ```
 
 One applied command and its operation result/audit entries commit atomically.
-An operation ID may be replayed only with the same request digest.
+An operation ID may be replayed only with the same request digest. Coordinator
+transactions and participant preparation records live in their owning metadata
+partitions; the notation above describes their shared logical contract, not one
+cross-partition SQL database. A prepared record fences its exact affected keys
+until an authenticated decision is applied or a valid abort is proved.
 
 ### Node-local branch kernel
 
@@ -823,6 +865,13 @@ snapshot_schedules(
   retention_duration NULL, locality_policy_id NULL -> locality_policies,
   state, revision
 )
+
+version_retention_policies(
+  policy_id PK, volume_id UNIQUE -> volumes,
+  history_enabled, minimum_age, minimum_versions NULL,
+  reclaim_mode, pressure_threshold NULL,
+  conflict_minimum_age, revision
+)
 ```
 
 An object must have at least one active effective owner at transaction end. The
@@ -841,6 +890,7 @@ file_versions(
   version_id PK, object_id -> namespace_objects, parent_version_id NULL,
   logical_length, content_digest, manifest_root_id,
   created_by -> principals, created_at, publication_operation_id -> operations,
+  retention_class, earliest_reclaim_at NULL,
   state, revision, UNIQUE(object_id, publication_operation_id)
 )
 

@@ -13,6 +13,9 @@ Before changing behaviour, read:
 3. the design documents relevant to the change
 4. [`design/decisions.md`](design/decisions.md)
 
+Public HTTPS or web-client work must also read
+[`design/public-api.md`](design/public-api.md).
+
 The design pack is currently draft. Do not present a proposed decision as
 accepted. Once locked, code and tests must preserve its invariants or update the
 decision explicitly.
@@ -85,6 +88,7 @@ crates/
   protocol/     versioned Protobuf messages and Quinn transport
   storage/      folder provider, shard IO and storage capability interface
   filesystem/   protocol-neutral namespace and handle semantics
+  api-contract/ public Rust boundary types, validation and OpenAPI generation
   gateway-http/ HTTPS adapter
   gateway-smb/  embedded SMB adapter
   daemon/       composition, configuration and process lifecycle
@@ -151,7 +155,9 @@ configuration. Prettier owns formatting; deprecated ESLint formatting rules do
 not.
 
 All warnings fail the local gate. Unused disable directives fail it too.
-Handwritten source and tests follow these rules; generated and vendored files are
+Handwritten source and tests follow these rules. Generated API code is exempt
+only from human responsibility/size ceilings: it still compiles strictly,
+contains no `any` and passes generated-schema behaviour tests. Vendored files are
 excluded at their directory boundary rather than weakened with inline comments.
 
 Type safety is non-negotiable:
@@ -204,6 +210,28 @@ TypeScript compiler projects enable `strict`, `noUncheckedIndexedAccess`,
 `exactOptionalPropertyTypes`, `noImplicitOverride`,
 `noFallthroughCasesInSwitch`, `noPropertyAccessFromIndexSignature`,
 `useUnknownInCatchVariables`, `verbatimModuleSyntax` and `isolatedModules`.
+
+## Public API contract
+
+- Rust boundary types and structural constraints generate OpenAPI; never
+  hand-maintain the same API model in Rust and TypeScript.
+- Commit generated OpenAPI, TypeScript, native-Fetch SDK and Zod 4 schemas. Do
+  not edit generated files. Regeneration must be deterministic and drift-free.
+- Validate every request and outgoing response in Rust. Zod validates web
+  boundaries but is never server authority and never a requirement for external
+  clients.
+- Requests reject unknown fields, implicit coercion and ambiguous variants.
+  Missing and nullable fields remain distinct.
+- Every endpoint declares access policy, operation/outcome types and concrete
+  bounds. Missing access metadata is default-deny and prevents route generation.
+- Every mutation carries an operation ID and canonical request digest.
+- `/api/latest` is rolling. Exact `/api/vM.m` routes are immutable only after a
+  signed release publishes their schema digest; `/api/vM.x` tracks the newest
+  compatible published minor.
+- Large collections filter and order on the server, use opaque cursors and return
+  a relative next-page URL. Every page applies current permissions.
+- Raw file bytes stream outside JSON/Zod with bounded frames, incremental
+  integrity and verified resume ranges.
 
 ## Rust lint contract
 
@@ -268,12 +296,14 @@ integration layer.
    SQLite-compatible engines.
 3. Protocol fixtures: canonical encoding, limits, malformed input and version
    compatibility.
-4. Deterministic simulation: loss, duplication, reordering, partitions, crashes
+4. Public API fixtures: Rust validation, OpenAPI, generated Zod and Fetch types
+   agree for valid and invalid requests and responses.
+5. Deterministic simulation: loss, duplication, reordering, partitions, crashes
    and stale workers under a seeded scheduler and clock.
-5. Process integration: real Quinn peers and real folder IO.
-6. Adapter conformance: the same filesystem vectors through HTTPS and SMB.
-7. End to end: multiple real daemon processes and real protocol clients.
-8. Hardware, power-loss, soak and performance gates for release milestones.
+6. Process integration: real Quinn peers and real folder IO.
+7. Adapter conformance: the same filesystem vectors through HTTPS and SMB.
+8. End to end: multiple real daemon processes and real protocol clients.
+9. Hardware, power-loss, soak and performance gates for release milestones.
 
 Tests must assert exact committed revisions, operation outcomes, visible bytes,
 authoritative shard sets and durable recovery state where relevant. Avoid tests

@@ -118,6 +118,28 @@ Ordinary isolated filesystem operations use the branch repository/service, not
 an invented successful consensus response. Authority validates and includes
 their immutable commits later.
 
+## Public API contract boundary
+
+**Owns:** Rust request/response types, structural validation, OpenAPI generation
+and stable HTTP outcome mapping.
+
+```text
+validate_request(raw bounded parts, access context)
+  -> typed request | bounded field errors
+
+execute(typed request, current actor, operation context)
+  -> typed domain outcome
+
+validate_response(typed outcome)
+  -> contract response | internal_contract_failure
+
+generate_openapi(api fixed point) -> canonical document + digest
+```
+
+The boundary has no direct SQL or provider-folder access. Zod and the generated
+Fetch SDK are downstream artefacts, not authority. See
+[`public-api.md`](public-api.md).
+
 ## Consensus engine
 
 **Owns:** terms, log replication, flexible quorum plans, membership and snapshot

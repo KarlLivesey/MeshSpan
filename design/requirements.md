@@ -276,6 +276,11 @@ Status: **draft for review**.
 - **FS-013** Namespace partition ownership MUST be explicit at volume or subtree boundaries. Same-
   partition operations retain atomic semantics; cross-partition operations require a typed
   transaction/handoff and MUST fail rather than partially commit during loss of either authority.
+- **FS-014** An all-or-nothing namespace mutation spanning metadata partitions MUST stage every
+  participant, record one durable global commit/abort decision and recover to that decision after
+  crash or partition without exposing a partially committed batch.
+- **FS-015** A logical bulk mutation MAY contain an effectively unbounded number of items only by
+  using a durable immutable manifest assembled from bounded, independently validated chunks.
 
 ## Copy-on-write and snapshots
 
@@ -301,6 +306,13 @@ Status: **draft for review**.
   published state or included as user-restorable snapshot content.
 - **COW-009** Snapshot, backup and consensus snapshot are distinct concepts and MUST use distinct
   record types, APIs, status text and recovery procedures.
+- **COW-010** Restoring a historical file version MUST create a new current version or a new copied
+  object; it MUST NOT rewind or erase intervening version history.
+- **COW-011** Ordinary file-version history MUST be enabled by default and configurable per volume.
+  Retention MUST support minimum age, minimum count, immediate-after-age or storage-pressure
+  reclamation, explicit pins/holds and a separate minimum for concurrent-conflict versions.
+- **COW-012** Disabling ordinary version history MUST NOT permit reconciliation to discard an
+  acknowledged concurrent alternative before its mandatory conflict-safety retention expires.
 
 ## Disconnected writes and reconciliation
 
@@ -345,6 +357,12 @@ Status: **draft for review**.
 - **CON-015** Offline capacity allocations MUST be disjoint and consumed durably per node/target so
   disconnected components cannot independently overspend one shared quota. Remote shard writes
   MUST carry an exact operation/shard/target capability derived from the delegation.
+- **CON-016** Reconciliation of delete/edit races MUST follow causal order. For a genuinely
+  concurrent race, a content write/truncate or rename survives, while descriptive, permission or
+  ownership metadata alone MUST NOT resurrect a deleted object.
+- **CON-017** Initial reconciliation MUST NOT perform content-aware merges. It MUST select one
+  visible version deterministically and retain every acknowledged alternative in immutable version
+  history for restore or restore-as-copy.
 
 ## Consistency and acknowledgement policy
 
@@ -594,17 +612,72 @@ Status: **draft for review**.
 
 ## Public API
 
-- **API-001** The HTTPS API MUST have an explicit major version and typed resources for setup,
-  authentication, mesh, nodes, targets, fault groups, volumes, exports, principals, groups,
-  permissions, files, uploads, work, repair, certificates, events and diagnostics.
+- **API-001** The HTTPS API MUST provide a rolling `/api/latest` contract and, once published,
+  immutable exact `/api/vM.m` contracts plus compatible-major `/api/vM.x` pins, with typed
+  resources for setup, authentication, mesh, nodes, targets, fault groups, volumes, exports,
+  principals, groups, permissions, files, uploads, work, repair, certificates, events and
+  diagnostics.
 - **API-002** Long-running operations MUST return an operation ID and expose durable state, bounded
   progress, cancellation support where safe and the terminal committed outcome.
 - **API-003** Errors MUST contain a stable code, plain message, request ID, retry classification and
   bounded field/remediation details while excluding sensitive data.
-- **API-004** List APIs MUST use stable revision-bound cursors with explicit ordering and page
-  limits.
+- **API-004** Potentially large list APIs MUST use stable opaque cursors within indexed server-side
+  filters and ordering. Every non-terminal page MUST return a ready-to-follow relative
+  `next_page_url`; reverse links and exact total counts are optional where efficient.
 - **API-005** API authentication and authorisation MUST use the same principals, sessions, roles,
   grants and audit rules as the user and administrator interfaces.
+- **API-006** Rust boundary types and their structural constraints MUST be the source for generated
+  OpenAPI, web types, request/response validators and the typed Fetch client. The server MUST NOT
+  depend on a caller using generated code.
+- **API-007** Every available API path MUST expose its exact OpenAPI document and return the
+  resolved API contract label plus schema digest as informational response headers.
+- **API-008** Before product 1.0 only `/api/latest` exists. An exact fixed point becomes immutable
+  only when a signed release manifest publishes its API version, OpenAPI digest and generated-client
+  fixture digest; support lifetime remains a separately published policy.
+- **API-009** Exact minor fixed points within one major SHOULD be backward-compatible. A security or
+  integrity emergency MAY reject unsafe behaviour only with an explicit stable error, affected-
+  version notice and replacement/remediation guidance.
+- **API-010** Path, query, header, cookie, JSON request and JSON response structures MUST be
+  validated against the same generated structural contract at their consuming boundary; stateful
+  domain rules remain authoritative Rust validation.
+- **API-011** Requests MUST reject unknown fields by default. Responses MAY ignore and discard
+  additive unknown fields only where forward compatibility is declared. Unknown control/security
+  variants and ambiguous unions MUST fail closed.
+- **API-012** Missing and nullable fields MUST remain distinct: omission means not supplied, while
+  `null` means explicitly blank/clear only where declared. The API MUST NOT perform implicit scalar
+  coercion or undeclared normalisation.
+- **API-013** If the server cannot validate its own outgoing response, it MUST suppress that
+  response, return a bounded internal-contract failure where possible and record a safe diagnostic
+  event rather than exposing malformed internal state.
+- **API-014** Route generation MUST default-deny missing access metadata and require an explicit
+  anonymous, authenticated, recent-step-up or internal-node access profile. Authentication and
+  coarse authorisation MUST precede expensive allocation/work where protocol framing permits.
+- **API-015** Browser sessions MUST initially use secure HTTP-only cookies plus CSRF defence;
+  headless clients MUST support scoped bearer tokens or client certificates. Credentials MUST NOT
+  appear in URLs, and authentication methods remain replaceable.
+- **API-016** Every mutation MUST carry a client-generated operation ID. Replay with the same
+  canonical digest returns the durable outcome; reuse with different input is rejected.
+- **API-017** A long-running mutation MUST support one durable operation with an asynchronous status
+  URL and, where useful, bounded wait-for-terminal-outcome behaviour.
+- **API-018** Pagination MUST apply current permissions at every page without forcing clients to
+  replay earlier pages after a permission change. The server MUST use bounded indexed filtering so
+  inaccessible records do not create a client request storm.
+- **API-019** Resumable Server-Sent Events MAY optimise browser updates but MUST NOT be required for
+  correctness or third-party clients. Pollable endpoints and conditional HTTP requests remain
+  complete alternatives.
+- **API-020** Authenticated `ETag` validators MUST include the resource revision and caller-visible
+  authorisation projection so revocation cannot incorrectly produce `304 Not Modified`.
+- **API-021** File streams MUST validate bounded control records, declared length/ranges and final
+  content integrity incrementally. Invalid, truncated, excessive or mismatched streams MUST NOT
+  publish a file version.
+- **API-022** Resumable transfer state MUST bind operation ID, content identity and independently
+  verified received ranges; a client-claimed offset alone is not authority.
+- **API-023** Generated OpenAPI, web types, Fetch client and runtime validators MUST be committed,
+  deterministic and non-editable by hand. Local regeneration MUST fail on drift and prove strict
+  compilation, absence of `any`, and exact valid/invalid fixtures.
+- **API-024** OpenAPI generation MUST reject incomplete contracts by default, including missing or
+  duplicate operation IDs, access policy, outcomes, discriminators, bounds or mutation replay
+  semantics. Contextual exceptions MUST be explicit and tested.
 
 ## Replaceability and configuration
 

@@ -129,6 +129,18 @@ upload quotas, CSRF defence and strict output encoding. Static assets use a
 restrictive content security policy. File previews, if later enabled, are
 treated as hostile active content and isolated.
 
+Every HTTPS route is default-deny without explicit access metadata. Cheap
+framing, route, method and media-type checks occur before authentication;
+authentication, coarse authorisation and admission occur before expensive body
+acceptance or work where the protocol permits. Anonymous schema, health, login,
+enrolment and ACME routes are explicit, bounded and independently abuse-limited.
+
+Rust validates every public request and outgoing response. Generated Zod
+validation is web-client defence in depth and is never assumed for CLI,
+third-party or hostile callers. Pagination re-applies current permissions;
+authenticated conditional validators incorporate the caller-visible
+authorisation projection.
+
 The SMB adapter validates every length, offset, state transition and negotiated
 feature before translating it. It applies resource-aware budgets but does not
 claim to be a network DDoS appliance. SMB names, identities and status codes are
