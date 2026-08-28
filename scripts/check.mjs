@@ -72,6 +72,21 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "metadata kernel tests",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-metadata",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
+      ],
+    },
+    {
       name: "private protocol compatibility",
       steps: [
         [
