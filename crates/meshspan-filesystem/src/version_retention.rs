@@ -274,6 +274,7 @@ pub(crate) fn select_candidates(
         CandidateQuery {
             volume_id,
             after,
+            exact_version: None,
             now: now.get(),
             conflict_cutoff,
             minimum_versions: policy.minimum_versions,
@@ -307,6 +308,7 @@ pub(crate) fn select_candidates(
 struct CandidateQuery {
     volume_id: VolumeId,
     after: Option<VersionRetentionCursor>,
+    exact_version: Option<FileVersionId>,
     now: i64,
     conflict_cutoff: i64,
     minimum_versions: u32,
@@ -325,6 +327,7 @@ fn load_candidate_rows(
     let after_id = query
         .after
         .map_or([0; 16], |cursor| cursor.version_id.as_bytes());
+    let exact_id = query.exact_version.map(FileVersionId::as_bytes);
     let mut statement = connection.prepare(
         "WITH historical AS (
             SELECT versions.version_id, history.superseded_by_version_id,
@@ -361,6 +364,7 @@ fn load_candidate_rows(
                successor_volume_id, successor_object_id, successor_created_at
         FROM historical
         WHERE (?2 IS NULL OR (superseded_at, branch_id, version_id) > (?2, ?3, ?4))
+          AND (?10 IS NULL OR version_id = ?10)
           AND superseded_at <= ?5
           AND (
               (first_observed_at IS NOT NULL AND first_observed_at <= ?6)
@@ -383,6 +387,7 @@ fn load_candidate_rows(
             i64::from(query.minimum_versions),
             query.ordinary_cutoff,
             query.row_limit,
+            exact_id.as_ref().map(<[u8; 16]>::as_slice),
         ],
         |row| {
             Ok((
@@ -410,6 +415,76 @@ fn load_candidate_rows(
         stored.push(row?);
     }
     Ok(stored)
+}
+
+pub(crate) fn revalidate_candidate(
+    connection: &Connection,
+    candidate: VersionRetentionCandidate,
+    policy: VersionRetentionSelectionPolicy,
+    pressure: VersionRetentionPressure,
+    now: UnixMicros,
+) -> Result<(), VersionRetentionError> {
+    if candidate.policy_sequence != policy.sequence {
+        return Err(VersionRetentionError::Corrupt);
+    }
+    let minimum_cutoff = cutoff(now, policy.minimum_age)?;
+    let maximum_cutoff = policy.maximum_age.map(|age| cutoff(now, age)).transpose()?;
+    let rows = load_candidate_rows(
+        connection,
+        CandidateQuery {
+            volume_id: candidate.volume_id,
+            after: None,
+            exact_version: Some(candidate.version_id),
+            now: now.get(),
+            conflict_cutoff: cutoff(now, policy.conflict_minimum_age)?,
+            minimum_versions: policy.minimum_versions,
+            ordinary_cutoff: ordinary_cutoff(policy, pressure, now, minimum_cutoff, maximum_cutoff),
+            row_limit: 2,
+        },
+    )?;
+    if rows.len() != 1
+        || decode_candidate(&rows[0], policy, pressure, minimum_cutoff, maximum_cutoff)?
+            != candidate
+    {
+        Err(VersionRetentionError::Corrupt)
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn selection_authority_digest(
+    policy: VersionRetentionSelectionPolicy,
+    pressure: VersionRetentionPressure,
+    now: UnixMicros,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.version-retention-selection.v1\0");
+    digest.update(&policy.sequence.to_be_bytes());
+    digest.update(&policy.minimum_age.get().to_be_bytes());
+    match policy.maximum_age {
+        Some(value) => {
+            digest.update(&[1]);
+            digest.update(&value.get().to_be_bytes());
+        }
+        None => {
+            digest.update(&[0]);
+        }
+    }
+    digest.update(&policy.minimum_versions.to_be_bytes());
+    digest.update(&[match policy.reclaim_mode {
+        VersionReclaimMode::UnderPressure => 1,
+        VersionReclaimMode::AfterMaximumAge => 2,
+        VersionReclaimMode::EagerAfterMinimumAge => 3,
+    }]);
+    digest.update(&[u8::from(policy.soft_minimum_breakable)]);
+    digest.update(&policy.conflict_minimum_age.get().to_be_bytes());
+    digest.update(&[match pressure {
+        VersionRetentionPressure::None => 1,
+        VersionRetentionPressure::Pressure => 2,
+        VersionRetentionPressure::Critical => 3,
+    }]);
+    digest.update(&now.get().to_be_bytes());
+    digest.finalize().into()
 }
 
 type StoredCandidate = (

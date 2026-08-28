@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 14] = [
+const MIGRATIONS: [Migration; 15] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -82,8 +82,12 @@ const MIGRATIONS: [Migration; 14] = [
         version: 14,
         sql: include_str!("../schema/branch/014_handle_flush_plans.sql"),
     },
+    Migration {
+        version: 15,
+        sql: include_str!("../schema/branch/015_version_reachability_scans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 14;
+const SCHEMA_VERSION: u32 = 15;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -795,6 +799,65 @@ impl VersionPublicationStore {
             now,
             after,
             limit,
+        )
+    }
+
+    /// Starts or replays a durable, revision-bound retained-root scan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale retention authority, invalid bounds, operation reuse, corrupt durable state
+    /// and SQLite failure.
+    pub fn begin_version_reachability_scan(
+        &mut self,
+        request: &crate::VersionReachabilityScanRequest,
+    ) -> Result<crate::VersionReachabilityProgress, crate::VersionReachabilityError> {
+        crate::reachability::begin(&mut self.connection, request)
+    }
+
+    /// Appends or exactly replays one bounded page of authoritative retained roots.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, duplicated, misordered, substituted or stale roots and SQLite failure.
+    pub fn append_version_reachability_roots(
+        &mut self,
+        page: &crate::ReachabilityRootPage,
+    ) -> Result<crate::VersionReachabilityProgress, crate::VersionReachabilityError> {
+        crate::reachability::append_roots(&mut self.connection, page)
+    }
+
+    /// Seals the complete retained-root manifest and begins its durable graph traversal.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete/substituted roots, stale local lifecycle roots, corrupt state and
+    /// SQLite failure.
+    pub fn seal_version_reachability_roots(
+        &mut self,
+        operation_id: OperationId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::VersionReachabilityProgress, crate::VersionReachabilityError> {
+        crate::reachability::seal(&mut self.connection, operation_id, observed_at)
+    }
+
+    /// Performs one bounded, restart-safe tranche of immutable namespace traversal.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds, changed lifecycle roots, missing/corrupt graph records and SQLite
+    /// failure.
+    pub fn advance_version_reachability_scan(
+        &mut self,
+        operation_id: OperationId,
+        maximum_work: usize,
+        observed_at: UnixMicros,
+    ) -> Result<crate::VersionReachabilityProgress, crate::VersionReachabilityError> {
+        crate::reachability::advance(
+            &mut self.connection,
+            operation_id,
+            maximum_work,
+            observed_at,
         )
     }
 
