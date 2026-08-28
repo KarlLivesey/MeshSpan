@@ -180,6 +180,12 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         |row| row.get(0),
     )?;
     assert_eq!(version_history, 1);
+    let open_handles: i64 = store.connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'open_handles')",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(open_handles, 1);
     Ok(())
 }
 

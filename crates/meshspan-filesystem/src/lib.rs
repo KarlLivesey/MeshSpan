@@ -8,6 +8,7 @@ mod content_crypto;
 mod content_key;
 mod content_publisher;
 mod directory;
+mod handles;
 mod name;
 mod publication;
 mod reconciliation;
@@ -37,6 +38,9 @@ pub use content_publisher::{
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
     DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
+};
+pub use handles::{
+    CreateDisposition, HandleAccess, HandleError, HandleShare, OpenHandleReceipt, OpenHandleRequest,
 };
 pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,
