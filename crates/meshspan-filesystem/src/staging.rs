@@ -140,14 +140,14 @@ impl StageOverlay {
     ///
     /// # Errors
     ///
-    /// Rejects zero/excessive final length and missing ranges unless sparse completion was explicit.
+    /// Rejects excessive final length and missing ranges unless sparse completion was explicit.
     pub fn complete_bytes(
         &self,
         final_length: u64,
         sparse: bool,
     ) -> Result<BoundedBytes, StageWriteError> {
         let length = usize::try_from(final_length).map_err(|_| StageWriteError::InvalidInput)?;
-        if length == 0 || length > self.maximum_bytes {
+        if length > self.maximum_bytes {
             return Err(StageWriteError::InvalidInput);
         }
         if !sparse && !covers(&self.ranges, final_length) {
@@ -234,8 +234,8 @@ pub(crate) fn insert_range(ranges: &mut Vec<Range<u64>>, mut inserted: Range<u64
 }
 
 pub(crate) fn covers(ranges: &[Range<u64>], final_length: u64) -> bool {
-    final_length > 0
-        && ranges
+    final_length == 0
+        || ranges
             .first()
             .is_some_and(|range| range.start == 0 && range.end >= final_length)
 }
@@ -267,6 +267,7 @@ mod tests {
         assert_eq!(stage.checkpoint().initialised_ranges, vec![0..10]);
 
         let sparse = StageOverlay::new(4, 64)?;
+        assert!(sparse.complete_bytes(0, false)?.is_empty());
         assert_eq!(sparse.complete_bytes(4, true)?.as_slice(), [0; 4]);
         Ok(())
     }

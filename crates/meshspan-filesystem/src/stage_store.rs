@@ -3,7 +3,7 @@
 //! WAL/FULL-sync stage journal plus immutable capability-scoped range parts.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::Path;
 
@@ -22,6 +22,8 @@ const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MIGRATION: &str = include_str!("../schema/stage/001_initial.sql");
 const STAGE_DIRECTORY: &str = "stages";
 const DATABASE_FILE: &str = "filesystem-stages.sqlite3";
+const COPY_BUFFER_BYTES: usize = 64 * 1_024;
+const COPY_BUFFER_BYTES_U64: u64 = 65_536;
 
 /// Durable identity, bounds and expiry for one private write stage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +38,34 @@ pub struct StageRegistration {
     pub created_at: UnixMicros,
     /// Exclusive inactivity/authority expiry.
     pub expires_at: UnixMicros,
+}
+
+/// Exact fenced checkpoint selected for one streaming completion attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageCompletionRequest {
+    /// Idempotency identity of the later publication operation.
+    pub operation_id: OperationId,
+    /// Stage to complete.
+    pub stage_id: StageId,
+    /// Exact writer generation.
+    pub stage_fence: u64,
+    /// Exact checkpoint sequence; later writes make this request stale.
+    pub expected_sequence: u64,
+    /// Exact final logical length.
+    pub final_length: u64,
+    /// Whether uninitialised ranges are explicit logical zeroes.
+    pub sparse: bool,
+    /// Authoritative time used for expiry validation.
+    pub observed_at: UnixMicros,
+}
+
+/// Independently verified content identity produced by streaming stage completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompletedStage {
+    /// Exact number of streamed logical bytes.
+    pub logical_length: u64,
+    /// BLAKE3 digest of the complete logical byte stream.
+    pub content_digest: [u8; 32],
 }
 
 /// Durable stage journal and immutable part storage beneath one daemon state directory.
@@ -168,7 +198,7 @@ impl DurableStageStore {
         sparse: bool,
     ) -> Result<BoundedBytes, StageStoreError> {
         let stage = load_stage(&self.connection, stage_id)?;
-        if final_length == 0 || final_length > stage.maximum_bytes {
+        if final_length > stage.maximum_bytes {
             return Err(StageStoreError::InvalidInput);
         }
         let writes = load_stage_writes(&self.connection, stage_id)?;
@@ -181,6 +211,50 @@ impl DurableStageStore {
             apply_part(&self.stages, stage_id, &write, &mut complete)?;
         }
         BoundedBytes::copy_from(&complete, length).map_err(|_| StageStoreError::InvalidInput)
+    }
+
+    /// Streams one exact fenced checkpoint through a bounded buffer without allocating file size.
+    ///
+    /// A private sparse completion image is assembled in journal order, synced, rewound and
+    /// independently hashed while it is copied to `destination`. It is never a published file and
+    /// is removed after success. A failed destination leaves no metadata publication; its private
+    /// temporary image is discarded on exact retry.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale fence/sequence/time, holes without explicit sparse intent, corrupt/missing
+    /// parts, range excess and every source/destination filesystem error.
+    pub fn stream_complete(
+        &mut self,
+        request: StageCompletionRequest,
+        destination: &mut impl Write,
+    ) -> Result<CompletedStage, StageStoreError> {
+        let stage = load_stage(&self.connection, request.stage_id)?;
+        validate_completion(stage, request)?;
+        let writes = load_stage_writes(&self.connection, request.stage_id)?;
+        if !request.sparse && !covers(&ranges(&writes)?, request.final_length) {
+            return Err(StageStoreError::Incomplete);
+        }
+        let directory = self.stages.open_dir(request.stage_id.to_string())?;
+        let pending_name = format!("{}.completion.pending", request.operation_id);
+        remove_private_file(&directory, &pending_name)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        let mut image = directory.open_with(&pending_name, &options)?;
+        image.set_len(request.final_length)?;
+        for write in &writes {
+            apply_part_to_image(&directory, write, request.final_length, &mut image)?;
+        }
+        image.sync_all()?;
+        image.seek(SeekFrom::Start(0))?;
+        let content_digest = copy_complete_image(&mut image, request.final_length, destination)?;
+        drop(image);
+        directory.remove_file(&pending_name)?;
+        sync_directory(&directory)?;
+        Ok(CompletedStage {
+            logical_length: request.final_length,
+            content_digest,
+        })
     }
 
     fn record_write(
@@ -335,6 +409,24 @@ fn validate_live_write(
         .ok_or(StageStoreError::InvalidInput)?;
     if end > stage.maximum_bytes {
         Err(StageStoreError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_completion(
+    stage: StoredStage,
+    request: StageCompletionRequest,
+) -> Result<(), StageStoreError> {
+    if request.final_length > stage.maximum_bytes {
+        return Err(StageStoreError::InvalidInput);
+    }
+    if stage.state != 1
+        || stage.fence != request.stage_fence
+        || stage.sequence != request.expected_sequence
+        || request.observed_at >= stage.expires_at
+    {
+        Err(StageStoreError::Stale)
     } else {
         Ok(())
     }
@@ -535,6 +627,74 @@ fn apply_part(
     Ok(())
 }
 
+fn apply_part_to_image(
+    directory: &Dir,
+    stored: &StoredWrite,
+    final_length: u64,
+    image: &mut cap_std::fs::File,
+) -> Result<(), StageStoreError> {
+    let mut source = directory.open(&stored.part_name)?;
+    image.seek(SeekFrom::Start(stored.offset.min(final_length)))?;
+    let mut digest = blake3::Hasher::new();
+    let mut total = 0_u64;
+    let mut buffer = vec![0_u8; COPY_BUFFER_BYTES].into_boxed_slice();
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        let read_u64 = u64::try_from(read).map_err(|_| StageStoreError::Corrupt)?;
+        let chunk_start = stored
+            .offset
+            .checked_add(total)
+            .ok_or(StageStoreError::Corrupt)?;
+        if chunk_start < final_length {
+            let writable = usize::try_from((final_length - chunk_start).min(read_u64))
+                .map_err(|_| StageStoreError::Corrupt)?;
+            image.write_all(&buffer[..writable])?;
+        }
+        total = total
+            .checked_add(read_u64)
+            .ok_or(StageStoreError::Corrupt)?;
+    }
+    if total == stored.length && digest.finalize().as_bytes() == &stored.digest {
+        Ok(())
+    } else {
+        Err(StageStoreError::Corrupt)
+    }
+}
+
+fn copy_complete_image(
+    image: &mut cap_std::fs::File,
+    logical_length: u64,
+    destination: &mut impl Write,
+) -> Result<[u8; 32], StageStoreError> {
+    let mut remaining = logical_length;
+    let mut digest = blake3::Hasher::new();
+    let mut buffer = vec![0_u8; COPY_BUFFER_BYTES].into_boxed_slice();
+    while remaining != 0 {
+        let requested = usize::try_from(remaining.min(COPY_BUFFER_BYTES_U64))
+            .map_err(|_| StageStoreError::Corrupt)?;
+        let read = image.read(&mut buffer[..requested])?;
+        if read == 0 {
+            return Err(StageStoreError::Corrupt);
+        }
+        digest.update(&buffer[..read]);
+        destination.write_all(&buffer[..read])?;
+        remaining -= u64::try_from(read).map_err(|_| StageStoreError::Corrupt)?;
+    }
+    Ok(digest.finalize().into())
+}
+
+fn remove_private_file(directory: &Dir, name: &str) -> Result<(), StageStoreError> {
+    match directory.remove_file(name) {
+        Ok(()) => sync_directory(directory).map_err(Into::into),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn create_stage_directory(root: &Dir, stage_id: StageId) -> Result<(), StageStoreError> {
     match root.create_dir(stage_id.to_string()) {
         Ok(()) => sync_directory(root).map_err(Into::into),
@@ -619,11 +779,16 @@ fn from_sql_i64(value: i64) -> Result<u64, rusqlite::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use meshspan_contracts::BoundedBytes;
     use meshspan_domain::{OperationId, StageId, UnixMicros};
     use tempfile::tempdir;
 
-    use super::{DurableStageStore, StageRegistration, StageStoreError, install_part};
+    use super::{
+        CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration,
+        StageStoreError, install_part,
+    };
     use crate::{StageWrite, StageWriteOutcome};
 
     #[test]
@@ -727,6 +892,145 @@ mod tests {
             b"durable"
         );
         Ok(())
+    }
+
+    #[test]
+    fn streaming_completion_is_fenced_exact_and_retryable_after_sink_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([11; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 12, 100))?;
+        store.write(stage_id, &write(13, 12, 5, b"world")?, UnixMicros::new(2))?;
+        store.write(stage_id, &write(14, 12, 0, b"hello")?, UnixMicros::new(3))?;
+        let request = StageCompletionRequest {
+            operation_id: OperationId::from_bytes([15; 16])?,
+            stage_id,
+            stage_fence: 12,
+            expected_sequence: 2,
+            final_length: 10,
+            sparse: false,
+            observed_at: UnixMicros::new(4),
+        };
+        let mut failing = FailingWriter;
+        assert!(matches!(
+            store.stream_complete(request, &mut failing),
+            Err(StageStoreError::Io(_))
+        ));
+        let mut completed = Vec::new();
+        assert_eq!(
+            store.stream_complete(request, &mut completed)?,
+            CompletedStage {
+                logical_length: 10,
+                content_digest: blake3::hash(b"helloworld").into(),
+            }
+        );
+        assert_eq!(completed, b"helloworld");
+        let stale = StageCompletionRequest {
+            expected_sequence: 1,
+            ..request
+        };
+        assert!(matches!(
+            store.stream_complete(stale, &mut Vec::new()),
+            Err(StageStoreError::Stale)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_completion_streams_large_logical_extent_in_bounded_chunks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([16; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(StageRegistration {
+            stage_id,
+            stage_fence: 17,
+            maximum_bytes: 2 * 1_024 * 1_024,
+            created_at: UnixMicros::new(1),
+            expires_at: UnixMicros::new(100),
+        })?;
+        store.write(
+            stage_id,
+            &write(18, 17, 1_048_575, b"x")?,
+            UnixMicros::new(2),
+        )?;
+        let mut counter = CountingWriter::default();
+        let completed = store.stream_complete(
+            StageCompletionRequest {
+                operation_id: OperationId::from_bytes([19; 16])?,
+                stage_id,
+                stage_fence: 17,
+                expected_sequence: 1,
+                final_length: 1_048_576,
+                sparse: true,
+                observed_at: UnixMicros::new(3),
+            },
+            &mut counter,
+        )?;
+        assert_eq!(completed.logical_length, 1_048_576);
+        assert_eq!(counter.written, 1_048_576);
+        assert!(counter.maximum_write <= 64 * 1_024);
+        Ok(())
+    }
+
+    #[test]
+    fn streaming_completion_accepts_an_empty_checkpoint() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([20; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 21, 100))?;
+        let mut completed_bytes = Vec::new();
+        let completed = store.stream_complete(
+            StageCompletionRequest {
+                operation_id: OperationId::from_bytes([22; 16])?,
+                stage_id,
+                stage_fence: 21,
+                expected_sequence: 0,
+                final_length: 0,
+                sparse: false,
+                observed_at: UnixMicros::new(2),
+            },
+            &mut completed_bytes,
+        )?;
+        assert_eq!(completed.logical_length, 0);
+        assert_eq!(completed.content_digest, *blake3::hash(&[]).as_bytes());
+        assert!(completed_bytes.is_empty());
+        Ok(())
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "injected destination failure",
+            ))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingWriter {
+        written: usize,
+        maximum_write: usize,
+    }
+
+    impl Write for CountingWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.written = self.written.saturating_add(buffer.len());
+            self.maximum_write = self.maximum_write.max(buffer.len());
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     fn registration(stage_id: StageId, fence: u64, expiry: i64) -> StageRegistration {

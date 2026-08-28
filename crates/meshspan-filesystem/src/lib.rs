@@ -19,5 +19,7 @@ pub use publication::{
     BranchNamespaceHead, FilePublication, ManifestPublication, NamespacePublicationReceipt,
     PublicationDisposition, PublicationError, RootFilePublication, VersionPublicationStore,
 };
-pub use stage_store::{DurableStageStore, StageRegistration, StageStoreError};
+pub use stage_store::{
+    CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration, StageStoreError,
+};
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
