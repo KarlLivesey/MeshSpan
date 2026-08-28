@@ -109,6 +109,30 @@ On reconnection:
 Interrupted reconciliation resumes from immutable IDs. Repeating it produces
 the same graph/root and cannot duplicate a user operation.
 
+### Executable planning contract
+
+Reconciliation is split into a pure planner and a receipt-backed applier. The
+planner receives one complete bounded causal closure containing the current
+converged head and every eligible branch head. It:
+
+1. rejects duplicate commit identities, missing parents, cycles, mixed volumes
+   or root objects, excessive parents/frontiers/commits and conflicting reuse of
+   an operation ID;
+2. computes the ancestry already included by the converged head;
+3. removes exact operation replays already present in that ancestry;
+4. topologically orders remaining commits, selecting among causally ready
+   commits by `(operation ID, commit ID)` only; and
+5. removes ancestor heads from the merge frontier, sorts the surviving parents
+   by commit ID and digests the complete plan under a versioned domain.
+
+The batch bound is a paging boundary, not a mesh-size ceiling. A peer must fetch
+the next causal page before planning if the closure does not fit. The applier
+may use only the planner's exact digest and ordered commits. It validates and
+imports immutable records before one authoritative transaction creates the
+multi-parent merge commit, advances the converged head and records inclusion.
+The source branch remains durable until that receipt is observed. Lost replies
+therefore repeat the same plan instead of inventing a second merge.
+
 ## Deterministic conflict rules
 
 No generic system can meaningfully combine two concurrent arbitrary binary edits
