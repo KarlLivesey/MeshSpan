@@ -56,6 +56,27 @@ Changing `/a/b/file` creates a new file/object revision and new immutable
 directory blocks along `b`, `a` and the root. Unchanged sibling blocks and file
 content are referenced by both old and new roots.
 
+The publication request carries one already-validated root-relative
+`NamespacePath`, the selected root object transition and exactly one child-
+directory transition for every component before the leaf. Each transition binds
+the stable directory object, its exact expected revision and its new revision.
+The chain length must match the path depth; callers cannot omit, invent or append
+an ancestor after path validation.
+
+Publication walks root to leaf and fails closed unless every selected entry is a
+directory with the declared stable object and expected revision. It changes the
+leaf entry first, then walks back towards the root. Each step persists the
+changed directory blocks and a new immutable directory-object revision, and
+replaces only that child's revision in its parent. The final root revision,
+namespace commit, file version and file/volume heads become visible in one
+compare-and-swap transaction. Every ancestor transition and both display and
+canonical path forms are bound into the operation digest, so an exact retry can
+replay but a path, identity or revision substitution cannot.
+
+The number of visited directories and newly created radix nodes is bounded by
+the validated per-volume path depth and the fixed per-directory path-copy bound.
+No mutation scans an unrelated directory subtree or copies file content.
+
 Large directories use bounded persistent blocks rather than copying an entire
 entry list. The exact tree structure is an implementation decision hidden behind
 the namespace repository contract. Canonical ordering and digest test vectors
