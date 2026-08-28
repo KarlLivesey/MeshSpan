@@ -436,6 +436,33 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
 }
 
 #[test]
+fn reachable_version_sharing_the_manifest_blocks_physical_cleanup()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut second = next_root_publication(&first)?;
+    second.file.manifest = first.file.manifest;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
+    let request = reachability_request(candidate, policy, &roots, 168)?;
+    store.begin_version_reachability_scan(&request)?;
+    store.append_version_reachability_roots(&ReachabilityRootPage {
+        operation_id: request.operation_id,
+        start_ordinal: 0,
+        roots,
+    })?;
+    let progress =
+        store.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
+    assert_eq!(progress.state, VersionReachabilityState::Reachable);
+    assert!(progress.proof.is_none());
+    Ok(())
+}
+
+#[test]
 fn retained_snapshot_root_and_substituted_root_manifest_fail_closed()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
