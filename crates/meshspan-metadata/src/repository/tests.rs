@@ -1,29 +1,35 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 
+use ed25519_dalek::{Signer, SigningKey};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, ComponentInstanceId,
-    DurationMicros, GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
-    PartitionId, PrincipalId, Revision, Rights, RoleId, UnixMicros, VolumeId,
+    DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId,
+    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights,
+    RoleId, ScopeId, ScopeRoute, SnapshotId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::{
-    ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, PrincipalKind,
-    RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
-    restore_partition_backup, run_repository_conformance,
+    ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, PreservedVote,
+    PrincipalKind, RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
+    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };
 use crate::{
-    ActivateGrant, ActivateGroup, AddGroupMember, AssignComponent, AuthoritativeCommand,
-    BootstrapMesh, CommandContext, ConfigureComponent, CreateActivationPolicy, CreateComponent,
-    CreateGroup, CreateObject, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
-    NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName,
+    ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember, AssignComponent,
+    AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext, ConfigureComponent,
+    ConsumeJoinGrant, CreateActivationPolicy, CreateComponent, CreateGroup,
+    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateUser, CreateVolume,
+    FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
+    NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName, RegisterRoutingSigner,
+    RouteAttestation,
 };
 
 struct FixtureIds {
@@ -122,8 +128,107 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 14);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        3
+        5
     );
+    Ok(())
+}
+
+#[test]
+fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("partition.sqlite3");
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    apply(
+        &mut repository,
+        1,
+        context(130, ids.administrator, 131, 100, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([132; 16])?,
+            mesh_name: RecordName::new("Join proof")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([133; 16])?,
+            host_id: HostId::from_bytes([134; 16])?,
+            host_name: RecordName::new("First host")?,
+            node_id: NodeId::from_bytes([135; 16])?,
+            node_name: RecordName::new("First node")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
+    let grant_id = JoinGrantId::from_bytes([136; 16])?;
+    let secret_digest = [137; 32];
+    let roles =
+        JoinRoles::new(JoinRoles::STORAGE | JoinRoles::GATEWAY | JoinRoles::METADATA_ELIGIBLE)?;
+    apply(
+        &mut repository,
+        2,
+        context(138, ids.administrator, 139, 200, Some(1))?,
+        &AuthoritativeCommand::IssueJoinGrant(IssueJoinGrant {
+            join_grant_id: grant_id,
+            secret_digest,
+            allowed_roles: roles,
+            maximum_uses: 1,
+            expires_at: UnixMicros::new(1_000),
+        }),
+    )?;
+
+    let certificate_der = b"public certificate only".to_vec();
+    let certificate_fingerprint: [u8; 32] = Sha256::digest(&certificate_der).into();
+    let consume_context = context(140, ids.administrator, 141, 300, Some(2))?;
+    let mut consume = ConsumeJoinGrant {
+        join_grant_id: grant_id,
+        secret_digest: [0; 32],
+        host_id: HostId::from_bytes([142; 16])?,
+        new_host_name: Some(RecordName::new("Second host")?),
+        node_id: NodeId::from_bytes([143; 16])?,
+        node_name: RecordName::new("Second node")?,
+        incarnation: 1,
+        requested_roles: roles,
+        certificate_der,
+        certificate_fingerprint,
+        certificate_valid_until: UnixMicros::new(10_000),
+    };
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 3, term: 1 },
+            consume_context,
+            &AuthoritativeCommand::ConsumeJoinGrant(consume.clone()),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(repository.current_revision()?, Revision::new(2));
+
+    consume.secret_digest = secret_digest;
+    let command = AuthoritativeCommand::ConsumeJoinGrant(consume);
+    let applied =
+        repository.apply_committed(LogPosition { index: 3, term: 1 }, consume_context, &command)?;
+    assert_eq!(applied.entity.kind, super::EntityKind::Node);
+    let replay =
+        repository.apply_committed(LogPosition { index: 4, term: 1 }, consume_context, &command)?;
+    assert_eq!(replay.disposition, ApplyDisposition::Replayed);
+
+    let database = repository.into_database();
+    let (uses, nodes, learner, certificates): (i64, i64, i64, i64) =
+        database.connection().query_row(
+            "SELECT
+                (SELECT used_count FROM join_grants WHERE join_grant_id = ?1),
+                (SELECT count(*) FROM nodes WHERE node_id = ?2 AND current_incarnation = 1),
+                (SELECT count(*) FROM partition_voters
+                 WHERE partition_id = ?3 AND node_id = ?2 AND member_role = 2 AND state = 2),
+                (SELECT count(*) FROM node_certificates
+                 WHERE node_id = ?2 AND certificate_fingerprint = ?4 AND state = 1)",
+            rusqlite::params![
+                grant_id.as_bytes().as_slice(),
+                NodeId::from_bytes([143; 16])?.as_bytes().as_slice(),
+                ids.partition.as_bytes().as_slice(),
+                certificate_fingerprint.as_slice(),
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    assert_eq!((uses, nodes, learner, certificates), (1, 1, 1, 1));
     Ok(())
 }
 
@@ -228,6 +333,336 @@ fn backup_restore_verifies_exact_state_and_rejects_changed_bytes()
         Err(RepositoryError::BackupMismatch)
     ));
     Ok(())
+}
+
+#[test]
+fn consensus_snapshot_restores_exact_state_without_forgetting_receiver_vote()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let source_path = directory.path().join("snapshot-source.sqlite3");
+    let snapshot_path = directory.path().join("snapshot.image.sqlite3");
+    let restored_path = directory.path().join("snapshot-restored.sqlite3");
+    let wrong_plan_path = directory.path().join("snapshot-wrong.sqlite3");
+    let partition_id = PartitionId::from_bytes([101; 16])?;
+    let administrator = PrincipalId::from_bytes([102; 16])?;
+    let voter = NodeId::from_bytes([103; 16])?;
+    let database = PartitionDatabase::open(&source_path, partition_id, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap_snapshot_repository(&mut repository, administrator, voter)?;
+    let entry = meshspan_consensus::LogEntry::new(
+        meshspan_consensus::LogPosition { term: 1, index: 1 },
+        OperationId::from_bytes([110; 16])?,
+        1,
+        b"bootstrap-metadata".to_vec(),
+    )?;
+    repository.persist_consensus_mutation(
+        1,
+        &meshspan_consensus::DurableMutation {
+            vote_state: Some((3, Some(voter))),
+            truncate_from: None,
+            append: vec![entry],
+            membership_epoch: None,
+        },
+        UnixMicros::new(20),
+    )?;
+    let plan = meshspan_consensus::compile_plan(meshspan_consensus::flat_plan(
+        QuorumPlanId::from_bytes([111; 16])?,
+        1,
+        BTreeSet::from([voter]),
+        BTreeSet::new(),
+    )?)?;
+    let manifest = repository.create_snapshot(
+        SnapshotId::from_bytes([112; 16])?,
+        &snapshot_path,
+        &plan,
+        UnixMicros::new(21),
+    )?;
+    let restored = restore_partition_snapshot(
+        &snapshot_path,
+        &restored_path,
+        manifest,
+        &plan,
+        PreservedVote {
+            current_term: 9,
+            voted_for: Some(voter),
+            membership_epoch: 1,
+        },
+        UnixMicros::new(22),
+    )?;
+    let restored = AuthoritativeRepository::new(restored);
+    let durable = restored.load_consensus_state(1)?;
+    assert_eq!((durable.current_term, durable.voted_for), (9, Some(voter)));
+    assert_eq!(durable.applied_index, 1);
+
+    let wrong_plan = meshspan_consensus::compile_plan(meshspan_consensus::flat_plan(
+        QuorumPlanId::from_bytes([113; 16])?,
+        2,
+        BTreeSet::from([voter]),
+        BTreeSet::new(),
+    )?)?;
+    assert!(matches!(
+        restore_partition_snapshot(
+            &snapshot_path,
+            &wrong_plan_path,
+            manifest,
+            &wrong_plan,
+            PreservedVote {
+                current_term: 9,
+                voted_for: Some(voter),
+                membership_epoch: 1,
+            },
+            UnixMicros::new(23),
+        ),
+        Err(RepositoryError::SnapshotMismatch)
+    ));
+    Ok(())
+}
+
+fn bootstrap_snapshot_repository(
+    repository: &mut AuthoritativeRepository,
+    administrator: PrincipalId,
+    voter: NodeId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        1,
+        context(104, administrator, 105, 10, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([106; 16])?,
+            mesh_name: RecordName::new("Snapshot proof")?,
+            administrator_id: administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([107; 16])?,
+            host_id: HostId::from_bytes([108; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: voter,
+            node_name: RecordName::new("Voter")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn signed_scope_handoff_persists_without_a_dual_writer_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("routing.sqlite3");
+    let source = PartitionId::from_bytes([121; 16])?;
+    let destination = PartitionId::from_bytes([122; 16])?;
+    let scope_id = ScopeId::from_bytes([123; 16])?;
+    let administrator = PrincipalId::from_bytes([124; 16])?;
+    let signer_node = NodeId::from_bytes([125; 16])?;
+    let signing_key = SigningKey::from_bytes(&[126; 32]);
+    let database = PartitionDatabase::open(&file_path, source, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap_routing_repository(&mut repository, administrator, signer_node)?;
+    apply(
+        &mut repository,
+        2,
+        context(131, administrator, 141, 11, Some(1))?,
+        &AuthoritativeCommand::RegisterRoutingSigner(RegisterRoutingSigner {
+            node_id: signer_node,
+            generation: 1,
+            verifying_key: signing_key.verifying_key().to_bytes(),
+        }),
+    )?;
+    apply(
+        &mut repository,
+        3,
+        context(132, administrator, 142, 12, Some(2))?,
+        &AuthoritativeCommand::CreateMetadataPartition(CreateMetadataPartition {
+            partition_id: destination,
+            name: RecordName::new("Namespace two")?,
+            partition_kind: 2,
+        }),
+    )?;
+
+    let mut expected = ScopeRoute::new(scope_id, source, 1, 1)?;
+    apply_route(
+        &mut repository,
+        4,
+        administrator,
+        &AuthoritativeCommand::CreateScopeRoute(CreateScopeRoute {
+            scope_id,
+            partition_id: source,
+            routing_epoch: 1,
+            attestation: attestation(&signing_key, signer_node, &expected),
+        }),
+    )?;
+    expected.begin_handoff(destination, 2)?;
+    apply_route(
+        &mut repository,
+        5,
+        administrator,
+        &AuthoritativeCommand::BeginScopeHandoff(BeginScopeHandoff {
+            scope_id,
+            destination_partition_id: destination,
+            routing_epoch: 2,
+            attestation: attestation(&signing_key, signer_node, &expected),
+        }),
+    )?;
+    let evidence = HandoffEvidence {
+        frozen_revision: Revision::new(5),
+        snapshot_digest: [131; 32],
+    };
+    expected.freeze(2, evidence)?;
+    apply_route(
+        &mut repository,
+        6,
+        administrator,
+        &AuthoritativeCommand::FreezeScopeHandoff(FreezeScopeHandoff {
+            scope_id,
+            routing_epoch: 2,
+            evidence,
+            attestation: attestation(&signing_key, signer_node, &expected),
+        }),
+    )?;
+    assert!(!expected.permits_write(source, 2));
+    assert!(!expected.permits_write(destination, 2));
+
+    let mut active = expected;
+    active.activate(destination, 2, evidence)?;
+    reject_bad_route_signature(
+        &mut repository,
+        administrator,
+        signer_node,
+        &signing_key,
+        scope_id,
+        destination,
+        evidence,
+        &active,
+    )?;
+    apply_route(
+        &mut repository,
+        7,
+        administrator,
+        &AuthoritativeCommand::ActivateScopeHandoff(ActivateScopeHandoff {
+            scope_id,
+            destination_partition_id: destination,
+            routing_epoch: 2,
+            evidence,
+            attestation: attestation(&signing_key, signer_node, &active),
+        }),
+    )?;
+    verify_persisted_route(repository, scope_id, destination)?;
+    Ok(())
+}
+
+fn bootstrap_routing_repository(
+    repository: &mut AuthoritativeRepository,
+    administrator: PrincipalId,
+    signer_node: NodeId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        1,
+        context(130, administrator, 140, 10, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([127; 16])?,
+            mesh_name: RecordName::new("Routing proof")?,
+            administrator_id: administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([128; 16])?,
+            host_id: HostId::from_bytes([129; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: signer_node,
+            node_name: RecordName::new("Signer")?,
+            partition_name: RecordName::new("Catalogue")?,
+        }),
+    )?;
+    Ok(())
+}
+
+fn apply_route(
+    repository: &mut AuthoritativeRepository,
+    index: u8,
+    administrator: PrincipalId,
+    command: &AuthoritativeCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        u64::from(index),
+        context(
+            index + 130,
+            administrator,
+            index + 140,
+            i64::from(index) + 10,
+            Some(u64::from(index - 1)),
+        )?,
+        command,
+    )?;
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one complete invalid activation fixture"
+)]
+fn reject_bad_route_signature(
+    repository: &mut AuthoritativeRepository,
+    administrator: PrincipalId,
+    signer_node: NodeId,
+    signing_key: &SigningKey,
+    scope_id: ScopeId,
+    destination: PartitionId,
+    evidence: HandoffEvidence,
+    active: &ScopeRoute,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut invalid_attestation = attestation(signing_key, signer_node, active);
+    invalid_attestation.signature[0] ^= 1;
+    let rejected = repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        context(150, administrator, 160, 16, Some(6))?,
+        &AuthoritativeCommand::ActivateScopeHandoff(ActivateScopeHandoff {
+            scope_id,
+            destination_partition_id: destination,
+            routing_epoch: 2,
+            evidence,
+            attestation: invalid_attestation,
+        }),
+    );
+    assert!(
+        matches!(rejected, Err(RepositoryError::InvalidCommand)),
+        "{rejected:?}"
+    );
+    Ok(())
+}
+
+fn verify_persisted_route(
+    repository: AuthoritativeRepository,
+    scope_id: ScopeId,
+    destination: PartitionId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database = repository.into_database();
+    let scope = scope_id.as_bytes();
+    let (owner, ownership_epoch, handoff_state): (Vec<u8>, i64, i64) =
+        database.connection().query_row(
+            "SELECT partition_id, ownership_epoch, handoff_state
+             FROM partition_scopes WHERE scope_id = ?1",
+            [scope.as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    let history: i64 = database.connection().query_row(
+        "SELECT count(*) FROM partition_routes WHERE scope_id = ?1",
+        [scope.as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(owner.as_slice(), destination.as_bytes());
+    assert_eq!((ownership_epoch, handoff_state, history), (2, 1, 4));
+    Ok(())
+}
+
+fn attestation(
+    signing_key: &SigningKey,
+    signer_node_id: NodeId,
+    route: &ScopeRoute,
+) -> RouteAttestation {
+    RouteAttestation {
+        signer_node_id,
+        signer_generation: 1,
+        signature: signing_key.sign(&route.signing_payload()).to_bytes(),
+    }
 }
 
 #[test]

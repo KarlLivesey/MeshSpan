@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Deterministic leader-based replicated-log state machine with explicit durable effects.
+
+mod state;
+mod types;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod simulation_tests;
+
+pub use state::ConsensusCore;
+pub use types::{
+    AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
+    DurableCoreState, DurableMutation, LogEntry, LogPosition, MemberIncarnations, PersistenceId,
+    ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
+};

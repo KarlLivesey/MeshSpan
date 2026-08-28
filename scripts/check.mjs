@@ -87,6 +87,21 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "consensus proof tests",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-consensus",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
+      ],
+    },
+    {
       name: "private protocol compatibility",
       steps: [
         [
@@ -98,6 +113,30 @@ if (!generation.passed) {
             "--all-targets",
             "--all-features",
           ],
+        ],
+      ],
+    },
+    {
+      name: "authenticated QUIC transport tests",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-transport",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
+      ],
+    },
+    {
+      name: "cluster driver and wire tests",
+      steps: [
+        [
+          "cargo",
+          ["test", "-p", "meshspan-cluster", "--all-targets", "--all-features"],
         ],
       ],
     },

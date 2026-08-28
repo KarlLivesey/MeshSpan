@@ -50,6 +50,12 @@ source/advisory policy automation arrive before a release artefact is built.
 | `thiserror` | 2.0.20 | `MIT OR Apache-2.0` |
 | `unicode-normalization` | 0.1.25 | `MIT OR Apache-2.0` |
 | `tempfile` (test only) | 3.27.0 | `MIT OR Apache-2.0` |
+| `bytes` | 1.12.1 | `MIT` |
+| `ed25519-dalek` | 3.0.0 | `BSD-3-Clause` |
+| `quinn` | 0.11.11 | `MIT OR Apache-2.0` |
+| `rcgen` | 0.14.9 | `MIT OR Apache-2.0` |
+| `rustls` | 0.23.43 | `Apache-2.0 OR ISC OR MIT` |
+| `tokio` | 1.53.1 | `MIT` |
 
 | Web/runtime dependency | Version | Declared licence |
 | --- | ---: | --- |

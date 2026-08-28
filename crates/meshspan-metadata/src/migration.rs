@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 3;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 5;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
 
-const PARTITION_MIGRATIONS: [Migration; 3] = [
+const PARTITION_MIGRATIONS: [Migration; 5] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -23,8 +23,16 @@ const PARTITION_MIGRATIONS: [Migration; 3] = [
         sql: include_str!("../schema/partition/002_roles.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 3,
         sql: include_str!("../schema/partition/003_component_rollout.sql"),
+    },
+    Migration {
+        version: 4,
+        sql: include_str!("../schema/partition/004_cluster_enrollment.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/005_partition_routing.sql"),
     },
 ];
 
@@ -212,6 +220,16 @@ pub(crate) fn partition_roles_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn partition_component_rollout_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[2].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_cluster_enrollment_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[3].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_routing_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[4].sql)
 }
 
 #[cfg(test)]

@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-cluster"
+description = "Consensus driver and private wire adapters for MeshSpan metadata partitions"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+ed25519-dalek.workspace = true
+meshspan-consensus = { path = "../meshspan-consensus" }
+meshspan-domain = { path = "../meshspan-domain" }
+meshspan-metadata = { path = "../meshspan-metadata" }
+meshspan-protocol = { path = "../meshspan-protocol" }
+meshspan-transport = { path = "../meshspan-transport" }
+quinn.workspace = true
+rustls.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

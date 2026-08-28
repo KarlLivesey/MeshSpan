@@ -56,6 +56,16 @@ pub enum EntityKind {
     ComponentInstance = 10,
     /// Desired component assignment.
     ComponentAssignment = 11,
+    /// Administrator-issued node join grant.
+    JoinGrant = 12,
+    /// Certificate-bound enrolled node.
+    Node = 13,
+    /// Public key authorised to sign catalogue routes.
+    RoutingSigner = 14,
+    /// Metadata partition catalogue record.
+    MetadataPartition = 15,
+    /// Signed scope route or handoff transition.
+    ScopeRoute = 16,
 }
 
 impl EntityKind {
@@ -72,6 +82,11 @@ impl EntityKind {
             9 => Ok(Self::AccessActivation),
             10 => Ok(Self::ComponentInstance),
             11 => Ok(Self::ComponentAssignment),
+            12 => Ok(Self::JoinGrant),
+            13 => Ok(Self::Node),
+            14 => Ok(Self::RoutingSigner),
+            15 => Ok(Self::MetadataPartition),
+            16 => Ok(Self::ScopeRoute),
             _ => Err(RepositoryError::CorruptState),
         }
     }

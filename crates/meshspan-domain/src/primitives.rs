@@ -99,6 +99,7 @@ define_identifier!(
     "Stable identity of one registered storage target."
 );
 define_identifier!(PartitionId, "Stable identity of one metadata partition.");
+define_identifier!(ScopeId, "Stable identity of one routed metadata scope.");
 define_identifier!(
     PrincipalId,
     "Stable identity of one user or group principal."
@@ -123,7 +124,16 @@ define_identifier!(
 define_identifier!(AuditEventId, "Stable identity of one audit event.");
 define_identifier!(TagId, "Stable identity of one descriptive tag.");
 define_identifier!(BackupId, "Stable identity of one metadata backup.");
+define_identifier!(SnapshotId, "Stable identity of one consensus snapshot.");
+define_identifier!(
+    JoinGrantId,
+    "Stable identity of one administrator-issued node join grant."
+);
 define_identifier!(RoleId, "Stable identity of one system-administration role.");
+define_identifier!(
+    QuorumPlanId,
+    "Stable identity of one immutable quorum plan."
+);
 define_identifier!(
     OperationId,
     "Stable idempotency identity of one logical mutation."
