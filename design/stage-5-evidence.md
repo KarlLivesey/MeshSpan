@@ -178,9 +178,15 @@ copy-on-write filesystem service. This document records executable evidence only
    commit and root in constant metadata work, records an idempotent audited
    receipt, rejects stale heads and elapsed expiry, survives restart, and exposes
    index-aligned bounded listing with a next cursor only when another page
-   exists. Snapshot expiry/removal, schedules, version-retention selection,
-   reachability guards and restore-as-new-head remain required before this gate
-   can close. Every new volume now receives the accepted safe ordinary-history
+   exists. Manual or due automatic expiry can now move an unprotected snapshot
+   into an explicit expiring state behind an exact snapshot-revision CAS. The
+   same transaction retains an immutable reason record and normal operation/audit
+   receipt; restart, exact replay, premature automation, protected roots, stale
+   revisions and every injected apply boundary are proven. This first phase does
+   not drop the root: removal remains blocked until handle and reachability guards
+   prove it safe. Schedules, version-retention selection, guarded root removal and
+   restore-as-new-head remain required before this gate can close. Every new
+   volume now receives the accepted safe ordinary-history
    default: enabled, 30-day soft minimum, pressure-triggered reclamation and a
    separate 30-day conflict minimum. Policy changes append immutable per-volume
    revisions behind an exact sequence CAS; validation rejects zero counts,

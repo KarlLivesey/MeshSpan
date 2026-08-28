@@ -47,6 +47,8 @@ pub enum AuthoritativeCommand {
     CommitConvergedVolumeHead(CommitConvergedVolumeHead),
     /// Pins one exact current converged namespace root as a read-only volume snapshot.
     CreateVolumeSnapshot(CreateVolumeSnapshot),
+    /// Marks one snapshot as expiring without dropping its namespace root.
+    RequestVolumeSnapshotExpiry(RequestVolumeSnapshotExpiry),
     /// Appends and selects one immutable per-volume file-version retention policy.
     ConfigureVersionRetention(ConfigureVersionRetention),
     /// Creates one folder or file record beneath an existing folder.
@@ -115,6 +117,7 @@ impl AuthoritativeCommand {
             Self::CreateVolume(value) => value.update_digest(digest),
             Self::CommitConvergedVolumeHead(value) => value.update_digest(digest),
             Self::CreateVolumeSnapshot(value) => value.update_digest(digest),
+            Self::RequestVolumeSnapshotExpiry(value) => value.update_digest(digest),
             Self::ConfigureVersionRetention(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
@@ -289,6 +292,19 @@ pub struct CreateVolumeSnapshot {
     pub expires_at: Option<UnixMicros>,
     /// Whether automatic expiry and pressure reclamation are forbidden.
     pub protected_from_expiry: bool,
+}
+
+/// Safe first phase of snapshot expiry; root removal remains separately guarded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RequestVolumeSnapshotExpiry {
+    /// Existing active snapshot.
+    pub snapshot_id: SnapshotId,
+    /// Exact snapshot revision observed by the requester.
+    pub expected_snapshot_revision: Revision,
+    /// Whether expiry was selected automatically from its configured deadline.
+    pub automatic: bool,
+    /// Stable non-zero reason code for audit and policy diagnosis.
+    pub reason_code: u32,
 }
 
 /// Closed trigger deciding when an otherwise eligible historical version is reclaimed.
@@ -794,6 +810,16 @@ digest_simple_record!(
         digest.name(&value.name);
         digest.optional_instant(value.expires_at);
         digest.boolean(value.protected_from_expiry);
+    }
+);
+digest_simple_record!(
+    RequestVolumeSnapshotExpiry,
+    b"request-volume-snapshot-expiry",
+    |value, digest| {
+        digest.identifier(value.snapshot_id.as_bytes());
+        digest.unsigned(value.expected_snapshot_revision.get());
+        digest.boolean(value.automatic);
+        digest.unsigned(u64::from(value.reason_code));
     }
 );
 digest_simple_record!(

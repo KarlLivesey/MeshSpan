@@ -9,7 +9,7 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, Page, PageLimit, RepositoryError};
-use crate::{CommandContext, CreateVolumeSnapshot, PartitionDatabase};
+use crate::{CommandContext, CreateVolumeSnapshot, PartitionDatabase, RequestVolumeSnapshotExpiry};
 
 /// Stable seek cursor for one volume's snapshot list.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +87,66 @@ pub(super) fn create(
             context.actor_principal_id.as_bytes().as_slice(),
             context.occurred_at.get(),
             command.expires_at.map(UnixMicros::get),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    Ok(EntityReference {
+        kind: EntityKind::VolumeSnapshot,
+        id: command.snapshot_id.as_bytes(),
+    })
+}
+
+pub(super) fn request_expiry(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: RequestVolumeSnapshotExpiry,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    if command.expected_snapshot_revision == Revision::ZERO || command.reason_code == 0 {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let stored: Option<(i64, i64, Option<i64>, i64)> = transaction
+        .query_row(
+            "SELECT state, protected_from_expiry, expires_at, revision
+             FROM volume_snapshots WHERE snapshot_id = ?1",
+            [command.snapshot_id.as_bytes().as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((state, protected, expires_at, stored_revision)) = stored else {
+        return Err(RepositoryError::InvalidCommand);
+    };
+    if parse_u64(stored_revision)? != command.expected_snapshot_revision.get() {
+        return Err(RepositoryError::StaleSnapshot);
+    }
+    if state != 1
+        || protected != 0
+        || command.automatic && expires_at.is_none_or(|expires| expires > context.occurred_at.get())
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let updated = transaction.execute(
+        "UPDATE volume_snapshots SET state = 2, revision = ?1
+         WHERE snapshot_id = ?2 AND state = 1 AND revision = ?3",
+        params![
+            to_i64(revision.get())?,
+            command.snapshot_id.as_bytes().as_slice(),
+            stored_revision,
+        ],
+    )?;
+    if updated != 1 {
+        return Err(RepositoryError::StaleSnapshot);
+    }
+    transaction.execute(
+        "INSERT INTO snapshot_expiry_requests(
+            snapshot_id, operation_id, automatic, reason_code, requested_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            command.snapshot_id.as_bytes().as_slice(),
+            context.operation_id.as_bytes().as_slice(),
+            command.automatic,
+            command.reason_code,
+            context.occurred_at.get(),
             to_i64(revision.get())?,
         ],
     )?;
@@ -206,4 +266,8 @@ fn identifier<T>(
             .map_err(|_| RepositoryError::CorruptState)?,
     )
     .map_err(|_| RepositoryError::CorruptState)
+}
+
+fn parse_u64(value: i64) -> Result<u64, RepositoryError> {
+    u64::try_from(value).map_err(|_| RepositoryError::CorruptState)
 }
