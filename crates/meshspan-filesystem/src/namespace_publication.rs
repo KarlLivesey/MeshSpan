@@ -8,6 +8,8 @@ mod digest;
 mod reconciliation_apply;
 #[path = "namespace_publication/repository.rs"]
 mod repository;
+#[path = "namespace_publication/snapshot_restore.rs"]
+mod snapshot_restore;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,6 +42,39 @@ pub(super) use repository::{
     load_branch_intent, load_directory_operation, load_file_operation as load_operation, load_head,
     load_reconciliation_commit,
 };
+
+pub(super) fn prepare_snapshot_restore(
+    connection: &mut Connection,
+    publication: super::SnapshotRestorePublication,
+    fault: Option<NamespaceFaultPoint>,
+) -> Result<super::SnapshotRestoreReceipt, PublicationError> {
+    snapshot_restore::prepare(connection, publication, fault)
+}
+
+#[cfg(test)]
+pub(super) fn prepare_snapshot_restore_with_fault(
+    connection: &mut Connection,
+    publication: super::SnapshotRestorePublication,
+    fault: NamespaceFaultPoint,
+) -> Result<super::SnapshotRestoreReceipt, PublicationError> {
+    snapshot_restore::prepare(connection, publication, Some(fault))
+}
+
+pub(super) fn activate_snapshot_restore(
+    connection: &mut Connection,
+    receipt: super::SnapshotRestoreReceipt,
+    activated_at: meshspan_domain::UnixMicros,
+) -> Result<super::BranchNamespaceHead, PublicationError> {
+    snapshot_restore::activate(connection, receipt, activated_at)
+}
+
+pub(super) fn load_snapshot_restore(
+    connection: &Connection,
+    operation_id: OperationId,
+    disposition: PublicationDisposition,
+) -> Result<Option<super::SnapshotRestoreReceipt>, PublicationError> {
+    snapshot_restore::load_receipt(connection, operation_id, disposition)
+}
 
 pub(super) fn apply_reconciliation(
     connection: &mut Connection,
@@ -292,6 +327,8 @@ pub(super) enum NamespaceFaultPoint {
     ReconciliationDirectories,
     ReconciliationCommit,
     ReconciliationOperation,
+    SnapshotRestoreCommit,
+    SnapshotRestoreOperation,
 }
 
 struct NamespaceBase {

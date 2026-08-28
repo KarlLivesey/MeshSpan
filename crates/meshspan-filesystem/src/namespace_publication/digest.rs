@@ -7,11 +7,11 @@ use meshspan_domain::{
     PrincipalId, UnixMicros, VolumeId,
 };
 
+use super::publication_request_digest;
 use super::repository::{ObjectRevisionInsert, StoredCommit};
-use super::{NamespaceIntent, publication_request_digest};
 use crate::{
     DirectoryNodeDigest, DirectoryPublication, NamespacePath, NamespacePublicationPath,
-    RootFilePublication,
+    RootFilePublication, SnapshotRestorePublication,
 };
 use crate::{NamespaceReconciliationApplication, PreparedNamespaceReconciliation};
 
@@ -47,23 +47,6 @@ pub(super) fn directory_request(publication: &DirectoryPublication) -> [u8; 32] 
     digest.update(&publication.created_by.as_bytes());
     digest.update(&publication.created_at.get().to_be_bytes());
     digest.finalize().into()
-}
-
-pub(super) fn commit(intent: NamespaceIntent<'_>, request_digest: [u8; 32]) -> [u8; 32] {
-    commit_fields(
-        &StoredCommit {
-            commit_id: intent.commit_id,
-            branch_id: intent.branch_id,
-            volume_id: intent.volume_id,
-            root_object_id: intent.root_object_id,
-            root_object_revision_id: intent.root_revision_id,
-            parent_id: intent.expected_commit_id,
-            created_by: intent.created_by,
-            operation_id: intent.operation_id,
-            created_at: intent.created_at,
-        },
-        request_digest,
-    )
 }
 
 pub(super) fn commit_fields(commit: &StoredCommit, request_digest: [u8; 32]) -> [u8; 32] {
@@ -122,6 +105,23 @@ pub(super) fn reconciliation_request(
     digest.update(&causal.root_object_id().as_bytes());
     update_optional_revision(&mut digest, replay.final_root_object_revision_id());
     update_commit_ids(&mut digest, causal.merge_parents());
+    digest.finalize().into()
+}
+
+pub(super) fn snapshot_restore_request(publication: SnapshotRestorePublication) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.namespace-snapshot-restore-request.v1\0");
+    digest.update(&publication.operation_id.as_bytes());
+    digest.update(&publication.branch_id.as_bytes());
+    digest.update(&publication.volume_id.as_bytes());
+    digest.update(&publication.snapshot_id.as_bytes());
+    digest.update(&publication.snapshot_namespace_commit_id.as_bytes());
+    digest.update(&publication.expected_namespace_commit_id.as_bytes());
+    digest.update(&publication.root_object_id.as_bytes());
+    digest.update(&publication.root_object_revision_id.as_bytes());
+    digest.update(&publication.namespace_commit_id.as_bytes());
+    digest.update(&publication.created_by.as_bytes());
+    digest.update(&publication.created_at.get().to_be_bytes());
     digest.finalize().into()
 }
 

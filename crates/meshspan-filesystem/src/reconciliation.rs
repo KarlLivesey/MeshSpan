@@ -5,7 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{
-    BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
+    BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId,
+    SnapshotId, VolumeId,
 };
 use thiserror::Error;
 
@@ -45,6 +46,13 @@ pub enum ReconciliationCommitPayload {
     Merge {
         /// Canonical digest of the applied namespace replay plan.
         replay_digest: [u8; 32],
+    },
+    /// One authoritative whole-volume restore prepared locally and committed by metadata CAS.
+    Restore {
+        /// Snapshot whose immutable root the commit selects.
+        snapshot_id: SnapshotId,
+        /// Exact namespace commit pinned by that snapshot.
+        snapshot_namespace_commit_id: NamespaceCommitId,
     },
 }
 
@@ -296,6 +304,13 @@ pub fn plan_reconciliation(
     validate_operations(&by_id)?;
 
     let pending = select_pending(&by_id, &eligible, &converged);
+    if pending.iter().any(|commit_id| {
+        by_id.get(commit_id).is_some_and(|commit| {
+            matches!(commit.payload, ReconciliationCommitPayload::Restore { .. })
+        })
+    }) {
+        return Err(ReconciliationError::UncommittedRestore);
+    }
     let ordered_commits = order_pending(&by_id, &pending)?;
     let merge_parents = minimal_frontier(frontier, &by_id)?;
     let commit_headers = by_id
@@ -348,6 +363,9 @@ pub enum ReconciliationError {
     /// An ordered mutation commit has no exact durable replay intent.
     #[error("reconciliation mutation intent is missing")]
     MissingIntent,
+    /// A prepared restore was presented as a branch-local write before metadata committed it.
+    #[error("snapshot restore has not been committed by replicated authority")]
+    UncommittedRestore,
     /// An affected path or revision required by replay is absent from the supplied base.
     #[error("reconciliation affected-path base is incomplete")]
     MissingBaseEntry,
@@ -396,6 +414,7 @@ fn index_commits(
         let invalid_payload = match commit.payload {
             ReconciliationCommitPayload::Mutation { .. } => commit.parents.len() > 1,
             ReconciliationCommitPayload::Merge { .. } => commit.parents.len() < 2,
+            ReconciliationCommitPayload::Restore { .. } => commit.parents.len() != 1,
         };
         if parents.len() != commit.parents.len()
             || parents.contains(&commit.commit_id)
@@ -678,6 +697,14 @@ fn update_payload(digest: &mut blake3::Hasher, payload: ReconciliationCommitPayl
         ReconciliationCommitPayload::Merge { replay_digest } => {
             digest.update(&[2]);
             digest.update(&replay_digest);
+        }
+        ReconciliationCommitPayload::Restore {
+            snapshot_id,
+            snapshot_namespace_commit_id,
+        } => {
+            digest.update(&[3]);
+            digest.update(&snapshot_id.as_bytes());
+            digest.update(&snapshot_namespace_commit_id.as_bytes());
         }
     }
 }

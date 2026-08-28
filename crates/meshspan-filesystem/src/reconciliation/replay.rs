@@ -174,7 +174,7 @@ pub fn plan_namespace_replay(
         let commit = commits
             .get(commit_id)
             .ok_or(ReconciliationError::MissingCommit)?;
-        if matches!(commit.payload, ReconciliationCommitPayload::Merge { .. }) {
+        if !matches!(commit.payload, ReconciliationCommitPayload::Mutation { .. }) {
             continue;
         }
         let intent = intents
