@@ -74,6 +74,7 @@ pub(super) fn persist(
         return Err(ConsensusStoreError::InvalidQuorumPlan);
     }
     verify_transition_entry(transaction, durable.activated_position)?;
+    advance_applied_position(transaction, partition_id, durable.activated_position)?;
     let canonical = durable.active_plan.encode()?;
     let phase = phase_kind(&durable.active_plan);
     let changed = transaction.execute(
@@ -110,6 +111,29 @@ pub(super) fn persist(
         ],
     )?;
     Ok(())
+}
+
+fn advance_applied_position(
+    transaction: &Transaction<'_>,
+    partition_id: &[u8; 16],
+    position: LogPosition,
+) -> Result<(), ConsensusStoreError> {
+    let changed = transaction.execute(
+        "UPDATE applied_state
+         SET last_log_index = ?1, last_log_term = ?2
+         WHERE singleton = 1 AND partition_id = ?3 AND last_log_index = ?4",
+        params![
+            to_i64(position.index)?,
+            to_i64(position.term)?,
+            partition_id.as_slice(),
+            to_i64(position.index.saturating_sub(1))?,
+        ],
+    )?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(ConsensusStoreError::InvalidQuorumPlan)
+    }
 }
 
 pub(super) fn verify_epoch(

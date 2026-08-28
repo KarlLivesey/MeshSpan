@@ -677,7 +677,9 @@ mod tests {
             super::super::quorum_plan::load(&fixture.database)?,
             Some(ActiveQuorumPlan::Stable(_))
         ));
-        assert_eq!(load_state(&fixture.database, 1)?.current_term, 4);
+        let retained = load_state(&fixture.database, 1)?;
+        assert_eq!(retained.current_term, 4);
+        assert_eq!(retained.applied_index, 0);
         Ok(())
     }
 
@@ -765,7 +767,9 @@ mod tests {
             super::super::quorum_plan::load(&fixture.database)?,
             Some(ActiveQuorumPlan::Joint(_))
         ));
-        assert_eq!(load_state(&fixture.database, 2)?.current_term, 4);
+        let joint_state = load_state(&fixture.database, 2)?;
+        assert_eq!(joint_state.current_term, 4);
+        assert_eq!(joint_state.applied_index, 1);
         persist_mutation(
             &mut fixture.database,
             2,
@@ -776,6 +780,7 @@ mod tests {
         let recovered = load_state(&fixture.database, 2)?;
         assert_eq!(recovered.current_term, 4);
         assert_eq!(recovered.voted_for, Some(fixture.voter));
+        assert_eq!(recovered.applied_index, 2);
         assert!(matches!(
             super::super::quorum_plan::load(&fixture.database)?,
             Some(ActiveQuorumPlan::Stable(_))
