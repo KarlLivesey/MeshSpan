@@ -1,0 +1,835 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Deterministic election and log-replication state transitions.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use meshspan_domain::{NodeId, OperationId};
+
+use super::types::{
+    AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
+    DurableMutation, LogEntry, LogPosition, PersistenceId, ProposalId, Role, VoteRequest,
+    VoteResponse, validate_append_entries,
+};
+use crate::QuorumFamily;
+
+const MAXIMUM_APPEND_ENTRIES: usize = 64;
+
+enum RoleState {
+    Follower,
+    Candidate { votes: BTreeSet<NodeId> },
+    Leader(LeaderState),
+}
+
+struct LeaderState {
+    matched: BTreeMap<NodeId, u64>,
+    next: BTreeMap<NodeId, u64>,
+}
+
+struct PendingPersistence {
+    id: PersistenceId,
+    mutation: DurableMutation,
+    action: AfterPersistence,
+}
+
+enum AfterPersistence {
+    Campaign,
+    VoteReply {
+        to: NodeId,
+        granted: bool,
+    },
+    AppendReply {
+        to: NodeId,
+        leader: NodeId,
+        leader_commit_index: u64,
+        accepted: bool,
+    },
+    Proposal {
+        proposal_id: ProposalId,
+        position: LogPosition,
+    },
+    StepDown,
+}
+
+/// Owned deterministic consensus core. It performs no IO and emits persistence before dependent
+/// messages or commit evidence.
+pub struct ConsensusCore {
+    config: CoreConfig,
+    current_term: u64,
+    voted_for: Option<NodeId>,
+    log: Vec<LogEntry>,
+    commit_index: u64,
+    applied_index: u64,
+    leader_id: Option<NodeId>,
+    role: RoleState,
+    pending: Option<PendingPersistence>,
+    next_persistence_id: u64,
+}
+
+impl ConsensusCore {
+    /// Constructs an empty follower/learner at term zero under one verified plan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero/mismatched local incarnation or a node outside voters and learners.
+    pub fn new(config: CoreConfig) -> Result<Self, CoreError> {
+        let local_is_member = config.plan.spec().voters.contains(&config.local_node_id)
+            || config.plan.spec().learners.contains(&config.local_node_id);
+        if config.local_incarnation == 0
+            || !local_is_member
+            || config.member_incarnations.get(config.local_node_id)
+                != Some(config.local_incarnation)
+        {
+            return Err(CoreError::InvalidConfiguration);
+        }
+        Ok(Self {
+            config,
+            current_term: 0,
+            voted_for: None,
+            log: Vec::new(),
+            commit_index: 0,
+            applied_index: 0,
+            leader_id: None,
+            role: RoleState::Follower,
+            pending: None,
+            next_persistence_id: 1,
+        })
+    }
+
+    /// Returns current volatile role.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        match &self.role {
+            RoleState::Follower => Role::Follower,
+            RoleState::Candidate { .. } => Role::Candidate,
+            RoleState::Leader(_) => Role::Leader,
+        }
+    }
+
+    /// Returns current durable term.
+    #[must_use]
+    pub const fn current_term(&self) -> u64 {
+        self.current_term
+    }
+
+    /// Returns highest committed log index.
+    #[must_use]
+    pub const fn commit_index(&self) -> u64 {
+        self.commit_index
+    }
+
+    /// Returns highest state-machine-applied index reported by the driver.
+    #[must_use]
+    pub const fn applied_index(&self) -> u64 {
+        self.applied_index
+    }
+
+    /// Returns current known leader, if any.
+    #[must_use]
+    pub const fn leader_id(&self) -> Option<NodeId> {
+        self.leader_id
+    }
+
+    /// Returns the exact membership epoch accepted by this core.
+    #[must_use]
+    pub fn membership_epoch(&self) -> u64 {
+        self.config.plan.spec().membership_epoch
+    }
+
+    /// Returns the canonical digest of the mechanically verified quorum plan.
+    #[must_use]
+    pub fn plan_digest(&self) -> [u8; 32] {
+        self.config.plan.proof_digest()
+    }
+
+    /// Consumes one deterministic input and returns ordered side effects.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed/stale input, a non-leader proposal, persistence reordering or any input
+    /// received while a safety-critical durable mutation remains unacknowledged.
+    pub fn step(&mut self, input: CoreInput) -> Result<Vec<CoreEffect>, CoreError> {
+        if self.pending.is_some() && !matches!(input, CoreInput::Persisted(_)) {
+            return Err(CoreError::PersistencePending);
+        }
+        match input {
+            CoreInput::ElectionTimeout => self.start_election(),
+            CoreInput::Persisted(id) => self.finish_persistence(id),
+            CoreInput::Message {
+                from,
+                sender_incarnation,
+                message,
+            } => self.receive(from, sender_incarnation, message),
+            CoreInput::Propose {
+                proposal_id,
+                operation_id,
+                command_version,
+                command,
+            } => self.propose(proposal_id, operation_id, command_version, command),
+            CoreInput::AppliedThrough(index) => self.applied_through(index),
+        }
+    }
+
+    fn start_election(&mut self) -> Result<Vec<CoreEffect>, CoreError> {
+        if matches!(self.role, RoleState::Leader(_)) {
+            return Err(CoreError::InvalidInput);
+        }
+        if !self
+            .config
+            .plan
+            .spec()
+            .eligible_leaders
+            .contains(&self.config.local_node_id)
+        {
+            return Err(CoreError::NotLeader);
+        }
+        let term = self
+            .current_term
+            .checked_add(1)
+            .ok_or(CoreError::Exhausted)?;
+        self.begin_persistence(
+            DurableMutation {
+                vote_state: Some((term, Some(self.config.local_node_id))),
+                truncate_from: None,
+                append: Vec::new(),
+            },
+            AfterPersistence::Campaign,
+        )
+    }
+
+    fn receive(
+        &mut self,
+        from: NodeId,
+        sender_incarnation: u64,
+        message: CoreMessage,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        self.validate_sender(from, sender_incarnation)?;
+        match message {
+            CoreMessage::VoteRequest(request) => self.vote_request(from, request),
+            CoreMessage::VoteResponse(response) => self.vote_response(from, response),
+            CoreMessage::AppendRequest(request) => self.append_request(from, &request),
+            CoreMessage::AppendResponse(response) => self.append_response(from, response),
+        }
+    }
+
+    fn vote_request(
+        &mut self,
+        from: NodeId,
+        request: VoteRequest,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        self.validate_plan(request.membership_epoch, request.plan_digest)?;
+        if request.candidate != from
+            || request.candidate_incarnation != self.member_incarnation(from)?
+            || request.term == 0
+            || !request.last_log.is_valid()
+            || !self.config.plan.spec().eligible_leaders.contains(&from)
+        {
+            return Err(CoreError::InvalidInput);
+        }
+        if request.term < self.current_term || !self.is_local_voter() {
+            return Ok(vec![self.vote_effect(from, false)]);
+        }
+        let log_is_current = request.last_log >= self.last_position();
+        let can_vote = request.term > self.current_term
+            || self.voted_for.is_none()
+            || self.voted_for == Some(from);
+        let granted = log_is_current && can_vote;
+        if request.term > self.current_term || (granted && self.voted_for != Some(from)) {
+            return self.begin_persistence(
+                DurableMutation {
+                    vote_state: Some((request.term, granted.then_some(from))),
+                    truncate_from: None,
+                    append: Vec::new(),
+                },
+                AfterPersistence::VoteReply { to: from, granted },
+            );
+        }
+        Ok(vec![self.vote_effect(from, granted)])
+    }
+
+    fn vote_response(
+        &mut self,
+        from: NodeId,
+        response: VoteResponse,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        if response.membership_epoch != self.config.plan.spec().membership_epoch
+            || response.term == 0
+        {
+            return Err(CoreError::StaleMember);
+        }
+        if response.term > self.current_term {
+            return self.persist_step_down(response.term);
+        }
+        if response.term < self.current_term {
+            return Ok(Vec::new());
+        }
+        let has_election_quorum = {
+            let RoleState::Candidate { votes } = &mut self.role else {
+                return Ok(Vec::new());
+            };
+            if response.granted {
+                votes.insert(from);
+            }
+            self.config.plan.satisfies(QuorumFamily::Election, votes)
+        };
+        if has_election_quorum {
+            self.become_leader()
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn append_request(
+        &mut self,
+        from: NodeId,
+        request: &AppendRequest,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        self.validate_plan(request.membership_epoch, request.plan_digest)?;
+        validate_append_entries(request)?;
+        if request.leader != from
+            || request.leader_incarnation != self.member_incarnation(from)?
+            || !self.config.plan.spec().eligible_leaders.contains(&from)
+        {
+            return Err(CoreError::InvalidInput);
+        }
+        if request.term < self.current_term {
+            return Ok(vec![self.append_response_effect(from, false)]);
+        }
+        let previous_matches = self.position_matches(request.previous, request.previous_digest);
+        if !previous_matches {
+            if request.term > self.current_term {
+                return self.begin_persistence(
+                    DurableMutation {
+                        vote_state: Some((request.term, None)),
+                        truncate_from: None,
+                        append: Vec::new(),
+                    },
+                    AfterPersistence::AppendReply {
+                        to: from,
+                        leader: from,
+                        leader_commit_index: 0,
+                        accepted: false,
+                    },
+                );
+            }
+            return Ok(vec![self.append_response_effect(from, false)]);
+        }
+        let (truncate_from, append) = self.log_delta(&request.entries)?;
+        let changes_term = request.term > self.current_term;
+        if changes_term || truncate_from.is_some() || !append.is_empty() {
+            return self.begin_persistence(
+                DurableMutation {
+                    vote_state: changes_term.then_some((request.term, None)),
+                    truncate_from,
+                    append,
+                },
+                AfterPersistence::AppendReply {
+                    to: from,
+                    leader: from,
+                    leader_commit_index: request.leader_commit_index,
+                    accepted: true,
+                },
+            );
+        }
+        self.follow_leader(Some(from));
+        let mut effects = self.advance_follower_commit(request.leader_commit_index)?;
+        effects.push(self.append_response_effect(from, true));
+        Ok(effects)
+    }
+
+    fn append_response(
+        &mut self,
+        from: NodeId,
+        response: AppendResponse,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        if response.term == 0 || response.next_index_hint == 0 {
+            return Err(CoreError::InvalidInput);
+        }
+        if response.term > self.current_term {
+            return self.persist_step_down(response.term);
+        }
+        if response.term < self.current_term {
+            return Ok(Vec::new());
+        }
+        let last_index = self.last_position().index;
+        let peer_next = {
+            let RoleState::Leader(leader) = &mut self.role else {
+                return Ok(Vec::new());
+            };
+            if response.accepted {
+                if response.matched_index > last_index {
+                    return Err(CoreError::InvalidInput);
+                }
+                leader.matched.insert(from, response.matched_index);
+                leader.next.insert(
+                    from,
+                    response
+                        .matched_index
+                        .checked_add(1)
+                        .ok_or(CoreError::Exhausted)?,
+                );
+            } else {
+                let last_next = last_index.checked_add(1).ok_or(CoreError::Exhausted)?;
+                leader
+                    .next
+                    .insert(from, response.next_index_hint.min(last_next).max(1));
+            }
+            leader.next.get(&from).copied().unwrap_or(1)
+        };
+        let mut effects = self.advance_leader_commit()?;
+        if peer_next <= last_index {
+            effects.push(self.append_effect(from)?);
+        }
+        Ok(effects)
+    }
+
+    fn propose(
+        &mut self,
+        proposal_id: ProposalId,
+        operation_id: OperationId,
+        command_version: u16,
+        command: Vec<u8>,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        if self.role() != Role::Leader {
+            return Err(CoreError::NotLeader);
+        }
+        if proposal_id.0 == 0 {
+            return Err(CoreError::InvalidInput);
+        }
+        let index = self
+            .last_position()
+            .index
+            .checked_add(1)
+            .ok_or(CoreError::Exhausted)?;
+        let position = LogPosition {
+            term: self.current_term,
+            index,
+        };
+        let entry = LogEntry::new(position, operation_id, command_version, command)?;
+        self.begin_persistence(
+            DurableMutation {
+                vote_state: None,
+                truncate_from: None,
+                append: vec![entry],
+            },
+            AfterPersistence::Proposal {
+                proposal_id,
+                position,
+            },
+        )
+    }
+
+    fn applied_through(&mut self, index: u64) -> Result<Vec<CoreEffect>, CoreError> {
+        if index < self.applied_index || index > self.commit_index {
+            return Err(CoreError::InvalidInput);
+        }
+        self.applied_index = index;
+        Ok(Vec::new())
+    }
+
+    fn begin_persistence(
+        &mut self,
+        mutation: DurableMutation,
+        action: AfterPersistence,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        let id = PersistenceId(self.next_persistence_id);
+        self.next_persistence_id = self
+            .next_persistence_id
+            .checked_add(1)
+            .ok_or(CoreError::Exhausted)?;
+        self.pending = Some(PendingPersistence {
+            id,
+            mutation: mutation.clone(),
+            action,
+        });
+        Ok(vec![CoreEffect::Persist { id, mutation }])
+    }
+
+    fn finish_persistence(&mut self, id: PersistenceId) -> Result<Vec<CoreEffect>, CoreError> {
+        let pending = self.pending.take().ok_or(CoreError::StalePersistence)?;
+        if pending.id != id {
+            self.pending = Some(pending);
+            return Err(CoreError::StalePersistence);
+        }
+        self.apply_durable_mutation(&pending.mutation)?;
+        match pending.action {
+            AfterPersistence::Campaign => self.finish_campaign(),
+            AfterPersistence::VoteReply { to, granted } => {
+                self.follow_leader(None);
+                Ok(vec![self.vote_effect(to, granted)])
+            }
+            AfterPersistence::AppendReply {
+                to,
+                leader,
+                leader_commit_index,
+                accepted,
+            } => {
+                self.follow_leader(Some(leader));
+                let mut effects = if accepted {
+                    self.advance_follower_commit(leader_commit_index)?
+                } else {
+                    Vec::new()
+                };
+                effects.push(self.append_response_effect(to, accepted));
+                Ok(effects)
+            }
+            AfterPersistence::Proposal {
+                proposal_id,
+                position,
+            } => self.finish_proposal(proposal_id, position),
+            AfterPersistence::StepDown => {
+                self.follow_leader(None);
+                Ok(vec![CoreEffect::RoleChanged {
+                    role: Role::Follower,
+                    term: self.current_term,
+                }])
+            }
+        }
+    }
+
+    fn finish_campaign(&mut self) -> Result<Vec<CoreEffect>, CoreError> {
+        self.leader_id = None;
+        self.role = RoleState::Candidate {
+            votes: BTreeSet::from([self.config.local_node_id]),
+        };
+        let mut effects = vec![CoreEffect::RoleChanged {
+            role: Role::Candidate,
+            term: self.current_term,
+        }];
+        if self.config.plan.satisfies(
+            QuorumFamily::Election,
+            &BTreeSet::from([self.config.local_node_id]),
+        ) {
+            effects.extend(self.become_leader()?);
+            return Ok(effects);
+        }
+        let request = CoreMessage::VoteRequest(VoteRequest {
+            term: self.current_term,
+            candidate: self.config.local_node_id,
+            candidate_incarnation: self.config.local_incarnation,
+            last_log: self.last_position(),
+            membership_epoch: self.config.plan.spec().membership_epoch,
+            plan_digest: self.config.plan.proof_digest(),
+        });
+        for voter in &self.config.plan.spec().voters {
+            if *voter != self.config.local_node_id {
+                effects.push(CoreEffect::Send {
+                    to: *voter,
+                    message: request.clone(),
+                });
+            }
+        }
+        Ok(effects)
+    }
+
+    fn become_leader(&mut self) -> Result<Vec<CoreEffect>, CoreError> {
+        let last = self.last_position().index;
+        let next_index = last.checked_add(1).ok_or(CoreError::Exhausted)?;
+        let mut matched = BTreeMap::from([(self.config.local_node_id, last)]);
+        let mut next = BTreeMap::new();
+        for member in self.members() {
+            matched.entry(member).or_insert(0);
+            next.insert(member, next_index);
+        }
+        self.role = RoleState::Leader(LeaderState { matched, next });
+        self.leader_id = Some(self.config.local_node_id);
+        let mut effects = vec![CoreEffect::RoleChanged {
+            role: Role::Leader,
+            term: self.current_term,
+        }];
+        for peer in self.peers() {
+            effects.push(self.append_effect(peer)?);
+        }
+        Ok(effects)
+    }
+
+    fn finish_proposal(
+        &mut self,
+        proposal_id: ProposalId,
+        position: LogPosition,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        let RoleState::Leader(leader) = &mut self.role else {
+            return Err(CoreError::NotLeader);
+        };
+        leader
+            .matched
+            .insert(self.config.local_node_id, position.index);
+        leader.next.insert(
+            self.config.local_node_id,
+            position.index.checked_add(1).ok_or(CoreError::Exhausted)?,
+        );
+        let mut effects = vec![CoreEffect::ProposalAppended {
+            proposal_id,
+            position,
+        }];
+        for peer in self.peers() {
+            effects.push(self.append_effect(peer)?);
+        }
+        effects.extend(self.advance_leader_commit()?);
+        Ok(effects)
+    }
+
+    fn apply_durable_mutation(&mut self, mutation: &DurableMutation) -> Result<(), CoreError> {
+        if let Some((term, voted_for)) = mutation.vote_state {
+            if term < self.current_term || term == 0 {
+                return Err(CoreError::InvalidInput);
+            }
+            if term > self.current_term {
+                self.role = RoleState::Follower;
+                self.leader_id = None;
+            }
+            self.current_term = term;
+            self.voted_for = voted_for;
+        }
+        if let Some(truncate_from) = mutation.truncate_from {
+            if truncate_from <= self.commit_index || truncate_from == 0 {
+                return Err(CoreError::InvalidInput);
+            }
+            self.log
+                .retain(|entry| entry.position.index < truncate_from);
+        }
+        for entry in &mutation.append {
+            entry.validate()?;
+            let expected = self
+                .last_position()
+                .index
+                .checked_add(1)
+                .ok_or(CoreError::Exhausted)?;
+            if entry.position.index != expected {
+                return Err(CoreError::InvalidInput);
+            }
+            self.log.push(entry.clone());
+        }
+        Ok(())
+    }
+
+    fn log_delta(&self, incoming: &[LogEntry]) -> Result<(Option<u64>, Vec<LogEntry>), CoreError> {
+        for (offset, entry) in incoming.iter().enumerate() {
+            let local = self.entry(entry.position.index);
+            match local {
+                Some(existing)
+                    if existing.position.term == entry.position.term
+                        && existing.entry_digest() == entry.entry_digest() => {}
+                Some(_) => {
+                    if entry.position.index <= self.commit_index {
+                        return Err(CoreError::InvalidInput);
+                    }
+                    return Ok((Some(entry.position.index), incoming[offset..].to_vec()));
+                }
+                None => return Ok((None, incoming[offset..].to_vec())),
+            }
+        }
+        Ok((None, Vec::new()))
+    }
+
+    fn position_matches(&self, position: LogPosition, digest: [u8; 32]) -> bool {
+        if position == LogPosition::GENESIS {
+            return digest == [0; 32];
+        }
+        self.entry(position.index).is_some_and(|entry| {
+            entry.position.term == position.term && entry.entry_digest() == digest
+        })
+    }
+
+    fn append_effect(&self, peer: NodeId) -> Result<CoreEffect, CoreError> {
+        let RoleState::Leader(leader) = &self.role else {
+            return Err(CoreError::NotLeader);
+        };
+        let next = leader.next.get(&peer).copied().unwrap_or(1).max(1);
+        let previous_index = next.checked_sub(1).ok_or(CoreError::InvalidInput)?;
+        let previous = if previous_index == 0 {
+            LogPosition::GENESIS
+        } else {
+            self.entry(previous_index)
+                .map(|entry| entry.position)
+                .ok_or(CoreError::InvalidInput)?
+        };
+        let previous_digest = if previous_index == 0 {
+            [0; 32]
+        } else {
+            self.entry(previous_index)
+                .map(LogEntry::entry_digest)
+                .ok_or(CoreError::InvalidInput)?
+        };
+        let entries: Vec<LogEntry> = self
+            .log
+            .iter()
+            .filter(|entry| entry.position.index >= next)
+            .take(MAXIMUM_APPEND_ENTRIES)
+            .cloned()
+            .collect();
+        Ok(CoreEffect::Send {
+            to: peer,
+            message: CoreMessage::AppendRequest(AppendRequest {
+                term: self.current_term,
+                leader: self.config.local_node_id,
+                leader_incarnation: self.config.local_incarnation,
+                previous,
+                previous_digest,
+                entries,
+                leader_commit_index: self.commit_index,
+                membership_epoch: self.config.plan.spec().membership_epoch,
+                plan_digest: self.config.plan.proof_digest(),
+            }),
+        })
+    }
+
+    fn advance_leader_commit(&mut self) -> Result<Vec<CoreEffect>, CoreError> {
+        let RoleState::Leader(leader) = &self.role else {
+            return Ok(Vec::new());
+        };
+        let matched = leader.matched.clone();
+        let old_commit = self.commit_index;
+        for index in ((old_commit + 1)..=self.last_position().index).rev() {
+            let Some(entry) = self.entry(index) else {
+                return Err(CoreError::InvalidInput);
+            };
+            if entry.position.term != self.current_term {
+                continue;
+            }
+            let acknowledgements: BTreeSet<NodeId> = matched
+                .iter()
+                .filter_map(|(node, matched)| (*matched >= index).then_some(*node))
+                .collect();
+            if self
+                .config
+                .plan
+                .satisfies(QuorumFamily::Commit, &acknowledgements)
+            {
+                self.commit_index = index;
+                break;
+            }
+        }
+        self.commit_effects(old_commit)
+    }
+
+    fn advance_follower_commit(
+        &mut self,
+        leader_commit_index: u64,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        let old_commit = self.commit_index;
+        let next_commit = leader_commit_index.min(self.last_position().index);
+        if next_commit < old_commit {
+            return Err(CoreError::InvalidInput);
+        }
+        self.commit_index = next_commit;
+        self.commit_effects(old_commit)
+    }
+
+    fn commit_effects(&self, old_commit: u64) -> Result<Vec<CoreEffect>, CoreError> {
+        if self.commit_index <= old_commit {
+            return Ok(Vec::new());
+        }
+        let entries = ((old_commit + 1)..=self.commit_index)
+            .map(|index| self.entry(index).cloned().ok_or(CoreError::InvalidInput))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(vec![CoreEffect::CommitReady { entries }])
+    }
+
+    fn persist_step_down(&mut self, term: u64) -> Result<Vec<CoreEffect>, CoreError> {
+        self.begin_persistence(
+            DurableMutation {
+                vote_state: Some((term, None)),
+                truncate_from: None,
+                append: Vec::new(),
+            },
+            AfterPersistence::StepDown,
+        )
+    }
+
+    fn follow_leader(&mut self, leader: Option<NodeId>) {
+        self.role = RoleState::Follower;
+        self.leader_id = leader;
+    }
+
+    fn vote_effect(&self, to: NodeId, granted: bool) -> CoreEffect {
+        CoreEffect::Send {
+            to,
+            message: CoreMessage::VoteResponse(VoteResponse {
+                term: self.current_term,
+                granted,
+                membership_epoch: self.config.plan.spec().membership_epoch,
+            }),
+        }
+    }
+
+    fn append_response_effect(&self, to: NodeId, accepted: bool) -> CoreEffect {
+        let last_index = self.last_position().index;
+        let matched_index = if accepted { last_index } else { 0 };
+        let next_index_hint = last_index.saturating_add(1).max(1);
+        CoreEffect::Send {
+            to,
+            message: CoreMessage::AppendResponse(AppendResponse {
+                term: self.current_term,
+                accepted,
+                matched_index,
+                next_index_hint,
+            }),
+        }
+    }
+
+    fn validate_sender(&self, node_id: NodeId, incarnation: u64) -> Result<(), CoreError> {
+        if self.config.member_incarnations.get(node_id) == Some(incarnation) {
+            Ok(())
+        } else {
+            Err(CoreError::StaleMember)
+        }
+    }
+
+    fn validate_plan(&self, epoch: u64, digest: [u8; 32]) -> Result<(), CoreError> {
+        if epoch == self.config.plan.spec().membership_epoch
+            && digest == self.config.plan.proof_digest()
+        {
+            Ok(())
+        } else {
+            Err(CoreError::StaleMember)
+        }
+    }
+
+    fn member_incarnation(&self, node_id: NodeId) -> Result<u64, CoreError> {
+        self.config
+            .member_incarnations
+            .get(node_id)
+            .ok_or(CoreError::StaleMember)
+    }
+
+    fn is_local_voter(&self) -> bool {
+        self.config
+            .plan
+            .spec()
+            .voters
+            .contains(&self.config.local_node_id)
+    }
+
+    fn members(&self) -> BTreeSet<NodeId> {
+        self.config
+            .plan
+            .spec()
+            .voters
+            .union(&self.config.plan.spec().learners)
+            .copied()
+            .collect()
+    }
+
+    fn peers(&self) -> BTreeSet<NodeId> {
+        self.members()
+            .into_iter()
+            .filter(|node| *node != self.config.local_node_id)
+            .collect()
+    }
+
+    fn last_position(&self) -> LogPosition {
+        self.log
+            .last()
+            .map_or(LogPosition::GENESIS, |entry| entry.position)
+    }
+
+    fn entry(&self, index: u64) -> Option<&LogEntry> {
+        let offset = index
+            .checked_sub(1)
+            .and_then(|value| usize::try_from(value).ok())?;
+        self.log
+            .get(offset)
+            .filter(|entry| entry.position.index == index)
+    }
+}
