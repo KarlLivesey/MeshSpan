@@ -10,10 +10,11 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::{
-    BranchNamespaceHead, NamespacePublicationReceipt, PublicationDisposition, PublicationError,
-    RootFilePublication, advance_file_head, copy_array, decode_identifier, from_i64,
-    load_directory_node, persist_directory_node, persist_manifest, persist_version, prepare_file,
-    publication_request_digest, to_i64,
+    BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,
+    NamespacePublicationPath, NamespacePublicationReceipt, PublicationDisposition,
+    PublicationError, RootFilePublication, advance_file_head, copy_array, decode_identifier,
+    from_i64, load_directory_node, persist_directory_node, persist_manifest, persist_version,
+    prepare_file, publication_request_digest, to_i64,
 };
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrie,
@@ -27,6 +28,15 @@ pub(super) fn publish(
     validate(publication)?;
     let request_digest = request_digest(publication);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if load_directory_operation(
+        &transaction,
+        publication.file.operation_id,
+        PublicationDisposition::Replayed,
+    )?
+    .is_some()
+    {
+        return Err(PublicationError::OperationConflict);
+    }
     if let Some(receipt) = load_operation(
         &transaction,
         publication.file.operation_id,
@@ -39,7 +49,10 @@ pub(super) fn publish(
         };
     }
 
-    let base = load_base(&transaction, publication)?;
+    let intent = NamespaceIntent::from_file(publication);
+    let base = load_base(&transaction, intent)?;
+    let leaf = base.directories.last().ok_or(PublicationError::Corrupt)?;
+    validate_old_entry(&transaction, publication, &leaf.editor)?;
     let head_sequence = base.head_sequence;
     let namespace = mutate_directory_path(base.directories, publication)?;
     for record in &namespace.created_nodes {
@@ -55,12 +68,102 @@ pub(super) fn publish(
 
     persist_object_revisions(&transaction, publication, &namespace.directories)?;
     inject(fault, NamespaceFaultPoint::ObjectRevisions)?;
-    persist_commit(&transaction, publication, request_digest)?;
+    persist_commit(&transaction, intent, request_digest)?;
     inject(fault, NamespaceFaultPoint::NamespaceCommit)?;
-    let head_sequence = advance_namespace_head(&transaction, publication, head_sequence)?;
+    let head_sequence = advance_namespace_head(&transaction, intent, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Heads)?;
     let receipt =
         persist_namespace_operation(&transaction, publication, request_digest, head_sequence)?;
+    inject(fault, NamespaceFaultPoint::Operation)?;
+    transaction.commit()?;
+    Ok(receipt)
+}
+
+pub(super) fn create_directory(
+    connection: &mut Connection,
+    publication: &DirectoryPublication,
+    fault: Option<NamespaceFaultPoint>,
+) -> Result<DirectoryPublicationReceipt, PublicationError> {
+    validate_directory_publication(publication)?;
+    let request_digest = directory_request_digest(publication);
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if load_operation_raw(
+        &transaction,
+        publication.operation_id,
+        PublicationDisposition::Replayed,
+    )?
+    .is_some()
+    {
+        return Err(PublicationError::OperationConflict);
+    }
+    if let Some(receipt) = load_directory_operation(
+        &transaction,
+        publication.operation_id,
+        PublicationDisposition::Replayed,
+    )? {
+        return if receipt.request_digest == request_digest {
+            Ok(receipt)
+        } else {
+            Err(PublicationError::OperationConflict)
+        };
+    }
+
+    let intent = NamespaceIntent::from_directory(publication);
+    let base = load_base(&transaction, intent)?;
+    let parent = base.directories.last().ok_or(PublicationError::Corrupt)?;
+    let leaf_name = publication
+        .path
+        .leaf_name()
+        .ok_or(PublicationError::InvalidInput)?;
+    if parent.editor.lookup(leaf_name)?.is_some() {
+        return Err(PublicationError::StaleHead);
+    }
+    let empty = DirectoryTrie::empty();
+    let empty_root = empty.root();
+    let empty_record = empty.record(empty_root)?;
+    let entry = DirectoryEntry::new(
+        leaf_name.clone(),
+        publication.directory_object_id,
+        publication.directory_object_revision_id,
+        DirectoryEntryKind::Directory,
+        publication.entry_generation,
+    )?;
+    let head_sequence = base.head_sequence;
+    let namespace = mutate_namespace_path(base.directories, &publication.path, entry, None)?;
+    persist_directory_node(&transaction, &empty_record, publication.created_at)?;
+    for record in &namespace.created_nodes {
+        persist_directory_node(&transaction, record, publication.created_at)?;
+    }
+    inject(fault, NamespaceFaultPoint::DirectoryNodes)?;
+
+    persist_object_revision(
+        &transaction,
+        ObjectRevisionInsert {
+            revision_id: publication.directory_object_revision_id,
+            volume_id: publication.volume_id,
+            object_id: publication.directory_object_id,
+            kind: 1,
+            prior_revision_id: None,
+            directory_root: Some(empty_root),
+            file_version_id: None,
+            created_by: publication.created_by,
+            created_at: publication.created_at,
+        },
+    )?;
+    persist_directory_path_revisions(
+        &transaction,
+        publication.volume_id,
+        publication.created_by,
+        publication.created_at,
+        &namespace.directories,
+    )?;
+    inject(fault, NamespaceFaultPoint::ObjectRevisions)?;
+    persist_commit(&transaction, intent, request_digest)?;
+    inject(fault, NamespaceFaultPoint::NamespaceCommit)?;
+    let head_sequence = advance_namespace_head(&transaction, intent, head_sequence)?;
+    inject(fault, NamespaceFaultPoint::Heads)?;
+    let receipt =
+        persist_directory_operation(&transaction, publication, request_digest, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Operation)?;
     transaction.commit()?;
     Ok(receipt)
@@ -145,6 +248,51 @@ fn load_operation_raw(
         .transpose()
 }
 
+pub(super) fn load_directory_operation(
+    connection: &Connection,
+    operation_id: OperationId,
+    disposition: PublicationDisposition,
+) -> Result<Option<DirectoryPublicationReceipt>, PublicationError> {
+    let receipt = load_directory_operation_raw(connection, operation_id, disposition)?;
+    if let Some(receipt) = receipt {
+        let commit = load_commit(connection, receipt.namespace_commit_id)?;
+        if commit.operation_id == operation_id {
+            Ok(Some(receipt))
+        } else {
+            Err(PublicationError::Corrupt)
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+fn load_directory_operation_raw(
+    connection: &Connection,
+    operation_id: OperationId,
+    disposition: PublicationDisposition,
+) -> Result<Option<DirectoryPublicationReceipt>, PublicationError> {
+    let stored: Option<StoredDirectoryReceipt> = connection
+        .query_row(
+            "SELECT request_digest, namespace_commit_id, directory_object_revision_id,
+                    head_sequence, result_digest
+             FROM directory_publication_operations WHERE operation_id = ?1",
+            [operation_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    stored
+        .map(|values| decode_directory_receipt(operation_id, disposition, &values))
+        .transpose()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NamespaceFaultPoint {
     DirectoryNodes,
@@ -158,6 +306,52 @@ pub(super) enum NamespaceFaultPoint {
 struct NamespaceBase {
     directories: Vec<LoadedDirectory>,
     head_sequence: u64,
+}
+
+#[derive(Clone, Copy)]
+struct NamespaceIntent<'a> {
+    operation_id: OperationId,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    root_object_id: ObjectId,
+    expected_commit_id: Option<NamespaceCommitId>,
+    root_revision_id: ObjectRevisionId,
+    commit_id: NamespaceCommitId,
+    path: &'a NamespacePublicationPath,
+    created_by: meshspan_domain::PrincipalId,
+    created_at: meshspan_domain::UnixMicros,
+}
+
+impl<'a> NamespaceIntent<'a> {
+    const fn from_file(publication: &'a RootFilePublication) -> Self {
+        Self {
+            operation_id: publication.file.operation_id,
+            branch_id: publication.file.branch_id,
+            volume_id: publication.file.volume_id,
+            root_object_id: publication.root_object_id,
+            expected_commit_id: publication.expected_namespace_commit_id,
+            root_revision_id: publication.root_object_revision_id,
+            commit_id: publication.namespace_commit_id,
+            path: &publication.path,
+            created_by: publication.file.created_by,
+            created_at: publication.file.created_at,
+        }
+    }
+
+    const fn from_directory(publication: &'a DirectoryPublication) -> Self {
+        Self {
+            operation_id: publication.operation_id,
+            branch_id: publication.branch_id,
+            volume_id: publication.volume_id,
+            root_object_id: publication.root_object_id,
+            expected_commit_id: publication.expected_namespace_commit_id,
+            root_revision_id: publication.root_object_revision_id,
+            commit_id: publication.namespace_commit_id,
+            path: &publication.path,
+            created_by: publication.created_by,
+            created_at: publication.created_at,
+        }
+    }
 }
 
 struct LoadedDirectory {
@@ -198,37 +392,62 @@ fn validate(publication: &RootFilePublication) -> Result<(), PublicationError> {
     Ok(())
 }
 
+fn validate_directory_publication(
+    publication: &DirectoryPublication,
+) -> Result<(), PublicationError> {
+    if publication.root_object_id == publication.directory_object_id
+        || publication.root_object_revision_id == publication.directory_object_revision_id
+        || publication.entry_generation == 0
+        || publication.path.leaf_name().is_none()
+    {
+        return Err(PublicationError::InvalidInput);
+    }
+    let mut object_ids =
+        BTreeSet::from([publication.root_object_id, publication.directory_object_id]);
+    let mut new_revisions = BTreeSet::from([
+        publication.root_object_revision_id,
+        publication.directory_object_revision_id,
+    ]);
+    let mut prior_revisions = BTreeSet::new();
+    for transition in publication.path.ancestors() {
+        if !object_ids.insert(transition.object_id())
+            || !new_revisions.insert(transition.new_revision_id())
+        {
+            return Err(PublicationError::InvalidInput);
+        }
+        prior_revisions.insert(transition.expected_revision_id());
+    }
+    if new_revisions.is_disjoint(&prior_revisions) {
+        Ok(())
+    } else {
+        Err(PublicationError::InvalidInput)
+    }
+}
+
 fn load_base(
     transaction: &Transaction<'_>,
-    publication: &RootFilePublication,
+    intent: NamespaceIntent<'_>,
 ) -> Result<NamespaceBase, PublicationError> {
-    let head = load_head(
-        transaction,
-        publication.file.branch_id,
-        publication.file.volume_id,
-    )?;
-    match (head, publication.expected_namespace_commit_id) {
-        (None, None) => load_initial_base(publication),
+    let head = load_head(transaction, intent.branch_id, intent.volume_id)?;
+    match (head, intent.expected_commit_id) {
+        (None, None) => load_initial_base(intent),
         (Some(head), Some(expected)) if head.namespace_commit_id == expected => {
-            load_existing_base(transaction, publication, head)
+            load_existing_base(transaction, intent, head)
         }
         _ => Err(PublicationError::StaleHead),
     }
 }
 
-fn load_initial_base(publication: &RootFilePublication) -> Result<NamespaceBase, PublicationError> {
-    if publication.expected_file_object_revision_id.is_some()
-        || publication.file.expected_current_version_id.is_some()
-        || !publication.path.ancestors().is_empty()
-    {
+fn load_initial_base(intent: NamespaceIntent<'_>) -> Result<NamespaceBase, PublicationError> {
+    if !intent.path.ancestors().is_empty() {
         return Err(PublicationError::StaleHead);
     }
     Ok(NamespaceBase {
         directories: vec![LoadedDirectory {
             editor: DirectoryTrie::empty(),
-            object_id: publication.root_object_id,
+            object_id: intent.root_object_id,
             prior_revision_id: None,
-            new_revision_id: publication.root_object_revision_id,
+            new_revision_id: intent.root_revision_id,
         }],
         head_sequence: 0,
     })
@@ -236,18 +455,18 @@ fn load_initial_base(publication: &RootFilePublication) -> Result<NamespaceBase,
 
 fn load_existing_base(
     transaction: &Transaction<'_>,
-    publication: &RootFilePublication,
+    intent: NamespaceIntent<'_>,
     head: BranchNamespaceHead,
 ) -> Result<NamespaceBase, PublicationError> {
     let commit = load_commit(transaction, head.namespace_commit_id)?;
-    if commit.branch_id != publication.file.branch_id
-        || commit.volume_id != publication.file.volume_id
-        || commit.root_object_id != publication.root_object_id
+    if commit.branch_id != intent.branch_id
+        || commit.volume_id != intent.volume_id
+        || commit.root_object_id != intent.root_object_id
     {
         return Err(PublicationError::Corrupt);
     }
-    if publication.root_object_revision_id == commit.root_object_revision_id
-        || publication
+    if intent.root_revision_id == commit.root_object_revision_id
+        || intent
             .path
             .ancestors()
             .iter()
@@ -255,17 +474,17 @@ fn load_existing_base(
     {
         return Err(PublicationError::InvalidInput);
     }
-    let components = publication.path.path().components();
+    let components = intent.path.path().components();
     let selected = components.first().ok_or(PublicationError::InvalidInput)?;
     let mut directories = vec![load_directory(
         transaction,
         commit.root_object_revision_id,
-        publication.root_object_id,
-        publication.root_object_revision_id,
-        publication.file.volume_id,
+        intent.root_object_id,
+        intent.root_revision_id,
+        intent.volume_id,
         selected,
     )?];
-    for (index, transition) in publication.path.ancestors().iter().enumerate() {
+    for (index, transition) in intent.path.ancestors().iter().enumerate() {
         let parent_name = components
             .get(index)
             .ok_or(PublicationError::InvalidInput)?;
@@ -288,12 +507,10 @@ fn load_existing_base(
             transition.expected_revision_id(),
             transition.object_id(),
             transition.new_revision_id(),
-            publication.file.volume_id,
+            intent.volume_id,
             next_name,
         )?);
     }
-    let leaf = directories.last().ok_or(PublicationError::Corrupt)?;
-    validate_old_entry(transaction, publication, &leaf.editor)?;
     Ok(NamespaceBase {
         directories,
         head_sequence: head.sequence,
@@ -356,18 +573,30 @@ fn load_commit(
         operation_id: decode_identifier(&stored.5, OperationId::from_bytes)?,
         created_at: meshspan_domain::UnixMicros::new(stored.6),
     };
-    let receipt = load_operation_raw(
-        connection,
-        commit.operation_id,
-        PublicationDisposition::Replayed,
-    )?
-    .ok_or(PublicationError::Corrupt)?;
-    if receipt.namespace_commit_id == commit_id
-        && copy_array(&stored.7)? == commit_digest_fields(&commit, receipt.request_digest)
-    {
+    let request_digest = load_commit_request_digest(connection, commit.operation_id, commit_id)?;
+    if copy_array(&stored.7)? == commit_digest_fields(&commit, request_digest) {
         Ok(commit)
     } else {
         Err(PublicationError::Corrupt)
+    }
+}
+
+fn load_commit_request_digest(
+    connection: &Connection,
+    operation_id: OperationId,
+    commit_id: NamespaceCommitId,
+) -> Result<[u8; 32], PublicationError> {
+    let file = load_operation_raw(connection, operation_id, PublicationDisposition::Replayed)?;
+    let directory =
+        load_directory_operation_raw(connection, operation_id, PublicationDisposition::Replayed)?;
+    match (file, directory) {
+        (Some(receipt), None) if receipt.namespace_commit_id == commit_id => {
+            Ok(receipt.request_digest)
+        }
+        (None, Some(receipt)) if receipt.namespace_commit_id == commit_id => {
+            Ok(receipt.request_digest)
+        }
+        _ => Err(PublicationError::Corrupt),
     }
 }
 
@@ -490,7 +719,7 @@ struct DirectoryRevisionResult {
 }
 
 fn mutate_directory_path(
-    mut directories: Vec<LoadedDirectory>,
+    directories: Vec<LoadedDirectory>,
     publication: &RootFilePublication,
 ) -> Result<DirectoryPathMutation, PublicationError> {
     let leaf_name = publication
@@ -504,19 +733,33 @@ fn mutate_directory_path(
         DirectoryEntryKind::File,
         publication.entry_generation,
     )?;
+    mutate_namespace_path(
+        directories,
+        &publication.path,
+        entry,
+        publication.expected_file_object_revision_id,
+    )
+}
+
+fn mutate_namespace_path(
+    mut directories: Vec<LoadedDirectory>,
+    path: &NamespacePublicationPath,
+    leaf_entry: DirectoryEntry,
+    expected_leaf_revision_id: Option<ObjectRevisionId>,
+) -> Result<DirectoryPathMutation, PublicationError> {
     let last = directories
         .len()
         .checked_sub(1)
         .ok_or(PublicationError::Corrupt)?;
     let (mut child_root, mut created_nodes) = mutate_entry(
         &mut directories[last].editor,
-        entry,
-        publication.expected_file_object_revision_id,
+        leaf_entry,
+        expected_leaf_revision_id,
     )?;
     let mut results = Vec::with_capacity(directories.len());
     results.push(directory_result(&directories[last], child_root));
 
-    let components = publication.path.path().components();
+    let components = path.path().components();
     for parent_index in (0..last).rev() {
         let child_index = parent_index
             .checked_add(1)
@@ -599,19 +842,35 @@ fn persist_object_revisions(
             created_at: publication.file.created_at,
         },
     )?;
+    persist_directory_path_revisions(
+        transaction,
+        publication.file.volume_id,
+        publication.file.created_by,
+        publication.file.created_at,
+        directories,
+    )
+}
+
+fn persist_directory_path_revisions(
+    transaction: &Transaction<'_>,
+    volume_id: VolumeId,
+    created_by: meshspan_domain::PrincipalId,
+    created_at: meshspan_domain::UnixMicros,
+    directories: &[DirectoryRevisionResult],
+) -> Result<(), PublicationError> {
     for directory in directories {
         persist_object_revision(
             transaction,
             ObjectRevisionInsert {
                 revision_id: directory.new_revision_id,
-                volume_id: publication.file.volume_id,
+                volume_id,
                 object_id: directory.object_id,
                 kind: 1,
                 prior_revision_id: directory.prior_revision_id,
                 directory_root: Some(directory.directory_root),
                 file_version_id: None,
-                created_by: publication.file.created_by,
-                created_at: publication.file.created_at,
+                created_by,
+                created_at,
             },
         )?;
     }
@@ -736,20 +995,20 @@ fn decode_optional<T, E>(
 
 fn persist_commit(
     transaction: &Transaction<'_>,
-    publication: &RootFilePublication,
+    intent: NamespaceIntent<'_>,
     request_digest: [u8; 32],
 ) -> Result<(), PublicationError> {
     let collision: i64 = transaction.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM namespace_commits WHERE namespace_commit_id = ?1
          )",
-        [publication.namespace_commit_id.as_bytes().as_slice()],
+        [intent.commit_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;
     if collision != 0 {
         return Err(PublicationError::OperationConflict);
     }
-    let commit_digest = commit_digest(publication, request_digest);
+    let commit_digest = commit_digest(intent, request_digest);
     transaction.execute(
         "INSERT INTO namespace_commits(
             namespace_commit_id, branch_id, volume_id, root_object_id,
@@ -757,24 +1016,24 @@ fn persist_commit(
             created_at, commit_digest
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
-            publication.namespace_commit_id.as_bytes().as_slice(),
-            publication.file.branch_id.as_bytes().as_slice(),
-            publication.file.volume_id.as_bytes().as_slice(),
-            publication.root_object_id.as_bytes().as_slice(),
-            publication.root_object_revision_id.as_bytes().as_slice(),
-            publication.file.created_by.as_bytes().as_slice(),
-            publication.file.operation_id.as_bytes().as_slice(),
-            publication.file.created_at.get(),
+            intent.commit_id.as_bytes().as_slice(),
+            intent.branch_id.as_bytes().as_slice(),
+            intent.volume_id.as_bytes().as_slice(),
+            intent.root_object_id.as_bytes().as_slice(),
+            intent.root_revision_id.as_bytes().as_slice(),
+            intent.created_by.as_bytes().as_slice(),
+            intent.operation_id.as_bytes().as_slice(),
+            intent.created_at.get(),
             commit_digest.as_slice()
         ],
     )?;
-    if let Some(parent) = publication.expected_namespace_commit_id {
+    if let Some(parent) = intent.expected_commit_id {
         transaction.execute(
             "INSERT INTO namespace_commit_parents(
                 namespace_commit_id, parent_ordinal, parent_commit_id
              ) VALUES (?1, 0, ?2)",
             params![
-                publication.namespace_commit_id.as_bytes().as_slice(),
+                intent.commit_id.as_bytes().as_slice(),
                 parent.as_bytes().as_slice()
             ],
         )?;
@@ -784,23 +1043,23 @@ fn persist_commit(
 
 fn advance_namespace_head(
     transaction: &Transaction<'_>,
-    publication: &RootFilePublication,
+    intent: NamespaceIntent<'_>,
     previous_sequence: u64,
 ) -> Result<u64, PublicationError> {
     let sequence = previous_sequence
         .checked_add(1)
         .ok_or(PublicationError::InvalidInput)?;
-    let changed = if let Some(expected) = publication.expected_namespace_commit_id {
+    let changed = if let Some(expected) = intent.expected_commit_id {
         transaction.execute(
             "UPDATE branch_namespace_heads
              SET namespace_commit_id = ?1, head_sequence = ?2
              WHERE branch_id = ?3 AND volume_id = ?4
                AND namespace_commit_id = ?5 AND head_sequence = ?6",
             params![
-                publication.namespace_commit_id.as_bytes().as_slice(),
+                intent.commit_id.as_bytes().as_slice(),
                 to_i64(sequence)?,
-                publication.file.branch_id.as_bytes().as_slice(),
-                publication.file.volume_id.as_bytes().as_slice(),
+                intent.branch_id.as_bytes().as_slice(),
+                intent.volume_id.as_bytes().as_slice(),
                 expected.as_bytes().as_slice(),
                 to_i64(previous_sequence)?
             ],
@@ -811,9 +1070,9 @@ fn advance_namespace_head(
                 branch_id, volume_id, namespace_commit_id, head_sequence
              ) VALUES (?1, ?2, ?3, ?4)",
             params![
-                publication.file.branch_id.as_bytes().as_slice(),
-                publication.file.volume_id.as_bytes().as_slice(),
-                publication.namespace_commit_id.as_bytes().as_slice(),
+                intent.branch_id.as_bytes().as_slice(),
+                intent.volume_id.as_bytes().as_slice(),
+                intent.commit_id.as_bytes().as_slice(),
                 to_i64(sequence)?
             ],
         )?
@@ -864,7 +1123,50 @@ fn persist_namespace_operation(
     })
 }
 
+fn persist_directory_operation(
+    transaction: &Transaction<'_>,
+    publication: &DirectoryPublication,
+    request_digest: [u8; 32],
+    head_sequence: u64,
+) -> Result<DirectoryPublicationReceipt, PublicationError> {
+    let result_digest = directory_result_digest(
+        publication.operation_id,
+        request_digest,
+        publication.directory_object_revision_id,
+        publication.namespace_commit_id,
+        head_sequence,
+    );
+    transaction.execute(
+        "INSERT INTO directory_publication_operations(
+            operation_id, request_digest, namespace_commit_id, directory_object_revision_id,
+            head_sequence, result_digest, committed_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            publication.operation_id.as_bytes().as_slice(),
+            request_digest.as_slice(),
+            publication.namespace_commit_id.as_bytes().as_slice(),
+            publication
+                .directory_object_revision_id
+                .as_bytes()
+                .as_slice(),
+            to_i64(head_sequence)?,
+            result_digest.as_slice(),
+            publication.created_at.get()
+        ],
+    )?;
+    Ok(DirectoryPublicationReceipt {
+        disposition: PublicationDisposition::Applied,
+        operation_id: publication.operation_id,
+        request_digest,
+        directory_object_revision_id: publication.directory_object_revision_id,
+        namespace_commit_id: publication.namespace_commit_id,
+        head_sequence,
+        result_digest,
+    })
+}
+
 type StoredReceipt = (Vec<u8>, Vec<u8>, Vec<u8>, i64, Vec<u8>);
+type StoredDirectoryReceipt = (Vec<u8>, Vec<u8>, Vec<u8>, i64, Vec<u8>);
 
 fn decode_receipt(
     operation_id: OperationId,
@@ -898,6 +1200,38 @@ fn decode_receipt(
     })
 }
 
+fn decode_directory_receipt(
+    operation_id: OperationId,
+    disposition: PublicationDisposition,
+    stored: &StoredDirectoryReceipt,
+) -> Result<DirectoryPublicationReceipt, PublicationError> {
+    let request_digest = copy_array(&stored.0)?;
+    let namespace_commit_id = decode_identifier(&stored.1, NamespaceCommitId::from_bytes)?;
+    let directory_object_revision_id = decode_identifier(&stored.2, ObjectRevisionId::from_bytes)?;
+    let head_sequence = from_i64(stored.3)?;
+    let result_digest = copy_array(&stored.4)?;
+    if result_digest
+        != directory_result_digest(
+            operation_id,
+            request_digest,
+            directory_object_revision_id,
+            namespace_commit_id,
+            head_sequence,
+        )
+    {
+        return Err(PublicationError::Corrupt);
+    }
+    Ok(DirectoryPublicationReceipt {
+        disposition,
+        operation_id,
+        request_digest,
+        directory_object_revision_id,
+        namespace_commit_id,
+        head_sequence,
+        result_digest,
+    })
+}
+
 fn request_digest(publication: &RootFilePublication) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.filesystem.path-file-publication.v1\0");
@@ -908,36 +1242,59 @@ fn request_digest(publication: &RootFilePublication) -> [u8; 32] {
     digest.update(&publication.file_object_revision_id.as_bytes());
     digest.update(&publication.root_object_revision_id.as_bytes());
     digest.update(&publication.namespace_commit_id.as_bytes());
-    digest.update(
-        &u16::try_from(publication.path.path().components().len())
-            .unwrap_or(u16::MAX)
-            .to_be_bytes(),
-    );
-    for component in publication.path.path().components() {
-        update_text(&mut digest, component.canonical());
-        update_text(&mut digest, component.display());
-    }
-    for transition in publication.path.ancestors() {
-        digest.update(&transition.object_id().as_bytes());
-        digest.update(&transition.expected_revision_id().as_bytes());
-        digest.update(&transition.new_revision_id().as_bytes());
-    }
+    update_publication_path(&mut digest, &publication.path);
     digest.update(&publication.entry_generation.to_be_bytes());
     digest.finalize().into()
 }
 
-fn commit_digest(publication: &RootFilePublication, request_digest: [u8; 32]) -> [u8; 32] {
+fn directory_request_digest(publication: &DirectoryPublication) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.directory-publication.v1\0");
+    digest.update(&publication.operation_id.as_bytes());
+    digest.update(&publication.branch_id.as_bytes());
+    digest.update(&publication.volume_id.as_bytes());
+    digest.update(&publication.root_object_id.as_bytes());
+    update_optional_commit(&mut digest, publication.expected_namespace_commit_id);
+    digest.update(&publication.directory_object_id.as_bytes());
+    digest.update(&publication.directory_object_revision_id.as_bytes());
+    digest.update(&publication.root_object_revision_id.as_bytes());
+    digest.update(&publication.namespace_commit_id.as_bytes());
+    update_publication_path(&mut digest, &publication.path);
+    digest.update(&publication.entry_generation.to_be_bytes());
+    digest.update(&publication.created_by.as_bytes());
+    digest.update(&publication.created_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+fn update_publication_path(digest: &mut blake3::Hasher, path: &NamespacePublicationPath) {
+    digest.update(
+        &u16::try_from(path.path().components().len())
+            .unwrap_or(u16::MAX)
+            .to_be_bytes(),
+    );
+    for component in path.path().components() {
+        update_text(digest, component.canonical());
+        update_text(digest, component.display());
+    }
+    for transition in path.ancestors() {
+        digest.update(&transition.object_id().as_bytes());
+        digest.update(&transition.expected_revision_id().as_bytes());
+        digest.update(&transition.new_revision_id().as_bytes());
+    }
+}
+
+fn commit_digest(intent: NamespaceIntent<'_>, request_digest: [u8; 32]) -> [u8; 32] {
     commit_digest_fields(
         &StoredCommit {
-            commit_id: publication.namespace_commit_id,
-            branch_id: publication.file.branch_id,
-            volume_id: publication.file.volume_id,
-            root_object_id: publication.root_object_id,
-            root_object_revision_id: publication.root_object_revision_id,
-            parent_id: publication.expected_namespace_commit_id,
-            created_by: publication.file.created_by,
-            operation_id: publication.file.operation_id,
-            created_at: publication.file.created_at,
+            commit_id: intent.commit_id,
+            branch_id: intent.branch_id,
+            volume_id: intent.volume_id,
+            root_object_id: intent.root_object_id,
+            root_object_revision_id: intent.root_revision_id,
+            parent_id: intent.expected_commit_id,
+            created_by: intent.created_by,
+            operation_id: intent.operation_id,
+            created_at: intent.created_at,
         },
         request_digest,
     )
@@ -986,6 +1343,23 @@ fn result_digest(
     digest.update(&operation_id.as_bytes());
     digest.update(&request_digest);
     digest.update(&file_version_id.as_bytes());
+    digest.update(&namespace_commit_id.as_bytes());
+    digest.update(&head_sequence.to_be_bytes());
+    digest.finalize().into()
+}
+
+fn directory_result_digest(
+    operation_id: OperationId,
+    request_digest: [u8; 32],
+    directory_object_revision_id: ObjectRevisionId,
+    namespace_commit_id: NamespaceCommitId,
+    head_sequence: u64,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.directory-publication-result.v1\0");
+    digest.update(&operation_id.as_bytes());
+    digest.update(&request_digest);
+    digest.update(&directory_object_revision_id.as_bytes());
     digest.update(&namespace_commit_id.as_bytes());
     digest.update(&head_sequence.to_be_bytes());
     digest.finalize().into()

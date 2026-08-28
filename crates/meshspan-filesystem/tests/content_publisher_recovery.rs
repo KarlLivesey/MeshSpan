@@ -16,8 +16,8 @@ use meshspan_domain::{
 };
 use meshspan_filesystem::{
     ContentChunkCipher, ContentChunkLimits, ContentKeyEnvelopeCipher, ContentPublicationError,
-    EncryptedContentChunk, FilePublicationPath, FilesystemCommitError, FilesystemCommitService,
-    NamespaceLimits, NamespacePath, RootFileCommitRequest, StageCompletionRequest,
+    EncryptedContentChunk, FilesystemCommitError, FilesystemCommitService, NamespaceLimits,
+    NamespacePath, NamespacePublicationPath, RootFileCommitRequest, StageCompletionRequest,
     StageRegistration, StageWrite, UnprotectedContentPublisher, UnprotectedContentTarget,
     VolumeKeyEncryptionKey,
 };
@@ -197,7 +197,7 @@ fn commit_request() -> Result<RootFileCommitRequest, Box<dyn std::error::Error>>
         file_object_revision_id: ObjectRevisionId::from_bytes([17; 16])?,
         root_object_revision_id: ObjectRevisionId::from_bytes([18; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([19; 16])?,
-        path: FilePublicationPath::new(
+        path: NamespacePublicationPath::new(
             NamespacePath::from_components(["report.txt"], NamespaceLimits::PORTABLE)?,
             Vec::new(),
         )?,

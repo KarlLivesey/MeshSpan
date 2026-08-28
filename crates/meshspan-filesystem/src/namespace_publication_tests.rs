@@ -8,7 +8,7 @@ use meshspan_domain::{
 use super::{LoadedDirectory, mutate_directory_path, validate};
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryRevisionTransition, DirectoryTrie,
-    FilePublication, FilePublicationPath, ManifestPublication, NamespaceLimits, NamespacePath,
+    FilePublication, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
     RootFilePublication,
 };
 
@@ -51,7 +51,7 @@ fn nested_file_mutation_rebuilds_every_directory_back_to_root()
     let publication = publication(
         root_object,
         root_new,
-        FilePublicationPath::new(
+        NamespacePublicationPath::new(
             path.clone(),
             vec![
                 DirectoryRevisionTransition::new(directory_a, a_old, a_new)?,
@@ -126,7 +126,7 @@ fn assert_selected_revision(
 fn publication(
     root_object_id: ObjectId,
     root_object_revision_id: ObjectRevisionId,
-    path: FilePublicationPath,
+    path: NamespacePublicationPath,
 ) -> Result<RootFilePublication, Box<dyn std::error::Error>> {
     Ok(RootFilePublication {
         file: FilePublication {

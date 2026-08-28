@@ -12,9 +12,9 @@ use meshspan_domain::{
 use thiserror::Error;
 
 use crate::{
-    CompletedStage, DurableStageStore, FilePublication, FilePublicationPath, ManifestPublication,
-    NamespacePublicationReceipt, PublicationError, RootFilePublication, StageCompletionRequest,
-    StageStoreError, VersionPublicationStore,
+    CompletedStage, DurableStageStore, FilePublication, ManifestPublication,
+    NamespacePublicationPath, NamespacePublicationReceipt, PublicationError, RootFilePublication,
+    StageCompletionRequest, StageStoreError, VersionPublicationStore,
 };
 
 /// Exact stage and manifest identity presented to a replaceable durable-content publisher.
@@ -130,7 +130,7 @@ pub struct RootFileCommitRequest {
     /// New immutable namespace-commit identity.
     pub namespace_commit_id: NamespaceCommitId,
     /// Validated root-relative path and exact existing child-directory transitions.
-    pub path: FilePublicationPath,
+    pub path: NamespacePublicationPath,
     /// Stable name-reuse generation.
     pub entry_generation: u64,
     /// Principal responsible for the save.
@@ -398,7 +398,7 @@ fn update_text(digest: &mut blake3::Hasher, value: &str) {
     digest.update(value.as_bytes());
 }
 
-fn update_publication_path(digest: &mut blake3::Hasher, path: &FilePublicationPath) {
+fn update_publication_path(digest: &mut blake3::Hasher, path: &NamespacePublicationPath) {
     digest.update(
         &u16::try_from(path.path().components().len())
             .unwrap_or(u16::MAX)
