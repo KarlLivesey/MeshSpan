@@ -56,9 +56,11 @@ administrator to operate a separate certificate system.
 ## Status
 
 MeshSpan is a clean-slate, pre-alpha project. No compatibility or stability guarantee applies
-before version 1.0. The design contract and Stages 1–3 are complete; folder storage and safe shard
-lifecycle are the active implementation stage. The accepted requirements, architecture,
-implementation order and evidence are in the [design review pack](design/README.md).
+before version 1.0. Stage 1 is complete. The Stage 2–3 completion claims are under executable
+re-audit after gaps were found between their roadmap language and their process proofs; see the
+[Stage 1–3 implementation audit](design/stage-1-3-audit.md). Folder storage work remains blocked on
+closing those dependency gaps. The accepted requirements, architecture and implementation order
+are in the [design review pack](design/README.md).
 
 ## Development
 

@@ -77,7 +77,7 @@ REL-002, DEV-001–006, EXT-001–005.
 
 **Depends on:** Stage 1.
 
-**Status:** complete. See [`stage-2-evidence.md`](stage-2-evidence.md).
+**Status:** completion audit reopened. See [`stage-1-3-audit.md`](stage-1-3-audit.md).
 
 Build:
 
@@ -112,7 +112,7 @@ CFG-001–008, EXT-002–004, EXT-007.
 
 **Depends on:** Stage 2.
 
-**Status:** complete. See [`stage-3-evidence.md`](stage-3-evidence.md).
+**Status:** completion audit reopened. See [`stage-1-3-audit.md`](stage-1-3-audit.md).
 
 Build:
 

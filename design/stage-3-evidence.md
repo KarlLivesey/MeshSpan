@@ -1,6 +1,10 @@
 # Stage 3 completion evidence
 
-Status: complete on 2026-08-28.
+Status: historical evidence; completion audit reopened on 2026-08-28.
+
+The behaviours below still pass, but this document's original completion claim
+was broader than its executable proof. The authoritative correction and closure
+gates are in [stage-1-3-audit.md](stage-1-3-audit.md).
 
 Stage 3 establishes the one-to-many metadata cluster kernel. It does not claim
 storage-folder providers, filesystem operations, HTTPS, SMB, erasure coding or
