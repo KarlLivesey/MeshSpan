@@ -95,7 +95,7 @@ impl ConsensusCore {
             || config.plan.spec().learners.contains(&config.local_node_id);
         if config.local_incarnation == 0
             || !local_is_member
-            || config.member_incarnations.get(config.local_node_id)
+            || config.member_incarnations.incarnation(config.local_node_id)
                 != Some(config.local_incarnation)
             || (durable.current_term == 0 && durable.voted_for.is_some())
             || durable
@@ -932,7 +932,7 @@ impl ConsensusCore {
     }
 
     fn validate_sender(&self, node_id: NodeId, incarnation: u64) -> Result<(), CoreError> {
-        if self.config.member_incarnations.get(node_id) == Some(incarnation) {
+        if self.config.member_incarnations.incarnation(node_id) == Some(incarnation) {
             Ok(())
         } else {
             Err(CoreError::StaleMember)
@@ -952,7 +952,7 @@ impl ConsensusCore {
     fn member_incarnation(&self, node_id: NodeId) -> Result<u64, CoreError> {
         self.config
             .member_incarnations
-            .get(node_id)
+            .incarnation(node_id)
             .ok_or(CoreError::StaleMember)
     }
 

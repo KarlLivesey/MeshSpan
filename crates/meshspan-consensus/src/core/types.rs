@@ -154,7 +154,9 @@ impl MemberIncarnations {
         }
     }
 
-    pub(super) fn get(&self, node_id: NodeId) -> Option<u64> {
+    /// Returns the exact accepted incarnation for one member.
+    #[must_use]
+    pub fn incarnation(&self, node_id: NodeId) -> Option<u64> {
         self.0.get(&node_id).copied()
     }
 }
