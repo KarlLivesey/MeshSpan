@@ -7,7 +7,7 @@ mod digest;
 #[path = "namespace_publication/repository.rs"]
 mod repository;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{
     BranchId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
@@ -23,6 +23,7 @@ use super::{
 };
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrie,
+    NamespaceReplayBase, NamespaceReplayEntry, ReconciliationCommit,
 };
 
 use digest::{directory_request as directory_request_digest, file_request as request_digest};
@@ -439,7 +440,7 @@ fn load_directory(
 }
 
 fn load_path_editor(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     root: DirectoryNodeDigest,
     name: &crate::NamespaceComponent,
 ) -> Result<DirectoryTrie, PublicationError> {
@@ -456,6 +457,91 @@ fn load_path_editor(
         selected = child;
     }
     DirectoryTrie::from_selected_records(root, records, name).map_err(Into::into)
+}
+
+pub(super) fn load_replay_base(
+    connection: &Connection,
+    converged: &ReconciliationCommit,
+    intents: &[crate::BranchMutationIntent],
+) -> Result<NamespaceReplayBase, PublicationError> {
+    let root = load_object_revision(connection, converged.root_object_revision_id)?;
+    if root.kind != 1
+        || root.volume_id != converged.volume_id
+        || root.object_id != converged.root_object_id
+    {
+        return Err(PublicationError::Corrupt);
+    }
+    let mut entries = BTreeMap::new();
+    for intent in intents {
+        load_replay_path(
+            connection,
+            converged.volume_id,
+            converged.root_object_id,
+            converged.root_object_revision_id,
+            &intent.path,
+            &mut entries,
+        )?;
+    }
+    Ok(NamespaceReplayBase {
+        root_object_revision_id: Some(converged.root_object_revision_id),
+        entries: entries.into_values().collect(),
+    })
+}
+
+fn load_replay_path(
+    connection: &Connection,
+    volume_id: VolumeId,
+    mut directory_object_id: ObjectId,
+    mut directory_revision_id: ObjectRevisionId,
+    path: &crate::NamespacePath,
+    entries: &mut BTreeMap<Vec<String>, NamespaceReplayEntry>,
+) -> Result<(), PublicationError> {
+    let mut selected_path = Vec::with_capacity(path.components().len());
+    for (index, component) in path.components().iter().enumerate() {
+        let directory = load_object_revision(connection, directory_revision_id)?;
+        if directory.kind != 1
+            || directory.volume_id != volume_id
+            || directory.object_id != directory_object_id
+        {
+            return Err(PublicationError::Corrupt);
+        }
+        let root = directory.directory_root.ok_or(PublicationError::Corrupt)?;
+        let editor = load_path_editor(connection, root, component)?;
+        let Some(entry) = editor.lookup(component)? else {
+            break;
+        };
+        selected_path.push(entry.name().clone());
+        let selected = crate::NamespacePath::from_stored_components(selected_path.clone())
+            .map_err(|_| PublicationError::Corrupt)?;
+        let replay_entry = NamespaceReplayEntry {
+            path: selected,
+            object_id: entry.object_id(),
+            object_revision_id: entry.object_revision_id(),
+            kind: entry.kind(),
+            entry_generation: entry.generation(),
+        };
+        let key = replay_entry
+            .path
+            .components()
+            .iter()
+            .map(|component| component.canonical().to_owned())
+            .collect::<Vec<_>>();
+        if entries
+            .insert(key, replay_entry.clone())
+            .is_some_and(|existing| existing != replay_entry)
+        {
+            return Err(PublicationError::Corrupt);
+        }
+        if index + 1 == path.components().len() {
+            break;
+        }
+        if entry.kind() != DirectoryEntryKind::Directory {
+            break;
+        }
+        directory_object_id = entry.object_id();
+        directory_revision_id = entry.object_revision_id();
+    }
+    Ok(())
 }
 
 fn validate_old_entry(

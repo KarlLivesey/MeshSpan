@@ -181,6 +181,9 @@ pub struct ReconciliationFrontier {
 /// Canonical, replayable result of validating and ordering one causal closure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReconciliationPlan {
+    converged_head: Option<NamespaceCommitId>,
+    volume_id: VolumeId,
+    root_object_id: ObjectId,
     ordered_commits: Vec<NamespaceCommitId>,
     merge_parents: Vec<NamespaceCommitId>,
     commit_headers: BTreeMap<NamespaceCommitId, [u8; 32]>,
@@ -188,6 +191,24 @@ pub struct ReconciliationPlan {
 }
 
 impl ReconciliationPlan {
+    /// Authoritative head the replay base must still select.
+    #[must_use]
+    pub const fn converged_head(&self) -> Option<NamespaceCommitId> {
+        self.converged_head
+    }
+
+    /// Volume whose namespace is being reconciled.
+    #[must_use]
+    pub const fn volume_id(&self) -> VolumeId {
+        self.volume_id
+    }
+
+    /// Stable root-directory object for the volume.
+    #[must_use]
+    pub const fn root_object_id(&self) -> ObjectId {
+        self.root_object_id
+    }
+
     /// Commits not already included, in deterministic causal application order.
     #[must_use]
     pub fn ordered_commits(&self) -> &[NamespaceCommitId] {
@@ -211,6 +232,31 @@ impl ReconciliationPlan {
             && commits.iter().all(|commit| {
                 self.commit_headers.get(&commit.commit_id) == Some(&commit_header_digest(commit))
             })
+    }
+}
+
+/// Fully validated causal and affected-path plans ready for transactional application.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedNamespaceReconciliation {
+    causal: ReconciliationPlan,
+    replay: NamespaceReplayPlan,
+}
+
+impl PreparedNamespaceReconciliation {
+    /// Validated causal closure, deterministic ordering and merge frontier.
+    #[must_use]
+    pub const fn causal_plan(&self) -> &ReconciliationPlan {
+        &self.causal
+    }
+
+    /// Exact namespace actions and resulting root selected from the durable affected base.
+    #[must_use]
+    pub const fn replay_plan(&self) -> &NamespaceReplayPlan {
+        &self.replay
+    }
+
+    pub(crate) const fn new(causal: ReconciliationPlan, replay: NamespaceReplayPlan) -> Self {
+        Self { causal, replay }
     }
 }
 
@@ -246,7 +292,14 @@ pub fn plan_reconciliation(
         .map(|(commit_id, commit)| (*commit_id, commit_header_digest(commit)))
         .collect();
     let digest = plan_digest(&by_id, frontier, &ordered_commits, &merge_parents);
+    let namespace = by_id
+        .values()
+        .next()
+        .ok_or(ReconciliationError::InvalidInput)?;
     Ok(ReconciliationPlan {
+        converged_head: frontier.converged_head,
+        volume_id: namespace.volume_id,
+        root_object_id: namespace.root_object_id,
         ordered_commits,
         merge_parents,
         commit_headers,

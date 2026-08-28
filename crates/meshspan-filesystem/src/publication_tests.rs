@@ -16,7 +16,7 @@ use super::{
 use crate::{
     BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
     DirectoryTrie, DirectoryTrieError, NamespaceComponent, NamespaceLimits, NamespacePath,
-    ReconciliationFrontier, ReconciliationLimits,
+    NamespaceReplayDisposition, ReconciliationFrontier, ReconciliationLimits,
 };
 
 #[test]
@@ -289,6 +289,46 @@ fn root_file_publication_moves_file_and_volume_heads_once_across_restart()
             .namespace_head(first.file.branch_id, first.file.volume_id)?
             .map(|head| (head.namespace_commit_id, head.sequence)),
         Some((second.namespace_commit_id, 2))
+    );
+    Ok(())
+}
+
+#[test]
+fn durable_affected_base_prepares_exact_replay_after_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(first.namespace_commit_id),
+        eligible_heads: vec![second.namespace_commit_id],
+    };
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&first)?;
+        store.publish_root_file(&second)?;
+    }
+
+    let reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let prepared =
+        reopened.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    assert_eq!(
+        prepared.causal_plan().converged_head(),
+        Some(first.namespace_commit_id)
+    );
+    assert_eq!(prepared.causal_plan().volume_id(), first.file.volume_id);
+    assert_eq!(
+        prepared.causal_plan().root_object_id(),
+        first.root_object_id
+    );
+    assert_eq!(prepared.replay_plan().actions().len(), 1);
+    let action = &prepared.replay_plan().actions()[0];
+    assert_eq!(action.commit_id, second.namespace_commit_id);
+    assert_eq!(action.disposition, NamespaceReplayDisposition::Applied);
+    assert_eq!(action.target_path.components()[0].display(), "Report");
+    assert_eq!(
+        prepared.replay_plan().final_root_object_revision_id(),
+        Some(second.root_object_revision_id)
     );
     Ok(())
 }
