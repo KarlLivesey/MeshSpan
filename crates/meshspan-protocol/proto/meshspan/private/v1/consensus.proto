@@ -63,6 +63,7 @@ message SnapshotBegin {
   uint32 format_version = 6;
   uint64 membership_epoch = 7;
   bytes quorum_plan_digest = 8;
+  bytes quorum_plan = 9;
 }
 
 message SnapshotChunk {

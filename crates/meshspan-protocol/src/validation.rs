@@ -103,7 +103,7 @@ fn validate_message(message: &Message, limits: WireLimits) -> Result<(), WireCon
         Message::VoteResponse(value) => consensus::vote_response(value),
         Message::AppendRequest(value) => consensus::append_request(value, limits),
         Message::AppendResponse(value) => consensus::append_response(value),
-        Message::SnapshotBegin(value) => consensus::snapshot_begin(value),
+        Message::SnapshotBegin(value) => consensus::snapshot_begin(value, limits),
         Message::SnapshotChunk(value) => consensus::snapshot_chunk(value, limits),
         Message::SnapshotFinish(value) => consensus::snapshot_finish(value),
         Message::SnapshotResult(value) => consensus::snapshot_result(value),
