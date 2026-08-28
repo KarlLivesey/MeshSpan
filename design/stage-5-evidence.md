@@ -157,8 +157,14 @@ copy-on-write filesystem service. This document records executable evidence only
    Tests prove delivery-order independence, same-name recovered copies, later edits
    following a recovered file, descendants following a recovered directory,
    and fail-closed handling of malformed intents, incomplete bases and commit
-   substitution. The transactional SQLite action applier and merge receipt are
-   still required before this gate can close.
+   substitution. A production SQLite applier now revalidates every commit and
+   intent at apply time, path-copies the exact actions, materialises recovered
+   copies under independently owned file versions, and atomically records the
+   immutable multi-parent merge plus a digest-bound retry receipt. Real database
+   proofs cover restart/idempotency, divergent roots, concurrent same-file edits,
+   post-merge causal loading, receipt corruption and rollback at every injected
+   transaction boundary. The replicated converged-volume-head authority
+   transition from this local receipt is still required before this gate closes.
 4. Snapshots, retention and restore-as-new-head.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.

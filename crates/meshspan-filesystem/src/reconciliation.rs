@@ -182,6 +182,7 @@ pub struct ReconciliationFrontier {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReconciliationPlan {
     converged_head: Option<NamespaceCommitId>,
+    converged_branch_id: Option<BranchId>,
     volume_id: VolumeId,
     root_object_id: ObjectId,
     ordered_commits: Vec<NamespaceCommitId>,
@@ -195,6 +196,12 @@ impl ReconciliationPlan {
     #[must_use]
     pub const fn converged_head(&self) -> Option<NamespaceCommitId> {
         self.converged_head
+    }
+
+    /// Writable authority branch that owns the selected converged head.
+    #[must_use]
+    pub const fn converged_branch_id(&self) -> Option<BranchId> {
+        self.converged_branch_id
     }
 
     /// Volume whose namespace is being reconciled.
@@ -232,6 +239,10 @@ impl ReconciliationPlan {
             && commits.iter().all(|commit| {
                 self.commit_headers.get(&commit.commit_id) == Some(&commit_header_digest(commit))
             })
+    }
+
+    pub(crate) fn commit_ids(&self) -> impl Iterator<Item = NamespaceCommitId> + '_ {
+        self.commit_headers.keys().copied()
     }
 }
 
@@ -298,6 +309,9 @@ pub fn plan_reconciliation(
         .ok_or(ReconciliationError::InvalidInput)?;
     Ok(ReconciliationPlan {
         converged_head: frontier.converged_head,
+        converged_branch_id: frontier
+            .converged_head
+            .and_then(|commit_id| by_id.get(&commit_id).map(|commit| commit.branch_id)),
         volume_id: namespace.volume_id,
         root_object_id: namespace.root_object_id,
         ordered_commits,

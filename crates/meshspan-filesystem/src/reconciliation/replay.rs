@@ -75,6 +75,8 @@ pub struct NamespaceReplayAction {
     pub source_object_revision_id: ObjectRevisionId,
     /// Effective immutable leaf revision selected by the target path.
     pub target_object_revision_id: ObjectRevisionId,
+    /// Stable target name-incarnation generation after this action.
+    pub target_entry_generation: u64,
     /// Exact target leaf revision replaced by this action, if any.
     pub target_prior_object_revision_id: Option<ObjectRevisionId>,
     /// Effective file version; derived for a recovered logical copy and absent for directories.
@@ -288,6 +290,7 @@ impl ReplayState {
             target_object_id: target_object,
             source_object_revision_id: intent.object_revision_id,
             target_object_revision_id: target_revision,
+            target_entry_generation: generation,
             target_prior_object_revision_id: prior_revision_id,
             target_file_version_id: file_version_id,
             target_publication_operation_id: publication_operation_id,
@@ -308,9 +311,18 @@ impl ReplayState {
         let prior_target = intent
             .prior_object_revision_id
             .and_then(|revision| self.revisions.get(&revision).cloned());
-        let selected_path = prior_target
-            .as_ref()
-            .map_or_else(|| effective_path.clone(), |target| target.path.clone());
+        let selected_path = prior_target.as_ref().map_or_else(
+            || effective_path.clone(),
+            |target| {
+                if target.object_id != intent.object_id
+                    || path_key(&target.path) != path_key(&effective_path)
+                {
+                    target.path.clone()
+                } else {
+                    effective_path.clone()
+                }
+            },
+        );
         let current = self.entries.get(&path_key(&selected_path)).cloned();
         if current.as_ref().is_some_and(|entry| {
             entry.object_id == intent.object_id
@@ -354,7 +366,10 @@ impl ReplayState {
         } else {
             self.recovered_target(plan_digest, commit, intent, &selected_path)?
         };
-        let prior_revision_id = current.as_ref().map(|entry| entry.revision_id);
+        let prior_revision_id = self
+            .entries
+            .get(&path_key(&path))
+            .map(|entry| entry.revision_id);
         let (file_version_id, publication_operation_id) = match intent.mutation {
             BranchMutation::CreateDirectory => (None, None),
             BranchMutation::File { version_id } if object_id == intent.object_id => {
@@ -675,6 +690,7 @@ fn already_applied(
         target_object_id: intent.object_id,
         source_object_revision_id: intent.object_revision_id,
         target_object_revision_id: intent.object_revision_id,
+        target_entry_generation: intent.entry_generation,
         target_prior_object_revision_id: Some(intent.object_revision_id),
         target_file_version_id: match intent.mutation {
             BranchMutation::File { version_id } => Some(version_id),

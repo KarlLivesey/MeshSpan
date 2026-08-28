@@ -43,7 +43,8 @@ pub use name::{
 pub use publication::{
     BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,
     DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespacePublicationPath,
-    NamespacePublicationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
+    NamespacePublicationReceipt, NamespaceReconciliationApplication,
+    NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
     RootFilePublication, VersionPublicationStore,
 };
 pub use reconciliation::{

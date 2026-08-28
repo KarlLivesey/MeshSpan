@@ -10,8 +10,8 @@ use tempfile::tempdir;
 use super::{
     DATABASE_FILE, DirectoryPublication, DirectoryRevisionTransition, FilePublication, MIGRATIONS,
     ManifestPublication, NamespacePublicationPath, NamespacePublicationReceipt,
-    PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
-    SCHEMA_VERSION, VersionPublicationStore, configure,
+    NamespaceReconciliationApplication, PublicationDisposition, PublicationError,
+    PublicationPathError, RootFilePublication, SCHEMA_VERSION, VersionPublicationStore, configure,
 };
 use crate::{
     BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
@@ -153,6 +153,14 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         |row| row.get(0),
     )?;
     assert_eq!(reconciliation_lineage, 1);
+    let reconciliation_receipts: i64 = store.connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM sqlite_schema WHERE name = 'namespace_reconciliation_operations'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(reconciliation_receipts, 1);
     Ok(())
 }
 
@@ -325,7 +333,7 @@ fn durable_affected_base_prepares_exact_replay_after_restart()
     let action = &prepared.replay_plan().actions()[0];
     assert_eq!(action.commit_id, second.namespace_commit_id);
     assert_eq!(action.disposition, NamespaceReplayDisposition::Applied);
-    assert_eq!(action.target_path.components()[0].display(), "Report");
+    assert_eq!(action.target_path.components()[0].display(), "REPORT");
     assert_eq!(
         prepared.replay_plan().final_root_object_revision_id(),
         Some(second.root_object_revision_id)
@@ -373,6 +381,291 @@ fn durable_branch_heads_plan_identically_after_restart() -> Result<(), Box<dyn s
     assert_eq!(
         observed.merge_parents(),
         [first.namespace_commit_id, second.namespace_commit_id]
+    );
+    Ok(())
+}
+
+#[test]
+fn divergent_roots_apply_one_atomic_merge_and_replay_its_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut second = initial_root_publication()?;
+    second.file.operation_id = OperationId::from_bytes([80; 16])?;
+    second.file.branch_id = BranchId::from_bytes([81; 16])?;
+    second.file.object_id = ObjectId::from_bytes([82; 16])?;
+    second.file.version_id = FileVersionId::from_bytes([83; 16])?;
+    second.file.manifest.manifest_id = ContentManifestId::from_bytes([84; 16])?;
+    second.file.manifest.content_digest = [85; 32];
+    second.file.manifest.root_digest = [86; 32];
+    second.file_object_revision_id = ObjectRevisionId::from_bytes([87; 16])?;
+    second.root_object_revision_id = ObjectRevisionId::from_bytes([88; 16])?;
+    second.namespace_commit_id = NamespaceCommitId::from_bytes([89; 16])?;
+    second.path = NamespacePublicationPath::new(
+        NamespacePath::from_components(["Other"], NamespaceLimits::PORTABLE)?,
+        Vec::new(),
+    )?;
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(first.namespace_commit_id),
+        eligible_heads: vec![second.namespace_commit_id],
+    };
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([120; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([121; 16])?,
+        created_by: first.file.created_by,
+        created_at: UnixMicros::new(120),
+    };
+    let applied = {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&first)?;
+        store.publish_root_file(&second)?;
+        let prepared =
+            store.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+        let receipt = store.apply_namespace_reconciliation(application, &prepared)?;
+        assert_eq!(receipt.disposition, PublicationDisposition::Applied);
+        receipt
+    };
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    assert_eq!(
+        reopened.resolve_namespace_reconciliation(application.operation_id)?,
+        Some(crate::NamespaceReconciliationReceipt {
+            disposition: PublicationDisposition::Replayed,
+            ..applied
+        })
+    );
+    let prepared =
+        reopened.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    assert_eq!(
+        reopened
+            .apply_namespace_reconciliation(application, &prepared)?
+            .disposition,
+        PublicationDisposition::Replayed
+    );
+    let report = stored_directory_entry(
+        &reopened,
+        applied.root_object_revision_id,
+        &first.path.path().components()[0],
+    )?;
+    let other = stored_directory_entry(
+        &reopened,
+        applied.root_object_revision_id,
+        &second.path.path().components()[0],
+    )?;
+    assert_eq!(report.object_revision_id(), first.file_object_revision_id);
+    assert_eq!(other.object_revision_id(), second.file_object_revision_id);
+
+    let after_merge = ReconciliationFrontier {
+        converged_head: Some(application.namespace_commit_id),
+        eligible_heads: vec![second.namespace_commit_id],
+    };
+    let observed = reopened.plan_reconciliation(&after_merge, ReconciliationLimits::DEFAULT)?;
+    assert!(observed.ordered_commits().is_empty());
+    assert_eq!(observed.merge_parents(), [application.namespace_commit_id]);
+    reopened.connection.execute(
+        "UPDATE namespace_reconciliation_operations SET result_digest = zeroblob(32)
+         WHERE operation_id = ?1",
+        [application.operation_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        reopened.resolve_namespace_reconciliation(application.operation_id),
+        Err(PublicationError::Corrupt)
+    ));
+    Ok(())
+}
+
+#[test]
+fn every_reconciliation_fault_rolls_back_root_merge_and_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut second = initial_root_publication()?;
+    second.file.operation_id = OperationId::from_bytes([80; 16])?;
+    second.file.branch_id = BranchId::from_bytes([81; 16])?;
+    second.file.object_id = ObjectId::from_bytes([82; 16])?;
+    second.file.version_id = FileVersionId::from_bytes([83; 16])?;
+    second.file.manifest.manifest_id = ContentManifestId::from_bytes([84; 16])?;
+    second.file.manifest.content_digest = [85; 32];
+    second.file.manifest.root_digest = [86; 32];
+    second.file_object_revision_id = ObjectRevisionId::from_bytes([87; 16])?;
+    second.root_object_revision_id = ObjectRevisionId::from_bytes([88; 16])?;
+    second.namespace_commit_id = NamespaceCommitId::from_bytes([89; 16])?;
+    second.path = NamespacePublicationPath::new(
+        NamespacePath::from_components(["Other"], NamespaceLimits::PORTABLE)?,
+        Vec::new(),
+    )?;
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(first.namespace_commit_id),
+        eligible_heads: vec![second.namespace_commit_id],
+    };
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([120; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([121; 16])?,
+        created_by: first.file.created_by,
+        created_at: UnixMicros::new(120),
+    };
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let prepared =
+        store.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    let final_root = prepared
+        .replay_plan()
+        .final_root_object_revision_id()
+        .ok_or("missing final root")?;
+    for fault in [
+        super::namespace::NamespaceFaultPoint::ReconciliationLeaf,
+        super::namespace::NamespaceFaultPoint::ReconciliationDirectories,
+        super::namespace::NamespaceFaultPoint::ReconciliationCommit,
+        super::namespace::NamespaceFaultPoint::ReconciliationOperation,
+    ] {
+        assert!(matches!(
+            super::namespace::apply_reconciliation_with_fault(
+                &mut store.connection,
+                application,
+                &prepared,
+                fault,
+            ),
+            Err(PublicationError::InjectedFault)
+        ));
+        assert_eq!(
+            store.resolve_namespace_reconciliation(application.operation_id)?,
+            None
+        );
+        let durable: i64 = store.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM object_revisions WHERE object_revision_id = ?1)",
+            [final_root.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(durable, 0);
+    }
+    let intent_digest = store
+        .branch_mutation_intent(second.namespace_commit_id)?
+        .ok_or("missing branch intent")?
+        .digest();
+    store.connection.execute(
+        "UPDATE namespace_commit_intents SET intent_digest = zeroblob(32)
+         WHERE namespace_commit_id = ?1",
+        [second.namespace_commit_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        store.apply_namespace_reconciliation(application, &prepared),
+        Err(PublicationError::Corrupt)
+    ));
+    store.connection.execute(
+        "UPDATE namespace_commit_intents SET intent_digest = ?1
+         WHERE namespace_commit_id = ?2",
+        params![
+            intent_digest.as_slice(),
+            second.namespace_commit_id.as_bytes().as_slice(),
+        ],
+    )?;
+    store.apply_namespace_reconciliation(application, &prepared)?;
+    let durable: i64 = store.connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM object_revisions WHERE object_revision_id = ?1)",
+        [final_root.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(durable, 1);
+    Ok(())
+}
+
+#[test]
+fn concurrent_file_edits_materialise_one_owned_recovered_copy()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let home = next_root_publication(&first)?;
+    let fork_branch = BranchId::from_bytes([125; 16])?;
+    let mut office = next_root_publication(&first)?;
+    office.file.operation_id = OperationId::from_bytes([130; 16])?;
+    office.file.branch_id = fork_branch;
+    office.file.version_id = FileVersionId::from_bytes([131; 16])?;
+    office.file.manifest.manifest_id = ContentManifestId::from_bytes([132; 16])?;
+    office.file.manifest.content_digest = [133; 32];
+    office.file.manifest.root_digest = [134; 32];
+    office.file_object_revision_id = ObjectRevisionId::from_bytes([135; 16])?;
+    office.root_object_revision_id = ObjectRevisionId::from_bytes([136; 16])?;
+    office.namespace_commit_id = NamespaceCommitId::from_bytes([137; 16])?;
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(first.namespace_commit_id),
+        eligible_heads: vec![home.namespace_commit_id, office.namespace_commit_id],
+    };
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([140; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([141; 16])?,
+        created_by: first.file.created_by,
+        created_at: UnixMicros::new(140),
+    };
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.connection.execute(
+        "INSERT INTO branch_namespace_heads(
+            branch_id, volume_id, namespace_commit_id, head_sequence
+         ) VALUES (?1, ?2, ?3, 1)",
+        params![
+            fork_branch.as_bytes().as_slice(),
+            first.file.volume_id.as_bytes().as_slice(),
+            first.namespace_commit_id.as_bytes().as_slice(),
+        ],
+    )?;
+    store.connection.execute(
+        "INSERT INTO branch_files(
+            branch_id, object_id, volume_id, current_version_id, head_sequence
+         ) VALUES (?1, ?2, ?3, ?4, 1)",
+        params![
+            fork_branch.as_bytes().as_slice(),
+            first.file.object_id.as_bytes().as_slice(),
+            first.file.volume_id.as_bytes().as_slice(),
+            first.file.version_id.as_bytes().as_slice(),
+        ],
+    )?;
+    store
+        .publish_root_file(&office)
+        .map_err(|error| format!("office publication: {error:?}"))?;
+    store
+        .publish_root_file(&home)
+        .map_err(|error| format!("home publication: {error:?}"))?;
+    let prepared = store
+        .prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)
+        .map_err(|error| format!("prepare reconciliation: {error:?}"))?;
+    let recovered = prepared
+        .replay_plan()
+        .actions()
+        .iter()
+        .find(|action| action.disposition == NamespaceReplayDisposition::Recovered)
+        .ok_or("missing recovered action")?
+        .clone();
+    let receipt = store
+        .apply_namespace_reconciliation(application, &prepared)
+        .map_err(|error| format!("apply reconciliation: {error:?}"))?;
+
+    assert_ne!(recovered.target_object_id, recovered.source_object_id);
+    let recovered_version = recovered
+        .target_file_version_id
+        .ok_or("missing recovered file version")?;
+    let stored_object: Vec<u8> = store.connection.query_row(
+        "SELECT object_id FROM file_versions WHERE version_id = ?1",
+        [recovered_version.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        stored_object.as_slice(),
+        recovered.target_object_id.as_bytes()
+    );
+    let recovered_entry = stored_directory_entry(
+        &store,
+        receipt.root_object_revision_id,
+        recovered
+            .target_path
+            .components()
+            .last()
+            .ok_or("missing recovered component")?,
+    )?;
+    assert_eq!(recovered_entry.object_id(), recovered.target_object_id);
+    assert_eq!(
+        recovered_entry.object_revision_id(),
+        recovered.target_object_revision_id
     );
     Ok(())
 }

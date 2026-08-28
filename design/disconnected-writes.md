@@ -154,8 +154,15 @@ object/revision IDs. Later edits follow the selected recovered revision, and
 children of a recovered directory follow that directory. Missing ancestors,
 substituted headers, malformed lineage, duplicate identities and incomplete
 bases fail closed before any namespace write. Applying the action list and
-creating the durable multi-parent merge receipt remain part of this gate's
-transactional applier work.
+creating the durable multi-parent merge receipt use one immediate SQLite
+transaction. Existing immutable source revisions are verified and reused;
+recovered logical copies receive deterministic object, revision, file-version
+and publication identities. Every created directory node/revision, recovered
+file head/version, multi-parent commit and digest-bound operation receipt either
+commits together or rolls back together. Exact retries return the original
+receipt, and subsequent causal planning validates the stored merge as a marker.
+Advancing the replicated globally converged volume head from this local receipt
+is the remaining authority transition before this gate closes.
 
 ## Deterministic conflict rules
 

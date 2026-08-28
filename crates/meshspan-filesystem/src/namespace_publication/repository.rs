@@ -8,9 +8,9 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::digest::{
-    commit as commit_digest, commit_fields as commit_digest_fields,
+    MergeCommitDigest, commit as commit_digest, commit_fields as commit_digest_fields,
     directory_result as directory_result_digest, file_result as result_digest,
-    object_revision as object_revision_digest,
+    merge_commit as merge_commit_digest, object_revision as object_revision_digest,
 };
 use super::{DirectoryRevisionResult, NamespaceIntent};
 use crate::publication::{copy_array, decode_identifier, from_i64, to_i64};
@@ -46,7 +46,7 @@ pub(in crate::publication) fn load_head(
                 sequence: from_i64(sequence)?,
             };
             let selected = load_commit(connection, head.namespace_commit_id)?;
-            if selected.branch_id == branch_id && selected.volume_id == volume_id {
+            if selected.volume_id == volume_id {
                 Ok(head)
             } else {
                 Err(PublicationError::Corrupt)
@@ -222,6 +222,10 @@ pub(in crate::publication) fn load_reconciliation_commit(
     if exists == 0 {
         return Ok(None);
     }
+    let parents = load_parents(connection, commit_id)?;
+    if parents.len() >= 2 {
+        return load_merge_reconciliation_commit(connection, commit_id, parents).map(Some);
+    }
     let commit = load_commit(connection, commit_id)?;
     let request_digest =
         load_commit_request_digest(connection, commit.operation_id, commit.commit_id)?;
@@ -231,7 +235,7 @@ pub(in crate::publication) fn load_reconciliation_commit(
         volume_id: commit.volume_id,
         root_object_id: commit.root_object_id,
         root_object_revision_id: commit.root_object_revision_id,
-        parents: commit.parent_id.into_iter().collect(),
+        parents,
         operation_id: commit.operation_id,
         request_digest,
         payload: ReconciliationCommitPayload::Mutation {
@@ -240,6 +244,88 @@ pub(in crate::publication) fn load_reconciliation_commit(
                 .digest(),
         },
     }))
+}
+
+fn load_merge_reconciliation_commit(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+    parents: Vec<NamespaceCommitId>,
+) -> Result<crate::ReconciliationCommit, PublicationError> {
+    type Stored = (
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        i64,
+        Vec<u8>,
+    );
+    let stored: Stored = connection.query_row(
+        "SELECT branch_id, volume_id, root_object_id, root_object_revision_id,
+                created_by, publication_operation_id, created_at, commit_digest
+         FROM namespace_commits WHERE namespace_commit_id = ?1",
+        [commit_id.as_bytes().as_slice()],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ))
+        },
+    )?;
+    let branch_id = decode_identifier(&stored.0, BranchId::from_bytes)?;
+    let volume_id = decode_identifier(&stored.1, VolumeId::from_bytes)?;
+    let root_object_id = decode_identifier(&stored.2, ObjectId::from_bytes)?;
+    let root_object_revision_id = decode_identifier(&stored.3, ObjectRevisionId::from_bytes)?;
+    let created_by = decode_identifier(&stored.4, meshspan_domain::PrincipalId::from_bytes)?;
+    let operation_id = decode_identifier(&stored.5, OperationId::from_bytes)?;
+    let created_at = meshspan_domain::UnixMicros::new(stored.6);
+    let receipt = super::reconciliation_apply::load_receipt(
+        connection,
+        operation_id,
+        PublicationDisposition::Replayed,
+    )?
+    .ok_or(PublicationError::Corrupt)?;
+    if receipt.namespace_commit_id != commit_id
+        || receipt.root_object_revision_id != root_object_revision_id
+    {
+        return Err(PublicationError::Corrupt);
+    }
+    let digest = merge_commit_digest(&MergeCommitDigest {
+        commit_id,
+        branch_id,
+        volume_id,
+        root_object_id,
+        root_revision_id: root_object_revision_id,
+        parents: &parents,
+        created_by,
+        operation_id,
+        created_at,
+        request_digest: receipt.request_digest,
+        replay_digest: receipt.replay_plan_digest,
+    });
+    if copy_array(&stored.7)? != digest {
+        return Err(PublicationError::Corrupt);
+    }
+    Ok(crate::ReconciliationCommit {
+        commit_id,
+        branch_id,
+        volume_id,
+        root_object_id,
+        root_object_revision_id,
+        parents,
+        operation_id,
+        request_digest: receipt.request_digest,
+        payload: ReconciliationCommitPayload::Merge {
+            replay_digest: receipt.replay_plan_digest,
+        },
+    })
 }
 
 pub(super) fn persist_file_intent(
@@ -556,24 +642,32 @@ fn load_single_parent(
     connection: &Connection,
     commit_id: NamespaceCommitId,
 ) -> Result<Option<NamespaceCommitId>, PublicationError> {
-    let count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM namespace_commit_parents WHERE namespace_commit_id = ?1",
-        [commit_id.as_bytes().as_slice()],
-        |row| row.get(0),
-    )?;
-    if count > 1 {
+    let parents = load_parents(connection, commit_id)?;
+    if parents.len() > 1 {
         return Err(PublicationError::Corrupt);
     }
-    connection
-        .query_row(
-            "SELECT parent_commit_id FROM namespace_commit_parents
-             WHERE namespace_commit_id = ?1 AND parent_ordinal = 0",
-            [commit_id.as_bytes().as_slice()],
-            |row| row.get::<_, Vec<u8>>(0),
-        )
-        .optional()?
-        .map(|bytes| decode_identifier(&bytes, NamespaceCommitId::from_bytes))
-        .transpose()
+    Ok(parents.into_iter().next())
+}
+
+fn load_parents(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+) -> Result<Vec<NamespaceCommitId>, PublicationError> {
+    let mut statement = connection.prepare(
+        "SELECT parent_ordinal, parent_commit_id FROM namespace_commit_parents
+         WHERE namespace_commit_id = ?1 ORDER BY parent_ordinal",
+    )?;
+    let mut rows = statement.query([commit_id.as_bytes().as_slice()])?;
+    let mut parents = Vec::new();
+    while let Some(row) = rows.next()? {
+        let ordinal: i64 = row.get(0)?;
+        if ordinal != i64::try_from(parents.len()).map_err(|_| PublicationError::Corrupt)? {
+            return Err(PublicationError::Corrupt);
+        }
+        let bytes: Vec<u8> = row.get(1)?;
+        parents.push(decode_identifier(&bytes, NamespaceCommitId::from_bytes)?);
+    }
+    Ok(parents)
 }
 
 #[derive(Clone, Copy)]

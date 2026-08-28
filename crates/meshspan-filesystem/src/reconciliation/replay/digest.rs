@@ -44,6 +44,7 @@ fn update_action(digest: &mut blake3::Hasher, action: &NamespaceReplayAction) {
     digest.update(&action.target_object_id.as_bytes());
     digest.update(&action.source_object_revision_id.as_bytes());
     digest.update(&action.target_object_revision_id.as_bytes());
+    digest.update(&action.target_entry_generation.to_be_bytes());
     update_optional_revision(digest, action.target_prior_object_revision_id);
     update_optional_identifier(
         digest,
