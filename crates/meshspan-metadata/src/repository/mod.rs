@@ -6,6 +6,7 @@ mod apply;
 mod backup;
 mod bootstrap;
 mod component;
+mod consensus;
 mod group_closure;
 mod identity;
 mod kernel;
@@ -20,6 +21,7 @@ use thiserror::Error;
 use crate::{MetadataStoreError, PartitionDatabase};
 
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
+pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, run_repository_conformance,
@@ -76,6 +78,32 @@ impl AuthoritativeRepository {
     /// Fails closed if persisted state is absent, malformed or outside the supported range.
     pub fn current_revision(&self) -> Result<Revision, RepositoryError> {
         apply::read_current_revision(&self.database)
+    }
+
+    /// Loads and verifies the exact durable consensus state for one membership epoch.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed, discontinuous, digest-mismatched or stale-epoch state.
+    pub fn load_consensus_state(
+        &self,
+        membership_epoch: u64,
+    ) -> Result<meshspan_consensus::DurableCoreState, ConsensusStoreError> {
+        consensus::load_state(&self.database, membership_epoch)
+    }
+
+    /// Applies one vote/log mutation in a single durable SQLite transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale terms, committed-tail truncation, malformed entries and epoch mismatch.
+    pub fn persist_consensus_mutation(
+        &mut self,
+        membership_epoch: u64,
+        mutation: &meshspan_consensus::DurableMutation,
+        persisted_at: meshspan_domain::UnixMicros,
+    ) -> Result<(), ConsensusStoreError> {
+        consensus::persist_mutation(&mut self.database, membership_epoch, mutation, persisted_at)
     }
 
     /// Applies one already-committed log entry atomically and returns durable evidence.

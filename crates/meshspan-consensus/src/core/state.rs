@@ -8,8 +8,8 @@ use meshspan_domain::{NodeId, OperationId};
 
 use super::types::{
     AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
-    DurableMutation, LogEntry, LogPosition, PersistenceId, ProposalId, ReadBarrierId, Role,
-    VoteRequest, VoteResponse, validate_append_entries,
+    DurableCoreState, DurableMutation, LogEntry, LogPosition, PersistenceId, ProposalId,
+    ReadBarrierId, Role, VoteRequest, VoteResponse, validate_append_entries,
 };
 use crate::QuorumFamily;
 
@@ -82,22 +82,36 @@ impl ConsensusCore {
     ///
     /// Rejects a zero/mismatched local incarnation or a node outside voters and learners.
     pub fn new(config: CoreConfig) -> Result<Self, CoreError> {
+        Self::restore(config, DurableCoreState::default())
+    }
+
+    /// Restores a follower from independently verified durable vote, log and apply state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid configuration, vote, non-contiguous/corrupt log or applied position.
+    pub fn restore(config: CoreConfig, durable: DurableCoreState) -> Result<Self, CoreError> {
         let local_is_member = config.plan.spec().voters.contains(&config.local_node_id)
             || config.plan.spec().learners.contains(&config.local_node_id);
         if config.local_incarnation == 0
             || !local_is_member
             || config.member_incarnations.get(config.local_node_id)
                 != Some(config.local_incarnation)
+            || (durable.current_term == 0 && durable.voted_for.is_some())
+            || durable
+                .voted_for
+                .is_some_and(|voter| !config.plan.spec().voters.contains(&voter))
         {
             return Err(CoreError::InvalidConfiguration);
         }
+        validate_durable_state(&durable)?;
         Ok(Self {
             config,
-            current_term: 0,
-            voted_for: None,
-            log: Vec::new(),
-            commit_index: 0,
-            applied_index: 0,
+            current_term: durable.current_term,
+            voted_for: durable.voted_for,
+            log: durable.log,
+            commit_index: durable.applied_index,
+            applied_index: durable.applied_index,
             leader_id: None,
             role: RoleState::Follower,
             pending: None,
@@ -967,4 +981,28 @@ impl ConsensusCore {
             .get(offset)
             .filter(|entry| entry.position.index == index)
     }
+}
+
+fn validate_durable_state(durable: &DurableCoreState) -> Result<(), CoreError> {
+    let mut expected_index = 1_u64;
+    for entry in &durable.log {
+        entry.validate()?;
+        if entry.position.index != expected_index
+            || entry.position.term > durable.current_term
+            || (expected_index > 1
+                && entry.position.term
+                    < durable.log[usize::try_from(expected_index - 2)
+                        .map_err(|_| CoreError::InvalidInput)?]
+                    .position
+                    .term)
+        {
+            return Err(CoreError::InvalidInput);
+        }
+        expected_index = expected_index.checked_add(1).ok_or(CoreError::Exhausted)?;
+    }
+    let last_index = durable.log.last().map_or(0, |entry| entry.position.index);
+    if durable.applied_index > last_index {
+        return Err(CoreError::InvalidInput);
+    }
+    Ok(())
 }

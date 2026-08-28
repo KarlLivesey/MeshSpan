@@ -174,6 +174,19 @@ pub struct CoreConfig {
     pub member_incarnations: MemberIncarnations,
 }
 
+/// Exact durable state recovered atomically before the deterministic core starts.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DurableCoreState {
+    /// Last durably observed term.
+    pub current_term: u64,
+    /// Candidate durably voted for in `current_term`, if any.
+    pub voted_for: Option<NodeId>,
+    /// Contiguous durable log above the current snapshot boundary.
+    pub log: Vec<LogEntry>,
+    /// Highest state-machine position durably applied to authoritative metadata.
+    pub applied_index: u64,
+}
+
 /// Candidate request for one vote in a term.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VoteRequest {

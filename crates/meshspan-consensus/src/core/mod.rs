@@ -11,6 +11,6 @@ mod tests;
 pub use state::ConsensusCore;
 pub use types::{
     AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
-    DurableMutation, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
-    ReadBarrierId, Role, VoteRequest, VoteResponse,
+    DurableCoreState, DurableMutation, LogEntry, LogPosition, MemberIncarnations, PersistenceId,
+    ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
 };
