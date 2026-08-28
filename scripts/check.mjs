@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { runProcess } from "./process.mjs";
+import { readWorkerCount, runWithLimit } from "./scheduler.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const workerCount = readWorkerCount(process.env.MESHSPAN_CHECK_WORKERS);
+const checkStartedAt = performance.now();
 
 const generation = await runLane({
   name: "generated contract drift",
@@ -22,7 +23,7 @@ if (!generation.passed) {
       steps: [["cargo", ["fmt", "--all", "--", "--check"]]],
     },
     {
-      name: "Rust lint and tests",
+      name: "Rust lint",
       steps: [
         [
           "cargo",
@@ -36,7 +37,53 @@ if (!generation.passed) {
             "warnings",
           ],
         ],
-        ["cargo", ["test", "--workspace", "--all-targets", "--all-features"]],
+      ],
+    },
+    {
+      name: "Rust domain and capability tests",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-domain",
+            "-p",
+            "meshspan-contracts",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
+      ],
+    },
+    {
+      name: "public API conformance",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-api-contract",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
+      ],
+    },
+    {
+      name: "private protocol compatibility",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-protocol",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
       ],
     },
     {
@@ -84,50 +131,35 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "scheduler tests",
+      steps: [[process.execPath, ["--test", "scripts/scheduler.test.mjs"]]],
+    },
+    {
       name: "web tests",
       steps: [["web/node_modules/.bin/vitest", ["run", "--root", "web"]]],
     },
   ];
-  const results = await runWithLimit(lanes, workerCount);
+  const results = await runWithLimit(lanes, workerCount, runLane);
   results.forEach(report);
   process.exitCode = results.some((result) => !result.passed) ? 1 : 0;
 }
-
-async function runWithLimit(lanes, limit) {
-  const results = new Array(lanes.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= lanes.length) {
-        return;
-      }
-      results[index] = await runLane(lanes[index]);
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: Math.min(limit, lanes.length) }, () => worker()),
-  );
-  return results;
-}
+process.stdout.write(
+  `DONE ${((performance.now() - checkStartedAt) / 1_000).toFixed(2)}s with ${workerCount} workers\n`,
+);
 
 async function runLane(lane) {
   const startedAt = performance.now();
-  for (const [command, arguments_] of lane.steps) {
-    const result = await runProcess(command, arguments_, {
-      cwd: repositoryRoot,
-    });
-    if (result.exitCode !== 0) {
-      return {
-        durationMs: performance.now() - startedAt,
-        name: lane.name,
-        output: result.output,
-        passed: false,
-      };
+  try {
+    for (const [command, arguments_] of lane.steps) {
+      const result = await runProcess(command, arguments_, {
+        cwd: repositoryRoot,
+      });
+      if (result.exitCode !== 0) {
+        return failedLane(lane.name, startedAt, result.output);
+      }
     }
+  } catch (error) {
+    return failedLane(lane.name, startedAt, errorMessage(error));
   }
   return {
     durationMs: performance.now() - startedAt,
@@ -135,6 +167,19 @@ async function runLane(lane) {
     output: "",
     passed: true,
   };
+}
+
+function failedLane(name, startedAt, output) {
+  return {
+    durationMs: performance.now() - startedAt,
+    name,
+    output: output.endsWith("\n") ? output : `${output}\n`,
+    passed: false,
+  };
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function report(result) {
@@ -145,18 +190,4 @@ function report(result) {
   if (!result.passed) {
     process.stdout.write(result.output);
   }
-}
-
-function readWorkerCount(value) {
-  if (value === undefined) {
-    return Math.min(4, availableParallelism());
-  }
-  if (!/^[1-9][0-9]*$/.test(value)) {
-    throw new Error("MESHSPAN_CHECK_WORKERS must be an integer from 1 to 32");
-  }
-  const workers = Number(value);
-  if (workers > 32) {
-    throw new Error("MESHSPAN_CHECK_WORKERS must be an integer from 1 to 32");
-  }
-  return workers;
 }
