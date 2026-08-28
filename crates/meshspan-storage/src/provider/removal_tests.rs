@@ -6,7 +6,8 @@ use std::fs;
 
 use meshspan_contracts::{
     BoundedBytes, ContractVersion, PutShardRequest, RemovalPermit, RequestContext,
-    ReservationClass, ShardIdentity, StoragePermitMacKey, TombstoneReceipt, removal_permit_mac,
+    ReservationClass, ReserveStorageRequest, ShardIdentity, StoragePermitMacKey, TombstoneReceipt,
+    removal_permit_mac,
 };
 use meshspan_domain::{
     EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId, UnixMicros,
@@ -18,10 +19,7 @@ use super::{
 };
 use crate::journal::{JournalTombstoneRequest, PrepareTombstoneResult};
 use crate::pack::PackTombstoneRequest;
-use crate::{
-    CapacityObservation, CapacityPolicy, FolderRegistration, RegisteredFolder,
-    ReserveCapacityRequest, UsageLimit,
-};
+use crate::{CapacityPolicy, FolderRegistration, RegisteredFolder, UsageLimit};
 
 const REMOVAL_EPOCH: u64 = 7;
 const PERMIT_KEY: [u8; 32] = [42; 32];
@@ -202,17 +200,13 @@ fn put_request(
         expected_revision: Some(Revision::new(5)),
     };
     let bytes = BoundedBytes::copy_from(b"encrypted shard awaiting guarded cleanup", 1_024)?;
-    let reservation = store.reserve(ReserveCapacityRequest {
+    let reservation = store.reserve(ReserveStorageRequest {
         context,
         target_id: registration.target_id,
         target_generation: registration.generation,
         class: ReservationClass::ForegroundWrite,
         bytes: u64::try_from(bytes.len())?,
-        observation: CapacityObservation {
-            total_bytes: 10_000,
-            available_bytes: 10_000,
-        },
-        now: UnixMicros::new(10),
+        observed_at: UnixMicros::new(10),
     })?;
     Ok(PutShardRequest {
         context,

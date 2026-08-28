@@ -899,6 +899,7 @@ dependencies = [
  "meshspan-contracts",
  "meshspan-domain",
  "rusqlite",
+ "rustix",
  "tempfile",
  "thiserror",
 ]
