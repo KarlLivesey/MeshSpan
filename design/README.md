@@ -34,6 +34,7 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 25. [stage-1-3-audit.md](stage-1-3-audit.md) — executable re-audit and closure gates for prior completion claims.
 26. [stage-4-5-decisions.md](stage-4-5-decisions.md) — accepted detailed folder-storage and filesystem decisions.
 27. [stage-4-evidence.md](stage-4-evidence.md) — active folder-storage implementation and exit-gate evidence.
+28. [stage-5-evidence.md](stage-5-evidence.md) — active protocol-neutral filesystem implementation and exit-gate evidence.
 28. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
 29. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
 30. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.

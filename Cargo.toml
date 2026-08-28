@@ -8,6 +8,7 @@ members = [
     "crates/meshspan-consensus",
     "crates/meshspan-data-plane",
     "crates/meshspan-domain",
+    "crates/meshspan-filesystem",
     "crates/meshspan-metadata",
     "crates/meshspan-protocol",
     "crates/meshspan-storage",
@@ -43,6 +44,7 @@ sha2 = "0.10.9"
 thiserror = "2.0.16"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 unicode-normalization = "0.1.25"
+unicode-casefold = "0.2.0"
 
 [workspace.lints.rust]
 missing_docs = "deny"

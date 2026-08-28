@@ -132,7 +132,7 @@ if (!generation.passed) {
       ],
     },
     {
-      name: "storage and remote data-plane proofs",
+      name: "storage, data-plane and filesystem proofs",
       steps: [
         [
           "cargo",
@@ -142,6 +142,8 @@ if (!generation.passed) {
             "meshspan-storage",
             "-p",
             "meshspan-data-plane",
+            "-p",
+            "meshspan-filesystem",
             "--all-targets",
             "--all-features",
           ],
