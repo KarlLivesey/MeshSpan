@@ -49,8 +49,8 @@ operation relies on.
 - Loss of required wrapping/recovery keys fails closed with exact guidance; the
   software does not manufacture a replacement mesh identity.
 
-The precise root/wrapping/recovery key ceremony remains decision O-005 and must
-be accepted before secret-store implementation.
+The accepted root/wrapping/recovery ceremony is decision D-056 and is detailed
+in `stage-0-review.md`. Secret-store implementation must preserve that boundary.
 
 ## Authentication threats
 

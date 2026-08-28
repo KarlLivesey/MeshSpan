@@ -100,8 +100,8 @@ and create repair/rebalance work.
    rejects cycles and updates the transitive closure atomically.
 3. Add one or more owner principals to an object. An owner may be a user or
    group; transitive members receive effective ownership.
-4. Add permission grants with scope, rights, inheritance and optional active
-   time window.
+4. Add permission grants with scope, rights, inheritance, optional active time
+   window and optional activation policy. A group may also require activation.
 5. Attach descriptive tags to objects or principals independently of access.
 6. Enrol one or more authentication methods for each user under current
    assurance policy.
@@ -109,6 +109,13 @@ and create repair/rebalance work.
 Every mutation changes the relevant authorisation revision, invalidates stale
 capabilities/sessions where required and appends a redacted audit event. The last
 active owner cannot be removed without a replacement in the same transaction.
+
+When access requires activation, the user supplies a bounded reason and desired
+duration. Authority verifies current structural membership or grant assignment,
+its absolute schedule, the policy maximum and any recent step-up requirement,
+then commits a mesh-wide activation and audit event. It contributes rights only
+until the earliest source, policy, session or activation expiry. Revocation is
+immediate at the authoritative revision and invalidates derived capabilities.
 
 ## 6. Authenticate to HTTPS
 

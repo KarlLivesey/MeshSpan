@@ -1,7 +1,7 @@
 # Stage 0 decision review
 
-Status: recommendations for review; no implementation is authorised by this
-document.
+Status: O-001 and O-005 are accepted as decisions D-054 and D-056. Remaining
+recommendations stay open until their named roadmap gates.
 
 This packet converts the remaining broad questions into seven decisions that can
 be accepted, amended or deferred to a named roadmap gate. Defaults minimise the
@@ -11,15 +11,15 @@ operator surface; advanced options do not create alternate product paths.
 
 | ID | Recommendation | Needed before |
 | --- | --- | --- |
-| O-001 | Build a small MeshSpan-owned consensus core around mechanically proved flexible quorum plans; use established systems as references and differential oracles | Stage 3 |
+| O-001 (accepted D-054) | Build a small MeshSpan-owned consensus core around mechanically proved flexible quorum plans; use established systems as references and differential oracles | Stage 3 |
 | O-002 | Offer plain failure presets; keep arbitrary simultaneous fault scenarios in Advanced | Stage 6 UI, Stage 8 enforcement |
 | O-003 | Implement a bounded SMB 3.1.1/3.0.2 profile over TCP 445; never SMB1 | Stage 7 |
 | O-004 | Use fixed CoW logical extents with benchmark-selected size/layout profiles; no content-defined chunking initially | Stage 8 |
-| O-005 | Use envelope encryption, offline recovery/root material and rotatable online intermediates | Stage 3 identity skeleton; Stage 10 full recovery |
+| O-005 (accepted D-056) | Use envelope encryption, offline recovery/root material and rotatable online intermediates | Stage 3 identity skeleton; Stage 10 full recovery |
 | O-006 | Adopt the measurable MUP gates below on low-power and server reference classes | Stage 1 harness; Stage 11 release |
 | O-007 | Ship native Linux/macOS and multi-architecture OCI artefacts for x86-64 and ARM64 | Stage 10 |
 
-## O-001 — consensus implementation
+## O-001 — consensus implementation (accepted as D-054)
 
 ### Recommendation
 
@@ -196,7 +196,7 @@ packing, manifest depth and heterogeneous slow-target tails on both reference
 hardware classes. The selected profile table becomes versioned metadata;
 existing versions never change meaning when defaults improve.
 
-## O-005 — mesh keys, backup and recovery
+## O-005 — mesh keys, backup and recovery (accepted as D-056)
 
 ### Key hierarchy
 

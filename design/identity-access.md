@@ -39,7 +39,7 @@ Folders define a new-child ownership policy: `creator`, `inherit_owners`, or
 
 ## Permission model
 
-Permissions are allow-only in the proposed initial model. Absence denies access. A folder may stop
+Permissions are allow-only. Absence denies access. A folder may stop
 inheriting parent grants, avoiding complicated deny precedence.
 
 One grant names:
@@ -51,6 +51,7 @@ rights bitset
 inheritance: object | descendants | object_and_descendants
 optional valid-from instant
 optional valid-until instant
+optional activation policy
 creator and revision
 ```
 
@@ -65,6 +66,24 @@ read_permissions, change_permissions, change_owner
 The UI maps these to reviewed presets such as Read, Contribute, Edit, Manage and Owner. Presets are
 not stored as authority; their expanded rights are.
 
+## Activation-required access
+
+A group or individual permission grant may require activation. Structural group
+membership remains committed and stable, but an activation-required group
+contributes no rights for a user until that user has a current activation for
+the group. A grant requiring activation contributes no rights until the current
+user has a current activation for that exact grant.
+
+Activation is self-service pre-authorisation, not an approval queue. Its policy
+defines the maximum duration, whether a non-blank reason is mandatory and the
+minimum recent authentication assurance. The resulting record binds the user,
+group or grant, reason, start, expiry, authentication event and creation
+operation. It is mesh-wide, revocable and audited. Activation cannot outlive its
+source membership, grant, absolute validity window, session or policy limit.
+Scheduled and activation-required access may be combined: the schedule controls
+when activation is permitted and the activation controls when rights are
+actually exercised.
+
 ## Access evaluation
 
 For an operation, authority:
@@ -73,13 +92,15 @@ For an operation, authority:
 2. verifies the user and contributing groups are active;
 3. reads the committed transitive group closure;
 4. collects direct and group grants on the volume, object and bounded ancestor chain;
-5. applies inheritance and authoritative time windows;
+5. applies inheritance, authoritative time windows and required activations;
 6. adds rights from every effective owner principal;
 7. checks the exact requested right; and
 8. issues a bounded capability tied to identity, group, ACL, object and gateway revisions.
 
-A capability expires no later than its session or earliest contributing grant. A revision change
-invalidates it. A gateway cannot extend it using its local wall clock.
+A capability expires no later than its session, earliest contributing grant or
+activation. It binds the activation revisions it used; revocation or any source
+revision change invalidates it. A gateway cannot extend it using its local wall
+clock.
 
 During an allowed isolation window, a gateway evaluates ordinary filesystem
 rights against one signed committed identity/group/ACL projection and records
@@ -136,6 +157,11 @@ tag content cannot escalate privileges.
 
 ## Administration boundary
 
-The proposal separates system administration from silent data access. Administrators manage
-infrastructure and access rules but do not automatically receive file-read rights. Emergency data
-access is an explicit, strongly authenticated, time-bounded and audited operation.
+System administration is separate from implicit data access. Administrators
+manage infrastructure and access rules but do not automatically receive file
+rights. An authorised administrator can explicitly create inherited global
+read, write, manage or recovery grants for another principal or themselves.
+Such a grant covers existing and future descendants of its scope and may be
+permanent, scheduled or activation-required. Owners cannot prevent authorised
+system recovery, but creation, activation and every data operation remain
+attributable and audited.
