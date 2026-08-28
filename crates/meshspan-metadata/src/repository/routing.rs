@@ -212,8 +212,8 @@ fn transition_route(
     Ok(route_reference(route))
 }
 
-fn load_scope(
-    transaction: &Transaction<'_>,
+pub(super) fn load_scope(
+    transaction: &rusqlite::Connection,
     scope_id: ScopeId,
 ) -> Result<ScopeRoute, RepositoryError> {
     let scope = scope_id.as_bytes();

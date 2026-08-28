@@ -27,6 +27,6 @@ pub use repository::{
     NamespaceCursor, NamespaceRecord, Page, PageLimit, PartitionBackupManifest,
     PartitionConsensusPersistence, PartitionSnapshotManifest, PreservedVote, PrincipalKind,
     PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
-    RepositoryConformanceVector, RepositoryError, restore_partition_backup,
+    RepositoryConformanceVector, RepositoryError, ScopeWriteAuthority, restore_partition_backup,
     restore_partition_snapshot, run_repository_conformance,
 };

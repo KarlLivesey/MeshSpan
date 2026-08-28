@@ -9,8 +9,10 @@ use meshspan_consensus::{
     DurableMutation, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
     ReadBarrierId, Role,
 };
-use meshspan_domain::{NodeId, UnixMicros};
-use meshspan_metadata::{ConsensusStoreError, PartitionConsensusPersistence};
+use meshspan_domain::{NodeId, OperationId, ScopeId, UnixMicros};
+use meshspan_metadata::{
+    ConsensusStoreError, PartitionConsensusPersistence, RepositoryError, ScopeWriteAuthority,
+};
 use thiserror::Error;
 
 struct BlockedPersistence {
@@ -60,6 +62,23 @@ pub enum DriverEffect {
         /// Stable core rejection category.
         error: CoreError,
     },
+}
+
+/// One already validated scope mutation ready for the consensus proposal boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScopedProposal {
+    /// Routed scope whose current authority must accept the mutation.
+    pub scope_id: ScopeId,
+    /// Exact catalogue route epoch observed by the caller.
+    pub routing_epoch: u64,
+    /// Caller correlation for append acknowledgement.
+    pub proposal_id: ProposalId,
+    /// Stable idempotency identity committed with the log entry.
+    pub operation_id: OperationId,
+    /// Closed command codec version.
+    pub command_version: u16,
+    /// Validated command payload.
+    pub command: Vec<u8>,
 }
 
 /// One partition's core plus its replaceable durable consensus repository.
@@ -267,6 +286,36 @@ impl<P: PartitionConsensusPersistence> PartitionConsensusDriver<P> {
     }
 }
 
+impl<P: PartitionConsensusPersistence + ScopeWriteAuthority> PartitionConsensusDriver<P> {
+    /// Proposes a mutation only when this partition owns the scope at the exact route epoch.
+    ///
+    /// # Errors
+    ///
+    /// Fails before touching consensus state when the route is missing, corrupt, stale or owned by
+    /// another partition. Otherwise it has the same persistence-first failures as [`Self::step`].
+    pub fn propose_scoped(
+        &mut self,
+        proposal: ScopedProposal,
+        persisted_at: UnixMicros,
+    ) -> Result<Vec<DriverEffect>, ClusterDriverError> {
+        if !self
+            .persistence
+            .permits_scope_write(proposal.scope_id, proposal.routing_epoch)?
+        {
+            return Err(ClusterDriverError::WriteFenced);
+        }
+        self.step(
+            CoreInput::Propose {
+                proposal_id: proposal.proposal_id,
+                operation_id: proposal.operation_id,
+                command_version: proposal.command_version,
+                command: proposal.command,
+            },
+            persisted_at,
+        )
+    }
+}
+
 fn prepend(queue: &mut VecDeque<CoreEffect>, effects: Vec<CoreEffect>) {
     for effect in effects.into_iter().rev() {
         queue.push_front(effect);
@@ -282,6 +331,12 @@ pub enum ClusterDriverError {
     /// Durable consensus persistence failed before dependent effects escaped.
     #[error("cluster consensus persistence failed")]
     Persistence(#[from] ConsensusStoreError),
+    /// The durable routing projection could not authorise a scoped proposal safely.
+    #[error("cluster scope authority lookup failed")]
+    Authority(#[from] RepositoryError),
+    /// This partition is not the sole writer for the presented scope route epoch.
+    #[error("cluster scope write is fenced")]
+    WriteFenced,
     /// New input was attempted while exact persistence retry is required.
     #[error("cluster consensus persistence retry is required")]
     PersistenceBlocked,

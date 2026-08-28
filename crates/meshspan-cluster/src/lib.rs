@@ -8,7 +8,10 @@ mod node_runtime;
 mod status;
 mod wire;
 
-pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver};
+#[cfg(test)]
+mod handoff_tests;
+
+pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
 pub use status::{
     AvailabilityError, AvailabilityReason, AvailabilityState, NodePresence, PartitionAvailability,
