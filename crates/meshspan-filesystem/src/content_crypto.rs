@@ -20,7 +20,7 @@ const AAD_DOMAIN: &[u8] = b"meshspan.content.chunk-aad.v1\0";
 /// The owner must generate this key cryptographically and persist it only inside a wrapped key
 /// envelope. Rewrapping that envelope rotates the protecting key without rewriting content. This
 /// type does not implement `Clone`, `Copy` or `Debug`, and clears its owned bytes on drop.
-pub struct ContentEncryptionKey(Zeroizing<[u8; 32]>);
+pub struct ContentEncryptionKey(pub(crate) Zeroizing<[u8; 32]>);
 
 impl ContentEncryptionKey {
     /// Takes ownership of one temporarily unwrapped content key.
@@ -34,6 +34,21 @@ impl ContentEncryptionKey {
         } else {
             Ok(Self(Zeroizing::new(bytes)))
         }
+    }
+
+    /// Generates a fresh key using the caller's cryptographic random source.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unavailable entropy and the all-zero sentinel.
+    pub fn generate(
+        random: &mut impl meshspan_domain::RandomSource,
+    ) -> Result<Self, ContentCryptoError> {
+        let mut bytes = Zeroizing::new([0_u8; 32]);
+        random
+            .fill_bytes(&mut bytes[..])
+            .map_err(|_| ContentCryptoError::Unavailable)?;
+        Self::from_bytes(*bytes)
     }
 }
 

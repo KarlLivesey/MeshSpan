@@ -97,8 +97,15 @@ copy-on-write filesystem service. This document records executable evidence only
   rotation can rewrap that key rather than rewriting user data. Its XChaCha20-
   Poly1305 key, nonce and associated data bind manifest, format, chunk index,
   exact length and plaintext digest; ciphertext and recovered plaintext are
-  independently rechecked. Cross-platform vectors cover deterministic output,
-  wrong manifest/format/index, forged digest/tag, invalid keys and bounds. The
+  independently rechecked. Per-layout content keys now have a fixed-width,
+  manifest-bound authenticated envelope under a generation-fenced volume key.
+  Envelope nonces mix fresh entropy with manifest, generation and content-key
+  identity under a separate keyed domain. Rewrap proof changes only the envelope
+  generation/bytes and produces byte-identical chunk encryption afterwards;
+  neither plaintext content nor provider chunks are rewritten. Decrypted key
+  buffers and owned key material are drop-zeroised. Cross-platform vectors cover
+  deterministic output, wrong manifest/format/index/generation, forged digest/
+  tag, invalid keys/bounds and unavailable entropy. The
   deliberately simple single-chunk publisher remains test-only: gate 2 stays
   open until a production bounded/paged manifest publisher durably stores the
   wrapped content key and chunk receipts through the same boundary.
