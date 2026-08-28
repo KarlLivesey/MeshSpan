@@ -8,7 +8,7 @@
     "node": ">=26 <27"
   },
   "scripts": {
-    "check": "cd ../.. && tooling/eslint/node_modules/.bin/eslint web/src web/tests --config tooling/eslint/eslint.config.mjs --max-warnings 0 --report-unused-disable-directives"
+    "check": "cd ../.. && tooling/eslint/node_modules/.bin/eslint web/src web/tests scripts tooling --config tooling/eslint/eslint.config.mjs --max-warnings 0 --report-unused-disable-directives"
   },
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "4.7.2",

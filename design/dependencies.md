@@ -1,18 +1,18 @@
 # Top-level dependency inventory
 
-Status: planned future implementation for review; this is not a lockfile and
-authorises no dependency installation.
+Status: active inventory of admitted Stage 1 dependencies and reviewed future
+candidates. Manifests and lockfiles remain authoritative for installed versions.
 
-This document records what MeshSpan will use or, where a choice still requires
-proof, the exact selection process it will follow. It does not describe work
-already implemented.
+This document records what MeshSpan uses or, where a choice still requires
+proof, the exact selection process it will follow. A planned entry is not an
+implemented feature.
 
 MeshSpan keeps its direct dependency surface explicit. A dependency is admitted
 only when it removes more correctness or maintenance risk than it adds, supports
 the required platforms/toolchain, passes a `GPL-2.0-only` compatibility review
 and has a bounded interface owned by MeshSpan.
 
-Versions below are resolved and pinned only when implementation begins. Automated
+Installed versions are locked by `Cargo.lock` and `pnpm-lock.yaml`. Automated
 updates must pass the same complete local gates as a human change.
 
 ## Toolchains
@@ -29,6 +29,33 @@ MeshSpan will pin that exact prerelease rather than accidentally resolving the
 `latest` tag, which currently remains on Solid 1. Companion packages must use
 their Solid-2-compatible prerelease lines and pass the complete panel suite
 before any upgrade.
+
+## Admitted Stage 1 dependency licences
+
+These direct dependencies are currently installed. They are build-time tools or
+libraries linked into project artefacts as indicated; transitive inventory and
+source/advisory policy automation arrive before a release artefact is built.
+
+| Rust dependency | Resolved version | Declared licence |
+| --- | ---: | --- |
+| `jsonschema` | 0.52.0 | `MIT` |
+| `schemars` | 1.2.2 | `MIT` |
+| `serde` | 1.0.229 | `MIT OR Apache-2.0` |
+| `serde_json` | 1.0.151 | `MIT OR Apache-2.0` |
+| `sha2` | 0.10.9 | `MIT OR Apache-2.0` |
+| `thiserror` | 2.0.20 | `MIT OR Apache-2.0` |
+
+| Web/runtime dependency | Version | Declared licence |
+| --- | ---: | --- |
+| `@js-temporal/polyfill` | 0.5.1 | `ISC` |
+| `zod` | 4.4.3 | `MIT` |
+
+The direct Node.js build/test dependencies in the lockfile are MIT or
+Apache-2.0 except `@js-temporal/polyfill` (`ISC`) and
+`eslint-plugin-sonarjs` (`LGPL-3.0-only`). SonarJS is an unmodified, separately
+executed development tool; it is not linked into or shipped with a MeshSpan
+runtime artefact. Exact versions remain visible in each tooling manifest and the
+lockfile.
 
 ## Rust production dependencies
 
@@ -177,7 +204,6 @@ library dependencies.
 | `@solidjs/router` `2.0.0-next.18` | Solid-2-compatible URL routing and nested user/admin panel layouts |
 | `@js-temporal/polyfill` | Temporal until every supported browser provides the required API natively |
 | `zod` 4.x | Runtime validation and type narrowing for untrusted API, route, persisted-browser and form inputs |
-| `@hey-api/client-fetch` | Native-Fetch runtime used by the generated public API SDK |
 | `@kobalte/core` | Candidate accessible primitives for dialogs, menus, selects and focus management |
 
 `@kobalte/core` is optional until a native implementation proves less risky.
@@ -189,11 +215,11 @@ native `fetch`, CSS and browser platform APIs are sufficient initially.
 
 | Direct dependency | Need |
 | --- | --- |
-| `typescript` 7.x | Strict type checking and project references |
+| `typescript` 6.0.3 | Strict type checking; 7 remains the next ecosystem-supported upgrade |
 | `vite` | Fast development/build pipeline and static production bundle |
 | `vite-plugin-solid` `3.0.0-next.27` | Solid-2-compatible compiler integration |
 | `@types/node` | Node 26 build-script types only |
-| `@hey-api/openapi-ts` | Generates committed TypeScript, native-Fetch SDK and Zod 4 schemas from Rust-generated OpenAPI |
+| `@hey-api/openapi-ts` | Generates committed TypeScript types and Zod 4 schemas from Rust-generated OpenAPI |
 | `vitest` | Fast unit and component tests sharing Vite transforms |
 | `@solidjs/testing-library` | Behaviour-level component tests once its declared peer range accepts the pinned Solid 2 prerelease; tests use Vitest/browser primitives until then |
 | `@testing-library/user-event` | Realistic keyboard/pointer interaction in component tests |
@@ -222,6 +248,10 @@ Generated OpenAPI and web client/validator output are committed, never edited by
 hand and regenerated deterministically by the local gate. Generated files are
 exempt from responsibility/size lint ceilings but must compile strictly, contain
 no `any` and pass the same valid/invalid contract fixtures as Rust.
+
+The native-Fetch client has no runtime wrapper dependency. A small MeshSpan
+generator reads the same OpenAPI operations and emits the route/method bindings,
+bounded response reader and generated Zod request/response checks.
 
 ## Explicit non-dependencies
 

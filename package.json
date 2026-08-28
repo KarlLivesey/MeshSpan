@@ -8,7 +8,9 @@
     "pnpm": ">=11.19 <12"
   },
   "scripts": {
-    "generate:api": "cargo run --quiet -p meshspan-api-contract --bin generate-openapi && pnpm --filter @meshspan/api-codegen generate",
+    "check": "node scripts/check.mjs",
+    "check:generated": "node scripts/verify-generated.mjs",
+    "generate:api": "node scripts/generate-api.mjs",
     "web:format": "pnpm --filter @meshspan/web format",
     "web:lint": "pnpm --filter @meshspan/eslint check",
     "web:test": "pnpm --filter @meshspan/web test",

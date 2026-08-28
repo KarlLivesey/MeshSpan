@@ -334,8 +334,10 @@ race, fix the shared state instead of serialising the suite.
 
 ## Local validation
 
-Once the workspace exists, the root task runner will provide canonical commands
-for these gates:
+Run `npm run check` from the repository root as the canonical fast local gate.
+It verifies generated API drift first, then schedules independent lanes with a
+bounded worker pool. Set `MESHSPAN_CHECK_WORKERS` from 1 to 32 only when the
+machine needs a different limit. The gate includes:
 
 - format check;
 - Rust workspace build and unit tests;
@@ -344,8 +346,7 @@ for these gates:
 - schema and protocol compatibility tests;
 - affected integration tests.
 
-Until those commands exist, do not invent successful results. Record exactly
-what was run and what could not yet run.
+Record exactly what was run, its duration and anything that could not run.
 
 For a defect:
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { open, readFile, rename, writeFile } from "node:fs/promises";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -12,17 +12,8 @@ const OUTPUT_PATH = new URL(
 );
 const INDEX_PATH = new URL("../../web/src/generated/index.ts", import.meta.url);
 
-const openApi = JSON.parse(await readFile(OPENAPI_PATH, "utf8"));
-assertContract(openApi);
-
-const routes = Object.fromEntries(
-  Object.entries(openApi.paths).flatMap(([route, pathItem]) =>
-    Object.entries(pathItem).map(([method, operation]) => [
-      operation.operationId,
-      { method: method.toUpperCase(), route },
-    ]),
-  ),
-);
+const openApi = parseContract(await readBoundedUtf8(OPENAPI_PATH));
+const routes = readRequiredRoutes(openApi);
 
 const source = `// SPDX-License-Identifier: GPL-2.0-only
 // Generated from the Rust-authored MeshSpan OpenAPI contract. Do not edit.
@@ -233,22 +224,89 @@ await writeAtomically(
   `${generatedIndex}export * from './fetch.gen';\n`,
 );
 
-function assertContract(document) {
+function parseContract(sourceText) {
+  const document = JSON.parse(sourceText);
+  if (!isRecord(document)) {
+    throw new Error("expected the OpenAPI document to be an object");
+  }
   if (document.openapi !== "3.1.0") {
     throw new Error("expected an OpenAPI 3.1.0 document");
   }
-  if (document.info?.license?.identifier !== "GPL-2.0-only") {
+  const info = requireRecord(document.info, "info");
+  const license = requireRecord(info.license, "info.license");
+  if (license.identifier !== "GPL-2.0-only") {
     throw new Error("expected the exact GPL-2.0-only identifier");
   }
-  const operationIds = new Set(
-    Object.values(document.paths).flatMap((pathItem) =>
-      Object.values(pathItem).map((operation) => operation.operationId),
-    ),
-  );
-  for (const required of ["createSession", "getHealth", "getOpenApi"]) {
-    if (!operationIds.has(required)) {
-      throw new Error(`missing required operation: ${required}`);
+  requireRecord(document.paths, "paths");
+  return document;
+}
+
+function readRequiredRoutes(document) {
+  const operations = new Map();
+  const paths = requireRecord(document.paths, "paths");
+  for (const [route, rawPathItem] of Object.entries(paths)) {
+    if (!route.startsWith("/") || route.length > 256) {
+      throw new Error(`invalid OpenAPI route: ${route}`);
     }
+    const pathItem = requireRecord(rawPathItem, `paths.${route}`);
+    for (const [method, rawOperation] of Object.entries(pathItem)) {
+      if (!/^(?:get|post|put|patch|delete)$/.test(method)) {
+        throw new Error(`unsupported OpenAPI path member: ${route} ${method}`);
+      }
+      const operation = requireRecord(rawOperation, `paths.${route}.${method}`);
+      const operationId = operation.operationId;
+      if (
+        typeof operationId !== "string" ||
+        !/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(operationId)
+      ) {
+        throw new Error(
+          `invalid operationId for ${method.toUpperCase()} ${route}`,
+        );
+      }
+      if (operations.has(operationId)) {
+        throw new Error(`duplicate operationId: ${operationId}`);
+      }
+      operations.set(operationId, { method: method.toUpperCase(), route });
+    }
+  }
+  return {
+    createSession: requireOperation(operations, "createSession"),
+    getHealth: requireOperation(operations, "getHealth"),
+    getOpenApi: requireOperation(operations, "getOpenApi"),
+  };
+}
+
+function requireOperation(operations, operationId) {
+  const operation = operations.get(operationId);
+  if (operation === undefined) {
+    throw new Error(`missing required operation: ${operationId}`);
+  }
+  return operation;
+}
+
+function requireRecord(value, location) {
+  if (!isRecord(value)) {
+    throw new Error(`expected ${location} to be an object`);
+  }
+  return value;
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readBoundedUtf8(sourcePath) {
+  const handle = await open(sourcePath, "r");
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > 1_048_576) {
+      throw new Error(
+        "OpenAPI input must be a regular file no larger than 1 MiB",
+      );
+    }
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
   }
 }
 

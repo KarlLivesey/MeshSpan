@@ -61,6 +61,23 @@ before version 1.0.
 The draft requirements, architecture and implementation order are collected in the
 [design review pack](design/README.md). They are not locked until explicitly accepted.
 
+## Development
+
+MeshSpan currently requires Rust 1.98.0, Node.js 26 and pnpm 11.19.0. Install the pinned web
+dependencies, then run the complete fast local gate:
+
+```sh
+npx --yes pnpm@11.19.0 install --frozen-lockfile
+npm run check
+```
+
+The command checks generated-contract drift before running independent Rust and web lanes in
+parallel. `MESHSPAN_CHECK_WORKERS` may set a bounded worker count from 1 to 32; the default is the
+smaller of four or the available CPU parallelism. Regenerate the committed OpenAPI, TypeScript,
+native-Fetch and Zod artefacts with `npm run generate:api`.
+
+Early development uses local verification only. There are deliberately no GitHub Actions yet.
+
 ## GPL-2.0-only
 
 **Valid licence identifier: `GPL-2.0-only`.**

@@ -17,6 +17,7 @@ const webRoot = fileURLToPath(new URL("../../web/", import.meta.url));
 const webFiles = ["web/**/*.ts", "web/**/*.tsx"];
 const generatedFiles = ["web/src/generated/**/*.ts"];
 const testFiles = ["web/tests/**/*.ts"];
+const toolingFiles = ["scripts/**/*.mjs", "tooling/**/*.mjs"];
 
 function forWeb(config) {
   return { ...config, files: webFiles };
@@ -24,7 +25,40 @@ function forWeb(config) {
 
 export default typescriptEslint.config(
   {
-    ignores: ["web/coverage/**"],
+    ignores: ["**/node_modules/**", "web/coverage/**"],
+  },
+  {
+    ...eslint.configs.recommended,
+    files: toolingFiles,
+    languageOptions: {
+      globals: globals.node,
+    },
+    plugins: {
+      "@eslint-community/eslint-comments": eslintComments,
+    },
+    rules: {
+      ...eslintComments.configs.recommended.rules,
+      complexity: ["error", 12],
+      eqeqeq: ["error", "always"],
+      "max-depth": ["error", 4],
+      "max-lines": [
+        "error",
+        { max: 500, skipBlankLines: true, skipComments: true },
+      ],
+      "max-lines-per-function": [
+        "error",
+        { max: 80, skipBlankLines: true, skipComments: true },
+      ],
+      "max-nested-callbacks": ["error", 3],
+      "max-params": ["error", 5],
+      "max-statements": ["error", 40],
+      "no-console": "error",
+      "no-eval": "error",
+      "no-warning-comments": [
+        "error",
+        { terms: ["fixme"], location: "anywhere" },
+      ],
+    },
   },
   forWeb(eslint.configs.recommended),
   ...typescriptEslint.configs.strictTypeChecked.map(forWeb),

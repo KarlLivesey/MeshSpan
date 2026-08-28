@@ -27,6 +27,13 @@ runner schedules independent lanes concurrently within explicit CPU, memory and
 IO budgets, avoids nested worker oversubscription and reports one local summary.
 GitHub Actions are absent during early implementation.
 
+The Stage 1 runner is `npm run check`. It verifies deterministic generated-file
+drift before scheduling independent Rust format, Rust lint/test, workspace
+format, web lint, web typecheck and web test lanes. The initial warm local
+baseline on 2026-08-28 was 6.4 seconds with four workers; the runner reports a
+fresh duration for every lane instead of treating that observation as a fixed
+promise.
+
 ### Parallel execution contract
 
 - Rust unit and conformance tests use the normal parallel harness or

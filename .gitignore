@@ -5,4 +5,27 @@ node_modules/
 /.pnpm-store/
 /coverage/
 *.log
+
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux desktop and filesystem artefacts
+*~
+.directory
+.fuse_hidden*
+.nfs*
+.Trash-*/
+lost+found/
