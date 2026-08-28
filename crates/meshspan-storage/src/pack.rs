@@ -17,8 +17,10 @@ use crate::shard::{decode_receipt, encode_receipt, encode_shard};
 use crate::{RegisteredFolder, TargetMarker};
 
 mod removal;
+mod scrub;
 
 pub(crate) use removal::PackTombstoneRequest;
+pub(crate) use scrub::PackScrubResult;
 
 const SCHEMA_VERSION: u32 = 1;
 const SCHEMA: &str = include_str!("../schema/pack/001_initial.sql");

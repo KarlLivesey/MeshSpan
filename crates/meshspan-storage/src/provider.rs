@@ -6,8 +6,9 @@ use std::path::Path;
 
 use meshspan_contracts::{
     BoundedBytes, BoundedItems, ContractVersion, InventoryPage, PutShardRequest, RemovalPermit,
-    RequestContext, ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageReservation,
-    TombstoneReceipt, verify_read_permit_mac, verify_removal_permit_mac,
+    RequestContext, ScrubObservation, ScrubOutcome, ScrubPage, ShardReadPermit, ShardReceipt,
+    StoragePermitMacKey, StorageReservation, TombstoneReceipt, verify_read_permit_mac,
+    verify_removal_permit_mac,
 };
 use meshspan_domain::{MeshId, RandomSource, UnixMicros};
 use thiserror::Error;
@@ -17,7 +18,9 @@ use crate::journal::{
     PendingPutPage, PendingTombstonePage, PreparePutResult, PrepareTombstoneResult,
     ReserveCapacityRequest, TargetJournal, TargetJournalError,
 };
-use crate::pack::{PackPutRequest, PackStore, PackStoreError, PackTombstoneRequest};
+use crate::pack::{
+    PackPutRequest, PackScrubResult, PackStore, PackStoreError, PackTombstoneRequest,
+};
 use crate::{RegisteredFolder, StorageFolderError};
 
 const ACTIVE_PACK_SEQUENCE: u64 = 1;
@@ -334,6 +337,84 @@ impl FolderShardStore {
         self.journal.inventory(cursor, limit).map_err(Into::into)
     }
 
+    /// Independently reads and verifies one bounded page of complete shard bytes.
+    ///
+    /// Results are evidence only. No outcome calls or bypasses the authenticated tombstone path.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed paging and state changes that invalidate a healthy observation.
+    pub fn scrub(
+        &mut self,
+        cursor: Option<&BoundedBytes>,
+        limit: usize,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubPage, FolderShardStoreError> {
+        let page = self.journal.inventory(cursor, limit)?;
+        let mut observations = Vec::with_capacity(page.entries.len());
+        for entry in page.entries.as_slice() {
+            let observation = match self
+                .pack
+                .scrub_exact(entry.shard, entry.length, entry.digest)
+            {
+                Ok(PackScrubResult::Missing) => {
+                    scrub_observation(*entry, None, ScrubOutcome::Missing)
+                }
+                Ok(PackScrubResult::Present {
+                    observed_length,
+                    observed_digest,
+                    healthy: true,
+                }) => {
+                    self.journal.mark_shard_verified(*entry, observed_at)?;
+                    scrub_observation(
+                        *entry,
+                        Some((observed_length, observed_digest)),
+                        ScrubOutcome::Healthy,
+                    )
+                }
+                Ok(PackScrubResult::Present {
+                    observed_length,
+                    observed_digest,
+                    healthy: false,
+                }) => scrub_observation(
+                    *entry,
+                    Some((observed_length, observed_digest)),
+                    ScrubOutcome::Corrupt,
+                ),
+                Err(PackStoreError::Sqlite(_) | PackStoreError::Folder(_)) => {
+                    scrub_observation(*entry, None, ScrubOutcome::Unreadable)
+                }
+                Err(error) => return Err(map_pack(&error)),
+            };
+            observations.push(observation);
+        }
+        Ok(ScrubPage {
+            observations: BoundedItems::new(observations, limit)
+                .map_err(|_| FolderShardStoreError::Corrupt)?,
+            next_cursor: page.next_cursor,
+        })
+    }
+
+    /// Runs one bounded page from the durable continuous-scrub checkpoint and advances it.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed bounds, invalid observations or stale concurrent checkpoint advancement.
+    pub fn scrub_continuous(
+        &mut self,
+        limit: usize,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubPage, FolderShardStoreError> {
+        let checkpoint = self.journal.scrub_checkpoint()?;
+        let page = self.scrub(checkpoint.cursor.as_ref(), limit, observed_at)?;
+        self.journal.advance_scrub_checkpoint(
+            &checkpoint,
+            page.next_cursor.as_ref(),
+            observed_at,
+        )?;
+        Ok(page)
+    }
+
     /// Reads and independently verifies one exact shard under a current authenticated permit.
     ///
     /// # Errors
@@ -419,6 +500,21 @@ fn removal_request_digest(permit: RemovalPermit) -> [u8; 32] {
     digest.update(b"meshspan.storage.removal-request.v1");
     digest.update(&permit.permit_digest);
     digest.finalize().into()
+}
+
+fn scrub_observation(
+    expected: meshspan_contracts::InventoryEntry,
+    observed: Option<(u64, [u8; 32])>,
+    outcome: ScrubOutcome,
+) -> ScrubObservation {
+    ScrubObservation {
+        shard: expected.shard,
+        expected_length: Some(expected.length),
+        expected_digest: Some(expected.digest),
+        observed_length: observed.map(|value| value.0),
+        observed_digest: observed.map(|value| value.1),
+        outcome,
+    }
 }
 
 fn validate_put(
@@ -515,7 +611,7 @@ mod tests {
 
     use meshspan_contracts::{
         BoundedBytes, ContractVersion, PutShardRequest, RequestContext, ReservationClass,
-        ShardIdentity, ShardReadPermit, StoragePermitMacKey, read_permit_mac,
+        ScrubOutcome, ShardIdentity, ShardReadPermit, StoragePermitMacKey, read_permit_mac,
     };
     use meshspan_domain::{
         EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId, UnixMicros,
@@ -631,6 +727,14 @@ mod tests {
         let first = store.put_exact(&request, UnixMicros::new(20))?;
         assert_eq!(store.put_exact(&request, UnixMicros::new(21))?, first);
         assert_eq!(store.inventory(None, 10)?.entries.len(), 1);
+        let scrub = store.scrub_continuous(10, UnixMicros::new(22))?;
+        assert_eq!(scrub.observations.len(), 1);
+        assert_eq!(
+            scrub.observations.as_slice()[0].outcome,
+            ScrubOutcome::Healthy
+        );
+        assert!(store.inventory(None, 10)?.entries.as_slice()[0].bytes_verified);
+        assert_eq!(store.journal.scrub_checkpoint()?.completed_cycles, 1);
         let read_context = RequestContext {
             contract_version: ContractVersion::V1_0,
             operation_id: OperationId::from_bytes([21; 16])?,
