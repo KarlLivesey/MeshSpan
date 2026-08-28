@@ -4,7 +4,7 @@
 
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::data_control_envelope::Message;
-use crate::v1::{GetShardHeader, PutShardReady};
+use crate::v1::{GetShardHeader, OperationOutcome, PutShardReady, VersionedPayload};
 
 use super::{
     valid_digest, valid_identifier, valid_nonempty_bytes, validate_header,
@@ -33,7 +33,7 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         }
         Message::PutShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
-            validate_payload(value.receipt.as_ref(), limits)
+            validate_mutation_receipt(value.result.as_ref(), value.receipt.as_ref(), limits)
         }
         Message::GetShardRequest(value) => {
             validate_header(
@@ -61,7 +61,7 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         }
         Message::DeleteShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
-            validate_payload(value.receipt.as_ref(), limits)
+            validate_mutation_receipt(value.result.as_ref(), value.receipt.as_ref(), limits)
         }
         Message::ValidateRemoval(value) => {
             validate_header(
@@ -74,6 +74,25 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             validate_shard(value.shard.as_ref())?;
             valid_digest(&value.permit_digest)
         }
+    }
+}
+
+fn validate_mutation_receipt(
+    result: Option<&crate::v1::OperationResult>,
+    receipt: Option<&VersionedPayload>,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    let outcome =
+        OperationOutcome::try_from(result.ok_or(WireContractError::InvalidMessage)?.outcome)
+            .map_err(|_| WireContractError::InvalidMessage)?;
+    match outcome {
+        OperationOutcome::Durable => validate_payload(receipt, limits),
+        OperationOutcome::Rejected | OperationOutcome::Stale | OperationOutcome::Failed
+            if receipt.is_none() =>
+        {
+            Ok(())
+        }
+        _ => Err(WireContractError::InvalidMessage),
     }
 }
 
