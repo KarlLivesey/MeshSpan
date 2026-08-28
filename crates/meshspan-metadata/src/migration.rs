@@ -10,17 +10,21 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 2;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 3;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
 
-const PARTITION_MIGRATIONS: [Migration; 2] = [
+const PARTITION_MIGRATIONS: [Migration; 3] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 2,
         sql: include_str!("../schema/partition/002_roles.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/003_component_rollout.sql"),
     },
 ];
 
@@ -203,6 +207,11 @@ pub(crate) fn partition_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn partition_roles_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[1].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_component_rollout_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[2].sql)
 }
 
 #[cfg(test)]

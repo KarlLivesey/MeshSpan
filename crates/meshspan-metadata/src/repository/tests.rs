@@ -5,10 +5,11 @@ use std::io::Write;
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, DurationMicros,
-    GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId,
-    PrincipalId, Revision, Rights, RoleId, UnixMicros, VolumeId,
+    ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, ComponentInstanceId,
+    DurationMicros, GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
+    PartitionId, PrincipalId, Revision, Rights, RoleId, UnixMicros, VolumeId,
 };
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
@@ -17,10 +18,10 @@ use super::{
     RepositoryError, restore_partition_backup,
 };
 use crate::{
-    ActivateGrant, ActivateGroup, AddGroupMember, AuthoritativeCommand, BootstrapMesh,
-    CommandContext, CreateActivationPolicy, CreateGroup, CreateObject, CreateUser, CreateVolume,
-    GrantInheritance, GrantPermission, NamespaceObjectKind, PartitionDatabase, PermissionScope,
-    RecordName,
+    ActivateGrant, ActivateGroup, AddGroupMember, AssignComponent, AuthoritativeCommand,
+    BootstrapMesh, CommandContext, ConfigureComponent, CreateActivationPolicy, CreateComponent,
+    CreateGroup, CreateObject, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName,
 };
 
 struct FixtureIds {
@@ -119,7 +120,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 14);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        2
+        3
     );
     Ok(())
 }
@@ -376,6 +377,92 @@ fn activation_required_group_is_self_activated_with_bounded_evidence()
         AuthoritativeRepository::new(reopened)
             .resolve_operation(activation_context.operation_id)?
             .is_some()
+    );
+    Ok(())
+}
+
+#[test]
+fn component_configuration_history_and_assignments_are_authoritative()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("components.sqlite3");
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    apply(
+        &mut repository,
+        1,
+        context(130, ids.administrator, 131, 100, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([132; 16])?,
+            mesh_name: RecordName::new("Component proof")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([133; 16])?,
+            host_id: HostId::from_bytes([134; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: NodeId::from_bytes([135; 16])?,
+            node_name: RecordName::new("Node")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
+    let instance_id = ComponentInstanceId::from_bytes([136; 16])?;
+    let first = b"{}".to_vec();
+    apply(
+        &mut repository,
+        2,
+        context(137, ids.administrator, 138, 101, Some(1))?,
+        &AuthoritativeCommand::CreateComponent(CreateComponent {
+            instance_id,
+            component_kind: 1,
+            name: RecordName::new("Primary storage")?,
+            implementation_id: "folder".to_owned(),
+            contract_major: 1,
+            contract_minor: 0,
+            schema_version: 1,
+            configuration_digest: Sha256::digest(&first).into(),
+            canonical_configuration: first,
+        }),
+    )?;
+    let second = br#"{"mode":"safe"}"#.to_vec();
+    apply(
+        &mut repository,
+        3,
+        context(139, ids.administrator, 140, 102, Some(2))?,
+        &AuthoritativeCommand::ConfigureComponent(ConfigureComponent {
+            instance_id,
+            schema_version: 2,
+            configuration_digest: Sha256::digest(&second).into(),
+            canonical_configuration: second,
+        }),
+    )?;
+    apply(
+        &mut repository,
+        4,
+        context(141, ids.administrator, 142, 103, Some(3))?,
+        &AuthoritativeCommand::AssignComponent(AssignComponent {
+            instance_id,
+            assignment_kind: 1,
+            assignment_id: [132; 16],
+            desired_state: 1,
+        }),
+    )?;
+    assert_eq!(repository.current_revision()?, Revision::new(4));
+    let database = repository.into_database();
+    let (active_revision, history_count, assignment_count): (i64, i64, i64) =
+        database.connection().query_row(
+            "SELECT ci.active_config_revision,
+                    (SELECT COUNT(*) FROM component_configurations cc
+                     WHERE cc.instance_id = ci.instance_id),
+                    (SELECT COUNT(*) FROM component_assignments ca
+                     WHERE ca.instance_id = ci.instance_id)
+             FROM component_instances ci WHERE ci.instance_id = ?1",
+            [instance_id.as_bytes().as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    assert_eq!(
+        (active_revision, history_count, assignment_count),
+        (2, 2, 1)
     );
     Ok(())
 }

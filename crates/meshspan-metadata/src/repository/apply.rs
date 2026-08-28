@@ -339,6 +339,12 @@ fn execute(
         AuthoritativeCommand::CreateComponent(value) => {
             component::create(transaction, context, value, revision)
         }
+        AuthoritativeCommand::ConfigureComponent(value) => {
+            component::configure(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AssignComponent(value) => {
+            component::assign(transaction, value, revision)
+        }
     }
 }
 
@@ -500,6 +506,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ActivateGrant(_) => 9,
         AuthoritativeCommand::ActivateGroup(_) => 10,
         AuthoritativeCommand::CreateComponent(_) => 11,
+        AuthoritativeCommand::ConfigureComponent(_) => 12,
+        AuthoritativeCommand::AssignComponent(_) => 13,
     }
 }
 

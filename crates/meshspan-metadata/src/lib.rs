@@ -9,9 +9,10 @@ mod name;
 mod repository;
 
 pub use command::{
-    ActivateGrant, ActivateGroup, AddGroupMember, AuthoritativeCommand, BootstrapMesh,
-    CommandContext, CreateActivationPolicy, CreateComponent, CreateGroup, CreateObject, CreateUser,
-    CreateVolume, GrantInheritance, GrantPermission, NamespaceObjectKind, PermissionScope,
+    ActivateGrant, ActivateGroup, AddGroupMember, AssignComponent, AuthoritativeCommand,
+    BootstrapMesh, CommandContext, ConfigureComponent, CreateActivationPolicy, CreateComponent,
+    CreateGroup, CreateObject, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    NamespaceObjectKind, PermissionScope,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;

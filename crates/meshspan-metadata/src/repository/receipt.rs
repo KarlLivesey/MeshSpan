@@ -54,6 +54,8 @@ pub enum EntityKind {
     AccessActivation = 9,
     /// Replaceable component instance.
     ComponentInstance = 10,
+    /// Desired component assignment.
+    ComponentAssignment = 11,
 }
 
 impl EntityKind {
@@ -69,6 +71,7 @@ impl EntityKind {
             8 => Ok(Self::PermissionGrant),
             9 => Ok(Self::AccessActivation),
             10 => Ok(Self::ComponentInstance),
+            11 => Ok(Self::ComponentAssignment),
             _ => Err(RepositoryError::CorruptState),
         }
     }

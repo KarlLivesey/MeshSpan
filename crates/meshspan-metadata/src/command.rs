@@ -52,6 +52,10 @@ pub enum AuthoritativeCommand {
     ActivateGroup(ActivateGroup),
     /// Creates a versioned desired component configuration.
     CreateComponent(CreateComponent),
+    /// Selects a new validated desired configuration revision.
+    ConfigureComponent(ConfigureComponent),
+    /// Creates or replaces one bounded component assignment.
+    AssignComponent(AssignComponent),
 }
 
 impl AuthoritativeCommand {
@@ -81,6 +85,8 @@ impl AuthoritativeCommand {
             Self::ActivateGrant(value) => value.update_digest(digest),
             Self::ActivateGroup(value) => value.update_digest(digest),
             Self::CreateComponent(value) => value.update_digest(digest),
+            Self::ConfigureComponent(value) => value.update_digest(digest),
+            Self::AssignComponent(value) => value.update_digest(digest),
         }
     }
 }
@@ -322,6 +328,32 @@ pub struct CreateComponent {
     pub configuration_digest: [u8; 32],
 }
 
+/// New desired configuration revision for an existing component instance.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfigureComponent {
+    /// Existing component instance.
+    pub instance_id: ComponentInstanceId,
+    /// Configuration schema version.
+    pub schema_version: u32,
+    /// Bounded canonical non-secret configuration.
+    pub canonical_configuration: Vec<u8>,
+    /// Digest of the canonical configuration.
+    pub configuration_digest: [u8; 32],
+}
+
+/// Desired placement/attachment of a component instance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignComponent {
+    /// Existing component instance.
+    pub instance_id: ComponentInstanceId,
+    /// Closed assignment family, such as mesh, host, node or fault group.
+    pub assignment_kind: u8,
+    /// Non-nil identity interpreted only under `assignment_kind`.
+    pub assignment_id: [u8; 16],
+    /// Closed desired assignment state.
+    pub desired_state: u8,
+}
+
 macro_rules! digest_simple_record {
     ($type:ty, $tag:literal, |$value:ident, $digest:ident| $body:block) => {
         impl $type {
@@ -440,6 +472,22 @@ digest_simple_record!(CreateComponent, b"create-component", |value, digest| {
     digest.unsigned(u64::from(value.schema_version));
     digest.bytes(&value.canonical_configuration);
     digest.bytes(&value.configuration_digest);
+});
+digest_simple_record!(
+    ConfigureComponent,
+    b"configure-component",
+    |value, digest| {
+        digest.identifier(value.instance_id.as_bytes());
+        digest.unsigned(u64::from(value.schema_version));
+        digest.bytes(&value.canonical_configuration);
+        digest.bytes(&value.configuration_digest);
+    }
+);
+digest_simple_record!(AssignComponent, b"assign-component", |value, digest| {
+    digest.identifier(value.instance_id.as_bytes());
+    digest.byte(value.assignment_kind);
+    digest.identifier(value.assignment_id);
+    digest.byte(value.desired_state);
 });
 
 fn assurance_code(value: AssuranceLevel) -> u8 {
