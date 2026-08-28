@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 11] = [
+const MIGRATIONS: [Migration; 13] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -70,8 +70,16 @@ const MIGRATIONS: [Migration; 11] = [
         version: 11,
         sql: include_str!("../schema/branch/011_pending_deletes.sql"),
     },
+    Migration {
+        version: 12,
+        sql: include_str!("../schema/branch/012_handle_write_admissions.sql"),
+    },
+    Migration {
+        version: 13,
+        sql: include_str!("../schema/branch/013_handle_paths.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 11;
+const SCHEMA_VERSION: u32 = 13;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -627,6 +635,21 @@ impl VersionPublicationStore {
         crate::handles::open_existing(&mut self.connection, request)
     }
 
+    /// Validates a prospective open without reserving a handle or changing durable state.
+    ///
+    /// The final open repeats every check transactionally. This preflight exists so a composed
+    /// service rejects malformed/absent/conflicting requests before allocating a private stage.
+    ///
+    /// # Errors
+    ///
+    /// Rejects every condition that the current state would reject during final open admission.
+    pub fn preflight_open_handle(
+        &self,
+        request: &crate::OpenHandleRequest,
+    ) -> Result<(), crate::HandleError> {
+        crate::handles::preflight_open(&self.connection, request)
+    }
+
     /// Resolves the immutable receipt for one prior open operation.
     ///
     /// # Errors
@@ -693,6 +716,34 @@ impl VersionPublicationStore {
         request: crate::UnlockRangeRequest,
     ) -> Result<crate::UnlockRangeReceipt, crate::HandleError> {
         crate::handles::unlock_range(&mut self.connection, request)
+    }
+
+    /// Durably orders one private-stage write against handle fencing and live range locks.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale or substituted handle authority, missing write access, conflicting locks,
+    /// operation reuse, corrupt durable state and persistence failure.
+    pub fn admit_handle_write(
+        &mut self,
+        request: crate::HandleWriteAdmissionRequest,
+    ) -> Result<crate::HandleWriteAdmissionReceipt, crate::HandleError> {
+        crate::handles::admit_write(&mut self.connection, request)
+    }
+
+    pub(crate) fn handle_uses_private_stage(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+    ) -> Result<bool, crate::HandleError> {
+        crate::handles::uses_private_stage(&self.connection, handle_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handle_path(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+    ) -> Result<crate::NamespacePath, crate::HandleError> {
+        crate::handles::load_handle_path(&self.connection, handle_id)
     }
 
     #[cfg(test)]

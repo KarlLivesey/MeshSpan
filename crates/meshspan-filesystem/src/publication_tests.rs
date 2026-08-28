@@ -129,6 +129,8 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "file_version_history",
         "open_handles",
         "pending_object_deletes",
+        "handle_write_admissions",
+        "open_handle_path_components",
     ] {
         assert_table_exists(&store.connection, table)?;
     }

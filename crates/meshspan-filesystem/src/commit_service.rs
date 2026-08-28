@@ -17,6 +17,9 @@ use crate::{
     PublicationError, RootFilePublication, StageCompletionRequest, StageStoreError,
     VersionPublicationStore,
 };
+use crate::{
+    FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
+};
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 
@@ -192,6 +195,57 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
     #[must_use]
     pub fn stages_mut(&mut self) -> &mut DurableStageStore {
         &mut self.stages
+    }
+
+    /// Opens a logical file and establishes its bounded private stage before a writable handle
+    /// can be returned.
+    ///
+    /// An interrupted attempt may leave an empty unreachable stage, but never an acknowledged
+    /// writable handle without its exact stage. Exact retry reuses both identities.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed stage policy, unsafe opens, sharing conflicts, stale authority,
+    /// corrupt durable state and persistence failure.
+    pub fn open_handle(
+        &mut self,
+        request: &FilesystemHandleOpenRequest,
+    ) -> Result<crate::OpenHandleReceipt, crate::HandleIoError> {
+        crate::handle_io::open(&mut self.stages, &mut self.publications, request)
+    }
+
+    /// Orders one range against live locks before durably writing immutable private-stage bytes.
+    ///
+    /// The authority admission and stage journal deliberately use separate databases. A crash
+    /// between them leaves a replayable admission but no falsely acknowledged bytes; exact retry
+    /// completes or resolves the stage write.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/substituted handles, missing write access, conflicting locks, forged bytes,
+    /// unsafe bounds, corrupt receipts and persistence failure.
+    pub fn write_handle(
+        &mut self,
+        request: &FilesystemHandleWriteRequest,
+    ) -> Result<FilesystemHandleWriteReceipt, crate::HandleIoError> {
+        crate::handle_io::write(&mut self.stages, &mut self.publications, request)
+    }
+
+    /// Renews a handle and its private stage, or transfers both under one higher fence.
+    ///
+    /// The stage transition is preflighted, then the authoritative handle transition is durable,
+    /// then the stage follows. A crash between databases exposes no successful service response;
+    /// exact retry replays the handle receipt and completes the stage transition.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale fences, substituted authority, shrinking/expired leases, operation conflicts,
+    /// corrupt state and persistence failure.
+    pub fn renew_handle_lease(
+        &mut self,
+        request: crate::HandleLeaseRequest,
+    ) -> Result<crate::HandleLeaseReceipt, crate::HandleIoError> {
+        crate::handle_io::renew_lease(&mut self.stages, &mut self.publications, request)
     }
 
     /// Creates one empty directory and atomically publishes every copied ancestor revision.

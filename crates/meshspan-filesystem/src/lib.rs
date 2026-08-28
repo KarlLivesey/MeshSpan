@@ -8,6 +8,7 @@ mod content_crypto;
 mod content_key;
 mod content_publisher;
 mod directory;
+mod handle_io;
 mod handles;
 mod name;
 mod publication;
@@ -39,11 +40,15 @@ pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
     DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
 };
+pub use handle_io::{
+    FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
+    HandleIoError,
+};
 pub use handles::{
     ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,
     HandleAccess, HandleError, HandleLeaseReceipt, HandleLeaseRequest, HandleShare,
-    LockRangeReceipt, LockRangeRequest, OpenHandleReceipt, OpenHandleRequest, RangeLockKind,
-    UnlockRangeReceipt, UnlockRangeRequest,
+    HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest, LockRangeReceipt, LockRangeRequest,
+    OpenHandleReceipt, OpenHandleRequest, RangeLockKind, UnlockRangeReceipt, UnlockRangeRequest,
 };
 pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,
@@ -64,7 +69,8 @@ pub use reconciliation::{
     ReconciliationStoreError, plan_namespace_replay, plan_reconciliation,
 };
 pub use stage_store::{
-    CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration, StageStoreError,
+    CompletedStage, DurableStageStore, StageCompletionRequest, StageLeaseReceipt,
+    StageLeaseRequest, StageRegistration, StageStoreError,
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
 pub use version_retention::{

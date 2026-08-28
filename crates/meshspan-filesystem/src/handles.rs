@@ -6,11 +6,15 @@
 mod lease;
 #[path = "handles/locks.rs"]
 mod locks;
+#[path = "handles/path.rs"]
+mod path;
 #[path = "handles/state.rs"]
 mod state;
 #[cfg(test)]
 #[path = "handles_tests.rs"]
 mod tests;
+#[path = "handles/write.rs"]
+mod write;
 
 pub use lease::{
     CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, HandleLeaseReceipt,
@@ -22,6 +26,8 @@ pub use locks::{
     UnlockRangeRequest,
 };
 pub(crate) use locks::{lock_range, unlock_range};
+pub(crate) use write::admit_write;
+pub use write::{HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest};
 
 use meshspan_domain::{
     BranchId, FileVersionId, HandleId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
@@ -34,6 +40,10 @@ use crate::publication::{PublicationDisposition, PublicationError, load_director
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeDigest, DirectoryTrie, NamespacePath,
 };
+
+#[cfg(test)]
+pub(crate) use path::load as load_handle_path;
+pub(crate) use state::uses_private_stage;
 
 const READ_ACCESS: u8 = 1;
 const WRITE_ACCESS: u8 = 2;
@@ -359,6 +369,28 @@ pub(crate) fn open_existing(
     Ok(receipt)
 }
 
+pub(crate) fn preflight_open(
+    connection: &Connection,
+    request: &OpenHandleRequest,
+) -> Result<(), HandleError> {
+    validate_open(request)?;
+    let Some(resolved) = resolve_file(connection, request)? else {
+        return match request.create_disposition {
+            CreateDisposition::OpenExisting | CreateDisposition::OverwriteExisting => {
+                Err(HandleError::NotFound)
+            }
+            CreateDisposition::CreateNew
+            | CreateDisposition::OpenOrCreate
+            | CreateDisposition::OverwriteOrCreate => Err(HandleError::CreationRequired),
+        };
+    };
+    if request.create_disposition == CreateDisposition::CreateNew {
+        return Err(HandleError::AlreadyExists);
+    }
+    reject_pending_delete(connection, request, resolved.object)?;
+    enforce_share_modes(connection, request, resolved.object)
+}
+
 fn validate_open(request: &OpenHandleRequest) -> Result<(), HandleError> {
     if request.authorization_revision == Revision::ZERO
         || request.lease_expires_at <= request.opened_at
@@ -561,7 +593,7 @@ fn lookup_entry(
 }
 
 fn enforce_share_modes(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     request: &OpenHandleRequest,
     object_id: ObjectId,
 ) -> Result<(), HandleError> {
@@ -594,6 +626,7 @@ fn persist_open(
     request_digest: [u8; 32],
     resolved: ResolvedFile,
 ) -> Result<OpenHandleReceipt, HandleError> {
+    let actual_path = resolve_actual_path(transaction, request, resolved)?;
     let result_digest = open_result_digest(request, request_digest, resolved);
     transaction.execute(
         "INSERT INTO open_handles(
@@ -628,6 +661,7 @@ fn persist_open(
             result_digest.as_slice(),
         ],
     )?;
+    path::persist(transaction, request.handle_id, &actual_path)?;
     Ok(OpenHandleReceipt {
         disposition: PublicationDisposition::Applied,
         operation_id: request.operation_id,
@@ -641,6 +675,55 @@ fn persist_open(
         truncate_on_first_write: request.create_disposition.truncates_existing(),
         result_digest,
     })
+}
+
+fn resolve_actual_path(
+    connection: &Connection,
+    request: &OpenHandleRequest,
+    resolved: ResolvedFile,
+) -> Result<NamespacePath, HandleError> {
+    type StoredHead = (Vec<u8>, Vec<u8>);
+    let (root_object, root_revision): StoredHead = connection.query_row(
+        "SELECT c.root_object_id, c.root_object_revision_id
+         FROM branch_namespace_heads h
+         JOIN namespace_commits c USING(namespace_commit_id)
+         WHERE h.branch_id = ?1 AND h.volume_id = ?2",
+        params![
+            request.branch_id.as_bytes().as_slice(),
+            request.volume_id.as_bytes().as_slice()
+        ],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let mut object_id = identifier(&root_object, ObjectId::from_bytes)?;
+    let mut revision_id = identifier(&root_revision, ObjectRevisionId::from_bytes)?;
+    let mut components = Vec::with_capacity(request.path.components().len());
+    for (index, requested) in request.path.components().iter().enumerate() {
+        let revision = load_revision(connection, revision_id)?;
+        if revision.volume_id != request.volume_id
+            || revision.object_id != object_id
+            || revision.kind != DirectoryEntryKind::Directory
+        {
+            return Err(HandleError::Corrupt);
+        }
+        let entry = lookup_entry(
+            connection,
+            revision.directory_root.ok_or(HandleError::Corrupt)?,
+            requested,
+        )?
+        .ok_or(HandleError::Corrupt)?;
+        components.push(entry.name().clone());
+        if index + 1 == request.path.components().len() {
+            if entry.object_id() != resolved.object
+                || entry.object_revision_id() != resolved.object_revision
+            {
+                return Err(HandleError::Corrupt);
+            }
+        } else {
+            object_id = entry.object_id();
+            revision_id = entry.object_revision_id();
+        }
+    }
+    NamespacePath::from_stored_components(components).map_err(|_| HandleError::Corrupt)
 }
 
 pub(crate) fn load_open_receipt(
@@ -832,7 +915,8 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM namespace_reconciliation_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM namespace_snapshot_restore_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
-             OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)",
+             OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;
@@ -860,7 +944,7 @@ fn reject_handle_collision(
 }
 
 fn reject_pending_delete(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     request: &OpenHandleRequest,
     object_id: ObjectId,
 ) -> Result<(), HandleError> {
