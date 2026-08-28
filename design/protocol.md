@@ -231,6 +231,13 @@ an integrity construction that proves the returned range.
 
 ## 10. Shard removal
 
+Before any removal message exists, `ProposeVersionCleanup` records one exact
+candidate and an operation-independent reachability-subject digest.
+`AttestVersionCleanup` carries one required gateway node's incarnation, unique
+durable scan request/result, unchanged local-root digest, cleanup key generation
+and Ed25519 signature. All required snapshotted node incarnations must attest to
+the same subject; per-node request digests are deliberately different.
+
 `DeleteShardRequest` carries the exact shard identity and a quorum-issued
 `RemovalPermit`. `DeleteShardResult` reports `removed`, `already_absent`,
 `identity_mismatch`, `permit_expired`, `stale_epoch` or a typed local failure.

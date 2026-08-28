@@ -69,7 +69,7 @@ pub use publication::{
 pub use reachability::{
     ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource, VersionReachabilityError,
     VersionReachabilityProgress, VersionReachabilityScanRequest, VersionReachabilityState,
-    VersionUnreachableProof, reachability_root_digest,
+    VersionUnreachableProof, reachability_root_digest, reachability_subject_digest,
 };
 pub use reconciliation::{
     BranchMutation, BranchMutationIntent, NamespaceReplayAction, NamespaceReplayBase,

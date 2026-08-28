@@ -5,6 +5,7 @@
 mod apply;
 mod backup;
 mod bootstrap;
+mod cleanup_attestation;
 mod cluster;
 mod component;
 mod consensus;
@@ -33,6 +34,7 @@ use thiserror::Error;
 use crate::{MetadataStoreError, PartitionDatabase};
 
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
+pub use cleanup_attestation::VersionCleanupAttestationProgress;
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
@@ -327,6 +329,18 @@ impl AuthoritativeRepository {
         version_cleanup::load(&self.database, operation_id)
     }
 
+    /// Returns bounded aggregate cleanup-attestation coverage without exposing signatures.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if proposal and participant counts disagree or durable values are malformed.
+    pub fn version_cleanup_attestation_progress(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<VersionCleanupAttestationProgress>, RepositoryError> {
+        cleanup_attestation::progress(&self.database, operation_id)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -478,6 +492,8 @@ pub enum RepositoryError {
     InjectedFault,
 }
 
+#[cfg(test)]
+mod cleanup_attestation_tests;
 #[cfg(test)]
 mod retention_tests;
 #[cfg(test)]

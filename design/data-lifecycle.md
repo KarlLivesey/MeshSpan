@@ -105,18 +105,24 @@ tombstones and cleanup when it returns.
    tombstoned version. Snapshots, open handles, retention rules and other links
    may keep the manifest reachable.
 2. A quorum-owned reachability scan identifies a manifest with no live
-   references. It creates a durable cleanup intent for a specific object,
-   version, shard generation and expected catalogue revision.
-3. Immediately before deletion, the worker obtains a short-lived
+   references. Its operation-independent subject digest binds the candidate,
+   retention selection and complete metadata-root authority; each node-local
+   scan has a separate request/result digest. The replicated proposal snapshots
+   every admitted gateway node and its exact incarnation.
+3. Every snapshotted gateway signs a terminal unreachable result for the same
+   subject after revalidating its own branch and lifecycle roots. An offline
+   gateway delays physical reclamation, not logical deletion. A changed node
+   incarnation or cleanup signing-key generation fails closed.
+4. Immediately before deletion, the worker obtains a short-lived
    `RemovalPermit` from the current owning metadata-partition leader. The permit binds:
    `mesh_id`, target, object, version, shard, generation, catalogue revision,
    operation ID and expiry.
-4. The storage node validates the permit, current leader epoch, a catalogue
+5. The storage node validates the permit, current leader epoch, a catalogue
    revision no older than the node's monotonically applied cleanup fence, and
    the local shard identity. Applying a newer catalogue revision permanently
    rejects older permits. It writes a local tombstone durably before unlinking
    bytes.
-5. The node reports a typed result. The quorum records completion idempotently;
+6. The node reports a typed result. The quorum records completion idempotently;
    a missing shard is success only when its identity and prior cleanup intent
    match.
 

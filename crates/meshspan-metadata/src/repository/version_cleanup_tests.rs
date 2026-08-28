@@ -38,8 +38,20 @@ fn exact_unreachable_proof_creates_one_replayable_cleanup_intent()
     assert_eq!(intent.volume_id, fixture.volume);
     assert_eq!(intent.version_id.as_bytes(), [40; 16]);
     assert_eq!(intent.manifest_id.as_bytes(), [41; 16]);
+    assert_ne!(intent.reachability_subject_digest, [0; 32]);
     assert_eq!(intent.reachability_revision, Revision::new(3));
+    assert_eq!(intent.required_attestation_count, 1);
     assert_eq!(intent.revision, Revision::new(4));
+    assert_eq!(
+        repository
+            .version_cleanup_attestation_progress(command_context.operation_id)?
+            .ok_or("missing cleanup participants")?,
+        super::VersionCleanupAttestationProgress {
+            cleanup_operation_id: command_context.operation_id,
+            required: 1,
+            attested: 0,
+        }
+    );
 
     let replay =
         repository.apply_committed(LogPosition { index: 5, term: 1 }, command_context, &command)?;
@@ -171,7 +183,7 @@ fn every_apply_fault_rolls_back_the_complete_cleanup_proposal()
     Ok(())
 }
 
-fn cleanup_command(
+pub(super) fn cleanup_command(
     volume_id: meshspan_domain::VolumeId,
     root_count: u64,
     root_digest: [u8; 32],
@@ -183,6 +195,7 @@ fn cleanup_command(
         manifest_id: ContentManifestId::from_bytes([identity.saturating_add(1); 16])?,
         source_scan_operation_id: OperationId::from_bytes([identity.saturating_add(2); 16])?,
         scan_request_digest: [identity.saturating_add(3); 32],
+        reachability_subject_digest: [identity.saturating_add(5); 32],
         retention_policy_sequence: 1,
         reachability_revision: Revision::new(3),
         retained_root_count: root_count,
@@ -194,7 +207,7 @@ fn cleanup_command(
     Ok(AuthoritativeCommand::ProposeVersionCleanup(value))
 }
 
-fn terminal_digest(command: ProposeVersionCleanup) -> [u8; 32] {
+pub(super) fn terminal_digest(command: ProposeVersionCleanup) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.version-reachability-result.v1\0");
     digest.update(&command.source_scan_operation_id.as_bytes());

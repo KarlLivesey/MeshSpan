@@ -16,7 +16,7 @@ mod convergence_tests;
 #[cfg(test)]
 mod handoff_tests;
 
-pub use cleanup::version_cleanup_proposal;
+pub use cleanup::{CleanupAttestationError, version_cleanup_attestation, version_cleanup_proposal};
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
 pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};

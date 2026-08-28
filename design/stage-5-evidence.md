@@ -277,10 +277,15 @@ copy-on-write filesystem service. This document records executable evidence only
    independently recomputes the current retained-root digest and count, validates
    the selected retention-policy sequence and terminal proof digest, then records
    one audited idempotent proposal. A proposal deliberately cannot issue removal
-   permits. Storage providers do already enforce a monotonically advancing
-   applied-catalogue fence, so applying a newer revision permanently rejects an
-   otherwise authentic older removal permit. Cross-node branch attestations,
-   final authority, shared-manifest checks and physical catalogue/provider
+   permits. Each proposal now snapshots every admitted gateway and its exact
+   incarnation. Nodes sign terminal local scan evidence with a separately
+   rotating cleanup-attestation key; the metadata transaction verifies the key,
+   signature, incarnation, terminal digest and operation-independent subject.
+   Coverage is incomplete until every snapshotted gateway has attested, while
+   its per-node scan request remains uniquely replay-safe. Storage providers
+   also enforce a monotonically advancing applied-catalogue fence, so applying a
+   newer revision permanently rejects an otherwise authentic older removal
+   permit. Final authority, shared-manifest checks and physical catalogue/provider
    completion remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
