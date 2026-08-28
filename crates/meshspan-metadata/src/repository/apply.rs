@@ -1,0 +1,459 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Transaction orchestration for deterministic committed command application.
+
+use meshspan_domain::{OperationId, PrincipalId, Revision};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
+
+use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
+use super::{
+    ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, component,
+    identity, namespace,
+};
+use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
+
+const POLICY_COMMITTED_OUTCOME: u8 = 3;
+const RESULT_KIND_ENTITY_REFERENCE: u8 = 1;
+const RECORD_VERSION: u8 = 1;
+const SYSTEM_MANAGE_RIGHT: i64 = 1;
+
+#[derive(Clone, Copy)]
+struct AppliedState {
+    position: LogPosition,
+    revision: Revision,
+}
+
+struct StoredOperation {
+    request_digest: Vec<u8>,
+    result_payload: Vec<u8>,
+    result_digest: Vec<u8>,
+    revision: i64,
+    committed_index: i64,
+}
+
+pub(super) fn read_current_revision(
+    database: &PartitionDatabase,
+) -> Result<Revision, RepositoryError> {
+    let stored = database.connection().query_row(
+        "SELECT state_revision FROM applied_state WHERE singleton = 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(Revision::new(
+        u64::try_from(stored).map_err(|_| RepositoryError::CorruptState)?,
+    ))
+}
+
+pub(super) fn apply_committed(
+    database: &mut PartitionDatabase,
+    position: LogPosition,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<CommandReceipt, RepositoryError> {
+    validate_position(position)?;
+    let partition_id = database.partition_id();
+    let transaction = database
+        .connection_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let state = read_applied_state(&transaction)?;
+    validate_transition(state, position)?;
+    let request_digest = command.request_digest(context);
+    if let Some(stored) = load_operation(&transaction, context.operation_id)? {
+        if stored.request_digest.as_slice() != request_digest {
+            return Err(RepositoryError::OperationConflict);
+        }
+        advance_applied_position(&transaction, state.revision, position)?;
+        let mut receipt = decode_receipt(
+            context.operation_id,
+            &stored.request_digest,
+            &stored.result_payload,
+            &stored.result_digest,
+            stored.revision,
+            stored.committed_index,
+            position,
+        )?;
+        receipt.disposition = ApplyDisposition::Replayed;
+        transaction.commit()?;
+        return Ok(receipt);
+    }
+
+    if context
+        .expected_revision
+        .is_some_and(|expected| expected != state.revision)
+    {
+        return Err(RepositoryError::StaleRevision);
+    }
+
+    let revision = state
+        .revision
+        .next()
+        .map_err(|_| RepositoryError::CapacityExceeded)?;
+    authorise(&transaction, context, command)?;
+    let entity = execute(
+        &transaction,
+        partition_id.as_bytes(),
+        context,
+        command,
+        revision,
+    )?;
+    let payload = encode_result(entity, revision, position)?;
+    let stored_result_digest = result_digest(&payload);
+    insert_operation(
+        &transaction,
+        partition_id.as_bytes(),
+        position,
+        context,
+        command_kind(command),
+        request_digest,
+        &payload,
+        stored_result_digest,
+        revision,
+    )?;
+    insert_audit_event(
+        &transaction,
+        context,
+        command_kind(command),
+        entity,
+        request_digest,
+        stored_result_digest,
+    )?;
+    advance_applied_position(&transaction, revision, position)?;
+    transaction.commit()?;
+    Ok(CommandReceipt {
+        disposition: ApplyDisposition::Applied,
+        operation_id: context.operation_id,
+        request_digest,
+        result_digest: stored_result_digest,
+        committed_revision: revision,
+        committed_position: position,
+        applied_position: position,
+        entity,
+    })
+}
+
+fn read_applied_state(transaction: &Transaction<'_>) -> Result<AppliedState, RepositoryError> {
+    let (index, term, revision) = transaction.query_row(
+        "SELECT last_log_index, last_log_term, state_revision
+         FROM applied_state WHERE singleton = 1",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        },
+    )?;
+    Ok(AppliedState {
+        position: LogPosition {
+            index: parse_u64(index)?,
+            term: parse_u64(term)?,
+        },
+        revision: Revision::new(parse_u64(revision)?),
+    })
+}
+
+fn validate_transition(state: AppliedState, next: LogPosition) -> Result<(), RepositoryError> {
+    let expected_index = state
+        .position
+        .index
+        .checked_add(1)
+        .ok_or(RepositoryError::InvalidLogPosition)?;
+    if next.index != expected_index || next.term < state.position.term {
+        return Err(RepositoryError::InvalidLogPosition);
+    }
+    Ok(())
+}
+
+fn load_operation(
+    transaction: &Transaction<'_>,
+    operation_id: OperationId,
+) -> Result<Option<StoredOperation>, RepositoryError> {
+    let operation = operation_id.as_bytes();
+    transaction
+        .query_row(
+            "SELECT request_digest, result_payload, result_digest, revision,
+                    committed_log_index
+             FROM operations WHERE operation_id = ?1",
+            [operation.as_slice()],
+            |row| {
+                Ok(StoredOperation {
+                    request_digest: row.get(0)?,
+                    result_payload: row.get(1)?,
+                    result_digest: row.get(2)?,
+                    revision: row.get(3)?,
+                    committed_index: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(RepositoryError::from)
+}
+
+fn authorise(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<(), RepositoryError> {
+    if let AuthoritativeCommand::BootstrapMesh(value) = command {
+        let existing: i64 = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM principals LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        return if existing == 0 && context.actor_principal_id == value.administrator_id {
+            Ok(())
+        } else {
+            Err(RepositoryError::InvalidCommand)
+        };
+    }
+    if let AuthoritativeCommand::ActivateGrant(value) = command {
+        return if context.actor_principal_id == value.principal_id {
+            Ok(())
+        } else {
+            Err(RepositoryError::InvalidCommand)
+        };
+    }
+    require_system_administrator(
+        transaction,
+        context.actor_principal_id,
+        context.occurred_at.get(),
+    )
+}
+
+fn require_system_administrator(
+    transaction: &Transaction<'_>,
+    principal_id: PrincipalId,
+    now: i64,
+) -> Result<(), RepositoryError> {
+    let principal = principal_id.as_bytes();
+    let authorised: i64 = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM role_grants rg
+            JOIN roles r ON r.role_id = rg.role_id
+            JOIN principals p ON p.principal_id = rg.principal_id
+            WHERE rg.principal_id = ?1 AND p.state = 1
+              AND (r.system_rights & ?2) = ?2
+              AND (rg.valid_from IS NULL OR rg.valid_from <= ?3)
+              AND (rg.valid_until IS NULL OR rg.valid_until > ?3)
+              AND rg.activation_policy_id IS NULL
+         )",
+        params![principal.as_slice(), SYSTEM_MANAGE_RIGHT, now],
+        |row| row.get(0),
+    )?;
+    if authorised == 1 {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
+}
+
+fn execute(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    match command {
+        AuthoritativeCommand::BootstrapMesh(value) => {
+            identity::bootstrap(transaction, partition_id, context, value, revision)
+        }
+        AuthoritativeCommand::CreateUser(value) => {
+            identity::create_user(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CreateGroup(value) => {
+            identity::create_group(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AddGroupMember(value) => {
+            identity::add_group_member(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CreateActivationPolicy(value) => {
+            identity::create_activation_policy(transaction, value, revision)
+        }
+        AuthoritativeCommand::CreateVolume(value) => {
+            namespace::create_volume(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CreateObject(value) => {
+            namespace::create_object(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::GrantPermission(value) => {
+            identity::grant_permission(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ActivateGrant(value) => {
+            identity::activate_grant(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CreateComponent(value) => {
+            component::create(transaction, context, value, revision)
+        }
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the stored operation row is one atomic record"
+)]
+fn insert_operation(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    position: LogPosition,
+    context: CommandContext,
+    operation_kind: u8,
+    request_digest: [u8; 32],
+    result_payload: &[u8],
+    stored_result_digest: [u8; 32],
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let operation = context.operation_id.as_bytes();
+    let actor = context.actor_principal_id.as_bytes();
+    transaction.execute(
+        "INSERT INTO operations(
+            operation_id, partition_id, actor_principal_id, actor_node_id,
+            operation_kind, request_version, request_digest, outcome, durability_scope,
+            started_at, completed_at, committed_log_index, result_kind, result_version,
+            result_payload, result_digest, error_kind, revision
+         ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, NULL, ?8, ?8, ?9, ?10, ?5,
+                   ?11, ?12, NULL, ?13)",
+        params![
+            operation.as_slice(),
+            partition_id.as_slice(),
+            actor.as_slice(),
+            operation_kind,
+            RECORD_VERSION,
+            request_digest.as_slice(),
+            POLICY_COMMITTED_OUTCOME,
+            context.occurred_at.get(),
+            to_i64(position.index)?,
+            RESULT_KIND_ENTITY_REFERENCE,
+            result_payload,
+            stored_result_digest.as_slice(),
+            to_i64(revision.get())?
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_audit_event(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    event_kind: u8,
+    entity: EntityReference,
+    request_digest: [u8; 32],
+    stored_result_digest: [u8; 32],
+) -> Result<(), RepositoryError> {
+    let previous: Option<Vec<u8>> = transaction
+        .query_row(
+            "SELECT event_digest FROM audit_events ORDER BY occurred_at DESC, event_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if previous.as_ref().is_some_and(|value| value.len() != 32) {
+        return Err(RepositoryError::CorruptState);
+    }
+    let event_digest = audit_digest(
+        context,
+        event_kind,
+        entity,
+        request_digest,
+        stored_result_digest,
+        previous.as_deref(),
+    );
+    let event = context.audit_event_id.as_bytes();
+    let operation = context.operation_id.as_bytes();
+    let actor = context.actor_principal_id.as_bytes();
+    transaction.execute(
+        "INSERT INTO audit_events(
+            event_id, operation_id, sequence, actor_principal_id, actor_node_id,
+            event_kind, subject_kind, subject_id, occurred_at, redacted_payload,
+            previous_event_digest, event_digest
+         ) VALUES (?1, ?2, 0, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            event.as_slice(),
+            operation.as_slice(),
+            actor.as_slice(),
+            event_kind,
+            entity.kind as u8,
+            entity.id.as_slice(),
+            context.occurred_at.get(),
+            [RECORD_VERSION, event_kind].as_slice(),
+            previous,
+            event_digest.as_slice()
+        ],
+    )?;
+    Ok(())
+}
+
+fn audit_digest(
+    context: CommandContext,
+    event_kind: u8,
+    entity: EntityReference,
+    request_digest: [u8; 32],
+    stored_result_digest: [u8; 32],
+    previous: Option<&[u8]>,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"meshspan.metadata.audit.v1");
+    digest.update(context.audit_event_id.as_bytes());
+    digest.update(context.operation_id.as_bytes());
+    digest.update(context.actor_principal_id.as_bytes());
+    digest.update(context.occurred_at.get().to_be_bytes());
+    digest.update([event_kind, entity.kind as u8]);
+    digest.update(entity.id);
+    digest.update(request_digest);
+    digest.update(stored_result_digest);
+    match previous {
+        Some(value) => {
+            digest.update([1]);
+            digest.update(value);
+        }
+        None => digest.update([0]),
+    }
+    digest.finalize().into()
+}
+
+fn advance_applied_position(
+    transaction: &Transaction<'_>,
+    revision: Revision,
+    position: LogPosition,
+) -> Result<(), RepositoryError> {
+    let updated = transaction.execute(
+        "UPDATE applied_state
+         SET last_log_index = ?1, last_log_term = ?2, state_revision = ?3
+         WHERE singleton = 1",
+        params![
+            to_i64(position.index)?,
+            to_i64(position.term)?,
+            to_i64(revision.get())?
+        ],
+    )?;
+    if updated == 1 {
+        Ok(())
+    } else {
+        Err(RepositoryError::CorruptState)
+    }
+}
+
+fn command_kind(command: &AuthoritativeCommand) -> u8 {
+    match command {
+        AuthoritativeCommand::BootstrapMesh(_) => 1,
+        AuthoritativeCommand::CreateUser(_) => 2,
+        AuthoritativeCommand::CreateGroup(_) => 3,
+        AuthoritativeCommand::AddGroupMember(_) => 4,
+        AuthoritativeCommand::CreateActivationPolicy(_) => 5,
+        AuthoritativeCommand::CreateVolume(_) => 6,
+        AuthoritativeCommand::CreateObject(_) => 7,
+        AuthoritativeCommand::GrantPermission(_) => 8,
+        AuthoritativeCommand::ActivateGrant(_) => 9,
+        AuthoritativeCommand::CreateComponent(_) => 10,
+    }
+}
+
+fn parse_u64(value: i64) -> Result<u64, RepositoryError> {
+    u64::try_from(value).map_err(|_| RepositoryError::CorruptState)
+}
+
+pub(super) fn to_i64(value: u64) -> Result<i64, RepositoryError> {
+    i64::try_from(value).map_err(|_| RepositoryError::CapacityExceeded)
+}

@@ -6,6 +6,7 @@ mod command;
 mod database;
 mod migration;
 mod name;
+mod repository;
 
 pub use command::{
     ActivateGrant, AddGroupMember, AuthoritativeCommand, BootstrapMesh, CommandContext,
@@ -15,3 +16,7 @@ pub use command::{
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
+pub use repository::{
+    ApplyDisposition, AuthoritativeRepository, CommandReceipt, EntityKind, EntityReference,
+    LogPosition, RepositoryError,
+};

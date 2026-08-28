@@ -75,8 +75,11 @@ impl PartitionDatabase {
         check_integrity(&self.connection, PARTITION_SCHEMA_VERSION)
     }
 
-    #[cfg(test)]
-    const fn connection(&self) -> &Connection {
+    pub(crate) const fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+
+    pub(crate) const fn connection(&self) -> &Connection {
         &self.connection
     }
 }
@@ -169,6 +172,10 @@ fn bind_partition_identity(
     if stored.as_slice() != partition_bytes {
         return Err(MetadataStoreError::IdentityMismatch);
     }
+    transaction.execute(
+        "UPDATE applied_state SET schema_version = ?1 WHERE singleton = 1",
+        [PARTITION_SCHEMA_VERSION],
+    )?;
     transaction.commit()?;
     Ok(())
 }
