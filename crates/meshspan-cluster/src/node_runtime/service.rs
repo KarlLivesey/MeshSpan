@@ -10,7 +10,9 @@ use meshspan_consensus::{
     flat_plan,
 };
 use meshspan_domain::{NodeId, OperationId, PartitionId, QuorumPlanId, UnixMicros};
-use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
+use meshspan_metadata::{
+    AuthoritativeRepository, LogPosition as MetadataLogPosition, PartitionDatabase,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
@@ -18,6 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::NodeRuntimeError;
 use super::config::NodeConfig;
 use super::network::{PeerMessage, PeerNetwork};
+use super::proof_metadata::ProofMetadata;
 use crate::{DriverEffect, PartitionConsensusDriver};
 
 const MEMBERSHIP_EPOCH: u64 = 1;
@@ -57,21 +60,21 @@ pub async fn run_stage_three_node(
     let (events, mut received_events) = mpsc::channel(EVENT_CAPACITY);
     let (peer_messages, received_peer_messages) = mpsc::channel(EVENT_CAPACITY);
     let network = PeerNetwork::start(&config, peer_messages)?;
+    let proof_metadata = ProofMetadata::load(&config)?;
     spawn_peer_forwarder(events.clone(), received_peer_messages);
     spawn_control_listener(config.control_address, events).await?;
 
-    let mut committed = BTreeSet::new();
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = heartbeat.tick(), if driver.role() == Role::Leader => {
                 let effects = driver.step(CoreInput::Heartbeat, now())?;
-                apply_effects(&mut driver, &network, &mut committed, effects)?;
+                apply_effects(&mut driver, &network, &proof_metadata, effects)?;
             }
             event = received_events.recv() => {
                 let event = event.ok_or(NodeRuntimeError::InvalidConfiguration)?;
-                handle_event(event, &mut driver, &network, &mut committed)?;
+                handle_event(event, &mut driver, &network, &proof_metadata)?;
             }
         }
     }
@@ -195,7 +198,7 @@ fn handle_event(
     event: NodeEvent,
     driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
     network: &PeerNetwork,
-    committed: &mut BTreeSet<OperationId>,
+    proof_metadata: &ProofMetadata,
 ) -> Result<(), NodeRuntimeError> {
     match event {
         NodeEvent::Peer(peer) => {
@@ -207,10 +210,10 @@ fn handle_event(
                 },
                 now(),
             )?;
-            apply_effects(driver, network, committed, effects)
+            apply_effects(driver, network, proof_metadata, effects)
         }
         NodeEvent::Control { request, response } => {
-            let answer = handle_control(request, driver, network, committed)?;
+            let answer = handle_control(request, driver, network, proof_metadata)?;
             let _receiver_closed = response.send(answer);
             Ok(())
         }
@@ -221,12 +224,12 @@ fn handle_control(
     request: ControlRequest,
     driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
     network: &PeerNetwork,
-    committed: &mut BTreeSet<OperationId>,
+    proof_metadata: &ProofMetadata,
 ) -> Result<&'static str, NodeRuntimeError> {
     match request {
         ControlRequest::Elect => {
             let effects = driver.step(CoreInput::ElectionTimeout, now())?;
-            apply_effects(driver, network, committed, effects)?;
+            apply_effects(driver, network, proof_metadata, effects)?;
             Ok("ELECTION_STARTED")
         }
         ControlRequest::Propose(value) if driver.role() == Role::Leader => {
@@ -239,11 +242,16 @@ fn handle_control(
                 },
                 now(),
             )?;
-            apply_effects(driver, network, committed, effects)?;
+            apply_effects(driver, network, proof_metadata, effects)?;
             Ok("ACCEPTED")
         }
         ControlRequest::Propose(_) => Ok(redirect_response(driver.leader_id())),
-        ControlRequest::Status(value) if committed.contains(&operation_id(value)?) => {
+        ControlRequest::Status(value)
+            if driver
+                .persistence()
+                .resolve_operation(operation_id(value)?)?
+                .is_some() =>
+        {
             Ok("COMMITTED")
         }
         ControlRequest::Status(_) => Ok("UNKNOWN"),
@@ -255,7 +263,7 @@ fn handle_control(
 fn apply_effects(
     driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
     network: &PeerNetwork,
-    committed: &mut BTreeSet<OperationId>,
+    proof_metadata: &ProofMetadata,
     effects: Vec<DriverEffect>,
 ) -> Result<(), NodeRuntimeError> {
     let mut pending = VecDeque::from(effects);
@@ -268,7 +276,17 @@ fn apply_effects(
                     .ok_or(NodeRuntimeError::InvalidConfiguration)?
                     .position
                     .index;
-                committed.extend(entries.into_iter().map(|entry| entry.operation_id));
+                for entry in entries {
+                    let decoded = proof_metadata.decode(&entry)?;
+                    driver.persistence_mut().apply_committed(
+                        MetadataLogPosition {
+                            term: entry.position.term,
+                            index: entry.position.index,
+                        },
+                        decoded.context,
+                        &decoded.command,
+                    )?;
+                }
                 pending.extend(driver.step(CoreInput::AppliedThrough(applied_index), now())?);
             }
             DriverEffect::Rejected { .. }

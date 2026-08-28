@@ -152,6 +152,23 @@ impl<P: PartitionConsensusPersistence> PartitionConsensusDriver<P> {
         self.core.applied_index()
     }
 
+    /// Borrows the durable repository for read-only state-machine queries.
+    ///
+    /// The single-owner runtime uses this only after processing emitted effects; consensus
+    /// persistence remains exclusively mediated by this driver.
+    #[must_use]
+    pub(crate) const fn persistence(&self) -> &P {
+        &self.persistence
+    }
+
+    /// Borrows the durable repository to apply an emitted committed-entry batch.
+    ///
+    /// Callers must apply entries in order and report the resulting durable applied index through
+    /// `CoreInput::AppliedThrough`. The runtime owns both operations in one event-loop turn.
+    pub(crate) const fn persistence_mut(&mut self) -> &mut P {
+        &mut self.persistence
+    }
+
     /// Returns ownership of persistence after orderly shutdown.
     #[must_use]
     pub fn into_persistence(self) -> P {

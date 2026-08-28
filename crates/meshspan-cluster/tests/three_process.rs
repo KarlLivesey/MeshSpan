@@ -43,6 +43,10 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
     )
     .await?;
 
+    for operation in 1_u8..=11 {
+        commit_on_every_node(&launches, 0, operation).await?;
+    }
+
     assert_eq!(
         command(launches[1].control_address, "PROPOSE 21").await?,
         "REDIRECT 1"
@@ -277,6 +281,23 @@ async fn abandon_response(address: SocketAddr, request: &str) -> Result<(), Box<
     stream.write_all(request.as_bytes()).await?;
     stream.write_all(b"\n").await?;
     drop(stream);
+    Ok(())
+}
+
+async fn commit_on_every_node(
+    launches: &[NodeLaunch],
+    leader_index: usize,
+    operation: u8,
+) -> Result<(), Box<dyn Error>> {
+    let proposal = format!("PROPOSE {operation}");
+    assert_eq!(
+        command(launches[leader_index].control_address, &proposal).await?,
+        "ACCEPTED"
+    );
+    let status = format!("STATUS {operation}");
+    for launch in launches {
+        wait_for_response(launch.control_address, &status, Some("COMMITTED")).await?;
+    }
     Ok(())
 }
 

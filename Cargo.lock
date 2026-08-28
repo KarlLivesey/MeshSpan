@@ -716,6 +716,7 @@ dependencies = [
 name = "meshspan-cluster"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "meshspan-consensus",
  "meshspan-domain",
  "meshspan-metadata",

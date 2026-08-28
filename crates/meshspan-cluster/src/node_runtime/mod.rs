@@ -4,6 +4,7 @@
 
 mod config;
 mod network;
+mod proof_metadata;
 mod service;
 
 use thiserror::Error;
@@ -37,6 +38,15 @@ pub enum NodeRuntimeError {
     /// Metadata database could not be opened or migrated.
     #[error("stage three node metadata store failed")]
     Metadata(#[from] meshspan_metadata::MetadataStoreError),
+    /// A committed metadata command failed closed.
+    #[error("stage three node metadata command failed")]
+    Repository(#[from] meshspan_metadata::RepositoryError),
+    /// A proof command could not construct a validated metadata value.
+    #[error("stage three node metadata value is invalid")]
+    MetadataCommand(#[from] meshspan_metadata::RepositoryCommandError),
+    /// A proof record name violated the metadata naming contract.
+    #[error("stage three node metadata name is invalid")]
+    RecordName(#[from] meshspan_metadata::RecordNameError),
     /// Durable consensus state could not be loaded.
     #[error("stage three node consensus store failed")]
     ConsensusStore(#[from] meshspan_metadata::ConsensusStoreError),

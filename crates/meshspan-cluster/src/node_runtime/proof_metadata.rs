@@ -1,0 +1,316 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Deterministic Stage 3 proof commands applied by every replicated metadata state machine.
+
+use std::collections::BTreeMap;
+
+use ed25519_dalek::{Signer, SigningKey};
+use meshspan_consensus::LogEntry;
+use meshspan_domain::{
+    AuditEventId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId, PartitionId,
+    PrincipalId, Revision, RoleId, ScopeId, ScopeRoute, UnixMicros,
+};
+use meshspan_metadata::{
+    ActivateScopeHandoff, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext,
+    ConsumeJoinGrant, CreateGroup, CreateMetadataPartition, CreateScopeRoute, FreezeScopeHandoff,
+    IssueJoinGrant, JoinRoles, RecordName, RegisterRoutingSigner, RouteAttestation,
+};
+use meshspan_transport::certificate_fingerprint;
+use rustls::pki_types::CertificateDer;
+
+use super::NodeRuntimeError;
+use super::config::NodeConfig;
+
+const BOOTSTRAP: u8 = 1;
+const ISSUE_NODE_TWO: u8 = 2;
+const ENROL_NODE_TWO: u8 = 3;
+const ISSUE_NODE_THREE: u8 = 4;
+const ENROL_NODE_THREE: u8 = 5;
+const REGISTER_ROUTING_SIGNER: u8 = 6;
+const CREATE_SECOND_PARTITION: u8 = 7;
+const CREATE_SCOPE_ROUTE: u8 = 8;
+const BEGIN_SCOPE_HANDOFF: u8 = 9;
+const FREEZE_SCOPE_HANDOFF: u8 = 10;
+const ACTIVATE_SCOPE_HANDOFF: u8 = 11;
+const FIRST_USER_COMMAND: u8 = 21;
+
+pub(super) struct ProofMetadata {
+    certificates: BTreeMap<NodeId, Vec<u8>>,
+}
+
+pub(super) struct DecodedCommand {
+    pub context: CommandContext,
+    pub command: AuthoritativeCommand,
+}
+
+impl ProofMetadata {
+    pub fn load(config: &NodeConfig) -> Result<Self, NodeRuntimeError> {
+        let own_certificate = std::fs::read(&config.certificate_path)?;
+        let mut certificates = BTreeMap::from([(config.node_id, own_certificate)]);
+        for peer in config.peers.values() {
+            certificates.insert(peer.node_id, std::fs::read(&peer.certificate_path)?);
+        }
+        if certificates.len() != 3 {
+            return Err(NodeRuntimeError::InvalidConfiguration);
+        }
+        Ok(Self { certificates })
+    }
+
+    pub fn decode(&self, entry: &LogEntry) -> Result<DecodedCommand, NodeRuntimeError> {
+        let [kind] = entry.command.as_slice() else {
+            return Err(NodeRuntimeError::InvalidConfiguration);
+        };
+        let command = match *kind {
+            BOOTSTRAP => bootstrap()?,
+            ISSUE_NODE_TWO => issue_join(2)?,
+            ENROL_NODE_TWO => self.enrol(2)?,
+            ISSUE_NODE_THREE => issue_join(3)?,
+            ENROL_NODE_THREE => self.enrol(3)?,
+            REGISTER_ROUTING_SIGNER => register_routing_signer()?,
+            CREATE_SECOND_PARTITION => create_second_partition()?,
+            CREATE_SCOPE_ROUTE => create_scope_route()?,
+            BEGIN_SCOPE_HANDOFF => begin_scope_handoff()?,
+            FREEZE_SCOPE_HANDOFF => freeze_scope_handoff()?,
+            ACTIVATE_SCOPE_HANDOFF => activate_scope_handoff()?,
+            value if value >= FIRST_USER_COMMAND => create_group(value)?,
+            _ => return Err(NodeRuntimeError::InvalidConfiguration),
+        };
+        Ok(DecodedCommand {
+            context: context(*kind, entry.operation_id)?,
+            command,
+        })
+    }
+
+    fn enrol(&self, number: u8) -> Result<AuthoritativeCommand, NodeRuntimeError> {
+        let node_id = node_id(number)?;
+        let certificate_der = self
+            .certificates
+            .get(&node_id)
+            .cloned()
+            .ok_or(NodeRuntimeError::InvalidConfiguration)?;
+        let fingerprint = certificate_fingerprint(&CertificateDer::from(certificate_der.clone()));
+        Ok(AuthoritativeCommand::ConsumeJoinGrant(ConsumeJoinGrant {
+            join_grant_id: join_grant_id(number)?,
+            secret_digest: join_secret(number),
+            host_id: HostId::from_bytes([60_u8.saturating_add(number); 16])?,
+            new_host_name: Some(RecordName::new(&format!("Proof host {number}"))?),
+            node_id,
+            node_name: RecordName::new(&format!("Proof node {number}"))?,
+            incarnation: 1,
+            requested_roles: proof_roles()?,
+            certificate_der,
+            certificate_fingerprint: fingerprint,
+            certificate_valid_until: UnixMicros::new(10_000_000),
+        }))
+    }
+}
+
+fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    Ok(AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+        mesh_id: MeshId::from_bytes([9; 16])?,
+        mesh_name: RecordName::new("Stage 3 proof mesh")?,
+        administrator_id: administrator_id()?,
+        administrator_name: RecordName::new("Proof administrator")?,
+        administrator_role_id: RoleId::from_bytes([11; 16])?,
+        host_id: HostId::from_bytes([12; 16])?,
+        host_name: RecordName::new("Proof host 1")?,
+        node_id: node_id(1)?,
+        node_name: RecordName::new("Proof node 1")?,
+        partition_name: RecordName::new("Proof authority")?,
+    }))
+}
+
+fn issue_join(number: u8) -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    Ok(AuthoritativeCommand::IssueJoinGrant(IssueJoinGrant {
+        join_grant_id: join_grant_id(number)?,
+        secret_digest: join_secret(number),
+        allowed_roles: proof_roles()?,
+        maximum_uses: 1,
+        expires_at: UnixMicros::new(9_000_000),
+    }))
+}
+
+fn create_group(value: u8) -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    Ok(AuthoritativeCommand::CreateGroup(CreateGroup {
+        group_id: GroupId::from_bytes([value; 16])?,
+        name: RecordName::new(&format!("Proof group {value}"))?,
+        activation_policy_id: None,
+    }))
+}
+
+fn register_routing_signer() -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    Ok(AuthoritativeCommand::RegisterRoutingSigner(
+        RegisterRoutingSigner {
+            node_id: node_id(1)?,
+            generation: 1,
+            verifying_key: routing_signing_key().verifying_key().to_bytes(),
+        },
+    ))
+}
+
+fn create_second_partition() -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    Ok(AuthoritativeCommand::CreateMetadataPartition(
+        CreateMetadataPartition {
+            partition_id: destination_partition()?,
+            name: RecordName::new("Proof namespace partition")?,
+            partition_kind: 2,
+        },
+    ))
+}
+
+fn create_scope_route() -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    let route = initial_route()?;
+    Ok(AuthoritativeCommand::CreateScopeRoute(CreateScopeRoute {
+        scope_id: proof_scope()?,
+        partition_id: source_partition()?,
+        routing_epoch: 1,
+        attestation: attest(&route)?,
+    }))
+}
+
+fn begin_scope_handoff() -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    let mut route = initial_route()?;
+    route
+        .begin_handoff(destination_partition()?, 2)
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+    Ok(AuthoritativeCommand::BeginScopeHandoff(BeginScopeHandoff {
+        scope_id: proof_scope()?,
+        destination_partition_id: destination_partition()?,
+        routing_epoch: 2,
+        attestation: attest(&route)?,
+    }))
+}
+
+fn freeze_scope_handoff() -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    let mut route = preparing_route()?;
+    let evidence = handoff_evidence();
+    route
+        .freeze(2, evidence)
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+    Ok(AuthoritativeCommand::FreezeScopeHandoff(
+        FreezeScopeHandoff {
+            scope_id: proof_scope()?,
+            routing_epoch: 2,
+            evidence,
+            attestation: attest(&route)?,
+        },
+    ))
+}
+
+fn activate_scope_handoff() -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    let mut route = preparing_route()?;
+    let evidence = handoff_evidence();
+    let destination = destination_partition()?;
+    route
+        .freeze(2, evidence)
+        .and_then(|()| route.activate(destination, 2, evidence))
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+    Ok(AuthoritativeCommand::ActivateScopeHandoff(
+        ActivateScopeHandoff {
+            scope_id: proof_scope()?,
+            destination_partition_id: destination,
+            routing_epoch: 2,
+            evidence,
+            attestation: attest(&route)?,
+        },
+    ))
+}
+
+fn initial_route() -> Result<ScopeRoute, NodeRuntimeError> {
+    ScopeRoute::new(proof_scope()?, source_partition()?, 1, 1)
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)
+}
+
+fn preparing_route() -> Result<ScopeRoute, NodeRuntimeError> {
+    let mut route = initial_route()?;
+    route
+        .begin_handoff(destination_partition()?, 2)
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+    Ok(route)
+}
+
+fn attest(route: &ScopeRoute) -> Result<RouteAttestation, NodeRuntimeError> {
+    let signature = routing_signing_key()
+        .sign(&route.signing_payload())
+        .to_bytes();
+    Ok(RouteAttestation {
+        signer_node_id: node_id(1)?,
+        signer_generation: 1,
+        signature,
+    })
+}
+
+fn routing_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[77; 32])
+}
+
+fn handoff_evidence() -> HandoffEvidence {
+    HandoffEvidence {
+        frozen_revision: Revision::new(9),
+        snapshot_digest: [78; 32],
+    }
+}
+
+fn context(
+    value: u8,
+    operation_id: meshspan_domain::OperationId,
+) -> Result<CommandContext, NodeRuntimeError> {
+    Ok(CommandContext {
+        operation_id,
+        actor_principal_id: administrator_id()?,
+        audit_event_id: AuditEventId::from_bytes([value.wrapping_add(100); 16])?,
+        occurred_at: UnixMicros::new(1_000 + i64::from(value)),
+        expected_revision: Some(Revision::new(expected_revision(value)?)),
+    })
+}
+
+fn expected_revision(value: u8) -> Result<u64, NodeRuntimeError> {
+    match value {
+        BOOTSTRAP => Ok(0),
+        ISSUE_NODE_TWO => Ok(1),
+        ENROL_NODE_TWO => Ok(2),
+        ISSUE_NODE_THREE => Ok(3),
+        ENROL_NODE_THREE => Ok(4),
+        REGISTER_ROUTING_SIGNER => Ok(5),
+        CREATE_SECOND_PARTITION => Ok(6),
+        CREATE_SCOPE_ROUTE => Ok(7),
+        BEGIN_SCOPE_HANDOFF => Ok(8),
+        FREEZE_SCOPE_HANDOFF => Ok(9),
+        ACTIVATE_SCOPE_HANDOFF => Ok(10),
+        value if value >= FIRST_USER_COMMAND => Ok(u64::from(value - FIRST_USER_COMMAND) + 11),
+        _ => Err(NodeRuntimeError::InvalidConfiguration),
+    }
+}
+
+fn proof_roles() -> Result<JoinRoles, NodeRuntimeError> {
+    JoinRoles::new(JoinRoles::STORAGE | JoinRoles::GATEWAY | JoinRoles::METADATA_ELIGIBLE)
+        .map_err(Into::into)
+}
+
+fn administrator_id() -> Result<PrincipalId, NodeRuntimeError> {
+    PrincipalId::from_bytes([10; 16]).map_err(Into::into)
+}
+
+fn node_id(number: u8) -> Result<NodeId, NodeRuntimeError> {
+    NodeId::from_bytes([number; 16]).map_err(Into::into)
+}
+
+fn source_partition() -> Result<PartitionId, NodeRuntimeError> {
+    PartitionId::from_bytes([8; 16]).map_err(Into::into)
+}
+
+fn destination_partition() -> Result<PartitionId, NodeRuntimeError> {
+    PartitionId::from_bytes([6; 16]).map_err(Into::into)
+}
+
+fn proof_scope() -> Result<ScopeId, NodeRuntimeError> {
+    ScopeId::from_bytes([70; 16]).map_err(Into::into)
+}
+
+fn join_grant_id(number: u8) -> Result<JoinGrantId, NodeRuntimeError> {
+    JoinGrantId::from_bytes([40_u8.saturating_add(number); 16]).map_err(Into::into)
+}
+
+const fn join_secret(number: u8) -> [u8; 32] {
+    [50_u8.saturating_add(number); 32]
+}
