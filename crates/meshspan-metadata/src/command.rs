@@ -6,7 +6,7 @@ use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
     DurationMicros, GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
-    PrincipalId, Revision, Rights, UnixMicros, VolumeId,
+    PrincipalId, Revision, Rights, RoleId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -93,6 +93,8 @@ pub struct BootstrapMesh {
     pub administrator_id: PrincipalId,
     /// Administrator display/canonical name.
     pub administrator_name: RecordName,
+    /// Built-in system-administrator role identity.
+    pub administrator_role_id: RoleId,
     /// First physical host.
     pub host_id: HostId,
     /// Host display/canonical name.
@@ -312,6 +314,7 @@ digest_simple_record!(BootstrapMesh, b"bootstrap", |value, digest| {
     digest.name(&value.mesh_name);
     digest.identifier(value.administrator_id.as_bytes());
     digest.name(&value.administrator_name);
+    digest.identifier(value.administrator_role_id.as_bytes());
     digest.identifier(value.host_id.as_bytes());
     digest.name(&value.host_name);
     digest.identifier(value.node_id.as_bytes());

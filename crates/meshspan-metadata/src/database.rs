@@ -224,7 +224,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{LocalDatabase, MetadataStoreError, PartitionDatabase};
-    use crate::migration::{local_migration_digest, partition_migration_digest};
+    use crate::migration::{
+        local_migration_digest, partition_migration_digest, partition_roles_migration_digest,
+    };
 
     #[test]
     fn partition_database_migrates_reopens_and_rejects_another_identity()
@@ -235,7 +237,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 1);
+        assert_eq!(database.check_integrity()?.schema_version, 2);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -297,6 +299,14 @@ mod tests {
                 0x6d, 0x94, 0xdb, 0x99, 0x71, 0xa3, 0xc3, 0x74, 0x3f, 0xce, 0xf1, 0x6b, 0x7c, 0xb3,
                 0x30, 0xdf, 0xd0, 0x7d, 0x63, 0xf7, 0x69, 0xf7, 0xdb, 0xe3, 0x9f, 0x72, 0x9d, 0x2d,
                 0xbb, 0x53, 0xa5, 0x10,
+            ]
+        );
+        assert_eq!(
+            partition_roles_migration_digest(),
+            [
+                0x64, 0x03, 0x34, 0x75, 0x75, 0x48, 0x36, 0x42, 0x6b, 0x9c, 0x8e, 0x1d, 0xca, 0xad,
+                0xbb, 0x85, 0x6b, 0x00, 0xc1, 0x3a, 0x36, 0xa3, 0xe5, 0xc7, 0xef, 0xfe, 0x2d, 0x51,
+                0x84, 0xf8, 0x75, 0xd1,
             ]
         );
     }

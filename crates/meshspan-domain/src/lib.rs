@@ -21,8 +21,8 @@ pub use operation::{
 pub use primitives::{
     ActivationId, ActivationPolicyId, AuditEventId, BackupId, ComponentInstanceId, DurationMicros,
     FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError, MeshId, NodeId,
-    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, RevisionError, TagId,
-    TargetId, UnixMicros, VolumeId,
+    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, RevisionError, RoleId,
+    TagId, TargetId, UnixMicros, VolumeId,
 };
 pub use seams::{Clock, EntropyError, RandomSource};
 pub use topology::{
