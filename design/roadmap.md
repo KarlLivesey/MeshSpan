@@ -112,6 +112,8 @@ CFG-001–008, EXT-002–004, EXT-007.
 
 **Depends on:** Stage 2.
 
+**Status:** complete. See [`stage-3-evidence.md`](stage-3-evidence.md).
+
 Build:
 
 - Quinn/mTLS node identity negotiation;
@@ -136,8 +138,9 @@ First vertical proof:
 
 Exit evidence:
 
-- deterministic multi-way partition tests prove only a majority advances the
-  converged/control head;
+- deterministic multi-way partition tests prove only a valid elected authority
+  retaining its compiled consensus-write quorum advances the converged/control
+  head;
 - stale processes, replayed messages and corrupt snapshots fail closed;
 - control traffic remains responsive during a saturated synthetic data stream.
 
