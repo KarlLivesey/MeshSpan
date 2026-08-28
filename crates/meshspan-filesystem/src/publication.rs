@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 10] = [
+const MIGRATIONS: [Migration; 11] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -66,8 +66,12 @@ const MIGRATIONS: [Migration; 10] = [
         version: 10,
         sql: include_str!("../schema/branch/010_handles_and_locks.sql"),
     },
+    Migration {
+        version: 11,
+        sql: include_str!("../schema/branch/011_pending_deletes.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -637,6 +641,58 @@ impl VersionPublicationStore {
             operation_id,
             PublicationDisposition::Replayed,
         )
+    }
+
+    /// Extends a live handle lease or explicitly transfers it under a new fence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale fences, expired handles, principal/gateway substitution, decreasing
+    /// authorisation/lease revisions, conflicting retries and corrupt durable state.
+    pub fn renew_handle_lease(
+        &mut self,
+        request: crate::HandleLeaseRequest,
+    ) -> Result<crate::HandleLeaseReceipt, crate::HandleError> {
+        crate::handles::renew(&mut self.connection, request)
+    }
+
+    /// Closes one fenced handle, releases its locks and advances delete-on-close readiness.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/expired fences, principal/gateway substitution, conflicting retries,
+    /// corrupt state and persistence failure.
+    pub fn close_handle(
+        &mut self,
+        request: crate::CloseHandleRequest,
+    ) -> Result<crate::CloseHandleReceipt, crate::HandleError> {
+        crate::handles::close(&mut self.connection, request)
+    }
+
+    /// Acquires one fenced, leased byte-range lock on a live file handle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid or stale handle authority, incompatible overlapping locks, identity or
+    /// retry conflicts, corrupt durable state and persistence failure.
+    pub fn lock_range(
+        &mut self,
+        request: crate::LockRangeRequest,
+    ) -> Result<crate::LockRangeReceipt, crate::HandleError> {
+        crate::handles::lock_range(&mut self.connection, request)
+    }
+
+    /// Releases one byte-range lock under the handle's current fence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale handle or lock authority, principal/gateway substitution, conflicting
+    /// retries, corrupt durable state and persistence failure.
+    pub fn unlock_range(
+        &mut self,
+        request: crate::UnlockRangeRequest,
+    ) -> Result<crate::UnlockRangeReceipt, crate::HandleError> {
+        crate::handles::unlock_range(&mut self.connection, request)
     }
 
     #[cfg(test)]

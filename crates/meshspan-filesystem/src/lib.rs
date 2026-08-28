@@ -40,7 +40,10 @@ pub use directory::{
     DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
 };
 pub use handles::{
-    CreateDisposition, HandleAccess, HandleError, HandleShare, OpenHandleReceipt, OpenHandleRequest,
+    ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,
+    HandleAccess, HandleError, HandleLeaseReceipt, HandleLeaseRequest, HandleShare,
+    LockRangeReceipt, LockRangeRequest, OpenHandleReceipt, OpenHandleRequest, RangeLockKind,
+    UnlockRangeReceipt, UnlockRangeRequest,
 };
 pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,

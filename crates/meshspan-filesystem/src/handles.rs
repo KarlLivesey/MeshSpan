@@ -2,9 +2,26 @@
 
 //! Durable authority-owned file handles and cross-gateway share-mode admission.
 
+#[path = "handles/lease.rs"]
+mod lease;
+#[path = "handles/locks.rs"]
+mod locks;
+#[path = "handles/state.rs"]
+mod state;
 #[cfg(test)]
 #[path = "handles_tests.rs"]
 mod tests;
+
+pub use lease::{
+    CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, HandleLeaseReceipt,
+    HandleLeaseRequest,
+};
+pub(crate) use lease::{close, renew};
+pub use locks::{
+    ByteRange, LockRangeReceipt, LockRangeRequest, RangeLockKind, UnlockRangeReceipt,
+    UnlockRangeRequest,
+};
+pub(crate) use locks::{lock_range, unlock_range};
 
 use meshspan_domain::{
     BranchId, FileVersionId, HandleId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
@@ -254,6 +271,21 @@ pub enum HandleError {
     /// Another live handle's desired/share sets are incompatible.
     #[error("filesystem handle sharing violation")]
     SharingViolation,
+    /// The target is waiting for its final live handle before namespace deletion.
+    #[error("filesystem handle target is pending deletion")]
+    DeletePending,
+    /// The handle is absent, closed, expired or no longer owned by the supplied fence.
+    #[error("filesystem handle fence is stale")]
+    StaleHandle,
+    /// A different gateway owns the live lease and takeover was not requested.
+    #[error("filesystem handle lease belongs to another gateway")]
+    GatewayMismatch,
+    /// A live incompatible byte-range lock overlaps the requested range.
+    #[error("filesystem byte-range lock conflicts with a live lock")]
+    LockConflict,
+    /// The selected lock is absent, released, expired or owned by another fence.
+    #[error("filesystem byte-range lock is stale")]
+    StaleLock,
     /// An idempotency or handle identity was reused for different input.
     #[error("filesystem handle operation conflicts with durable state")]
     OperationConflict,
@@ -320,6 +352,7 @@ pub(crate) fn open_existing(
         return Err(HandleError::AlreadyExists);
     }
     reject_handle_collision(&transaction, request.handle_id)?;
+    reject_pending_delete(&transaction, request, resolved.object)?;
     enforce_share_modes(&transaction, request, resolved.object)?;
     let receipt = persist_open(&transaction, request, request_digest, resolved)?;
     transaction.commit()?;
@@ -750,12 +783,40 @@ fn validate_open_lineage(
 fn expire_stale_handles(transaction: &Transaction<'_>, now: UnixMicros) -> Result<(), HandleError> {
     transaction.execute(
         "UPDATE range_locks SET state = 3, released_at = ?1
-         WHERE state = 1 AND lease_expires_at <= ?1",
+         WHERE state = 1 AND (
+             lease_expires_at <= ?1 OR EXISTS(
+                 SELECT 1 FROM open_handles h
+                 WHERE h.handle_id = range_locks.handle_id
+                   AND h.state = 1 AND h.lease_expires_at <= ?1
+             )
+         )",
+        [now.get()],
+    )?;
+    transaction.execute(
+        "INSERT INTO pending_object_deletes(
+            branch_id, volume_id, object_id, requesting_handle_id,
+            object_revision_id, version_id, state, requested_at, ready_at
+         )
+         SELECT branch_id, volume_id, object_id, handle_id,
+                object_revision_id, opened_version_id, 1, ?1, NULL
+         FROM open_handles
+         WHERE state = 1 AND lease_expires_at <= ?1 AND delete_on_close = 1
+         ON CONFLICT(branch_id, object_id) DO NOTHING",
         [now.get()],
     )?;
     transaction.execute(
         "UPDATE open_handles SET state = 3, closed_at = ?1
          WHERE state = 1 AND lease_expires_at <= ?1",
+        [now.get()],
+    )?;
+    transaction.execute(
+        "UPDATE pending_object_deletes AS pending SET state = 2, ready_at = ?1
+         WHERE pending.state = 1 AND NOT EXISTS(
+             SELECT 1 FROM open_handles h
+             WHERE h.branch_id = pending.branch_id AND h.volume_id = pending.volume_id
+               AND h.object_id = pending.object_id AND h.state = 1
+               AND h.lease_expires_at > ?1
+         )",
         [now.get()],
     )?;
     Ok(())
@@ -795,6 +856,30 @@ fn reject_handle_collision(
         Ok(())
     } else {
         Err(HandleError::OperationConflict)
+    }
+}
+
+fn reject_pending_delete(
+    transaction: &Transaction<'_>,
+    request: &OpenHandleRequest,
+    object_id: ObjectId,
+) -> Result<(), HandleError> {
+    let pending: i64 = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM pending_object_deletes
+            WHERE branch_id = ?1 AND volume_id = ?2 AND object_id = ?3
+         )",
+        params![
+            request.branch_id.as_bytes().as_slice(),
+            request.volume_id.as_bytes().as_slice(),
+            object_id.as_bytes().as_slice(),
+        ],
+        |row| row.get(0),
+    )?;
+    if pending == 0 {
+        Ok(())
+    } else {
+        Err(HandleError::DeletePending)
     }
 }
 

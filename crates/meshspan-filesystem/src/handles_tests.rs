@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId, NodeId, ObjectId,
-    ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, FileVersionId, HandleId, LockId, NamespaceCommitId, NodeId,
+    ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
@@ -139,6 +139,344 @@ fn corrupt_open_receipt_fails_closed() -> Result<(), Box<dyn std::error::Error>>
         Err(HandleError::Corrupt)
     ));
     Ok(())
+}
+
+#[test]
+fn lease_takeover_advances_the_fence_and_rejects_the_old_gateway()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = publication()?;
+    let open = open_request(60, 61, CreateDisposition::OpenExisting, 100)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    store.open_handle(&open)?;
+    let renewed = store.renew_handle_lease(HandleLeaseRequest {
+        operation_id: OperationId::from_bytes([62; 16])?,
+        handle_id: open.handle_id,
+        expected_fence: 1,
+        principal_id: open.principal_id,
+        authorization_revision: Revision::new(2),
+        gateway_node_id: open.gateway_node_id,
+        takeover: false,
+        lease_expires_at: UnixMicros::new(150),
+        observed_at: UnixMicros::new(20),
+    })?;
+    assert_eq!(renewed.handle_fence, 1);
+    let takeover_request = HandleLeaseRequest {
+        operation_id: OperationId::from_bytes([63; 16])?,
+        expected_fence: 1,
+        gateway_node_id: NodeId::from_bytes([64; 16])?,
+        takeover: true,
+        lease_expires_at: UnixMicros::new(200),
+        observed_at: UnixMicros::new(30),
+        ..HandleLeaseRequest {
+            operation_id: OperationId::from_bytes([62; 16])?,
+            handle_id: open.handle_id,
+            expected_fence: 1,
+            principal_id: open.principal_id,
+            authorization_revision: Revision::new(2),
+            gateway_node_id: open.gateway_node_id,
+            takeover: false,
+            lease_expires_at: UnixMicros::new(150),
+            observed_at: UnixMicros::new(20),
+        }
+    };
+    let takeover = store.renew_handle_lease(takeover_request)?;
+    assert_eq!(takeover.handle_fence, 2);
+    assert_eq!(
+        store.renew_handle_lease(takeover_request)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    assert!(matches!(
+        store.close_handle(CloseHandleRequest {
+            operation_id: OperationId::from_bytes([65; 16])?,
+            handle_id: open.handle_id,
+            expected_fence: 1,
+            principal_id: open.principal_id,
+            gateway_node_id: open.gateway_node_id,
+            observed_at: UnixMicros::new(40),
+        }),
+        Err(HandleError::StaleHandle)
+    ));
+    Ok(())
+}
+
+#[test]
+fn delete_on_close_waits_for_the_last_handle_and_blocks_new_opens()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    let mut deleting = open_request(70, 71, CreateDisposition::OpenExisting, 100)?;
+    deleting.desired_access = HandleAccess::new(true, false, true)?;
+    deleting.share_access = HandleShare::new(true, false, true);
+    deleting.delete_on_close = true;
+    let mut observer = open_request(72, 73, CreateDisposition::OpenExisting, 100)?;
+    observer.desired_access = HandleAccess::new(true, false, false)?;
+    observer.share_access = HandleShare::new(true, false, true);
+    store.open_handle(&deleting)?;
+    store.open_handle(&observer)?;
+
+    let deferred = store.close_handle(close_request(74, &deleting, 1, 20)?)?;
+    assert_eq!(deferred.outcome, CloseHandleOutcome::DeleteDeferred);
+    let blocked = open_request(75, 76, CreateDisposition::OpenExisting, 100)?;
+    assert!(matches!(
+        store.open_handle(&blocked),
+        Err(HandleError::DeletePending)
+    ));
+    let ready_request = close_request(77, &observer, 1, 30)?;
+    let ready = store.close_handle(ready_request)?;
+    assert_eq!(ready.outcome, CloseHandleOutcome::DeleteReady);
+    assert_eq!(
+        store.close_handle(ready_request)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    Ok(())
+}
+
+#[test]
+fn expired_delete_on_close_becomes_pending_before_another_open()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    let mut deleting = open_request(80, 81, CreateDisposition::OpenExisting, 50)?;
+    deleting.desired_access = HandleAccess::new(true, false, true)?;
+    deleting.share_access = HandleShare::new(true, false, true);
+    deleting.delete_on_close = true;
+    store.open_handle(&deleting)?;
+    let mut later = open_request(82, 83, CreateDisposition::OpenExisting, 100)?;
+    later.opened_at = UnixMicros::new(51);
+    assert!(matches!(
+        store.open_handle(&later),
+        Err(HandleError::DeletePending)
+    ));
+    Ok(())
+}
+
+#[test]
+fn range_locks_enforce_overlap_compatibility_and_allow_adjacency()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    let first = open_request(90, 91, CreateDisposition::OpenExisting, 200)?;
+    let second = open_request(92, 93, CreateDisposition::OpenExisting, 200)?;
+    store.open_handle(&first)?;
+    store.open_handle(&second)?;
+
+    let first_shared = lock_request(94, 95, &first, 1, 0, 100, RangeLockKind::Shared, 100, 20)?;
+    store.lock_range(first_shared)?;
+    let second_shared = lock_request(96, 97, &second, 1, 50, 25, RangeLockKind::Shared, 100, 20)?;
+    store.lock_range(second_shared)?;
+    let overlapping = lock_request(98, 99, &second, 1, 99, 2, RangeLockKind::Exclusive, 100, 20)?;
+    assert!(matches!(
+        store.lock_range(overlapping),
+        Err(HandleError::LockConflict)
+    ));
+    let adjacent = lock_request(
+        100,
+        101,
+        &second,
+        1,
+        100,
+        10,
+        RangeLockKind::Exclusive,
+        100,
+        20,
+    )?;
+    store.lock_range(adjacent)?;
+    let active: i64 = store.test_connection().query_row(
+        "SELECT count(*) FROM range_locks WHERE state = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(active, 3);
+    Ok(())
+}
+
+#[test]
+fn range_lock_replay_unlock_and_expiry_are_durable() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = publication()?;
+    let open = open_request(102, 103, CreateDisposition::OpenExisting, 200)?;
+    let lock = lock_request(104, 105, &open, 1, 10, 20, RangeLockKind::Exclusive, 50, 20)?;
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        store.open_handle(&open)?;
+        let applied = store.lock_range(lock)?;
+        assert_eq!(applied.disposition, PublicationDisposition::Applied);
+    }
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    assert_eq!(
+        store.lock_range(lock)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    let unlock = unlock_request(106, &lock, &open, 1, 30)?;
+    assert_eq!(
+        store.unlock_range(unlock)?.disposition,
+        PublicationDisposition::Applied
+    );
+    assert_eq!(
+        store.unlock_range(unlock)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    let replacement = lock_request(107, 108, &open, 1, 10, 20, RangeLockKind::Exclusive, 80, 51)?;
+    store.lock_range(replacement)?;
+    Ok(())
+}
+
+#[test]
+fn takeover_refences_locks_and_close_releases_them() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = publication()?;
+    let open = open_request(109, 110, CreateDisposition::OpenExisting, 200)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    store.open_handle(&open)?;
+    let lock = lock_request(111, 112, &open, 1, 0, 50, RangeLockKind::Exclusive, 150, 20)?;
+    store.lock_range(lock)?;
+    let new_gateway = NodeId::from_bytes([113; 16])?;
+    store.renew_handle_lease(HandleLeaseRequest {
+        operation_id: OperationId::from_bytes([114; 16])?,
+        handle_id: open.handle_id,
+        expected_fence: 1,
+        principal_id: open.principal_id,
+        authorization_revision: Revision::new(2),
+        gateway_node_id: new_gateway,
+        takeover: true,
+        lease_expires_at: UnixMicros::new(250),
+        observed_at: UnixMicros::new(30),
+    })?;
+    assert_eq!(
+        store.lock_range(lock)?.handle_fence,
+        1,
+        "the immutable acquisition receipt must retain its original fence"
+    );
+    assert!(matches!(
+        store.unlock_range(unlock_request(115, &lock, &open, 1, 40)?),
+        Err(HandleError::StaleHandle)
+    ));
+    let mut transferred = open.clone();
+    transferred.gateway_node_id = new_gateway;
+    store.unlock_range(unlock_request(116, &lock, &transferred, 2, 40)?)?;
+
+    let second_lock = lock_request(
+        117,
+        118,
+        &transferred,
+        2,
+        0,
+        50,
+        RangeLockKind::Exclusive,
+        200,
+        50,
+    )?;
+    store.lock_range(second_lock)?;
+    store.close_handle(close_request(119, &transferred, 2, 60)?)?;
+    let active: i64 = store.test_connection().query_row(
+        "SELECT count(*) FROM range_locks WHERE state = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(active, 0);
+    Ok(())
+}
+
+#[test]
+fn invalid_ranges_and_corrupt_lock_receipts_fail_closed() -> Result<(), Box<dyn std::error::Error>>
+{
+    assert!(matches!(
+        ByteRange::new(0, 0),
+        Err(HandleError::InvalidInput)
+    ));
+    assert!(matches!(
+        ByteRange::new(u64::MAX, 2),
+        Err(HandleError::InvalidInput)
+    ));
+    assert!(matches!(
+        ByteRange::new(9_223_372_036_854_775_807, 1),
+        Err(HandleError::InvalidInput)
+    ));
+
+    let directory = tempdir()?;
+    let file = publication()?;
+    let open = open_request(120, 121, CreateDisposition::OpenExisting, 200)?;
+    let lock = lock_request(122, 123, &open, 1, 0, 1, RangeLockKind::Shared, 100, 20)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    store.open_handle(&open)?;
+    store.lock_range(lock)?;
+    store.test_connection().execute(
+        "UPDATE range_locks SET receipt_digest = zeroblob(32) WHERE lock_id = ?1",
+        [lock.lock_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(store.lock_range(lock), Err(HandleError::Corrupt)));
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lock_request(
+    operation: u8,
+    lock: u8,
+    open: &OpenHandleRequest,
+    fence: u64,
+    start: u64,
+    length: u64,
+    kind: RangeLockKind,
+    expires_at: i64,
+    observed_at: i64,
+) -> Result<LockRangeRequest, Box<dyn std::error::Error>> {
+    Ok(LockRangeRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        lock_id: LockId::from_bytes([lock; 16])?,
+        handle_id: open.handle_id,
+        handle_fence: fence,
+        principal_id: open.principal_id,
+        gateway_node_id: open.gateway_node_id,
+        range: ByteRange::new(start, length)?,
+        kind,
+        lease_expires_at: UnixMicros::new(expires_at),
+        observed_at: UnixMicros::new(observed_at),
+    })
+}
+
+fn unlock_request(
+    operation: u8,
+    lock: &LockRangeRequest,
+    open: &OpenHandleRequest,
+    fence: u64,
+    observed_at: i64,
+) -> Result<UnlockRangeRequest, Box<dyn std::error::Error>> {
+    Ok(UnlockRangeRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        lock_id: lock.lock_id,
+        handle_id: open.handle_id,
+        handle_fence: fence,
+        principal_id: open.principal_id,
+        gateway_node_id: open.gateway_node_id,
+        observed_at: UnixMicros::new(observed_at),
+    })
+}
+
+fn close_request(
+    operation: u8,
+    open: &OpenHandleRequest,
+    fence: u64,
+    observed_at: i64,
+) -> Result<CloseHandleRequest, Box<dyn std::error::Error>> {
+    Ok(CloseHandleRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        handle_id: open.handle_id,
+        expected_fence: fence,
+        principal_id: open.principal_id,
+        gateway_node_id: open.gateway_node_id,
+        observed_at: UnixMicros::new(observed_at),
+    })
 }
 
 fn open_request(
