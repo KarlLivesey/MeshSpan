@@ -28,7 +28,7 @@ impl PageLimit {
         }
     }
 
-    const fn get(self) -> usize {
+    pub(super) const fn get(self) -> usize {
         self.0
     }
 }

@@ -252,8 +252,13 @@ fn authorise(
             Err(RepositoryError::InvalidCommand)
         };
     }
-    if let AuthoritativeCommand::ActivateGrant(value) = command {
-        return if context.actor_principal_id == value.principal_id {
+    let self_activation_principal = match command {
+        AuthoritativeCommand::ActivateGrant(value) => Some(value.principal_id),
+        AuthoritativeCommand::ActivateGroup(value) => Some(value.principal_id),
+        _ => None,
+    };
+    if let Some(principal_id) = self_activation_principal {
+        return if context.actor_principal_id == principal_id {
             Ok(())
         } else {
             Err(RepositoryError::InvalidCommand)
@@ -327,6 +332,9 @@ fn execute(
         }
         AuthoritativeCommand::ActivateGrant(value) => {
             identity::activate_grant(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ActivateGroup(value) => {
+            identity::activate_group(transaction, context, value, revision)
         }
         AuthoritativeCommand::CreateComponent(value) => {
             component::create(transaction, context, value, revision)
@@ -490,7 +498,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CreateObject(_) => 7,
         AuthoritativeCommand::GrantPermission(_) => 8,
         AuthoritativeCommand::ActivateGrant(_) => 9,
-        AuthoritativeCommand::CreateComponent(_) => 10,
+        AuthoritativeCommand::ActivateGroup(_) => 10,
+        AuthoritativeCommand::CreateComponent(_) => 11,
     }
 }
 

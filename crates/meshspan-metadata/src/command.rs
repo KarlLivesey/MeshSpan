@@ -48,6 +48,8 @@ pub enum AuthoritativeCommand {
     GrantPermission(GrantPermission),
     /// Activates one pre-authorised grant for the requesting user.
     ActivateGrant(ActivateGrant),
+    /// Activates one pre-authorised group for the requesting user.
+    ActivateGroup(ActivateGroup),
     /// Creates a versioned desired component configuration.
     CreateComponent(CreateComponent),
 }
@@ -77,6 +79,7 @@ impl AuthoritativeCommand {
             Self::CreateObject(value) => value.update_digest(digest),
             Self::GrantPermission(value) => value.update_digest(digest),
             Self::ActivateGrant(value) => value.update_digest(digest),
+            Self::ActivateGroup(value) => value.update_digest(digest),
             Self::CreateComponent(value) => value.update_digest(digest),
         }
     }
@@ -273,6 +276,29 @@ pub struct ActivateGrant {
     pub authentication_digest: [u8; 32],
 }
 
+/// One user's time-bounded activation of a pre-authorised group.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivateGroup {
+    /// Activation record identity.
+    pub activation_id: ActivationId,
+    /// User receiving active group-derived rights.
+    pub principal_id: PrincipalId,
+    /// Exact group being activated.
+    pub group_id: GroupId,
+    /// Exact policy expected on the group.
+    pub policy_id: ActivationPolicyId,
+    /// Bounded audit reason supplied by the user.
+    pub reason: String,
+    /// Requested duration.
+    pub duration: DurationMicros,
+    /// Current session expiry.
+    pub session_expires_at: UnixMicros,
+    /// Current authentication assurance.
+    pub assurance: AssuranceLevel,
+    /// Digest binding the authentication ceremony/session.
+    pub authentication_digest: [u8; 32],
+}
+
 /// New desired component instance and its first configuration revision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreateComponent {
@@ -386,6 +412,17 @@ digest_simple_record!(ActivateGrant, b"activate-grant", |value, digest| {
     digest.identifier(value.activation_id.as_bytes());
     digest.identifier(value.principal_id.as_bytes());
     digest.identifier(value.grant_id.as_bytes());
+    digest.identifier(value.policy_id.as_bytes());
+    digest.bytes(value.reason.as_bytes());
+    digest.unsigned(value.duration.get());
+    digest.signed(value.session_expires_at.get());
+    digest.byte(assurance_code(value.assurance));
+    digest.bytes(&value.authentication_digest);
+});
+digest_simple_record!(ActivateGroup, b"activate-group", |value, digest| {
+    digest.identifier(value.activation_id.as_bytes());
+    digest.identifier(value.principal_id.as_bytes());
+    digest.identifier(value.group_id.as_bytes());
     digest.identifier(value.policy_id.as_bytes());
     digest.bytes(value.reason.as_bytes());
     digest.unsigned(value.duration.get());

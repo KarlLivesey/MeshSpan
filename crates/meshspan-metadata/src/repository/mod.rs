@@ -10,6 +10,7 @@ mod identity;
 mod namespace;
 mod query;
 mod receipt;
+mod verify;
 
 use meshspan_domain::{OperationId, Revision};
 use thiserror::Error;
@@ -22,6 +23,7 @@ pub use query::{
     PrincipalRecord,
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
+pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
 
 /// Authoritative metadata repository owning one identity-bound partition database.
 pub struct AuthoritativeRepository {
@@ -124,6 +126,15 @@ impl AuthoritativeRepository {
         created_at: meshspan_domain::UnixMicros,
     ) -> Result<PartitionBackupManifest, RepositoryError> {
         backup::create_partition_backup(&self.database, backup_id, destination, created_at)
+    }
+
+    /// Runs bounded relational/domain checks that go beyond SQLite structural integrity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid finding bound and reports malformed persisted identifiers as corruption.
+    pub fn check_invariants(&self, limit: PageLimit) -> Result<InvariantReport, RepositoryError> {
+        verify::check_invariants(&self.database, limit)
     }
 
     /// Returns the underlying database after repository ownership is no longer needed.

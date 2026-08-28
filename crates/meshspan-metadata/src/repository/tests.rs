@@ -17,9 +17,10 @@ use super::{
     RepositoryError, restore_partition_backup,
 };
 use crate::{
-    ActivateGrant, AddGroupMember, AuthoritativeCommand, BootstrapMesh, CommandContext,
-    CreateActivationPolicy, CreateGroup, CreateObject, CreateUser, CreateVolume, GrantInheritance,
-    GrantPermission, NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName,
+    ActivateGrant, ActivateGroup, AddGroupMember, AuthoritativeCommand, BootstrapMesh,
+    CommandContext, CreateActivationPolicy, CreateGroup, CreateObject, CreateUser, CreateVolume,
+    GrantInheritance, GrantPermission, NamespaceObjectKind, PartitionDatabase, PermissionScope,
+    RecordName,
 };
 
 struct FixtureIds {
@@ -81,22 +82,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     let file_id = create_namespace(&mut repository, &ids)?;
     let grant_id = create_and_activate_grant(&mut repository, &ids, policy_id, file_id)?;
 
-    let principal = repository
-        .principal(ids.user)?
-        .ok_or("created user was not returned")?;
-    assert_eq!(principal.kind, PrincipalKind::User);
-    assert_eq!(principal.canonical_name, "alex");
-    let root_children = repository.namespace_children(
-        VolumeId::from_bytes([28; 16])?,
-        ObjectId::from_bytes([29; 16])?,
-        None,
-        PageLimit::new(1)?,
-    )?;
-    assert_eq!(root_children.items.len(), 1);
-    assert!(root_children.next.is_none());
-    let members = repository.direct_group_members(ids.inner_group, None, PageLimit::new(1)?)?;
-    assert_eq!(members.items, vec![ids.user]);
-    assert!(members.next.is_none());
+    verify_vertical_queries(&repository, &ids)?;
 
     let activation_context = context(32, ids.user, 52, 112, Some(12))?;
     let activation_command = AuthoritativeCommand::ActivateGrant(ActivateGrant {
@@ -296,6 +282,105 @@ fn every_atomic_apply_stage_rolls_back_to_the_old_valid_state()
 }
 
 #[test]
+fn activation_required_group_is_self_activated_with_bounded_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("group-activation.sqlite3");
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    let bootstrap = AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+        mesh_id: MeshId::from_bytes([110; 16])?,
+        mesh_name: RecordName::new("Activation proof")?,
+        administrator_id: ids.administrator,
+        administrator_name: RecordName::new("Administrator")?,
+        administrator_role_id: RoleId::from_bytes([111; 16])?,
+        host_id: HostId::from_bytes([112; 16])?,
+        host_name: RecordName::new("Host")?,
+        node_id: NodeId::from_bytes([113; 16])?,
+        node_name: RecordName::new("Node")?,
+        partition_name: RecordName::new("Authority")?,
+    });
+    apply(
+        &mut repository,
+        1,
+        context(114, ids.administrator, 115, 100, Some(0))?,
+        &bootstrap,
+    )?;
+    apply(
+        &mut repository,
+        2,
+        context(116, ids.administrator, 117, 101, Some(1))?,
+        &AuthoritativeCommand::CreateUser(CreateUser {
+            principal_id: ids.user,
+            name: RecordName::new("Alex")?,
+        }),
+    )?;
+    let policy_id = ActivationPolicyId::from_bytes([118; 16])?;
+    apply(
+        &mut repository,
+        3,
+        context(119, ids.administrator, 120, 102, Some(2))?,
+        &AuthoritativeCommand::CreateActivationPolicy(CreateActivationPolicy {
+            policy_id,
+            maximum_duration: DurationMicros::new(5_000),
+            reason_required: true,
+            minimum_assurance: AssuranceLevel::RecentStepUp,
+            valid_from: None,
+            valid_until: None,
+        }),
+    )?;
+    apply(
+        &mut repository,
+        4,
+        context(121, ids.administrator, 122, 103, Some(3))?,
+        &AuthoritativeCommand::CreateGroup(CreateGroup {
+            group_id: ids.inner_group,
+            name: RecordName::new("Privileged operators")?,
+            activation_policy_id: Some(policy_id),
+        }),
+    )?;
+    apply(
+        &mut repository,
+        5,
+        context(123, ids.administrator, 124, 104, Some(4))?,
+        &AuthoritativeCommand::AddGroupMember(AddGroupMember {
+            containing_group_id: ids.inner_group,
+            member_principal_id: ids.user,
+            valid_from: None,
+            valid_until: None,
+            activation_required: true,
+        }),
+    )?;
+    let activation_context = context(125, ids.user, 126, 105, Some(5))?;
+    let activation = AuthoritativeCommand::ActivateGroup(ActivateGroup {
+        activation_id: ActivationId::from_bytes([127; 16])?,
+        principal_id: ids.user,
+        group_id: ids.inner_group,
+        policy_id,
+        reason: "maintenance window".to_owned(),
+        duration: DurationMicros::new(1_000),
+        session_expires_at: UnixMicros::new(2_000),
+        assurance: AssuranceLevel::RecentStepUp,
+        authentication_digest: [128; 32],
+    });
+    let receipt = repository.apply_committed(
+        LogPosition { index: 6, term: 1 },
+        activation_context,
+        &activation,
+    )?;
+    assert_eq!(receipt.committed_revision, Revision::new(6));
+    drop(repository);
+    let reopened = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(200))?;
+    assert!(
+        AuthoritativeRepository::new(reopened)
+            .resolve_operation(activation_context.operation_id)?
+            .is_some()
+    );
+    Ok(())
+}
+
+#[test]
 fn conflicting_operation_and_group_cycle_roll_back_without_advancing()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
@@ -327,6 +412,35 @@ fn conflicting_operation_and_group_cycle_roll_back_without_advancing()
     );
     assert!(matches!(conflict, Err(RepositoryError::OperationConflict)));
     assert_eq!(repository.current_revision()?, Revision::new(1));
+    Ok(())
+}
+
+fn verify_vertical_queries(
+    repository: &AuthoritativeRepository,
+    ids: &FixtureIds,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let principal = repository
+        .principal(ids.user)?
+        .ok_or("created user was not returned")?;
+    assert_eq!(principal.kind, PrincipalKind::User);
+    assert_eq!(principal.canonical_name, "alex");
+    let root_children = repository.namespace_children(
+        VolumeId::from_bytes([28; 16])?,
+        ObjectId::from_bytes([29; 16])?,
+        None,
+        PageLimit::new(1)?,
+    )?;
+    assert_eq!(root_children.items.len(), 1);
+    assert!(root_children.next.is_none());
+    let members = repository.direct_group_members(ids.inner_group, None, PageLimit::new(1)?)?;
+    assert_eq!(members.items, vec![ids.user]);
+    assert!(members.next.is_none());
+    assert!(
+        repository
+            .check_invariants(PageLimit::new(100)?)?
+            .findings
+            .is_empty()
+    );
     Ok(())
 }
 

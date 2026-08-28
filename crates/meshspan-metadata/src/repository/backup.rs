@@ -110,11 +110,22 @@ fn verify_source(
     let foreign_key_violation = connection
         .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
         .optional()?;
+    let partition = manifest.partition_id.as_bytes();
+    let admitted: i64 = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM metadata_partitions mp
+            JOIN partition_voters pv ON pv.partition_id = mp.partition_id
+            WHERE mp.partition_id = ?1 AND mp.state = 1 AND pv.state = 1
+         )",
+        [partition.as_slice()],
+        |row| row.get(0),
+    )?;
     if stored_partition.as_slice() != manifest.partition_id.as_bytes()
         || schema_version != manifest.schema_version
         || state != (manifest.applied_position, manifest.state_revision)
         || quick_check != "ok"
         || foreign_key_violation.is_some()
+        || admitted != 1
     {
         return Err(RepositoryError::BackupMismatch);
     }

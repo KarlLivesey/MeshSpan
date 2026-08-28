@@ -14,8 +14,9 @@ use super::apply::to_i64;
 use super::group_closure;
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{
-    ActivateGrant, AddGroupMember, BootstrapMesh, CommandContext, CreateActivationPolicy,
-    CreateGroup, CreateUser, GrantInheritance, GrantPermission, PermissionScope,
+    ActivateGrant, ActivateGroup, AddGroupMember, BootstrapMesh, CommandContext,
+    CreateActivationPolicy, CreateGroup, CreateUser, GrantInheritance, GrantPermission,
+    PermissionScope,
 };
 
 type ValidatedScope = (u8, Option<[u8; 16]>, Option<[u8; 16]>);
@@ -443,6 +444,82 @@ pub(super) fn activate_grant(
     })
 }
 
+pub(super) fn activate_group(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &ActivateGroup,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    require_user(transaction, command.principal_id)?;
+    let group_id = command.group_id.as_bytes();
+    let group = transaction
+        .query_row(
+            "SELECT g.activation_policy_id, p.revision
+             FROM groups g JOIN principals p ON p.principal_id = g.principal_id
+             WHERE g.principal_id = ?1 AND p.state = 1",
+            [group_id.as_slice()],
+            |row| Ok((row.get::<_, Option<Vec<u8>>>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?
+        .ok_or(RepositoryError::InvalidCommand)?;
+    if group.0.as_deref() != Some(command.policy_id.as_bytes().as_slice())
+        || !active_structural_group_path(
+            transaction,
+            command.group_id,
+            command.principal_id,
+            context.occurred_at.get(),
+        )?
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let (policy, policy_revision) = load_policy(transaction, command.policy_id.as_bytes())?;
+    let identity_revision = read_identity_revision(transaction)?;
+    let activation = policy
+        .activate(AccessActivationRequest {
+            operation_id: context.operation_id,
+            principal_id: command.principal_id,
+            subject: ActivationSubject::Group(command.group_id),
+            source_is_authorized: true,
+            identity_revision,
+            source_revision: Revision::new(parse_u64(group.1)?),
+            policy_revision,
+            reason: &command.reason,
+            duration: command.duration,
+            now: context.occurred_at,
+            session_expires_at: command.session_expires_at,
+            assurance: command.assurance,
+            source_window: AccessWindow::default(),
+        })
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    let activation_id = command.activation_id.as_bytes();
+    let principal = command.principal_id.as_bytes();
+    transaction.execute(
+        "INSERT INTO access_activations(
+            activation_id, principal_id, group_id, grant_id, policy_id, reason,
+            authentication_digest, identity_revision, source_revision, policy_revision,
+            activated_at, expires_at, revoked_at, revision
+         ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12)",
+        params![
+            activation_id.as_slice(),
+            principal.as_slice(),
+            group_id.as_slice(),
+            command.policy_id.as_bytes().as_slice(),
+            activation.reason(),
+            command.authentication_digest.as_slice(),
+            to_i64(activation.identity_revision().get())?,
+            to_i64(activation.source_revision().get())?,
+            to_i64(activation.policy_revision().get())?,
+            activation.activated_at().get(),
+            activation.expires_at().get(),
+            to_i64(revision.get())?
+        ],
+    )?;
+    Ok(EntityReference {
+        kind: EntityKind::AccessActivation,
+        id: activation_id,
+    })
+}
+
 fn insert_principal(
     transaction: &Transaction<'_>,
     principal_id: PrincipalId,
@@ -654,6 +731,68 @@ fn active_group_path(
         }
     }
     Ok(false)
+}
+
+fn active_structural_group_path(
+    transaction: &Transaction<'_>,
+    containing_group: GroupId,
+    member: PrincipalId,
+    now: i64,
+) -> Result<bool, RepositoryError> {
+    let mut statement = transaction.prepare(
+        "SELECT containing_group_id, member_principal_id
+         FROM group_memberships
+         WHERE (valid_from IS NULL OR valid_from <= ?1)
+           AND (valid_until IS NULL OR valid_until > ?1)
+         ORDER BY containing_group_id, member_principal_id LIMIT ?2",
+    )?;
+    let rows = statement.query_map(
+        params![
+            now,
+            to_i64(
+                u64::try_from(MAXIMUM_MEMBERSHIP_EDGES + 1)
+                    .map_err(|_| RepositoryError::CapacityExceeded)?
+            )?
+        ],
+        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+    )?;
+    let mut edges = BTreeMap::<PrincipalId, BTreeSet<PrincipalId>>::new();
+    let mut count = 0_usize;
+    for row in rows {
+        let (group, child) = row?;
+        edges
+            .entry(parse_principal(&group)?)
+            .or_default()
+            .insert(parse_principal(&child)?);
+        count += 1;
+        if count > MAXIMUM_MEMBERSHIP_EDGES {
+            return Err(RepositoryError::CapacityExceeded);
+        }
+    }
+    Ok(path_exists(&edges, containing_group.principal_id(), member))
+}
+
+fn path_exists(
+    edges: &BTreeMap<PrincipalId, BTreeSet<PrincipalId>>,
+    root: PrincipalId,
+    target: PrincipalId,
+) -> bool {
+    let mut pending = VecDeque::from([root]);
+    let mut visited = BTreeSet::new();
+    while let Some(current) = pending.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        for child in edges.get(&current).cloned().unwrap_or_default() {
+            if child == target {
+                return true;
+            }
+            if edges.contains_key(&child) {
+                pending.push_back(child);
+            }
+        }
+    }
+    false
 }
 
 fn read_identity_revision(transaction: &Transaction<'_>) -> Result<Revision, RepositoryError> {
