@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
-    ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, component,
-    identity, namespace,
+    ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
+    component, identity, namespace,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -307,7 +307,7 @@ fn execute(
 ) -> Result<EntityReference, RepositoryError> {
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
-            identity::bootstrap(transaction, partition_id, context, value, revision)
+            bootstrap::bootstrap(transaction, partition_id, context, value, revision)
         }
         AuthoritativeCommand::CreateUser(value) => {
             identity::create_user(transaction, context, value, revision)

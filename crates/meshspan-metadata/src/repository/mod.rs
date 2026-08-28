@@ -4,6 +4,7 @@
 
 mod apply;
 mod backup;
+mod bootstrap;
 mod component;
 mod group_closure;
 mod identity;
