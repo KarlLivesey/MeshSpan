@@ -427,13 +427,15 @@ fn divergent_roots_apply_one_atomic_merge_and_replay_its_receipt()
     };
 
     let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let replayed = crate::NamespaceReconciliationReceipt {
+        disposition: PublicationDisposition::Replayed,
+        ..applied
+    };
     assert_eq!(
         reopened.resolve_namespace_reconciliation(application.operation_id)?,
-        Some(crate::NamespaceReconciliationReceipt {
-            disposition: PublicationDisposition::Replayed,
-            ..applied
-        })
+        Some(replayed)
     );
+    prove_reconciliation_head_verification(&reopened, &first, replayed)?;
     let prepared =
         reopened.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
     assert_eq!(
@@ -470,6 +472,61 @@ fn divergent_roots_apply_one_atomic_merge_and_replay_its_receipt()
     assert!(matches!(
         reopened.resolve_namespace_reconciliation(application.operation_id),
         Err(PublicationError::Corrupt)
+    ));
+    Ok(())
+}
+
+fn prove_reconciliation_head_verification(
+    store: &VersionPublicationStore,
+    first: &RootFilePublication,
+    replayed: crate::NamespaceReconciliationReceipt,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let verified = store.verify_reconciliation_head(
+        first.file.volume_id,
+        first.namespace_commit_id,
+        replayed,
+    )?;
+    assert_eq!(verified.receipt(), replayed);
+    assert_eq!(verified.volume_id(), first.file.volume_id);
+    assert!(
+        store
+            .verify_reconciliation_head(
+                first.file.volume_id,
+                first.namespace_commit_id,
+                crate::NamespaceReconciliationReceipt {
+                    disposition: PublicationDisposition::Applied,
+                    ..replayed
+                },
+            )
+            .is_ok()
+    );
+    assert!(matches!(
+        store.verify_reconciliation_head(
+            VolumeId::from_bytes([122; 16])?,
+            first.namespace_commit_id,
+            replayed,
+        ),
+        Err(PublicationError::InvalidInput)
+    ));
+    assert!(matches!(
+        store.verify_reconciliation_head(
+            first.file.volume_id,
+            NamespaceCommitId::from_bytes([123; 16])?,
+            replayed,
+        ),
+        Err(PublicationError::InvalidInput)
+    ));
+    let substituted = crate::NamespaceReconciliationReceipt {
+        result_digest: [124; 32],
+        ..replayed
+    };
+    assert!(matches!(
+        store.verify_reconciliation_head(
+            first.file.volume_id,
+            first.namespace_commit_id,
+            substituted,
+        ),
+        Err(PublicationError::OperationConflict)
     ));
     Ok(())
 }

@@ -8,6 +8,7 @@ mod common;
 mod component;
 mod conformance;
 mod data;
+mod filesystem;
 mod observability;
 mod security;
 mod storage;
@@ -39,6 +40,7 @@ pub use data::{
     CodingLayout, CodingLayoutError, CodingScheme, PlacementPlan, PlacementPolicy,
     PlacementRequest, ReconstructionRequest,
 };
+pub use filesystem::namespace_reconciliation_result_digest;
 pub use observability::{EventSeverity, ObservabilityReceipt, ObservabilitySink, RedactedEvent};
 pub use security::{
     AuthenticationAttempt, AuthenticationHandler, AuthenticationOutcome, CertificateChallenge,

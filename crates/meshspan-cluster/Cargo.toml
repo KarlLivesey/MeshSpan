@@ -14,6 +14,7 @@ version.workspace = true
 ed25519-dalek.workspace = true
 meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-domain = { path = "../meshspan-domain" }
+meshspan-filesystem = { path = "../meshspan-filesystem" }
 meshspan-metadata = { path = "../meshspan-metadata" }
 meshspan-protocol = { path = "../meshspan-protocol" }
 meshspan-transport = { path = "../meshspan-transport" }

@@ -229,7 +229,7 @@ fn validate_active_principals(
     Ok(())
 }
 
-fn update_namespace_revision(
+pub(super) fn update_namespace_revision(
     transaction: &Transaction<'_>,
     revision: Revision,
 ) -> Result<(), RepositoryError> {

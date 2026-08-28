@@ -11,10 +11,11 @@ mod repository;
 pub use command::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
     AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh,
-    CommandContext, ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy, CreateComponent,
-    CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser,
-    CreateVolume, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant,
-    JoinRoles, NamespaceObjectKind, PermissionScope, RegisterRoutingSigner, ReplaceObjectOwners,
+    CommandContext, CommitConvergedVolumeHead, ConfigureComponent, ConsumeJoinGrant,
+    ConvergedHeadEvidence, CreateActivationPolicy, CreateComponent, CreateGroup,
+    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
+    DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
+    NamespaceObjectKind, PermissionScope, RegisterRoutingSigner, ReplaceObjectOwners,
     RepositoryCommandError, RouteAttestation, TagTarget,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
@@ -22,9 +23,9 @@ pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
 pub use repository::{
     ApplyDisposition, AuthoritativeMembership, AuthoritativeMetadataKernel,
-    AuthoritativeRepository, CommandReceipt, ConsensusStoreError, EntityKind, EntityReference,
-    GroupMemberCursor, InvariantFinding, InvariantKind, InvariantReport, LogPosition,
-    NamespaceCursor, NamespaceRecord, Page, PageLimit, PartitionBackupManifest,
+    AuthoritativeRepository, CommandReceipt, ConsensusStoreError, ConvergedVolumeHead, EntityKind,
+    EntityReference, GroupMemberCursor, InvariantFinding, InvariantKind, InvariantReport,
+    LogPosition, NamespaceCursor, NamespaceRecord, Page, PageLimit, PartitionBackupManifest,
     PartitionConsensusPersistence, PartitionSnapshotManifest, PreservedVote, PrincipalKind,
     PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, RepositoryError, ScopeWriteAuthority, restore_partition_backup,

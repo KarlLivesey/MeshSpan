@@ -14,6 +14,8 @@ pub enum InvariantKind {
     ObjectWithoutActiveOwner,
     /// A volume does not have exactly one root namespace object.
     InvalidVolumeRoot,
+    /// A converged volume-head sequence has a gap or does not name its exact predecessor.
+    InvalidVolumeHeadHistory,
     /// A completed operation lacks a complete exact result representation.
     IncompleteOperationResult,
     /// A direct group edge is absent from the materialised closure.
@@ -92,6 +94,7 @@ pub(super) fn check_invariants(
         &mut findings,
         limit.get(),
     )?;
+    collect_volume_head_findings(database, sql_limit, &mut findings, limit.get())?;
     collect(
         database,
         "SELECT gm.containing_group_id FROM group_memberships gm
@@ -126,6 +129,34 @@ pub(super) fn check_invariants(
         findings,
         truncated,
     })
+}
+
+fn collect_volume_head_findings(
+    database: &PartitionDatabase,
+    sql_limit: i64,
+    findings: &mut Vec<InvariantFinding>,
+    maximum: usize,
+) -> Result<(), RepositoryError> {
+    collect(
+        database,
+        "SELECT volume_id FROM (
+             SELECT volume_id, head_sequence, previous_namespace_commit_id,
+                    row_number() OVER (
+                        PARTITION BY volume_id ORDER BY head_sequence
+                    ) AS expected_sequence,
+                    lag(namespace_commit_id) OVER (
+                        PARTITION BY volume_id ORDER BY head_sequence
+                    ) AS expected_previous
+             FROM volume_head_transitions
+         )
+         WHERE head_sequence <> expected_sequence
+            OR (head_sequence > 1 AND previous_namespace_commit_id <> expected_previous)
+         ORDER BY volume_id LIMIT ?1",
+        sql_limit,
+        InvariantKind::InvalidVolumeHeadHistory,
+        findings,
+        maximum,
+    )
 }
 
 fn collect(
