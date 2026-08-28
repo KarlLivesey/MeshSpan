@@ -18,7 +18,7 @@ pub use command::{
     GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles, NamespaceObjectKind,
     PermissionScope, RegisterRoutingSigner, ReplaceObjectOwners, RepositoryCommandError,
     RequestVolumeSnapshotExpiry, RetentionReclaimMode, RouteAttestation, RunSnapshotSchedule,
-    TagTarget,
+    SnapshotExpiryReason, TagTarget,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;
@@ -31,6 +31,7 @@ pub use repository::{
     PartitionConsensusPersistence, PartitionSnapshotManifest, PreservedVote, PrincipalKind,
     PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, RepositoryError, ScopeWriteAuthority, SnapshotCursor,
-    SnapshotSchedule, SnapshotScheduleCursor, VersionRetentionPolicy, VolumeSnapshot,
-    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
+    SnapshotExpiryCandidate, SnapshotExpiryCursor, SnapshotSchedule, SnapshotScheduleCursor,
+    VersionRetentionPolicy, VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
+    run_repository_conformance,
 };

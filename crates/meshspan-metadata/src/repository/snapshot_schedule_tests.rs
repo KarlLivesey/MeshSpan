@@ -6,7 +6,10 @@ use tempfile::tempdir;
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::volume_head_tests::{commit, context, fixture, open_and_prepare, publication_command};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, RepositoryError};
-use crate::{AuthoritativeCommand, ConfigureSnapshotSchedule, RecordName, RunSnapshotSchedule};
+use crate::{
+    AuthoritativeCommand, ConfigureSnapshotSchedule, RecordName, RequestVolumeSnapshotExpiry,
+    RunSnapshotSchedule, SnapshotExpiryReason,
+};
 
 #[test]
 fn schedules_revise_immutably_page_due_work_and_replay_after_restart()
@@ -327,6 +330,104 @@ fn corrupted_schedule_head_fails_closed_for_every_consumer()
     Ok(())
 }
 
+#[test]
+fn indexed_age_and_count_retention_select_and_revalidate_exact_snapshots()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let fixture = fixture()?;
+    let mut repository =
+        prepared_schedule(&directory.path().join("retention.sqlite3"), &fixture, true)?;
+    for (offset, scheduled_for, snapshot_identity) in [
+        (0_u64, 100_i64, 100_u8),
+        (1, 150, 101),
+        (2, 200, 102),
+        (3, 250, 103),
+    ] {
+        repository.apply_committed(
+            LogPosition {
+                index: 5 + offset,
+                term: 1,
+            },
+            context(
+                snapshot_identity,
+                fixture.administrator,
+                snapshot_identity.saturating_add(20),
+                scheduled_for,
+                Some(4 + offset),
+            )?,
+            &run_command(50, scheduled_for, snapshot_identity, 30)?,
+        )?;
+    }
+    let count_page =
+        repository.due_snapshot_expiries(UnixMicros::new(300), None, PageLimit::new(2)?)?;
+    assert_eq!(count_page.items.len(), 1);
+    assert_eq!(
+        count_page.items[0].snapshot_id,
+        SnapshotId::from_bytes([100; 16])?
+    );
+    assert_eq!(count_page.items[0].revision, Revision::new(5));
+    assert_eq!(
+        count_page.items[0].reason,
+        SnapshotExpiryReason::RetentionCount
+    );
+
+    repository.apply_committed(
+        LogPosition { index: 9, term: 1 },
+        context(230, fixture.administrator, 231, 300, Some(8))?,
+        &expiry_command(100, 5, SnapshotExpiryReason::RetentionCount)?,
+    )?;
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 10, term: 1 },
+            context(232, fixture.administrator, 233, 300, Some(9))?,
+            &expiry_command(103, 8, SnapshotExpiryReason::RetentionCount)?,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+
+    let first_age =
+        repository.due_snapshot_expiries(UnixMicros::new(1_200), None, PageLimit::new(1)?)?;
+    assert_eq!(first_age.items.len(), 1);
+    assert_eq!(
+        first_age.items[0].snapshot_id,
+        SnapshotId::from_bytes([101; 16])?
+    );
+    assert_eq!(
+        first_age.items[0].reason,
+        SnapshotExpiryReason::RetentionAge
+    );
+    assert!(first_age.next.is_some());
+    let second_age = repository.due_snapshot_expiries(
+        UnixMicros::new(1_200),
+        first_age.next.as_ref(),
+        PageLimit::new(1)?,
+    )?;
+    assert_eq!(second_age.items.len(), 1);
+    assert_eq!(
+        second_age.items[0].snapshot_id,
+        SnapshotId::from_bytes([102; 16])?
+    );
+    assert!(second_age.next.is_none());
+
+    repository.database.connection_mut().execute(
+        "UPDATE snapshot_schedule_heads SET run_sequence = 5 WHERE schedule_id = ?1",
+        [schedule_id(50)?.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        repository.due_snapshot_expiries(UnixMicros::new(300), None, PageLimit::new(2)?),
+        Err(RepositoryError::CorruptState)
+    ));
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 10, term: 1 },
+            context(234, fixture.administrator, 235, 300, Some(9))?,
+            &expiry_command(101, 6, SnapshotExpiryReason::RetentionCount)?,
+        ),
+        Err(RepositoryError::CorruptState)
+    ));
+    Ok(())
+}
+
 fn prepared_head(
     file_path: &std::path::Path,
     fixture: &super::volume_head_tests::HeadFixture,
@@ -416,6 +517,20 @@ fn run_command_with_sequence(
             snapshot_id: SnapshotId::from_bytes([snapshot_identity; 16])?,
             namespace_commit_id: commit(commit_identity)?,
             name: RecordName::new(&name)?,
+        },
+    ))
+}
+
+fn expiry_command(
+    snapshot_identity: u8,
+    expected_revision: u64,
+    reason: SnapshotExpiryReason,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    Ok(AuthoritativeCommand::RequestVolumeSnapshotExpiry(
+        RequestVolumeSnapshotExpiry {
+            snapshot_id: SnapshotId::from_bytes([snapshot_identity; 16])?,
+            expected_snapshot_revision: Revision::new(expected_revision),
+            reason,
         },
     ))
 }

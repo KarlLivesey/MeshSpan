@@ -624,7 +624,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 14);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        11
+        12
     );
     Ok(())
 }

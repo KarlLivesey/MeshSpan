@@ -45,7 +45,9 @@ pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference,
 pub use retention::VersionRetentionPolicy;
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use snapshot_schedule::{SnapshotSchedule, SnapshotScheduleCursor};
-pub use user_snapshot::{SnapshotCursor, VolumeSnapshot};
+pub use user_snapshot::{
+    SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor, VolumeSnapshot,
+};
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
 pub use volume_head::ConvergedVolumeHead;
 
@@ -234,6 +236,20 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<VolumeSnapshot, SnapshotCursor>, RepositoryError> {
         user_snapshot::list(&self.database, volume_id, after, limit)
+    }
+
+    /// Returns a bounded page of currently eligible automatic snapshot expiries.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed snapshots, schedules or retention ledgers.
+    pub fn due_snapshot_expiries(
+        &self,
+        now: meshspan_domain::UnixMicros,
+        after: Option<&SnapshotExpiryCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<SnapshotExpiryCandidate, SnapshotExpiryCursor>, RepositoryError> {
+        user_snapshot::due_expiries(&self.database, now, after, limit)
     }
 
     /// Returns the current authoritative configuration and due state of one snapshot schedule.
