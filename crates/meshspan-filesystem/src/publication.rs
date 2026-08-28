@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 18] = [
+const MIGRATIONS: [Migration; 19] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -98,8 +98,12 @@ const MIGRATIONS: [Migration; 18] = [
         version: 18,
         sql: include_str!("../schema/branch/018_reachability_manifest_root.sql"),
     },
+    Migration {
+        version: 19,
+        sql: include_str!("../schema/branch/019_cleanup_reference_fences.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 18;
+const SCHEMA_VERSION: u32 = 19;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -1126,6 +1130,9 @@ pub enum PublicationError {
     /// An immutable or idempotency identity already belongs to different content.
     #[error("file publication identity conflicts with durable state")]
     OperationConflict,
+    /// A live physical-cleanup proof currently excludes new references to this manifest.
+    #[error("file publication conflicts with an active cleanup fence")]
+    CleanupFenced,
     /// Durable state violates an identity, digest or transition invariant.
     #[error("file publication state is corrupt")]
     Corrupt,
@@ -1239,6 +1246,7 @@ fn persist_version(
     transaction: &Transaction<'_>,
     publication: FilePublication,
 ) -> Result<(), PublicationError> {
+    crate::cleanup_fence::reject_manifest_reference(transaction, publication.manifest)?;
     let version = publication.version_id.as_bytes();
     let collision: i64 = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM file_versions WHERE version_id = ?1)",

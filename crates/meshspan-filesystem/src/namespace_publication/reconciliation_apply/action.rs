@@ -35,6 +35,9 @@ pub(super) fn apply_action(
     current_root: ObjectRevisionId,
     action: &NamespaceReplayAction,
 ) -> Result<ObjectRevisionId, PublicationError> {
+    if let BranchMutation::File { version_id } = action.mutation {
+        crate::cleanup_fence::reject_version_reference(transaction, version_id)?;
+    }
     let next_root = action
         .target_root_object_revision_id
         .ok_or(PublicationError::InvalidInput)?;

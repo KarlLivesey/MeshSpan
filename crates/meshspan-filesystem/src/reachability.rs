@@ -223,6 +223,7 @@ pub(crate) fn begin(
             request.selected_at.get(),
         ],
     )?;
+    crate::cleanup_fence::install(&transaction, request, subject_digest)?;
     let progress = progress(&transaction, request.operation_id)?;
     transaction.commit()?;
     Ok(progress)
@@ -237,6 +238,7 @@ pub(crate) fn append_roots(
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let scan = load_scan(&transaction, page.operation_id)?;
+    crate::cleanup_fence::require_active(&transaction, scan.fence_identity())?;
     if scan.state != STATE_COLLECTING {
         return Err(VersionReachabilityError::Conflict);
     }
@@ -277,6 +279,7 @@ pub(crate) fn seal(
 ) -> Result<VersionReachabilityProgress, VersionReachabilityError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let scan = load_scan(&transaction, operation_id)?;
+    validate_fence_for_state(&transaction, &scan)?;
     if scan.state != STATE_COLLECTING {
         let result = progress(&transaction, operation_id)?;
         transaction.commit()?;
@@ -322,6 +325,7 @@ pub(crate) fn advance(
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let scan = load_scan(&transaction, operation_id)?;
+    validate_fence_for_state(&transaction, &scan)?;
     if scan.state != STATE_SCANNING {
         let result = progress(&transaction, operation_id)?;
         transaction.commit()?;
@@ -372,6 +376,19 @@ struct StoredScan {
     local_roots_digest: Option<[u8; 32]>,
     state: i64,
     result_digest: Option<[u8; 32]>,
+}
+
+impl StoredScan {
+    const fn fence_identity(&self) -> crate::cleanup_fence::ReferenceFenceIdentity {
+        crate::cleanup_fence::ReferenceFenceIdentity::active(
+            self.operation_id,
+            self.volume_id,
+            self.version_id,
+            self.manifest_id,
+            self.manifest_root_digest,
+            self.subject_digest,
+        )
+    }
 }
 
 fn load_scan(
@@ -966,6 +983,11 @@ fn complete_scan(
     state: i64,
     observed_at: UnixMicros,
 ) -> Result<(), VersionReachabilityError> {
+    if state == STATE_REACHABLE {
+        crate::cleanup_fence::release_reachable(transaction, scan.fence_identity(), observed_at)?;
+    } else {
+        crate::cleanup_fence::require_active(transaction, scan.fence_identity())?;
+    }
     let result = result_digest(scan, local_digest, state);
     let updated = transaction.execute(
         "UPDATE version_reachability_scans
@@ -1001,6 +1023,7 @@ fn progress(
     operation_id: OperationId,
 ) -> Result<VersionReachabilityProgress, VersionReachabilityError> {
     let scan = load_scan(connection, operation_id)?;
+    validate_fence_for_state(connection, &scan)?;
     let processed: i64 = connection.query_row(
         "SELECT count(*) FROM version_reachability_work WHERE operation_id = ?1 AND processed = 1",
         [operation_id.as_bytes().as_slice()],
@@ -1044,6 +1067,17 @@ fn progress(
         work_pending: pending,
         proof,
     })
+}
+
+fn validate_fence_for_state(
+    connection: &Connection,
+    scan: &StoredScan,
+) -> Result<(), VersionReachabilityError> {
+    if scan.state == STATE_REACHABLE {
+        crate::cleanup_fence::require_released(connection, scan.fence_identity())
+    } else {
+        crate::cleanup_fence::require_active(connection, scan.fence_identity())
+    }
 }
 
 fn reject_operation_collision(
