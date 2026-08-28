@@ -885,8 +885,11 @@ name = "meshspan-filesystem"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "cap-std",
  "meshspan-contracts",
  "meshspan-domain",
+ "rusqlite",
+ "tempfile",
  "thiserror",
  "unicode-casefold",
  "unicode-normalization",
