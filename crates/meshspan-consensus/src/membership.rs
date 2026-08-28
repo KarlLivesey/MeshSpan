@@ -135,6 +135,66 @@ pub struct PlannedPromotion {
     pub joint_plan: JointQuorumPlan,
 }
 
+/// One deterministic authoritative learner admission through a safe joint phase.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlannedLearnerAdmission {
+    /// Lowest stable admitted identity selected from the authoritative candidate set.
+    pub admitted_node_id: NodeId,
+    /// Verified joint phase adding the selected identity as a non-voting learner.
+    pub joint_plan: JointQuorumPlan,
+    /// Exact incumbent-preserving incarnation set for the expanded membership.
+    pub member_incarnations: MemberIncarnations,
+}
+
+/// Adds at most one authoritative candidate to a flat plan as a non-voting learner.
+///
+/// # Errors
+///
+/// Rejects zero incarnations, candidates already present in the plan, mismatched incumbent
+/// incarnation state, an exhausted epoch or an unsafe compiled transition.
+pub fn plan_next_flat_learner_admission(
+    old: &CompiledQuorumPlan,
+    accepted_incarnations: &MemberIncarnations,
+    admitted_candidates: &BTreeMap<NodeId, u64>,
+    new_plan_id: QuorumPlanId,
+) -> Result<Option<PlannedLearnerAdmission>, MembershipChangeError> {
+    let old_members = old.members();
+    if !accepted_incarnations.matches_members(&old_members)
+        || admitted_candidates
+            .iter()
+            .any(|(node, incarnation)| *incarnation == 0 || old_members.contains(node))
+    {
+        return Err(MembershipChangeError::InvalidTarget);
+    }
+    let Some((admitted_node_id, incarnation)) = admitted_candidates.first_key_value() else {
+        return Ok(None);
+    };
+    let mut learners = old.spec().learners.clone();
+    learners.insert(*admitted_node_id);
+    let new = compile_plan(
+        flat_plan(
+            new_plan_id,
+            old.spec()
+                .membership_epoch
+                .checked_add(1)
+                .ok_or(MembershipChangeError::InvalidTransition)?,
+            old.spec().voters.clone(),
+            learners,
+        )
+        .map_err(|_| MembershipChangeError::InvalidTransition)?,
+    )
+    .map_err(|_| MembershipChangeError::InvalidTransition)?;
+    let mut values = accepted_incarnations.values().clone();
+    values.insert(*admitted_node_id, *incarnation);
+    let member_incarnations =
+        MemberIncarnations::new(values, &new).map_err(|_| MembershipChangeError::InvalidTarget)?;
+    Ok(Some(PlannedLearnerAdmission {
+        admitted_node_id: *admitted_node_id,
+        joint_plan: JointQuorumPlan::new(old.clone(), new)?,
+        member_incarnations,
+    }))
+}
+
 /// Selects at most one fully caught-up eligible learner and builds the next flat plan.
 ///
 /// Promotion is deliberately one node per committed joint transition. Calling this again after
@@ -298,6 +358,41 @@ mod tests {
                 .joint_plan
                 .satisfies(QuorumFamily::Commit, &BTreeSet::from([first, second]))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn learner_admission_is_authoritative_ordered_and_incarnation_fenced()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let first = node(1)?;
+        let second = node(2)?;
+        let third = node(3)?;
+        let old = compiled(1, BTreeSet::from([first]), BTreeSet::new())?;
+        let accepted = MemberIncarnations::new(BTreeMap::from([(first, 4)]), &old)?;
+        let admission = plan_next_flat_learner_admission(
+            &old,
+            &accepted,
+            &BTreeMap::from([(third, 2), (second, 7)]),
+            QuorumPlanId::from_bytes([8; 16])?,
+        )?
+        .ok_or("admission was unexpectedly absent")?;
+        assert_eq!(admission.admitted_node_id, second);
+        assert_eq!(
+            admission.joint_plan.new_plan().spec().learners,
+            BTreeSet::from([second])
+        );
+        assert_eq!(admission.member_incarnations.incarnation(first), Some(4));
+        assert_eq!(admission.member_incarnations.incarnation(second), Some(7));
+        assert_eq!(admission.member_incarnations.incarnation(third), None);
+        assert!(matches!(
+            plan_next_flat_learner_admission(
+                &old,
+                &accepted,
+                &BTreeMap::from([(first, 5)]),
+                QuorumPlanId::from_bytes([9; 16])?,
+            ),
+            Err(MembershipChangeError::InvalidTarget)
+        ));
         Ok(())
     }
 
