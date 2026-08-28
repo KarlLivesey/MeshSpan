@@ -720,7 +720,13 @@ dependencies = [
  "meshspan-domain",
  "meshspan-metadata",
  "meshspan-protocol",
+ "meshspan-transport",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

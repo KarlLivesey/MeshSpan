@@ -8,7 +8,9 @@ mod snapshot;
 mod stream;
 mod tls;
 
-pub use identity::{AuthenticatedPeer, NegotiationConfig, PeerBinding, PeerRegistry};
+pub use identity::{
+    AuthenticatedPeer, NegotiationConfig, PeerBinding, PeerRegistry, certificate_fingerprint,
+};
 pub use snapshot::{SnapshotStager, VerifiedSnapshot};
 pub use stream::{
     AcceptedStream, StreamKind, accept_stream, open_stream, receive_control, send_control,
