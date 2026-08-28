@@ -54,6 +54,10 @@ impl ReconciliationLimits {
             parents: maximum_parents,
         })
     }
+
+    pub(crate) const fn commit_page_limit(self) -> usize {
+        self.commits
+    }
 }
 
 /// Untrusted immutable header for one locally acknowledged namespace commit.
@@ -173,6 +177,17 @@ pub enum ReconciliationError {
     /// The page contains a commit outside the named frontier's causal closure.
     #[error("reconciliation page contains an unreachable commit")]
     UnreachableCommit,
+}
+
+/// Failures while loading a durable commit closure and planning its reconciliation.
+#[derive(Debug, Error)]
+pub enum ReconciliationStoreError {
+    /// Durable branch state is corrupt or unavailable.
+    #[error("durable reconciliation graph could not be loaded")]
+    Publication(#[from] crate::publication::PublicationError),
+    /// The loaded causal closure is incomplete, conflicting or over bounds.
+    #[error("durable reconciliation graph is ineligible")]
+    Planning(#[from] ReconciliationError),
 }
 
 fn validate_bounds(

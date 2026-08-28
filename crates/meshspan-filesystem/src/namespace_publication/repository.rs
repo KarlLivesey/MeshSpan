@@ -206,6 +206,35 @@ pub(super) fn load_commit(
     }
 }
 
+pub(in crate::publication) fn load_reconciliation_commit(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+) -> Result<Option<crate::ReconciliationCommit>, PublicationError> {
+    let exists: i64 = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM namespace_commits WHERE namespace_commit_id = ?1
+         )",
+        [commit_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        return Ok(None);
+    }
+    let commit = load_commit(connection, commit_id)?;
+    let request_digest =
+        load_commit_request_digest(connection, commit.operation_id, commit.commit_id)?;
+    Ok(Some(crate::ReconciliationCommit {
+        commit_id: commit.commit_id,
+        branch_id: commit.branch_id,
+        volume_id: commit.volume_id,
+        root_object_id: commit.root_object_id,
+        root_object_revision_id: commit.root_object_revision_id,
+        parents: commit.parent_id.into_iter().collect(),
+        operation_id: commit.operation_id,
+        request_digest,
+    }))
+}
+
 fn load_commit_request_digest(
     connection: &Connection,
     operation_id: OperationId,

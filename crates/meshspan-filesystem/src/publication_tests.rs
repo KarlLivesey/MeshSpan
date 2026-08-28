@@ -15,7 +15,8 @@ use super::{
 };
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
-    NamespaceComponent, NamespaceLimits, NamespacePath,
+    NamespaceComponent, NamespaceLimits, NamespacePath, ReconciliationFrontier,
+    ReconciliationLimits,
 };
 
 #[test]
@@ -252,6 +253,50 @@ fn root_file_publication_moves_file_and_volume_heads_once_across_restart()
             .namespace_head(first.file.branch_id, first.file.volume_id)?
             .map(|head| (head.namespace_commit_id, head.sequence)),
         Some((second.namespace_commit_id, 2))
+    );
+    Ok(())
+}
+
+#[test]
+fn durable_branch_heads_plan_identically_after_restart() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut second = initial_root_publication()?;
+    second.file.operation_id = OperationId::from_bytes([80; 16])?;
+    second.file.branch_id = BranchId::from_bytes([81; 16])?;
+    second.file.object_id = ObjectId::from_bytes([82; 16])?;
+    second.file.version_id = FileVersionId::from_bytes([83; 16])?;
+    second.file.manifest.manifest_id = ContentManifestId::from_bytes([84; 16])?;
+    second.file.manifest.content_digest = [85; 32];
+    second.file.manifest.root_digest = [86; 32];
+    second.file_object_revision_id = ObjectRevisionId::from_bytes([87; 16])?;
+    second.root_object_revision_id = ObjectRevisionId::from_bytes([88; 16])?;
+    second.namespace_commit_id = NamespaceCommitId::from_bytes([89; 16])?;
+    second.path = NamespacePublicationPath::new(
+        NamespacePath::from_components(["Other"], NamespaceLimits::PORTABLE)?,
+        Vec::new(),
+    )?;
+    let frontier = ReconciliationFrontier {
+        converged_head: None,
+        eligible_heads: vec![first.namespace_commit_id, second.namespace_commit_id],
+    };
+
+    let expected = {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&second)?;
+        store.publish_root_file(&first)?;
+        store.plan_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?
+    };
+    let reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let observed = reopened.plan_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    assert_eq!(observed, expected);
+    assert_eq!(
+        observed.ordered_commits(),
+        [first.namespace_commit_id, second.namespace_commit_id]
+    );
+    assert_eq!(
+        observed.merge_parents(),
+        [first.namespace_commit_id, second.namespace_commit_id]
     );
     Ok(())
 }

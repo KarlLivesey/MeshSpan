@@ -48,7 +48,7 @@ pub use publication::{
 };
 pub use reconciliation::{
     ReconciliationCommit, ReconciliationError, ReconciliationFrontier, ReconciliationLimits,
-    ReconciliationPlan, plan_reconciliation,
+    ReconciliationPlan, ReconciliationStoreError, plan_reconciliation,
 };
 pub use stage_store::{
     CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration, StageStoreError,
