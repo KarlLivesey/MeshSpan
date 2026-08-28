@@ -183,6 +183,8 @@ Requirements: TOP-001–005, DAT-005, DAT-006, DAT-010–013, TST-002.
 
 **Depends on:** Stages 2–4.
 
+**Status:** in progress. See [`stage-5-evidence.md`](stage-5-evidence.md).
+
 Build:
 
 - protocol-neutral path resolution and canonical naming;

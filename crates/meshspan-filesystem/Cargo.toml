@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-filesystem"
+description = "Protocol-neutral copy-on-write filesystem service for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+unicode-casefold.workspace = true
+unicode-normalization.workspace = true
+
+[lints]
+workspace = true
