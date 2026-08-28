@@ -42,11 +42,13 @@ source/advisory policy automation arrive before a release artefact is built.
 | `prost` | 0.14.4 | `Apache-2.0` |
 | `prost-build` (build only) | 0.14.4 | `Apache-2.0` |
 | `protoc-bin-vendored` (build only) | 3.2.0 | `MIT` |
+| `rusqlite` | 0.40.2 | `MIT` |
 | `schemars` | 1.2.2 | `MIT` |
 | `serde` | 1.0.229 | `MIT OR Apache-2.0` |
 | `serde_json` | 1.0.151 | `MIT OR Apache-2.0` |
 | `sha2` | 0.10.9 | `MIT OR Apache-2.0` |
 | `thiserror` | 2.0.20 | `MIT OR Apache-2.0` |
+| `tempfile` (test only) | 3.27.0 | `MIT OR Apache-2.0` |
 
 | Web/runtime dependency | Version | Declared licence |
 | --- | ---: | --- |

@@ -5,6 +5,7 @@ members = [
     "crates/meshspan-api-contract",
     "crates/meshspan-contracts",
     "crates/meshspan-domain",
+    "crates/meshspan-metadata",
     "crates/meshspan-protocol",
 ]
 resolver = "3"
@@ -20,6 +21,7 @@ version = "0.1.0"
 [workspace.dependencies]
 jsonschema = { version = "0.52.0", default-features = false }
 prost = "0.14.4"
+rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
