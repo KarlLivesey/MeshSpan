@@ -11,14 +11,14 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use super::path;
 use super::state::{ActiveHandle, load_active};
 use super::{
-    HandleError, array, expire_stale_handles, identifier, load_revision, lookup_entry, to_i64,
-    validate_open_lineage,
+    CreateDisposition, HandleError, array, expire_stale_handles, identifier, load_revision,
+    lookup_entry, to_i64, validate_open_lineage,
 };
 use crate::commit_service::commit_request_digest;
 use crate::{
     DirectoryEntryKind, DirectoryRevisionTransition, FilesystemHandleFlushRequest,
-    NamespaceComponent, NamespacePath, NamespacePublicationPath, RootFileCommitRequest,
-    StageCompletionRequest,
+    ManifestPublication, NamespaceComponent, NamespacePath, NamespacePublicationPath,
+    PublishedContentReference, RootFileCommitRequest, StageCompletionRequest,
 };
 use crate::{PublicationError, RootFilePublication};
 
@@ -46,6 +46,19 @@ struct FlushPlan {
     commit: RootFileCommitRequest,
     expected_root_revision: ObjectRevisionId,
 }
+
+type StoredBaseContent = (
+    Vec<u8>,
+    Vec<u8>,
+    i64,
+    i64,
+    Vec<u8>,
+    Vec<u8>,
+    i64,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+);
 
 struct ProgressAdvance {
     handle: HandleId,
@@ -117,6 +130,78 @@ pub(crate) fn prepare(
     persist_plan(&transaction, request, request_digest, &plan)?;
     transaction.commit()?;
     Ok(plan.commit)
+}
+
+pub(crate) fn base_content(
+    connection: &Connection,
+    handle_id: HandleId,
+) -> Result<Option<PublishedContentReference>, HandleError> {
+    type StoredHandle = (i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
+    let stored: StoredHandle = connection.query_row(
+        "SELECT create_disposition, opened_version_id, branch_id, volume_id, object_id
+         FROM open_handles WHERE handle_id = ?1",
+        [handle_id.as_bytes().as_slice()],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    let disposition =
+        CreateDisposition::from_code(u8::try_from(stored.0).map_err(|_| HandleError::Corrupt)?)?;
+    if disposition.truncates_existing() {
+        return Ok(None);
+    }
+    let version_id = identifier(&stored.1, FileVersionId::from_bytes)?;
+    let content: StoredBaseContent = connection.query_row(
+        "SELECT v.publication_operation_id, m.manifest_id, m.format_version,
+                m.logical_length, m.content_digest, m.root_digest,
+                v.logical_length, v.content_digest, v.branch_id, v.volume_id
+         FROM file_versions v
+         JOIN content_manifests m USING(manifest_id)
+         WHERE v.version_id = ?1 AND v.object_id = ?2",
+        params![version_id.as_bytes().as_slice(), stored.4.as_slice()],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+            ))
+        },
+    )?;
+    if content.3 != content.6
+        || content.4 != content.7
+        || content.8 != stored.2
+        || content.9 != stored.3
+    {
+        return Err(HandleError::Corrupt);
+    }
+    let format_version = u16::try_from(content.2).map_err(|_| HandleError::Corrupt)?;
+    let logical_length = u64::try_from(content.3).map_err(|_| HandleError::Corrupt)?;
+    if format_version == 0 {
+        return Err(HandleError::Corrupt);
+    }
+    Ok(Some(PublishedContentReference {
+        publication_operation_id: identifier(&content.0, OperationId::from_bytes)?,
+        manifest: ManifestPublication {
+            manifest_id: identifier(&content.1, ContentManifestId::from_bytes)?,
+            format_version,
+            logical_length,
+            content_digest: array(&content.4)?,
+            root_digest: array(&content.5)?,
+        },
+    }))
 }
 
 pub(crate) fn advance_progress(

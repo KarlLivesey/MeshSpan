@@ -7,6 +7,7 @@ mod content_catalog;
 mod content_crypto;
 mod content_key;
 mod content_publisher;
+mod content_reader;
 mod directory;
 mod handle_io;
 mod handles;
@@ -35,6 +36,9 @@ pub use content_key::{
 };
 pub use content_publisher::{
     DurableContentSink, UnprotectedContentPublisher, UnprotectedContentTarget,
+};
+pub use content_reader::{
+    ContentReadError, ContentReadRequest, DurableContentReader, PublishedContentReference,
 };
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,

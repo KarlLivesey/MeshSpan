@@ -18,7 +18,10 @@ mod tests;
 #[path = "handles/write.rs"]
 mod write;
 
-pub(crate) use flush::{advance_progress as advance_flush_progress, prepare as prepare_flush};
+pub(crate) use flush::{
+    advance_progress as advance_flush_progress, base_content as handle_base_content,
+    prepare as prepare_flush,
+};
 pub use lease::{
     CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, HandleLeaseReceipt,
     HandleLeaseRequest,

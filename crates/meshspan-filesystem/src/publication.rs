@@ -757,6 +757,13 @@ impl VersionPublicationStore {
         crate::handles::prepare_flush(&mut self.connection, request)
     }
 
+    pub(crate) fn handle_base_content(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+    ) -> Result<Option<crate::PublishedContentReference>, crate::HandleError> {
+        crate::handles::handle_base_content(&self.connection, handle_id)
+    }
+
     #[cfg(test)]
     pub(crate) fn test_connection(&mut self) -> &mut Connection {
         &mut self.connection
