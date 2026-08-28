@@ -4,8 +4,14 @@
 
 mod driver;
 mod node_runtime;
+mod status;
 mod wire;
 
 pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver};
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
+pub use status::{
+    AvailabilityError, AvailabilityReason, AvailabilityState, NodePresence, PartitionAvailability,
+    PartitionStatusInput, PresenceError, PresenceRegistry, PresenceRole, PresenceUpdate,
+    evaluate_partition_availability,
+};
 pub use wire::{ConsensusWireError, decode_consensus_message, encode_consensus_message};

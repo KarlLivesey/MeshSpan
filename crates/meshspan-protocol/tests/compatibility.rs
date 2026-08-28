@@ -6,8 +6,8 @@ use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::data_control_envelope::Message as DataMessage;
 use meshspan_protocol::v1::{
     ComponentSupport, ControlEnvelope, DataControlEnvelope, DataFrame, DeleteShardRequest,
-    NodeHello, Ping, ProtocolVersion, PutShardBegin, RequestHeader, ShardIdentity, VoteRequest,
-    VoteResponse,
+    NodeHello, NodeRole, Ping, ProtocolVersion, PublishPresence, PutShardBegin, RequestHeader,
+    ShardIdentity, VersionedPayload, VoteRequest, VoteResponse,
 };
 use meshspan_protocol::{
     WireContractError, WireLimits, decode_control_frame, decode_data_control_frame,
@@ -112,6 +112,44 @@ fn semantic_validation_rejects_missing_authority_and_excessive_repetition()
     };
     assert_eq!(
         encode_control_frame(&authority_message, wire_limits),
+        Err(WireContractError::InvalidMessage)
+    );
+    Ok(())
+}
+
+#[test]
+fn presence_requires_a_monotonic_sequence_and_valid_lease_interval()
+-> Result<(), Box<dyn std::error::Error>> {
+    let envelope = |presence: PublishPresence| ControlEnvelope {
+        header: Some(valid_header()),
+        message: Some(Message::PublishPresence(presence)),
+    };
+    let valid = PublishPresence {
+        node_id: vec![3; 16],
+        incarnation: 2,
+        roles: vec![NodeRole::Storage.into()],
+        private_addresses: vec!["127.0.0.1:7443".to_owned()],
+        lease_expires_unix_micros: 2_000,
+        health: Some(VersionedPayload {
+            format_version: 1,
+            canonical_bytes: Vec::new(),
+        }),
+        presence_sequence: 7,
+        observed_mesh_time: 1_000,
+    };
+    assert!(encode_control_frame(&envelope(valid.clone()), limits()?).is_ok());
+
+    let mut missing_sequence = valid.clone();
+    missing_sequence.presence_sequence = 0;
+    assert_eq!(
+        encode_control_frame(&envelope(missing_sequence), limits()?),
+        Err(WireContractError::InvalidMessage)
+    );
+
+    let mut reversed_lease = valid;
+    reversed_lease.lease_expires_unix_micros = 999;
+    assert_eq!(
+        encode_control_frame(&envelope(reversed_lease), limits()?),
         Err(WireContractError::InvalidMessage)
     );
     Ok(())

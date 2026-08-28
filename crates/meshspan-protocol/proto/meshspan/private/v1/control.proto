@@ -152,6 +152,8 @@ message PublishPresence {
   repeated string private_addresses = 4;
   uint64 lease_expires_unix_micros = 5;
   VersionedPayload health = 6;
+  uint64 presence_sequence = 7;
+  sint64 observed_mesh_time = 8;
 }
 
 enum ComponentLifecycleState {

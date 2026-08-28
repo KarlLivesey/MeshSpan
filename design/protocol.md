@@ -179,15 +179,17 @@ predicates; `excluded` zones are rejected as placement targets.
 
 | Message | Purpose |
 | --- | --- |
-| `PublishPresence` | Node incarnation, addresses, roles and health summary |
+| `PublishPresence` | Node incarnation, monotonic sequence, mesh-time lease, addresses, roles and health summary |
 | `PublishComponentSupport` | Installed implementation IDs, contract ranges, capabilities and limits |
 | `PublishComponentObservation` | Desired/active revisions and bounded apply status |
 | `PublishTargetStatus` | Capacity, reservation, IO and filesystem observations |
 | `InventoryBegin/Batch/Finish` | Reconcile locally present shard identities |
 | `ScrubObservation` | Report verified health without changing authority |
 
-Presence is a lease-backed observation. It is not membership, permission or
-proof of stored data.
+Presence is a lease-backed observation. Its sequence is monotonic within one
+authority-accepted process incarnation, and a new accepted incarnation fences
+every observation from the previous process. Presence is not membership,
+permission or proof of stored data.
 
 ## 8. Shard write stream
 
