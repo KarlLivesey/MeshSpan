@@ -13,12 +13,16 @@ mod shard;
 pub use config::{HeadlessStorageConfig, StorageConfigError, UsageLimit};
 pub use folder::{FolderRegistration, RegisteredFolder, StorageFolderError};
 pub use journal::{
-    CapacityObservation, CapacityPolicy, DurablePackEvidence, JournalCapacity, JournalPutRequest,
-    PendingPut, PendingPutPage, PreparePutResult, ReserveCapacityRequest, TargetJournal,
-    TargetJournalError,
+    CapacityObservation, CapacityPolicy, DurablePackEvidence, DurableTombstoneEvidence,
+    JournalCapacity, JournalPutRequest, JournalTombstoneRequest, PendingPut, PendingPutPage,
+    PendingTombstone, PendingTombstonePage, PreparePutResult, PrepareTombstoneResult,
+    ReserveCapacityRequest, TargetJournal, TargetJournalError,
 };
 pub use marker::{MarkerFingerprint, TargetMarker};
-pub use provider::{FolderShardStore, FolderShardStoreError, RecoveryPage, StoragePermitVerifier};
+pub use provider::{
+    FolderShardStore, FolderShardStoreError, RecoveryPage, StoragePermitVerifier,
+    TombstoneRecoveryPage,
+};
 
 use meshspan_domain::{EntropyError, RandomSource};
 

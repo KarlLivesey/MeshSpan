@@ -16,6 +16,10 @@ use crate::journal::DurablePackEvidence;
 use crate::shard::{decode_receipt, encode_receipt, encode_shard};
 use crate::{RegisteredFolder, TargetMarker};
 
+mod removal;
+
+pub(crate) use removal::PackTombstoneRequest;
+
 const SCHEMA_VERSION: u32 = 1;
 const SCHEMA: &str = include_str!("../schema/pack/001_initial.sql");
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);

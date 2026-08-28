@@ -15,9 +15,14 @@ use thiserror::Error;
 use crate::{TargetMarker, UsageLimit};
 
 mod inventory;
+mod removal;
 
 pub use inventory::{
     DurablePackEvidence, JournalPutRequest, PendingPut, PendingPutPage, PreparePutResult,
+};
+pub use removal::{
+    DurableTombstoneEvidence, JournalTombstoneRequest, PendingTombstone, PendingTombstonePage,
+    PrepareTombstoneResult,
 };
 
 const SCHEMA_VERSION: u32 = 1;
