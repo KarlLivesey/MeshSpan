@@ -34,6 +34,7 @@ use repository::{
 };
 pub(super) use repository::{
     load_directory_operation, load_file_operation as load_operation, load_head,
+    load_reconciliation_commit,
 };
 
 pub(super) fn publish(

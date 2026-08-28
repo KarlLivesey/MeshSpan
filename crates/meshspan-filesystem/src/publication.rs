@@ -5,6 +5,7 @@
 #[path = "namespace_publication.rs"]
 mod namespace;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -16,6 +17,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use thiserror::Error;
 
 use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespacePath};
+use crate::{
+    ReconciliationFrontier, ReconciliationLimits, ReconciliationPlan, ReconciliationStoreError,
+};
 
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
@@ -454,6 +458,41 @@ impl VersionPublicationStore {
             operation_id,
             PublicationDisposition::Replayed,
         )
+    }
+
+    /// Loads and validates the complete durable causal closure for one reconciliation frontier.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing/corrupt commits, cycles, mixed namespaces, conflicting operation reuse and
+    /// any closure that exceeds the selected bounded page.
+    pub fn plan_reconciliation(
+        &self,
+        frontier: &ReconciliationFrontier,
+        limits: ReconciliationLimits,
+    ) -> Result<ReconciliationPlan, ReconciliationStoreError> {
+        let mut pending = frontier
+            .converged_head
+            .into_iter()
+            .chain(frontier.eligible_heads.iter().copied())
+            .collect::<Vec<_>>();
+        let mut visited = BTreeSet::new();
+        let mut commits = Vec::new();
+        while let Some(commit_id) = pending.pop() {
+            if !visited.insert(commit_id) {
+                continue;
+            }
+            if visited.len() > limits.commit_page_limit() {
+                return Err(crate::ReconciliationError::BoundsExceeded.into());
+            }
+            let Some(commit) = namespace::load_reconciliation_commit(&self.connection, commit_id)?
+            else {
+                continue;
+            };
+            pending.extend(commit.parents.iter().copied());
+            commits.push(commit);
+        }
+        crate::plan_reconciliation(&commits, frontier, limits).map_err(Into::into)
     }
 }
 
