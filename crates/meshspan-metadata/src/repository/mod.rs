@@ -15,6 +15,7 @@ mod membership;
 mod namespace;
 mod query;
 mod quorum_plan;
+mod reachability;
 mod receipt;
 mod retention;
 mod routing;
@@ -40,6 +41,10 @@ pub use membership::AuthoritativeMembership;
 pub use query::{
     GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
     PrincipalRecord,
+};
+pub use reachability::{
+    RetainedNamespaceRoot, RetainedNamespaceRootCursor, RetainedNamespaceRootPage,
+    RetainedNamespaceRootSource,
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use retention::VersionRetentionPolicy;
@@ -236,6 +241,24 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<VolumeSnapshot, SnapshotCursor>, RepositoryError> {
         user_snapshot::list(&self.database, volume_id, after, limit)
+    }
+
+    /// Returns one stable page of every metadata root retaining a volume namespace.
+    ///
+    /// Every page must present the same exact current `catalogue_revision`; any intervening
+    /// authoritative mutation makes continuation fail stale rather than yielding a mixed root set.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale revisions, absent converged heads, malformed roots and invalid page bounds.
+    pub fn retained_namespace_roots(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+        catalogue_revision: Revision,
+        after: Option<RetainedNamespaceRootCursor>,
+        limit: PageLimit,
+    ) -> Result<RetainedNamespaceRootPage, RepositoryError> {
+        reachability::retained_roots(&self.database, volume_id, catalogue_revision, after, limit)
     }
 
     /// Returns a bounded page of currently eligible automatic snapshot expiries.
