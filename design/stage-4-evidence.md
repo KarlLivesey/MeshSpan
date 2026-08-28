@@ -46,6 +46,11 @@ implementation claim.
   domains agree. A real restart test stops between pack commit and journal
   commit, then proves bounded recovery publishes the existing bytes exactly
   once without uploading them again.
+- Read permits use one canonical domain-separated keyed BLAKE3 MAC shared by
+  issuer and verifier code. Reads bind the operation, authority revision,
+  deadline, mesh, target incarnation and exact shard; forged, expired or
+  mismatched authority fails before independently length/digest-verified bytes
+  leave the provider.
 
 ## Closure gates
 
@@ -55,7 +60,7 @@ implementation claim.
    filesystem capability probes.
 3. [x] Durable target journal, bounded inventory, reservations, recovery checkpoint
    and target-incarnation fencing.
-4. Immutable packed shard put/get with exact replay, bounded read authority,
+4. [x] Immutable packed shard put/get with exact replay, bounded read authority,
    durable receipts and independent integrity verification.
 5. Exact removal permits, durable tombstones, guarded unlink and scrub
    observations that never become deletion authority.

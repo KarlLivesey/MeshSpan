@@ -5,10 +5,10 @@
 use std::path::Path;
 
 use meshspan_contracts::{
-    BoundedBytes, BoundedItems, ContractVersion, InventoryPage, PutShardRequest, ShardReceipt,
-    StorageReservation,
+    BoundedBytes, BoundedItems, ContractVersion, InventoryPage, PutShardRequest, RequestContext,
+    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageReservation, verify_read_permit_mac,
 };
-use meshspan_domain::{RandomSource, UnixMicros};
+use meshspan_domain::{MeshId, RandomSource, UnixMicros};
 use thiserror::Error;
 
 use crate::journal::{
@@ -36,6 +36,25 @@ pub struct FolderShardStore {
     folder: RegisteredFolder,
     journal: TargetJournal,
     pack: PackStore,
+    permits: StoragePermitVerifier,
+}
+
+/// Current mesh authority material used to authenticate short-lived storage permits.
+pub struct StoragePermitVerifier {
+    mesh_id: MeshId,
+    key: StoragePermitMacKey,
+}
+
+impl StoragePermitVerifier {
+    /// Installs the secret MAC key delivered through the mesh secret-distribution boundary.
+    #[must_use]
+    pub const fn new(mesh_id: MeshId, key: StoragePermitMacKey) -> Self {
+        Self { mesh_id, key }
+    }
+
+    fn authenticates_read(&self, permit: ShardReadPermit) -> bool {
+        permit.mesh_id == self.mesh_id && verify_read_permit_mac(&self.key, permit)
+    }
 }
 
 impl FolderShardStore {
@@ -48,9 +67,13 @@ impl FolderShardStore {
         folder: RegisteredFolder,
         daemon_state_dir: &Path,
         policy: CapacityPolicy,
+        permits: StoragePermitVerifier,
         opened_at: UnixMicros,
         random: &mut impl RandomSource,
     ) -> Result<Self, FolderShardStoreError> {
+        if permits.mesh_id != folder.marker().mesh_id() {
+            return Err(FolderShardStoreError::InvalidInput);
+        }
         let journal =
             TargetJournal::open(daemon_state_dir, folder.marker(), policy, opened_at, random)?;
         let pack = PackStore::open(&folder, ACTIVE_PACK_SEQUENCE, opened_at)
@@ -59,6 +82,7 @@ impl FolderShardStore {
             folder,
             journal,
             pack,
+            permits,
         })
     }
 
@@ -172,6 +196,27 @@ impl FolderShardStore {
         self.journal.inventory(cursor, limit).map_err(Into::into)
     }
 
+    /// Reads and independently verifies one exact shard under a current authenticated permit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed context, expired authority, forged or target-mismatched permits, absent
+    /// bytes and any persisted length/digest corruption.
+    pub fn get_exact(
+        &self,
+        context: RequestContext,
+        permit: ShardReadPermit,
+        now: UnixMicros,
+    ) -> Result<BoundedBytes, FolderShardStoreError> {
+        validate_read(context, permit, self.folder.marker(), now)?;
+        if !self.permits.authenticates_read(permit) {
+            return Err(FolderShardStoreError::Unauthorized);
+        }
+        self.pack
+            .get_exact(permit.shard)
+            .map_err(|error| map_pack(&error))
+    }
+
     /// Re-runs folder, journal and pack structural health checks.
     ///
     /// # Errors
@@ -184,6 +229,31 @@ impl FolderShardStore {
             .check_integrity()
             .map_err(|error| map_pack(&error))
     }
+}
+
+fn validate_read(
+    context: RequestContext,
+    permit: ShardReadPermit,
+    marker: crate::TargetMarker,
+    now: UnixMicros,
+) -> Result<(), FolderShardStoreError> {
+    if context.contract_version != ContractVersion::V1_0
+        || context.operation_id != permit.operation_id
+        || context.expected_revision != Some(permit.authorization_revision)
+        || context.deadline > permit.expires_at
+    {
+        return Err(FolderShardStoreError::InvalidInput);
+    }
+    if context.deadline <= now || permit.expires_at <= now {
+        return Err(FolderShardStoreError::Stale);
+    }
+    if permit.mesh_id != marker.mesh_id()
+        || permit.target_id != marker.target_id()
+        || permit.target_generation != marker.generation()
+    {
+        return Err(FolderShardStoreError::Unauthorized);
+    }
+    Ok(())
 }
 
 fn validate_put(
@@ -248,6 +318,12 @@ pub enum FolderShardStoreError {
     /// Request shape, bounds, time, identity or digest is invalid.
     #[error("folder shard request is invalid")]
     InvalidInput,
+    /// Caller identity or permit is not authorised for this target and operation.
+    #[error("folder shard request is not authorised")]
+    Unauthorized,
+    /// A deadline or permit is stale.
+    #[error("folder shard request authority is stale")]
+    Stale,
     /// One operation/shard identity was reused with different immutable input.
     #[error("folder shard operation conflicts with prior input")]
     OperationConflict,
@@ -274,14 +350,14 @@ mod tests {
 
     use meshspan_contracts::{
         BoundedBytes, ContractVersion, PutShardRequest, RequestContext, ReservationClass,
-        ShardIdentity,
+        ShardIdentity, ShardReadPermit, StoragePermitMacKey, read_permit_mac,
     };
     use meshspan_domain::{
         EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId, UnixMicros,
     };
     use tempfile::tempdir;
 
-    use super::{FolderShardStore, put_request_digest};
+    use super::{FolderShardStore, StoragePermitVerifier, put_request_digest};
     use crate::journal::{JournalPutRequest, PreparePutResult};
     use crate::pack::PackPutRequest;
     use crate::{
@@ -296,6 +372,15 @@ mod tests {
             destination.fill(9);
             Ok(())
         }
+    }
+
+    fn permit_verifier(
+        mesh_id: MeshId,
+    ) -> Result<StoragePermitVerifier, Box<dyn std::error::Error>> {
+        Ok(StoragePermitVerifier::new(
+            mesh_id,
+            StoragePermitMacKey::from_bytes([42; 32])?,
+        ))
     }
 
     fn reserve_put(
@@ -361,8 +446,14 @@ mod tests {
             repair_reserve_bytes: 100,
             revision: Revision::new(1),
         };
-        let mut store =
-            FolderShardStore::open(folder, &state_path, policy, UnixMicros::new(1), &mut random)?;
+        let mut store = FolderShardStore::open(
+            folder,
+            &state_path,
+            policy,
+            permit_verifier(registration.mesh_id)?,
+            UnixMicros::new(1),
+            &mut random,
+        )?;
         let request = reserve_put(
             &mut store,
             registration,
@@ -374,6 +465,34 @@ mod tests {
         let first = store.put_exact(&request, UnixMicros::new(20))?;
         assert_eq!(store.put_exact(&request, UnixMicros::new(21))?, first);
         assert_eq!(store.inventory(None, 10)?.entries.len(), 1);
+        let read_context = RequestContext {
+            contract_version: ContractVersion::V1_0,
+            operation_id: OperationId::from_bytes([21; 16])?,
+            deadline: UnixMicros::new(200),
+            expected_revision: Some(Revision::new(22)),
+        };
+        let mut permit = ShardReadPermit {
+            operation_id: read_context.operation_id,
+            mesh_id: registration.mesh_id,
+            target_id: registration.target_id,
+            target_generation: registration.generation,
+            shard: request.shard,
+            authorization_revision: Revision::new(22),
+            expires_at: UnixMicros::new(250),
+            permit_digest: [0; 32],
+        };
+        let signing_key = StoragePermitMacKey::from_bytes([42; 32])?;
+        permit.permit_digest = read_permit_mac(&signing_key, permit);
+        assert_eq!(
+            store.get_exact(read_context, permit, UnixMicros::new(30))?,
+            request.bytes
+        );
+        let mut forged = permit;
+        forged.permit_digest[0] ^= 1;
+        assert!(matches!(
+            store.get_exact(read_context, forged, UnixMicros::new(30)),
+            Err(super::FolderShardStoreError::Unauthorized)
+        ));
         store.check_health()?;
         drop(store);
 
@@ -382,6 +501,7 @@ mod tests {
             folder,
             &state_path,
             policy,
+            permit_verifier(registration.mesh_id)?,
             UnixMicros::new(30),
             &mut random,
         )?;
@@ -416,8 +536,14 @@ mod tests {
             repair_reserve_bytes: 100,
             revision: Revision::new(1),
         };
-        let mut store =
-            FolderShardStore::open(folder, &state_path, policy, UnixMicros::new(1), &mut random)?;
+        let mut store = FolderShardStore::open(
+            folder,
+            &state_path,
+            policy,
+            permit_verifier(registration.mesh_id)?,
+            UnixMicros::new(1),
+            &mut random,
+        )?;
         let request = reserve_put(
             &mut store,
             registration,
@@ -456,6 +582,7 @@ mod tests {
             folder,
             &state_path,
             policy,
+            permit_verifier(registration.mesh_id)?,
             UnixMicros::new(30),
             &mut random,
         )?;

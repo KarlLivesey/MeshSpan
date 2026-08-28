@@ -6,6 +6,30 @@ use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 
 use crate::{BoundedBytes, BoundedItems, ComponentLifecycle, ContractError, RequestContext};
 
+const READ_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.read-permit.v1";
+const REMOVAL_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.removal-permit.v1";
+
+/// Secret 256-bit key used to authenticate short-lived storage permits.
+///
+/// This type deliberately omits `Clone`, `Copy` and `Debug`. It is capability material, not a
+/// serialisable contract field or a value that may be logged.
+pub struct StoragePermitMacKey([u8; 32]);
+
+impl StoragePermitMacKey {
+    /// Accepts exact key bytes obtained from the mesh secret-distribution boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero sentinel, which is never valid key material.
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, ContractError> {
+        if bytes == [0; 32] {
+            Err(ContractError::InvalidInput)
+        } else {
+            Ok(Self(bytes))
+        }
+    }
+}
+
 /// Immutable identity of one erasure-coded or replicated shard generation.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ShardIdentity {
@@ -100,7 +124,7 @@ pub struct ShardReadPermit {
     pub authorization_revision: Revision,
     /// Exclusive expiry.
     pub expires_at: UnixMicros,
-    /// Digest or signature binding every permit field and its issuing authority.
+    /// Domain-separated keyed BLAKE3 MAC binding every permit field and issuing authority.
     pub permit_digest: [u8; 32],
 }
 
@@ -123,8 +147,63 @@ pub struct RemovalPermit {
     pub catalogue_revision: Revision,
     /// Exclusive expiry.
     pub expires_at: UnixMicros,
-    /// Digest binding authority, identity, generation and expiry.
+    /// Domain-separated keyed BLAKE3 MAC binding authority, identity, generation and expiry.
     pub permit_digest: [u8; 32],
+}
+
+/// Calculates the canonical keyed MAC for one exact read permit.
+///
+/// The existing `permit_digest` field is excluded and may contain any value; callers replace it
+/// with the returned MAC before transmission.
+#[must_use]
+pub fn read_permit_mac(key: &StoragePermitMacKey, permit: ShardReadPermit) -> [u8; 32] {
+    let mut mac = blake3::Hasher::new_keyed(&key.0);
+    mac.update(READ_PERMIT_DOMAIN);
+    mac.update(&permit.operation_id.as_bytes());
+    mac.update(&permit.mesh_id.as_bytes());
+    mac.update(&permit.target_id.as_bytes());
+    mac.update(&permit.target_generation.to_be_bytes());
+    encode_shard_for_mac(&mut mac, permit.shard);
+    mac.update(&permit.authorization_revision.get().to_be_bytes());
+    mac.update(&permit.expires_at.get().to_be_bytes());
+    mac.finalize().into()
+}
+
+/// Verifies one read permit MAC in constant time.
+#[must_use]
+pub fn verify_read_permit_mac(key: &StoragePermitMacKey, permit: ShardReadPermit) -> bool {
+    blake3::Hash::from_bytes(read_permit_mac(key, permit))
+        == blake3::Hash::from_bytes(permit.permit_digest)
+}
+
+/// Calculates the canonical keyed MAC for one exact removal permit.
+#[must_use]
+pub fn removal_permit_mac(key: &StoragePermitMacKey, permit: RemovalPermit) -> [u8; 32] {
+    let mut mac = blake3::Hasher::new_keyed(&key.0);
+    mac.update(REMOVAL_PERMIT_DOMAIN);
+    mac.update(&permit.operation_id.as_bytes());
+    mac.update(&permit.mesh_id.as_bytes());
+    mac.update(&permit.target_id.as_bytes());
+    mac.update(&permit.target_generation.to_be_bytes());
+    encode_shard_for_mac(&mut mac, permit.shard);
+    mac.update(&permit.authority_epoch.to_be_bytes());
+    mac.update(&permit.catalogue_revision.get().to_be_bytes());
+    mac.update(&permit.expires_at.get().to_be_bytes());
+    mac.finalize().into()
+}
+
+/// Verifies one removal permit MAC in constant time.
+#[must_use]
+pub fn verify_removal_permit_mac(key: &StoragePermitMacKey, permit: RemovalPermit) -> bool {
+    blake3::Hash::from_bytes(removal_permit_mac(key, permit))
+        == blake3::Hash::from_bytes(permit.permit_digest)
+}
+
+fn encode_shard_for_mac(mac: &mut blake3::Hasher, shard: ShardIdentity) {
+    mac.update(&shard.manifest_digest);
+    mac.update(&shard.stripe_index.to_be_bytes());
+    mac.update(&shard.shard_index.to_be_bytes());
+    mac.update(&shard.generation.to_be_bytes());
 }
 
 /// Durable proof that one exact removal permit became irreversible locally.
@@ -224,4 +303,83 @@ pub trait StorageProvider: ComponentLifecycle {
         cursor: Option<&BoundedBytes>,
         limit: usize,
     ) -> Result<InventoryPage, ContractError>;
+}
+
+#[cfg(test)]
+mod permit_tests {
+    use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
+
+    use super::{
+        RemovalPermit, ShardIdentity, ShardReadPermit, StoragePermitMacKey, read_permit_mac,
+        removal_permit_mac, verify_read_permit_mac, verify_removal_permit_mac,
+    };
+
+    #[test]
+    fn read_mac_binds_every_identity_and_rejects_forgery() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let key = StoragePermitMacKey::from_bytes([1; 32])?;
+        let mut permit = read_permit()?;
+        permit.permit_digest = read_permit_mac(&key, permit);
+        assert!(verify_read_permit_mac(&key, permit));
+
+        let mut wrong_target_generation = permit;
+        wrong_target_generation.target_generation += 1;
+        assert!(!verify_read_permit_mac(&key, wrong_target_generation));
+        let mut wrong_shard = permit;
+        wrong_shard.shard.generation += 1;
+        assert!(!verify_read_permit_mac(&key, wrong_shard));
+        let mut forged = permit;
+        forged.permit_digest[0] ^= 1;
+        assert!(!verify_read_permit_mac(&key, forged));
+        Ok(())
+    }
+
+    #[test]
+    fn removal_mac_binds_epoch_revision_and_expiry() -> Result<(), Box<dyn std::error::Error>> {
+        let key = StoragePermitMacKey::from_bytes([2; 32])?;
+        let read = read_permit()?;
+        let mut permit = RemovalPermit {
+            operation_id: read.operation_id,
+            mesh_id: read.mesh_id,
+            target_id: read.target_id,
+            shard: read.shard,
+            target_generation: read.target_generation,
+            authority_epoch: 9,
+            catalogue_revision: Revision::new(10),
+            expires_at: UnixMicros::new(11),
+            permit_digest: [0; 32],
+        };
+        permit.permit_digest = removal_permit_mac(&key, permit);
+        assert!(verify_removal_permit_mac(&key, permit));
+
+        let mut stale_epoch = permit;
+        stale_epoch.authority_epoch += 1;
+        assert!(!verify_removal_permit_mac(&key, stale_epoch));
+        let mut changed_revision = permit;
+        changed_revision.catalogue_revision = Revision::new(12);
+        assert!(!verify_removal_permit_mac(&key, changed_revision));
+        let mut extended = permit;
+        extended.expires_at = UnixMicros::new(12);
+        assert!(!verify_removal_permit_mac(&key, extended));
+        assert!(StoragePermitMacKey::from_bytes([0; 32]).is_err());
+        Ok(())
+    }
+
+    fn read_permit() -> Result<ShardReadPermit, Box<dyn std::error::Error>> {
+        Ok(ShardReadPermit {
+            operation_id: OperationId::from_bytes([3; 16])?,
+            mesh_id: MeshId::from_bytes([4; 16])?,
+            target_id: TargetId::from_bytes([5; 16])?,
+            target_generation: 6,
+            shard: ShardIdentity {
+                manifest_digest: [7; 32],
+                stripe_index: 8,
+                shard_index: 9,
+                generation: 10,
+            },
+            authorization_revision: Revision::new(11),
+            expires_at: UnixMicros::new(12),
+            permit_digest: [0; 32],
+        })
+    }
 }

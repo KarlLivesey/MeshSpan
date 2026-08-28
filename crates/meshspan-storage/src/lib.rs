@@ -18,7 +18,7 @@ pub use journal::{
     TargetJournalError,
 };
 pub use marker::{MarkerFingerprint, TargetMarker};
-pub use provider::{FolderShardStore, FolderShardStoreError, RecoveryPage};
+pub use provider::{FolderShardStore, FolderShardStoreError, RecoveryPage, StoragePermitVerifier};
 
 use meshspan_domain::{EntropyError, RandomSource};
 
