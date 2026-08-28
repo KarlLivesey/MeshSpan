@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-contracts"
+description = "Versioned replaceable capability contracts and conformance harnesses for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+meshspan-domain = { path = "../meshspan-domain" }
+thiserror.workspace = true
+
+[lints]
+workspace = true
