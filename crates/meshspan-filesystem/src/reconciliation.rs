@@ -5,13 +5,44 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{
-    BranchId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
+    BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
 };
 use thiserror::Error;
 
 const MAXIMUM_COMMITS: usize = 65_536;
 const MAXIMUM_FRONTIER_HEADS: usize = 1_024;
 const MAXIMUM_PARENTS: usize = 1_024;
+
+/// Replayable namespace mutation represented by one immutable branch commit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BranchMutation {
+    /// Select one already durable immutable file version.
+    File {
+        /// Immutable version selected by the file-object revision.
+        version_id: FileVersionId,
+    },
+    /// Create one new empty directory object.
+    CreateDirectory,
+}
+
+/// Canonical path and leaf transition required to replay one disconnected branch commit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchMutationIntent {
+    /// Commit that durably acknowledged this intent.
+    pub commit_id: NamespaceCommitId,
+    /// Original validated root-relative path.
+    pub path: crate::NamespacePath,
+    /// Stable object selected by the leaf entry.
+    pub object_id: ObjectId,
+    /// Immutable leaf-object revision produced by the source commit.
+    pub object_revision_id: ObjectRevisionId,
+    /// Exact prior object revision observed by the source branch, if any.
+    pub prior_object_revision_id: Option<ObjectRevisionId>,
+    /// Stable incarnation of the canonical leaf name.
+    pub entry_generation: u64,
+    /// Typed leaf mutation whose immutable records must already be durable.
+    pub mutation: BranchMutation,
+}
 
 /// Resource bounds for one independently validated reconciliation page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

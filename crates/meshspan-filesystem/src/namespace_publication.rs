@@ -29,11 +29,12 @@ use digest::{directory_request as directory_request_digest, file_request as requ
 use repository::{
     ObjectRevisionInsert, advance_namespace_head, load_commit,
     load_file_operation_raw as load_operation_raw, load_object_revision, persist_commit,
-    persist_directory_operation, persist_directory_path_revisions,
-    persist_file_operation as persist_namespace_operation, persist_object_revision,
+    persist_directory_intent, persist_directory_operation, persist_directory_path_revisions,
+    persist_file_intent, persist_file_operation as persist_namespace_operation,
+    persist_object_revision,
 };
 pub(super) use repository::{
-    load_directory_operation, load_file_operation as load_operation, load_head,
+    load_branch_intent, load_directory_operation, load_file_operation as load_operation, load_head,
     load_reconciliation_commit,
 };
 
@@ -86,6 +87,7 @@ pub(super) fn publish(
     persist_object_revisions(&transaction, publication, &namespace.directories)?;
     inject(fault, NamespaceFaultPoint::ObjectRevisions)?;
     persist_commit(&transaction, intent, request_digest)?;
+    persist_file_intent(&transaction, publication)?;
     inject(fault, NamespaceFaultPoint::NamespaceCommit)?;
     let head_sequence = advance_namespace_head(&transaction, intent, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Heads)?;
@@ -176,6 +178,7 @@ pub(super) fn create_directory(
     )?;
     inject(fault, NamespaceFaultPoint::ObjectRevisions)?;
     persist_commit(&transaction, intent, request_digest)?;
+    persist_directory_intent(&transaction, publication)?;
     inject(fault, NamespaceFaultPoint::NamespaceCommit)?;
     let head_sequence = advance_namespace_head(&transaction, intent, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Heads)?;

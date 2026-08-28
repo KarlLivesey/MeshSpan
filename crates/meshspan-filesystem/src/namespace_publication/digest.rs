@@ -7,7 +7,8 @@ use meshspan_domain::{FileVersionId, NamespaceCommitId, ObjectRevisionId, Operat
 use super::repository::{ObjectRevisionInsert, StoredCommit};
 use super::{NamespaceIntent, publication_request_digest};
 use crate::{
-    DirectoryNodeDigest, DirectoryPublication, NamespacePublicationPath, RootFilePublication,
+    BranchMutation, BranchMutationIntent, DirectoryNodeDigest, DirectoryPublication, NamespacePath,
+    NamespacePublicationPath, RootFilePublication,
 };
 
 pub(super) fn file_request(publication: &RootFilePublication) -> [u8; 32] {
@@ -92,6 +93,27 @@ pub(super) fn object_revision(revision: &ObjectRevisionInsert) -> [u8; 32] {
     digest.finalize().into()
 }
 
+pub(super) fn branch_intent(intent: &BranchMutationIntent) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.branch-mutation-intent.v1\0");
+    digest.update(&intent.commit_id.as_bytes());
+    update_namespace_path(&mut digest, &intent.path);
+    digest.update(&intent.object_id.as_bytes());
+    digest.update(&intent.object_revision_id.as_bytes());
+    update_optional_revision(&mut digest, intent.prior_object_revision_id);
+    digest.update(&intent.entry_generation.to_be_bytes());
+    match intent.mutation {
+        BranchMutation::File { version_id } => {
+            digest.update(&[1]);
+            digest.update(&version_id.as_bytes());
+        }
+        BranchMutation::CreateDirectory => {
+            digest.update(&[2]);
+        }
+    }
+    digest.finalize().into()
+}
+
 pub(super) fn file_result(
     operation_id: OperationId,
     request_digest: [u8; 32],
@@ -127,19 +149,23 @@ pub(super) fn directory_result(
 }
 
 fn update_publication_path(digest: &mut blake3::Hasher, path: &NamespacePublicationPath) {
-    digest.update(
-        &u16::try_from(path.path().components().len())
-            .unwrap_or(u16::MAX)
-            .to_be_bytes(),
-    );
-    for component in path.path().components() {
-        update_text(digest, component.canonical());
-        update_text(digest, component.display());
-    }
+    update_namespace_path(digest, path.path());
     for transition in path.ancestors() {
         digest.update(&transition.object_id().as_bytes());
         digest.update(&transition.expected_revision_id().as_bytes());
         digest.update(&transition.new_revision_id().as_bytes());
+    }
+}
+
+fn update_namespace_path(digest: &mut blake3::Hasher, path: &NamespacePath) {
+    digest.update(
+        &u16::try_from(path.components().len())
+            .unwrap_or(u16::MAX)
+            .to_be_bytes(),
+    );
+    for component in path.components() {
+        update_text(digest, component.canonical());
+        update_text(digest, component.display());
     }
 }
 

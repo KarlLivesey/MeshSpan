@@ -47,8 +47,9 @@ pub use publication::{
     RootFilePublication, VersionPublicationStore,
 };
 pub use reconciliation::{
-    ReconciliationCommit, ReconciliationError, ReconciliationFrontier, ReconciliationLimits,
-    ReconciliationPlan, ReconciliationStoreError, plan_reconciliation,
+    BranchMutation, BranchMutationIntent, ReconciliationCommit, ReconciliationError,
+    ReconciliationFrontier, ReconciliationLimits, ReconciliationPlan, ReconciliationStoreError,
+    plan_reconciliation,
 };
 pub use stage_store::{
     CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration, StageStoreError,

@@ -133,6 +133,13 @@ multi-parent merge commit, advances the converged head and records inclusion.
 The source branch remains durable until that receipt is observed. Lost replies
 therefore repeat the same plan instead of inventing a second merge.
 
+Each ordinary branch commit stores its canonical replay intent atomically with
+the commit: typed mutation, validated display/canonical path, stable leaf object,
+new and causal-prior revisions, name generation and selected immutable file
+version where applicable. Reconciliation applies these bounded affected paths;
+it never discovers user operations by scanning or heuristically diffing an
+entire namespace tree.
+
 ## Deterministic conflict rules
 
 No generic system can meaningfully combine two concurrent arbitrary binary edits

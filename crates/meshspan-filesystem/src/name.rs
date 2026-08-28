@@ -204,6 +204,29 @@ impl NamespacePath {
         })
     }
 
+    pub(crate) fn from_stored_components(
+        components: Vec<NamespaceComponent>,
+    ) -> Result<Self, NamespaceNameError> {
+        if components.is_empty() || components.len() > HARD_MAXIMUM_DEPTH {
+            return Err(NamespaceNameError::InvalidComponent);
+        }
+        let mut display_bytes = 0_usize;
+        let mut canonical_bytes = 0_usize;
+        for component in &components {
+            display_bytes = append_component_bytes(display_bytes, component.display.len())?;
+            canonical_bytes = append_component_bytes(canonical_bytes, component.canonical.len())?;
+            if display_bytes > HARD_MAXIMUM_PATH_BYTES || canonical_bytes > HARD_MAXIMUM_PATH_BYTES
+            {
+                return Err(NamespaceNameError::PathTooLong);
+            }
+        }
+        Ok(Self {
+            components,
+            display_bytes,
+            canonical_bytes,
+        })
+    }
+
     /// Validated components in root-to-leaf order.
     #[must_use]
     pub fn components(&self) -> &[NamespaceComponent] {
