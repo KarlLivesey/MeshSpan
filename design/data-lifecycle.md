@@ -110,7 +110,13 @@ tombstones and cleanup when it returns.
    scan has a separate request/result digest. The replicated proposal snapshots
    every admitted gateway node and its exact incarnation.
 3. Every snapshotted gateway signs a terminal unreachable result for the same
-   subject after revalidating its own branch and lifecycle roots. Reachability
+   subject after atomically installing a durable node-local reference fence and
+   revalidating its own branch and lifecycle roots. While the proof remains
+   usable, publication and reconciliation on that node reject any new reference
+   to the logical manifest or its immutable root. A reachable result releases
+   the fence in the same transaction as the terminal result; an unreachable
+   result retains it until replicated completion or cancellation authority is
+   applied. Reachability
    follows both the selected version and any other retained version sharing its
    immutable manifest, so logical copies cannot lose shared shards. The subject
    and proposal bind both the logical manifest ID and its immutable root digest;

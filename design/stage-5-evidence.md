@@ -290,8 +290,14 @@ copy-on-write filesystem service. This document records executable evidence only
    preventing cleanup-item substitution across manifests. Storage providers
    also enforce a monotonically advancing applied-catalogue fence, so applying a
    newer revision permanently rejects an otherwise authentic older removal
-   permit. Final authority and physical catalogue/provider completion remain
-   outstanding.
+   permit. Each node now atomically installs a durable manifest-root reference
+   fence when it admits a reachability scan. File publication and reconciliation
+   reject new references while the fence is active; a reachable result releases
+   it atomically, while an unreachable proof remains loadable only with its exact
+   active fence. Restart, parallel-scan exclusion, alternate manifest IDs sharing
+   a fenced root, forged release state and subsequent permitted publication after
+   a reachable result are executable. Final replicated cancellation/completion
+   authority and physical catalogue/provider completion remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

@@ -2,6 +2,7 @@
 
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
+mod cleanup_fence;
 mod commit_service;
 mod content_catalog;
 mod content_crypto;

@@ -139,6 +139,7 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "version_reachability_scans",
         "version_reachability_roots",
         "version_reachability_work",
+        "version_cleanup_reference_fences",
     ] {
         assert_table_exists(&store.connection, table)?;
     }
@@ -424,6 +425,13 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
     assert_eq!(proof.subject_digest, reachability_subject_digest(&request));
     assert!(progress.work_processed >= 3);
     assert_eq!(progress.work_pending, 0);
+    let mut republished = following_root_publication(&second, 190, 191, 192, 193, 194)?;
+    republished.file.manifest = first.file.manifest;
+    republished.file.manifest.manifest_id = ContentManifestId::from_bytes([195; 16])?;
+    assert!(matches!(
+        reopened.publish_root_file(&republished),
+        Err(PublicationError::CleanupFenced)
+    ));
     assert_eq!(
         reopened.advance_version_reachability_scan(
             request.operation_id,
@@ -459,6 +467,47 @@ fn reachable_version_sharing_the_manifest_blocks_physical_cleanup()
         store.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
     assert_eq!(progress.state, VersionReachabilityState::Reachable);
     assert!(progress.proof.is_none());
+    let mut third = following_root_publication(&second, 185, 186, 187, 188, 189)?;
+    third.file.manifest = first.file.manifest;
+    third.file.manifest.manifest_id = ContentManifestId::from_bytes([190; 16])?;
+    assert_eq!(
+        store.publish_root_file(&third)?.disposition,
+        PublicationDisposition::Applied
+    );
+    Ok(())
+}
+
+#[test]
+fn cleanup_reference_fence_rejects_parallel_scan_and_tampered_release()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
+    let request = reachability_request(candidate, policy, &roots, 167)?;
+    store.begin_version_reachability_scan(&request)?;
+
+    let mut parallel = request;
+    parallel.operation_id = OperationId::from_bytes([166; 16])?;
+    assert!(matches!(
+        store.begin_version_reachability_scan(&parallel),
+        Err(VersionReachabilityError::Conflict)
+    ));
+
+    store.connection.execute(
+        "UPDATE version_cleanup_reference_fences SET state = 2, released_at = 121
+         WHERE operation_id = ?1",
+        [request.operation_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        store.begin_version_reachability_scan(&request),
+        Err(VersionReachabilityError::Stale)
+    ));
     Ok(())
 }
 
@@ -513,12 +562,10 @@ fn retained_snapshot_root_and_substituted_root_manifest_fail_closed()
 }
 
 #[test]
-fn reachability_scan_rejects_corrupt_evidence_and_changed_local_roots()
--> Result<(), Box<dyn std::error::Error>> {
+fn reachability_scan_rejects_corrupt_evidence() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let first = initial_root_publication()?;
     let second = next_root_publication(&first)?;
-    let third = following_root_publication(&second, 180, 181, 182, 183, 184)?;
     let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
     store.publish_root_file(&first)?;
     store.publish_root_file(&second)?;
@@ -531,7 +578,7 @@ fn reachability_scan_rejects_corrupt_evidence_and_changed_local_roots()
     store.append_version_reachability_roots(&ReachabilityRootPage {
         operation_id: corrupt_request.operation_id,
         start_ordinal: 0,
-        roots: roots.clone(),
+        roots,
     })?;
     store.connection.execute(
         "UPDATE version_reachability_roots SET record_digest = zeroblob(32)
@@ -542,7 +589,21 @@ fn reachability_scan_rejects_corrupt_evidence_and_changed_local_roots()
         store.seal_version_reachability_roots(corrupt_request.operation_id, UnixMicros::new(121)),
         Err(VersionReachabilityError::Corrupt)
     ));
+    Ok(())
+}
 
+#[test]
+fn reachability_scan_rejects_changed_local_roots() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let third = following_root_publication(&second, 180, 181, 182, 183, 184)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
     let stale_request = reachability_request(candidate, policy, &roots, 173)?;
     store.begin_version_reachability_scan(&stale_request)?;
     store.append_version_reachability_roots(&ReachabilityRootPage {
