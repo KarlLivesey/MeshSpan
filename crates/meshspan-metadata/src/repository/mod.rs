@@ -7,6 +7,7 @@ mod backup;
 mod component;
 mod group_closure;
 mod identity;
+mod kernel;
 mod namespace;
 mod query;
 mod receipt;
@@ -18,6 +19,10 @@ use thiserror::Error;
 use crate::{MetadataStoreError, PartitionDatabase};
 
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
+pub use kernel::{
+    AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
+    RepositoryConformanceVector, run_repository_conformance,
+};
 pub use query::{
     GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
     PrincipalRecord,
@@ -28,6 +33,32 @@ pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
 /// Authoritative metadata repository owning one identity-bound partition database.
 pub struct AuthoritativeRepository {
     database: PartitionDatabase,
+}
+
+impl AuthoritativeMetadataKernel for AuthoritativeRepository {
+    fn current_revision(&self) -> Result<Revision, RepositoryError> {
+        Self::current_revision(self)
+    }
+
+    fn apply_committed(
+        &mut self,
+        position: LogPosition,
+        context: crate::CommandContext,
+        command: &crate::AuthoritativeCommand,
+    ) -> Result<CommandReceipt, RepositoryError> {
+        Self::apply_committed(self, position, context, command)
+    }
+
+    fn resolve_operation(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<CommandReceipt>, RepositoryError> {
+        Self::resolve_operation(self, operation_id)
+    }
+
+    fn check_invariants(&self, limit: PageLimit) -> Result<InvariantReport, RepositoryError> {
+        Self::check_invariants(self, limit)
+    }
 }
 
 impl AuthoritativeRepository {

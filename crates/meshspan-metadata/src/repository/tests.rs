@@ -2,6 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
@@ -15,7 +16,8 @@ use tempfile::tempdir;
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::{
     ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, PrincipalKind,
-    RepositoryError, restore_partition_backup,
+    RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
+    restore_partition_backup, run_repository_conformance,
 };
 use crate::{
     ActivateGrant, ActivateGroup, AddGroupMember, AssignComponent, AuthoritativeCommand,
@@ -468,8 +470,7 @@ fn component_configuration_history_and_assignments_are_authoritative()
 }
 
 #[test]
-fn conflicting_operation_and_group_cycle_roll_back_without_advancing()
--> Result<(), Box<dyn std::error::Error>> {
+fn conflicting_operation_rolls_back_without_advancing() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let file_path = directory.path().join("partition.sqlite3");
     let ids = fixture_ids()?;
@@ -499,6 +500,129 @@ fn conflicting_operation_and_group_cycle_roll_back_without_advancing()
     );
     assert!(matches!(conflict, Err(RepositoryError::OperationConflict)));
     assert_eq!(repository.current_revision()?, Revision::new(1));
+    Ok(())
+}
+
+#[test]
+fn repository_rejects_transitive_group_cycle_without_advancing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("cycle.sqlite3");
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    apply(
+        &mut repository,
+        1,
+        context(150, ids.administrator, 151, 100, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([152; 16])?,
+            mesh_name: RecordName::new("Cycle proof")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([153; 16])?,
+            host_id: HostId::from_bytes([154; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: NodeId::from_bytes([155; 16])?,
+            node_name: RecordName::new("Node")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
+    for (index, operation, audit, group, name) in [
+        (2, 156, 157, ids.inner_group, "Inner"),
+        (3, 158, 159, ids.outer_group, "Outer"),
+    ] {
+        apply(
+            &mut repository,
+            index,
+            context(
+                operation,
+                ids.administrator,
+                audit,
+                100 + i64::try_from(index).map_err(|_| "fixture index overflow")?,
+                Some(index - 1),
+            )?,
+            &AuthoritativeCommand::CreateGroup(CreateGroup {
+                group_id: group,
+                name: RecordName::new(name)?,
+                activation_policy_id: None,
+            }),
+        )?;
+    }
+    apply(
+        &mut repository,
+        4,
+        context(160, ids.administrator, 161, 104, Some(3))?,
+        &AuthoritativeCommand::AddGroupMember(AddGroupMember {
+            containing_group_id: ids.inner_group,
+            member_principal_id: ids.outer_group.principal_id(),
+            valid_from: None,
+            valid_until: None,
+            activation_required: false,
+        }),
+    )?;
+    let cycle = repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(162, ids.administrator, 163, 105, Some(4))?,
+        &AuthoritativeCommand::AddGroupMember(AddGroupMember {
+            containing_group_id: ids.outer_group,
+            member_principal_id: ids.inner_group.principal_id(),
+            valid_from: None,
+            valid_until: None,
+            activation_required: false,
+        }),
+    );
+    assert!(matches!(cycle, Err(RepositoryError::InvalidCommand)));
+    assert_eq!(repository.current_revision()?, Revision::new(4));
+    assert!(
+        repository
+            .into_database()
+            .check_integrity()?
+            .foreign_keys_ok
+    );
+    Ok(())
+}
+
+#[test]
+fn sqlite_passes_the_reusable_metadata_kernel_conformance_vector()
+-> Result<(), Box<dyn std::error::Error>> {
+    let ids = fixture_ids()?;
+    let command_context = context(170, ids.administrator, 171, 100, Some(0))?;
+    let command = AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+        mesh_id: MeshId::from_bytes([172; 16])?,
+        mesh_name: RecordName::new("Conformance")?,
+        administrator_id: ids.administrator,
+        administrator_name: RecordName::new("Administrator")?,
+        administrator_role_id: RoleId::from_bytes([173; 16])?,
+        host_id: HostId::from_bytes([174; 16])?,
+        host_name: RecordName::new("Host")?,
+        node_id: NodeId::from_bytes([175; 16])?,
+        node_name: RecordName::new("Node")?,
+        partition_name: RecordName::new("Authority")?,
+    });
+    let conflict = AuthoritativeCommand::CreateUser(CreateUser {
+        principal_id: ids.user,
+        name: RecordName::new("Different input")?,
+    });
+    let vector = RepositoryConformanceVector {
+        initial_position: LogPosition { index: 1, term: 1 },
+        replay_position: LogPosition { index: 2, term: 1 },
+        conflict_position: LogPosition { index: 3, term: 1 },
+        context: command_context,
+        command: &command,
+        conflicting_command: &conflict,
+    };
+    let report = run_repository_conformance(&vector, || {
+        let database =
+            PartitionDatabase::open(Path::new(":memory:"), ids.partition, UnixMicros::new(1))?;
+        Ok(AuthoritativeRepository::new(database))
+    })?;
+    assert_eq!(
+        report,
+        RepositoryConformanceReport {
+            failures: Vec::new(),
+        }
+    );
     Ok(())
 }
 
