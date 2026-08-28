@@ -888,6 +888,7 @@ dependencies = [
  "cap-std",
  "meshspan-contracts",
  "meshspan-domain",
+ "meshspan-storage",
  "rusqlite",
  "tempfile",
  "thiserror",

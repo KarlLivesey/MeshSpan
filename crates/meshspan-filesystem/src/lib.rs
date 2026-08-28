@@ -2,12 +2,17 @@
 
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
+mod commit_service;
 mod directory;
 mod name;
 mod publication;
 mod stage_store;
 mod staging;
 
+pub use commit_service::{
+    ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
+    FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
+};
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
     DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
