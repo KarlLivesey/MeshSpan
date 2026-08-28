@@ -38,6 +38,14 @@ implementation claim.
   reservation; accepting independently durable pack evidence atomically commits
   inventory, the exact receipt and capacity counters. Exact committed replays
   remain resolvable after restart.
+- Provider bytes live in identity-bound SQLite pack segments beneath the private
+  target directory rather than one operating-system file per shard. Exact puts
+  are immutable, bounded and independently BLAKE3-verified after the WAL/FULL-sync
+  pack transaction commits.
+- The composed folder store publishes inventory only after both durability
+  domains agree. A real restart test stops between pack commit and journal
+  commit, then proves bounded recovery publishes the existing bytes exactly
+  once without uploading them again.
 
 ## Closure gates
 

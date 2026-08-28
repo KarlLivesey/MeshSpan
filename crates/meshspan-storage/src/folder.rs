@@ -149,6 +149,17 @@ impl RegisteredFolder {
         clear_interrupted_probe(&self.private_directory)?;
         probe_capabilities(&self.private_directory)
     }
+
+    pub(crate) fn pack_database_path(&self, sequence: u64) -> Result<PathBuf, StorageFolderError> {
+        if sequence == 0 {
+            return Err(StorageFolderError::InvalidRegistration);
+        }
+        Ok(self
+            .canonical_path
+            .join(PRIVATE_DIRECTORY)
+            .join(PACK_DIRECTORY)
+            .join(format!("{sequence:016x}.sqlite3")))
+    }
 }
 
 fn open_and_lock(storage_path: &Path) -> Result<(PathBuf, Dir, std::fs::File), StorageFolderError> {

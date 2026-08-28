@@ -6,6 +6,8 @@ mod config;
 mod folder;
 mod journal;
 mod marker;
+mod pack;
+mod provider;
 mod shard;
 
 pub use config::{HeadlessStorageConfig, StorageConfigError, UsageLimit};
@@ -16,6 +18,7 @@ pub use journal::{
     TargetJournalError,
 };
 pub use marker::{MarkerFingerprint, TargetMarker};
+pub use provider::{FolderShardStore, FolderShardStoreError, RecoveryPage};
 
 use meshspan_domain::{EntropyError, RandomSource};
 
