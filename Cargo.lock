@@ -884,6 +884,9 @@ dependencies = [
 name = "meshspan-filesystem"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "meshspan-contracts",
+ "meshspan-domain",
  "thiserror",
  "unicode-casefold",
  "unicode-normalization",
