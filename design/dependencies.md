@@ -39,6 +39,9 @@ source/advisory policy automation arrive before a release artefact is built.
 | Rust dependency | Resolved version | Declared licence |
 | --- | ---: | --- |
 | `jsonschema` | 0.52.0 | `MIT` |
+| `prost` | 0.14.4 | `Apache-2.0` |
+| `prost-build` (build only) | 0.14.4 | `Apache-2.0` |
+| `protoc-bin-vendored` (build only) | 3.2.0 | `MIT` |
 | `schemars` | 1.2.2 | `MIT` |
 | `serde` | 1.0.229 | `MIT OR Apache-2.0` |
 | `serde_json` | 1.0.151 | `MIT OR Apache-2.0` |
@@ -90,6 +93,11 @@ runtime request/response validation. The exact Rust schema crates remain gated
 on one focused round-trip proof: the same declared constraint must appear in
 runtime validation, OpenAPI and hostile fixtures without a second hand-written
 model. Candidate selection happens before the first public route is scaffolded.
+
+Private Protobuf generation uses `prost-build` with the exact platform-specific
+`protoc` selected by `protoc-bin-vendored`. Both are build-only dependencies;
+the generated Rust is compiled in `OUT_DIR`, while canonical encoded fixtures
+are committed and checked for drift and compatibility.
 
 ### Persistence and local filesystem
 
