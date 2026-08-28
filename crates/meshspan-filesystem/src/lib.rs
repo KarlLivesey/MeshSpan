@@ -3,6 +3,7 @@
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
 mod commit_service;
+mod content_catalog;
 mod content_crypto;
 mod content_key;
 mod directory;
@@ -14,6 +15,9 @@ mod staging;
 pub use commit_service::{
     ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
     FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
+};
+pub use content_catalog::{
+    ContentCatalogError, DurableContentCatalog, PendingContentChunkPage, PreparedContentChunk,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,
