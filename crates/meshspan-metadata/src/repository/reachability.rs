@@ -3,7 +3,7 @@
 //! Revision-bound authoritative roots for guarded namespace reachability scans.
 
 use meshspan_domain::{NamespaceCommitId, ObjectRevisionId, Revision, SnapshotId, VolumeId};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 
 use super::{PageLimit, RepositoryError};
 use crate::PartitionDatabase;
@@ -127,7 +127,59 @@ pub(super) fn retained_roots(
 }
 
 fn current_revision(database: &PartitionDatabase) -> Result<Revision, RepositoryError> {
-    let revision: i64 = database.connection().query_row(
+    current_connection_revision(database.connection())
+}
+
+pub(super) fn retained_root_summary(
+    connection: &Connection,
+    volume_id: VolumeId,
+    catalogue_revision: Revision,
+) -> Result<(u64, [u8; 32]), RepositoryError> {
+    if catalogue_revision == Revision::ZERO
+        || current_connection_revision(connection)? != catalogue_revision
+    {
+        return Err(RepositoryError::StaleRevision);
+    }
+    let mut statement = connection.prepare(
+        "WITH roots(source_kind, source_id, namespace_commit_id, root_object_revision_id) AS (
+            SELECT 1, volume_id, namespace_commit_id, root_object_revision_id
+            FROM volume_head_transitions h
+            WHERE h.volume_id = ?1 AND h.head_sequence = (
+                SELECT max(current.head_sequence) FROM volume_head_transitions current
+                WHERE current.volume_id = ?1
+            )
+            UNION ALL
+            SELECT 2, snapshot_id, namespace_commit_id, root_object_revision_id
+            FROM volume_snapshots WHERE volume_id = ?1 AND state IN (1, 2)
+         )
+         SELECT source_kind, source_id, namespace_commit_id, root_object_revision_id
+         FROM roots ORDER BY source_kind, source_id",
+    )?;
+    let rows = statement.query_map([volume_id.as_bytes().as_slice()], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, Vec<u8>>(1)?,
+            row.get::<_, Vec<u8>>(2)?,
+            row.get::<_, Vec<u8>>(3)?,
+        ))
+    })?;
+    let mut digest = retained_root_hasher(volume_id, catalogue_revision);
+    let mut count = 0_u64;
+    for row in rows {
+        let root = decode_root(volume_id, &row?)?;
+        digest.update(&retained_root_record_digest(root));
+        count = count
+            .checked_add(1)
+            .ok_or(RepositoryError::CapacityExceeded)?;
+    }
+    if count == 0 {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok((count, digest.finalize().into()))
+}
+
+fn current_connection_revision(connection: &Connection) -> Result<Revision, RepositoryError> {
+    let revision: i64 = connection.query_row(
         "SELECT state_revision FROM applied_state WHERE singleton = 1",
         [],
         |row| row.get(0),
@@ -138,6 +190,32 @@ fn current_revision(database: &PartitionDatabase) -> Result<Revision, Repository
     } else {
         Ok(Revision::new(revision))
     }
+}
+
+fn retained_root_hasher(volume_id: VolumeId, revision: Revision) -> blake3::Hasher {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.retained-namespace-roots.v1\0");
+    digest.update(&volume_id.as_bytes());
+    digest.update(&revision.get().to_be_bytes());
+    digest
+}
+
+fn retained_root_record_digest(root: RetainedNamespaceRoot) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.retained-namespace-root.v1\0");
+    match root.source {
+        RetainedNamespaceRootSource::ConvergedHead(volume_id) => {
+            digest.update(&[1]);
+            digest.update(&volume_id.as_bytes());
+        }
+        RetainedNamespaceRootSource::Snapshot(snapshot_id) => {
+            digest.update(&[2]);
+            digest.update(&snapshot_id.as_bytes());
+        }
+    }
+    digest.update(&root.namespace_commit_id.as_bytes());
+    digest.update(&root.root_object_revision_id.as_bytes());
+    digest.finalize().into()
 }
 
 fn decode_root(

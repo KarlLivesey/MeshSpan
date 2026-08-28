@@ -16,9 +16,10 @@ pub use command::{
     CreateComponent, CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute,
     CreateTag, CreateUser, CreateVolume, CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff,
     GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles, NamespaceObjectKind,
-    PermissionScope, RegisterRoutingSigner, RemoveVolumeSnapshotRoot, ReplaceObjectOwners,
-    RepositoryCommandError, RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot,
-    RetentionReclaimMode, RouteAttestation, RunSnapshotSchedule, SnapshotExpiryReason, TagTarget,
+    PermissionScope, ProposeVersionCleanup, RegisterRoutingSigner, RemoveVolumeSnapshotRoot,
+    ReplaceObjectOwners, RepositoryCommandError, RequestVolumeSnapshotExpiry,
+    RestoreVolumeSnapshot, RetentionReclaimMode, RouteAttestation, RunSnapshotSchedule,
+    SnapshotExpiryReason, TagTarget,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;
@@ -33,6 +34,7 @@ pub use repository::{
     RepositoryConformanceVector, RepositoryError, RetainedNamespaceRoot,
     RetainedNamespaceRootCursor, RetainedNamespaceRootPage, RetainedNamespaceRootSource,
     ScopeWriteAuthority, SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor,
-    SnapshotSchedule, SnapshotScheduleCursor, VersionRetentionPolicy, VolumeSnapshot,
-    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
+    SnapshotSchedule, SnapshotScheduleCursor, VersionCleanupIntent, VersionRetentionPolicy,
+    VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
+    run_repository_conformance,
 };

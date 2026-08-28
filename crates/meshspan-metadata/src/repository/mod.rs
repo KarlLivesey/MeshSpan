@@ -24,6 +24,7 @@ mod snapshot_schedule;
 mod tags;
 mod user_snapshot;
 mod verify;
+mod version_cleanup;
 mod volume_head;
 
 use meshspan_domain::{OperationId, Revision, ScopeId, ScopeRoute};
@@ -54,6 +55,7 @@ pub use user_snapshot::{
     SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor, VolumeSnapshot,
 };
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
+pub use version_cleanup::VersionCleanupIntent;
 pub use volume_head::ConvergedVolumeHead;
 
 /// Authoritative metadata repository owning one identity-bound partition database.
@@ -313,6 +315,18 @@ impl AuthoritativeRepository {
         retention::load(&self.database, volume_id)
     }
 
+    /// Returns one independently revalidated replicated version-cleanup intent.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if stored identities, proof digests, state or revisions are malformed.
+    pub fn version_cleanup_intent(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<VersionCleanupIntent>, RepositoryError> {
+        version_cleanup::load(&self.database, operation_id)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -472,5 +486,7 @@ mod snapshot_schedule_tests;
 mod snapshot_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod version_cleanup_tests;
 #[cfg(test)]
 mod volume_head_tests;

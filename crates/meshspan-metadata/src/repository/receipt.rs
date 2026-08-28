@@ -74,6 +74,8 @@ pub enum EntityKind {
     VolumeSnapshot = 19,
     /// Authoritative volume snapshot schedule.
     SnapshotSchedule = 20,
+    /// Replicated unreachable-version cleanup intent.
+    VersionCleanup = 21,
 }
 
 impl EntityKind {
@@ -99,6 +101,7 @@ impl EntityKind {
             18 => Ok(Self::TagAttachment),
             19 => Ok(Self::VolumeSnapshot),
             20 => Ok(Self::SnapshotSchedule),
+            21 => Ok(Self::VersionCleanup),
             _ => Err(RepositoryError::CorruptState),
         }
     }

@@ -5,10 +5,10 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
-    DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId,
-    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
-    PrincipalId, Revision, Rights, RoleId, ScopeId, SnapshotId, SnapshotScheduleId, TagId,
-    UnixMicros, VolumeId,
+    ContentManifestId, DurationMicros, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
+    JoinGrantId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId,
+    OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId, SnapshotId,
+    SnapshotScheduleId, TagId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -60,6 +60,8 @@ pub enum AuthoritativeCommand {
     RunSnapshotSchedule(RunSnapshotSchedule),
     /// Appends and selects one immutable per-volume file-version retention policy.
     ConfigureVersionRetention(ConfigureVersionRetention),
+    /// Proposes cleanup from one exact proof; cross-node validation remains required.
+    ProposeVersionCleanup(ProposeVersionCleanup),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
@@ -132,6 +134,7 @@ impl AuthoritativeCommand {
             Self::ConfigureSnapshotSchedule(value) => value.update_digest(digest),
             Self::RunSnapshotSchedule(value) => value.update_digest(digest),
             Self::ConfigureVersionRetention(value) => value.update_digest(digest),
+            Self::ProposeVersionCleanup(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
@@ -439,6 +442,33 @@ pub struct ConfigureVersionRetention {
     pub soft_minimum_breakable: bool,
     /// Mandatory safety age for acknowledged concurrent alternatives.
     pub conflict_minimum_age: DurationMicros,
+}
+
+/// Exact terminal reachability evidence admitted as one replicated cleanup intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProposeVersionCleanup {
+    /// Volume whose retained-root set was exhausted.
+    pub volume_id: VolumeId,
+    /// Historical immutable version proved unreachable.
+    pub version_id: FileVersionId,
+    /// Content manifest selected by that version.
+    pub manifest_id: ContentManifestId,
+    /// Durable filesystem scan operation that produced the proof.
+    pub source_scan_operation_id: OperationId,
+    /// Digest binding the scan candidate, policy and root authority.
+    pub scan_request_digest: [u8; 32],
+    /// Exact current retention policy sequence used by preliminary selection.
+    pub retention_policy_sequence: u64,
+    /// Metadata revision against which every retained root was enumerated.
+    pub reachability_revision: Revision,
+    /// Complete number of metadata-authoritative retained roots.
+    pub retained_root_count: u64,
+    /// Canonical digest of those roots in stable order.
+    pub retained_root_digest: [u8; 32],
+    /// Digest of unchanged node-local branch and lifecycle roots.
+    pub local_roots_digest: [u8; 32],
+    /// Terminal scanner digest proving the unreachable outcome.
+    pub proof_result_digest: [u8; 32],
 }
 
 /// Namespace object kind stored as a closed integer contract.
@@ -999,6 +1029,23 @@ digest_simple_record!(
         });
         digest.boolean(value.soft_minimum_breakable);
         digest.unsigned(value.conflict_minimum_age.get());
+    }
+);
+digest_simple_record!(
+    ProposeVersionCleanup,
+    b"propose-version-cleanup",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.version_id.as_bytes());
+        digest.identifier(value.manifest_id.as_bytes());
+        digest.identifier(value.source_scan_operation_id.as_bytes());
+        digest.bytes(&value.scan_request_digest);
+        digest.unsigned(value.retention_policy_sequence);
+        digest.unsigned(value.reachability_revision.get());
+        digest.unsigned(value.retained_root_count);
+        digest.bytes(&value.retained_root_digest);
+        digest.bytes(&value.local_roots_digest);
+        digest.bytes(&value.proof_result_digest);
     }
 );
 digest_simple_record!(CreateVolume, b"create-volume", |value, digest| {
