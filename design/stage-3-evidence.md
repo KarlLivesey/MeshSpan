@@ -1,10 +1,10 @@
 # Stage 3 completion evidence
 
-Status: historical evidence; completion audit reopened on 2026-08-28.
+Status: complete; reopened audit closed on 2026-08-28.
 
-The behaviours below still pass, but this document's original completion claim
-was broader than its executable proof. The authoritative correction and closure
-gates are in [stage-1-3-audit.md](stage-1-3-audit.md).
+The original completion claim was broader than its executable proof. The
+reopened audit repaired that gap; all corrected closure gates and their exact
+status are in [stage-1-3-audit.md](stage-1-3-audit.md).
 
 Stage 3 establishes the one-to-many metadata cluster kernel. It does not claim
 storage-folder providers, filesystem operations, HTTPS, SMB, erasure coding or
@@ -83,15 +83,18 @@ the final appliance daemon; those remain later roadmap stages.
 | Traffic isolation | A real QUIC test stalls an 8 MiB bulk-data write while a consensus ping completes on its independent high-priority stream within one second |
 | Three-process cycle | Three OS processes use distinct SQLite databases, certificates and dynamic loopback ports; only node one starts authoritative; committed grants admit nodes two and three, which install verified snapshots, catch up and become voters; the cycle then commits routing proof records, redirects a follower request, resolves a deliberately lost reply by durable operation ID, kills the leader, elects and writes through another, restarts the old process and catches it up |
 | Outage bounds | Per-peer reusable connection workers bound queueing, timeout and reconnect work; the process cycle commits through the surviving pair while the killed peer is unreachable |
+| Adversarial closure | `npm run check:stage3-adversarial` runs the exact multi-way partition, stale-incarnation, corrupt/reordered/excessive snapshot and saturated bulk-stream tests concurrently, and fails if any filter executes zero tests |
 | Complete local gate | `npm run check` runs generation drift, strict Rust/web lint, unit/conformance/simulation, real Quinn and real-process tests locally with four concurrent workers and no GitHub Actions |
 
 ## Feedback-loop observation
 
-The complete warm local gate measured 7.44 seconds with live learner admission,
+The final complete local gate measured 6.17 seconds with live learner admission,
 the one/two/three process matrix and exact joint/stable restart proofs. All five
 real-process cases complete together in approximately 4.9 seconds, dominated by
 the main bootstrap, admission, promotion, handoff, failover and restart cycle.
-The cluster lane remains isolated, so unrelated lanes continue concurrently.
+The four-case adversarial closure completes in 4.66 seconds. Both use four
+workers, and the cluster lane remains isolated so unrelated lanes continue
+concurrently.
 
 ## Deliberate later-stage boundaries
 

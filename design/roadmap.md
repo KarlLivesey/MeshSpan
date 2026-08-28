@@ -112,7 +112,8 @@ CFG-001–008, EXT-002–004, EXT-007.
 
 **Depends on:** Stage 2.
 
-**Status:** completion audit reopened. See [`stage-1-3-audit.md`](stage-1-3-audit.md).
+**Status:** complete after executable re-audit. See
+[`stage-1-3-audit.md`](stage-1-3-audit.md).
 
 Build:
 

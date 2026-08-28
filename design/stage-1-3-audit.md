@@ -65,7 +65,8 @@ Real process execution now covers one, two and three voters plus exact restart
 from durable joint and stable promotion phases. Two separately identity-bound
 SQLite databases and consensus cores also commit signed route transitions in
 different orders; every real scoped proposal is admitted by at most one
-authority. Only the consolidated adversarial closure gate remains.
+authority. The consolidated adversarial gate also passes with exact non-empty
+test selection.
 
 ### Stage 3 closure gates
 
@@ -82,8 +83,11 @@ authority. Only the consolidated adversarial closure gate remains.
 5. [x] Run two independent partition databases and consensus authorities, transfer
    one scope through prepare/freeze/activate records, and prove every mutation is
    accepted by at most one authority throughout the handoff.
-6. Re-run multi-way partition, stale-incarnation, corrupt-snapshot, saturated
+6. [x] Re-run multi-way partition, stale-incarnation, corrupt-snapshot, saturated
    bulk-stream and complete local gates with exact expected outcomes.
 
-Stage 4 implementation begins only after these gates pass, because its target
-and shard authority must not depend on invented membership or routing safety.
+Stage 3 is complete. Its six closure gates now have executable local evidence;
+`npm run check:stage3-adversarial` also prevents an exact test filter from
+silently succeeding with zero tests. Stage 4 remains blocked on the open Stage 2
+tag and owner-transfer closure gates, because storage authority must build on the
+complete metadata contract rather than bypass it.
