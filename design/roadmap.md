@@ -152,6 +152,8 @@ Requirements: CLU-001–027, OPS-003, TST-003, SCL-005, SCL-006, SCL-010.
 
 **Depends on:** Stage 3.
 
+**Status:** in progress. See [`stage-4-evidence.md`](stage-4-evidence.md).
+
 Build:
 
 - repeatable `--storage-path` plus `--daemon-state-dir` configuration;
