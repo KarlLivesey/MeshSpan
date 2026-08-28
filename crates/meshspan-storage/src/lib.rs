@@ -16,7 +16,7 @@ pub use journal::{
     CapacityObservation, CapacityPolicy, DurablePackEvidence, DurableTombstoneEvidence,
     JournalCapacity, JournalPutRequest, JournalTombstoneRequest, PendingPut, PendingPutPage,
     PendingTombstone, PendingTombstonePage, PreparePutResult, PrepareTombstoneResult,
-    ReserveCapacityRequest, TargetJournal, TargetJournalError,
+    ReserveCapacityRequest, ScrubCheckpoint, TargetJournal, TargetJournalError,
 };
 pub use marker::{MarkerFingerprint, TargetMarker};
 pub use provider::{

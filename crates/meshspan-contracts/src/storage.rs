@@ -245,6 +245,49 @@ pub struct InventoryPage {
     pub next_cursor: Option<BoundedBytes>,
 }
 
+/// Typed result of independently checking one complete provider shard.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrubOutcome {
+    /// Exact bytes, length, digest and identity match committed inventory.
+    Healthy,
+    /// Committed inventory names bytes that are not locally present.
+    Missing,
+    /// Present bytes or protected framing do not match committed integrity data.
+    Corrupt,
+    /// Local IO could not produce a trustworthy observation.
+    Unreadable,
+    /// Bytes exist locally without a corresponding committed inventory entry.
+    Unexpected,
+    /// Verification was deliberately postponed by a bounded local-resource decision.
+    Deferred,
+}
+
+/// Evidence-only result for one scrubbed shard; it never grants cleanup authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScrubObservation {
+    /// Exact shard identity inspected or discovered.
+    pub shard: ShardIdentity,
+    /// Length committed in provider inventory, when one exists.
+    pub expected_length: Option<u64>,
+    /// Digest committed in provider inventory, when one exists.
+    pub expected_digest: Option<[u8; 32]>,
+    /// Length calculated from bytes that could be read.
+    pub observed_length: Option<u64>,
+    /// BLAKE3 digest calculated from bytes that could be read.
+    pub observed_digest: Option<[u8; 32]>,
+    /// Closed evidence classification.
+    pub outcome: ScrubOutcome,
+}
+
+/// Stable bounded page of scrub evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScrubPage {
+    /// Evidence records in stable provider-inventory order.
+    pub observations: BoundedItems<ScrubObservation>,
+    /// Opaque continuation cursor, or `None` when this pass reached the end.
+    pub next_cursor: Option<BoundedBytes>,
+}
+
 /// Byte storage beneath one registered target, without namespace or ACL knowledge.
 pub trait StorageProvider: ComponentLifecycle {
     /// Reserves capacity for one exact operation without publishing a shard.
@@ -303,6 +346,20 @@ pub trait StorageProvider: ComponentLifecycle {
         cursor: Option<&BoundedBytes>,
         limit: usize,
     ) -> Result<InventoryPage, ContractError>;
+
+    /// Independently verifies one bounded page of complete shard bytes.
+    ///
+    /// Scrub results are observations only and can never be used as removal authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed cursors/bounds or target-wide failure that prevents trustworthy paging.
+    fn scrub(
+        &mut self,
+        cursor: Option<&BoundedBytes>,
+        limit: usize,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubPage, ContractError>;
 }
 
 #[cfg(test)]

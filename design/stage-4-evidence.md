@@ -56,6 +56,11 @@ implementation claim.
   refuses physical unlink until the journal confirms the exact receipt. Restart
   proof stops between pack and journal commits, recovers once, rejects forged
   permits/receipts and releases capacity exactly once only after unlink.
+- Bounded scrub rereads complete bytes and recomputes BLAKE3 instead of trusting
+  either catalogue or an earlier checksum. Healthy evidence is compare-and-set
+  onto unchanged inventory; corrupt, missing and unreadable findings remain
+  typed observations with no deletion path. A WAL/FULL-sync per-target cursor
+  advances only after a complete bounded page and resumes across restart.
 
 ## Closure gates
 
@@ -67,7 +72,7 @@ implementation claim.
    and target-incarnation fencing.
 4. [x] Immutable packed shard put/get with exact replay, bounded read authority,
    durable receipts and independent integrity verification.
-5. Exact removal permits, durable tombstones, guarded unlink and scrub
+5. [x] Exact removal permits, durable tombstones, guarded unlink and scrub
    observations that never become deletion authority.
 6. Reusable provider conformance plus real IO/process proofs for restart,
    `ENOSPC`, short/partial writes, lost flush results, corruption, path/media
