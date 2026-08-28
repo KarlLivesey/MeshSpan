@@ -2,7 +2,7 @@
 
 //! Deterministic recovered names, paths and derived immutable identities.
 
-use meshspan_domain::{NamespaceCommitId, ObjectId, ObjectRevisionId};
+use meshspan_domain::{FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId};
 
 use super::super::ReconciliationError;
 use crate::{CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespacePath};
@@ -111,6 +111,36 @@ pub(super) fn derived_revision(
         ordinal,
     );
     ObjectRevisionId::from_bytes(bytes).map_err(|_| ReconciliationError::InvalidInput)
+}
+
+pub(super) fn derived_file_version(
+    plan_digest: [u8; 32],
+    commit_id: NamespaceCommitId,
+    source: FileVersionId,
+) -> Result<FileVersionId, ReconciliationError> {
+    FileVersionId::from_bytes(derived_identifier(
+        b"meshspan.filesystem.recovered-file-version.v1\0",
+        plan_digest,
+        commit_id,
+        source.as_bytes(),
+        0,
+    ))
+    .map_err(|_| ReconciliationError::InvalidInput)
+}
+
+pub(super) fn derived_operation(
+    plan_digest: [u8; 32],
+    commit_id: NamespaceCommitId,
+    source: OperationId,
+) -> Result<OperationId, ReconciliationError> {
+    OperationId::from_bytes(derived_identifier(
+        b"meshspan.filesystem.recovered-publication-operation.v1\0",
+        plan_digest,
+        commit_id,
+        source.as_bytes(),
+        0,
+    ))
+    .map_err(|_| ReconciliationError::InvalidInput)
 }
 
 fn derived_identifier(

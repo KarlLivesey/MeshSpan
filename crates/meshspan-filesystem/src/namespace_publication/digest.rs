@@ -2,7 +2,10 @@
 
 //! Canonical domain-separated digests for namespace requests, records and receipts.
 
-use meshspan_domain::{FileVersionId, NamespaceCommitId, ObjectRevisionId, OperationId};
+use meshspan_domain::{
+    BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId,
+    PrincipalId, UnixMicros, VolumeId,
+};
 
 use super::repository::{ObjectRevisionInsert, StoredCommit};
 use super::{NamespaceIntent, publication_request_digest};
@@ -10,6 +13,7 @@ use crate::{
     DirectoryNodeDigest, DirectoryPublication, NamespacePath, NamespacePublicationPath,
     RootFilePublication,
 };
+use crate::{NamespaceReconciliationApplication, PreparedNamespaceReconciliation};
 
 pub(super) fn file_request(publication: &RootFilePublication) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
@@ -93,6 +97,84 @@ pub(super) fn object_revision(revision: &ObjectRevisionInsert) -> [u8; 32] {
     digest.finalize().into()
 }
 
+pub(super) fn reconciliation_request(
+    application: NamespaceReconciliationApplication,
+    prepared: &PreparedNamespaceReconciliation,
+) -> [u8; 32] {
+    let causal = prepared.causal_plan();
+    let replay = prepared.replay_plan();
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.namespace-reconciliation-request.v1\0");
+    digest.update(&application.operation_id.as_bytes());
+    digest.update(&application.namespace_commit_id.as_bytes());
+    digest.update(&application.created_by.as_bytes());
+    digest.update(&application.created_at.get().to_be_bytes());
+    digest.update(&causal.digest());
+    digest.update(&replay.digest());
+    update_optional_commit(&mut digest, causal.converged_head());
+    if let Some(branch_id) = causal.converged_branch_id() {
+        digest.update(&[1]);
+        digest.update(&branch_id.as_bytes());
+    } else {
+        digest.update(&[0]);
+    }
+    digest.update(&causal.volume_id().as_bytes());
+    digest.update(&causal.root_object_id().as_bytes());
+    update_optional_revision(&mut digest, replay.final_root_object_revision_id());
+    update_commit_ids(&mut digest, causal.merge_parents());
+    digest.finalize().into()
+}
+
+pub(super) struct MergeCommitDigest<'a> {
+    pub commit_id: NamespaceCommitId,
+    pub branch_id: BranchId,
+    pub volume_id: VolumeId,
+    pub root_object_id: ObjectId,
+    pub root_revision_id: ObjectRevisionId,
+    pub parents: &'a [NamespaceCommitId],
+    pub created_by: PrincipalId,
+    pub operation_id: OperationId,
+    pub created_at: UnixMicros,
+    pub request_digest: [u8; 32],
+    pub replay_digest: [u8; 32],
+}
+
+pub(super) fn merge_commit(commit: &MergeCommitDigest<'_>) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.namespace-merge-commit.v1\0");
+    digest.update(&commit.commit_id.as_bytes());
+    digest.update(&commit.branch_id.as_bytes());
+    digest.update(&commit.volume_id.as_bytes());
+    digest.update(&commit.root_object_id.as_bytes());
+    digest.update(&commit.root_revision_id.as_bytes());
+    update_commit_ids(&mut digest, commit.parents);
+    digest.update(&commit.created_by.as_bytes());
+    digest.update(&commit.operation_id.as_bytes());
+    digest.update(&commit.created_at.get().to_be_bytes());
+    digest.update(&commit.request_digest);
+    digest.update(&commit.replay_digest);
+    digest.finalize().into()
+}
+
+pub(super) fn reconciliation_result(
+    operation_id: OperationId,
+    namespace_commit_id: NamespaceCommitId,
+    request_digest: [u8; 32],
+    causal_digest: [u8; 32],
+    replay_digest: [u8; 32],
+    root_revision_id: ObjectRevisionId,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.namespace-reconciliation-result.v1\0");
+    digest.update(&operation_id.as_bytes());
+    digest.update(&request_digest);
+    digest.update(&causal_digest);
+    digest.update(&replay_digest);
+    digest.update(&namespace_commit_id.as_bytes());
+    digest.update(&root_revision_id.as_bytes());
+    digest.finalize().into()
+}
+
 pub(super) fn file_result(
     operation_id: OperationId,
     request_digest: [u8; 32],
@@ -150,6 +232,17 @@ fn update_namespace_path(digest: &mut blake3::Hasher, path: &NamespacePath) {
 
 fn update_optional_commit(digest: &mut blake3::Hasher, value: Option<NamespaceCommitId>) {
     update_optional_bytes(digest, value.map(NamespaceCommitId::as_bytes).as_ref());
+}
+
+fn update_commit_ids(digest: &mut blake3::Hasher, values: &[NamespaceCommitId]) {
+    digest.update(
+        &u32::try_from(values.len())
+            .unwrap_or(u32::MAX)
+            .to_be_bytes(),
+    );
+    for value in values {
+        digest.update(&value.as_bytes());
+    }
 }
 
 fn update_optional_revision(digest: &mut blake3::Hasher, value: Option<ObjectRevisionId>) {

@@ -4,10 +4,12 @@
 
 #[path = "namespace_publication/digest.rs"]
 mod digest;
+#[path = "namespace_publication/reconciliation_apply.rs"]
+mod reconciliation_apply;
 #[path = "namespace_publication/repository.rs"]
 mod repository;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{
     BranchId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
@@ -23,6 +25,7 @@ use super::{
 };
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrie,
+    NamespaceReplayBase, NamespaceReplayEntry, ReconciliationCommit,
 };
 
 use digest::{directory_request as directory_request_digest, file_request as request_digest};
@@ -37,6 +40,51 @@ pub(super) use repository::{
     load_branch_intent, load_directory_operation, load_file_operation as load_operation, load_head,
     load_reconciliation_commit,
 };
+
+pub(super) fn apply_reconciliation(
+    connection: &mut Connection,
+    application: super::NamespaceReconciliationApplication,
+    prepared: &crate::PreparedNamespaceReconciliation,
+) -> Result<super::NamespaceReconciliationReceipt, PublicationError> {
+    reconciliation_apply::apply(connection, application, prepared, None)
+}
+
+#[cfg(test)]
+pub(super) fn apply_reconciliation_with_fault(
+    connection: &mut Connection,
+    application: super::NamespaceReconciliationApplication,
+    prepared: &crate::PreparedNamespaceReconciliation,
+    fault: NamespaceFaultPoint,
+) -> Result<super::NamespaceReconciliationReceipt, PublicationError> {
+    reconciliation_apply::apply(connection, application, prepared, Some(fault))
+}
+
+pub(super) fn load_reconciliation_receipt(
+    connection: &Connection,
+    operation_id: OperationId,
+) -> Result<Option<super::NamespaceReconciliationReceipt>, PublicationError> {
+    let receipt = reconciliation_apply::load_receipt(
+        connection,
+        operation_id,
+        PublicationDisposition::Replayed,
+    )?;
+    let Some(receipt) = receipt else {
+        return Ok(None);
+    };
+    let commit = repository::load_reconciliation_commit(connection, receipt.namespace_commit_id)?
+        .ok_or(PublicationError::Corrupt)?;
+    if commit.operation_id == operation_id
+        && commit.root_object_revision_id == receipt.root_object_revision_id
+        && commit.payload
+            == (crate::ReconciliationCommitPayload::Merge {
+                replay_digest: receipt.replay_plan_digest,
+            })
+    {
+        Ok(Some(receipt))
+    } else {
+        Err(PublicationError::Corrupt)
+    }
+}
 
 pub(super) fn publish(
     connection: &mut Connection,
@@ -197,6 +245,10 @@ pub(super) enum NamespaceFaultPoint {
     NamespaceCommit,
     Heads,
     Operation,
+    ReconciliationLeaf,
+    ReconciliationDirectories,
+    ReconciliationCommit,
+    ReconciliationOperation,
 }
 
 struct NamespaceBase {
@@ -355,10 +407,7 @@ fn load_existing_base(
     head: BranchNamespaceHead,
 ) -> Result<NamespaceBase, PublicationError> {
     let commit = load_commit(transaction, head.namespace_commit_id)?;
-    if commit.branch_id != intent.branch_id
-        || commit.volume_id != intent.volume_id
-        || commit.root_object_id != intent.root_object_id
-    {
+    if commit.volume_id != intent.volume_id || commit.root_object_id != intent.root_object_id {
         return Err(PublicationError::Corrupt);
     }
     if intent.root_revision_id == commit.root_object_revision_id
@@ -439,7 +488,7 @@ fn load_directory(
 }
 
 fn load_path_editor(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     root: DirectoryNodeDigest,
     name: &crate::NamespaceComponent,
 ) -> Result<DirectoryTrie, PublicationError> {
@@ -456,6 +505,91 @@ fn load_path_editor(
         selected = child;
     }
     DirectoryTrie::from_selected_records(root, records, name).map_err(Into::into)
+}
+
+pub(super) fn load_replay_base(
+    connection: &Connection,
+    converged: &ReconciliationCommit,
+    intents: &[crate::BranchMutationIntent],
+) -> Result<NamespaceReplayBase, PublicationError> {
+    let root = load_object_revision(connection, converged.root_object_revision_id)?;
+    if root.kind != 1
+        || root.volume_id != converged.volume_id
+        || root.object_id != converged.root_object_id
+    {
+        return Err(PublicationError::Corrupt);
+    }
+    let mut entries = BTreeMap::new();
+    for intent in intents {
+        load_replay_path(
+            connection,
+            converged.volume_id,
+            converged.root_object_id,
+            converged.root_object_revision_id,
+            &intent.path,
+            &mut entries,
+        )?;
+    }
+    Ok(NamespaceReplayBase {
+        root_object_revision_id: Some(converged.root_object_revision_id),
+        entries: entries.into_values().collect(),
+    })
+}
+
+fn load_replay_path(
+    connection: &Connection,
+    volume_id: VolumeId,
+    mut directory_object_id: ObjectId,
+    mut directory_revision_id: ObjectRevisionId,
+    path: &crate::NamespacePath,
+    entries: &mut BTreeMap<Vec<String>, NamespaceReplayEntry>,
+) -> Result<(), PublicationError> {
+    let mut selected_path = Vec::with_capacity(path.components().len());
+    for (index, component) in path.components().iter().enumerate() {
+        let directory = load_object_revision(connection, directory_revision_id)?;
+        if directory.kind != 1
+            || directory.volume_id != volume_id
+            || directory.object_id != directory_object_id
+        {
+            return Err(PublicationError::Corrupt);
+        }
+        let root = directory.directory_root.ok_or(PublicationError::Corrupt)?;
+        let editor = load_path_editor(connection, root, component)?;
+        let Some(entry) = editor.lookup(component)? else {
+            break;
+        };
+        selected_path.push(entry.name().clone());
+        let selected = crate::NamespacePath::from_stored_components(selected_path.clone())
+            .map_err(|_| PublicationError::Corrupt)?;
+        let replay_entry = NamespaceReplayEntry {
+            path: selected,
+            object_id: entry.object_id(),
+            object_revision_id: entry.object_revision_id(),
+            kind: entry.kind(),
+            entry_generation: entry.generation(),
+        };
+        let key = replay_entry
+            .path
+            .components()
+            .iter()
+            .map(|component| component.canonical().to_owned())
+            .collect::<Vec<_>>();
+        if entries
+            .insert(key, replay_entry.clone())
+            .is_some_and(|existing| existing != replay_entry)
+        {
+            return Err(PublicationError::Corrupt);
+        }
+        if index + 1 == path.components().len() {
+            break;
+        }
+        if entry.kind() != DirectoryEntryKind::Directory {
+            break;
+        }
+        directory_object_id = entry.object_id();
+        directory_revision_id = entry.object_revision_id();
+    }
+    Ok(())
 }
 
 fn validate_old_entry(

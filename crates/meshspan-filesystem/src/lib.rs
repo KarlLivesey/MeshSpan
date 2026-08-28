@@ -43,14 +43,16 @@ pub use name::{
 pub use publication::{
     BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,
     DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespacePublicationPath,
-    NamespacePublicationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
+    NamespacePublicationReceipt, NamespaceReconciliationApplication,
+    NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
     RootFilePublication, VersionPublicationStore,
 };
 pub use reconciliation::{
     BranchMutation, BranchMutationIntent, NamespaceReplayAction, NamespaceReplayBase,
-    NamespaceReplayDisposition, NamespaceReplayEntry, NamespaceReplayPlan, ReconciliationCommit,
-    ReconciliationCommitPayload, ReconciliationError, ReconciliationFrontier, ReconciliationLimits,
-    ReconciliationPlan, ReconciliationStoreError, plan_namespace_replay, plan_reconciliation,
+    NamespaceReplayDisposition, NamespaceReplayEntry, NamespaceReplayPlan,
+    PreparedNamespaceReconciliation, ReconciliationCommit, ReconciliationCommitPayload,
+    ReconciliationError, ReconciliationFrontier, ReconciliationLimits, ReconciliationPlan,
+    ReconciliationStoreError, plan_namespace_replay, plan_reconciliation,
 };
 pub use stage_store::{
     CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration, StageStoreError,

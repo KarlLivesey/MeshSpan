@@ -18,13 +18,14 @@ use thiserror::Error;
 
 use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespacePath};
 use crate::{
+    PreparedNamespaceReconciliation, ReconciliationCommit, ReconciliationCommitPayload,
     ReconciliationFrontier, ReconciliationLimits, ReconciliationPlan, ReconciliationStoreError,
 };
 
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 6] = [
+const MIGRATIONS: [Migration; 7] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -49,8 +50,12 @@ const MIGRATIONS: [Migration; 6] = [
         version: 6,
         sql: include_str!("../schema/branch/006_reconciliation_ancestor_lineage.sql"),
     },
+    Migration {
+        version: 7,
+        sql: include_str!("../schema/branch/007_reconciliation_receipts.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -309,6 +314,40 @@ pub struct DirectoryPublicationReceipt {
     pub result_digest: [u8; 32],
 }
 
+/// Stable identities supplied when committing one prepared reconciliation plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespaceReconciliationApplication {
+    /// Idempotency identity for the complete reconciliation transaction.
+    pub operation_id: OperationId,
+    /// New immutable multi-parent namespace commit.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Principal responsible for the automatic reconciliation.
+    pub created_by: PrincipalId,
+    /// Authoritative commit instant.
+    pub created_at: UnixMicros,
+}
+
+/// Durable outcome proving one exact replay plan and merge commit were stored atomically.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespaceReconciliationReceipt {
+    /// Whether this call applied or replayed the exact operation.
+    pub disposition: PublicationDisposition,
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Digest of application identities and both validated plans.
+    pub request_digest: [u8; 32],
+    /// Exact causal plan committed by the merge.
+    pub causal_plan_digest: [u8; 32],
+    /// Exact affected-path replay plan applied transactionally.
+    pub replay_plan_digest: [u8; 32],
+    /// Durable multi-parent merge commit.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Immutable converged root selected by the merge commit.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// Digest binding the complete durable outcome.
+    pub result_digest: [u8; 32],
+}
+
 /// Current branch-local version pointer for one stable file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BranchFileHead {
@@ -479,28 +518,76 @@ impl VersionPublicationStore {
         frontier: &ReconciliationFrontier,
         limits: ReconciliationLimits,
     ) -> Result<ReconciliationPlan, ReconciliationStoreError> {
-        let mut pending = frontier
-            .converged_head
-            .into_iter()
-            .chain(frontier.eligible_heads.iter().copied())
-            .collect::<Vec<_>>();
-        let mut visited = BTreeSet::new();
-        let mut commits = Vec::new();
-        while let Some(commit_id) = pending.pop() {
-            if !visited.insert(commit_id) {
-                continue;
-            }
-            if visited.len() > limits.commit_page_limit() {
-                return Err(crate::ReconciliationError::BoundsExceeded.into());
-            }
-            let Some(commit) = namespace::load_reconciliation_commit(&self.connection, commit_id)?
-            else {
-                continue;
-            };
-            pending.extend(commit.parents.iter().copied());
-            commits.push(commit);
-        }
+        let commits = load_reconciliation_commits(&self.connection, frontier, limits)?;
         crate::plan_reconciliation(&commits, frontier, limits).map_err(Into::into)
+    }
+
+    /// Loads the exact affected namespace base and produces a deterministic replay plan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete/corrupt causal state, missing or substituted mutation intents,
+    /// malformed directory graphs and an affected base that cannot safely replay every action.
+    pub fn prepare_namespace_reconciliation(
+        &self,
+        frontier: &ReconciliationFrontier,
+        limits: ReconciliationLimits,
+    ) -> Result<PreparedNamespaceReconciliation, ReconciliationStoreError> {
+        let commits = load_reconciliation_commits(&self.connection, frontier, limits)?;
+        let causal = crate::plan_reconciliation(&commits, frontier, limits)?;
+        let mut intents = Vec::new();
+        for commit_id in causal.ordered_commits() {
+            let commit = commits
+                .iter()
+                .find(|commit| commit.commit_id == *commit_id)
+                .ok_or(crate::ReconciliationError::MissingCommit)?;
+            if matches!(commit.payload, ReconciliationCommitPayload::Mutation { .. }) {
+                intents.push(
+                    namespace::load_branch_intent(&self.connection, *commit_id)?
+                        .ok_or(crate::ReconciliationError::MissingIntent)?,
+                );
+            }
+        }
+        let base = if let Some(converged_head) = causal.converged_head() {
+            let converged = commits
+                .iter()
+                .find(|commit| commit.commit_id == converged_head)
+                .ok_or(crate::ReconciliationError::MissingCommit)?;
+            namespace::load_replay_base(&self.connection, converged, &intents)?
+        } else {
+            crate::NamespaceReplayBase {
+                root_object_revision_id: None,
+                entries: Vec::new(),
+            }
+        };
+        let replay = crate::plan_namespace_replay(&causal, &commits, &intents, &base)?;
+        Ok(PreparedNamespaceReconciliation::new(causal, replay))
+    }
+
+    /// Applies every prepared namespace action and records one immutable merge receipt atomically.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale roots, substituted plans, missing immutable source records, identity
+    /// collisions and any action whose exact target transition no longer matches durable state.
+    pub fn apply_namespace_reconciliation(
+        &mut self,
+        application: NamespaceReconciliationApplication,
+        prepared: &PreparedNamespaceReconciliation,
+    ) -> Result<NamespaceReconciliationReceipt, PublicationError> {
+        namespace::apply_reconciliation(&mut self.connection, application, prepared)
+    }
+
+    /// Resolves an exact reconciliation outcome after a lost response.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or digest-inconsistent durable receipts and SQLite failure.
+    pub fn resolve_namespace_reconciliation(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<NamespaceReconciliationReceipt>, PublicationError> {
+        namespace::load_reconciliation_receipt(&self.connection, operation_id)
     }
 
     /// Loads and revalidates the canonical replay intent attached to one branch commit.
@@ -515,6 +602,34 @@ impl VersionPublicationStore {
     ) -> Result<Option<crate::BranchMutationIntent>, PublicationError> {
         namespace::load_branch_intent(&self.connection, commit_id)
     }
+}
+
+fn load_reconciliation_commits(
+    connection: &Connection,
+    frontier: &ReconciliationFrontier,
+    limits: ReconciliationLimits,
+) -> Result<Vec<ReconciliationCommit>, ReconciliationStoreError> {
+    let mut pending = frontier
+        .converged_head
+        .into_iter()
+        .chain(frontier.eligible_heads.iter().copied())
+        .collect::<Vec<_>>();
+    let mut visited = BTreeSet::new();
+    let mut commits = Vec::new();
+    while let Some(commit_id) = pending.pop() {
+        if !visited.insert(commit_id) {
+            continue;
+        }
+        if visited.len() > limits.commit_page_limit() {
+            return Err(crate::ReconciliationError::BoundsExceeded.into());
+        }
+        let Some(commit) = namespace::load_reconciliation_commit(connection, commit_id)? else {
+            continue;
+        };
+        pending.extend(commit.parents.iter().copied());
+        commits.push(commit);
+    }
+    Ok(commits)
 }
 
 /// Stable publication failure categories.
