@@ -148,7 +148,7 @@ copy-on-write filesystem service. This document records executable evidence only
 
 1. [x] Protocol-neutral canonical component/path types and compatibility bounds.
 2. [x] Persistent immutable versions, staged random writes and atomic CoW volume heads.
-3. Deterministic branch commits, disconnected reconciliation and recovered items.
+3. [x] Deterministic branch commits, disconnected reconciliation and recovered items.
    Durable branch commits now bind exact nested mutation lineage, and a pure
    bounded replay planner validates each commit-bound mutation-intent digest,
    the causal plan's exact headers and the affected-entry base before producing
@@ -163,8 +163,16 @@ copy-on-write filesystem service. This document records executable evidence only
    immutable multi-parent merge plus a digest-bound retry receipt. Real database
    proofs cover restart/idempotency, divergent roots, concurrent same-file edits,
    post-merge causal loading, receipt corruption and rollback at every injected
-   transaction boundary. The replicated converged-volume-head authority
-   transition from this local receipt is still required before this gate closes.
+   transaction boundary. The cluster composition boundary now reloads the exact
+   local receipt and immutable merge, proves the volume, root and prior converged
+   parent, then constructs one canonical replicated command. The metadata state
+   machine performs a per-volume compare-and-swap, appends immutable evidence
+   history and its normal operation/audit receipt in one transaction. Local and
+   replicated databases deliberately remain separate: a crash after the local
+   commit leaves a resolvable receipt for exact retry, while a stale replicated
+   head rejects without hiding or deleting the local merge. Tests cover the real
+   cross-crate path, restart/lost response, conflicting evidence, stale bases,
+   broken history and rollback at every metadata transaction boundary.
 4. Snapshots, retention and restore-as-new-head.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
