@@ -11,6 +11,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+blake3.workspace = true
+meshspan-contracts = { path = "../meshspan-contracts" }
+meshspan-domain = { path = "../meshspan-domain" }
 thiserror.workspace = true
 unicode-casefold.workspace = true
 unicode-normalization.workspace = true

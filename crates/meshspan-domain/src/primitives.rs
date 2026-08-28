@@ -107,6 +107,28 @@ define_identifier!(
 define_identifier!(GroupId, "Stable identity of one group principal.");
 define_identifier!(VolumeId, "Stable identity of one volume.");
 define_identifier!(ObjectId, "Stable identity of one namespace object.");
+define_identifier!(
+    BranchId,
+    "Stable identity of one writable namespace branch."
+);
+define_identifier!(
+    NamespaceCommitId,
+    "Stable identity of one immutable namespace commit."
+);
+define_identifier!(
+    ObjectRevisionId,
+    "Stable identity of one immutable namespace-object revision."
+);
+define_identifier!(
+    FileVersionId,
+    "Stable identity of one immutable regular-file version."
+);
+define_identifier!(
+    ContentManifestId,
+    "Stable identity of one immutable content manifest root."
+);
+define_identifier!(StageId, "Stable identity of one private write stage.");
+define_identifier!(HandleId, "Stable identity of one fenced filesystem handle.");
 define_identifier!(GrantId, "Stable identity of one permission grant.");
 define_identifier!(
     ActivationPolicyId,
