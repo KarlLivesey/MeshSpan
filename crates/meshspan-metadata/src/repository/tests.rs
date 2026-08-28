@@ -7,8 +7,8 @@ use std::path::Path;
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, ComponentInstanceId,
-    DurationMicros, GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
-    PartitionId, PrincipalId, Revision, Rights, RoleId, UnixMicros, VolumeId,
+    DurationMicros, GrantId, GroupId, HostId, JoinGrantId, MeshId, NodeId, ObjectId, OperationId,
+    OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -21,9 +21,10 @@ use super::{
 };
 use crate::{
     ActivateGrant, ActivateGroup, AddGroupMember, AssignComponent, AuthoritativeCommand,
-    BootstrapMesh, CommandContext, ConfigureComponent, CreateActivationPolicy, CreateComponent,
-    CreateGroup, CreateObject, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
-    NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName,
+    BootstrapMesh, CommandContext, ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy,
+    CreateComponent, CreateGroup, CreateObject, CreateUser, CreateVolume, GrantInheritance,
+    GrantPermission, IssueJoinGrant, JoinRoles, NamespaceObjectKind, PartitionDatabase,
+    PermissionScope, RecordName,
 };
 
 struct FixtureIds {
@@ -122,8 +123,107 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 14);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        3
+        4
     );
+    Ok(())
+}
+
+#[test]
+fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("partition.sqlite3");
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    apply(
+        &mut repository,
+        1,
+        context(130, ids.administrator, 131, 100, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([132; 16])?,
+            mesh_name: RecordName::new("Join proof")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([133; 16])?,
+            host_id: HostId::from_bytes([134; 16])?,
+            host_name: RecordName::new("First host")?,
+            node_id: NodeId::from_bytes([135; 16])?,
+            node_name: RecordName::new("First node")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
+    let grant_id = JoinGrantId::from_bytes([136; 16])?;
+    let secret_digest = [137; 32];
+    let roles =
+        JoinRoles::new(JoinRoles::STORAGE | JoinRoles::GATEWAY | JoinRoles::METADATA_ELIGIBLE)?;
+    apply(
+        &mut repository,
+        2,
+        context(138, ids.administrator, 139, 200, Some(1))?,
+        &AuthoritativeCommand::IssueJoinGrant(IssueJoinGrant {
+            join_grant_id: grant_id,
+            secret_digest,
+            allowed_roles: roles,
+            maximum_uses: 1,
+            expires_at: UnixMicros::new(1_000),
+        }),
+    )?;
+
+    let certificate_der = b"public certificate only".to_vec();
+    let certificate_fingerprint: [u8; 32] = Sha256::digest(&certificate_der).into();
+    let consume_context = context(140, ids.administrator, 141, 300, Some(2))?;
+    let mut consume = ConsumeJoinGrant {
+        join_grant_id: grant_id,
+        secret_digest: [0; 32],
+        host_id: HostId::from_bytes([142; 16])?,
+        new_host_name: Some(RecordName::new("Second host")?),
+        node_id: NodeId::from_bytes([143; 16])?,
+        node_name: RecordName::new("Second node")?,
+        incarnation: 1,
+        requested_roles: roles,
+        certificate_der,
+        certificate_fingerprint,
+        certificate_valid_until: UnixMicros::new(10_000),
+    };
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 3, term: 1 },
+            consume_context,
+            &AuthoritativeCommand::ConsumeJoinGrant(consume.clone()),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(repository.current_revision()?, Revision::new(2));
+
+    consume.secret_digest = secret_digest;
+    let command = AuthoritativeCommand::ConsumeJoinGrant(consume);
+    let applied =
+        repository.apply_committed(LogPosition { index: 3, term: 1 }, consume_context, &command)?;
+    assert_eq!(applied.entity.kind, super::EntityKind::Node);
+    let replay =
+        repository.apply_committed(LogPosition { index: 4, term: 1 }, consume_context, &command)?;
+    assert_eq!(replay.disposition, ApplyDisposition::Replayed);
+
+    let database = repository.into_database();
+    let (uses, nodes, learner, certificates): (i64, i64, i64, i64) =
+        database.connection().query_row(
+            "SELECT
+                (SELECT used_count FROM join_grants WHERE join_grant_id = ?1),
+                (SELECT count(*) FROM nodes WHERE node_id = ?2 AND current_incarnation = 1),
+                (SELECT count(*) FROM partition_voters
+                 WHERE partition_id = ?3 AND node_id = ?2 AND member_role = 2 AND state = 2),
+                (SELECT count(*) FROM node_certificates
+                 WHERE node_id = ?2 AND certificate_fingerprint = ?4 AND state = 1)",
+            rusqlite::params![
+                grant_id.as_bytes().as_slice(),
+                NodeId::from_bytes([143; 16])?.as_bytes().as_slice(),
+                ids.partition.as_bytes().as_slice(),
+                certificate_fingerprint.as_slice(),
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    assert_eq!((uses, nodes, learner, certificates), (1, 1, 1, 1));
     Ok(())
 }
 

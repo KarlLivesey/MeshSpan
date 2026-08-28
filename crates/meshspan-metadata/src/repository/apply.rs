@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
-    component, identity, namespace,
+    cluster, component, identity, namespace,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -257,6 +257,9 @@ fn authorise(
         AuthoritativeCommand::ActivateGroup(value) => Some(value.principal_id),
         _ => None,
     };
+    if matches!(command, AuthoritativeCommand::ConsumeJoinGrant(_)) {
+        return Ok(());
+    }
     if let Some(principal_id) = self_activation_principal {
         return if context.actor_principal_id == principal_id {
             Ok(())
@@ -344,6 +347,12 @@ fn execute(
         }
         AuthoritativeCommand::AssignComponent(value) => {
             component::assign(transaction, value, revision)
+        }
+        AuthoritativeCommand::IssueJoinGrant(value) => {
+            cluster::issue_join_grant(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ConsumeJoinGrant(value) => {
+            cluster::consume_join_grant(transaction, partition_id, context, value, revision)
         }
     }
 }
@@ -508,6 +517,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CreateComponent(_) => 11,
         AuthoritativeCommand::ConfigureComponent(_) => 12,
         AuthoritativeCommand::AssignComponent(_) => 13,
+        AuthoritativeCommand::IssueJoinGrant(_) => 14,
+        AuthoritativeCommand::ConsumeJoinGrant(_) => 15,
     }
 }
 

@@ -20,9 +20,9 @@ pub use operation::{
 };
 pub use primitives::{
     ActivationId, ActivationPolicyId, AuditEventId, BackupId, ComponentInstanceId, DurationMicros,
-    FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError, MeshId, NodeId,
-    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision,
-    RevisionError, RoleId, TagId, TargetId, UnixMicros, VolumeId,
+    FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError, JoinGrantId,
+    MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId,
+    Revision, RevisionError, RoleId, TagId, TargetId, UnixMicros, VolumeId,
 };
 pub use seams::{Clock, EntropyError, RandomSource};
 pub use topology::{

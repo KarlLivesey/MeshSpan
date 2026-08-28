@@ -56,6 +56,10 @@ pub enum EntityKind {
     ComponentInstance = 10,
     /// Desired component assignment.
     ComponentAssignment = 11,
+    /// Administrator-issued node join grant.
+    JoinGrant = 12,
+    /// Certificate-bound enrolled node.
+    Node = 13,
 }
 
 impl EntityKind {
@@ -72,6 +76,8 @@ impl EntityKind {
             9 => Ok(Self::AccessActivation),
             10 => Ok(Self::ComponentInstance),
             11 => Ok(Self::ComponentAssignment),
+            12 => Ok(Self::JoinGrant),
+            13 => Ok(Self::Node),
             _ => Err(RepositoryError::CorruptState),
         }
     }

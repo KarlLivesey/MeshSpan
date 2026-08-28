@@ -5,6 +5,7 @@
 mod apply;
 mod backup;
 mod bootstrap;
+mod cluster;
 mod component;
 mod consensus;
 mod group_closure;
