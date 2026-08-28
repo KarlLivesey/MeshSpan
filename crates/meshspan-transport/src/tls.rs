@@ -198,6 +198,9 @@ pub enum TransportError {
     /// A stream kind or frame violates the private wire contract.
     #[error("private transport stream frame is invalid")]
     InvalidFrame,
+    /// Authenticated peers do not share an exact supported protocol version.
+    #[error("private transport protocol version is unsupported")]
+    UnsupportedProtocol,
     /// Protobuf framing or semantic validation rejected the message.
     #[error("private transport wire contract rejected the message")]
     Wire(#[from] meshspan_protocol::WireContractError),

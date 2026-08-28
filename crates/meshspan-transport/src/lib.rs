@@ -7,7 +7,7 @@ mod identity;
 mod stream;
 mod tls;
 
-pub use identity::{AuthenticatedPeer, PeerBinding, PeerRegistry};
+pub use identity::{AuthenticatedPeer, NegotiationConfig, PeerBinding, PeerRegistry};
 pub use stream::{
     AcceptedStream, StreamKind, accept_stream, open_stream, receive_control, send_control,
 };

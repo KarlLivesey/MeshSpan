@@ -4,9 +4,9 @@ use std::error::Error;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use meshspan_domain::{MeshId, NodeId};
+use meshspan_domain::{MeshId, NodeId, PartitionId};
 use meshspan_protocol::v1::control_envelope::Message;
-use meshspan_protocol::v1::{ControlEnvelope, NodeHello, Ping};
+use meshspan_protocol::v1::{ControlEnvelope, NodeHello, Ping, ProtocolVersion};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
     KeyPair, KeyUsagePurpose,
@@ -16,9 +16,9 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 use super::identity::certificate_fingerprint;
 use super::{
-    NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportError, TransportLimits,
-    accept_stream, client_endpoint, connect, open_stream, receive_control, send_control,
-    server_endpoint,
+    NegotiationConfig, NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportError,
+    TransportLimits, accept_stream, client_endpoint, connect, open_stream, receive_control,
+    send_control, server_endpoint,
 };
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -77,6 +77,29 @@ async fn real_quinn_mtls_binds_peers_and_round_trips_an_independent_stream()
         authenticated_client.verify_hello(mesh_id, &hello(mesh_id, server_node, 7)),
         Err(TransportError::UntrustedPeer)
     ));
+    let mut offered = hello(mesh_id, client_node, 7);
+    offered.versions = vec![version(1, 0), version(1, 2), version(2, 0)];
+    offered.maximum_control_bytes = 128 * 1_024;
+    offered.maximum_data_frame_bytes = 2 * 1_024 * 1_024;
+    offered.maximum_streams = 96;
+    let welcome = authenticated_client.negotiate(
+        mesh_id,
+        &offered,
+        &NegotiationConfig {
+            versions: vec![version(1, 0), version(1, 2)],
+            partition_ids: vec![PartitionId::from_bytes([11; 16])?.as_bytes()],
+            leader_node_id: Some(server_node),
+            routing_epoch: 4,
+            maximum_control_bytes: 64 * 1_024,
+            maximum_data_frame_bytes: 4 * 1_024 * 1_024,
+            maximum_streams: 128,
+        },
+    )?;
+    assert_eq!(welcome.selected_version, Some(version(1, 2)));
+    assert_eq!(welcome.maximum_control_bytes, 64 * 1_024);
+    assert_eq!(welcome.maximum_data_frame_bytes, 2 * 1_024 * 1_024);
+    assert_eq!(welcome.maximum_streams, 96);
+    assert_eq!(welcome.peer_node_id, client_node.as_bytes());
 
     let (mut client_send, _client_receive) =
         open_stream(&client_connection, StreamKind::Consensus).await?;
@@ -238,6 +261,10 @@ fn hello(mesh_id: MeshId, node_id: NodeId, incarnation: u64) -> NodeHello {
         maximum_data_frame_bytes: 1,
         maximum_streams: 1,
     }
+}
+
+const fn version(major: u32, minor: u32) -> ProtocolVersion {
+    ProtocolVersion { major, minor }
 }
 
 const fn loopback() -> SocketAddr {

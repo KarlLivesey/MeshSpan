@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{MeshId, NodeId};
-use meshspan_protocol::v1::NodeHello;
+use meshspan_protocol::v1::{NodeHello, NodeWelcome, ProtocolVersion};
 use rustls::pki_types::CertificateDer;
 use sha2::{Digest, Sha256};
 
@@ -112,6 +112,91 @@ impl AuthenticatedPeer {
             Ok(())
         } else {
             Err(TransportError::UntrustedPeer)
+        }
+    }
+
+    /// Negotiates the highest exact protocol version and lower resource limits for this peer.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an identity mismatch, unsupported version, empty route set or invalid limits.
+    pub fn negotiate(
+        self,
+        mesh_id: MeshId,
+        hello: &NodeHello,
+        local: &NegotiationConfig,
+    ) -> Result<NodeWelcome, TransportError> {
+        self.verify_hello(mesh_id, hello)?;
+        local.validate()?;
+        let selected_version = local
+            .versions
+            .iter()
+            .filter(|supported| {
+                hello.versions.iter().any(|offered| {
+                    offered.major == supported.major && offered.minor == supported.minor
+                })
+            })
+            .max_by_key(|version| (version.major, version.minor))
+            .copied()
+            .ok_or(TransportError::UnsupportedProtocol)?;
+        let maximum_control_bytes = local.maximum_control_bytes.min(hello.maximum_control_bytes);
+        let maximum_data_frame_bytes = local
+            .maximum_data_frame_bytes
+            .min(hello.maximum_data_frame_bytes);
+        let maximum_streams = local.maximum_streams.min(hello.maximum_streams);
+        if maximum_control_bytes == 0 || maximum_data_frame_bytes == 0 || maximum_streams == 0 {
+            return Err(TransportError::InvalidConfiguration);
+        }
+        Ok(NodeWelcome {
+            selected_version: Some(selected_version),
+            peer_node_id: hello.node_id.clone(),
+            peer_incarnation: hello.incarnation,
+            partition_ids: local
+                .partition_ids
+                .iter()
+                .map(|partition| partition.to_vec())
+                .collect(),
+            leader_node_id: local.leader_node_id.map(|node| node.as_bytes().to_vec()),
+            routing_epoch: local.routing_epoch,
+            maximum_control_bytes,
+            maximum_data_frame_bytes,
+            maximum_streams,
+        })
+    }
+}
+
+/// Local route and resource bounds used to answer an authenticated `NodeHello`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NegotiationConfig {
+    /// Exact protocol versions implemented locally.
+    pub versions: Vec<ProtocolVersion>,
+    /// Partition identifiers currently advertised to the peer.
+    pub partition_ids: Vec<[u8; 16]>,
+    /// Current leader hint, if known.
+    pub leader_node_id: Option<NodeId>,
+    /// Current signed-routing epoch.
+    pub routing_epoch: u64,
+    /// Local maximum control frame size.
+    pub maximum_control_bytes: u64,
+    /// Local maximum data frame size.
+    pub maximum_data_frame_bytes: u64,
+    /// Local maximum bidirectional stream count.
+    pub maximum_streams: u32,
+}
+
+impl NegotiationConfig {
+    fn validate(&self) -> Result<(), TransportError> {
+        if self.versions.is_empty()
+            || self.partition_ids.is_empty()
+            || self.routing_epoch == 0
+            || self.maximum_control_bytes == 0
+            || self.maximum_data_frame_bytes == 0
+            || self.maximum_streams == 0
+            || self.versions.iter().any(|version| version.major == 0)
+        {
+            Err(TransportError::InvalidConfiguration)
+        } else {
+            Ok(())
         }
     }
 }
