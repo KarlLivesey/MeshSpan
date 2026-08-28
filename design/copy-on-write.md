@@ -118,6 +118,13 @@ Expiry/removal only drops the snapshot root after open snapshot handles and lega
 retention permit it. Reclamation is a later reachability decision using the
 guarded cleanup lifecycle.
 
+The initial scheduler uses a fixed UTC interval and one indexed authoritative
+`next_due_at` per schedule. A late scheduler captures one occurrence and advances
+directly to the first boundary after its current authoritative time; it does not
+emit every missed occurrence after downtime. Every run compare-and-swaps the
+schedule sequence and due instant, pins the exact current converged head, and is
+idempotent by operation and `(schedule, scheduled_for)` identity.
+
 ## Restore
 
 Restore never rewinds consensus or overwrites the current head in place. It creates a

@@ -72,6 +72,8 @@ pub enum EntityKind {
     TagAttachment = 18,
     /// Read-only volume namespace snapshot.
     VolumeSnapshot = 19,
+    /// Authoritative volume snapshot schedule.
+    SnapshotSchedule = 20,
 }
 
 impl EntityKind {
@@ -96,6 +98,7 @@ impl EntityKind {
             17 => Ok(Self::Tag),
             18 => Ok(Self::TagAttachment),
             19 => Ok(Self::VolumeSnapshot),
+            20 => Ok(Self::SnapshotSchedule),
             _ => Err(RepositoryError::CorruptState),
         }
     }

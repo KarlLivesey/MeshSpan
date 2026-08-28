@@ -11,13 +11,14 @@ mod repository;
 pub use command::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
     AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh,
-    CommandContext, CommitConvergedVolumeHead, ConfigureComponent, ConfigureVersionRetention,
-    ConsumeJoinGrant, ConvergedHeadEvidence, CreateActivationPolicy, CreateComponent, CreateGroup,
-    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
-    CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission,
-    IssueJoinGrant, JoinRoles, NamespaceObjectKind, PermissionScope, RegisterRoutingSigner,
-    ReplaceObjectOwners, RepositoryCommandError, RequestVolumeSnapshotExpiry, RetentionReclaimMode,
-    RouteAttestation, TagTarget,
+    CommandContext, CommitConvergedVolumeHead, ConfigureComponent, ConfigureSnapshotSchedule,
+    ConfigureVersionRetention, ConsumeJoinGrant, ConvergedHeadEvidence, CreateActivationPolicy,
+    CreateComponent, CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute,
+    CreateTag, CreateUser, CreateVolume, CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff,
+    GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles, NamespaceObjectKind,
+    PermissionScope, RegisterRoutingSigner, ReplaceObjectOwners, RepositoryCommandError,
+    RequestVolumeSnapshotExpiry, RetentionReclaimMode, RouteAttestation, RunSnapshotSchedule,
+    TagTarget,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;
@@ -30,6 +31,6 @@ pub use repository::{
     PartitionConsensusPersistence, PartitionSnapshotManifest, PreservedVote, PrincipalKind,
     PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, RepositoryError, ScopeWriteAuthority, SnapshotCursor,
-    VersionRetentionPolicy, VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
-    run_repository_conformance,
+    SnapshotSchedule, SnapshotScheduleCursor, VersionRetentionPolicy, VolumeSnapshot,
+    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };

@@ -9,7 +9,8 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
-    cluster, component, identity, namespace, retention, routing, tags, user_snapshot, volume_head,
+    cluster, component, identity, namespace, retention, routing, snapshot_schedule, tags,
+    user_snapshot, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -336,6 +337,12 @@ fn execute(
         AuthoritativeCommand::RequestVolumeSnapshotExpiry(value) => {
             user_snapshot::request_expiry(transaction, context, *value, revision)
         }
+        AuthoritativeCommand::ConfigureSnapshotSchedule(value) => {
+            snapshot_schedule::configure(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RunSnapshotSchedule(value) => {
+            snapshot_schedule::run(transaction, context, value, revision)
+        }
         AuthoritativeCommand::ConfigureVersionRetention(value) => {
             retention::configure(transaction, context, *value, revision)
         }
@@ -579,6 +586,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CreateVolumeSnapshot(_) => 28,
         AuthoritativeCommand::ConfigureVersionRetention(_) => 29,
         AuthoritativeCommand::RequestVolumeSnapshotExpiry(_) => 30,
+        AuthoritativeCommand::ConfigureSnapshotSchedule(_) => 31,
+        AuthoritativeCommand::RunSnapshotSchedule(_) => 32,
     }
 }
 

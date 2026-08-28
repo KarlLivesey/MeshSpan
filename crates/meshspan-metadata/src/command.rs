@@ -7,7 +7,8 @@ use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
     DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId,
     NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
-    PrincipalId, Revision, Rights, RoleId, ScopeId, SnapshotId, TagId, UnixMicros, VolumeId,
+    PrincipalId, Revision, Rights, RoleId, ScopeId, SnapshotId, SnapshotScheduleId, TagId,
+    UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -49,6 +50,10 @@ pub enum AuthoritativeCommand {
     CreateVolumeSnapshot(CreateVolumeSnapshot),
     /// Marks one snapshot as expiring without dropping its namespace root.
     RequestVolumeSnapshotExpiry(RequestVolumeSnapshotExpiry),
+    /// Creates or replaces one authoritative fixed-interval snapshot schedule.
+    ConfigureSnapshotSchedule(ConfigureSnapshotSchedule),
+    /// Materialises exactly one due occurrence from an authoritative snapshot schedule.
+    RunSnapshotSchedule(RunSnapshotSchedule),
     /// Appends and selects one immutable per-volume file-version retention policy.
     ConfigureVersionRetention(ConfigureVersionRetention),
     /// Creates one folder or file record beneath an existing folder.
@@ -118,6 +123,8 @@ impl AuthoritativeCommand {
             Self::CommitConvergedVolumeHead(value) => value.update_digest(digest),
             Self::CreateVolumeSnapshot(value) => value.update_digest(digest),
             Self::RequestVolumeSnapshotExpiry(value) => value.update_digest(digest),
+            Self::ConfigureSnapshotSchedule(value) => value.update_digest(digest),
+            Self::RunSnapshotSchedule(value) => value.update_digest(digest),
             Self::ConfigureVersionRetention(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
@@ -305,6 +312,44 @@ pub struct RequestVolumeSnapshotExpiry {
     pub automatic: bool,
     /// Stable non-zero reason code for audit and policy diagnosis.
     pub reason_code: u32,
+}
+
+/// One complete immutable revision of a fixed-interval volume snapshot schedule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigureSnapshotSchedule {
+    /// Stable schedule identity.
+    pub schedule_id: SnapshotScheduleId,
+    /// Volume whose converged head will be captured.
+    pub volume_id: VolumeId,
+    /// Exact current schedule sequence, or zero when creating the schedule.
+    pub expected_schedule_sequence: u64,
+    /// Positive interval between scheduled occurrences.
+    pub interval: DurationMicros,
+    /// Optional count of newest snapshots retained by this schedule.
+    pub retention_count: Option<u32>,
+    /// Optional age after which snapshots created by this schedule become expirable.
+    pub retention_duration: Option<DurationMicros>,
+    /// Whether the schedule may be selected for execution.
+    pub enabled: bool,
+    /// Exact first or rescheduled occurrence.
+    pub next_due_at: UnixMicros,
+}
+
+/// Exact execution of one due snapshot-schedule occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunSnapshotSchedule {
+    /// Schedule being executed.
+    pub schedule_id: SnapshotScheduleId,
+    /// Exact current schedule revision observed by the scheduler.
+    pub expected_schedule_sequence: u64,
+    /// Due instant selected from authoritative schedule state.
+    pub scheduled_for: UnixMicros,
+    /// Stable identity allocated for the resulting snapshot.
+    pub snapshot_id: SnapshotId,
+    /// Exact current converged namespace commit required by the request.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Human-facing and canonicalised snapshot name.
+    pub name: RecordName,
 }
 
 /// Closed trigger deciding when an otherwise eligible historical version is reclaimed.
@@ -820,6 +865,32 @@ digest_simple_record!(
         digest.unsigned(value.expected_snapshot_revision.get());
         digest.boolean(value.automatic);
         digest.unsigned(u64::from(value.reason_code));
+    }
+);
+digest_simple_record!(
+    ConfigureSnapshotSchedule,
+    b"configure-snapshot-schedule",
+    |value, digest| {
+        digest.identifier(value.schedule_id.as_bytes());
+        digest.identifier(value.volume_id.as_bytes());
+        digest.unsigned(value.expected_schedule_sequence);
+        digest.unsigned(value.interval.get());
+        digest.optional_unsigned(value.retention_count.map(u64::from));
+        digest.optional_unsigned(value.retention_duration.map(DurationMicros::get));
+        digest.boolean(value.enabled);
+        digest.signed(value.next_due_at.get());
+    }
+);
+digest_simple_record!(
+    RunSnapshotSchedule,
+    b"run-snapshot-schedule",
+    |value, digest| {
+        digest.identifier(value.schedule_id.as_bytes());
+        digest.unsigned(value.expected_schedule_sequence);
+        digest.signed(value.scheduled_for.get());
+        digest.identifier(value.snapshot_id.as_bytes());
+        digest.identifier(value.namespace_commit_id.as_bytes());
+        digest.name(&value.name);
     }
 );
 digest_simple_record!(
