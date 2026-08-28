@@ -2,19 +2,16 @@
 
 //! Single-owner headless service loop composing network, consensus and durable state.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use meshspan_consensus::{
-    ConsensusCore, CoreConfig, CoreInput, MEMBERSHIP_COMMAND_VERSION, MemberIncarnations,
-    MembershipTransitionCommand, ProposalId, Role, compile_plan, flat_plan,
+    ConsensusCore, CoreConfig, CoreInput, MEMBERSHIP_COMMAND_VERSION, MembershipTransitionCommand,
+    ProposalId, Role, compile_plan, flat_plan,
 };
-use meshspan_domain::{
-    BackupId, NodeId, OperationId, PartitionId, QuorumPlanId, Revision, SnapshotId, UnixMicros,
-};
+use meshspan_domain::{NodeId, OperationId, PartitionId, QuorumPlanId, UnixMicros};
 use meshspan_metadata::{
-    AuthoritativeRepository, LogPosition as MetadataLogPosition, PartitionBackupManifest,
-    PartitionDatabase, PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot,
+    AuthoritativeRepository, LogPosition as MetadataLogPosition, PartitionDatabase,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -22,9 +19,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::NodeRuntimeError;
 use super::config::NodeConfig;
-use super::network::{OutboundSnapshot, PeerMessage, PeerNetwork, ReceivedSnapshot};
+use super::membership_runtime::{
+    SnapshotDispatch, dispatch_learner_snapshots, install_admission_snapshot,
+    maybe_plan_membership_transition, restore_incarnations,
+};
+use super::network::{PeerMessage, PeerNetwork, ReceivedSnapshot};
 use super::proof_metadata::ProofMetadata;
-use crate::membership::{MembershipCoordinatorError, plan_next_transition, validate_transition};
+use crate::membership::{MembershipCoordinatorError, validate_transition};
 use crate::{ClusterDriverError, DriverEffect, PartitionConsensusDriver};
 
 const MEMBERSHIP_EPOCH: u64 = 1;
@@ -149,66 +150,6 @@ fn bootstrap_plan() -> Result<meshspan_consensus::CompiledQuorumPlan, NodeRuntim
         voters,
         BTreeSet::new(),
     )?)?)
-}
-
-fn install_admission_snapshot(
-    config: &NodeConfig,
-    received: ReceivedSnapshot,
-) -> Result<(), NodeRuntimeError> {
-    let active = meshspan_consensus::ActiveQuorumPlan::decode(&received.snapshot.quorum_plan)
-        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-    let meshspan_consensus::ActiveQuorumPlan::Stable(plan) = active else {
-        return Err(NodeRuntimeError::InvalidConfiguration);
-    };
-    if !plan.spec().voters.contains(&received.from)
-        || !plan.spec().learners.contains(&config.node_id)
-        || plan.proof_digest() != received.snapshot.quorum_plan_digest
-        || plan.spec().membership_epoch != received.snapshot.membership_epoch
-    {
-        return Err(NodeRuntimeError::InvalidConfiguration);
-    }
-    let snapshot_id = SnapshotId::from_bytes(received.snapshot.snapshot_id)?;
-    let included = received.snapshot.included_position;
-    let manifest = PartitionSnapshotManifest {
-        snapshot_id,
-        backup: PartitionBackupManifest {
-            backup_id: BackupId::from_bytes(snapshot_id.as_bytes())?,
-            partition_id: partition_id()?,
-            applied_position: MetadataLogPosition {
-                term: included.term,
-                index: included.index,
-            },
-            state_revision: Revision::new(received.snapshot.state_revision),
-            schema_version: received.snapshot.format_version,
-            byte_length: received.snapshot.total_bytes,
-            digest: received.snapshot.digest,
-            created_at: now(),
-        },
-        membership_epoch: received.snapshot.membership_epoch,
-        quorum_plan_digest: received.snapshot.quorum_plan_digest,
-    };
-    let database = restore_partition_snapshot(
-        &received.snapshot.staging_path,
-        &config.state_path,
-        manifest,
-        &plan,
-        PreservedVote {
-            current_term: 1,
-            voted_for: None,
-            membership_epoch: 0,
-        },
-        now(),
-    )?;
-    let membership = AuthoritativeRepository::new(database)
-        .partition_membership()?
-        .ok_or(NodeRuntimeError::InvalidConfiguration)?;
-    if membership.admitted_learners().get(&config.node_id) != Some(&1) {
-        return Err(NodeRuntimeError::InvalidConfiguration);
-    }
-    received
-        .installed
-        .send(())
-        .map_err(|()| NodeRuntimeError::InvalidConfiguration)
 }
 
 fn spawn_peer_forwarder(
@@ -406,90 +347,6 @@ fn apply_effects(
     }
 }
 
-struct SnapshotDispatch {
-    state_path: std::path::PathBuf,
-    sent: BTreeSet<NodeId>,
-}
-
-impl SnapshotDispatch {
-    fn new(state_path: std::path::PathBuf) -> Self {
-        Self {
-            state_path,
-            sent: BTreeSet::new(),
-        }
-    }
-}
-
-fn dispatch_learner_snapshots(
-    driver: &PartitionConsensusDriver<AuthoritativeRepository>,
-    network: &PeerNetwork,
-    dispatch: &mut SnapshotDispatch,
-) -> Result<(), NodeRuntimeError> {
-    if driver.role() != Role::Leader {
-        return Ok(());
-    }
-    let meshspan_consensus::ActiveQuorumPlan::Stable(plan) = driver.active_plan() else {
-        return Ok(());
-    };
-    let Some(membership) = driver.persistence().partition_membership()? else {
-        return Ok(());
-    };
-    for learner in &plan.spec().learners {
-        if dispatch.sent.contains(learner) || !membership.admitted_learners().contains_key(learner)
-        {
-            continue;
-        }
-        let snapshot_id = learner_snapshot_id(plan, *learner)?;
-        let destination = dispatch.state_path.with_extension(format!(
-            "learner-{}-epoch-{}.snapshot",
-            node_number(*learner).ok_or(NodeRuntimeError::InvalidConfiguration)?,
-            plan.spec().membership_epoch,
-        ));
-        remove_owned_snapshot(&destination)?;
-        let manifest =
-            driver
-                .persistence()
-                .create_snapshot(snapshot_id, &destination, plan, now())?;
-        let quorum_plan = meshspan_consensus::ActiveQuorumPlan::Stable(plan.clone())
-            .encode()
-            .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-        network.send_snapshot(
-            *learner,
-            OutboundSnapshot {
-                path: destination,
-                manifest,
-                quorum_plan,
-            },
-        );
-        dispatch.sent.insert(*learner);
-    }
-    Ok(())
-}
-
-fn learner_snapshot_id(
-    plan: &meshspan_consensus::CompiledQuorumPlan,
-    learner: NodeId,
-) -> Result<SnapshotId, NodeRuntimeError> {
-    let mut bytes: [u8; 16] = plan.proof_digest()[..16]
-        .try_into()
-        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-    for (target, source) in bytes.iter_mut().zip(learner.as_bytes()) {
-        *target ^= source;
-    }
-    SnapshotId::from_bytes(bytes).map_err(Into::into)
-}
-
-fn remove_owned_snapshot(file_path: &std::path::Path) -> Result<(), NodeRuntimeError> {
-    match std::fs::symlink_metadata(file_path) {
-        Ok(metadata) if metadata.file_type().is_file() => {
-            std::fs::remove_file(file_path).map_err(Into::into)
-        }
-        Ok(_) => Err(NodeRuntimeError::InvalidConfiguration),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
 fn apply_committed_entry(
     driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
     proof_metadata: &ProofMetadata,
@@ -556,124 +413,6 @@ fn apply_committed_entry(
     Ok(())
 }
 
-fn maybe_plan_membership_transition(
-    driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
-) -> Result<Vec<DriverEffect>, NodeRuntimeError> {
-    if driver.role() != Role::Leader
-        || driver
-            .last_log_entry()
-            .is_some_and(|entry| entry.position.index > driver.commit_index())
-    {
-        return Ok(Vec::new());
-    }
-    let Some(membership) = driver.persistence().partition_membership()? else {
-        return Ok(Vec::new());
-    };
-    let committed = driver.committed_entry().cloned();
-    let command = plan_next_transition(
-        driver.active_plan(),
-        driver.member_incarnations(),
-        membership.active_voters(),
-        membership.admitted_learners(),
-        committed.as_ref(),
-        |node| driver.peer_matched_index(node),
-    )?;
-    let Some(command) = command else {
-        return Ok(Vec::new());
-    };
-    let command_bytes = command.encode().map_err(MembershipCoordinatorError::from)?;
-    driver
-        .step(
-            CoreInput::Propose {
-                proposal_id: membership_proposal_id(&command)?,
-                operation_id: membership_operation_id(&command)?,
-                command_version: MEMBERSHIP_COMMAND_VERSION,
-                command: command_bytes,
-            },
-            now(),
-        )
-        .map_err(Into::into)
-}
-
-fn restore_incarnations(
-    repository: &AuthoritativeRepository,
-    active_plan: &meshspan_consensus::ActiveQuorumPlan,
-) -> Result<MemberIncarnations, NodeRuntimeError> {
-    let values = if let Some(membership) = repository.partition_membership()? {
-        let mut values = membership.active_voters().clone();
-        values.extend(membership.admitted_learners());
-        active_plan
-            .members()
-            .into_iter()
-            .map(|node| {
-                values
-                    .get(&node)
-                    .copied()
-                    .map(|incarnation| (node, incarnation))
-                    .ok_or(NodeRuntimeError::InvalidConfiguration)
-            })
-            .collect::<Result<BTreeMap<_, _>, _>>()?
-    } else {
-        active_plan
-            .members()
-            .into_iter()
-            .map(|node| (node, 1))
-            .collect()
-    };
-    MemberIncarnations::for_members(values, &active_plan.members()).map_err(Into::into)
-}
-
-fn membership_proposal_id(
-    command: &MembershipTransitionCommand,
-) -> Result<ProposalId, NodeRuntimeError> {
-    let epoch = transition_epoch(command);
-    let value = epoch
-        .checked_mul(4)
-        .and_then(|value| value.checked_add(u64::from(transition_kind(command))))
-        .map(|value| value | (1_u64 << 63))
-        .ok_or(NodeRuntimeError::InvalidConfiguration)?;
-    Ok(ProposalId(value))
-}
-
-fn membership_operation_id(
-    command: &MembershipTransitionCommand,
-) -> Result<OperationId, NodeRuntimeError> {
-    let digest = transition_digest(command);
-    let mut bytes: [u8; 16] = digest[..16]
-        .try_into()
-        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-    bytes[0] ^= transition_kind(command);
-    OperationId::from_bytes(bytes).map_err(Into::into)
-}
-
-const fn transition_kind(command: &MembershipTransitionCommand) -> u8 {
-    match command {
-        MembershipTransitionCommand::AdmitLearner { .. } => 1,
-        MembershipTransitionCommand::PromoteLearner { .. } => 2,
-        MembershipTransitionCommand::FinaliseStable { .. } => 3,
-    }
-}
-
-fn transition_epoch(command: &MembershipTransitionCommand) -> u64 {
-    match command {
-        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
-        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
-            joint_plan.membership_epoch()
-        }
-        MembershipTransitionCommand::FinaliseStable { plan } => plan.spec().membership_epoch,
-    }
-}
-
-fn transition_digest(command: &MembershipTransitionCommand) -> [u8; 32] {
-    match command {
-        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
-        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
-            joint_plan.proof_digest()
-        }
-        MembershipTransitionCommand::FinaliseStable { plan } => plan.proof_digest(),
-    }
-}
-
 fn role_response(driver: &PartitionConsensusDriver<AuthoritativeRepository>) -> &'static str {
     match driver.role() {
         Role::Leader => "LEADER",
@@ -692,7 +431,7 @@ fn redirect_response(leader: Option<NodeId>) -> &'static str {
     }
 }
 
-fn node_number(node: NodeId) -> Option<u8> {
+pub(super) fn node_number(node: NodeId) -> Option<u8> {
     let bytes = node.as_bytes();
     bytes
         .iter()
@@ -708,11 +447,11 @@ fn operation_id(value: u8) -> Result<OperationId, NodeRuntimeError> {
     OperationId::from_bytes([value; 16]).map_err(Into::into)
 }
 
-fn partition_id() -> Result<PartitionId, NodeRuntimeError> {
+pub(super) fn partition_id() -> Result<PartitionId, NodeRuntimeError> {
     PartitionId::from_bytes([8; 16]).map_err(Into::into)
 }
 
-fn now() -> UnixMicros {
+pub(super) fn now() -> UnixMicros {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

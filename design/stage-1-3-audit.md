@@ -54,17 +54,15 @@ passed in 10.00 seconds before its signed merge.
 The quorum compiler, deterministic consensus state machine, persistence-first
 driver, mTLS Quinn transport, snapshot validation, join-grant transaction,
 routing-record handoff and three-process failover behaviours are substantive and
-continue to pass. Their composition does not yet satisfy the complete roadmap
-claim:
+continue to pass. The active stable/joint plan is now stored, independently
+decoded and re-proved on restore. The real process cycle starts with one voter;
+administrator join transactions create the other identities, bounded mTLS/QUIC
+snapshots establish their databases, and exact current-incarnation catch-up
+evidence drives automatic committed joint then stable promotion. Every process
+finishes with revision 5, three active voters and no staged learners.
 
-- `consensus_quorum_plans` exists, but the active compiled plan is not persisted
-  or restored. The proof runtime reconstructs one fixed plan from constants.
-- the three-process runtime starts with all three nodes as voters. Its join-grant
-  commands create metadata learner rows after those nodes already participate in
-  consensus, so the process test does not prove live enrolment or automatic
-  learner promotion.
-- joint/stable transition logic is unit-tested, but no runtime path drives a
-  caught-up learner through both committed phases.
+The remaining composition does not yet satisfy the complete roadmap claim:
+
 - the process proof creates a second partition record and performs a fenced route
   transition inside the original partition database. It does not start a second
   consensus/database authority and therefore cannot prove cross-partition
@@ -77,7 +75,7 @@ claim:
 1. [x] Persist the canonical active stable or joint quorum plan with its proof,
    restore and independently recompile it, and fail closed on missing, stale or
    corrupt plan state. Crash every plan-transition persistence boundary.
-2. Start one voter, admit additional node identities through the authoritative
+2. [x] Start one voter, admit additional node identities through the authoritative
    join transaction, replicate them as learners, derive exact current-incarnation
    catch-up evidence and automatically commit joint then stable promotion.
 3. Restart during each promotion phase and continue from durable state without

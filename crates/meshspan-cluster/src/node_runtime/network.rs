@@ -3,7 +3,6 @@
 //! Authenticated Quinn peer connections and mandatory hello negotiation.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,27 +11,27 @@ use std::time::Duration;
 
 use meshspan_consensus::CoreMessage;
 use meshspan_domain::{MeshId, NodeId, OperationId, PartitionId};
-use meshspan_metadata::PartitionSnapshotManifest;
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::{
-    ComponentSupport, ControlEnvelope, LogPosition, NodeHello, NodeRole, Pong, ProtocolVersion,
-    RequestHeader, SnapshotBegin, SnapshotChunk, SnapshotFinish, SnapshotResult,
+    ComponentSupport, ControlEnvelope, NodeHello, NodeRole, Pong, ProtocolVersion, RequestHeader,
 };
 use meshspan_transport::{
-    NegotiationConfig, NodeCredentials, PeerBinding, PeerRegistry, SnapshotStager, StreamKind,
-    TransportLimits, VerifiedSnapshot, accept_stream, certificate_fingerprint, client_endpoint,
-    connect, open_stream, receive_control, send_control, server_endpoint,
+    NegotiationConfig, NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportLimits,
+    accept_stream, certificate_fingerprint, client_endpoint, connect, open_stream, receive_control,
+    send_control, server_endpoint,
 };
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use super::NodeRuntimeError;
 use super::config::{NodeConfig, PeerConfig};
 use crate::{decode_consensus_message, encode_consensus_message};
+
+mod snapshot;
+
+pub(in crate::node_runtime) use snapshot::{OutboundSnapshot, ReceivedSnapshot};
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
 const MAXIMUM_CONTROL_BYTES: usize = 64 * 1_024;
@@ -46,10 +45,7 @@ const CONNECTION_WINDOW: u32 = 4 * 1_024 * 1_024;
 const INCARNATION: u64 = 1;
 const OUTBOUND_QUEUE_CAPACITY: usize = 8;
 const PEER_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
-const SNAPSHOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(100);
-const MAXIMUM_SNAPSHOT_BYTES: u64 = 512 * 1_024 * 1_024;
-const SNAPSHOT_CHUNK_BYTES: usize = 48 * 1_024;
 
 static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
 
@@ -58,18 +54,6 @@ pub(super) struct PeerMessage {
     pub from: NodeId,
     pub sender_incarnation: u64,
     pub message: CoreMessage,
-}
-
-pub(super) struct OutboundSnapshot {
-    pub path: PathBuf,
-    pub manifest: PartitionSnapshotManifest,
-    pub quorum_plan: Vec<u8>,
-}
-
-pub(super) struct ReceivedSnapshot {
-    pub from: NodeId,
-    pub snapshot: VerifiedSnapshot,
-    pub installed: oneshot::Sender<()>,
 }
 
 #[derive(Clone)]
@@ -152,12 +136,6 @@ impl PeerNetwork {
         }
     }
 
-    pub fn send_snapshot(&self, to: NodeId, snapshot: OutboundSnapshot) {
-        if let Some(sender) = self.outbound_snapshots.get(&to) {
-            let _full_or_closed = sender.try_send(snapshot);
-        }
-    }
-
     fn spawn_outbound_worker(&self, peer: NodeId, mut messages: mpsc::Receiver<CoreMessage>) {
         let network = self.clone();
         tokio::spawn(async move {
@@ -171,22 +149,6 @@ impl PeerNetwork {
                 if !matches!(result, Ok(Ok(()))) {
                     connection = None;
                     tokio::time::sleep(RECONNECT_BACKOFF).await;
-                }
-            }
-        });
-    }
-
-    fn spawn_snapshot_worker(&self, peer: NodeId, mut snapshots: mpsc::Receiver<OutboundSnapshot>) {
-        let network = self.clone();
-        tokio::spawn(async move {
-            while let Some(snapshot) = snapshots.recv().await {
-                let result = tokio::time::timeout(
-                    SNAPSHOT_OPERATION_TIMEOUT,
-                    network.send_snapshot_to_peer(peer, &snapshot),
-                )
-                .await;
-                if matches!(result, Ok(Ok(()))) {
-                    let _cleanup = tokio::fs::remove_file(&snapshot.path).await;
                 }
             }
         });
@@ -309,180 +271,6 @@ impl PeerNetwork {
             .as_ref()
             .ok_or(NodeRuntimeError::InvalidConfiguration)?;
         self.send_message(active, message).await
-    }
-
-    async fn send_snapshot_to_peer(
-        &self,
-        to: NodeId,
-        snapshot: &OutboundSnapshot,
-    ) -> Result<(), NodeRuntimeError> {
-        let connection = self.connect_peer(to).await?;
-        let (mut send, mut receive) = open_stream(&connection, StreamKind::Snapshot).await?;
-        let manifest = snapshot.manifest;
-        let begin = SnapshotBegin {
-            snapshot_id: manifest.snapshot_id.as_bytes().to_vec(),
-            included_position: Some(LogPosition {
-                term: manifest.backup.applied_position.term,
-                index: manifest.backup.applied_position.index,
-            }),
-            state_revision: manifest.backup.state_revision.get(),
-            total_bytes: manifest.backup.byte_length,
-            digest: manifest.backup.digest.to_vec(),
-            format_version: manifest.backup.schema_version,
-            membership_epoch: manifest.membership_epoch,
-            quorum_plan_digest: manifest.quorum_plan_digest.to_vec(),
-            quorum_plan: snapshot.quorum_plan.clone(),
-        };
-        self.send_snapshot_envelope(&mut send, Message::SnapshotBegin(begin))
-            .await?;
-        let mut file = tokio::fs::File::open(&snapshot.path).await?;
-        let mut buffer = vec![0_u8; SNAPSHOT_CHUNK_BYTES];
-        let mut offset = 0_u64;
-        loop {
-            let read = file.read(&mut buffer).await?;
-            if read == 0 {
-                break;
-            }
-            let bytes = buffer[..read].to_vec();
-            self.send_snapshot_envelope(
-                &mut send,
-                Message::SnapshotChunk(SnapshotChunk {
-                    snapshot_id: manifest.snapshot_id.as_bytes().to_vec(),
-                    offset,
-                    chunk_digest: Sha256::digest(&bytes).to_vec(),
-                    bytes,
-                }),
-            )
-            .await?;
-            offset = offset
-                .checked_add(
-                    u64::try_from(read).map_err(|_| NodeRuntimeError::InvalidConfiguration)?,
-                )
-                .ok_or(NodeRuntimeError::InvalidConfiguration)?;
-        }
-        self.send_snapshot_envelope(
-            &mut send,
-            Message::SnapshotFinish(SnapshotFinish {
-                snapshot_id: manifest.snapshot_id.as_bytes().to_vec(),
-                total_bytes: manifest.backup.byte_length,
-                digest: manifest.backup.digest.to_vec(),
-            }),
-        )
-        .await?;
-        send.finish()
-            .map_err(meshspan_transport::TransportError::from)?;
-        let result = receive_control(&mut receive, self.wire_limits).await?;
-        let Message::SnapshotResult(result) = result
-            .as_inner()
-            .message
-            .as_ref()
-            .ok_or(NodeRuntimeError::InvalidConfiguration)?
-        else {
-            return Err(NodeRuntimeError::InvalidConfiguration);
-        };
-        if result.installed
-            && result.snapshot_id.as_slice() == manifest.snapshot_id.as_bytes()
-            && result.included_position.as_ref()
-                == Some(&LogPosition {
-                    term: manifest.backup.applied_position.term,
-                    index: manifest.backup.applied_position.index,
-                })
-        {
-            Ok(())
-        } else {
-            Err(NodeRuntimeError::InvalidConfiguration)
-        }
-    }
-
-    async fn send_snapshot_envelope(
-        &self,
-        send: &mut quinn::SendStream,
-        message: Message,
-    ) -> Result<(), NodeRuntimeError> {
-        send_control(
-            send,
-            &ControlEnvelope {
-                header: Some(self.request_header()?),
-                message: Some(message),
-            },
-            self.wire_limits,
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn receive_snapshot(
-        &self,
-        peer: NodeId,
-        state_path: &std::path::Path,
-        stream: &mut meshspan_transport::AcceptedStream,
-        snapshots: &mpsc::Sender<ReceivedSnapshot>,
-    ) -> Result<(), NodeRuntimeError> {
-        let first = receive_control(&mut stream.receive, self.wire_limits).await?;
-        self.verify_header(&first, peer, INCARNATION)?;
-        let Message::SnapshotBegin(begin) = first
-            .as_inner()
-            .message
-            .as_ref()
-            .ok_or(NodeRuntimeError::InvalidConfiguration)?
-        else {
-            return Err(NodeRuntimeError::InvalidConfiguration);
-        };
-        let staging_path = snapshot_staging_path(state_path, &begin.snapshot_id)?;
-        remove_stale_stage(&staging_path)?;
-        let mut stager = SnapshotStager::begin(
-            &staging_path,
-            begin,
-            MAXIMUM_SNAPSHOT_BYTES,
-            SNAPSHOT_CHUNK_BYTES,
-        )?;
-        let verified = loop {
-            let envelope = receive_control(&mut stream.receive, self.wire_limits).await?;
-            self.verify_header(&envelope, peer, INCARNATION)?;
-            match envelope
-                .as_inner()
-                .message
-                .as_ref()
-                .ok_or(NodeRuntimeError::InvalidConfiguration)?
-            {
-                Message::SnapshotChunk(chunk) => stager.append_chunk(chunk)?,
-                Message::SnapshotFinish(finish) => break stager.finish(finish)?,
-                _ => return Err(NodeRuntimeError::InvalidConfiguration),
-            }
-        };
-        let included_position = verified.included_position;
-        let snapshot_id = verified.snapshot_id;
-        let (installed, receive_installed) = oneshot::channel();
-        snapshots
-            .send(ReceivedSnapshot {
-                from: peer,
-                snapshot: verified,
-                installed,
-            })
-            .await
-            .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-        receive_installed
-            .await
-            .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-        send_control(
-            &mut stream.send,
-            &ControlEnvelope {
-                header: Some(self.request_header()?),
-                message: Some(Message::SnapshotResult(SnapshotResult {
-                    snapshot_id: snapshot_id.to_vec(),
-                    installed: true,
-                    included_position: Some(included_position),
-                    error: None,
-                })),
-            },
-            self.wire_limits,
-        )
-        .await?;
-        stream
-            .send
-            .finish()
-            .map_err(meshspan_transport::TransportError::from)?;
-        Ok(())
     }
 
     async fn connect_peer(&self, to: NodeId) -> Result<quinn::Connection, NodeRuntimeError> {
@@ -716,29 +504,4 @@ fn request_identifier(value: u64) -> [u8; 16] {
         bytes[15] = 1;
     }
     bytes
-}
-
-fn snapshot_staging_path(
-    state_path: &std::path::Path,
-    snapshot_id: &[u8],
-) -> Result<PathBuf, NodeRuntimeError> {
-    let exact: [u8; 16] = snapshot_id
-        .try_into()
-        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-    let mut suffix = String::with_capacity(32);
-    for byte in exact {
-        write!(&mut suffix, "{byte:02x}").map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-    }
-    Ok(state_path.with_extension(format!("snapshot-{suffix}.stage")))
-}
-
-fn remove_stale_stage(staging_path: &std::path::Path) -> Result<(), NodeRuntimeError> {
-    match std::fs::symlink_metadata(staging_path) {
-        Ok(metadata) if metadata.file_type().is_file() => {
-            std::fs::remove_file(staging_path).map_err(Into::into)
-        }
-        Ok(_) => Err(NodeRuntimeError::InvalidConfiguration),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
 }

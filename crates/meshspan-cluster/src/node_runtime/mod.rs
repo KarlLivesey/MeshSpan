@@ -3,6 +3,7 @@
 //! Minimal headless three-voter runtime used before public service adapters arrive.
 
 mod config;
+mod membership_runtime;
 mod network;
 mod proof_metadata;
 mod service;
