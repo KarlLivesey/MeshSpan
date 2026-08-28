@@ -309,6 +309,9 @@ fn execute(
     command: &AuthoritativeCommand,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
+    if is_cleanup_command(command) {
+        return execute_cleanup_command(transaction, context, command, revision);
+    }
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
             bootstrap::bootstrap(transaction, partition_id, context, value, revision)
@@ -341,11 +344,6 @@ fn execute(
         }
         AuthoritativeCommand::ConfigureVersionRetention(value) => {
             retention::configure(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::ProposeVersionCleanup(_)
-        | AuthoritativeCommand::RegisterCleanupAttestationKey(_)
-        | AuthoritativeCommand::AttestVersionCleanup(_) => {
-            execute_cleanup_command(transaction, context, command, revision)
         }
         AuthoritativeCommand::CreateObject(value) => {
             namespace::create_object(transaction, context, value, revision)
@@ -407,7 +405,19 @@ fn execute(
         AuthoritativeCommand::AbortScopeHandoff(value) => {
             routing::abort_handoff(transaction, context, *value, revision)
         }
+        _ => Err(RepositoryError::InvalidCommand),
     }
+}
+
+fn is_cleanup_command(command: &AuthoritativeCommand) -> bool {
+    matches!(
+        command,
+        AuthoritativeCommand::ProposeVersionCleanup(_)
+            | AuthoritativeCommand::RegisterCleanupAttestationKey(_)
+            | AuthoritativeCommand::AttestVersionCleanup(_)
+            | AuthoritativeCommand::AuthoriseVersionCleanup(_)
+            | AuthoritativeCommand::CancelVersionCleanup(_)
+    )
 }
 
 fn execute_cleanup_command(
@@ -425,6 +435,12 @@ fn execute_cleanup_command(
         }
         AuthoritativeCommand::AttestVersionCleanup(value) => {
             cleanup_attestation::attest(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AuthoriseVersionCleanup(value) => {
+            version_cleanup::authorise(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CancelVersionCleanup(value) => {
+            version_cleanup::cancel(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -643,6 +659,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ProposeVersionCleanup(_) => 35,
         AuthoritativeCommand::RegisterCleanupAttestationKey(_) => 36,
         AuthoritativeCommand::AttestVersionCleanup(_) => 37,
+        AuthoritativeCommand::AuthoriseVersionCleanup(_) => 38,
+        AuthoritativeCommand::CancelVersionCleanup(_) => 39,
     }
 }
 

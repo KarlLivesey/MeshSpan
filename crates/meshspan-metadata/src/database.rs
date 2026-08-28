@@ -241,6 +241,7 @@ mod tests {
         partition_snapshot_root_removals_migration_digest,
         partition_snapshot_schedules_migration_digest,
         partition_version_cleanup_attestations_migration_digest,
+        partition_version_cleanup_finalisation_migration_digest,
         partition_version_cleanup_intents_migration_digest,
         partition_version_cleanup_manifest_root_migration_digest,
         partition_version_cleanup_root_set_digest_migration_digest,
@@ -257,7 +258,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 18);
+        assert_eq!(database.check_integrity()?.schema_version, 19);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -429,6 +430,10 @@ mod tests {
                 0xdd, 0xca, 0xef, 0x6e,
             ]
         );
+    }
+
+    #[test]
+    fn cleanup_migration_digests_are_committed_compatibility_values() {
         assert_eq!(
             partition_version_cleanup_intents_migration_digest(),
             [
@@ -459,6 +464,14 @@ mod tests {
                 0xb0, 0xf7, 0x2b, 0x54, 0xa2, 0x93, 0xbc, 0xfc, 0x05, 0x59, 0xf5, 0x2a, 0x35, 0x15,
                 0xe6, 0x4b, 0x18, 0xb5, 0xb2, 0x06, 0x4c, 0xd7, 0xec, 0xa4, 0xd7, 0x85, 0x7f, 0xef,
                 0x58, 0xc2, 0x24, 0x42,
+            ]
+        );
+        assert_eq!(
+            partition_version_cleanup_finalisation_migration_digest(),
+            [
+                0x8b, 0xe5, 0x4b, 0x06, 0x2d, 0x07, 0xfd, 0x47, 0xae, 0x7d, 0x16, 0xdc, 0xcd, 0xe1,
+                0xb3, 0xae, 0x37, 0x04, 0xd4, 0x36, 0xbf, 0xc9, 0x90, 0x78, 0xe4, 0xa1, 0xc4, 0x2e,
+                0x3e, 0x0a, 0x7c, 0x90,
             ]
         );
     }

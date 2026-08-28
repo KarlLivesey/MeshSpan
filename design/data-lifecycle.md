@@ -127,16 +127,22 @@ tombstones and cleanup when it returns.
    cleanup items therefore cannot substitute another manifest's shard identity. An offline
    gateway delays physical reclamation, not logical deletion. A changed node
    incarnation or cleanup signing-key generation fails closed.
-4. Immediately before deletion, the worker obtains a short-lived
+4. The metadata authority moves a pending proposal to `authorised` only after
+   revalidating the current retention policy, the complete revision-independent
+   retained-root set, every current gateway incarnation, every active cleanup
+   key generation, and every stored signature. Any mismatch leaves the proposal
+   pending without deletion authority. Cancellation is a separate terminal
+   transition that can never authorise deletion.
+5. Immediately before deletion, the worker obtains a short-lived
    `RemovalPermit` from the current owning metadata-partition leader. The permit binds:
    `mesh_id`, target, object, version, shard, generation, catalogue revision,
    operation ID and expiry.
-5. The storage node validates the permit, current leader epoch, a catalogue
+6. The storage node validates the permit, current leader epoch, a catalogue
    revision no older than the node's monotonically applied cleanup fence, and
    the local shard identity. Applying a newer catalogue revision permanently
    rejects older permits. It writes a local tombstone durably before unlinking
    bytes.
-6. The node reports a typed result. The quorum records completion idempotently;
+7. The node reports a typed result. The quorum records completion idempotently;
    a missing shard is success only when its identity and prior cleanup intent
    match.
 

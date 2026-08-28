@@ -57,7 +57,7 @@ pub use user_snapshot::{
     SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor, VolumeSnapshot,
 };
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
-pub use version_cleanup::VersionCleanupIntent;
+pub use version_cleanup::{VersionCleanupIntent, VersionCleanupState};
 pub use volume_head::ConvergedVolumeHead;
 
 /// Authoritative metadata repository owning one identity-bound partition database.
@@ -502,6 +502,8 @@ mod snapshot_schedule_tests;
 mod snapshot_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod version_cleanup_finalisation_tests;
 #[cfg(test)]
 mod version_cleanup_tests;
 #[cfg(test)]

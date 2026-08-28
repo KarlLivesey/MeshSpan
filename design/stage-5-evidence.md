@@ -301,8 +301,16 @@ copy-on-write filesystem service. This document records executable evidence only
    set. Tests prove that the digest survives unrelated global revision advances
    while the revision-bound digest does not. Whole-volume restore preparation is
    blocked while a volume has an active cleanup fence, closing the existing-root
-   head-activation path without scanning every ordinary write. Final replicated cancellation/completion
-   authority and physical catalogue/provider completion remain outstanding.
+   head-activation path without scanning every ordinary write. Replicated
+   finalisation now has distinct `authorised` and `cancelled` terminal states.
+   Authorisation revalidates the current policy, stable retained-root set,
+   complete current gateway/incarnation membership, active key generations,
+   terminal scan digests and every persisted Ed25519 signature in the same
+   transaction as its audited terminal revision. Cancellation grants no deletion
+   authority. Restart/replay, incomplete coverage, changed roots or policy,
+   rotated keys, tampered persisted signatures and every injected transaction
+   boundary are executable. Bounded physical cleanup-item issue and provider
+   completion remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

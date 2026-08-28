@@ -10,9 +10,28 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use super::apply::to_i64;
 use super::reachability::retained_root_summary;
 use super::{EntityKind, EntityReference, RepositoryError};
-use crate::{CommandContext, PartitionDatabase, ProposeVersionCleanup};
+use crate::{
+    AuthoriseVersionCleanup, CancelVersionCleanup, CommandContext, PartitionDatabase,
+    ProposeVersionCleanup,
+};
 
 const UNREACHABLE_STATE_CODE: u8 = 4;
+const STATE_PENDING: i64 = 1;
+const STATE_AUTHORISED: i64 = 2;
+const STATE_CANCELLED: i64 = 3;
+const TERMINAL_AUTHORISED: i64 = 1;
+const TERMINAL_CANCELLED: i64 = 2;
+
+/// Replicated lifecycle state of one guarded cleanup proposal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VersionCleanupState {
+    /// Cross-node evidence is incomplete or not yet finally revalidated.
+    Pending,
+    /// Final authority exists for bounded physical cleanup items.
+    Authorised,
+    /// The proposal ended without granting deletion authority.
+    Cancelled,
+}
 
 /// One replicated cleanup intent admitted from an exact terminal reachability proof.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +72,16 @@ pub struct VersionCleanupIntent {
     pub proposed_at: UnixMicros,
     /// Replicated revision that created this intent.
     pub revision: Revision,
+    /// Current terminal state.
+    pub state: VersionCleanupState,
+    /// Operation that authorised or cancelled the proposal.
+    pub terminal_operation_id: Option<OperationId>,
+    /// Catalogue revision of the terminal transition.
+    pub terminal_revision: Option<Revision>,
+    /// Authorisation instant, present only for authorised cleanup.
+    pub authorised_at: Option<UnixMicros>,
+    /// Cancellation instant, present only for cancelled cleanup.
+    pub cancelled_at: Option<UnixMicros>,
 }
 
 pub(super) fn propose(
@@ -62,7 +91,11 @@ pub(super) fn propose(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate_input(context, command)?;
-    validate_policy(transaction, command)?;
+    validate_policy(
+        transaction,
+        command.volume_id,
+        command.retention_policy_sequence,
+    )?;
     let root_summary = retained_root_summary(
         transaction,
         command.volume_id,
@@ -77,7 +110,7 @@ pub(super) fn propose(
     if terminal_result_digest(command) != command.proof_result_digest {
         return Err(RepositoryError::InvalidCommand);
     }
-    let required_attestation_count = required_participant_count(transaction)?;
+    let required_attestation_count = current_participant_count(transaction)?;
     if required_attestation_count == 0 {
         return Err(RepositoryError::InvalidCommand);
     }
@@ -148,6 +181,178 @@ pub(super) fn propose(
     })
 }
 
+pub(super) fn authorise(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: AuthoriseVersionCleanup,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    validate_terminal_input(
+        context,
+        command.cleanup_operation_id,
+        command.cleanup_revision,
+        command.reachability_subject_digest,
+    )?;
+    let authority = load_pending_authority(
+        transaction,
+        command.cleanup_operation_id,
+        command.cleanup_revision,
+        command.reachability_subject_digest,
+    )?;
+    validate_policy(
+        transaction,
+        authority.volume_id,
+        authority.retention_policy_sequence,
+    )?;
+    let current_revision = context
+        .expected_revision
+        .ok_or(RepositoryError::InvalidCommand)?;
+    let root_summary = retained_root_summary(transaction, authority.volume_id, current_revision)?;
+    if root_summary.count != authority.retained_root_count
+        || root_summary.set_digest != authority.retained_root_set_digest
+    {
+        return Err(RepositoryError::StaleRevision);
+    }
+    super::cleanup_attestation::validate_complete(
+        transaction,
+        command.cleanup_operation_id,
+        command.cleanup_revision,
+        command.reachability_subject_digest,
+    )?;
+    let changed = transaction.execute(
+        "UPDATE version_cleanup_intents
+         SET state = ?1, completed_at = ?2, terminal_operation_id = ?3,
+             terminal_revision = ?4, terminal_kind = ?5
+         WHERE cleanup_operation_id = ?6 AND revision = ?7
+           AND reachability_subject_digest = ?8 AND state = ?9
+           AND completed_at IS NULL AND cancelled_at IS NULL
+           AND terminal_operation_id IS NULL AND terminal_revision IS NULL
+           AND terminal_kind IS NULL",
+        params![
+            STATE_AUTHORISED,
+            context.occurred_at.get(),
+            context.operation_id.as_bytes().as_slice(),
+            to_i64(revision.get())?,
+            TERMINAL_AUTHORISED,
+            command.cleanup_operation_id.as_bytes().as_slice(),
+            to_i64(command.cleanup_revision.get())?,
+            command.reachability_subject_digest.as_slice(),
+            STATE_PENDING,
+        ],
+    )?;
+    terminal_entity(changed, command.cleanup_operation_id)
+}
+
+pub(super) fn cancel(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: CancelVersionCleanup,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    validate_terminal_input(
+        context,
+        command.cleanup_operation_id,
+        command.cleanup_revision,
+        command.reachability_subject_digest,
+    )?;
+    load_pending_authority(
+        transaction,
+        command.cleanup_operation_id,
+        command.cleanup_revision,
+        command.reachability_subject_digest,
+    )?;
+    let changed = transaction.execute(
+        "UPDATE version_cleanup_intents
+         SET state = ?1, cancelled_at = ?2, terminal_operation_id = ?3,
+             terminal_revision = ?4, terminal_kind = ?5
+         WHERE cleanup_operation_id = ?6 AND revision = ?7
+           AND reachability_subject_digest = ?8 AND state = ?9
+           AND completed_at IS NULL AND cancelled_at IS NULL
+           AND terminal_operation_id IS NULL AND terminal_revision IS NULL
+           AND terminal_kind IS NULL",
+        params![
+            STATE_CANCELLED,
+            context.occurred_at.get(),
+            context.operation_id.as_bytes().as_slice(),
+            to_i64(revision.get())?,
+            TERMINAL_CANCELLED,
+            command.cleanup_operation_id.as_bytes().as_slice(),
+            to_i64(command.cleanup_revision.get())?,
+            command.reachability_subject_digest.as_slice(),
+            STATE_PENDING,
+        ],
+    )?;
+    terminal_entity(changed, command.cleanup_operation_id)
+}
+
+fn terminal_entity(
+    changed: usize,
+    cleanup_operation_id: OperationId,
+) -> Result<EntityReference, RepositoryError> {
+    if changed != 1 {
+        return Err(RepositoryError::StaleRevision);
+    }
+    Ok(EntityReference {
+        kind: EntityKind::VersionCleanup,
+        id: cleanup_operation_id.as_bytes(),
+    })
+}
+
+struct PendingCleanupAuthority {
+    volume_id: VolumeId,
+    retention_policy_sequence: u64,
+    retained_root_count: u64,
+    retained_root_set_digest: [u8; 32],
+}
+
+fn load_pending_authority(
+    transaction: &Transaction<'_>,
+    cleanup_operation_id: OperationId,
+    cleanup_revision: Revision,
+    subject_digest: [u8; 32],
+) -> Result<PendingCleanupAuthority, RepositoryError> {
+    let stored: Option<(Vec<u8>, i64, i64, Vec<u8>)> = transaction
+        .query_row(
+            "SELECT volume_id, retention_policy_sequence, retained_root_count,
+                    retained_root_set_digest
+             FROM version_cleanup_intents
+             WHERE cleanup_operation_id = ?1 AND revision = ?2
+               AND reachability_subject_digest = ?3 AND state = ?4",
+            params![
+                cleanup_operation_id.as_bytes().as_slice(),
+                to_i64(cleanup_revision.get())?,
+                subject_digest.as_slice(),
+                STATE_PENDING,
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let stored = stored.ok_or(RepositoryError::StaleRevision)?;
+    Ok(PendingCleanupAuthority {
+        volume_id: volume(&stored.0)?,
+        retention_policy_sequence: parse_positive(stored.1)?,
+        retained_root_count: parse_positive(stored.2)?,
+        retained_root_set_digest: array(&stored.3)?,
+    })
+}
+
+fn validate_terminal_input(
+    context: CommandContext,
+    cleanup_operation_id: OperationId,
+    cleanup_revision: Revision,
+    subject_digest: [u8; 32],
+) -> Result<(), RepositoryError> {
+    if context.expected_revision.is_none()
+        || cleanup_revision == Revision::ZERO
+        || subject_digest == [0; 32]
+        || context.operation_id == cleanup_operation_id
+    {
+        Err(RepositoryError::InvalidCommand)
+    } else {
+        Ok(())
+    }
+}
+
 pub(super) fn load(
     database: &PartitionDatabase,
     operation_id: OperationId,
@@ -160,7 +365,8 @@ pub(super) fn load(
                     retained_root_count, retained_root_digest, local_roots_digest,
                     proof_result_digest, state, proposed_at, completed_at, revision,
                     required_attestation_count, reachability_subject_digest,
-                    manifest_root_digest, retained_root_set_digest
+                    manifest_root_digest, retained_root_set_digest,
+                    terminal_operation_id, terminal_revision, cancelled_at, terminal_kind
              FROM version_cleanup_intents WHERE cleanup_operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
@@ -184,6 +390,10 @@ pub(super) fn load(
                     row.get::<_, Option<Vec<u8>>>(16)?,
                     row.get::<_, Option<Vec<u8>>>(17)?,
                     row.get::<_, Option<Vec<u8>>>(18)?,
+                    row.get::<_, Option<Vec<u8>>>(19)?,
+                    row.get::<_, Option<i64>>(20)?,
+                    row.get::<_, Option<i64>>(21)?,
+                    row.get::<_, Option<i64>>(22)?,
                 ))
             },
         )
@@ -214,15 +424,20 @@ type StoredIntent = (
     Option<Vec<u8>>,
     Option<Vec<u8>>,
     Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
 );
 
 fn decode(
     operation_id: OperationId,
     row: &StoredIntent,
 ) -> Result<VersionCleanupIntent, RepositoryError> {
-    if row.11 != 1 || row.13.is_some() || parse_u64(row.7)? == 0 {
+    if parse_u64(row.7)? == 0 {
         return Err(RepositoryError::CorruptState);
     }
+    let terminal = decode_terminal(row.11, row.13, row.19.as_deref(), row.20, row.21, row.22)?;
     let intent = VersionCleanupIntent {
         cleanup_operation_id: operation_id,
         volume_id: volume(&row.0)?,
@@ -261,6 +476,11 @@ fn decode(
             .ok_or(RepositoryError::CorruptState)?,
         proposed_at: UnixMicros::new(row.12),
         revision: revision(row.14)?,
+        state: terminal.state,
+        terminal_operation_id: terminal.operation_id,
+        terminal_revision: terminal.revision,
+        authorised_at: terminal.authorised_at,
+        cancelled_at: terminal.cancelled_at,
     };
     let command = ProposeVersionCleanup {
         volume_id: intent.volume_id,
@@ -284,7 +504,70 @@ fn decode(
     Ok(intent)
 }
 
-fn required_participant_count(connection: &Connection) -> Result<u64, RepositoryError> {
+struct DecodedTerminal {
+    state: VersionCleanupState,
+    operation_id: Option<OperationId>,
+    revision: Option<Revision>,
+    authorised_at: Option<UnixMicros>,
+    cancelled_at: Option<UnixMicros>,
+}
+
+fn decode_terminal(
+    state: i64,
+    completed_at: Option<i64>,
+    terminal_operation_id: Option<&[u8]>,
+    terminal_revision: Option<i64>,
+    cancelled_at: Option<i64>,
+    terminal_kind: Option<i64>,
+) -> Result<DecodedTerminal, RepositoryError> {
+    match (
+        state,
+        completed_at,
+        terminal_operation_id,
+        terminal_revision,
+        cancelled_at,
+        terminal_kind,
+    ) {
+        (STATE_PENDING, None, None, None, None, None) => Ok(DecodedTerminal {
+            state: VersionCleanupState::Pending,
+            operation_id: None,
+            revision: None,
+            authorised_at: None,
+            cancelled_at: None,
+        }),
+        (
+            STATE_AUTHORISED,
+            Some(authorised_at),
+            Some(operation_id),
+            Some(terminal_revision),
+            None,
+            Some(TERMINAL_AUTHORISED),
+        ) => Ok(DecodedTerminal {
+            state: VersionCleanupState::Authorised,
+            operation_id: Some(operation(operation_id)?),
+            revision: Some(revision(terminal_revision)?),
+            authorised_at: Some(UnixMicros::new(authorised_at)),
+            cancelled_at: None,
+        }),
+        (
+            STATE_CANCELLED,
+            None,
+            Some(operation_id),
+            Some(terminal_revision),
+            Some(cancelled_at),
+            Some(TERMINAL_CANCELLED),
+        ) => Ok(DecodedTerminal {
+            state: VersionCleanupState::Cancelled,
+            operation_id: Some(operation(operation_id)?),
+            revision: Some(revision(terminal_revision)?),
+            authorised_at: None,
+            cancelled_at: Some(UnixMicros::new(cancelled_at)),
+        }),
+        _ => Err(RepositoryError::CorruptState),
+    }
+}
+
+pub(super) fn current_participant_count(connection: &Connection) -> Result<u64, RepositoryError> {
     let count: i64 = connection.query_row(
         "SELECT count(*)
          FROM nodes n
@@ -332,19 +615,20 @@ fn validate_input(
 
 fn validate_policy(
     connection: &Connection,
-    command: &ProposeVersionCleanup,
+    volume_id: VolumeId,
+    retention_policy_sequence: u64,
 ) -> Result<(), RepositoryError> {
     let (latest, count): (Option<i64>, i64) = connection.query_row(
         "SELECT max(policy_sequence), count(*)
          FROM version_retention_policy_revisions WHERE volume_id = ?1",
-        [command.volume_id.as_bytes().as_slice()],
+        [volume_id.as_bytes().as_slice()],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let latest = latest
         .map(parse_positive)
         .transpose()?
         .ok_or(RepositoryError::InvalidCommand)?;
-    if latest != parse_u64(count)? || latest != command.retention_policy_sequence {
+    if latest != parse_u64(count)? || latest != retention_policy_sequence {
         Err(RepositoryError::StaleRetentionPolicy)
     } else {
         Ok(())

@@ -245,6 +245,14 @@ revision-independent digest of the same ordered root set, so finalisation can
 distinguish harmless intervening attestation commands from a changed namespace
 head or retained snapshot.
 
+`AuthoriseVersionCleanup` names the exact proposal revision and common subject.
+The replicated transition revalidates the current policy and retained roots,
+the complete current gateway/incarnation set, active key generations, terminal
+scan digests and stored Ed25519 signatures before it creates deletion authority.
+`CancelVersionCleanup` terminates the same exact pending identity without
+creating that authority. Neither command accepts a provider location or shard
+identifier.
+
 `DeleteShardRequest` carries the exact shard identity and a quorum-issued
 `RemovalPermit`. `DeleteShardResult` reports `removed`, `already_absent`,
 `identity_mismatch`, `permit_expired`, `stale_epoch` or a typed local failure.
