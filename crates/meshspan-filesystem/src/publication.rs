@@ -15,7 +15,9 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespaceComponent};
+use crate::{
+    DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespaceComponent, NamespacePath,
+};
 
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
@@ -80,6 +82,112 @@ pub struct FilePublication {
     pub created_by: PrincipalId,
     /// Authoritative publication instant.
     pub created_at: UnixMicros,
+}
+
+/// One existing child directory whose immutable revision must change during path copying.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectoryRevisionTransition {
+    object: ObjectId,
+    expected_revision: ObjectRevisionId,
+    new_revision: ObjectRevisionId,
+}
+
+impl DirectoryRevisionTransition {
+    /// Binds a stable directory object to distinct old and new immutable revisions.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an attempted in-place revision update.
+    pub fn new(
+        object_id: ObjectId,
+        expected_revision_id: ObjectRevisionId,
+        new_revision_id: ObjectRevisionId,
+    ) -> Result<Self, PublicationPathError> {
+        if expected_revision_id == new_revision_id {
+            Err(PublicationPathError::ReusedRevision)
+        } else {
+            Ok(Self {
+                object: object_id,
+                expected_revision: expected_revision_id,
+                new_revision: new_revision_id,
+            })
+        }
+    }
+
+    /// Stable directory identity selected by its parent entry.
+    #[must_use]
+    pub const fn object_id(self) -> ObjectId {
+        self.object
+    }
+
+    /// Exact existing immutable revision selected by the current path.
+    #[must_use]
+    pub const fn expected_revision_id(self) -> ObjectRevisionId {
+        self.expected_revision
+    }
+
+    /// New immutable revision installed while copying the path back to the root.
+    #[must_use]
+    pub const fn new_revision_id(self) -> ObjectRevisionId {
+        self.new_revision
+    }
+}
+
+/// Validated namespace path paired with every existing directory below the volume root.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilePublicationPath {
+    path: NamespacePath,
+    ancestors: Vec<DirectoryRevisionTransition>,
+}
+
+impl FilePublicationPath {
+    /// Creates an exact root-to-leaf chain for one file publication.
+    ///
+    /// A one-component path has no child-directory transitions. Every additional component before
+    /// the leaf requires exactly one transition in the same root-to-leaf order.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing or extra directory transitions.
+    pub fn new(
+        path: NamespacePath,
+        ancestors: Vec<DirectoryRevisionTransition>,
+    ) -> Result<Self, PublicationPathError> {
+        if ancestors.len().checked_add(1) == Some(path.components().len()) {
+            Ok(Self { path, ancestors })
+        } else {
+            Err(PublicationPathError::TransitionCount)
+        }
+    }
+
+    /// Complete validated root-relative namespace path.
+    #[must_use]
+    pub const fn path(&self) -> &NamespacePath {
+        &self.path
+    }
+
+    /// Existing child-directory transitions in root-to-leaf order.
+    #[must_use]
+    pub fn ancestors(&self) -> &[DirectoryRevisionTransition] {
+        &self.ancestors
+    }
+
+    /// Leaf file name selected by the path.
+    #[must_use]
+    pub fn leaf_name(&self) -> Option<&crate::NamespaceComponent> {
+        self.path.components().last()
+    }
+}
+
+/// Stable construction failures for an exact file-publication path.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum PublicationPathError {
+    /// The path and child-directory transition counts do not describe the same hierarchy.
+    #[error("file publication path has missing or extra directory transitions")]
+    TransitionCount,
+    /// Immutable object revision identity was reused for an in-place update.
+    #[error("file publication path reuses an immutable directory revision")]
+    ReusedRevision,
 }
 
 /// One root-directory file mutation that must advance a verified volume branch head atomically.

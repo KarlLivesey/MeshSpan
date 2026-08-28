@@ -8,14 +8,50 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
 
 use super::{
-    DATABASE_FILE, FilePublication, MIGRATIONS, ManifestPublication, NamespacePublicationReceipt,
-    PublicationDisposition, PublicationError, RootFilePublication, VersionPublicationStore,
-    configure,
+    DATABASE_FILE, DirectoryRevisionTransition, FilePublication, FilePublicationPath, MIGRATIONS,
+    ManifestPublication, NamespacePublicationReceipt, PublicationDisposition, PublicationError,
+    PublicationPathError, RootFilePublication, VersionPublicationStore, configure,
 };
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
-    NamespaceComponent, NamespaceLimits,
+    NamespaceComponent, NamespaceLimits, NamespacePath,
 };
+
+#[test]
+fn publication_path_requires_every_ancestor_and_new_revision()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = NamespacePath::from_components(["a", "b", "file"], NamespaceLimits::PORTABLE)?;
+    let first = DirectoryRevisionTransition::new(
+        ObjectId::from_bytes([40; 16])?,
+        ObjectRevisionId::from_bytes([41; 16])?,
+        ObjectRevisionId::from_bytes([42; 16])?,
+    )?;
+    let second = DirectoryRevisionTransition::new(
+        ObjectId::from_bytes([43; 16])?,
+        ObjectRevisionId::from_bytes([44; 16])?,
+        ObjectRevisionId::from_bytes([45; 16])?,
+    )?;
+    let selected = FilePublicationPath::new(path.clone(), vec![first, second])?;
+    assert_eq!(selected.path(), &path);
+    assert_eq!(selected.ancestors(), &[first, second]);
+    assert_eq!(
+        selected.leaf_name().map(NamespaceComponent::display),
+        Some("file")
+    );
+    assert_eq!(
+        FilePublicationPath::new(path, vec![first]),
+        Err(PublicationPathError::TransitionCount)
+    );
+    assert_eq!(
+        DirectoryRevisionTransition::new(
+            ObjectId::from_bytes([46; 16])?,
+            ObjectRevisionId::from_bytes([47; 16])?,
+            ObjectRevisionId::from_bytes([47; 16])?,
+        ),
+        Err(PublicationPathError::ReusedRevision)
+    );
+    Ok(())
+}
 
 #[test]
 fn directory_nodes_round_trip_after_restart_and_corruption_fails_closed()
