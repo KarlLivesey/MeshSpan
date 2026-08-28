@@ -117,6 +117,21 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "authenticated QUIC transport tests",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-transport",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
+      ],
+    },
+    {
       name: "workspace format",
       steps: [
         [

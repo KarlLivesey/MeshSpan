@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-transport"
+description = "Mutually authenticated bounded QUIC transport for MeshSpan nodes"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+bytes.workspace = true
+meshspan-domain = { path = "../meshspan-domain" }
+meshspan-protocol = { path = "../meshspan-protocol" }
+quinn.workspace = true
+rustls.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+
+[lints]
+workspace = true

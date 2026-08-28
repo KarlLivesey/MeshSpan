@@ -8,6 +8,7 @@ members = [
     "crates/meshspan-domain",
     "crates/meshspan-metadata",
     "crates/meshspan-protocol",
+    "crates/meshspan-transport",
 ]
 resolver = "3"
 
@@ -20,14 +21,19 @@ rust-version = "1.98"
 version = "0.1.0"
 
 [workspace.dependencies]
+bytes = "1.12.1"
 jsonschema = { version = "0.52.0", default-features = false }
 prost = "0.14.4"
+quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = { version = "0.14.9", default-features = false, features = ["ring"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10.9"
 thiserror = "2.0.16"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 unicode-normalization = "0.1.25"
 
 [workspace.lints.rust]
