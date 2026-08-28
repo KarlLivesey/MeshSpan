@@ -105,15 +105,25 @@ copy-on-write filesystem service. This document records executable evidence only
   neither plaintext content nor provider chunks are rewritten. Decrypted key
   buffers and owned key material are drop-zeroised. Cross-platform vectors cover
   deterministic output, wrong manifest/format/index/generation, forged digest/
-  tag, invalid keys/bounds and unavailable entropy. The
-  deliberately simple single-chunk publisher remains test-only: gate 2 stays
-  open until a production bounded/paged manifest publisher durably stores the
-  wrapped content key and chunk receipts through the same boundary.
+  tag, invalid keys/bounds and unavailable entropy. The production initial
+  publisher now streams a private durable spool into bounded encrypted chunks,
+  appends immutable layout identities in pages of at most 1,000, seals the
+  independently recomputed manifest and wrapped key, then records an exact
+  provider receipt for every chunk before reporting the manifest durable. The
+  initial layout is explicitly one-node and unprotected; Stage 8 replaces its
+  placement/coding decision without replacing this lifecycle. A real registered-
+  folder proof stages `helloworld` as three chunks, reads each ciphertext by
+  authenticated shard identity and reconstructs the exact file. A second proof
+  interrupts the second provider write, drops and reopens every filesystem and
+  provider store, resumes only the missing receipts from the durable spool and
+  reaches the same atomic namespace result. Absent, exact-retry and conflicting-
+  operation catalogue lookups are separately exercised. Gate 2 is therefore
+  closed.
 
 ## Closure gates
 
 1. [x] Protocol-neutral canonical component/path types and compatibility bounds.
-2. Persistent immutable versions, staged random writes and atomic CoW volume heads.
+2. [x] Persistent immutable versions, staged random writes and atomic CoW volume heads.
 3. Deterministic branch commits, disconnected reconciliation and recovered items.
 4. Snapshots, retention and restore-as-new-head.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
