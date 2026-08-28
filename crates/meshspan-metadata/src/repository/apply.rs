@@ -333,6 +333,9 @@ fn execute(
         AuthoritativeCommand::CreateVolumeSnapshot(value) => {
             user_snapshot::create(transaction, context, value, revision)
         }
+        AuthoritativeCommand::RequestVolumeSnapshotExpiry(value) => {
+            user_snapshot::request_expiry(transaction, context, *value, revision)
+        }
         AuthoritativeCommand::ConfigureVersionRetention(value) => {
             retention::configure(transaction, context, *value, revision)
         }
@@ -575,6 +578,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CommitConvergedVolumeHead(_) => 27,
         AuthoritativeCommand::CreateVolumeSnapshot(_) => 28,
         AuthoritativeCommand::ConfigureVersionRetention(_) => 29,
+        AuthoritativeCommand::RequestVolumeSnapshotExpiry(_) => 30,
     }
 }
 

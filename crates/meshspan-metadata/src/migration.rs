@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 9;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 10;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
 
-const PARTITION_MIGRATIONS: [Migration; 9] = [
+const PARTITION_MIGRATIONS: [Migration; 10] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -47,8 +47,12 @@ const PARTITION_MIGRATIONS: [Migration; 9] = [
         sql: include_str!("../schema/partition/008_volume_snapshots.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 9,
         sql: include_str!("../schema/partition/009_version_retention.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/010_snapshot_expiry_requests.sql"),
     },
 ];
 
@@ -266,6 +270,11 @@ pub(crate) fn partition_volume_snapshots_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn partition_version_retention_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[8].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_snapshot_expiry_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[9].sql)
 }
 
 #[cfg(test)]

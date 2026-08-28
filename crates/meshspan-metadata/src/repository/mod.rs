@@ -362,6 +362,9 @@ pub enum RepositoryError {
     /// A per-volume immutable retention-policy sequence is stale.
     #[error("expected version-retention policy is stale")]
     StaleRetentionPolicy,
+    /// A snapshot-specific compare-and-swap revision is stale.
+    #[error("expected volume snapshot revision is stale")]
+    StaleSnapshot,
     /// A command violates a semantic precondition.
     #[error("authoritative command is invalid")]
     InvalidCommand,
