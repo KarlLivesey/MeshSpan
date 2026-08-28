@@ -2,7 +2,7 @@
 
 use meshspan_domain::{
     BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    OperationId, PrincipalId, UnixMicros, VolumeId,
+    OperationId, PrincipalId, SnapshotId, UnixMicros, VolumeId,
 };
 use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
@@ -11,7 +11,8 @@ use super::{
     DATABASE_FILE, DirectoryPublication, DirectoryRevisionTransition, FilePublication, MIGRATIONS,
     ManifestPublication, NamespacePublicationPath, NamespacePublicationReceipt,
     NamespaceReconciliationApplication, PublicationDisposition, PublicationError,
-    PublicationPathError, RootFilePublication, SCHEMA_VERSION, VersionPublicationStore, configure,
+    PublicationPathError, RootFilePublication, SCHEMA_VERSION, SnapshotRestorePublication,
+    VersionPublicationStore, configure,
 };
 use crate::{
     BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
@@ -161,6 +162,165 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         |row| row.get(0),
     )?;
     assert_eq!(reconciliation_receipts, 1);
+    let snapshot_restores: i64 = store.connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM sqlite_schema WHERE name = 'namespace_snapshot_restore_operations'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(snapshot_restores, 1);
+    Ok(())
+}
+
+#[test]
+fn snapshot_restore_prepares_off_head_then_activates_idempotently_across_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let restore = snapshot_restore_publication(&first, &second)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+
+    let applied = store.prepare_snapshot_restore(restore)?;
+    assert_eq!(applied.disposition, PublicationDisposition::Applied);
+    assert_eq!(
+        store.namespace_head(first.file.branch_id, first.file.volume_id)?,
+        Some(super::BranchNamespaceHead {
+            branch_id: first.file.branch_id,
+            volume_id: first.file.volume_id,
+            namespace_commit_id: second.namespace_commit_id,
+            sequence: 2,
+        })
+    );
+    drop(store);
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(130))?;
+    let replayed = reopened
+        .resolve_snapshot_restore(restore.operation_id)?
+        .ok_or("missing restore receipt")?;
+    assert_eq!(replayed.disposition, PublicationDisposition::Replayed);
+    assert_eq!(replayed.result_digest, applied.result_digest);
+    assert_eq!(
+        reopened.prepare_snapshot_restore(restore)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    let activated = reopened.activate_snapshot_restore(replayed, UnixMicros::new(131))?;
+    assert_eq!(activated.namespace_commit_id, restore.namespace_commit_id);
+    assert_eq!(activated.sequence, 3);
+    assert_eq!(
+        reopened
+            .activate_snapshot_restore(replayed, UnixMicros::new(132))?
+            .sequence,
+        3
+    );
+    Ok(())
+}
+
+#[test]
+fn prepared_restore_is_causal_but_cannot_reconcile_before_authority_commits_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let restore = snapshot_restore_publication(&first, &second)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    store.prepare_snapshot_restore(restore)?;
+
+    let uncommitted = ReconciliationFrontier {
+        converged_head: Some(second.namespace_commit_id),
+        eligible_heads: vec![restore.namespace_commit_id],
+    };
+    assert!(matches!(
+        store.plan_reconciliation(&uncommitted, ReconciliationLimits::DEFAULT),
+        Err(crate::ReconciliationStoreError::Planning(
+            crate::ReconciliationError::UncommittedRestore
+        ))
+    ));
+
+    let receipt = store
+        .resolve_snapshot_restore(restore.operation_id)?
+        .ok_or("missing restore receipt")?;
+    store.activate_snapshot_restore(receipt, UnixMicros::new(131))?;
+    let committed = ReconciliationFrontier {
+        converged_head: Some(restore.namespace_commit_id),
+        eligible_heads: vec![second.namespace_commit_id],
+    };
+    assert!(
+        store
+            .plan_reconciliation(&committed, ReconciliationLimits::DEFAULT)?
+            .ordered_commits()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn snapshot_restore_rejects_substitution_stale_activation_and_partial_transactions()
+-> Result<(), Box<dyn std::error::Error>> {
+    use super::namespace::NamespaceFaultPoint;
+
+    for fault in [
+        NamespaceFaultPoint::SnapshotRestoreCommit,
+        NamespaceFaultPoint::SnapshotRestoreOperation,
+    ] {
+        let directory = tempdir()?;
+        let first = initial_root_publication()?;
+        let second = next_root_publication(&first)?;
+        let restore = snapshot_restore_publication(&first, &second)?;
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&first)?;
+        store.publish_root_file(&second)?;
+        assert!(matches!(
+            super::namespace::prepare_snapshot_restore_with_fault(
+                &mut store.connection,
+                restore,
+                fault,
+            ),
+            Err(PublicationError::InjectedFault)
+        ));
+        assert_eq!(store.resolve_snapshot_restore(restore.operation_id)?, None);
+        let exists: i64 = store.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM namespace_commits WHERE namespace_commit_id = ?1
+             )",
+            [restore.namespace_commit_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(exists, 0);
+    }
+
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let restore = snapshot_restore_publication(&first, &second)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let mut substituted = restore;
+    substituted.root_object_revision_id = second.root_object_revision_id;
+    assert!(matches!(
+        store.prepare_snapshot_restore(substituted),
+        Err(PublicationError::InvalidInput)
+    ));
+    let receipt = store.prepare_snapshot_restore(restore)?;
+    store.connection.execute(
+        "UPDATE branch_namespace_heads SET namespace_commit_id = ?1
+         WHERE branch_id = ?2 AND volume_id = ?3",
+        params![
+            first.namespace_commit_id.as_bytes().as_slice(),
+            first.file.branch_id.as_bytes().as_slice(),
+            first.file.volume_id.as_bytes().as_slice(),
+        ],
+    )?;
+    assert!(matches!(
+        store.activate_snapshot_restore(receipt, UnixMicros::new(131)),
+        Err(PublicationError::StaleHead)
+    ));
     Ok(())
 }
 
@@ -1129,5 +1289,24 @@ fn next_root_publication(
             Vec::new(),
         )?,
         entry_generation: 1,
+    })
+}
+
+fn snapshot_restore_publication(
+    snapshot: &RootFilePublication,
+    current: &RootFilePublication,
+) -> Result<SnapshotRestorePublication, Box<dyn std::error::Error>> {
+    Ok(SnapshotRestorePublication {
+        operation_id: OperationId::from_bytes([120; 16])?,
+        branch_id: current.file.branch_id,
+        volume_id: current.file.volume_id,
+        snapshot_id: SnapshotId::from_bytes([121; 16])?,
+        snapshot_namespace_commit_id: snapshot.namespace_commit_id,
+        expected_namespace_commit_id: current.namespace_commit_id,
+        root_object_id: current.root_object_id,
+        root_object_revision_id: snapshot.root_object_revision_id,
+        namespace_commit_id: NamespaceCommitId::from_bytes([122; 16])?,
+        created_by: current.file.created_by,
+        created_at: UnixMicros::new(130),
     })
 }

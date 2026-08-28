@@ -8,7 +8,7 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::digest::{
-    MergeCommitDigest, commit as commit_digest, commit_fields as commit_digest_fields,
+    MergeCommitDigest, commit_fields as commit_digest_fields,
     directory_result as directory_result_digest, file_result as result_digest,
     merge_commit as merge_commit_digest, object_revision as object_revision_digest,
 };
@@ -229,6 +229,39 @@ pub(in crate::publication) fn load_reconciliation_commit(
     let commit = load_commit(connection, commit_id)?;
     let request_digest =
         load_commit_request_digest(connection, commit.operation_id, commit.commit_id)?;
+    if let Some(restore) = super::snapshot_restore::load_receipt_raw(
+        connection,
+        commit.operation_id,
+        PublicationDisposition::Replayed,
+    )? {
+        if restore.namespace_commit_id != commit.commit_id
+            || restore.expected_namespace_commit_id
+                != commit.parent_id.ok_or(PublicationError::Corrupt)?
+            || restore.root_object_revision_id != commit.root_object_revision_id
+        {
+            return Err(PublicationError::Corrupt);
+        }
+        super::snapshot_restore::validate_receipt_source(
+            connection,
+            restore,
+            commit.volume_id,
+            commit.root_object_id,
+        )?;
+        return Ok(Some(crate::ReconciliationCommit {
+            commit_id: commit.commit_id,
+            branch_id: commit.branch_id,
+            volume_id: commit.volume_id,
+            root_object_id: commit.root_object_id,
+            root_object_revision_id: commit.root_object_revision_id,
+            parents,
+            operation_id: commit.operation_id,
+            request_digest,
+            payload: ReconciliationCommitPayload::Restore {
+                snapshot_id: restore.snapshot_id,
+                snapshot_namespace_commit_id: restore.snapshot_namespace_commit_id,
+            },
+        }));
+    }
     Ok(Some(crate::ReconciliationCommit {
         commit_id: commit.commit_id,
         branch_id: commit.branch_id,
@@ -627,11 +660,19 @@ fn load_commit_request_digest(
     let file = load_file_operation_raw(connection, operation_id, PublicationDisposition::Replayed)?;
     let directory =
         load_directory_operation_raw(connection, operation_id, PublicationDisposition::Replayed)?;
-    match (file, directory) {
-        (Some(receipt), None) if receipt.namespace_commit_id == commit_id => {
+    let restore = super::snapshot_restore::load_receipt_raw(
+        connection,
+        operation_id,
+        PublicationDisposition::Replayed,
+    )?;
+    match (file, directory, restore) {
+        (Some(receipt), None, None) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
-        (None, Some(receipt)) if receipt.namespace_commit_id == commit_id => {
+        (None, Some(receipt), None) if receipt.namespace_commit_id == commit_id => {
+            Ok(receipt.request_digest)
+        }
+        (None, None, Some(receipt)) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
         _ => Err(PublicationError::Corrupt),
@@ -816,15 +857,37 @@ pub(super) fn persist_commit(
     intent: NamespaceIntent<'_>,
     request_digest: [u8; 32],
 ) -> Result<(), PublicationError> {
+    persist_stored_commit(
+        transaction,
+        &StoredCommit {
+            commit_id: intent.commit_id,
+            branch_id: intent.branch_id,
+            volume_id: intent.volume_id,
+            root_object_id: intent.root_object_id,
+            root_object_revision_id: intent.root_revision_id,
+            parent_id: intent.expected_commit_id,
+            created_by: intent.created_by,
+            operation_id: intent.operation_id,
+            created_at: intent.created_at,
+        },
+        request_digest,
+    )
+}
+
+pub(super) fn persist_stored_commit(
+    transaction: &Transaction<'_>,
+    commit: &StoredCommit,
+    request_digest: [u8; 32],
+) -> Result<(), PublicationError> {
     let collision: i64 = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM namespace_commits WHERE namespace_commit_id = ?1)",
-        [intent.commit_id.as_bytes().as_slice()],
+        [commit.commit_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;
     if collision != 0 {
         return Err(PublicationError::OperationConflict);
     }
-    let digest = commit_digest(intent, request_digest);
+    let digest = commit_digest_fields(commit, request_digest);
     transaction.execute(
         "INSERT INTO namespace_commits(
             namespace_commit_id, branch_id, volume_id, root_object_id,
@@ -832,24 +895,24 @@ pub(super) fn persist_commit(
             created_at, commit_digest
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
-            intent.commit_id.as_bytes().as_slice(),
-            intent.branch_id.as_bytes().as_slice(),
-            intent.volume_id.as_bytes().as_slice(),
-            intent.root_object_id.as_bytes().as_slice(),
-            intent.root_revision_id.as_bytes().as_slice(),
-            intent.created_by.as_bytes().as_slice(),
-            intent.operation_id.as_bytes().as_slice(),
-            intent.created_at.get(),
+            commit.commit_id.as_bytes().as_slice(),
+            commit.branch_id.as_bytes().as_slice(),
+            commit.volume_id.as_bytes().as_slice(),
+            commit.root_object_id.as_bytes().as_slice(),
+            commit.root_object_revision_id.as_bytes().as_slice(),
+            commit.created_by.as_bytes().as_slice(),
+            commit.operation_id.as_bytes().as_slice(),
+            commit.created_at.get(),
             digest.as_slice()
         ],
     )?;
-    if let Some(parent) = intent.expected_commit_id {
+    if let Some(parent) = commit.parent_id {
         transaction.execute(
             "INSERT INTO namespace_commit_parents(
                 namespace_commit_id, parent_ordinal, parent_commit_id
              ) VALUES (?1, 0, ?2)",
             params![
-                intent.commit_id.as_bytes().as_slice(),
+                commit.commit_id.as_bytes().as_slice(),
                 parent.as_bytes().as_slice()
             ],
         )?;

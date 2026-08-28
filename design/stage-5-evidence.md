@@ -194,10 +194,18 @@ copy-on-write filesystem service. This document records executable evidence only
    gap-free per-schedule sequence. Indexed bounded selection now finds exact age
    and “older than newest N” candidates, and the expiry mutation independently
    revalidates the typed reason against current retention state. Corrupt run or
-   configuration ledgers fail closed. Ordinary file-version retention selection,
-   guarded root removal and restore-as-new-head remain required before this gate
-   can close. Every new volume now receives the accepted safe ordinary-history
-   default: enabled, 30-day soft minimum, pressure-triggered reclamation and a
+   configuration ledgers fail closed. Whole-volume restore-as-new-head is now a
+   two-phase cross-database transition: the filesystem store prepares an immutable
+   single-parent restore commit without advancing its branch, the cluster boundary
+   reloads and verifies the exact durable receipt, and replicated metadata validates
+   the snapshot revision/source/root before one head CAS and immutable restore-history
+   insert. Only that committed authority permits idempotent local activation. Lost
+   responses, restart, stale heads, substituted roots/evidence, premature causal
+   reconciliation and every injected local/metadata transaction boundary are proven.
+   Ordinary file-version retention selection and guarded root removal remain
+   required before this gate can close. Every new volume now receives the
+   accepted safe ordinary-history default: enabled, 30-day soft minimum,
+   pressure-triggered reclamation and a
    separate 30-day conflict minimum. Policy changes append immutable per-volume
    revisions behind an exact sequence CAS; validation rejects zero counts,
    inverted ages, unsafe conflict minima and maximum-age mode without a maximum.

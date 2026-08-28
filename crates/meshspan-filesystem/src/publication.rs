@@ -11,7 +11,7 @@ use std::path::Path;
 
 use meshspan_domain::{
     BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    OperationId, PrincipalId, UnixMicros, VolumeId,
+    OperationId, PrincipalId, SnapshotId, UnixMicros, VolumeId,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 7] = [
+const MIGRATIONS: [Migration; 8] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -54,8 +54,12 @@ const MIGRATIONS: [Migration; 7] = [
         version: 7,
         sql: include_str!("../schema/branch/007_reconciliation_receipts.sql"),
     },
+    Migration {
+        version: 8,
+        sql: include_str!("../schema/branch/008_snapshot_restore_operations.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -314,6 +318,81 @@ pub struct DirectoryPublicationReceipt {
     pub result_digest: [u8; 32],
 }
 
+/// One immutable whole-volume restore commit prepared for authoritative publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnapshotRestorePublication {
+    /// Idempotency identity for the complete restore preparation.
+    pub operation_id: OperationId,
+    /// Writable authoritative branch that owns the current converged head.
+    pub branch_id: BranchId,
+    /// Volume restored by the operation.
+    pub volume_id: VolumeId,
+    /// Authoritative snapshot selected by the user.
+    pub snapshot_id: SnapshotId,
+    /// Exact namespace commit pinned by the selected snapshot.
+    pub snapshot_namespace_commit_id: NamespaceCommitId,
+    /// Exact current converged commit required before restore.
+    pub expected_namespace_commit_id: NamespaceCommitId,
+    /// Stable volume-root directory identity shared by both commits.
+    pub root_object_id: ObjectId,
+    /// Exact immutable root revision pinned by the selected snapshot.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// New immutable commit selecting the snapshot root without rewinding history.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Principal responsible for restore.
+    pub created_by: PrincipalId,
+    /// Authoritative preparation instant.
+    pub created_at: UnixMicros,
+}
+
+/// Durable prepared restore outcome safe to present to replicated metadata authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnapshotRestoreReceipt {
+    /// Whether this call prepared or replayed the exact operation.
+    pub disposition: PublicationDisposition,
+    /// Stable local operation identity.
+    pub operation_id: OperationId,
+    /// Digest binding every restore input and expected base.
+    pub request_digest: [u8; 32],
+    /// Authoritative snapshot selected by the request.
+    pub snapshot_id: SnapshotId,
+    /// Exact immutable snapshot commit used as the content source.
+    pub snapshot_namespace_commit_id: NamespaceCommitId,
+    /// Current converged head that must still pass replicated compare-and-swap.
+    pub expected_namespace_commit_id: NamespaceCommitId,
+    /// Newly prepared immutable restore commit.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Snapshot root selected by the new commit.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// Digest binding the complete durable result.
+    pub result_digest: [u8; 32],
+}
+
+/// Locally revalidated restore preparation safe to present to replicated authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSnapshotRestoreHead {
+    receipt: SnapshotRestoreReceipt,
+    volume_id: VolumeId,
+}
+
+impl VerifiedSnapshotRestoreHead {
+    pub(crate) const fn new(receipt: SnapshotRestoreReceipt, volume_id: VolumeId) -> Self {
+        Self { receipt, volume_id }
+    }
+
+    /// Exact durable restore preparation reloaded from local storage.
+    #[must_use]
+    pub const fn receipt(self) -> SnapshotRestoreReceipt {
+        self.receipt
+    }
+
+    /// Volume bound by the prepared immutable commit.
+    #[must_use]
+    pub const fn volume_id(self) -> VolumeId {
+        self.volume_id
+    }
+}
+
 /// Stable identities supplied when committing one prepared reconciliation plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NamespaceReconciliationApplication {
@@ -545,6 +624,70 @@ impl VersionPublicationStore {
             operation_id,
             PublicationDisposition::Replayed,
         )
+    }
+
+    /// Prepares a whole-volume restore commit without exposing it as the local branch head.
+    ///
+    /// Replicated metadata must first compare-and-swap the converged head using the returned
+    /// receipt. Only then may `activate_snapshot_restore` expose the commit locally. A lost race
+    /// therefore leaves an unreachable immutable preparation rather than an uncommitted branch
+    /// tail.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale heads, substituted snapshot roots, mixed namespace identities, identity
+    /// collisions, corrupt immutable records and SQLite failure.
+    pub fn prepare_snapshot_restore(
+        &mut self,
+        publication: SnapshotRestorePublication,
+    ) -> Result<SnapshotRestoreReceipt, PublicationError> {
+        namespace::prepare_snapshot_restore(&mut self.connection, publication, None)
+    }
+
+    /// Activates one prepared restore after its replicated head transition has committed.
+    ///
+    /// Exact retries are idempotent. A branch that moved independently is left untouched for
+    /// normal reconciliation against the now-authoritative restore root.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing/substituted receipts, stale branch heads, corrupt state and SQLite failure.
+    pub fn activate_snapshot_restore(
+        &mut self,
+        receipt: SnapshotRestoreReceipt,
+        activated_at: UnixMicros,
+    ) -> Result<BranchNamespaceHead, PublicationError> {
+        namespace::activate_snapshot_restore(&mut self.connection, receipt, activated_at)
+    }
+
+    /// Resolves an exact prepared restore outcome after restart or a lost response.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or digest-inconsistent durable records and SQLite failure.
+    pub fn resolve_snapshot_restore(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<SnapshotRestoreReceipt>, PublicationError> {
+        namespace::load_snapshot_restore(
+            &self.connection,
+            operation_id,
+            PublicationDisposition::Replayed,
+        )
+    }
+
+    /// Reloads and verifies one prepared restore commit at the replicated-head boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a lost, substituted or corrupt receipt, wrong volume, wrong parent or mismatched
+    /// snapshot source.
+    pub fn verify_snapshot_restore_head(
+        &self,
+        volume_id: VolumeId,
+        receipt: SnapshotRestoreReceipt,
+    ) -> Result<VerifiedSnapshotRestoreHead, PublicationError> {
+        namespace::verify_snapshot_restore_head(&self.connection, volume_id, receipt)
     }
 
     /// Loads and validates the complete durable causal closure for one reconciliation frontier.

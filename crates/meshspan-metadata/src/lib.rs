@@ -17,8 +17,8 @@ pub use command::{
     CreateTag, CreateUser, CreateVolume, CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff,
     GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles, NamespaceObjectKind,
     PermissionScope, RegisterRoutingSigner, ReplaceObjectOwners, RepositoryCommandError,
-    RequestVolumeSnapshotExpiry, RetentionReclaimMode, RouteAttestation, RunSnapshotSchedule,
-    SnapshotExpiryReason, TagTarget,
+    RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode, RouteAttestation,
+    RunSnapshotSchedule, SnapshotExpiryReason, TagTarget,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;

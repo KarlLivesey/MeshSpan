@@ -136,6 +136,13 @@ pre-restore current head as its parent/audit context, and atomically makes the
 new commit current. The snapshot and intervening commits remain immutable until
 their own retention expires.
 
+The local immutable commit is prepared off-head first. Replicated metadata then
+validates the exact snapshot revision and source root and compare-and-swaps the
+current converged head. Only a committed replicated transition permits the local
+branch pointer to activate the prepared commit. A crash before authority commits
+therefore leaves an unreachable preparation, while a crash after commit is an
+idempotent activation retry; neither case exposes an uncommitted restore as saved.
+
 Whole-volume restore is required initially. File/folder restore is a copy from a
 snapshot root into a new current namespace commit and may share unchanged
 content.

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use meshspan_domain::{Revision, SnapshotId, UnixMicros};
+use meshspan_contracts::namespace_snapshot_restore_result_digest;
+use meshspan_domain::{
+    NamespaceCommitId, ObjectRevisionId, OperationId, Revision, SnapshotId, UnixMicros,
+};
 use rusqlite::params;
 use tempfile::tempdir;
 
@@ -9,7 +12,7 @@ use super::volume_head_tests::{commit, context, fixture, open_and_prepare, publi
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, RepositoryError};
 use crate::{
     AuthoritativeCommand, CreateVolumeSnapshot, RecordName, RequestVolumeSnapshotExpiry,
-    SnapshotExpiryReason,
+    RestoreVolumeSnapshot, SnapshotExpiryReason,
 };
 
 #[test]
@@ -242,6 +245,165 @@ fn every_apply_fault_rolls_back_snapshot_expiry_completely()
     Ok(())
 }
 
+#[test]
+fn snapshot_restore_advances_to_a_new_head_and_replays_after_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("restore.sqlite3");
+    let fixture = fixture()?;
+    let mut repository = prepared_snapshot(&file_path, &fixture, 140, false, 10_000)?;
+    repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(141, fixture.administrator, 142, 104, Some(4))?,
+        &publication_command(&fixture, Some(commit(30)?), 143, 144, 145, 146, 147)?,
+    )?;
+    let command = restore_command(140, fixture.volume, 4, 30, 143, 150, 31, 151, 152)?;
+    let restore_context = context(153, fixture.administrator, 154, 105, Some(5))?;
+    let receipt =
+        repository.apply_committed(LogPosition { index: 6, term: 1 }, restore_context, &command)?;
+    let head = repository
+        .converged_volume_head(fixture.volume)?
+        .ok_or("restored head missing")?;
+    assert_eq!(head.namespace_commit_id, commit(150)?);
+    assert_eq!(head.root_object_revision_id.as_bytes(), [31; 16]);
+    assert_eq!(head.sequence, 3);
+    let restore_row: (Vec<u8>, Vec<u8>, i64) = repository.database.connection().query_row(
+        "SELECT snapshot_id, previous_namespace_commit_id, revision
+         FROM volume_snapshot_restores WHERE metadata_operation_id = ?1",
+        [restore_context.operation_id.as_bytes().as_slice()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(restore_row.0.as_slice(), [140; 16]);
+    assert_eq!(restore_row.1.as_slice(), [143; 16]);
+    assert_eq!(restore_row.2, 6);
+    drop(repository);
+
+    let database =
+        crate::PartitionDatabase::open(&file_path, fixture.partition, UnixMicros::new(500))?;
+    let mut reopened = AuthoritativeRepository::new(database);
+    let replay =
+        reopened.apply_committed(LogPosition { index: 7, term: 1 }, restore_context, &command)?;
+    assert_eq!(replay.disposition, ApplyDisposition::Replayed);
+    assert_eq!(replay.result_digest, receipt.result_digest);
+    assert_eq!(
+        reopened
+            .converged_volume_head(fixture.volume)?
+            .ok_or("restored head missing")?
+            .sequence,
+        3
+    );
+    Ok(())
+}
+
+#[test]
+fn snapshot_restore_rejects_stale_snapshot_head_and_substituted_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let fixture = fixture()?;
+    let mut repository = prepared_snapshot(
+        &directory.path().join("restore-reject.sqlite3"),
+        &fixture,
+        160,
+        false,
+        10_000,
+    )?;
+    repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(161, fixture.administrator, 162, 104, Some(4))?,
+        &publication_command(&fixture, Some(commit(30)?), 163, 164, 165, 166, 167)?,
+    )?;
+    let valid = restore_command(160, fixture.volume, 4, 30, 163, 170, 31, 171, 172)?;
+    let AuthoritativeCommand::RestoreVolumeSnapshot(valid) = valid else {
+        return Err("restore helper returned wrong command".into());
+    };
+    let mut stale_snapshot = valid;
+    stale_snapshot.expected_snapshot_revision = Revision::new(3);
+    refresh_restore_result(&mut stale_snapshot);
+    let mut stale_head = valid;
+    stale_head.expected_namespace_commit_id = commit(30)?;
+    refresh_restore_result(&mut stale_head);
+    let mut wrong_root = valid;
+    wrong_root.root_object_revision_id = ObjectRevisionId::from_bytes([164; 16])?;
+    refresh_restore_result(&mut wrong_root);
+    let mut corrupt_evidence = valid;
+    corrupt_evidence.source_result_digest[0] ^= 1;
+    for (identity, command, expected) in [
+        (173, stale_snapshot, RepositoryError::StaleSnapshot),
+        (174, stale_head, RepositoryError::StaleVolumeHead),
+        (175, wrong_root, RepositoryError::InvalidCommand),
+        (176, corrupt_evidence, RepositoryError::InvalidCommand),
+    ] {
+        let result = repository.apply_committed(
+            LogPosition { index: 6, term: 1 },
+            context(identity, fixture.administrator, identity + 1, 105, Some(5))?,
+            &AuthoritativeCommand::RestoreVolumeSnapshot(command),
+        );
+        match result {
+            Err(error) => assert_eq!(error.to_string(), expected.to_string()),
+            Ok(_) => return Err("invalid snapshot restore succeeded".into()),
+        }
+    }
+    assert_eq!(
+        repository
+            .converged_volume_head(fixture.volume)?
+            .ok_or("head missing")?
+            .namespace_commit_id,
+        commit(163)?
+    );
+    Ok(())
+}
+
+#[test]
+fn every_apply_fault_rolls_back_snapshot_restore_head_and_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    for fault in [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterOperation,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ] {
+        let directory = tempdir()?;
+        let fixture = fixture()?;
+        let mut repository = prepared_snapshot(
+            &directory.path().join("restore-fault.sqlite3"),
+            &fixture,
+            180,
+            false,
+            10_000,
+        )?;
+        repository.apply_committed(
+            LogPosition { index: 5, term: 1 },
+            context(181, fixture.administrator, 182, 104, Some(4))?,
+            &publication_command(&fixture, Some(commit(30)?), 183, 184, 185, 186, 187)?,
+        )?;
+        let command = restore_command(180, fixture.volume, 4, 30, 183, 190, 31, 191, 192)?;
+        let restore_context = context(193, fixture.administrator, 194, 105, Some(5))?;
+        let interrupted = apply_committed_with_fault(
+            &mut repository.database,
+            LogPosition { index: 6, term: 1 },
+            restore_context,
+            &command,
+            fault,
+        );
+        assert!(matches!(interrupted, Err(RepositoryError::InjectedFault)));
+        assert_eq!(
+            repository
+                .converged_volume_head(fixture.volume)?
+                .ok_or("head missing")?
+                .namespace_commit_id,
+            commit(183)?
+        );
+        let restores: i64 = repository.database.connection().query_row(
+            "SELECT count(*) FROM volume_snapshot_restores",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(restores, 0);
+        repository.apply_committed(LogPosition { index: 6, term: 1 }, restore_context, &command)?;
+    }
+    Ok(())
+}
+
 fn prepared_snapshot(
     file_path: &std::path::Path,
     fixture: &super::volume_head_tests::HeadFixture,
@@ -329,4 +491,44 @@ fn snapshot_command(
             protected_from_expiry: false,
         },
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restore_command(
+    snapshot_byte: u8,
+    volume_id: meshspan_domain::VolumeId,
+    snapshot_revision: u64,
+    snapshot_commit_byte: u8,
+    expected_commit_byte: u8,
+    commit_byte: u8,
+    root_byte: u8,
+    operation_byte: u8,
+    request_byte: u8,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let mut command = RestoreVolumeSnapshot {
+        snapshot_id: SnapshotId::from_bytes([snapshot_byte; 16])?,
+        expected_snapshot_revision: Revision::new(snapshot_revision),
+        volume_id,
+        snapshot_namespace_commit_id: NamespaceCommitId::from_bytes([snapshot_commit_byte; 16])?,
+        expected_namespace_commit_id: NamespaceCommitId::from_bytes([expected_commit_byte; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([commit_byte; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([root_byte; 16])?,
+        source_operation_id: OperationId::from_bytes([operation_byte; 16])?,
+        source_request_digest: [request_byte; 32],
+        source_result_digest: [0; 32],
+    };
+    refresh_restore_result(&mut command);
+    Ok(AuthoritativeCommand::RestoreVolumeSnapshot(command))
+}
+
+fn refresh_restore_result(command: &mut RestoreVolumeSnapshot) {
+    command.source_result_digest = namespace_snapshot_restore_result_digest(
+        command.source_operation_id,
+        command.source_request_digest,
+        command.snapshot_id,
+        command.snapshot_namespace_commit_id,
+        command.expected_namespace_commit_id,
+        command.namespace_commit_id,
+        command.root_object_revision_id,
+    );
 }
