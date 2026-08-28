@@ -8,14 +8,15 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::digest::{
-    commit as commit_digest, commit_fields as commit_digest_fields,
-    directory_result as directory_result_digest, file_result as result_digest,
-    object_revision as object_revision_digest,
+    branch_intent as branch_intent_digest, commit as commit_digest,
+    commit_fields as commit_digest_fields, directory_result as directory_result_digest,
+    file_result as result_digest, object_revision as object_revision_digest,
 };
 use super::{DirectoryRevisionResult, NamespaceIntent};
 use crate::publication::{copy_array, decode_identifier, from_i64, to_i64};
 use crate::{
-    BranchNamespaceHead, DirectoryNodeDigest, DirectoryPublication, DirectoryPublicationReceipt,
+    BranchMutation, BranchMutationIntent, BranchNamespaceHead, DirectoryNodeDigest,
+    DirectoryPublication, DirectoryPublicationReceipt, NamespaceComponent, NamespacePath,
     NamespacePublicationReceipt, PublicationDisposition, PublicationError, RootFilePublication,
 };
 
@@ -235,6 +236,221 @@ pub(in crate::publication) fn load_reconciliation_commit(
     }))
 }
 
+pub(super) fn persist_file_intent(
+    transaction: &Transaction<'_>,
+    publication: &RootFilePublication,
+) -> Result<(), PublicationError> {
+    persist_branch_intent(
+        transaction,
+        &BranchMutationIntent {
+            commit_id: publication.namespace_commit_id,
+            path: publication.path.path().clone(),
+            object_id: publication.file.object_id,
+            object_revision_id: publication.file_object_revision_id,
+            prior_object_revision_id: publication.expected_file_object_revision_id,
+            entry_generation: publication.entry_generation,
+            mutation: BranchMutation::File {
+                version_id: publication.file.version_id,
+            },
+        },
+    )
+}
+
+pub(super) fn persist_directory_intent(
+    transaction: &Transaction<'_>,
+    publication: &DirectoryPublication,
+) -> Result<(), PublicationError> {
+    persist_branch_intent(
+        transaction,
+        &BranchMutationIntent {
+            commit_id: publication.namespace_commit_id,
+            path: publication.path.path().clone(),
+            object_id: publication.directory_object_id,
+            object_revision_id: publication.directory_object_revision_id,
+            prior_object_revision_id: None,
+            entry_generation: publication.entry_generation,
+            mutation: BranchMutation::CreateDirectory,
+        },
+    )
+}
+
+fn persist_branch_intent(
+    transaction: &Transaction<'_>,
+    intent: &BranchMutationIntent,
+) -> Result<(), PublicationError> {
+    let (kind, version_id) = match intent.mutation {
+        BranchMutation::File { version_id } => (1_u8, Some(version_id.as_bytes())),
+        BranchMutation::CreateDirectory => (2, None),
+    };
+    let prior = intent
+        .prior_object_revision_id
+        .map(ObjectRevisionId::as_bytes);
+    transaction.execute(
+        "INSERT INTO namespace_commit_intents(
+            namespace_commit_id, intent_kind, object_id, object_revision_id,
+            prior_object_revision_id, file_version_id, entry_generation, path_depth,
+            intent_digest
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            intent.commit_id.as_bytes().as_slice(),
+            kind,
+            intent.object_id.as_bytes().as_slice(),
+            intent.object_revision_id.as_bytes().as_slice(),
+            prior.as_ref().map(<[u8; 16]>::as_slice),
+            version_id.as_ref().map(<[u8; 16]>::as_slice),
+            to_i64(intent.entry_generation)?,
+            to_i64(
+                u64::try_from(intent.path.components().len())
+                    .map_err(|_| PublicationError::InvalidInput)?
+            )?,
+            branch_intent_digest(intent).as_slice(),
+        ],
+    )?;
+    for (ordinal, component) in intent.path.components().iter().enumerate() {
+        transaction.execute(
+            "INSERT INTO namespace_commit_path_components(
+                namespace_commit_id, component_ordinal, display_name, canonical_name
+             ) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                intent.commit_id.as_bytes().as_slice(),
+                to_i64(u64::try_from(ordinal).map_err(|_| PublicationError::InvalidInput)?)?,
+                component.display(),
+                component.canonical(),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+type StoredBranchIntent = (
+    i64,
+    Vec<u8>,
+    Vec<u8>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    i64,
+    i64,
+    Vec<u8>,
+);
+
+pub(in crate::publication) fn load_branch_intent(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+) -> Result<Option<BranchMutationIntent>, PublicationError> {
+    let stored: Option<StoredBranchIntent> = connection
+        .query_row(
+            "SELECT intent_kind, object_id, object_revision_id, prior_object_revision_id,
+                    file_version_id, entry_generation, path_depth, intent_digest
+             FROM namespace_commit_intents WHERE namespace_commit_id = ?1",
+            [commit_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .optional()?;
+    stored
+        .as_ref()
+        .map(|stored| decode_branch_intent(connection, commit_id, stored))
+        .transpose()
+}
+
+fn decode_branch_intent(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+    stored: &StoredBranchIntent,
+) -> Result<BranchMutationIntent, PublicationError> {
+    let path_depth = usize::try_from(from_i64(stored.6)?).map_err(|_| PublicationError::Corrupt)?;
+    let mut statement = connection.prepare(
+        "SELECT component_ordinal, display_name, canonical_name
+         FROM namespace_commit_path_components
+         WHERE namespace_commit_id = ?1 ORDER BY component_ordinal",
+    )?;
+    let rows = statement.query_map([commit_id.as_bytes().as_slice()], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut components = Vec::new();
+    for row in rows {
+        let (ordinal, display, canonical) = row?;
+        if usize::try_from(from_i64(ordinal)?) != Ok(components.len()) {
+            return Err(PublicationError::Corrupt);
+        }
+        components.push(
+            NamespaceComponent::from_stored(&display, &canonical)
+                .map_err(|_| PublicationError::Corrupt)?,
+        );
+    }
+    if components.len() != path_depth {
+        return Err(PublicationError::Corrupt);
+    }
+    let version = decode_optional(stored.4.as_deref(), FileVersionId::from_bytes)?;
+    let mutation = match (stored.0, version) {
+        (1, Some(version_id)) => BranchMutation::File { version_id },
+        (2, None) => BranchMutation::CreateDirectory,
+        _ => return Err(PublicationError::Corrupt),
+    };
+    let intent = BranchMutationIntent {
+        commit_id,
+        path: NamespacePath::from_stored_components(components)
+            .map_err(|_| PublicationError::Corrupt)?,
+        object_id: decode_identifier(&stored.1, ObjectId::from_bytes)?,
+        object_revision_id: decode_identifier(&stored.2, ObjectRevisionId::from_bytes)?,
+        prior_object_revision_id: decode_optional(
+            stored.3.as_deref(),
+            ObjectRevisionId::from_bytes,
+        )?,
+        entry_generation: from_i64(stored.5)?,
+        mutation,
+    };
+    validate_loaded_intent(connection, &intent)?;
+    if copy_array(&stored.7)? == branch_intent_digest(&intent) {
+        Ok(intent)
+    } else {
+        Err(PublicationError::Corrupt)
+    }
+}
+
+fn validate_loaded_intent(
+    connection: &Connection,
+    intent: &BranchMutationIntent,
+) -> Result<(), PublicationError> {
+    let commit = load_commit(connection, intent.commit_id)?;
+    let revision = load_object_revision(connection, intent.object_revision_id)?;
+    let valid_kind = match intent.mutation {
+        BranchMutation::File { version_id } => {
+            revision.kind == 2
+                && revision.directory_root.is_none()
+                && revision.file_version_id == Some(version_id)
+        }
+        BranchMutation::CreateDirectory => {
+            revision.kind == 1
+                && revision.directory_root.is_some()
+                && revision.file_version_id.is_none()
+                && intent.prior_object_revision_id.is_none()
+        }
+    };
+    if commit.volume_id != revision.volume_id
+        || revision.object_id != intent.object_id
+        || revision.prior_revision_id != intent.prior_object_revision_id
+        || !valid_kind
+    {
+        return Err(PublicationError::Corrupt);
+    }
+    Ok(())
+}
+
 fn load_commit_request_digest(
     connection: &Connection,
     operation_id: OperationId,
@@ -329,7 +545,7 @@ pub(super) fn persist_object_revision(
 }
 
 pub(super) fn load_object_revision(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     revision_id: ObjectRevisionId,
 ) -> Result<ObjectRevisionInsert, PublicationError> {
     type StoredObjectRevision = (

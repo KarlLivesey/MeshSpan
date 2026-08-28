@@ -24,7 +24,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 4] = [
+const MIGRATIONS: [Migration; 5] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -41,8 +41,12 @@ const MIGRATIONS: [Migration; 4] = [
         version: 4,
         sql: include_str!("../schema/branch/004_directory_operations.sql"),
     },
+    Migration {
+        version: 5,
+        sql: include_str!("../schema/branch/005_reconciliation_intents.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -493,6 +497,19 @@ impl VersionPublicationStore {
             commits.push(commit);
         }
         crate::plan_reconciliation(&commits, frontier, limits).map_err(Into::into)
+    }
+
+    /// Loads and revalidates the canonical replay intent attached to one branch commit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed paths, digest mismatch, missing immutable leaf records and database
+    /// failure. A legacy commit without a recorded intent returns `None`.
+    pub fn branch_mutation_intent(
+        &self,
+        commit_id: NamespaceCommitId,
+    ) -> Result<Option<crate::BranchMutationIntent>, PublicationError> {
+        namespace::load_branch_intent(&self.connection, commit_id)
     }
 }
 

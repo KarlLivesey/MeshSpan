@@ -11,12 +11,12 @@ use super::{
     DATABASE_FILE, DirectoryPublication, DirectoryRevisionTransition, FilePublication, MIGRATIONS,
     ManifestPublication, NamespacePublicationPath, NamespacePublicationReceipt,
     PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
-    VersionPublicationStore, configure,
+    SCHEMA_VERSION, VersionPublicationStore, configure,
 };
 use crate::{
-    DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
-    NamespaceComponent, NamespaceLimits, NamespacePath, ReconciliationFrontier,
-    ReconciliationLimits,
+    BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
+    DirectoryTrie, DirectoryTrieError, NamespaceComponent, NamespaceLimits, NamespacePath,
+    ReconciliationFrontier, ReconciliationLimits,
 };
 
 #[test]
@@ -92,7 +92,8 @@ fn directory_nodes_round_trip_after_restart_and_corruption_fails_closed()
 }
 
 #[test]
-fn version_one_database_migrates_to_directory_schema() -> Result<(), Box<dyn std::error::Error>> {
+fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dyn std::error::Error>>
+{
     let directory = tempdir()?;
     let file = directory.path().join(DATABASE_FILE);
     let mut connection = Connection::open(&file)?;
@@ -113,7 +114,7 @@ fn version_one_database_migrates_to_directory_schema() -> Result<(), Box<dyn std
     let version: u32 = store
         .connection
         .pragma_query_value(None, "user_version", |row| row.get(0))?;
-    assert_eq!(version, 4);
+    assert_eq!(version, SCHEMA_VERSION);
     let table: i64 = store.connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'directory_nodes')",
         [],
@@ -136,6 +137,14 @@ fn version_one_database_migrates_to_directory_schema() -> Result<(), Box<dyn std
         |row| row.get(0),
     )?;
     assert_eq!(directory_operations, 1);
+    let reconciliation_intents: i64 = store.connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM sqlite_schema WHERE name = 'namespace_commit_intents'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(reconciliation_intents, 1);
     Ok(())
 }
 
@@ -297,6 +306,68 @@ fn durable_branch_heads_plan_identically_after_restart() -> Result<(), Box<dyn s
     assert_eq!(
         observed.merge_parents(),
         [first.namespace_commit_id, second.namespace_commit_id]
+    );
+    Ok(())
+}
+
+#[test]
+fn branch_mutation_intents_round_trip_restart_and_reject_path_corruption()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let expected = BranchMutationIntent {
+        commit_id: file.namespace_commit_id,
+        path: file.path.path().clone(),
+        object_id: file.file.object_id,
+        object_revision_id: file.file_object_revision_id,
+        prior_object_revision_id: None,
+        entry_generation: file.entry_generation,
+        mutation: BranchMutation::File {
+            version_id: file.file.version_id,
+        },
+    };
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        assert_eq!(
+            store.branch_mutation_intent(file.namespace_commit_id)?,
+            Some(expected.clone())
+        );
+    }
+    let store = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    assert_eq!(
+        store.branch_mutation_intent(file.namespace_commit_id)?,
+        Some(expected)
+    );
+    store.connection.execute(
+        "UPDATE namespace_commit_path_components SET canonical_name = 'forged'
+         WHERE namespace_commit_id = ?1 AND component_ordinal = 0",
+        [file.namespace_commit_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        store.branch_mutation_intent(file.namespace_commit_id),
+        Err(PublicationError::Corrupt)
+    ));
+    Ok(())
+}
+
+#[test]
+fn directory_commit_records_a_typed_replay_intent() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let publication = initial_directory_publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.create_directory(&publication)?;
+    assert_eq!(
+        store.branch_mutation_intent(publication.namespace_commit_id)?,
+        Some(BranchMutationIntent {
+            commit_id: publication.namespace_commit_id,
+            path: publication.path.path().clone(),
+            object_id: publication.directory_object_id,
+            object_revision_id: publication.directory_object_revision_id,
+            prior_object_revision_id: None,
+            entry_generation: publication.entry_generation,
+            mutation: BranchMutation::CreateDirectory,
+        })
     );
     Ok(())
 }

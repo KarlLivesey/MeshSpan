@@ -91,6 +91,14 @@ copy-on-write filesystem service. This document records executable evidence only
   inspect every durable root-to-leaf edge. Corrupt receipts, cross-kind operation
   reuse, missing/stale ancestors and injected failure at every transaction phase
   all fail without a partial namespace transition.
+- Branch schema v5 records one canonical replay intent in the same transaction
+  as every new namespace commit. The intent preserves the validated display and
+  case-folded path components, leaf object/revision, causal prior, name
+  generation and typed file-version or directory mutation. Reconciliation can
+  therefore replay only affected paths instead of scanning or diffing the whole
+  namespace. Loads revalidate the stored Unicode key, aggregate path bounds,
+  intent digest, commit, object-revision kind and selected file version. Restart
+  and deliberate stored-path corruption proofs exercise the durable contract.
 - The filesystem commit service now composes an exact fenced stage checkpoint,
   a replaceable durable-content publisher and the atomic namespace transaction
   under one operation identity. Content must resolve or become independently
