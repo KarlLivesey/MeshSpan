@@ -452,6 +452,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-consensus"
+version = "0.1.0"
+dependencies = [
+ "meshspan-domain",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "meshspan-contracts"
 version = "0.1.0"
 dependencies = [

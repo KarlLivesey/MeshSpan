@@ -125,6 +125,10 @@ define_identifier!(TagId, "Stable identity of one descriptive tag.");
 define_identifier!(BackupId, "Stable identity of one metadata backup.");
 define_identifier!(RoleId, "Stable identity of one system-administration role.");
 define_identifier!(
+    QuorumPlanId,
+    "Stable identity of one immutable quorum plan."
+);
+define_identifier!(
     OperationId,
     "Stable idempotency identity of one logical mutation."
 );

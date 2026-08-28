@@ -87,6 +87,21 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "consensus proof tests",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-consensus",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
+      ],
+    },
+    {
       name: "private protocol compatibility",
       steps: [
         [

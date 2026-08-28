@@ -4,6 +4,7 @@
 members = [
     "crates/meshspan-api-contract",
     "crates/meshspan-contracts",
+    "crates/meshspan-consensus",
     "crates/meshspan-domain",
     "crates/meshspan-metadata",
     "crates/meshspan-protocol",

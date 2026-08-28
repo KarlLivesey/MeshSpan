@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-consensus"
+description = "Deterministic flexible-quorum and replicated-log core for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+meshspan-domain = { path = "../meshspan-domain" }
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
