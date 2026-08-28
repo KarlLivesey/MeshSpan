@@ -31,10 +31,11 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 22. [stage-1-evidence.md](stage-1-evidence.md) — completed foundation evidence and measured gate.
 23. [stage-2-evidence.md](stage-2-evidence.md) — completed authoritative-kernel evidence and recovery proof.
 24. [stage-3-evidence.md](stage-3-evidence.md) — completed cluster-kernel, failover and partition proof.
-25. [stage-4-5-decisions.md](stage-4-5-decisions.md) — accepted detailed folder-storage and filesystem decisions.
-26. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
-27. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
-28. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
+25. [stage-1-3-audit.md](stage-1-3-audit.md) — executable re-audit and closure gates for prior completion claims.
+26. [stage-4-5-decisions.md](stage-4-5-decisions.md) — accepted detailed folder-storage and filesystem decisions.
+27. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
+28. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
+29. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
 
 ## Document rules
 
