@@ -54,17 +54,15 @@ Status: **draft for review**.
 | D-046 | Initial reconciliation never guesses content merges. Alternatives remain in immutable history and may be restored or restored as a copy; future type-specific mergers create new versions from immutable sources. |
 | D-047 | Server-Sent Events are an optional update optimisation. Polling and revision-aware conditional HTTP remain complete, and authenticated validators incorporate current authorisation projection. |
 | D-048 | Every mutation uses an operation ID and exact request digest. File transfers stream bounded frames with incremental integrity and resume only from independently verified ranges. |
-
-## Proposed defaults requiring review
-
-| ID | Proposal | Reason |
-| --- | --- | --- |
-| P-001 | Protobuf encodes private node messages. | Versioned cross-language schemas without exposing Rust or database layout. |
-| P-003 | Permissions are allow-only with explicit inheritance control. | Avoids ambiguous deny precedence across nested groups and time windows. |
-| P-004 | System administrators do not silently receive file-data access; emergency access is explicit and audited. | Separates infrastructure administration from data ownership. |
-| P-005 | Tags are descriptive and searchable but have no implicit permission effect. | Prevents tag editing from becoming privilege escalation. |
-| P-006 | Interactive administration supports step-up two-factor authentication; SMB uses a separate scoped credential. | SMB cannot perform an interactive second-factor ceremony. |
-| P-008 | Voters keep consensus, replicated state and node-local state in separately recoverable stores. | Makes snapshot installation and local recovery boundaries explicit. |
+| D-049 | Private control messages use bounded Protobuf over Quinn/mTLS. Bulk bytes use separately framed, bounded QUIC streams rather than Protobuf payloads. |
+| D-050 | Permissions are allow-only with explicit inheritance, and tags are descriptive/searchable without implicit authority. |
+| D-051 | System administration grants no implicit file-data access. An authorised administrator may create explicit, inherited global read, write, manage or recovery grants, including for themselves; every grant and use remains attributable and audited. |
+| D-052 | A group or permission grant may require self-service activation. Activation is pre-authorised, reasoned, time-bounded by policy, optionally requires recent step-up, and may be combined with an absolute validity window. |
+| D-053 | Each authoritative partition uses one `partition.sqlite3` for consensus and applied replicated metadata; each daemon uses one `local.sqlite3` for node-local state and disconnected branches. No invariant depends on cross-file atomicity: cross-authority work uses idempotent, receipt-backed state-machine transitions. |
+| D-054 | MeshSpan builds the small owned consensus core and proof programme described in `consensus.md`, including separately proved election, consensus-write and linearizable-read quorum families. |
+| D-055 | Fully caught-up eligible nodes are promoted automatically to maintain the selected safe voter plan. Administrators control eligibility and policy intent rather than routine promotions. |
+| D-056 | Mesh identity uses an offline encrypted recovery bundle, rotatable online intermediates and per-node wrapping/signing keys whose private material never leaves that node. |
+| D-057 | The initial persistence adapter uses `rusqlite` with bundled SQLite while project SQL remains inside the portable SQLite-compatible contract. |
 
 ## Open decisions
 
@@ -73,10 +71,8 @@ Concrete recommendations and proof gates for every item are in
 
 | ID | Question |
 | --- | --- |
-| O-001 | Does the proposed small MeshSpan-owned consensus core and its proof programme adequately meet the mandatory quorum contract? |
 | O-002 | What exact simultaneous-failure policy shapes are exposed in the ordinary and advanced UI? |
 | O-003 | Which SMB dialects and optional features are required for the first MUP? |
 | O-004 | What chunk size and erasure geometries meet the first performance and repair targets? |
-| O-005 | How is the mesh secret-wrapping key created, rotated, backed up and recovered? |
 | O-006 | What measurable latency, throughput, recovery-time and scale targets gate MUP? |
 | O-007 | Which native archive and container platforms are mandatory for the first release? |

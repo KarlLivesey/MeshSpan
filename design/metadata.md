@@ -8,21 +8,30 @@ Authoritative state uses portable SQLite-compatible SQL. SQLite is the initial e
 replace it only after passing the same state-machine, migration, crash, power-loss and round-trip
 suite. Neither engine appears in the private node protocol.
 
-The proposed local files are:
+The initial adapter uses `rusqlite` with bundled SQLite so native Linux and
+macOS builds do not depend on a separately administered system database. The
+adapter cannot expose SQLite-only behaviour to domain or protocol interfaces.
+
+The local database files are:
 
 ```text
-<daemon-state-dir>/partitions/<partition-id>/consensus.sqlite3
-<daemon-state-dir>/partitions/<partition-id>/metadata.sqlite3
-<daemon-state-dir>/branches/<partition-id>.sqlite3
+<daemon-state-dir>/partitions/<partition-id>/partition.sqlite3
 <daemon-state-dir>/local.sqlite3
 ```
 
-A node stores the first two files only for metadata partitions it votes for or
-replicates. A node stores a branch database for each partition whose filesystem
-scope it serves while disconnected; those durable commits are later included by
-the partition owner and cannot contain control-plane mutations. Small meshes
-still use a real partition ID. Registered folders contain provider records and
-immutable shards, never a metadata database.
+A node stores a partition database only for metadata partitions it votes for or
+replicates. That database contains both consensus durability records and the
+authoritative applied state for that partition. `local.sqlite3` contains
+node-specific bindings, observations and disconnected branch records keyed by
+partition. Small meshes still use a real partition ID. Registered folders
+contain provider records and immutable shards, never a metadata database.
+
+No invariant depends on an atomic transaction across database files. Records
+that require one atomic commit live in the same database. Work crossing from a
+local branch or observation into authoritative state uses an operation ID,
+immutable request digest and durable result receipt: the local source remains
+until the authoritative outcome is known, and every step is safe to replay.
+SQLite `ATTACH` and multi-file transaction behaviour are not correctness tools.
 
 ## SQL rules
 
@@ -69,13 +78,16 @@ Applying one command updates its domain records, operation result, audit events 
 in one transaction. Replay with the same request digest returns the stored typed result; a different
 digest under the same operation ID is rejected.
 
-The branch store has separate `local_branch_*` tables and applies the same
+The local database has separate `local_branch_*` tables and applies the same
 crash-safe transaction rule to one immutable namespace commit, its operation
 outcome, local durability evidence, debt and branch-head advance. It does not
 allocate a fake consensus log index or write the replicated `namespace_*` tables.
 Reconciliation copies validated canonical records into the owning state machine
 through bounded typed commands; it never attaches or writes a peer database
-directly.
+directly. Reconciliation retains the branch until the authoritative partition
+returns or deduplicates its durable result, then records inclusion locally. A
+lost response or crash can repeat either side without duplicating or losing the
+acknowledged branch.
 
 ## Topology and fault tables
 
@@ -146,6 +158,8 @@ isolation_delegation_target_scopes
 roles
 role_grants
 permission_grants
+access_activation_policies
+access_activations
 ```
 
 Subtype rows share the authentication method's primary key. Constraints ensure exactly the

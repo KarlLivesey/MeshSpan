@@ -18,7 +18,7 @@ does not expose the database layout.
 - Private node traffic uses QUIC implemented with Quinn.
 - Every established peer connection uses mutual TLS and binds the certificate to
   one mesh ID and node ID.
-- Protobuf is the proposed canonical message encoding. Bulk shard bytes use
+- Protobuf is the canonical control-message encoding. Bulk shard bytes use
   framed QUIC streams rather than embedding large payloads in Protobuf.
 - Consensus, control and data use independent streams with bounded queues so a
   shard transfer cannot block heartbeats or votes. Separate connections remain

@@ -24,9 +24,11 @@ retained after removal, state/retirement metadata. Foreign keys are immediate
 unless a documented transaction needs deferred validation. User-facing names
 store both display and canonical forms.
 
-## 2. Consensus-local records
+## 2. Partition consensus records
 
-These exist independently on each voter and are never replicated by SQL.
+These exist independently on each voter and are never replicated by SQL. They
+share that partition's `partition.sqlite3` with section 3 so records requiring
+one atomic partition-local commit have one transaction boundary.
 
 ```text
 consensus_vote(
@@ -131,8 +133,8 @@ until an authenticated decision is applied or a valid abort is proved.
 
 ### Node-local branch kernel
 
-`branches/<partition-id>.sqlite3` is deliberately not the replicated
-state-machine database. It uses:
+These tables live in `local.sqlite3`, keyed by partition, and are deliberately
+outside the replicated state machine:
 
 ```text
 local_branch_operations(
@@ -546,7 +548,8 @@ users(
 )
 
 groups(
-  principal_id PK -> principals, description, group_kind, revision
+  principal_id PK -> principals, description, group_kind,
+  activation_policy_id NULL -> access_activation_policies, revision
 )
 
 group_memberships(
@@ -698,10 +701,28 @@ role_grants(
 
 permission_grants(
   grant_id PK, subject_principal_id -> principals,
-  volume_id -> volumes, object_id NULL -> namespace_objects,
+  scope_kind, mesh_id -> meshes,
+  volume_id NULL -> volumes, object_id NULL -> namespace_objects,
   rights_bitset, inheritance_mode, valid_from NULL, valid_until NULL,
+  activation_policy_id NULL -> access_activation_policies,
   granted_by -> principals, created_at, supersedes_grant_id NULL,
   state, revision
+)
+
+access_activation_policies(
+  activation_policy_id PK, maximum_duration, reason_required,
+  minimum_assurance, valid_from NULL, valid_until NULL,
+  created_by -> principals, state, revision
+)
+
+access_activations(
+  activation_id PK, user_id -> users, subject_kind,
+  group_id NULL -> groups, grant_id NULL -> permission_grants,
+  reason, activated_at, expires_at,
+  session_id -> authentication_sessions,
+  operation_id UNIQUE -> operations,
+  revoked_at NULL, revoked_by NULL -> principals,
+  revocation_reason NULL, state, revision
 )
 
 permission_sets(
@@ -715,8 +736,11 @@ permission_set_members(
 )
 ```
 
-Initial permissions are allow-only. `object_id = NULL` means volume scope.
-Ending inheritance is an object policy, not a deny grant.
+Permissions are allow-only. The scope tuple permits exactly one mesh-wide,
+volume or object scope; a mesh-wide grant inherits to current and future volumes
+and objects. Ending inheritance is an object policy, not a deny grant. An
+activation row targets exactly one group or grant and cannot outlive its source,
+policy, session or absolute validity window.
 
 ## 13. Volumes and exports
 

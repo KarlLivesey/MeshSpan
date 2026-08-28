@@ -424,6 +424,16 @@ Status: **draft for review**.
 - **ACL-007** The ordinary UI SHOULD present understandable permission presets while advanced
   interfaces MAY expose individual rights.
 - **ACL-008** Permission evaluation MUST be deterministic and independent of the serving gateway.
+- **ACL-009** Permissions MUST be allow-only with explicit inheritance control; absence of an
+  applicable right denies access and tags MUST NOT create authority.
+- **ACL-010** A group or individual grant MAY require activation and MUST contribute no rights for a
+  user without that user's current activation for the exact group or grant.
+- **ACL-011** Activation MUST be self-service within pre-authorised bounds, record a bounded reason
+  and duration, support a recent-step-up requirement, remain mesh-wide/revocable/audited, and never
+  outlive its source, schedule, session or policy maximum.
+- **ACL-012** Authorised system administrators MUST be able to create explicit inherited global
+  read, write, manage and recovery grants, including for themselves, without receiving implicit
+  data rights merely from the administrator role.
 
 ## Authentication and sessions
 
@@ -529,6 +539,10 @@ Status: **draft for review**.
 - **PER-011** Catastrophic metadata recovery MUST use an administrator-held recovery bundle plus a
   verified committed snapshot and target inventories; it MUST never infer a new namespace solely
   from untrusted filenames or locations.
+- **PER-012** One `partition.sqlite3` MUST contain a partition's consensus and applied replicated
+  state, while one daemon-wide `local.sqlite3` contains node-local and disconnected-branch state.
+  No invariant MAY depend on atomic commit across those files; every cross-authority transition
+  MUST be idempotent, digest-bound and retain its source until a durable result is known.
 
 ## Scale, performance and resource safety
 
