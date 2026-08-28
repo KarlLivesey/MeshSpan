@@ -11,7 +11,7 @@ use super::types::{
     DurableCoreState, DurableMutation, LogEntry, LogPosition, PersistenceId, ProposalId,
     ReadBarrierId, Role, VoteRequest, VoteResponse, validate_append_entries,
 };
-use crate::QuorumFamily;
+use crate::{CompiledQuorumPlan, JointQuorumPlan, QuorumFamily};
 
 const MAXIMUM_APPEND_ENTRIES: usize = 64;
 const MAXIMUM_PENDING_READ_BARRIERS: usize = 1_024;
@@ -20,6 +20,11 @@ enum RoleState {
     Follower,
     Candidate { votes: BTreeSet<NodeId> },
     Leader(LeaderState),
+}
+
+enum ActivePlan {
+    Stable(Box<CompiledQuorumPlan>),
+    Joint(Box<JointQuorumPlan>),
 }
 
 struct LeaderState {
@@ -58,12 +63,15 @@ enum AfterPersistence {
         position: LogPosition,
     },
     StepDown,
+    ActivateJoint(Box<JointQuorumPlan>),
+    ActivateStable(Box<CompiledQuorumPlan>),
 }
 
 /// Owned deterministic consensus core. It performs no IO and emits persistence before dependent
 /// messages or commit evidence.
 pub struct ConsensusCore {
     config: CoreConfig,
+    active_plan: ActivePlan,
     current_term: u64,
     voted_for: Option<NodeId>,
     log: Vec<LogEntry>,
@@ -105,8 +113,10 @@ impl ConsensusCore {
             return Err(CoreError::InvalidConfiguration);
         }
         validate_durable_state(&durable)?;
+        let active_plan = ActivePlan::Stable(Box::new(config.plan.clone()));
         Ok(Self {
             config,
+            active_plan,
             current_term: durable.current_term,
             voted_for: durable.voted_for,
             log: durable.log,
@@ -156,13 +166,13 @@ impl ConsensusCore {
     /// Returns the exact membership epoch accepted by this core.
     #[must_use]
     pub fn membership_epoch(&self) -> u64 {
-        self.config.plan.spec().membership_epoch
+        self.active_membership_epoch()
     }
 
     /// Returns the canonical digest of the mechanically verified quorum plan.
     #[must_use]
     pub fn plan_digest(&self) -> [u8; 32] {
-        self.config.plan.proof_digest()
+        self.active_plan_digest()
     }
 
     /// Consumes one deterministic input and returns ordered side effects.
@@ -193,6 +203,14 @@ impl ConsensusCore {
             CoreInput::BeginReadBarrier(read_barrier_id) => {
                 self.begin_read_barrier(read_barrier_id)
             }
+            CoreInput::ActivateJointPlan {
+                joint_plan,
+                committed_position,
+            } => self.activate_joint_plan(joint_plan, committed_position),
+            CoreInput::ActivateStablePlan {
+                plan,
+                committed_position,
+            } => self.activate_stable_plan(plan, committed_position),
             CoreInput::AppliedThrough(index) => self.applied_through(index),
         }
     }
@@ -202,10 +220,7 @@ impl ConsensusCore {
             return Err(CoreError::InvalidInput);
         }
         if !self
-            .config
-            .plan
-            .spec()
-            .eligible_leaders
+            .active_eligible_leaders()
             .contains(&self.config.local_node_id)
         {
             return Err(CoreError::NotLeader);
@@ -219,6 +234,7 @@ impl ConsensusCore {
                 vote_state: Some((term, Some(self.config.local_node_id))),
                 truncate_from: None,
                 append: Vec::new(),
+                membership_epoch: None,
             },
             AfterPersistence::Campaign,
         )
@@ -259,7 +275,7 @@ impl ConsensusCore {
             || request.candidate_incarnation != self.member_incarnation(from)?
             || request.term == 0
             || !request.last_log.is_valid()
-            || !self.config.plan.spec().eligible_leaders.contains(&from)
+            || !self.active_eligible_leaders().contains(&from)
         {
             return Err(CoreError::InvalidInput);
         }
@@ -277,6 +293,7 @@ impl ConsensusCore {
                     vote_state: Some((request.term, granted.then_some(from))),
                     truncate_from: None,
                     append: Vec::new(),
+                    membership_epoch: None,
                 },
                 AfterPersistence::VoteReply { to: from, granted },
             );
@@ -299,15 +316,16 @@ impl ConsensusCore {
         if response.term < self.current_term {
             return Ok(Vec::new());
         }
-        let has_election_quorum = {
+        let votes = {
             let RoleState::Candidate { votes } = &mut self.role else {
                 return Ok(Vec::new());
             };
             if response.granted {
                 votes.insert(from);
             }
-            self.config.plan.satisfies(QuorumFamily::Election, votes)
+            votes.clone()
         };
+        let has_election_quorum = self.active_satisfies(QuorumFamily::Election, &votes);
         if has_election_quorum {
             self.become_leader()
         } else {
@@ -324,7 +342,7 @@ impl ConsensusCore {
         validate_append_entries(request)?;
         if request.leader != from
             || request.leader_incarnation != self.member_incarnation(from)?
-            || !self.config.plan.spec().eligible_leaders.contains(&from)
+            || !self.active_eligible_leaders().contains(&from)
         {
             return Err(CoreError::InvalidInput);
         }
@@ -343,6 +361,7 @@ impl ConsensusCore {
                         vote_state: Some((request.term, None)),
                         truncate_from: None,
                         append: Vec::new(),
+                        membership_epoch: None,
                     },
                     AfterPersistence::AppendReply {
                         to: from,
@@ -367,6 +386,7 @@ impl ConsensusCore {
                     vote_state: changes_term.then_some((request.term, None)),
                     truncate_from,
                     append,
+                    membership_epoch: None,
                 },
                 AfterPersistence::AppendReply {
                     to: from,
@@ -464,6 +484,7 @@ impl ConsensusCore {
                 vote_state: None,
                 truncate_from: None,
                 append: vec![entry],
+                membership_epoch: None,
             },
             AfterPersistence::Proposal {
                 proposal_id,
@@ -481,10 +502,8 @@ impl ConsensusCore {
         }
         let required_applied_index = self.commit_index;
         let local_node_id = self.config.local_node_id;
-        let quorum_confirmed = self
-            .config
-            .plan
-            .satisfies(QuorumFamily::Read, &BTreeSet::from([local_node_id]));
+        let quorum_confirmed =
+            self.active_satisfies(QuorumFamily::Read, &BTreeSet::from([local_node_id]));
         {
             let RoleState::Leader(leader) = &mut self.role else {
                 return Err(CoreError::NotLeader);
@@ -512,6 +531,74 @@ impl ConsensusCore {
             .collect()
     }
 
+    fn activate_joint_plan(
+        &mut self,
+        joint_plan: Box<JointQuorumPlan>,
+        committed_position: LogPosition,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        let ActivePlan::Stable(current) = &self.active_plan else {
+            return Err(CoreError::InvalidInput);
+        };
+        if current.proof_digest() != joint_plan.old_plan().proof_digest()
+            || current.spec().membership_epoch != joint_plan.old_plan().spec().membership_epoch
+            || joint_plan.members() != self.active_members()
+        {
+            return Err(CoreError::InvalidInput);
+        }
+        self.validate_applied_transition_position(committed_position)?;
+        self.begin_persistence(
+            DurableMutation {
+                vote_state: None,
+                truncate_from: None,
+                append: Vec::new(),
+                membership_epoch: Some(joint_plan.membership_epoch()),
+            },
+            AfterPersistence::ActivateJoint(joint_plan),
+        )
+    }
+
+    fn activate_stable_plan(
+        &mut self,
+        plan: Box<CompiledQuorumPlan>,
+        committed_position: LogPosition,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        let ActivePlan::Joint(joint) = &self.active_plan else {
+            return Err(CoreError::InvalidInput);
+        };
+        if plan.proof_digest() != joint.new_plan().proof_digest()
+            || plan.spec().membership_epoch != joint.membership_epoch()
+            || joint.members() != self.active_members()
+        {
+            return Err(CoreError::InvalidInput);
+        }
+        self.validate_applied_transition_position(committed_position)?;
+        self.begin_persistence(
+            DurableMutation {
+                vote_state: None,
+                truncate_from: None,
+                append: Vec::new(),
+                membership_epoch: Some(plan.spec().membership_epoch),
+            },
+            AfterPersistence::ActivateStable(plan),
+        )
+    }
+
+    fn validate_applied_transition_position(
+        &self,
+        committed_position: LogPosition,
+    ) -> Result<(), CoreError> {
+        if committed_position == LogPosition::GENESIS
+            || committed_position.index > self.applied_index
+            || self
+                .entry(committed_position.index)
+                .is_none_or(|entry| entry.position.term != committed_position.term)
+        {
+            Err(CoreError::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+
     fn acknowledge_read_barrier(
         &mut self,
         from: NodeId,
@@ -523,17 +610,22 @@ impl ConsensusCore {
         if read_barrier_id.0 == 0 {
             return Err(CoreError::InvalidInput);
         }
-        let RoleState::Leader(leader) = &mut self.role else {
-            return Ok(Vec::new());
+        let acknowledgements = {
+            let RoleState::Leader(leader) = &mut self.role else {
+                return Ok(Vec::new());
+            };
+            let Some(barrier) = leader.read_barriers.get_mut(&read_barrier_id) else {
+                return Ok(Vec::new());
+            };
+            barrier.acknowledgements.insert(from);
+            barrier.acknowledgements.clone()
         };
-        let Some(barrier) = leader.read_barriers.get_mut(&read_barrier_id) else {
-            return Ok(Vec::new());
-        };
-        barrier.acknowledgements.insert(from);
-        barrier.quorum_confirmed = self
-            .config
-            .plan
-            .satisfies(QuorumFamily::Read, &barrier.acknowledgements);
+        let quorum_confirmed = self.active_satisfies(QuorumFamily::Read, &acknowledgements);
+        if let RoleState::Leader(leader) = &mut self.role
+            && let Some(barrier) = leader.read_barriers.get_mut(&read_barrier_id)
+        {
+            barrier.quorum_confirmed = quorum_confirmed;
+        }
         Ok(self.complete_read_barriers())
     }
 
@@ -629,7 +721,35 @@ impl ConsensusCore {
                     term: self.current_term,
                 }])
             }
+            AfterPersistence::ActivateJoint(joint_plan) => {
+                Ok(self.finish_plan_activation(ActivePlan::Joint(joint_plan)))
+            }
+            AfterPersistence::ActivateStable(plan) => {
+                Ok(self.finish_plan_activation(ActivePlan::Stable(plan)))
+            }
         }
+    }
+
+    fn finish_plan_activation(&mut self, active_plan: ActivePlan) -> Vec<CoreEffect> {
+        self.active_plan = active_plan;
+        let may_lead = self
+            .active_eligible_leaders()
+            .contains(&self.config.local_node_id);
+        if let RoleState::Leader(leader) = &mut self.role {
+            leader.read_barriers.clear();
+        }
+        if may_lead && self.is_local_voter() {
+            return Vec::new();
+        }
+        let changed = self.role() != Role::Follower;
+        self.follow_leader(None);
+        changed
+            .then_some(CoreEffect::RoleChanged {
+                role: Role::Follower,
+                term: self.current_term,
+            })
+            .into_iter()
+            .collect()
     }
 
     fn finish_campaign(&mut self) -> Result<Vec<CoreEffect>, CoreError> {
@@ -641,7 +761,7 @@ impl ConsensusCore {
             role: Role::Candidate,
             term: self.current_term,
         }];
-        if self.config.plan.satisfies(
+        if self.active_satisfies(
             QuorumFamily::Election,
             &BTreeSet::from([self.config.local_node_id]),
         ) {
@@ -653,13 +773,13 @@ impl ConsensusCore {
             candidate: self.config.local_node_id,
             candidate_incarnation: self.config.local_incarnation,
             last_log: self.last_position(),
-            membership_epoch: self.config.plan.spec().membership_epoch,
-            plan_digest: self.config.plan.proof_digest(),
+            membership_epoch: self.active_membership_epoch(),
+            plan_digest: self.active_plan_digest(),
         });
-        for voter in &self.config.plan.spec().voters {
-            if *voter != self.config.local_node_id {
+        for voter in self.active_voters() {
+            if voter != self.config.local_node_id {
                 effects.push(CoreEffect::Send {
-                    to: *voter,
+                    to: voter,
                     message: request.clone(),
                 });
             }
@@ -719,6 +839,12 @@ impl ConsensusCore {
     }
 
     fn apply_durable_mutation(&mut self, mutation: &DurableMutation) -> Result<(), CoreError> {
+        if let Some(membership_epoch) = mutation.membership_epoch
+            && membership_epoch != self.active_membership_epoch()
+            && membership_epoch != self.active_membership_epoch().saturating_add(1)
+        {
+            return Err(CoreError::InvalidInput);
+        }
         if let Some((term, voted_for)) = mutation.vote_state {
             if term < self.current_term || term == 0 {
                 return Err(CoreError::InvalidInput);
@@ -822,8 +948,8 @@ impl ConsensusCore {
                 entries,
                 leader_commit_index: self.commit_index,
                 read_barrier_id,
-                membership_epoch: self.config.plan.spec().membership_epoch,
-                plan_digest: self.config.plan.proof_digest(),
+                membership_epoch: self.active_membership_epoch(),
+                plan_digest: self.active_plan_digest(),
             }),
         })
     }
@@ -845,11 +971,7 @@ impl ConsensusCore {
                 .iter()
                 .filter_map(|(node, matched)| (*matched >= index).then_some(*node))
                 .collect();
-            if self
-                .config
-                .plan
-                .satisfies(QuorumFamily::Commit, &acknowledgements)
-            {
+            if self.active_satisfies(QuorumFamily::Commit, &acknowledgements) {
                 self.commit_index = index;
                 break;
             }
@@ -886,6 +1008,7 @@ impl ConsensusCore {
                 vote_state: Some((term, None)),
                 truncate_from: None,
                 append: Vec::new(),
+                membership_epoch: None,
             },
             AfterPersistence::StepDown,
         )
@@ -902,8 +1025,8 @@ impl ConsensusCore {
             message: CoreMessage::VoteResponse(VoteResponse {
                 term: self.current_term,
                 granted,
-                membership_epoch: self.config.plan.spec().membership_epoch,
-                plan_digest: self.config.plan.proof_digest(),
+                membership_epoch: self.active_membership_epoch(),
+                plan_digest: self.active_plan_digest(),
             }),
         }
     }
@@ -925,8 +1048,8 @@ impl ConsensusCore {
                 matched_index,
                 next_index_hint,
                 read_barrier_id,
-                membership_epoch: self.config.plan.spec().membership_epoch,
-                plan_digest: self.config.plan.proof_digest(),
+                membership_epoch: self.active_membership_epoch(),
+                plan_digest: self.active_plan_digest(),
             }),
         }
     }
@@ -940,9 +1063,7 @@ impl ConsensusCore {
     }
 
     fn validate_plan(&self, epoch: u64, digest: [u8; 32]) -> Result<(), CoreError> {
-        if epoch == self.config.plan.spec().membership_epoch
-            && digest == self.config.plan.proof_digest()
-        {
+        if epoch == self.active_membership_epoch() && digest == self.active_plan_digest() {
             Ok(())
         } else {
             Err(CoreError::StaleMember)
@@ -957,21 +1078,11 @@ impl ConsensusCore {
     }
 
     fn is_local_voter(&self) -> bool {
-        self.config
-            .plan
-            .spec()
-            .voters
-            .contains(&self.config.local_node_id)
+        self.active_voters().contains(&self.config.local_node_id)
     }
 
     fn members(&self) -> BTreeSet<NodeId> {
-        self.config
-            .plan
-            .spec()
-            .voters
-            .union(&self.config.plan.spec().learners)
-            .copied()
-            .collect()
+        self.active_members()
     }
 
     fn peers(&self) -> BTreeSet<NodeId> {
@@ -979,6 +1090,59 @@ impl ConsensusCore {
             .into_iter()
             .filter(|node| *node != self.config.local_node_id)
             .collect()
+    }
+
+    fn active_satisfies(&self, family: QuorumFamily, acknowledgements: &BTreeSet<NodeId>) -> bool {
+        match &self.active_plan {
+            ActivePlan::Stable(plan) => plan.satisfies(family, acknowledgements),
+            ActivePlan::Joint(plan) => plan.satisfies(family, acknowledgements),
+        }
+    }
+
+    fn active_membership_epoch(&self) -> u64 {
+        match &self.active_plan {
+            ActivePlan::Stable(plan) => plan.spec().membership_epoch,
+            ActivePlan::Joint(plan) => plan.membership_epoch(),
+        }
+    }
+
+    fn active_plan_digest(&self) -> [u8; 32] {
+        match &self.active_plan {
+            ActivePlan::Stable(plan) => plan.proof_digest(),
+            ActivePlan::Joint(plan) => plan.proof_digest(),
+        }
+    }
+
+    fn active_voters(&self) -> BTreeSet<NodeId> {
+        match &self.active_plan {
+            ActivePlan::Stable(plan) => plan.spec().voters.clone(),
+            ActivePlan::Joint(plan) => plan
+                .old_plan()
+                .spec()
+                .voters
+                .union(&plan.new_plan().spec().voters)
+                .copied()
+                .collect(),
+        }
+    }
+
+    fn active_members(&self) -> BTreeSet<NodeId> {
+        match &self.active_plan {
+            ActivePlan::Stable(plan) => plan
+                .spec()
+                .voters
+                .union(&plan.spec().learners)
+                .copied()
+                .collect(),
+            ActivePlan::Joint(plan) => plan.members(),
+        }
+    }
+
+    fn active_eligible_leaders(&self) -> BTreeSet<NodeId> {
+        match &self.active_plan {
+            ActivePlan::Stable(plan) => plan.spec().eligible_leaders.clone(),
+            ActivePlan::Joint(plan) => plan.eligible_leaders(),
+        }
     }
 
     fn last_position(&self) -> LogPosition {

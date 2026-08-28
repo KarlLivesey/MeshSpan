@@ -118,6 +118,12 @@ impl JointQuorumPlan {
     pub const fn new_plan(&self) -> &CompiledQuorumPlan {
         &self.new
     }
+
+    /// Returns the stable predecessor required to commit the joint phase.
+    #[must_use]
+    pub const fn old_plan(&self) -> &CompiledQuorumPlan {
+        &self.old
+    }
 }
 
 /// One safe next automatic learner promotion, always applied through a joint phase.

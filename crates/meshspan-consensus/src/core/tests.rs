@@ -11,7 +11,7 @@ use super::{
     CoreMessage, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
     ReadBarrierId, Role, VoteResponse,
 };
-use crate::{compile_plan, flat_plan};
+use crate::{JointQuorumPlan, compile_plan, flat_plan};
 
 #[test]
 fn campaign_is_durable_before_messages_or_role_change() -> Result<(), Box<dyn Error>> {
@@ -354,6 +354,112 @@ fn conflicting_uncommitted_tail_is_replaced_but_committed_tail_is_protected()
         )?),
         Err(CoreError::InvalidInput)
     );
+    Ok(())
+}
+
+#[test]
+fn committed_membership_change_moves_through_durable_joint_and_stable_plans()
+-> Result<(), Box<dyn Error>> {
+    let first = node(1)?;
+    let second = node(2)?;
+    let third = node(3)?;
+    let old = compile_plan(flat_plan(
+        QuorumPlanId::from_bytes([91; 16])?,
+        1,
+        BTreeSet::from([first, second]),
+        BTreeSet::from([third]),
+    )?)?;
+    let new = compile_plan(flat_plan(
+        QuorumPlanId::from_bytes([92; 16])?,
+        2,
+        BTreeSet::from([first, second, third]),
+        BTreeSet::new(),
+    )?)?;
+    let joint = JointQuorumPlan::new(old.clone(), new.clone())?;
+    let incarnations = MemberIncarnations::new(
+        BTreeSet::from([first, second, third])
+            .into_iter()
+            .map(|member| (member, 1))
+            .collect(),
+        &old,
+    )?;
+    let mut core = ConsensusCore::new(CoreConfig {
+        partition_id: PartitionId::from_bytes([81; 16])?,
+        local_node_id: first,
+        local_incarnation: 1,
+        plan: old.clone(),
+        member_incarnations: incarnations,
+    })?;
+    persist_only_effect(&mut core, CoreInput::ElectionTimeout)?;
+    core.step(vote_for_plan(2, 1, true, old.proof_digest())?)?;
+
+    persist_only_effect(&mut core, proposal(1, b"enter-joint".to_vec())?)?;
+    let transition = LogPosition { term: 1, index: 1 };
+    assert_eq!(
+        core.step(CoreInput::ActivateJointPlan {
+            joint_plan: Box::new(joint.clone()),
+            committed_position: transition,
+        }),
+        Err(CoreError::InvalidInput)
+    );
+    core.step(CoreInput::AppliedThrough(1))?;
+
+    let effects = core.step(CoreInput::ActivateJointPlan {
+        joint_plan: Box::new(joint.clone()),
+        committed_position: transition,
+    })?;
+    let [CoreEffect::Persist { id, mutation }] = effects.as_slice() else {
+        return Err(io::Error::other("joint activation was not a lone persistence effect").into());
+    };
+    assert_eq!(mutation.membership_epoch, Some(2));
+    assert_eq!(core.membership_epoch(), 1);
+    assert_eq!(core.plan_digest(), old.proof_digest());
+    core.step(CoreInput::Persisted(*id))?;
+    assert_eq!(core.membership_epoch(), 2);
+    assert_eq!(core.plan_digest(), joint.proof_digest());
+
+    assert_eq!(
+        core.step(message(
+            2,
+            CoreMessage::VoteResponse(VoteResponse {
+                term: 1,
+                granted: true,
+                membership_epoch: 1,
+                plan_digest: old.proof_digest(),
+            }),
+        )?),
+        Err(CoreError::StaleMember)
+    );
+
+    persist_only_effect(&mut core, proposal(2, b"leave-joint".to_vec())?)?;
+    assert_eq!(core.commit_index(), 1);
+    core.step(message(
+        3,
+        CoreMessage::AppendResponse(AppendResponse {
+            term: 1,
+            accepted: true,
+            matched_index: 2,
+            next_index_hint: 3,
+            read_barrier_id: None,
+            membership_epoch: 2,
+            plan_digest: joint.proof_digest(),
+        }),
+    )?)?;
+    assert_eq!(core.commit_index(), 2);
+    core.step(CoreInput::AppliedThrough(2))?;
+
+    let effects = core.step(CoreInput::ActivateStablePlan {
+        plan: Box::new(new.clone()),
+        committed_position: LogPosition { term: 1, index: 2 },
+    })?;
+    let [CoreEffect::Persist { id, mutation }] = effects.as_slice() else {
+        return Err(io::Error::other("stable activation was not a lone persistence effect").into());
+    };
+    assert_eq!(mutation.membership_epoch, Some(2));
+    assert_eq!(core.plan_digest(), joint.proof_digest());
+    core.step(CoreInput::Persisted(*id))?;
+    assert_eq!(core.membership_epoch(), 2);
+    assert_eq!(core.plan_digest(), new.proof_digest());
     Ok(())
 }
 

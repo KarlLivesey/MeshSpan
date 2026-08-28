@@ -124,7 +124,8 @@ fn persist_mutation_with_failpoint(
     if membership_epoch == 0
         || (mutation.vote_state.is_none()
             && mutation.truncate_from.is_none()
-            && mutation.append.is_empty())
+            && mutation.append.is_empty()
+            && mutation.membership_epoch.is_none())
     {
         return Err(ConsensusStoreError::InvalidMutation);
     }
@@ -273,6 +274,10 @@ fn persist_vote(
     mutation: &DurableMutation,
     persisted_at: UnixMicros,
 ) -> Result<(), ConsensusStoreError> {
+    let target_epoch = mutation.membership_epoch.unwrap_or(membership_epoch);
+    if target_epoch != membership_epoch && target_epoch != membership_epoch.saturating_add(1) {
+        return Err(ConsensusStoreError::MembershipEpochMismatch);
+    }
     let stored = transaction
         .query_row(
             "SELECT partition_id, current_term, voted_for_node_id, membership_epoch
@@ -322,10 +327,20 @@ fn persist_vote(
                 partition_id.as_slice(),
                 to_i64(term)?,
                 voted_for.map(|node| node.as_bytes().to_vec()),
-                to_i64(membership_epoch)?,
+                to_i64(target_epoch)?,
                 persisted_at.get(),
             ],
         )?;
+    } else if mutation.membership_epoch.is_some() {
+        let changed = transaction.execute(
+            "UPDATE consensus_vote
+             SET membership_epoch = ?1, persisted_at = ?2
+             WHERE singleton = 1",
+            params![to_i64(target_epoch)?, persisted_at.get()],
+        )?;
+        if changed != 1 {
+            return Err(ConsensusStoreError::InvalidMutation);
+        }
     }
     Ok(())
 }
@@ -518,6 +533,7 @@ mod tests {
             vote_state: Some((1, Some(voter))),
             truncate_from: None,
             append: vec![entry.clone()],
+            membership_epoch: None,
         };
         let mut database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(1))?;
         persist_mutation(&mut database, 1, &mutation, UnixMicros::new(2))?;
@@ -551,6 +567,7 @@ mod tests {
                 vote_state: Some((1, None)),
                 truncate_from: None,
                 append: vec![entry(1, 1, 5, b"old")?],
+                membership_epoch: None,
             },
             UnixMicros::new(2),
         )?;
@@ -561,6 +578,7 @@ mod tests {
                 vote_state: Some((2, None)),
                 truncate_from: Some(1),
                 append: vec![entry(2, 1, 6, b"new")?],
+                membership_epoch: None,
             },
             UnixMicros::new(3),
             StoreFailpoint::BeforeCommit,
@@ -588,6 +606,7 @@ mod tests {
                 vote_state: Some((1, None)),
                 truncate_from: None,
                 append: vec![entry(1, 1, 8, b"valid")?],
+                membership_epoch: None,
             },
             UnixMicros::new(2),
         )?;
@@ -602,6 +621,47 @@ mod tests {
         assert!(matches!(
             load_state(&database, 1),
             Err(ConsensusStoreError::CorruptState)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn membership_epoch_changes_atomically_without_rewriting_the_vote()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("partition.sqlite3");
+        let partition_id = PartitionId::from_bytes([9; 16])?;
+        let voter = NodeId::from_bytes([10; 16])?;
+        let mut database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(1))?;
+        persist_mutation(
+            &mut database,
+            1,
+            &DurableMutation {
+                vote_state: Some((4, Some(voter))),
+                truncate_from: None,
+                append: Vec::new(),
+                membership_epoch: None,
+            },
+            UnixMicros::new(2),
+        )?;
+        persist_mutation(
+            &mut database,
+            1,
+            &DurableMutation {
+                vote_state: None,
+                truncate_from: None,
+                append: Vec::new(),
+                membership_epoch: Some(2),
+            },
+            UnixMicros::new(3),
+        )?;
+
+        let recovered = load_state(&database, 2)?;
+        assert_eq!(recovered.current_term, 4);
+        assert_eq!(recovered.voted_for, Some(voter));
+        assert!(matches!(
+            load_state(&database, 1),
+            Err(ConsensusStoreError::MembershipEpochMismatch)
         ));
         Ok(())
     }

@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::CompiledQuorumPlan;
+use crate::JointQuorumPlan;
 
 const MAXIMUM_LOG_ENTRY_BYTES: usize = 16 * 1_024 * 1_024;
 const MAXIMUM_APPEND_ENTRIES: usize = 64;
@@ -307,6 +308,20 @@ pub enum CoreInput {
     },
     /// Current leader begins one quorum-confirmed linearizable read barrier.
     BeginReadBarrier(ReadBarrierId),
+    /// Applies a committed old+new membership entry after its log position is applied.
+    ActivateJointPlan {
+        /// Independently proved old+new plan.
+        joint_plan: Box<JointQuorumPlan>,
+        /// Applied log position containing the transition command.
+        committed_position: LogPosition,
+    },
+    /// Applies the committed stable successor after the joint phase.
+    ActivateStablePlan {
+        /// Exact successor previously carried by the active joint plan.
+        plan: Box<CompiledQuorumPlan>,
+        /// Applied log position containing the finalisation command.
+        committed_position: LogPosition,
+    },
     /// State-machine driver applied every committed entry through this index.
     AppliedThrough(u64),
 }
@@ -320,6 +335,8 @@ pub struct DurableMutation {
     pub truncate_from: Option<u64>,
     /// Contiguous entries installed after truncation.
     pub append: Vec<LogEntry>,
+    /// Adjacent membership epoch to persist before emitting messages under a new plan.
+    pub membership_epoch: Option<u64>,
 }
 
 /// Driver effects emitted by one deterministic step.
