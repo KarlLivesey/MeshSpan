@@ -48,6 +48,8 @@ pub enum AuthoritativeCommand {
     CommitConvergedVolumeHead(CommitConvergedVolumeHead),
     /// Pins one exact current converged namespace root as a read-only volume snapshot.
     CreateVolumeSnapshot(CreateVolumeSnapshot),
+    /// Restores one exact snapshot root as a new authoritative namespace commit.
+    RestoreVolumeSnapshot(RestoreVolumeSnapshot),
     /// Marks one snapshot as expiring without dropping its namespace root.
     RequestVolumeSnapshotExpiry(RequestVolumeSnapshotExpiry),
     /// Creates or replaces one authoritative fixed-interval snapshot schedule.
@@ -122,6 +124,7 @@ impl AuthoritativeCommand {
             Self::CreateVolume(value) => value.update_digest(digest),
             Self::CommitConvergedVolumeHead(value) => value.update_digest(digest),
             Self::CreateVolumeSnapshot(value) => value.update_digest(digest),
+            Self::RestoreVolumeSnapshot(value) => value.update_digest(digest),
             Self::RequestVolumeSnapshotExpiry(value) => value.update_digest(digest),
             Self::ConfigureSnapshotSchedule(value) => value.update_digest(digest),
             Self::RunSnapshotSchedule(value) => value.update_digest(digest),
@@ -299,6 +302,31 @@ pub struct CreateVolumeSnapshot {
     pub expires_at: Option<UnixMicros>,
     /// Whether automatic expiry and pressure reclamation are forbidden.
     pub protected_from_expiry: bool,
+}
+
+/// Authoritative compare-and-swap of one prepared whole-volume snapshot restore.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RestoreVolumeSnapshot {
+    /// Existing active or expiring snapshot selected for restore.
+    pub snapshot_id: SnapshotId,
+    /// Exact snapshot record revision observed by the requester.
+    pub expected_snapshot_revision: Revision,
+    /// Volume whose current namespace is restored.
+    pub volume_id: VolumeId,
+    /// Exact namespace commit pinned by the snapshot.
+    pub snapshot_namespace_commit_id: NamespaceCommitId,
+    /// Exact current converged head required before restore.
+    pub expected_namespace_commit_id: NamespaceCommitId,
+    /// Prepared immutable commit that selects the snapshot root.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Exact immutable root revision pinned by the snapshot.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// Stable local preparation operation.
+    pub source_operation_id: OperationId,
+    /// Digest binding every local preparation input.
+    pub source_request_digest: [u8; 32],
+    /// Digest binding the complete durable local preparation result.
+    pub source_result_digest: [u8; 32],
 }
 
 /// Closed, persistently encoded reason for moving a snapshot into expiring state.
@@ -864,6 +892,22 @@ digest_simple_record!(
         digest.name(&value.name);
         digest.optional_instant(value.expires_at);
         digest.boolean(value.protected_from_expiry);
+    }
+);
+digest_simple_record!(
+    RestoreVolumeSnapshot,
+    b"restore-volume-snapshot",
+    |value, digest| {
+        digest.identifier(value.snapshot_id.as_bytes());
+        digest.unsigned(value.expected_snapshot_revision.get());
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.snapshot_namespace_commit_id.as_bytes());
+        digest.identifier(value.expected_namespace_commit_id.as_bytes());
+        digest.identifier(value.namespace_commit_id.as_bytes());
+        digest.identifier(value.root_object_revision_id.as_bytes());
+        digest.identifier(value.source_operation_id.as_bytes());
+        digest.bytes(&value.source_request_digest);
+        digest.bytes(&value.source_result_digest);
     }
 );
 digest_simple_record!(

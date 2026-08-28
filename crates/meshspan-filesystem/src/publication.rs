@@ -368,6 +368,31 @@ pub struct SnapshotRestoreReceipt {
     pub result_digest: [u8; 32],
 }
 
+/// Locally revalidated restore preparation safe to present to replicated authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSnapshotRestoreHead {
+    receipt: SnapshotRestoreReceipt,
+    volume_id: VolumeId,
+}
+
+impl VerifiedSnapshotRestoreHead {
+    pub(crate) const fn new(receipt: SnapshotRestoreReceipt, volume_id: VolumeId) -> Self {
+        Self { receipt, volume_id }
+    }
+
+    /// Exact durable restore preparation reloaded from local storage.
+    #[must_use]
+    pub const fn receipt(self) -> SnapshotRestoreReceipt {
+        self.receipt
+    }
+
+    /// Volume bound by the prepared immutable commit.
+    #[must_use]
+    pub const fn volume_id(self) -> VolumeId {
+        self.volume_id
+    }
+}
+
 /// Stable identities supplied when committing one prepared reconciliation plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NamespaceReconciliationApplication {
@@ -649,6 +674,20 @@ impl VersionPublicationStore {
             operation_id,
             PublicationDisposition::Replayed,
         )
+    }
+
+    /// Reloads and verifies one prepared restore commit at the replicated-head boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a lost, substituted or corrupt receipt, wrong volume, wrong parent or mismatched
+    /// snapshot source.
+    pub fn verify_snapshot_restore_head(
+        &self,
+        volume_id: VolumeId,
+        receipt: SnapshotRestoreReceipt,
+    ) -> Result<VerifiedSnapshotRestoreHead, PublicationError> {
+        namespace::verify_snapshot_restore_head(&self.connection, volume_id, receipt)
     }
 
     /// Loads and validates the complete durable causal closure for one reconciliation frontier.

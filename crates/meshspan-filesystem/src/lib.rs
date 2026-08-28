@@ -46,7 +46,7 @@ pub use publication::{
     NamespacePublicationReceipt, NamespaceReconciliationApplication,
     NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
     RootFilePublication, SnapshotRestorePublication, SnapshotRestoreReceipt,
-    VerifiedReconciliationHead, VersionPublicationStore,
+    VerifiedReconciliationHead, VerifiedSnapshotRestoreHead, VersionPublicationStore,
 };
 pub use reconciliation::{
     BranchMutation, BranchMutationIntent, NamespaceReplayAction, NamespaceReplayBase,

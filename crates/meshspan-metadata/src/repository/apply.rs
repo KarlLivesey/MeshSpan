@@ -331,17 +331,12 @@ fn execute(
         AuthoritativeCommand::CommitConvergedVolumeHead(value) => {
             volume_head::commit(transaction, context, value, revision)
         }
-        AuthoritativeCommand::CreateVolumeSnapshot(value) => {
-            user_snapshot::create(transaction, context, value, revision)
-        }
-        AuthoritativeCommand::RequestVolumeSnapshotExpiry(value) => {
-            user_snapshot::request_expiry(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::ConfigureSnapshotSchedule(value) => {
-            snapshot_schedule::configure(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::RunSnapshotSchedule(value) => {
-            snapshot_schedule::run(transaction, context, value, revision)
+        AuthoritativeCommand::CreateVolumeSnapshot(_)
+        | AuthoritativeCommand::RestoreVolumeSnapshot(_)
+        | AuthoritativeCommand::RequestVolumeSnapshotExpiry(_)
+        | AuthoritativeCommand::ConfigureSnapshotSchedule(_)
+        | AuthoritativeCommand::RunSnapshotSchedule(_) => {
+            execute_snapshot_command(transaction, context, command, revision)
         }
         AuthoritativeCommand::ConfigureVersionRetention(value) => {
             retention::configure(transaction, context, *value, revision)
@@ -406,6 +401,32 @@ fn execute(
         AuthoritativeCommand::AbortScopeHandoff(value) => {
             routing::abort_handoff(transaction, context, *value, revision)
         }
+    }
+}
+
+fn execute_snapshot_command(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    match command {
+        AuthoritativeCommand::CreateVolumeSnapshot(value) => {
+            user_snapshot::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::RestoreVolumeSnapshot(value) => {
+            user_snapshot::restore(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RequestVolumeSnapshotExpiry(value) => {
+            user_snapshot::request_expiry(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ConfigureSnapshotSchedule(value) => {
+            snapshot_schedule::configure(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RunSnapshotSchedule(value) => {
+            snapshot_schedule::run(transaction, context, value, revision)
+        }
+        _ => Err(RepositoryError::InvalidCommand),
     }
 }
 
@@ -588,6 +609,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RequestVolumeSnapshotExpiry(_) => 30,
         AuthoritativeCommand::ConfigureSnapshotSchedule(_) => 31,
         AuthoritativeCommand::RunSnapshotSchedule(_) => 32,
+        AuthoritativeCommand::RestoreVolumeSnapshot(_) => 33,
     }
 }
 

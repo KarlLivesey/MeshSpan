@@ -15,9 +15,19 @@ use crate::{
 };
 
 mod expiry;
+mod restore;
 
 pub(super) use expiry::due as due_expiries;
 pub use expiry::{SnapshotExpiryCandidate, SnapshotExpiryCursor};
+
+pub(super) fn restore(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: crate::RestoreVolumeSnapshot,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    restore::apply(transaction, context, command, revision)
+}
 
 /// Stable seek cursor for one volume's snapshot list.
 #[derive(Clone, Debug, Eq, PartialEq)]

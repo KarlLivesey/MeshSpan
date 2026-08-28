@@ -76,6 +76,14 @@ pub(super) fn load_snapshot_restore(
     snapshot_restore::load_receipt(connection, operation_id, disposition)
 }
 
+pub(super) fn verify_snapshot_restore_head(
+    connection: &Connection,
+    volume_id: VolumeId,
+    receipt: super::SnapshotRestoreReceipt,
+) -> Result<super::VerifiedSnapshotRestoreHead, PublicationError> {
+    snapshot_restore::verify_head(connection, volume_id, receipt)
+}
+
 pub(super) fn apply_reconciliation(
     connection: &mut Connection,
     application: super::NamespaceReconciliationApplication,

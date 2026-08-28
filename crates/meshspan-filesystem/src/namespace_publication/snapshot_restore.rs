@@ -159,6 +159,29 @@ pub(super) fn load_receipt(
     Ok(Some(receipt))
 }
 
+pub(super) fn verify_head(
+    connection: &Connection,
+    volume_id: meshspan_domain::VolumeId,
+    supplied: SnapshotRestoreReceipt,
+) -> Result<crate::publication::VerifiedSnapshotRestoreHead, PublicationError> {
+    let durable = load_receipt(
+        connection,
+        supplied.operation_id,
+        PublicationDisposition::Replayed,
+    )?
+    .ok_or(PublicationError::InvalidInput)?;
+    if !same_outcome(durable, supplied) {
+        return Err(PublicationError::OperationConflict);
+    }
+    let commit = load_commit(connection, durable.namespace_commit_id)?;
+    if commit.volume_id != volume_id {
+        return Err(PublicationError::InvalidInput);
+    }
+    Ok(crate::publication::VerifiedSnapshotRestoreHead::new(
+        durable, volume_id,
+    ))
+}
+
 pub(super) fn validate_receipt_source(
     connection: &Connection,
     receipt: SnapshotRestoreReceipt,
@@ -356,10 +379,10 @@ fn decode_receipt(
         receipt.namespace_commit_id,
         receipt.root_object_revision_id,
     );
-    if expected != receipt.result_digest {
-        Err(PublicationError::Corrupt)
-    } else {
+    if expected == receipt.result_digest {
         Ok(receipt)
+    } else {
+        Err(PublicationError::Corrupt)
     }
 }
 
