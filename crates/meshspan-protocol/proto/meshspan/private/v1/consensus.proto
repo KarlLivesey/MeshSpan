@@ -20,6 +20,7 @@ message VoteResponse {
   bool granted = 2;
   uint64 membership_epoch = 3;
   optional WireError rejection = 4;
+  bytes quorum_plan_digest = 5;
 }
 
 message LogEntry {
@@ -39,6 +40,7 @@ message AppendRequest {
   uint64 leader_commit_index = 7;
   uint64 membership_epoch = 8;
   bytes quorum_plan_digest = 9;
+  optional uint64 read_barrier_id = 10;
 }
 
 message AppendResponse {
@@ -47,6 +49,9 @@ message AppendResponse {
   uint64 matched_index = 3;
   uint64 next_index_hint = 4;
   optional WireError rejection = 5;
+  uint64 membership_epoch = 6;
+  bytes quorum_plan_digest = 7;
+  optional uint64 read_barrier_id = 8;
 }
 
 message SnapshotBegin {

@@ -289,10 +289,9 @@ impl ConsensusCore {
         from: NodeId,
         response: VoteResponse,
     ) -> Result<Vec<CoreEffect>, CoreError> {
-        if response.membership_epoch != self.config.plan.spec().membership_epoch
-            || response.term == 0
-        {
-            return Err(CoreError::StaleMember);
+        self.validate_plan(response.membership_epoch, response.plan_digest)?;
+        if response.term == 0 {
+            return Err(CoreError::InvalidInput);
         }
         if response.term > self.current_term {
             return self.persist_step_down(response.term);
@@ -389,6 +388,7 @@ impl ConsensusCore {
         from: NodeId,
         response: AppendResponse,
     ) -> Result<Vec<CoreEffect>, CoreError> {
+        self.validate_plan(response.membership_epoch, response.plan_digest)?;
         if response.term == 0
             || response.next_index_hint == 0
             || response
@@ -903,6 +903,7 @@ impl ConsensusCore {
                 term: self.current_term,
                 granted,
                 membership_epoch: self.config.plan.spec().membership_epoch,
+                plan_digest: self.config.plan.proof_digest(),
             }),
         }
     }
@@ -924,6 +925,8 @@ impl ConsensusCore {
                 matched_index,
                 next_index_hint,
                 read_barrier_id,
+                membership_epoch: self.config.plan.spec().membership_epoch,
+                plan_digest: self.config.plan.proof_digest(),
             }),
         }
     }

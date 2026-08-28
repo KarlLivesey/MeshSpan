@@ -213,6 +213,8 @@ pub struct VoteResponse {
     pub granted: bool,
     /// Exact membership epoch used for the decision.
     pub membership_epoch: u64,
+    /// Exact compiled quorum plan used for the decision.
+    pub plan_digest: [u8; 32],
 }
 
 /// Leader log replication or heartbeat request.
@@ -253,6 +255,10 @@ pub struct AppendResponse {
     pub next_index_hint: u64,
     /// Exact read probe being answered, if the request carried one.
     pub read_barrier_id: Option<ReadBarrierId>,
+    /// Exact membership epoch used for the response.
+    pub membership_epoch: u64,
+    /// Exact compiled quorum plan used for the response.
+    pub plan_digest: [u8; 32],
 }
 
 /// Closed peer messages owned by the consensus core.

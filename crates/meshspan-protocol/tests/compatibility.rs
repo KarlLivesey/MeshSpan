@@ -7,6 +7,7 @@ use meshspan_protocol::v1::data_control_envelope::Message as DataMessage;
 use meshspan_protocol::v1::{
     ComponentSupport, ControlEnvelope, DataControlEnvelope, DataFrame, DeleteShardRequest,
     NodeHello, Ping, ProtocolVersion, PutShardBegin, RequestHeader, ShardIdentity, VoteRequest,
+    VoteResponse,
 };
 use meshspan_protocol::{
     WireContractError, WireLimits, decode_control_frame, decode_data_control_frame,
@@ -111,6 +112,29 @@ fn semantic_validation_rejects_missing_authority_and_excessive_repetition()
     };
     assert_eq!(
         encode_control_frame(&authority_message, wire_limits),
+        Err(WireContractError::InvalidMessage)
+    );
+    Ok(())
+}
+
+#[test]
+fn consensus_responses_are_bound_to_an_exact_quorum_plan() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut response = VoteResponse {
+        term: 4,
+        granted: true,
+        membership_epoch: 3,
+        rejection: None,
+        quorum_plan_digest: vec![9; 32],
+    };
+    let envelope = |response: VoteResponse| ControlEnvelope {
+        header: Some(valid_header()),
+        message: Some(Message::VoteResponse(response)),
+    };
+    assert!(encode_control_frame(&envelope(response.clone()), limits()?).is_ok());
+    response.quorum_plan_digest.clear();
+    assert_eq!(
+        encode_control_frame(&envelope(response), limits()?),
         Err(WireContractError::InvalidMessage)
     );
     Ok(())

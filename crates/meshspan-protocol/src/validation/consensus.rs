@@ -25,6 +25,7 @@ pub(super) fn vote_request(value: &VoteRequest) -> Result<(), WireContractError>
 }
 
 pub(super) fn vote_response(value: &VoteResponse) -> Result<(), WireContractError> {
+    valid_digest(&value.quorum_plan_digest)?;
     if value.term == 0 || value.membership_epoch == 0 {
         return Err(WireContractError::InvalidMessage);
     }
@@ -46,14 +47,23 @@ pub(super) fn append_request(
         valid_digest(&entry.command_digest)?;
         validate_payload(entry.command.as_ref(), limits)?;
     }
-    if value.term == 0 || value.leader_incarnation == 0 || value.membership_epoch == 0 {
+    if value.term == 0
+        || value.leader_incarnation == 0
+        || value.membership_epoch == 0
+        || value.read_barrier_id == Some(0)
+    {
         return Err(WireContractError::InvalidMessage);
     }
     validate_entry_order(value)
 }
 
 pub(super) fn append_response(value: &AppendResponse) -> Result<(), WireContractError> {
-    if value.term == 0 || value.next_index_hint == 0 {
+    valid_digest(&value.quorum_plan_digest)?;
+    if value.term == 0
+        || value.next_index_hint == 0
+        || value.membership_epoch == 0
+        || value.read_barrier_id == Some(0)
+    {
         return Err(WireContractError::InvalidMessage);
     }
     validate_conditional_error(value.accepted, value.rejection.as_ref())

@@ -94,6 +94,8 @@ fn three_voters_require_peer_election_and_commit_acknowledgements() -> Result<()
             matched_index: 1,
             next_index_hint: 2,
             read_barrier_id: None,
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
         }),
     )?)?;
     assert_eq!(core.commit_index(), 1);
@@ -107,10 +109,11 @@ fn three_voters_require_peer_election_and_commit_acknowledgements() -> Result<()
 #[test]
 fn four_voters_elect_with_three_and_commit_with_two() -> Result<(), Box<dyn Error>> {
     let mut core = core(4)?;
+    let plan_digest = core.plan_digest();
     persist_only_effect(&mut core, CoreInput::ElectionTimeout)?;
-    core.step(vote(2, true)?)?;
+    core.step(vote_for_plan(2, 1, true, plan_digest)?)?;
     assert_eq!(core.role(), Role::Candidate);
-    core.step(vote(3, true)?)?;
+    core.step(vote_for_plan(3, 1, true, plan_digest)?)?;
     assert_eq!(core.role(), Role::Leader);
 
     let persistence_id = only_persistence_id(&core.step(proposal(1, b"write".to_vec())?)?)?;
@@ -124,6 +127,8 @@ fn four_voters_elect_with_three_and_commit_with_two() -> Result<(), Box<dyn Erro
             matched_index: 1,
             next_index_hint: 2,
             read_barrier_id: None,
+            membership_epoch: 1,
+            plan_digest,
         }),
     )?)?;
     assert_eq!(core.commit_index(), 1);
@@ -148,6 +153,7 @@ fn stale_identity_epoch_and_persistence_fail_closed() -> Result<(), Box<dyn Erro
                 term: 1,
                 granted: true,
                 membership_epoch: 1,
+                plan_digest: fixture_plan_digest()?,
             }),
         }),
         Err(CoreError::StaleMember)
@@ -159,6 +165,7 @@ fn stale_identity_epoch_and_persistence_fail_closed() -> Result<(), Box<dyn Erro
                 term: 1,
                 granted: true,
                 membership_epoch: 2,
+                plan_digest: fixture_plan_digest()?,
             }),
         )?),
         Err(CoreError::StaleMember)
@@ -177,6 +184,8 @@ fn higher_term_is_persisted_before_step_down() -> Result<(), Box<dyn Error>> {
             matched_index: 0,
             next_index_hint: 1,
             read_barrier_id: None,
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
         }),
     )?)?;
     let persistence_id = only_persistence_id(&effects)?;
@@ -221,6 +230,8 @@ fn read_barrier_requires_current_read_quorum_response() -> Result<(), Box<dyn Er
             matched_index: 0,
             next_index_hint: 1,
             read_barrier_id: Some(read_barrier_id),
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
         }),
     )?)?;
     assert!(matches!(
@@ -246,6 +257,8 @@ fn read_barrier_waits_for_local_state_machine_application() -> Result<(), Box<dy
             matched_index: 1,
             next_index_hint: 2,
             read_barrier_id: None,
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
         }),
     )?)?;
 
@@ -259,6 +272,8 @@ fn read_barrier_waits_for_local_state_machine_application() -> Result<(), Box<dy
             matched_index: 1,
             next_index_hint: 2,
             read_barrier_id: Some(read_barrier_id),
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
         }),
     )?)?;
     assert!(effects.is_empty());
@@ -317,6 +332,8 @@ fn conflicting_uncommitted_tail_is_replaced_but_committed_tail_is_protected()
             matched_index: 2,
             next_index_hint: 3,
             read_barrier_id: None,
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
         }),
     )?)?;
     assert_eq!(follower.commit_index(), 2);
@@ -399,12 +416,22 @@ fn vote(from: u8, granted: bool) -> Result<CoreInput, Box<dyn Error>> {
 }
 
 fn vote_with_term(from: u8, term: u64, granted: bool) -> Result<CoreInput, Box<dyn Error>> {
+    vote_for_plan(from, term, granted, fixture_plan_digest()?)
+}
+
+fn vote_for_plan(
+    from: u8,
+    term: u64,
+    granted: bool,
+    plan_digest: [u8; 32],
+) -> Result<CoreInput, Box<dyn Error>> {
     message(
         from,
         CoreMessage::VoteResponse(VoteResponse {
             term,
             granted,
             membership_epoch: 1,
+            plan_digest,
         }),
     )
 }
