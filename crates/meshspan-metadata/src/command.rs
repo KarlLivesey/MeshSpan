@@ -5,8 +5,9 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
-    DurationMicros, GrantId, GroupId, HostId, JoinGrantId, MeshId, NodeId, ObjectId, OperationId,
-    OwnerSetId, PrincipalId, Revision, Rights, RoleId, UnixMicros, VolumeId,
+    DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId,
+    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId,
+    UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -60,6 +61,20 @@ pub enum AuthoritativeCommand {
     IssueJoinGrant(IssueJoinGrant),
     /// Consumes a join grant to admit one certificate-bound learner node.
     ConsumeJoinGrant(ConsumeJoinGrant),
+    /// Registers an Ed25519 public key permitted to attest catalogue routes.
+    RegisterRoutingSigner(RegisterRoutingSigner),
+    /// Creates another metadata partition in the catalogue.
+    CreateMetadataPartition(CreateMetadataPartition),
+    /// Creates one initially active scope route.
+    CreateScopeRoute(CreateScopeRoute),
+    /// Begins destination catch-up while the source remains sole writer.
+    BeginScopeHandoff(BeginScopeHandoff),
+    /// Fences source writes at an exact state image.
+    FreezeScopeHandoff(FreezeScopeHandoff),
+    /// Activates a caught-up destination as sole writer.
+    ActivateScopeHandoff(ActivateScopeHandoff),
+    /// Restores source authority under a newer route fence.
+    AbortScopeHandoff(AbortScopeHandoff),
 }
 
 impl AuthoritativeCommand {
@@ -93,6 +108,13 @@ impl AuthoritativeCommand {
             Self::AssignComponent(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
             Self::ConsumeJoinGrant(value) => value.update_digest(digest),
+            Self::RegisterRoutingSigner(value) => value.update_digest(digest),
+            Self::CreateMetadataPartition(value) => value.update_digest(digest),
+            Self::CreateScopeRoute(value) => value.update_digest(digest),
+            Self::BeginScopeHandoff(value) => value.update_digest(digest),
+            Self::FreezeScopeHandoff(value) => value.update_digest(digest),
+            Self::ActivateScopeHandoff(value) => value.update_digest(digest),
+            Self::AbortScopeHandoff(value) => value.update_digest(digest),
         }
     }
 }
@@ -448,6 +470,106 @@ pub struct ConsumeJoinGrant {
     pub certificate_valid_until: UnixMicros,
 }
 
+/// Ed25519 signature and committed key identity for one resulting route state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RouteAttestation {
+    /// Enrolled node whose active public key verifies the route.
+    pub signer_node_id: NodeId,
+    /// Exact signing-key generation.
+    pub signer_generation: u64,
+    /// Ed25519 signature over `ScopeRoute::signing_payload()`.
+    pub signature: [u8; 64],
+}
+
+/// Public route-signing key registration; private signing material remains node-local.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisterRoutingSigner {
+    /// Existing enrolled node.
+    pub node_id: NodeId,
+    /// Monotonic node key generation.
+    pub generation: u64,
+    /// Strict Ed25519 verifying key bytes.
+    pub verifying_key: [u8; 32],
+}
+
+/// Another metadata partition addressable by catalogue routes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateMetadataPartition {
+    /// New partition identity.
+    pub partition_id: PartitionId,
+    /// Human-facing partition name.
+    pub name: RecordName,
+    /// Closed partition kind defined by the schema.
+    pub partition_kind: u8,
+}
+
+/// First active owner of a newly routed scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CreateScopeRoute {
+    /// Stable routed scope.
+    pub scope_id: ScopeId,
+    /// Existing owner partition.
+    pub partition_id: PartitionId,
+    /// Initial positive route epoch.
+    pub routing_epoch: u64,
+    /// Signature over the resulting active route.
+    pub attestation: RouteAttestation,
+}
+
+/// Starts one fenced scope movement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BeginScopeHandoff {
+    /// Existing routed scope.
+    pub scope_id: ScopeId,
+    /// Different destination partition.
+    pub destination_partition_id: PartitionId,
+    /// New route epoch.
+    pub routing_epoch: u64,
+    /// Signature over the resulting preparing route.
+    pub attestation: RouteAttestation,
+}
+
+/// Stops source writes at an exact revision and snapshot digest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FreezeScopeHandoff {
+    /// Existing routed scope.
+    pub scope_id: ScopeId,
+    /// Current handoff route epoch.
+    pub routing_epoch: u64,
+    /// Exact source fence.
+    pub evidence: HandoffEvidence,
+    /// Signature over the resulting frozen route.
+    pub attestation: RouteAttestation,
+}
+
+/// Makes the destination sole writer after exact fence installation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivateScopeHandoff {
+    /// Existing routed scope.
+    pub scope_id: ScopeId,
+    /// Expected destination partition.
+    pub destination_partition_id: PartitionId,
+    /// Current handoff route epoch.
+    pub routing_epoch: u64,
+    /// Exact installed source fence.
+    pub evidence: HandoffEvidence,
+    /// Signature over the resulting active route.
+    pub attestation: RouteAttestation,
+}
+
+/// Cancels an unfinished handoff and restores source authority at a newer fence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AbortScopeHandoff {
+    /// Existing routed scope.
+    pub scope_id: ScopeId,
+    /// New route epoch used to fence all handoff messages.
+    pub routing_epoch: u64,
+    /// Stable non-zero audit reason code.
+    pub reason_code: u32,
+    /// Signature over the resulting active route.
+    pub attestation: RouteAttestation,
+}
+
 macro_rules! digest_simple_record {
     ($type:ty, $tag:literal, |$value:ident, $digest:ident| $body:block) => {
         impl $type {
@@ -603,6 +725,71 @@ digest_simple_record!(ConsumeJoinGrant, b"consume-join-grant", |value, digest| {
     digest.bytes(&value.certificate_fingerprint);
     digest.signed(value.certificate_valid_until.get());
 });
+digest_simple_record!(
+    RegisterRoutingSigner,
+    b"register-routing-signer",
+    |value, digest| {
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.generation);
+        digest.bytes(&value.verifying_key);
+    }
+);
+digest_simple_record!(
+    CreateMetadataPartition,
+    b"create-metadata-partition",
+    |value, digest| {
+        digest.identifier(value.partition_id.as_bytes());
+        digest.name(&value.name);
+        digest.byte(value.partition_kind);
+    }
+);
+digest_simple_record!(CreateScopeRoute, b"create-scope-route", |value, digest| {
+    digest.identifier(value.scope_id.as_bytes());
+    digest.identifier(value.partition_id.as_bytes());
+    digest.unsigned(value.routing_epoch);
+    digest.attestation(value.attestation);
+});
+digest_simple_record!(
+    BeginScopeHandoff,
+    b"begin-scope-handoff",
+    |value, digest| {
+        digest.identifier(value.scope_id.as_bytes());
+        digest.identifier(value.destination_partition_id.as_bytes());
+        digest.unsigned(value.routing_epoch);
+        digest.attestation(value.attestation);
+    }
+);
+digest_simple_record!(
+    FreezeScopeHandoff,
+    b"freeze-scope-handoff",
+    |value, digest| {
+        digest.identifier(value.scope_id.as_bytes());
+        digest.unsigned(value.routing_epoch);
+        digest.evidence(value.evidence);
+        digest.attestation(value.attestation);
+    }
+);
+digest_simple_record!(
+    ActivateScopeHandoff,
+    b"activate-scope-handoff",
+    |value, digest| {
+        digest.identifier(value.scope_id.as_bytes());
+        digest.identifier(value.destination_partition_id.as_bytes());
+        digest.unsigned(value.routing_epoch);
+        digest.evidence(value.evidence);
+        digest.attestation(value.attestation);
+    }
+);
+digest_simple_record!(
+    AbortScopeHandoff,
+    b"abort-scope-handoff",
+    |value, digest| {
+        digest.identifier(value.scope_id.as_bytes());
+        digest.unsigned(value.routing_epoch);
+        digest.unsigned(u64::from(value.reason_code));
+        digest.attestation(value.attestation);
+    }
+);
 
 fn assurance_code(value: AssuranceLevel) -> u8 {
     match value {
@@ -710,6 +897,17 @@ impl CanonicalDigest {
         for identifier in identifiers {
             self.identifier(identifier);
         }
+    }
+
+    fn evidence(&mut self, value: HandoffEvidence) {
+        self.unsigned(value.frozen_revision.get());
+        self.bytes(&value.snapshot_digest);
+    }
+
+    fn attestation(&mut self, value: RouteAttestation) {
+        self.identifier(value.signer_node_id.as_bytes());
+        self.unsigned(value.signer_generation);
+        self.bytes(&value.signature);
     }
 
     fn permission_scope(&mut self, scope: PermissionScope) {

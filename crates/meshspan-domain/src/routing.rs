@@ -204,6 +204,54 @@ impl ScopeRoute {
     pub const fn state(&self) -> RouteState {
         self.state
     }
+
+    /// Returns the proposed destination while a handoff exists.
+    #[must_use]
+    pub const fn destination_partition(&self) -> Option<PartitionId> {
+        match self.state {
+            RouteState::Active => None,
+            RouteState::Preparing { destination } | RouteState::Frozen { destination, .. } => {
+                Some(destination)
+            }
+        }
+    }
+
+    /// Returns the exact source fence after writes have stopped.
+    #[must_use]
+    pub const fn handoff_evidence(&self) -> Option<HandoffEvidence> {
+        match self.state {
+            RouteState::Frozen { evidence, .. } => Some(evidence),
+            RouteState::Active | RouteState::Preparing { .. } => None,
+        }
+    }
+
+    /// Encodes the complete route state for signatures and durable route digests.
+    #[must_use]
+    pub fn signing_payload(&self) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(146);
+        payload.extend_from_slice(b"meshspan.scope-route.v1");
+        payload.extend_from_slice(&self.scope_id.as_bytes());
+        payload.extend_from_slice(&self.source_partition.as_bytes());
+        payload.extend_from_slice(&self.ownership_epoch.to_be_bytes());
+        payload.extend_from_slice(&self.routing_epoch.to_be_bytes());
+        match self.state {
+            RouteState::Active => payload.push(1),
+            RouteState::Preparing { destination } => {
+                payload.push(2);
+                payload.extend_from_slice(&destination.as_bytes());
+            }
+            RouteState::Frozen {
+                destination,
+                evidence,
+            } => {
+                payload.push(3);
+                payload.extend_from_slice(&destination.as_bytes());
+                payload.extend_from_slice(&evidence.frozen_revision.get().to_be_bytes());
+                payload.extend_from_slice(&evidence.snapshot_digest);
+            }
+        }
+        payload
+    }
 }
 
 /// Closed route transition failures.

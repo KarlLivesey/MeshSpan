@@ -14,6 +14,7 @@ mod kernel;
 mod namespace;
 mod query;
 mod receipt;
+mod routing;
 mod verify;
 
 use meshspan_domain::{OperationId, Revision};

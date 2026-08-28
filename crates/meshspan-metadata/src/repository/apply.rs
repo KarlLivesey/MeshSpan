@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
-    cluster, component, identity, namespace,
+    cluster, component, identity, namespace, routing,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -354,6 +354,27 @@ fn execute(
         AuthoritativeCommand::ConsumeJoinGrant(value) => {
             cluster::consume_join_grant(transaction, partition_id, context, value, revision)
         }
+        AuthoritativeCommand::RegisterRoutingSigner(value) => {
+            routing::register_signer(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CreateMetadataPartition(value) => {
+            routing::create_partition(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CreateScopeRoute(value) => {
+            routing::create_scope(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::BeginScopeHandoff(value) => {
+            routing::begin_handoff(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::FreezeScopeHandoff(value) => {
+            routing::freeze_handoff(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ActivateScopeHandoff(value) => {
+            routing::activate_handoff(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::AbortScopeHandoff(value) => {
+            routing::abort_handoff(transaction, context, *value, revision)
+        }
     }
 }
 
@@ -519,6 +540,13 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::AssignComponent(_) => 13,
         AuthoritativeCommand::IssueJoinGrant(_) => 14,
         AuthoritativeCommand::ConsumeJoinGrant(_) => 15,
+        AuthoritativeCommand::RegisterRoutingSigner(_) => 16,
+        AuthoritativeCommand::CreateMetadataPartition(_) => 17,
+        AuthoritativeCommand::CreateScopeRoute(_) => 18,
+        AuthoritativeCommand::BeginScopeHandoff(_) => 19,
+        AuthoritativeCommand::FreezeScopeHandoff(_) => 20,
+        AuthoritativeCommand::ActivateScopeHandoff(_) => 21,
+        AuthoritativeCommand::AbortScopeHandoff(_) => 22,
     }
 }
 
