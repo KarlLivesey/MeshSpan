@@ -213,6 +213,27 @@ impl ConsensusCore {
             .flatten()
     }
 
+    /// Returns one locally present log entry by exact index.
+    #[must_use]
+    pub fn log_entry(&self, index: u64) -> Option<&LogEntry> {
+        self.entry(index)
+    }
+
+    /// Returns the current durable log tail entry, if any.
+    #[must_use]
+    pub fn last_log_entry(&self) -> Option<&LogEntry> {
+        self.log.last()
+    }
+
+    /// Returns the leader's highest matched index for one current member.
+    #[must_use]
+    pub fn peer_matched_index(&self, node_id: NodeId) -> Option<u64> {
+        match &self.role {
+            RoleState::Leader(leader) => leader.matched.get(&node_id).copied(),
+            RoleState::Follower | RoleState::Candidate { .. } => None,
+        }
+    }
+
     /// Consumes one deterministic input and returns ordered side effects.
     ///
     /// # Errors

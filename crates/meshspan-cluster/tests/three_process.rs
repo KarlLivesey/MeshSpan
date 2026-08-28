@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use meshspan_domain::{PartitionId, Revision, UnixMicros};
+use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
     KeyPair, KeyUsagePurpose,
@@ -28,23 +30,48 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
     let launches = build_launches(temporary.path())?;
     let mut cluster = ProcessCluster::start(&launches)?;
 
-    for launch in &launches {
-        wait_for_response(launch.control_address, "INFO", None).await?;
-    }
+    wait_for_response(launches[0].control_address, "INFO", None).await?;
     assert_eq!(
         command(launches[0].control_address, "ELECT").await?,
         "ELECTION_STARTED"
     );
     wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
+    for operation in 1_u8..=3 {
+        commit_on_nodes(&launches, 0, operation, 1).await?;
+    }
     wait_for_response(
         launches[1].control_address,
         "INFO",
         Some("FOLLOWER_WITH_LEADER"),
     )
     .await?;
-
-    for operation in 1_u8..=11 {
-        commit_on_every_node(&launches, 0, operation).await?;
+    for operation in 1_u8..=3 {
+        wait_for_response(
+            launches[1].control_address,
+            &format!("STATUS {operation}"),
+            Some("COMMITTED"),
+        )
+        .await?;
+    }
+    for operation in 4_u8..=5 {
+        commit_on_nodes(&launches, 0, operation, 2).await?;
+    }
+    wait_for_response(
+        launches[2].control_address,
+        "INFO",
+        Some("FOLLOWER_WITH_LEADER"),
+    )
+    .await?;
+    for operation in 1_u8..=5 {
+        wait_for_response(
+            launches[2].control_address,
+            &format!("STATUS {operation}"),
+            Some("COMMITTED"),
+        )
+        .await?;
+    }
+    for operation in 6_u8..=11 {
+        commit_on_nodes(&launches, 0, operation, 3).await?;
     }
 
     assert_eq!(
@@ -85,6 +112,28 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
     cluster.restart(&launches[0])?;
     wait_for_response(launches[0].control_address, "INFO", None).await?;
     wait_for_response(launches[0].control_address, "STATUS 23", Some("COMMITTED")).await?;
+    for number in 1_u8..=3 {
+        cluster.stop(number)?;
+    }
+    assert_promoted_membership(&launches)?;
+    Ok(())
+}
+
+fn assert_promoted_membership(launches: &[NodeLaunch]) -> Result<(), Box<dyn Error>> {
+    let partition_id = PartitionId::from_bytes([8; 16])?;
+    for launch in launches {
+        let database = PartitionDatabase::open(
+            &launch.state_path,
+            partition_id,
+            UnixMicros::new(20_000_000),
+        )?;
+        let membership = AuthoritativeRepository::new(database)
+            .partition_membership()?
+            .ok_or("promoted membership projection was absent")?;
+        assert_eq!(membership.revision(), Revision::new(5));
+        assert_eq!(membership.active_voters().len(), 3);
+        assert!(membership.admitted_learners().is_empty());
+    }
     Ok(())
 }
 
@@ -156,6 +205,10 @@ fn spawn_node(launch: &NodeLaunch) -> Result<RunningNode, Box<dyn Error>> {
         .args(["--private-key", path_text(&launch.private_key_path)?])
         .args(["--authority", path_text(&launch.authority_path)?])
         .args(["--state", path_text(&launch.state_path)?]);
+    command.args([
+        "--bootstrap",
+        if launch.number == 1 { "true" } else { "false" },
+    ]);
     for peer in launch_peers(launch)? {
         command.args(["--peer", &peer]);
     }
@@ -284,10 +337,11 @@ async fn abandon_response(address: SocketAddr, request: &str) -> Result<(), Box<
     Ok(())
 }
 
-async fn commit_on_every_node(
+async fn commit_on_nodes(
     launches: &[NodeLaunch],
     leader_index: usize,
     operation: u8,
+    node_count: usize,
 ) -> Result<(), Box<dyn Error>> {
     let proposal = format!("PROPOSE {operation}");
     assert_eq!(
@@ -295,7 +349,7 @@ async fn commit_on_every_node(
         "ACCEPTED"
     );
     let status = format!("STATUS {operation}");
-    for launch in launches {
+    for launch in launches.iter().take(node_count) {
         wait_for_response(launch.control_address, &status, Some("COMMITTED")).await?;
     }
     Ok(())

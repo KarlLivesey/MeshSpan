@@ -171,6 +171,24 @@ impl<P: PartitionConsensusPersistence> PartitionConsensusDriver<P> {
         self.core.committed_entry()
     }
 
+    /// Returns one locally present replicated-log entry by exact index.
+    #[must_use]
+    pub fn log_entry(&self, index: u64) -> Option<&LogEntry> {
+        self.core.log_entry(index)
+    }
+
+    /// Returns the durable log tail entry, if the log is non-empty.
+    #[must_use]
+    pub fn last_log_entry(&self) -> Option<&LogEntry> {
+        self.core.last_log_entry()
+    }
+
+    /// Returns the leader's highest exact match position for one current member.
+    #[must_use]
+    pub fn peer_matched_index(&self, node_id: NodeId) -> Option<u64> {
+        self.core.peer_matched_index(node_id)
+    }
+
     /// Borrows the durable repository for read-only state-machine queries.
     ///
     /// The single-owner runtime uses this only after processing emitted effects; consensus

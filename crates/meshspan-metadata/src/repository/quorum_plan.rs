@@ -3,7 +3,7 @@
 //! Atomic active quorum-plan bootstrap, transition history and hostile-state recovery.
 
 use meshspan_consensus::{ActiveQuorumPlan, CompiledQuorumPlan, DurableQuorumPlan, LogPosition};
-use meshspan_domain::UnixMicros;
+use meshspan_domain::{NodeId, UnixMicros};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::consensus::ConsensusStoreError;
@@ -110,7 +110,104 @@ pub(super) fn persist(
             durable.active_plan.proof_digest().as_slice(),
         ],
     )?;
+    if let ActiveQuorumPlan::Stable(plan) = &durable.active_plan {
+        synchronise_membership_projection(transaction, partition_id, plan, updated_at)?;
+    }
     Ok(())
+}
+
+fn synchronise_membership_projection(
+    transaction: &Transaction<'_>,
+    partition_id: &[u8; 16],
+    plan: &CompiledQuorumPlan,
+    updated_at: UnixMicros,
+) -> Result<(), ConsensusStoreError> {
+    let current = transaction
+        .query_row(
+            "SELECT current_membership_revision FROM metadata_partitions
+             WHERE partition_id = ?1 AND state = 1",
+            [partition_id.as_slice()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    let Some(current) = current else {
+        return Ok(());
+    };
+    let epoch = to_i64(plan.spec().membership_epoch)?;
+    if current != epoch.saturating_sub(1) {
+        return Err(ConsensusStoreError::InvalidQuorumPlan);
+    }
+    let mut statement = transaction.prepare(
+        "SELECT node_id FROM partition_voters
+         WHERE partition_id = ?1 AND state IN (1, 2)
+         ORDER BY node_id",
+    )?;
+    let stored = statement
+        .query_map([partition_id.as_slice()], |row| row.get::<_, Vec<u8>>(0))?
+        .map(|row| member_id(&row?))
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    drop(statement);
+    if stored != plan.members() {
+        return Err(ConsensusStoreError::InvalidQuorumPlan);
+    }
+    for voter in &plan.spec().voters {
+        update_member(transaction, partition_id, *voter, epoch, 1, 1)?;
+        let changed = transaction.execute(
+            "UPDATE nodes SET state = 2, activated_at = coalesce(activated_at, ?1)
+             WHERE node_id = ?2 AND state IN (1, 2)",
+            params![updated_at.get(), voter.as_bytes().as_slice()],
+        )?;
+        if changed != 1 {
+            return Err(ConsensusStoreError::InvalidQuorumPlan);
+        }
+    }
+    for learner in &plan.spec().learners {
+        update_member(transaction, partition_id, *learner, epoch, 2, 2)?;
+    }
+    let changed = transaction.execute(
+        "UPDATE metadata_partitions SET current_membership_revision = ?1
+         WHERE partition_id = ?2 AND current_membership_revision = ?3",
+        params![epoch, partition_id.as_slice(), current],
+    )?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(ConsensusStoreError::InvalidQuorumPlan)
+    }
+}
+
+fn update_member(
+    transaction: &Transaction<'_>,
+    partition_id: &[u8; 16],
+    node_id: NodeId,
+    membership_revision: i64,
+    member_role: i64,
+    state: i64,
+) -> Result<(), ConsensusStoreError> {
+    let changed = transaction.execute(
+        "UPDATE partition_voters
+         SET membership_revision = ?1, member_role = ?2, state = ?3
+         WHERE partition_id = ?4 AND node_id = ?5 AND state IN (1, 2)",
+        params![
+            membership_revision,
+            member_role,
+            state,
+            partition_id.as_slice(),
+            node_id.as_bytes().as_slice(),
+        ],
+    )?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(ConsensusStoreError::InvalidQuorumPlan)
+    }
+}
+
+fn member_id(bytes: &[u8]) -> Result<NodeId, ConsensusStoreError> {
+    let exact: [u8; 16] = bytes
+        .try_into()
+        .map_err(|_| ConsensusStoreError::InvalidQuorumPlan)?;
+    NodeId::from_bytes(exact).map_err(|_| ConsensusStoreError::InvalidQuorumPlan)
 }
 
 fn advance_applied_position(

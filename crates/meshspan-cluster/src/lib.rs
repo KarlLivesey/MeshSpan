@@ -3,6 +3,7 @@
 //! Runtime composition boundary for deterministic consensus, metadata persistence and QUIC.
 
 mod driver;
+mod membership;
 mod node_runtime;
 mod status;
 mod wire;
