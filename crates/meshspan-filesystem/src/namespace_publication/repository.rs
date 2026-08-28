@@ -8,16 +8,17 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::digest::{
-    branch_intent as branch_intent_digest, commit as commit_digest,
-    commit_fields as commit_digest_fields, directory_result as directory_result_digest,
-    file_result as result_digest, object_revision as object_revision_digest,
+    commit as commit_digest, commit_fields as commit_digest_fields,
+    directory_result as directory_result_digest, file_result as result_digest,
+    object_revision as object_revision_digest,
 };
 use super::{DirectoryRevisionResult, NamespaceIntent};
 use crate::publication::{copy_array, decode_identifier, from_i64, to_i64};
 use crate::{
     BranchMutation, BranchMutationIntent, BranchNamespaceHead, DirectoryNodeDigest,
     DirectoryPublication, DirectoryPublicationReceipt, NamespaceComponent, NamespacePath,
-    NamespacePublicationReceipt, PublicationDisposition, PublicationError, RootFilePublication,
+    NamespacePublicationReceipt, PublicationDisposition, PublicationError,
+    ReconciliationCommitPayload, RootFilePublication,
 };
 
 pub(in crate::publication) fn load_head(
@@ -233,6 +234,11 @@ pub(in crate::publication) fn load_reconciliation_commit(
         parents: commit.parent_id.into_iter().collect(),
         operation_id: commit.operation_id,
         request_digest,
+        payload: ReconciliationCommitPayload::Mutation {
+            intent_digest: load_branch_intent(connection, commit.commit_id)?
+                .ok_or(PublicationError::Corrupt)?
+                .digest(),
+        },
     }))
 }
 
@@ -305,7 +311,7 @@ fn persist_branch_intent(
                 u64::try_from(intent.path.components().len())
                     .map_err(|_| PublicationError::InvalidInput)?
             )?,
-            branch_intent_digest(intent).as_slice(),
+            intent.digest().as_slice(),
         ],
     )?;
     for (ordinal, component) in intent.path.components().iter().enumerate() {
@@ -433,7 +439,7 @@ fn decode_branch_intent(
         mutation,
     };
     validate_loaded_intent(connection, &intent)?;
-    if copy_array(&stored.7)? == branch_intent_digest(&intent) {
+    if copy_array(&stored.7)? == intent.digest() {
         Ok(intent)
     } else {
         Err(PublicationError::Corrupt)

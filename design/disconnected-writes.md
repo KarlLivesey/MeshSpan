@@ -143,6 +143,20 @@ mapping rather than the losing display path. Reconciliation applies these
 bounded affected paths; it never discovers user operations by scanning or
 heuristically diffing an entire namespace tree.
 
+The namespace replay planner validates those intents against the exact commit
+headers already bound by the causal plan and against a complete affected-entry
+base. Mutation headers bind the canonical intent digest; merge headers instead
+bind the replay-plan digest and remain causal markers rather than invented user
+mutations. It emits an ordered, digested action list. Distinct mutations apply at
+their original paths; concurrent same-name alternatives receive deterministic
+recovered paths and, where identity cannot safely be shared, derived immutable
+object/revision IDs. Later edits follow the selected recovered revision, and
+children of a recovered directory follow that directory. Missing ancestors,
+substituted headers, malformed lineage, duplicate identities and incomplete
+bases fail closed before any namespace write. Applying the action list and
+creating the durable multi-parent merge receipt remain part of this gate's
+transactional applier work.
+
 ## Deterministic conflict rules
 
 No generic system can meaningfully combine two concurrent arbitrary binary edits

@@ -9,6 +9,14 @@ use meshspan_domain::{
 };
 use thiserror::Error;
 
+#[path = "reconciliation/replay.rs"]
+mod replay;
+
+pub use replay::{
+    NamespaceReplayAction, NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEntry,
+    NamespaceReplayPlan, plan_namespace_replay,
+};
+
 const MAXIMUM_COMMITS: usize = 65_536;
 const MAXIMUM_FRONTIER_HEADS: usize = 1_024;
 const MAXIMUM_PARENTS: usize = 1_024;
@@ -23,6 +31,21 @@ pub enum BranchMutation {
     },
     /// Create one new empty directory object.
     CreateDirectory,
+}
+
+/// Immutable payload bound by one namespace commit header.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReconciliationCommitPayload {
+    /// One user-visible namespace mutation with its exact durable intent digest.
+    Mutation {
+        /// Canonical digest of the replay intent stored with the commit.
+        intent_digest: [u8; 32],
+    },
+    /// One reconciliation merge with the exact replay-plan digest it included.
+    Merge {
+        /// Canonical digest of the applied namespace replay plan.
+        replay_digest: [u8; 32],
+    },
 }
 
 /// Canonical path and leaf transition required to replay one disconnected branch commit.
@@ -44,6 +67,36 @@ pub struct BranchMutationIntent {
     pub entry_generation: u64,
     /// Typed leaf mutation whose immutable records must already be durable.
     pub mutation: BranchMutation,
+}
+
+impl BranchMutationIntent {
+    /// Returns the versioned canonical digest bound into its mutation commit.
+    #[must_use]
+    pub fn digest(&self) -> [u8; 32] {
+        let mut digest = blake3::Hasher::new();
+        digest.update(b"meshspan.filesystem.branch-mutation-intent.v2\0");
+        digest.update(&self.commit_id.as_bytes());
+        update_namespace_path(&mut digest, &self.path);
+        for ancestor in &self.ancestors {
+            digest.update(&ancestor.object_id().as_bytes());
+            digest.update(&ancestor.expected_revision_id().as_bytes());
+            digest.update(&ancestor.new_revision_id().as_bytes());
+        }
+        digest.update(&self.object_id.as_bytes());
+        digest.update(&self.object_revision_id.as_bytes());
+        update_optional_revision(&mut digest, self.prior_object_revision_id);
+        digest.update(&self.entry_generation.to_be_bytes());
+        match self.mutation {
+            BranchMutation::File { version_id } => {
+                digest.update(&[1]);
+                digest.update(&version_id.as_bytes());
+            }
+            BranchMutation::CreateDirectory => {
+                digest.update(&[2]);
+            }
+        }
+        digest.finalize().into()
+    }
 }
 
 /// Resource bounds for one independently validated reconciliation page.
@@ -112,6 +165,8 @@ pub struct ReconciliationCommit {
     pub operation_id: OperationId,
     /// Digest of the complete canonical mutation request.
     pub request_digest: [u8; 32],
+    /// Mutation intent or merge receipt bound by this commit.
+    pub payload: ReconciliationCommitPayload,
 }
 
 /// Current converged head and disconnected heads eligible for one reconciliation plan.
@@ -128,6 +183,7 @@ pub struct ReconciliationFrontier {
 pub struct ReconciliationPlan {
     ordered_commits: Vec<NamespaceCommitId>,
     merge_parents: Vec<NamespaceCommitId>,
+    commit_headers: BTreeMap<NamespaceCommitId, [u8; 32]>,
     digest: [u8; 32],
 }
 
@@ -148,6 +204,13 @@ impl ReconciliationPlan {
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
+    }
+
+    pub(crate) fn validates_commits(&self, commits: &[ReconciliationCommit]) -> bool {
+        commits.len() == self.commit_headers.len()
+            && commits.iter().all(|commit| {
+                self.commit_headers.get(&commit.commit_id) == Some(&commit_header_digest(commit))
+            })
     }
 }
 
@@ -178,10 +241,15 @@ pub fn plan_reconciliation(
     let pending = select_pending(&by_id, &eligible, &converged);
     let ordered_commits = order_pending(&by_id, &pending)?;
     let merge_parents = minimal_frontier(frontier, &by_id)?;
+    let commit_headers = by_id
+        .iter()
+        .map(|(commit_id, commit)| (*commit_id, commit_header_digest(commit)))
+        .collect();
     let digest = plan_digest(&by_id, frontier, &ordered_commits, &merge_parents);
     Ok(ReconciliationPlan {
         ordered_commits,
         merge_parents,
+        commit_headers,
         digest,
     })
 }
@@ -210,6 +278,15 @@ pub enum ReconciliationError {
     /// The page contains a commit outside the named frontier's causal closure.
     #[error("reconciliation page contains an unreachable commit")]
     UnreachableCommit,
+    /// An ordered mutation commit has no exact durable replay intent.
+    #[error("reconciliation mutation intent is missing")]
+    MissingIntent,
+    /// An affected path or revision required by replay is absent from the supplied base.
+    #[error("reconciliation affected-path base is incomplete")]
+    MissingBaseEntry,
+    /// Source directory/revision lineage cannot be applied safely to the selected target.
+    #[error("reconciliation source lineage is invalid")]
+    InvalidLineage,
 }
 
 /// Failures while loading a durable commit closure and planning its reconciliation.
@@ -249,9 +326,14 @@ fn index_commits(
     let mut indexed = BTreeMap::new();
     for commit in commits {
         let parents = commit.parents.iter().copied().collect::<BTreeSet<_>>();
+        let invalid_payload = match commit.payload {
+            ReconciliationCommitPayload::Mutation { .. } => commit.parents.len() > 1,
+            ReconciliationCommitPayload::Merge { .. } => commit.parents.len() < 2,
+        };
         if parents.len() != commit.parents.len()
             || parents.contains(&commit.commit_id)
             || commit.parents.len() > limits.parents
+            || invalid_payload
             || indexed.insert(commit.commit_id, commit).is_some()
         {
             return Err(ReconciliationError::InvalidInput);
@@ -462,7 +544,7 @@ fn plan_digest(
     parents: &[NamespaceCommitId],
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.reconciliation-plan.v1\0");
+    digest.update(b"meshspan.filesystem.reconciliation-plan.v2\0");
     if let Some(head) = frontier.converged_head {
         digest.update(&[1]);
         digest.update(&head.as_bytes());
@@ -476,6 +558,7 @@ fn plan_digest(
         let commit = commits[commit_id];
         digest.update(&commit.operation_id.as_bytes());
         digest.update(&commit.request_digest);
+        update_payload(&mut digest, commit.payload);
         digest.update(&commit.root_object_revision_id.as_bytes());
     }
     update_ids(&mut digest, parents);
@@ -500,6 +583,61 @@ fn update_commits(
         update_ids(digest, &commit.parents);
         digest.update(&commit.operation_id.as_bytes());
         digest.update(&commit.request_digest);
+        update_payload(digest, commit.payload);
+    }
+}
+
+fn commit_header_digest(commit: &ReconciliationCommit) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.reconciliation-commit-header.v2\0");
+    digest.update(&commit.commit_id.as_bytes());
+    digest.update(&commit.branch_id.as_bytes());
+    digest.update(&commit.volume_id.as_bytes());
+    digest.update(&commit.root_object_id.as_bytes());
+    digest.update(&commit.root_object_revision_id.as_bytes());
+    update_ids(&mut digest, &commit.parents);
+    digest.update(&commit.operation_id.as_bytes());
+    digest.update(&commit.request_digest);
+    update_payload(&mut digest, commit.payload);
+    digest.finalize().into()
+}
+
+fn update_payload(digest: &mut blake3::Hasher, payload: ReconciliationCommitPayload) {
+    match payload {
+        ReconciliationCommitPayload::Mutation { intent_digest } => {
+            digest.update(&[1]);
+            digest.update(&intent_digest);
+        }
+        ReconciliationCommitPayload::Merge { replay_digest } => {
+            digest.update(&[2]);
+            digest.update(&replay_digest);
+        }
+    }
+}
+
+fn update_namespace_path(digest: &mut blake3::Hasher, path: &crate::NamespacePath) {
+    digest.update(
+        &u16::try_from(path.components().len())
+            .unwrap_or(u16::MAX)
+            .to_be_bytes(),
+    );
+    for component in path.components() {
+        update_text(digest, component.canonical());
+        update_text(digest, component.display());
+    }
+}
+
+fn update_text(digest: &mut blake3::Hasher, value: &str) {
+    digest.update(&u32::try_from(value.len()).unwrap_or(u32::MAX).to_be_bytes());
+    digest.update(value.as_bytes());
+}
+
+fn update_optional_revision(digest: &mut blake3::Hasher, value: Option<ObjectRevisionId>) {
+    if let Some(value) = value {
+        digest.update(&[1]);
+        digest.update(&value.as_bytes());
+    } else {
+        digest.update(&[0]);
     }
 }
 

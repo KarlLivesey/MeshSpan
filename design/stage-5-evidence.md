@@ -149,6 +149,16 @@ copy-on-write filesystem service. This document records executable evidence only
 1. [x] Protocol-neutral canonical component/path types and compatibility bounds.
 2. [x] Persistent immutable versions, staged random writes and atomic CoW volume heads.
 3. Deterministic branch commits, disconnected reconciliation and recovered items.
+   Durable branch commits now bind exact nested mutation lineage, and a pure
+   bounded replay planner validates each commit-bound mutation-intent digest,
+   the causal plan's exact headers and the affected-entry base before producing
+   one digested action sequence. Merge commits have a distinct plan-digest
+   payload and are proven to remain causal markers rather than replay actions.
+   Tests prove delivery-order independence, same-name recovered copies, later edits
+   following a recovered file, descendants following a recovered directory,
+   and fail-closed handling of malformed intents, incomplete bases and commit
+   substitution. The transactional SQLite action applier and merge receipt are
+   still required before this gate can close.
 4. Snapshots, retention and restore-as-new-head.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
