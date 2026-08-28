@@ -151,6 +151,8 @@ pub struct VersionRetentionCandidate {
     pub object_id: ObjectId,
     /// Immutable content manifest selected by the version.
     pub manifest_id: ContentManifestId,
+    /// Immutable manifest root used by every physical shard identity.
+    pub manifest_root_digest: [u8; 32],
     /// Logical bytes represented by the version.
     pub logical_length: u64,
     /// Authoritative instant at which the version stopped being current.
@@ -340,6 +342,7 @@ fn load_candidate_rows(
                    successors.volume_id AS successor_volume_id,
                    successors.object_id AS successor_object_id,
                    successors.created_at AS successor_created_at,
+                   manifests.root_digest AS manifest_root_digest,
                    sum(CASE
                        WHEN history.ordinary_history_enabled = 1
                         AND conflicts.first_observed_at IS NULL THEN 1 ELSE 0
@@ -351,6 +354,8 @@ fn load_candidate_rows(
             JOIN file_version_history AS history USING(version_id)
             JOIN file_versions AS successors
               ON successors.version_id = history.superseded_by_version_id
+            JOIN content_manifests AS manifests
+              ON manifests.manifest_id = versions.manifest_id
             LEFT JOIN file_version_conflict_protections AS conflicts USING(version_id)
             WHERE versions.volume_id = ?1
               AND NOT EXISTS (
@@ -361,7 +366,8 @@ fn load_candidate_rows(
         SELECT version_id, superseded_by_version_id, branch_id, volume_id, object_id,
                manifest_id, logical_length, superseded_at, ordinary_history_enabled,
                policy_sequence, first_observed_at, version_created_at, successor_branch_id,
-               successor_volume_id, successor_object_id, successor_created_at
+               successor_volume_id, successor_object_id, successor_created_at,
+               manifest_root_digest
         FROM historical
         WHERE (?2 IS NULL OR (superseded_at, branch_id, version_id) > (?2, ?3, ?4))
           AND (?10 IS NULL OR version_id = ?10)
@@ -407,6 +413,7 @@ fn load_candidate_rows(
                 row.get::<_, Vec<u8>>(13)?,
                 row.get::<_, Vec<u8>>(14)?,
                 row.get::<_, i64>(15)?,
+                row.get::<_, Vec<u8>>(16)?,
             ))
         },
     )?;
@@ -504,6 +511,7 @@ type StoredCandidate = (
     Vec<u8>,
     Vec<u8>,
     i64,
+    Vec<u8>,
 );
 
 fn decode_candidate(
@@ -558,6 +566,11 @@ fn decode_candidate(
         volume_id: identifier(&stored.3, VolumeId::from_bytes)?,
         object_id: identifier(&stored.4, ObjectId::from_bytes)?,
         manifest_id: identifier(&stored.5, ContentManifestId::from_bytes)?,
+        manifest_root_digest: stored
+            .16
+            .as_slice()
+            .try_into()
+            .map_err(|_| VersionRetentionError::Corrupt)?,
         logical_length: u64::try_from(stored.6).map_err(|_| VersionRetentionError::Corrupt)?,
         superseded_at,
         policy_sequence: policy.sequence,

@@ -24,6 +24,7 @@ pub const fn version_cleanup_proposal(proof: VersionUnreachableProof) -> Authori
         volume_id: proof.volume_id,
         version_id: proof.version_id,
         manifest_id: proof.manifest_id,
+        manifest_root_digest: proof.manifest_root_digest,
         source_scan_operation_id: proof.operation_id,
         scan_request_digest: proof.scan_request_digest,
         reachability_subject_digest: proof.subject_digest,
@@ -91,6 +92,7 @@ mod tests {
             volume_id: VolumeId::from_bytes([2; 16])?,
             version_id: FileVersionId::from_bytes([3; 16])?,
             manifest_id: ContentManifestId::from_bytes([4; 16])?,
+            manifest_root_digest: [19; 32],
             scan_request_digest: [5; 32],
             subject_digest: [12; 32],
             retention_policy_sequence: 6,
@@ -107,6 +109,7 @@ mod tests {
         assert_eq!(command.volume_id, proof.volume_id);
         assert_eq!(command.version_id, proof.version_id);
         assert_eq!(command.manifest_id, proof.manifest_id);
+        assert_eq!(command.manifest_root_digest, proof.manifest_root_digest);
         assert_eq!(command.source_scan_operation_id, proof.operation_id);
         assert_eq!(command.scan_request_digest, proof.scan_request_digest);
         assert_eq!(command.reachability_subject_digest, proof.subject_digest);
@@ -161,6 +164,7 @@ mod tests {
             volume_id: VolumeId::from_bytes([2; 16])?,
             version_id: FileVersionId::from_bytes([3; 16])?,
             manifest_id: ContentManifestId::from_bytes([4; 16])?,
+            manifest_root_digest: [19; 32],
             scan_request_digest: [5; 32],
             subject_digest: [12; 32],
             retention_policy_sequence: 6,

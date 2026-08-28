@@ -285,7 +285,9 @@ copy-on-write filesystem service. This document records executable evidence only
    its per-node scan request remains uniquely replay-safe. The graph proof also
    treats any reachable version sharing the candidate's immutable manifest as a
    live reference, preventing logical copies from authorising shared-shard
-   deletion. Storage providers
+   deletion. Retention selection, scan evidence and replicated proposals also
+   carry the immutable manifest root digest used by physical shard identities,
+   preventing cleanup-item substitution across manifests. Storage providers
    also enforce a monotonically advancing applied-catalogue fence, so applying a
    newer revision permanently rejects an otherwise authentic older removal
    permit. Final authority and physical catalogue/provider completion remain

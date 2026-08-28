@@ -104,7 +104,7 @@ fn stale_roots_policy_and_forged_terminal_proofs_change_nothing()
     ));
     let mut substituted = valid_value;
     substituted.retained_root_digest[0] ^= 1;
-    substituted.proof_result_digest = terminal_digest(substituted);
+    substituted.proof_result_digest = terminal_digest(&substituted);
     assert!(matches!(
         repository.apply_committed(
             LogPosition { index: 4, term: 1 },
@@ -115,7 +115,7 @@ fn stale_roots_policy_and_forged_terminal_proofs_change_nothing()
     ));
     let mut wrong_policy = valid_value;
     wrong_policy.retention_policy_sequence = 2;
-    wrong_policy.proof_result_digest = terminal_digest(wrong_policy);
+    wrong_policy.proof_result_digest = terminal_digest(&wrong_policy);
     assert!(matches!(
         repository.apply_committed(
             LogPosition { index: 4, term: 1 },
@@ -193,6 +193,7 @@ pub(super) fn cleanup_command(
         volume_id,
         version_id: FileVersionId::from_bytes([identity; 16])?,
         manifest_id: ContentManifestId::from_bytes([identity.saturating_add(1); 16])?,
+        manifest_root_digest: [identity.saturating_add(6); 32],
         source_scan_operation_id: OperationId::from_bytes([identity.saturating_add(2); 16])?,
         scan_request_digest: [identity.saturating_add(3); 32],
         reachability_subject_digest: [identity.saturating_add(5); 32],
@@ -203,11 +204,11 @@ pub(super) fn cleanup_command(
         local_roots_digest: [identity.saturating_add(4); 32],
         proof_result_digest: [0; 32],
     };
-    value.proof_result_digest = terminal_digest(value);
+    value.proof_result_digest = terminal_digest(&value);
     Ok(AuthoritativeCommand::ProposeVersionCleanup(value))
 }
 
-pub(super) fn terminal_digest(command: ProposeVersionCleanup) -> [u8; 32] {
+pub(super) fn terminal_digest(command: &ProposeVersionCleanup) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.version-reachability-result.v1\0");
     digest.update(&command.source_scan_operation_id.as_bytes());

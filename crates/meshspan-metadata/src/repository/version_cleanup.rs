@@ -25,6 +25,8 @@ pub struct VersionCleanupIntent {
     pub version_id: FileVersionId,
     /// Content manifest selected by the version.
     pub manifest_id: ContentManifestId,
+    /// Immutable manifest root carried by every physical shard identity.
+    pub manifest_root_digest: [u8; 32],
     /// Durable filesystem scan that produced the proof.
     pub source_scan_operation_id: OperationId,
     /// Digest binding the scan candidate, retention selection and root authority.
@@ -54,7 +56,7 @@ pub struct VersionCleanupIntent {
 pub(super) fn propose(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    command: ProposeVersionCleanup,
+    command: &ProposeVersionCleanup,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate_input(context, command)?;
@@ -81,8 +83,8 @@ pub(super) fn propose(
             reachability_revision, retained_root_count, retained_root_digest,
             local_roots_digest, proof_result_digest, state, proposed_at,
             completed_at, revision, required_attestation_count,
-            reachability_subject_digest
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, NULL, ?14, ?15, ?16)",
+            reachability_subject_digest, manifest_root_digest
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, NULL, ?14, ?15, ?16, ?17)",
         params![
             context.operation_id.as_bytes().as_slice(),
             command.volume_id.as_bytes().as_slice(),
@@ -100,6 +102,7 @@ pub(super) fn propose(
             to_i64(revision.get())?,
             to_i64(required_attestation_count)?,
             command.reachability_subject_digest.as_slice(),
+            command.manifest_root_digest.as_slice(),
         ],
     )?;
     let participant_rows = transaction.execute(
@@ -150,7 +153,8 @@ pub(super) fn load(
                     scan_request_digest, retention_policy_sequence, reachability_revision,
                     retained_root_count, retained_root_digest, local_roots_digest,
                     proof_result_digest, state, proposed_at, completed_at, revision,
-                    required_attestation_count, reachability_subject_digest
+                    required_attestation_count, reachability_subject_digest,
+                    manifest_root_digest
              FROM version_cleanup_intents WHERE cleanup_operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
@@ -172,6 +176,7 @@ pub(super) fn load(
                     row.get::<_, i64>(14)?,
                     row.get::<_, Option<i64>>(15)?,
                     row.get::<_, Option<Vec<u8>>>(16)?,
+                    row.get::<_, Option<Vec<u8>>>(17)?,
                 ))
             },
         )
@@ -200,6 +205,7 @@ type StoredIntent = (
     i64,
     Option<i64>,
     Option<Vec<u8>>,
+    Option<Vec<u8>>,
 );
 
 fn decode(
@@ -214,6 +220,12 @@ fn decode(
         volume_id: volume(&row.0)?,
         version_id: version(&row.1)?,
         manifest_id: manifest(&row.2)?,
+        manifest_root_digest: row
+            .17
+            .as_deref()
+            .map(array)
+            .transpose()?
+            .ok_or(RepositoryError::CorruptState)?,
         source_scan_operation_id: operation(&row.3)?,
         scan_request_digest: array(&row.4)?,
         reachability_subject_digest: row
@@ -240,6 +252,7 @@ fn decode(
         volume_id: intent.volume_id,
         version_id: intent.version_id,
         manifest_id: intent.manifest_id,
+        manifest_root_digest: intent.manifest_root_digest,
         source_scan_operation_id: intent.source_scan_operation_id,
         scan_request_digest: intent.scan_request_digest,
         reachability_subject_digest: intent.reachability_subject_digest,
@@ -250,7 +263,7 @@ fn decode(
         local_roots_digest: intent.local_roots_digest,
         proof_result_digest: intent.proof_result_digest,
     };
-    if terminal_result_digest(command) != intent.proof_result_digest {
+    if terminal_result_digest(&command) != intent.proof_result_digest {
         return Err(RepositoryError::CorruptState);
     }
     Ok(intent)
@@ -281,13 +294,14 @@ fn required_participant_count(connection: &Connection) -> Result<u64, Repository
 
 fn validate_input(
     context: CommandContext,
-    command: ProposeVersionCleanup,
+    command: &ProposeVersionCleanup,
 ) -> Result<(), RepositoryError> {
     if context.expected_revision != Some(command.reachability_revision)
         || command.reachability_revision == Revision::ZERO
         || command.retention_policy_sequence == 0
         || command.retained_root_count == 0
         || command.scan_request_digest == [0; 32]
+        || command.manifest_root_digest == [0; 32]
         || command.reachability_subject_digest == [0; 32]
         || command.retained_root_digest == [0; 32]
         || command.local_roots_digest == [0; 32]
@@ -302,7 +316,7 @@ fn validate_input(
 
 fn validate_policy(
     connection: &Connection,
-    command: ProposeVersionCleanup,
+    command: &ProposeVersionCleanup,
 ) -> Result<(), RepositoryError> {
     let (latest, count): (Option<i64>, i64) = connection.query_row(
         "SELECT max(policy_sequence), count(*)
@@ -321,7 +335,7 @@ fn validate_policy(
     }
 }
 
-fn terminal_result_digest(command: ProposeVersionCleanup) -> [u8; 32] {
+fn terminal_result_digest(command: &ProposeVersionCleanup) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.version-reachability-result.v1\0");
     digest.update(&command.source_scan_operation_id.as_bytes());
