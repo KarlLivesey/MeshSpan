@@ -45,6 +45,9 @@ public file access; those remain later roadmap stages.
   active user/group owners. Parent kind/volume, scope and inheritance are
   validated before SQL mutation. Component configuration history and
   assignments use the same authorisation, replay and audit machinery.
+- Typed tag commands create bounded canonical definitions and attach/detach them
+  only to active principals or logical objects. They share exact replay,
+  conflict and audit machinery but never modify ownership, grants or authority.
 - Public repository reads are point lookups or explicit seek pages capped at
   1,000 records. Namespace and membership plan vectors assert their intended
   indexes. Internal graph and verification scans have explicit row/finding
@@ -64,6 +67,7 @@ public file access; those remain later roadmap stages.
 | Replay and hostile state | Exact replay preserves the original revision/result; conflicting reuse, stale position/revision, transitive cycles, malformed identifiers, digest drift and changed backup bytes fail closed |
 | Migration and integrity | Three immutable authoritative migrations and one local migration; reopen, wrong identity, newer/drifted history, strict constraints, `quick_check` and foreign-key vectors |
 | IAM and ownership | Shared user/group namespace, bounded exact closure, scheduled grants, grant/group self-activation and non-empty multiple user/group owner sets |
+| Descriptive tags | Create/attach/detach covers principal and object targets, exact replay, conflicting reuse, duplicate/missing-edge rejection, name bounds, audit rows and proof that a tagged user gains no authority |
 | Desired configuration | Versioned component instances, retained configuration history, assignments, node support and desired-versus-observed records |
 | Backup and restore | Exact position/revision/schema/identity manifest, SHA-256 byte verification, active-voter admission and never-overwrite staged restore |
 | Bounded indexed reads | Validated page limits, seek cursors, explicit `LIMIT + 1`, named namespace index and membership primary-index query-plan assertions |

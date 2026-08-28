@@ -7,7 +7,7 @@ use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
     DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId,
     ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId,
-    UnixMicros, VolumeId,
+    TagId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -45,6 +45,12 @@ pub enum AuthoritativeCommand {
     CreateVolume(CreateVolume),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
+    /// Creates one descriptive tag with no authority semantics.
+    CreateTag(CreateTag),
+    /// Attaches one descriptive tag to a principal or logical object.
+    AttachTag(AttachTag),
+    /// Detaches one descriptive tag from a principal or logical object.
+    DetachTag(DetachTag),
     /// Creates an allow-only global, volume or object permission grant.
     GrantPermission(GrantPermission),
     /// Activates one pre-authorised grant for the requesting user.
@@ -100,6 +106,9 @@ impl AuthoritativeCommand {
             Self::CreateActivationPolicy(value) => value.update_digest(digest),
             Self::CreateVolume(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
+            Self::CreateTag(value) => value.update_digest(digest),
+            Self::AttachTag(value) => value.update_digest(digest),
+            Self::DetachTag(value) => value.update_digest(digest),
             Self::GrantPermission(value) => value.update_digest(digest),
             Self::ActivateGrant(value) => value.update_digest(digest),
             Self::ActivateGroup(value) => value.update_digest(digest),
@@ -237,6 +246,42 @@ pub struct CreateObject {
     pub owner_set_id: OwnerSetId,
     /// Non-empty user/group owner principals.
     pub owners: BoundedItems<PrincipalId>,
+}
+
+/// One descriptive tag definition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateTag {
+    /// Stable tag identity.
+    pub tag_id: TagId,
+    /// Human-facing and canonicalised tag name.
+    pub name: RecordName,
+}
+
+/// Closed entities that may carry descriptive tags.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TagTarget {
+    /// User or group principal.
+    Principal(PrincipalId),
+    /// Folder or file logical object.
+    Object(ObjectId),
+}
+
+/// One descriptive tag attachment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AttachTag {
+    /// Existing tag.
+    pub tag_id: TagId,
+    /// Existing active target.
+    pub target: TagTarget,
+}
+
+/// One descriptive tag detachment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DetachTag {
+    /// Existing tag.
+    pub tag_id: TagId,
+    /// Exact currently attached target.
+    pub target: TagTarget,
 }
 
 /// Permission scope with no ambiguous nullable combination.
@@ -642,6 +687,18 @@ digest_simple_record!(CreateObject, b"create-object", |value, digest| {
     digest.identifier(value.owner_set_id.as_bytes());
     digest.principals(&value.owners);
 });
+digest_simple_record!(CreateTag, b"create-tag", |value, digest| {
+    digest.identifier(value.tag_id.as_bytes());
+    digest.name(&value.name);
+});
+digest_simple_record!(AttachTag, b"attach-tag", |value, digest| {
+    digest.identifier(value.tag_id.as_bytes());
+    digest.tag_target(value.target);
+});
+digest_simple_record!(DetachTag, b"detach-tag", |value, digest| {
+    digest.identifier(value.tag_id.as_bytes());
+    digest.tag_target(value.target);
+});
 digest_simple_record!(GrantPermission, b"grant-permission", |value, digest| {
     digest.identifier(value.grant_id.as_bytes());
     digest.identifier(value.subject_principal_id.as_bytes());
@@ -806,6 +863,19 @@ impl CanonicalDigest {
         let mut digest = Sha256::new();
         digest.update(domain);
         Self(digest)
+    }
+
+    fn tag_target(&mut self, target: TagTarget) {
+        match target {
+            TagTarget::Principal(principal_id) => {
+                self.byte(1);
+                self.identifier(principal_id.as_bytes());
+            }
+            TagTarget::Object(object_id) => {
+                self.byte(2);
+                self.identifier(object_id.as_bytes());
+            }
+        }
     }
 
     fn finish(self) -> [u8; 32] {

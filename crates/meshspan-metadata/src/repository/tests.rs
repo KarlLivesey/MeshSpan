@@ -11,7 +11,7 @@ use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, ComponentInstanceId,
     DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId,
     ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights,
-    RoleId, ScopeId, ScopeRoute, SnapshotId, UnixMicros, VolumeId,
+    RoleId, ScopeId, ScopeRoute, SnapshotId, TagId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -23,13 +23,13 @@ use super::{
     restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };
 use crate::{
-    ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember, AssignComponent,
+    ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember, AssignComponent, AttachTag,
     AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext, ConfigureComponent,
     ConsumeJoinGrant, CreateActivationPolicy, CreateComponent, CreateGroup,
-    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateUser, CreateVolume,
-    FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
+    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
+    DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
     NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName, RegisterRoutingSigner,
-    RouteAttestation,
+    RouteAttestation, TagTarget,
 };
 
 struct FixtureIds {
@@ -39,6 +39,238 @@ struct FixtureIds {
     inner_group: GroupId,
     outer_group: GroupId,
     partition: PartitionId,
+}
+
+#[test]
+fn descriptive_tags_are_audited_idempotent_and_never_grant_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(
+        &directory.path().join("tags.sqlite3"),
+        ids.partition,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    apply(
+        &mut repository,
+        1,
+        context(150, ids.administrator, 151, 100, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([152; 16])?,
+            mesh_name: RecordName::new("Tag proof")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([153; 16])?,
+            host_id: HostId::from_bytes([154; 16])?,
+            host_name: RecordName::new("Tag host")?,
+            node_id: NodeId::from_bytes([155; 16])?,
+            node_name: RecordName::new("Tag node")?,
+            partition_name: RecordName::new("Tag authority")?,
+        }),
+    )?;
+    apply(
+        &mut repository,
+        2,
+        context(156, ids.administrator, 157, 101, Some(1))?,
+        &AuthoritativeCommand::CreateUser(CreateUser {
+            principal_id: ids.user,
+            name: RecordName::new("Tagged user")?,
+        }),
+    )?;
+    let root_id = ObjectId::from_bytes([158; 16])?;
+    apply(
+        &mut repository,
+        3,
+        context(159, ids.administrator, 160, 102, Some(2))?,
+        &AuthoritativeCommand::CreateVolume(CreateVolume {
+            volume_id: VolumeId::from_bytes([161; 16])?,
+            name: RecordName::new("Tagged volume")?,
+            root_object_id: root_id,
+            owner_set_id: OwnerSetId::from_bytes([162; 16])?,
+            owners: BoundedItems::new(vec![ids.administrator], 1_024)?,
+        }),
+    )?;
+    let tag_id = TagId::from_bytes([163; 16])?;
+    apply(
+        &mut repository,
+        4,
+        context(164, ids.administrator, 165, 103, Some(3))?,
+        &AuthoritativeCommand::CreateTag(CreateTag {
+            tag_id,
+            name: RecordName::new("Needs Review")?,
+        }),
+    )?;
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 5, term: 1 },
+            context(179, ids.administrator, 180, 104, Some(4))?,
+            &AuthoritativeCommand::CreateTag(CreateTag {
+                tag_id: TagId::from_bytes([181; 16])?,
+                name: RecordName::new(&"x".repeat(129))?,
+            }),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    prove_tag_attachment_semantics(&mut repository, &ids, root_id, tag_id)?;
+    detach_tags_and_verify_no_authority(repository, &ids, root_id, tag_id)
+}
+
+fn prove_tag_attachment_semantics(
+    repository: &mut AuthoritativeRepository,
+    ids: &FixtureIds,
+    root_id: ObjectId,
+    tag_id: TagId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        5,
+        context(166, ids.administrator, 167, 104, Some(4))?,
+        &AuthoritativeCommand::AttachTag(AttachTag {
+            tag_id,
+            target: TagTarget::Principal(ids.user),
+        }),
+    )?;
+    let object_attachment_context = context(168, ids.administrator, 169, 105, Some(5))?;
+    let object_attachment = AuthoritativeCommand::AttachTag(AttachTag {
+        tag_id,
+        target: TagTarget::Object(root_id),
+    });
+    let attached = repository.apply_committed(
+        LogPosition { index: 6, term: 1 },
+        object_attachment_context,
+        &object_attachment,
+    )?;
+    let replay = repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        object_attachment_context,
+        &object_attachment,
+    )?;
+    assert_eq!(replay.disposition, ApplyDisposition::Replayed);
+    assert_eq!(replay.result_digest, attached.result_digest);
+
+    for (operation, target) in [
+        (182, TagTarget::Principal(ids.user)),
+        (184, TagTarget::Object(ObjectId::from_bytes([185; 16])?)),
+    ] {
+        assert!(matches!(
+            repository.apply_committed(
+                LogPosition { index: 8, term: 1 },
+                context(
+                    operation,
+                    ids.administrator,
+                    operation.saturating_add(1),
+                    106,
+                    Some(6),
+                )?,
+                &AuthoritativeCommand::AttachTag(AttachTag { tag_id, target }),
+            ),
+            Err(RepositoryError::InvalidCommand)
+        ));
+    }
+
+    let conflicting_attachment = AuthoritativeCommand::AttachTag(AttachTag {
+        tag_id,
+        target: TagTarget::Principal(ids.user),
+    });
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 8, term: 1 },
+            object_attachment_context,
+            &conflicting_attachment,
+        ),
+        Err(RepositoryError::OperationConflict)
+    ));
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 8, term: 1 },
+            context(170, ids.user, 171, 106, Some(6))?,
+            &AuthoritativeCommand::CreateGroup(CreateGroup {
+                group_id: GroupId::from_bytes([172; 16])?,
+                name: RecordName::new("Unauthorised despite tag")?,
+                activation_policy_id: None,
+            }),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
+
+fn detach_tags_and_verify_no_authority(
+    mut repository: AuthoritativeRepository,
+    ids: &FixtureIds,
+    root_id: ObjectId,
+    tag_id: TagId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        &mut repository,
+        8,
+        context(173, ids.administrator, 174, 107, Some(6))?,
+        &AuthoritativeCommand::DetachTag(DetachTag {
+            tag_id,
+            target: TagTarget::Object(root_id),
+        }),
+    )?;
+    apply(
+        &mut repository,
+        9,
+        context(175, ids.administrator, 176, 108, Some(7))?,
+        &AuthoritativeCommand::DetachTag(DetachTag {
+            tag_id,
+            target: TagTarget::Principal(ids.user),
+        }),
+    )?;
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 10, term: 1 },
+            context(177, ids.administrator, 178, 109, Some(8))?,
+            &AuthoritativeCommand::DetachTag(DetachTag {
+                tag_id,
+                target: TagTarget::Principal(ids.user),
+            }),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+
+    let database = repository.into_database();
+    let (tag_count, attachment_count, owner_count, user_grants, audit_count): (
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+    ) = database.connection().query_row(
+        "SELECT
+            (SELECT count(*) FROM tags WHERE tag_id = ?1),
+            (SELECT count(*) FROM object_tags WHERE tag_id = ?1)
+                + (SELECT count(*) FROM principal_tags WHERE tag_id = ?1),
+            (SELECT count(*) FROM object_owners WHERE owner_set_id = ?2),
+            (SELECT count(*) FROM role_grants WHERE principal_id = ?3),
+            (SELECT count(*) FROM audit_events WHERE operation_id IN (?4, ?5, ?6, ?7, ?8))",
+        rusqlite::params![
+            tag_id.as_bytes().as_slice(),
+            OwnerSetId::from_bytes([162; 16])?.as_bytes().as_slice(),
+            ids.user.as_bytes().as_slice(),
+            OperationId::from_bytes([164; 16])?.as_bytes().as_slice(),
+            OperationId::from_bytes([166; 16])?.as_bytes().as_slice(),
+            OperationId::from_bytes([168; 16])?.as_bytes().as_slice(),
+            OperationId::from_bytes([173; 16])?.as_bytes().as_slice(),
+            OperationId::from_bytes([175; 16])?.as_bytes().as_slice(),
+        ],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    assert_eq!((tag_count, attachment_count), (1, 0));
+    assert_eq!((owner_count, user_grants), (1, 0));
+    assert_eq!(audit_count, 5);
+    Ok(())
 }
 
 #[test]
