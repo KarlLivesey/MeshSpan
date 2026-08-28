@@ -236,7 +236,9 @@ mod tests {
         partition_cluster_enrollment_migration_digest,
         partition_component_rollout_migration_digest, partition_migration_digest,
         partition_roles_migration_digest, partition_routing_migration_digest,
-        partition_snapshot_expiry_migration_digest, partition_snapshot_schedules_migration_digest,
+        partition_snapshot_expiry_migration_digest,
+        partition_snapshot_retention_selection_migration_digest,
+        partition_snapshot_schedules_migration_digest,
         partition_version_retention_migration_digest, partition_volume_heads_migration_digest,
         partition_volume_snapshots_migration_digest,
     };
@@ -250,7 +252,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 11);
+        assert_eq!(database.check_integrity()?.schema_version, 12);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -297,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_migration_digest_is_a_committed_compatibility_value() {
+    fn foundational_migration_digests_are_committed_compatibility_values() {
         assert_eq!(
             partition_migration_digest(),
             [
@@ -354,6 +356,10 @@ mod tests {
                 0x09, 0x0f, 0x15, 0xcc,
             ]
         );
+    }
+
+    #[test]
+    fn filesystem_migration_digests_are_committed_compatibility_values() {
         assert_eq!(
             partition_volume_heads_migration_digest(),
             [
@@ -392,6 +398,14 @@ mod tests {
                 0x8d, 0xee, 0xb6, 0xce, 0xda, 0x2f, 0x17, 0xa6, 0x74, 0x82, 0x7a, 0x3f, 0x09, 0xd0,
                 0xb8, 0xf0, 0xe0, 0xcf, 0xec, 0x8a, 0xc6, 0x4a, 0x80, 0x51, 0x16, 0x94, 0x6a, 0xcb,
                 0xec, 0x26, 0xe2, 0xff,
+            ]
+        );
+        assert_eq!(
+            partition_snapshot_retention_selection_migration_digest(),
+            [
+                0x25, 0xb5, 0x2c, 0xb6, 0xb3, 0xfd, 0x98, 0x43, 0x01, 0x27, 0x3e, 0xd3, 0x99, 0xf7,
+                0xa6, 0x62, 0xc8, 0x52, 0x2c, 0x0c, 0x52, 0x2a, 0x82, 0x76, 0x61, 0x4b, 0x53, 0x39,
+                0x02, 0x46, 0xac, 0x3b,
             ]
         );
     }

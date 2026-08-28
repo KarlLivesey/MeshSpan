@@ -9,7 +9,7 @@ use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, user_snapshot};
 use crate::{CommandContext, ConfigureSnapshotSchedule, CreateVolumeSnapshot, RunSnapshotSchedule};
 
-type StoredRunHead = (i64, Vec<u8>, i64, Option<i64>, i64, i64, i64);
+type StoredRunHead = (i64, Vec<u8>, i64, Option<i64>, i64, i64, i64, i64);
 mod query;
 
 pub use query::{SnapshotSchedule, SnapshotScheduleCursor};
@@ -22,6 +22,7 @@ struct ScheduleRunHead {
     retention_duration: Option<i64>,
     enabled: bool,
     next_due_at: i64,
+    run_sequence: u64,
 }
 
 pub(super) fn configure(
@@ -122,15 +123,23 @@ pub(super) fn run(
         revision,
     )?;
     let following_due = following_due(head.next_due_at, head.interval, context.occurred_at.get())?;
+    let run_sequence = head
+        .run_sequence
+        .checked_add(1)
+        .ok_or(RepositoryError::CapacityExceeded)?;
     let updated = transaction.execute(
-        "UPDATE snapshot_schedule_heads SET next_due_at = ?1, revision = ?2
-         WHERE schedule_id = ?3 AND schedule_sequence = ?4 AND next_due_at = ?5",
+        "UPDATE snapshot_schedule_heads
+         SET next_due_at = ?1, run_sequence = ?2, revision = ?3
+         WHERE schedule_id = ?4 AND schedule_sequence = ?5
+           AND next_due_at = ?6 AND run_sequence = ?7",
         params![
             following_due,
+            to_i64(run_sequence)?,
             to_i64(revision.get())?,
             command.schedule_id.as_bytes().as_slice(),
             to_i64(head.sequence)?,
             head.next_due_at,
+            to_i64(head.run_sequence)?,
         ],
     )?;
     if updated != 1 {
@@ -139,8 +148,8 @@ pub(super) fn run(
     transaction.execute(
         "INSERT INTO snapshot_schedule_runs(
             schedule_id, schedule_sequence, scheduled_for, snapshot_id,
-            operation_id, created_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            operation_id, created_at, revision, run_sequence
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             command.schedule_id.as_bytes().as_slice(),
             to_i64(head.sequence)?,
@@ -149,6 +158,7 @@ pub(super) fn run(
             context.operation_id.as_bytes().as_slice(),
             context.occurred_at.get(),
             to_i64(revision.get())?,
+            to_i64(run_sequence)?,
         ],
     )?;
     Ok(entity)
@@ -161,7 +171,7 @@ fn load_run_head(
     let stored: Option<StoredRunHead> = transaction
         .query_row(
             "SELECT h.schedule_sequence, h.volume_id, h.interval_micros,
-                    h.retention_duration_micros, h.enabled, h.next_due_at,
+                    h.retention_duration_micros, h.enabled, h.next_due_at, h.run_sequence,
                     CASE WHEN r.volume_id = h.volume_id
                                AND r.interval_micros = h.interval_micros
                                AND r.retention_count IS h.retention_count
@@ -179,6 +189,12 @@ fn load_run_head(
                                    SELECT 1 FROM snapshot_schedule_revisions c
                                    WHERE c.schedule_id = h.schedule_id
                                      AND c.volume_id != h.volume_id)
+                               AND (SELECT count(*) FROM snapshot_schedule_runs sr
+                                    WHERE sr.schedule_id = h.schedule_id) = h.run_sequence
+                               AND coalesce((SELECT max(sr.run_sequence)
+                                             FROM snapshot_schedule_runs sr
+                                             WHERE sr.schedule_id = h.schedule_id), 0)
+                                   = h.run_sequence
                          THEN 1 ELSE 0 END
              FROM snapshot_schedule_heads h
              LEFT JOIN snapshot_schedule_revisions r
@@ -195,6 +211,7 @@ fn load_run_head(
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )
@@ -203,7 +220,7 @@ fn load_run_head(
 }
 
 fn decode_run_head(stored: &StoredRunHead) -> Result<ScheduleRunHead, RepositoryError> {
-    if stored.6 != 1 || !matches!(stored.4, 0 | 1) || stored.2 <= 0 {
+    if stored.7 != 1 || !matches!(stored.4, 0 | 1) || stored.2 <= 0 {
         return Err(RepositoryError::CorruptState);
     }
     if stored.3.is_some_and(|duration| duration <= 0) {
@@ -216,6 +233,7 @@ fn decode_run_head(stored: &StoredRunHead) -> Result<ScheduleRunHead, Repository
         retention_duration: stored.3,
         enabled: stored.4 == 1,
         next_due_at: stored.5,
+        run_sequence: parse_u64(stored.6)?,
     })
 }
 

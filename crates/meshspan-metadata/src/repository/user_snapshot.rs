@@ -9,7 +9,15 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, Page, PageLimit, RepositoryError};
-use crate::{CommandContext, CreateVolumeSnapshot, PartitionDatabase, RequestVolumeSnapshotExpiry};
+use crate::{
+    CommandContext, CreateVolumeSnapshot, PartitionDatabase, RequestVolumeSnapshotExpiry,
+    SnapshotExpiryReason,
+};
+
+mod expiry;
+
+pub(super) use expiry::due as due_expiries;
+pub use expiry::{SnapshotExpiryCandidate, SnapshotExpiryCursor};
 
 /// Stable seek cursor for one volume's snapshot list.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,7 +110,7 @@ pub(super) fn request_expiry(
     command: RequestVolumeSnapshotExpiry,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
-    if command.expected_snapshot_revision == Revision::ZERO || command.reason_code == 0 {
+    if command.expected_snapshot_revision == Revision::ZERO {
         return Err(RepositoryError::InvalidCommand);
     }
     let stored: Option<(i64, i64, Option<i64>, i64)> = transaction
@@ -119,12 +127,10 @@ pub(super) fn request_expiry(
     if parse_u64(stored_revision)? != command.expected_snapshot_revision.get() {
         return Err(RepositoryError::StaleSnapshot);
     }
-    if state != 1
-        || protected != 0
-        || command.automatic && expires_at.is_none_or(|expires| expires > context.occurred_at.get())
-    {
+    if state != 1 || protected != 0 {
         return Err(RepositoryError::InvalidCommand);
     }
+    validate_expiry_reason(transaction, context, command, expires_at)?;
     let updated = transaction.execute(
         "UPDATE volume_snapshots SET state = 2, revision = ?1
          WHERE snapshot_id = ?2 AND state = 1 AND revision = ?3",
@@ -144,8 +150,8 @@ pub(super) fn request_expiry(
         params![
             command.snapshot_id.as_bytes().as_slice(),
             context.operation_id.as_bytes().as_slice(),
-            command.automatic,
-            command.reason_code,
+            command.reason != SnapshotExpiryReason::Manual,
+            expiry_reason_code(command.reason),
             context.occurred_at.get(),
             to_i64(revision.get())?,
         ],
@@ -154,6 +160,36 @@ pub(super) fn request_expiry(
         kind: EntityKind::VolumeSnapshot,
         id: command.snapshot_id.as_bytes(),
     })
+}
+
+fn validate_expiry_reason(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: RequestVolumeSnapshotExpiry,
+    expires_at: Option<i64>,
+) -> Result<(), RepositoryError> {
+    let eligible = match command.reason {
+        SnapshotExpiryReason::Manual => true,
+        SnapshotExpiryReason::RetentionAge => {
+            expires_at.is_some_and(|expires| expires <= context.occurred_at.get())
+        }
+        SnapshotExpiryReason::RetentionCount => {
+            expiry::count_eligible(transaction, command.snapshot_id)?
+        }
+    };
+    if eligible {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
+}
+
+const fn expiry_reason_code(reason: SnapshotExpiryReason) -> u8 {
+    match reason {
+        SnapshotExpiryReason::Manual => 1,
+        SnapshotExpiryReason::RetentionAge => 2,
+        SnapshotExpiryReason::RetentionCount => 3,
+    }
 }
 
 pub(super) fn list(

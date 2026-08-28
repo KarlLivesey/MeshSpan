@@ -7,7 +7,10 @@ use tempfile::tempdir;
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::volume_head_tests::{commit, context, fixture, open_and_prepare, publication_command};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, RepositoryError};
-use crate::{AuthoritativeCommand, CreateVolumeSnapshot, RecordName, RequestVolumeSnapshotExpiry};
+use crate::{
+    AuthoritativeCommand, CreateVolumeSnapshot, RecordName, RequestVolumeSnapshotExpiry,
+    SnapshotExpiryReason,
+};
 
 #[test]
 fn snapshots_pin_exact_heads_page_stably_and_replay_after_restart()
@@ -124,7 +127,7 @@ fn expiry_request_preserves_the_root_and_replays_after_restart()
     let file_path = directory.path().join("expiry.sqlite3");
     let fixture = fixture()?;
     let mut repository = prepared_snapshot(&file_path, &fixture, 90, false, 10_000)?;
-    let command = expiry_command(90, 4, false, 7)?;
+    let command = expiry_command(90, 4, false)?;
     let expiry_context = context(91, fixture.administrator, 92, 200, Some(4))?;
     let receipt =
         repository.apply_committed(LogPosition { index: 5, term: 1 }, expiry_context, &command)?;
@@ -140,7 +143,7 @@ fn expiry_request_preserves_the_root_and_replays_after_restart()
         [SnapshotId::from_bytes([90; 16])?.as_bytes().as_slice()],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )?;
-    assert_eq!(request, (0, 7, 200, 5));
+    assert_eq!(request, (0, 1, 200, 5));
     drop(repository);
 
     let database =
@@ -171,7 +174,7 @@ fn expiry_request_rejects_stale_protected_and_early_automatic_requests()
             protected,
             10_000,
         )?;
-        let command = expiry_command(identity, expected_revision, identity == 102, 8)?;
+        let command = expiry_command(identity, expected_revision, identity == 102)?;
         let result = repository.apply_committed(
             LogPosition { index: 5, term: 1 },
             context(110, fixture.administrator, 111, occurred_at, Some(4))?,
@@ -197,7 +200,7 @@ fn expiry_request_rejects_stale_protected_and_early_automatic_requests()
     repository.apply_committed(
         LogPosition { index: 5, term: 1 },
         context(112, fixture.administrator, 113, 10_000, Some(4))?,
-        &expiry_command(103, 4, true, 9)?,
+        &expiry_command(103, 4, true)?,
     )?;
     assert_eq!(only_snapshot(&repository, fixture.volume)?.state, 2);
     Ok(())
@@ -221,7 +224,7 @@ fn every_apply_fault_rolls_back_snapshot_expiry_completely()
             false,
             10_000,
         )?;
-        let command = expiry_command(120, 4, false, 10)?;
+        let command = expiry_command(120, 4, false)?;
         let expiry_context = context(121, fixture.administrator, 122, 200, Some(4))?;
         let interrupted = apply_committed_with_fault(
             &mut repository.database,
@@ -271,14 +274,16 @@ fn expiry_command(
     identity: u8,
     expected_revision: u64,
     automatic: bool,
-    reason_code: u32,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     Ok(AuthoritativeCommand::RequestVolumeSnapshotExpiry(
         RequestVolumeSnapshotExpiry {
             snapshot_id: SnapshotId::from_bytes([identity; 16])?,
             expected_snapshot_revision: Revision::new(expected_revision),
-            automatic,
-            reason_code,
+            reason: if automatic {
+                SnapshotExpiryReason::RetentionAge
+            } else {
+                SnapshotExpiryReason::Manual
+            },
         },
     ))
 }

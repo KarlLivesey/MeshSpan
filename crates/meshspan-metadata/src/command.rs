@@ -301,6 +301,17 @@ pub struct CreateVolumeSnapshot {
     pub protected_from_expiry: bool,
 }
 
+/// Closed, persistently encoded reason for moving a snapshot into expiring state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotExpiryReason {
+    /// Explicit authorised request independent of automatic retention.
+    Manual,
+    /// Configured expiry instant has elapsed.
+    RetentionAge,
+    /// A schedule exceeds its current retained-snapshot count.
+    RetentionCount,
+}
+
 /// Safe first phase of snapshot expiry; root removal remains separately guarded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RequestVolumeSnapshotExpiry {
@@ -308,10 +319,8 @@ pub struct RequestVolumeSnapshotExpiry {
     pub snapshot_id: SnapshotId,
     /// Exact snapshot revision observed by the requester.
     pub expected_snapshot_revision: Revision,
-    /// Whether expiry was selected automatically from its configured deadline.
-    pub automatic: bool,
-    /// Stable non-zero reason code for audit and policy diagnosis.
-    pub reason_code: u32,
+    /// Exact manual or automatically proven retention reason.
+    pub reason: SnapshotExpiryReason,
 }
 
 /// One complete immutable revision of a fixed-interval volume snapshot schedule.
@@ -863,10 +872,17 @@ digest_simple_record!(
     |value, digest| {
         digest.identifier(value.snapshot_id.as_bytes());
         digest.unsigned(value.expected_snapshot_revision.get());
-        digest.boolean(value.automatic);
-        digest.unsigned(u64::from(value.reason_code));
+        digest.byte(snapshot_expiry_reason_code(value.reason));
     }
 );
+
+const fn snapshot_expiry_reason_code(reason: SnapshotExpiryReason) -> u8 {
+    match reason {
+        SnapshotExpiryReason::Manual => 1,
+        SnapshotExpiryReason::RetentionAge => 2,
+        SnapshotExpiryReason::RetentionCount => 3,
+    }
+}
 digest_simple_record!(
     ConfigureSnapshotSchedule,
     b"configure-snapshot-schedule",

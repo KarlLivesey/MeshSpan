@@ -19,6 +19,7 @@ type StoredSchedule = (
     i64,
     i64,
     i64,
+    i64,
 );
 
 /// Stable seek cursor for schedules ordered by their next due instant.
@@ -49,6 +50,8 @@ pub struct SnapshotSchedule {
     pub next_due_at: UnixMicros,
     /// Last authoritative state revision affecting the schedule head.
     pub revision: Revision,
+    /// Number of successfully materialised schedule occurrences.
+    pub successful_runs: u64,
 }
 
 pub(crate) fn load(
@@ -60,6 +63,7 @@ pub(crate) fn load(
         .query_row(
             "SELECT h.volume_id, h.schedule_sequence, h.interval_micros, h.retention_count,
                     h.retention_duration_micros, h.enabled, h.next_due_at, h.revision,
+                    h.run_sequence,
                     CASE WHEN r.volume_id = h.volume_id
                                AND r.interval_micros = h.interval_micros
                                AND r.retention_count IS h.retention_count
@@ -77,6 +81,12 @@ pub(crate) fn load(
                                    SELECT 1 FROM snapshot_schedule_revisions c
                                    WHERE c.schedule_id = h.schedule_id
                                      AND c.volume_id != h.volume_id)
+                               AND (SELECT count(*) FROM snapshot_schedule_runs sr
+                                    WHERE sr.schedule_id = h.schedule_id) = h.run_sequence
+                               AND coalesce((SELECT max(sr.run_sequence)
+                                             FROM snapshot_schedule_runs sr
+                                             WHERE sr.schedule_id = h.schedule_id), 0)
+                                   = h.run_sequence
                          THEN 1 ELSE 0 END
              FROM snapshot_schedule_heads h
              LEFT JOIN snapshot_schedule_revisions r
@@ -95,6 +105,7 @@ pub(crate) fn load(
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
                 ))
             },
         )
@@ -121,7 +132,7 @@ pub(crate) fn due(
     let mut statement = database.connection().prepare(
         "SELECT h.schedule_id, h.volume_id, h.schedule_sequence, h.interval_micros,
                 h.retention_count, h.retention_duration_micros, h.enabled, h.next_due_at,
-                h.revision,
+                h.revision, h.run_sequence,
                 CASE WHEN r.volume_id = h.volume_id
                            AND r.interval_micros = h.interval_micros
                            AND r.retention_count IS h.retention_count
@@ -139,6 +150,12 @@ pub(crate) fn due(
                                SELECT 1 FROM snapshot_schedule_revisions c
                                WHERE c.schedule_id = h.schedule_id
                                  AND c.volume_id != h.volume_id)
+                           AND (SELECT count(*) FROM snapshot_schedule_runs sr
+                                WHERE sr.schedule_id = h.schedule_id) = h.run_sequence
+                           AND coalesce((SELECT max(sr.run_sequence)
+                                         FROM snapshot_schedule_runs sr
+                                         WHERE sr.schedule_id = h.schedule_id), 0)
+                               = h.run_sequence
                      THEN 1 ELSE 0 END
          FROM snapshot_schedule_heads h INDEXED BY snapshot_schedule_heads_due
          LEFT JOIN snapshot_schedule_revisions r
@@ -161,6 +178,7 @@ pub(crate) fn due(
                 row.get::<_, i64>(7)?,
                 row.get::<_, i64>(8)?,
                 row.get::<_, i64>(9)?,
+                row.get::<_, i64>(10)?,
             ))
         },
     )?;
@@ -170,7 +188,7 @@ pub(crate) fn due(
         let schedule_id = identifier(&stored.0, SnapshotScheduleId::from_bytes)?;
         let schedule = (
             stored.1, stored.2, stored.3, stored.4, stored.5, stored.6, stored.7, stored.8,
-            stored.9,
+            stored.9, stored.10,
         );
         items.push(decode(schedule_id, &schedule)?);
     }
@@ -189,7 +207,7 @@ fn decode(
     schedule_id: SnapshotScheduleId,
     stored: &StoredSchedule,
 ) -> Result<SnapshotSchedule, RepositoryError> {
-    if (stored.5 != 0 && stored.5 != 1) || stored.8 != 1 {
+    if (stored.5 != 0 && stored.5 != 1) || stored.9 != 1 {
         return Err(RepositoryError::CorruptState);
     }
     Ok(SnapshotSchedule {
@@ -202,5 +220,6 @@ fn decode(
         enabled: stored.5 == 1,
         next_due_at: UnixMicros::new(stored.6),
         revision: Revision::new(parse_u64(stored.7)?),
+        successful_runs: parse_u64(stored.8)?,
     })
 }
