@@ -4,11 +4,17 @@ use meshspan_domain::{
     BranchId, ContentManifestId, FileVersionId, ObjectId, OperationId, PrincipalId, UnixMicros,
     VolumeId,
 };
+use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
 
 use super::{
-    BranchFileHead, FilePublication, ManifestPublication, PublicationDisposition, PublicationError,
-    PublicationFaultPoint, PublicationReceipt, VersionPublicationStore,
+    BranchFileHead, DATABASE_FILE, FilePublication, MIGRATIONS, ManifestPublication,
+    PublicationDisposition, PublicationError, PublicationFaultPoint, PublicationReceipt,
+    VersionPublicationStore, configure,
+};
+use crate::{
+    DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
+    NamespaceComponent, NamespaceLimits,
 };
 
 #[test]
@@ -127,6 +133,74 @@ fn corrupt_receipt_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[test]
+fn directory_nodes_round_trip_after_restart_and_corruption_fails_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let mut trie = DirectoryTrie::empty();
+    let entry = DirectoryEntry::new(
+        NamespaceComponent::new("persisted", NamespaceLimits::PORTABLE)?,
+        ObjectId::from_bytes([50; 16])?,
+        meshspan_domain::ObjectRevisionId::from_bytes([51; 16])?,
+        DirectoryEntryKind::File,
+        1,
+    )?;
+    let mutation = trie.upsert(entry, None)?;
+    let records = mutation_records(&trie, &mutation.created_nodes)?;
+    let selected = records.first().ok_or("missing node")?.clone();
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.persist_directory_nodes(&records, UnixMicros::new(2))?;
+    store.persist_directory_nodes(&records, UnixMicros::new(3))?;
+    drop(store);
+
+    let reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(4))?;
+    assert_eq!(
+        reopened.directory_node(selected.digest())?,
+        Some(selected.clone())
+    );
+    reopened.connection.execute(
+        "UPDATE directory_nodes SET encoded_node = X'00' WHERE node_digest = ?1",
+        [selected.digest().as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        reopened.directory_node(selected.digest()),
+        Err(PublicationError::Directory(DirectoryTrieError::Corrupt))
+    ));
+    Ok(())
+}
+
+#[test]
+fn version_one_database_migrates_to_directory_schema() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = directory.path().join(DATABASE_FILE);
+    let mut connection = Connection::open(&file)?;
+    configure(&connection)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute_batch(MIGRATIONS[0].sql)?;
+    let digest: [u8; 32] = blake3::hash(MIGRATIONS[0].sql.as_bytes()).into();
+    transaction.execute(
+        "INSERT INTO schema_migrations(version, migration_digest, applied_at)
+         VALUES (1, ?1, 1)",
+        params![digest.as_slice()],
+    )?;
+    transaction.pragma_update(None, "user_version", 1)?;
+    transaction.commit()?;
+    drop(connection);
+
+    let store = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let version: u32 = store
+        .connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))?;
+    assert_eq!(version, 2);
+    let table: i64 = store.connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'directory_nodes')",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(table, 1);
+    Ok(())
+}
+
 fn make_publication(
     operation: u8,
     parent: Option<FileVersionId>,
@@ -150,4 +224,11 @@ fn make_publication(
         created_by: PrincipalId::from_bytes([33; 16])?,
         created_at: UnixMicros::new(i64::from(operation)),
     })
+}
+
+fn mutation_records(
+    trie: &DirectoryTrie,
+    digests: &[crate::DirectoryNodeDigest],
+) -> Result<Vec<DirectoryNodeRecord>, DirectoryTrieError> {
+    digests.iter().map(|digest| trie.record(*digest)).collect()
 }

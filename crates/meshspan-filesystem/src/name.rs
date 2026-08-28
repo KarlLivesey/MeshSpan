@@ -121,6 +121,22 @@ impl NamespaceComponent {
         Ok(Self { display, canonical })
     }
 
+    /// Revalidates a stored display/key pair against mandatory structural and allocation bounds.
+    pub(crate) fn from_stored(display: &str, canonical: &str) -> Result<Self, NamespaceNameError> {
+        let limits = NamespaceLimits {
+            profile: CompatibilityProfile::Extended,
+            maximum_component_bytes: HARD_MAXIMUM_COMPONENT_BYTES,
+            maximum_depth: HARD_MAXIMUM_DEPTH,
+            maximum_path_bytes: HARD_MAXIMUM_PATH_BYTES,
+        };
+        let component = Self::new(display, limits)?;
+        if component.canonical == canonical {
+            Ok(component)
+        } else {
+            Err(NamespaceNameError::InvalidComponent)
+        }
+    }
+
     /// Case-preserved NFC text returned to users and adapters.
     #[must_use]
     pub fn display(&self) -> &str {
