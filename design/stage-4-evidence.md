@@ -24,6 +24,15 @@ implementation claim.
 - New registration requires an otherwise empty private directory. Return
   requires the exact authority-expected identity and fingerprint. Corrupt
   markers and unknown private records fail closed and are never erased.
+- One WAL/FULL-sync SQLite journal is stored beneath the daemon state directory
+  and bound to the exact marker fingerprint and target generation. Immutable
+  migration bytes are fingerprinted, structural/foreign-key checks run at open,
+  and an existing journal reopens without generating replacement capability
+  material.
+- Capacity policy changes require a strictly newer authoritative revision.
+  Foreground, repair and relocation reservations are distinct, idempotent and
+  atomically accounted; foreground work preserves repair headroom while exact
+  replay remains resolvable after reservation expiry.
 
 ## Closure gates
 

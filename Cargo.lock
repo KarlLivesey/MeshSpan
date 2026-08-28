@@ -895,7 +895,9 @@ dependencies = [
  "blake3",
  "cap-std",
  "getrandom 0.4.3",
+ "meshspan-contracts",
  "meshspan-domain",
+ "rusqlite",
  "tempfile",
  "thiserror",
 ]

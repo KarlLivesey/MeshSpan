@@ -4,10 +4,15 @@
 
 mod config;
 mod folder;
+mod journal;
 mod marker;
 
 pub use config::{HeadlessStorageConfig, StorageConfigError, UsageLimit};
 pub use folder::{FolderRegistration, RegisteredFolder, StorageFolderError};
+pub use journal::{
+    CapacityObservation, CapacityPolicy, JournalCapacity, ReserveCapacityRequest, TargetJournal,
+    TargetJournalError,
+};
 pub use marker::{MarkerFingerprint, TargetMarker};
 
 use meshspan_domain::{EntropyError, RandomSource};
