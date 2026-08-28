@@ -15,6 +15,7 @@ mod namespace;
 mod query;
 mod receipt;
 mod routing;
+mod snapshot;
 mod verify;
 
 use meshspan_domain::{OperationId, Revision};
@@ -33,6 +34,7 @@ pub use query::{
     PrincipalRecord,
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
+pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
 
 /// Authoritative metadata repository owning one identity-bound partition database.
@@ -190,6 +192,21 @@ impl AuthoritativeRepository {
         backup::create_partition_backup(&self.database, backup_id, destination, created_at)
     }
 
+    /// Creates a complete state-machine snapshot bound to one proved quorum plan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent/inconsistent consensus state and never overwrites an existing destination.
+    pub fn create_snapshot(
+        &self,
+        snapshot_id: meshspan_domain::SnapshotId,
+        destination: &std::path::Path,
+        plan: &meshspan_consensus::CompiledQuorumPlan,
+        created_at: meshspan_domain::UnixMicros,
+    ) -> Result<PartitionSnapshotManifest, RepositoryError> {
+        snapshot::create_snapshot(&self.database, snapshot_id, destination, plan, created_at)
+    }
+
     /// Runs bounded relational/domain checks that go beyond SQLite structural integrity.
     ///
     /// # Errors
@@ -245,6 +262,9 @@ pub enum RepositoryError {
     /// Backup bytes or their embedded state do not match the supplied manifest.
     #[error("metadata backup does not match its manifest")]
     BackupMismatch,
+    /// Snapshot bytes, consensus position, vote or quorum-plan proof do not agree.
+    #[error("metadata snapshot does not match its consensus manifest")]
+    SnapshotMismatch,
     /// Deterministic internal transaction interruption used by the crash-proof harness.
     #[error("injected authoritative transaction interruption")]
     InjectedFault,

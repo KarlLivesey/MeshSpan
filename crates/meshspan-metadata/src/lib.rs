@@ -24,7 +24,8 @@ pub use repository::{
     ApplyDisposition, AuthoritativeMetadataKernel, AuthoritativeRepository, CommandReceipt,
     ConsensusStoreError, EntityKind, EntityReference, GroupMemberCursor, InvariantFinding,
     InvariantKind, InvariantReport, LogPosition, NamespaceCursor, NamespaceRecord, Page, PageLimit,
-    PartitionBackupManifest, PartitionConsensusPersistence, PrincipalKind, PrincipalRecord,
-    RepositoryConformanceCheck, RepositoryConformanceReport, RepositoryConformanceVector,
-    RepositoryError, restore_partition_backup, run_repository_conformance,
+    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
+    PreservedVote, PrincipalKind, PrincipalRecord, RepositoryConformanceCheck,
+    RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
+    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };

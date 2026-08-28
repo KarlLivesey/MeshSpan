@@ -72,6 +72,7 @@ pub(super) fn append_response(value: &AppendResponse) -> Result<(), WireContract
 pub(super) fn snapshot_begin(value: &SnapshotBegin) -> Result<(), WireContractError> {
     valid_identifier(&value.snapshot_id)?;
     valid_digest(&value.digest)?;
+    valid_digest(&value.quorum_plan_digest)?;
     validate_position(value.included_position.as_ref(), false)?;
     if value.state_revision == 0
         || value.total_bytes == 0

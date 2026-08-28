@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -9,17 +10,17 @@ use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, ComponentInstanceId,
     DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId,
-    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId,
-    ScopeRoute, UnixMicros, VolumeId,
+    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights,
+    RoleId, ScopeId, ScopeRoute, SnapshotId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::{
-    ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, PrincipalKind,
-    RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
-    restore_partition_backup, run_repository_conformance,
+    ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, PreservedVote,
+    PrincipalKind, RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
+    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };
 use crate::{
     ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember, AssignComponent,
@@ -331,6 +332,114 @@ fn backup_restore_verifies_exact_state_and_rejects_changed_bytes()
         ),
         Err(RepositoryError::BackupMismatch)
     ));
+    Ok(())
+}
+
+#[test]
+fn consensus_snapshot_restores_exact_state_without_forgetting_receiver_vote()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let source_path = directory.path().join("snapshot-source.sqlite3");
+    let snapshot_path = directory.path().join("snapshot.image.sqlite3");
+    let restored_path = directory.path().join("snapshot-restored.sqlite3");
+    let wrong_plan_path = directory.path().join("snapshot-wrong.sqlite3");
+    let partition_id = PartitionId::from_bytes([101; 16])?;
+    let administrator = PrincipalId::from_bytes([102; 16])?;
+    let voter = NodeId::from_bytes([103; 16])?;
+    let database = PartitionDatabase::open(&source_path, partition_id, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap_snapshot_repository(&mut repository, administrator, voter)?;
+    let entry = meshspan_consensus::LogEntry::new(
+        meshspan_consensus::LogPosition { term: 1, index: 1 },
+        OperationId::from_bytes([110; 16])?,
+        1,
+        b"bootstrap-metadata".to_vec(),
+    )?;
+    repository.persist_consensus_mutation(
+        1,
+        &meshspan_consensus::DurableMutation {
+            vote_state: Some((3, Some(voter))),
+            truncate_from: None,
+            append: vec![entry],
+            membership_epoch: None,
+        },
+        UnixMicros::new(20),
+    )?;
+    let plan = meshspan_consensus::compile_plan(meshspan_consensus::flat_plan(
+        QuorumPlanId::from_bytes([111; 16])?,
+        1,
+        BTreeSet::from([voter]),
+        BTreeSet::new(),
+    )?)?;
+    let manifest = repository.create_snapshot(
+        SnapshotId::from_bytes([112; 16])?,
+        &snapshot_path,
+        &plan,
+        UnixMicros::new(21),
+    )?;
+    let restored = restore_partition_snapshot(
+        &snapshot_path,
+        &restored_path,
+        manifest,
+        &plan,
+        PreservedVote {
+            current_term: 9,
+            voted_for: Some(voter),
+            membership_epoch: 1,
+        },
+        UnixMicros::new(22),
+    )?;
+    let restored = AuthoritativeRepository::new(restored);
+    let durable = restored.load_consensus_state(1)?;
+    assert_eq!((durable.current_term, durable.voted_for), (9, Some(voter)));
+    assert_eq!(durable.applied_index, 1);
+
+    let wrong_plan = meshspan_consensus::compile_plan(meshspan_consensus::flat_plan(
+        QuorumPlanId::from_bytes([113; 16])?,
+        2,
+        BTreeSet::from([voter]),
+        BTreeSet::new(),
+    )?)?;
+    assert!(matches!(
+        restore_partition_snapshot(
+            &snapshot_path,
+            &wrong_plan_path,
+            manifest,
+            &wrong_plan,
+            PreservedVote {
+                current_term: 9,
+                voted_for: Some(voter),
+                membership_epoch: 1,
+            },
+            UnixMicros::new(23),
+        ),
+        Err(RepositoryError::SnapshotMismatch)
+    ));
+    Ok(())
+}
+
+fn bootstrap_snapshot_repository(
+    repository: &mut AuthoritativeRepository,
+    administrator: PrincipalId,
+    voter: NodeId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        1,
+        context(104, administrator, 105, 10, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([106; 16])?,
+            mesh_name: RecordName::new("Snapshot proof")?,
+            administrator_id: administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([107; 16])?,
+            host_id: HostId::from_bytes([108; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: voter,
+            node_name: RecordName::new("Voter")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
     Ok(())
 }
 

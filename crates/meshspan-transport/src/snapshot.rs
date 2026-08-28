@@ -30,6 +30,8 @@ pub struct VerifiedSnapshot {
     pub format_version: u32,
     /// Membership epoch represented by the image.
     pub membership_epoch: u64,
+    /// Independently recompiled quorum-plan proof digest represented by the image.
+    pub quorum_plan_digest: [u8; DIGEST_BYTES],
     /// Exact staged image length.
     pub total_bytes: u64,
     /// SHA-256 of the complete staged image.
@@ -45,6 +47,7 @@ pub struct SnapshotStager {
     state_revision: u64,
     format_version: u32,
     membership_epoch: u64,
+    quorum_plan_digest: [u8; DIGEST_BYTES],
     total_bytes: u64,
     expected_digest: [u8; DIGEST_BYTES],
     received_bytes: u64,
@@ -184,6 +187,7 @@ impl SnapshotStager {
             state_revision: self.state_revision,
             format_version: self.format_version,
             membership_epoch: self.membership_epoch,
+            quorum_plan_digest: self.quorum_plan_digest,
             total_bytes: self.total_bytes,
             digest: actual_digest,
         })
@@ -205,6 +209,7 @@ impl SnapshotStager {
             state_revision: manifest.state_revision,
             format_version: manifest.format_version,
             membership_epoch: manifest.membership_epoch,
+            quorum_plan_digest: manifest.quorum_plan_digest,
             total_bytes: manifest.total_bytes,
             expected_digest: manifest.digest,
             received_bytes,
@@ -221,6 +226,7 @@ struct StagingManifest {
     state_revision: u64,
     format_version: u32,
     membership_epoch: u64,
+    quorum_plan_digest: [u8; DIGEST_BYTES],
     total_bytes: u64,
     digest: [u8; DIGEST_BYTES],
 }
@@ -229,6 +235,7 @@ impl StagingManifest {
     fn parse(begin: &SnapshotBegin, maximum_snapshot_bytes: u64) -> Result<Self, TransportError> {
         let snapshot_id = exact_bytes(&begin.snapshot_id)?;
         let digest = exact_bytes(&begin.digest)?;
+        let quorum_plan_digest = exact_bytes(&begin.quorum_plan_digest)?;
         let included_position = begin
             .included_position
             .ok_or(TransportError::SnapshotRejected)?;
@@ -248,6 +255,7 @@ impl StagingManifest {
             state_revision: begin.state_revision,
             format_version: begin.format_version,
             membership_epoch: begin.membership_epoch,
+            quorum_plan_digest,
             total_bytes: begin.total_bytes,
             digest,
         })
@@ -348,6 +356,7 @@ mod tests {
             digest: Sha256::digest(bytes).to_vec(),
             format_version: 1,
             membership_epoch: 4,
+            quorum_plan_digest: vec![2; DIGEST_BYTES],
         }
     }
 

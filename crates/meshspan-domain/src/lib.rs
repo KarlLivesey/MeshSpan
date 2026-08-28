@@ -23,7 +23,7 @@ pub use primitives::{
     ActivationId, ActivationPolicyId, AuditEventId, BackupId, ComponentInstanceId, DurationMicros,
     FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError, JoinGrantId,
     MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId,
-    Revision, RevisionError, RoleId, ScopeId, TagId, TargetId, UnixMicros, VolumeId,
+    Revision, RevisionError, RoleId, ScopeId, SnapshotId, TagId, TargetId, UnixMicros, VolumeId,
 };
 pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};

@@ -62,6 +62,7 @@ message SnapshotBegin {
   bytes digest = 5;
   uint32 format_version = 6;
   uint64 membership_epoch = 7;
+  bytes quorum_plan_digest = 8;
 }
 
 message SnapshotChunk {

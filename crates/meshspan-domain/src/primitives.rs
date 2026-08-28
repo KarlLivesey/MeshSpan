@@ -124,6 +124,7 @@ define_identifier!(
 define_identifier!(AuditEventId, "Stable identity of one audit event.");
 define_identifier!(TagId, "Stable identity of one descriptive tag.");
 define_identifier!(BackupId, "Stable identity of one metadata backup.");
+define_identifier!(SnapshotId, "Stable identity of one consensus snapshot.");
 define_identifier!(
     JoinGrantId,
     "Stable identity of one administrator-issued node join grant."
