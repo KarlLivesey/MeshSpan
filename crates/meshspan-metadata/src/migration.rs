@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 16;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 17;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
 
-const PARTITION_MIGRATIONS: [Migration; 16] = [
+const PARTITION_MIGRATIONS: [Migration; 17] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -75,8 +75,12 @@ const PARTITION_MIGRATIONS: [Migration; 16] = [
         sql: include_str!("../schema/partition/015_version_cleanup_intents.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 16,
         sql: include_str!("../schema/partition/016_version_cleanup_attestations.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/017_version_cleanup_manifest_root.sql"),
     },
 ];
 
@@ -329,6 +333,11 @@ pub(crate) fn partition_version_cleanup_intents_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn partition_version_cleanup_attestations_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[15].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_version_cleanup_manifest_root_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[16].sql)
 }
 
 #[cfg(test)]

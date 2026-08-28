@@ -112,7 +112,9 @@ tombstones and cleanup when it returns.
 3. Every snapshotted gateway signs a terminal unreachable result for the same
    subject after revalidating its own branch and lifecycle roots. Reachability
    follows both the selected version and any other retained version sharing its
-   immutable manifest, so logical copies cannot lose shared shards. An offline
+   immutable manifest, so logical copies cannot lose shared shards. The subject
+   and proposal bind both the logical manifest ID and its immutable root digest;
+   cleanup items therefore cannot substitute another manifest's shard identity. An offline
    gateway delays physical reclamation, not logical deletion. A changed node
    incarnation or cleanup signing-key generation fails closed.
 4. Immediately before deletion, the worker obtains a short-lived

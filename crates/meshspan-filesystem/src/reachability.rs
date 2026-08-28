@@ -99,6 +99,8 @@ pub struct VersionUnreachableProof {
     pub version_id: FileVersionId,
     /// Content manifest selected by that version.
     pub manifest_id: ContentManifestId,
+    /// Immutable manifest root used by physical shard identities.
+    pub manifest_root_digest: [u8; 32],
     /// Digest binding the candidate, retention selection and retained-root authority.
     pub scan_request_digest: [u8; 32],
     /// Operation-independent digest shared by honest scans of this exact cleanup subject.
@@ -201,16 +203,18 @@ pub(crate) fn begin(
     transaction.execute(
         "INSERT INTO version_reachability_scans(
             operation_id, request_digest, volume_id, version_id, manifest_id,
+            manifest_root_digest,
             metadata_revision, expected_root_count, expected_root_digest,
             retention_policy_sequence, subject_digest,
             roots_received, local_roots_digest, state, started_at, completed_at, result_digest
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, NULL, 1, ?11, NULL, NULL)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, NULL, 1, ?12, NULL, NULL)",
         params![
             request.operation_id.as_bytes().as_slice(),
             digest.as_slice(),
             request.candidate.volume_id.as_bytes().as_slice(),
             request.candidate.version_id.as_bytes().as_slice(),
             request.candidate.manifest_id.as_bytes().as_slice(),
+            request.candidate.manifest_root_digest.as_slice(),
             to_i64(request.metadata_revision.get())?,
             to_i64(request.root_count)?,
             request.root_digest.as_slice(),
@@ -359,6 +363,7 @@ struct StoredScan {
     volume_id: VolumeId,
     version_id: FileVersionId,
     manifest_id: ContentManifestId,
+    manifest_root_digest: [u8; 32],
     metadata_revision: Revision,
     retention_policy_sequence: u64,
     root_count: u64,
@@ -378,7 +383,7 @@ fn load_scan(
             "SELECT request_digest, volume_id, version_id, manifest_id, metadata_revision,
                     expected_root_count, expected_root_digest, roots_received,
                     local_roots_digest, state, result_digest, retention_policy_sequence,
-                    subject_digest
+                    subject_digest, manifest_root_digest
              FROM version_reachability_scans WHERE operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
@@ -396,6 +401,7 @@ fn load_scan(
                     row.get::<_, Option<Vec<u8>>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, Option<Vec<u8>>>(12)?,
+                    row.get::<_, Option<Vec<u8>>>(13)?,
                 ))
             },
         )
@@ -419,6 +425,12 @@ fn load_scan(
         volume_id: identifier(&stored.1, VolumeId::from_bytes)?,
         version_id: identifier(&stored.2, FileVersionId::from_bytes)?,
         manifest_id: identifier(&stored.3, ContentManifestId::from_bytes)?,
+        manifest_root_digest: stored
+            .13
+            .as_deref()
+            .map(array)
+            .transpose()?
+            .ok_or(VersionReachabilityError::Corrupt)?,
         metadata_revision: revision(stored.4)?,
         retention_policy_sequence: stored
             .11
@@ -476,6 +488,7 @@ pub fn reachability_subject_digest(request: &VersionReachabilityScanRequest) -> 
     digest.update(&request.candidate.volume_id.as_bytes());
     digest.update(&request.candidate.object_id.as_bytes());
     digest.update(&request.candidate.manifest_id.as_bytes());
+    digest.update(&request.candidate.manifest_root_digest);
     digest.update(&request.candidate.logical_length.to_be_bytes());
     digest.update(&request.candidate.superseded_at.get().to_be_bytes());
     digest.update(&request.candidate.policy_sequence.to_be_bytes());
@@ -1007,6 +1020,7 @@ fn progress(
             volume_id: scan.volume_id,
             version_id: scan.version_id,
             manifest_id: scan.manifest_id,
+            manifest_root_digest: scan.manifest_root_digest,
             scan_request_digest: scan.request_digest,
             subject_digest: scan.subject_digest,
             retention_policy_sequence: scan.retention_policy_sequence,

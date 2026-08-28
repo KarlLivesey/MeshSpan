@@ -418,7 +418,7 @@ fn execute_cleanup_command(
 ) -> Result<EntityReference, RepositoryError> {
     match command {
         AuthoritativeCommand::ProposeVersionCleanup(value) => {
-            version_cleanup::propose(transaction, context, *value, revision)
+            version_cleanup::propose(transaction, context, value, revision)
         }
         AuthoritativeCommand::RegisterCleanupAttestationKey(value) => {
             cleanup_attestation::register_key(transaction, context, *value, revision)

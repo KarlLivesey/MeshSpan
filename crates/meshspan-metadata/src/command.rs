@@ -459,6 +459,8 @@ pub struct ProposeVersionCleanup {
     pub version_id: FileVersionId,
     /// Content manifest selected by that version.
     pub manifest_id: ContentManifestId,
+    /// Immutable manifest root carried by every physical shard identity.
+    pub manifest_root_digest: [u8; 32],
     /// Durable filesystem scan operation that produced the proof.
     pub source_scan_operation_id: OperationId,
     /// Digest binding the scan candidate, policy and root authority.
@@ -1111,6 +1113,7 @@ digest_simple_record!(
         digest.identifier(value.volume_id.as_bytes());
         digest.identifier(value.version_id.as_bytes());
         digest.identifier(value.manifest_id.as_bytes());
+        digest.bytes(&value.manifest_root_digest);
         digest.identifier(value.source_scan_operation_id.as_bytes());
         digest.bytes(&value.scan_request_digest);
         digest.bytes(&value.reachability_subject_digest);

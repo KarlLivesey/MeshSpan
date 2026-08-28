@@ -202,7 +202,7 @@ fn every_snapshotted_gateway_must_attest_before_coverage_is_complete()
         return Err("wrong proposal fixture".into());
     };
     proposal.reachability_revision = Revision::new(5);
-    proposal.proof_result_digest = terminal_digest(proposal);
+    proposal.proof_result_digest = terminal_digest(&proposal);
     let cleanup_context = context(41, fixture.administrator, 42, 103, Some(5))?;
     repository.apply_committed(
         LogPosition { index: 6, term: 1 },
