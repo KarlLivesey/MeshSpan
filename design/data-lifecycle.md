@@ -110,7 +110,9 @@ tombstones and cleanup when it returns.
    scan has a separate request/result digest. The replicated proposal snapshots
    every admitted gateway node and its exact incarnation.
 3. Every snapshotted gateway signs a terminal unreachable result for the same
-   subject after revalidating its own branch and lifecycle roots. An offline
+   subject after revalidating its own branch and lifecycle roots. Reachability
+   follows both the selected version and any other retained version sharing its
+   immutable manifest, so logical copies cannot lose shared shards. An offline
    gateway delays physical reclamation, not logical deletion. A changed node
    incarnation or cleanup signing-key generation fails closed.
 4. Immediately before deletion, the worker obtains a short-lived

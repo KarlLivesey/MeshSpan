@@ -282,11 +282,14 @@ copy-on-write filesystem service. This document records executable evidence only
    rotating cleanup-attestation key; the metadata transaction verifies the key,
    signature, incarnation, terminal digest and operation-independent subject.
    Coverage is incomplete until every snapshotted gateway has attested, while
-   its per-node scan request remains uniquely replay-safe. Storage providers
+   its per-node scan request remains uniquely replay-safe. The graph proof also
+   treats any reachable version sharing the candidate's immutable manifest as a
+   live reference, preventing logical copies from authorising shared-shard
+   deletion. Storage providers
    also enforce a monotonically advancing applied-catalogue fence, so applying a
    newer revision permanently rejects an otherwise authentic older removal
-   permit. Final authority, shared-manifest checks and physical catalogue/provider
-   completion remain outstanding.
+   permit. Final authority and physical catalogue/provider completion remain
+   outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

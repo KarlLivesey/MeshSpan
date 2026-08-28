@@ -797,9 +797,19 @@ fn candidate_is_directly_pinned(
     scan: &StoredScan,
 ) -> Result<bool, VersionReachabilityError> {
     let pinned: i64 = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM branch_files WHERE current_version_id = ?1)
-             OR EXISTS(SELECT 1 FROM open_handles WHERE state = 1 AND opened_version_id = ?1)",
-        [scan.version_id.as_bytes().as_slice()],
+        "SELECT EXISTS(
+             SELECT 1 FROM branch_files bf
+             JOIN file_versions fv ON fv.version_id = bf.current_version_id
+             WHERE bf.current_version_id = ?1 OR fv.manifest_id = ?2
+         ) OR EXISTS(
+             SELECT 1 FROM open_handles h
+             JOIN file_versions fv ON fv.version_id = h.opened_version_id
+             WHERE h.state = 1 AND (h.opened_version_id = ?1 OR fv.manifest_id = ?2)
+         )",
+        params![
+            scan.version_id.as_bytes().as_slice(),
+            scan.manifest_id.as_bytes().as_slice()
+        ],
         |row| row.get(0),
     )?;
     Ok(pinned == 1)
@@ -841,25 +851,46 @@ fn process_object_revision(
     scan: &StoredScan,
     identity: &[u8],
 ) -> Result<bool, VersionReachabilityError> {
-    type StoredObjectRevision = (Vec<u8>, i64, Option<Vec<u8>>, Option<Vec<u8>>);
+    type StoredObjectRevision = (
+        Vec<u8>,
+        i64,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+    );
     let stored: StoredObjectRevision = transaction
         .query_row(
-            "SELECT volume_id, object_kind, directory_root_digest, file_version_id
-             FROM object_revisions WHERE object_revision_id = ?1",
+            "SELECT revisions.volume_id, revisions.object_kind,
+                    revisions.directory_root_digest, revisions.file_version_id,
+                    versions.manifest_id
+             FROM object_revisions revisions
+             LEFT JOIN file_versions versions
+               ON versions.version_id = revisions.file_version_id
+             WHERE revisions.object_revision_id = ?1",
             [identity],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()?
         .ok_or(VersionReachabilityError::Corrupt)?;
     if stored.0.as_slice() != scan.volume_id.as_bytes() {
         return Err(VersionReachabilityError::Corrupt);
     }
-    match (stored.1, stored.2, stored.3) {
-        (1, Some(root), None) => {
+    match (stored.1, stored.2, stored.3, stored.4) {
+        (1, Some(root), None, None) => {
             enqueue_work(transaction, scan.operation_id, 2, &root)?;
             Ok(false)
         }
-        (2, None, Some(version)) => Ok(version.as_slice() == scan.version_id.as_bytes()),
+        (2, None, Some(version), Some(manifest)) => Ok(version.as_slice()
+            == scan.version_id.as_bytes()
+            || manifest.as_slice() == scan.manifest_id.as_bytes()),
         _ => Err(VersionReachabilityError::Corrupt),
     }
 }
