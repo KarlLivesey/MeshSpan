@@ -42,6 +42,8 @@ No production implementation is claimed in this stage.
 
 **Depends on:** Stage 0.
 
+**Status:** complete. See [`stage-1-evidence.md`](stage-1-evidence.md).
+
 Build:
 
 - Rust workspace tracking the latest tested stable toolchain, plus a Node.js 26

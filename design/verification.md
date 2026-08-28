@@ -32,7 +32,9 @@ drift before scheduling independent Rust format, Rust lint/test, workspace
 format, web lint, web typecheck and web test lanes. The initial warm local
 baseline on 2026-08-28 was 6.4 seconds with four workers; the runner reports a
 fresh duration for every lane instead of treating that observation as a fixed
-promise.
+promise. After separating Rust responsibilities and adding CPU/memory-aware
+scheduling, the complete warm gate measured 3.4 seconds with four workers and
+6.0 seconds through the single-worker fallback on the same workstation.
 
 ### Parallel execution contract
 
