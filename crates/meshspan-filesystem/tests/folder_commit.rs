@@ -57,6 +57,7 @@ fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
         StoragePermitVerifier::new(
             registration.mesh_id,
             1,
+            Revision::new(1),
             StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
         )?,
         UnixMicros::new(1),
@@ -337,6 +338,7 @@ fn production_provider(
         StoragePermitVerifier::new(
             registration.mesh_id,
             1,
+            Revision::new(1),
             StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
         )?,
         opened_at,

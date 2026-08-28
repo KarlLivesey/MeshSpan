@@ -265,6 +265,7 @@ fn open_store(root: &Path, instance: u8) -> Result<FolderShardStore, Box<dyn std
         StoragePermitVerifier::new(
             mesh_id()?,
             REMOVAL_EPOCH,
+            Revision::new(1),
             StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
         )?,
         UnixMicros::new(1),

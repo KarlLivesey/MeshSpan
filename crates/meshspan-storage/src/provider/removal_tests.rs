@@ -22,6 +22,7 @@ use crate::pack::PackTombstoneRequest;
 use crate::{CapacityPolicy, FolderRegistration, RegisteredFolder, UsageLimit};
 
 const REMOVAL_EPOCH: u64 = 7;
+const CATALOGUE_REVISION: Revision = Revision::new(11);
 const PERMIT_KEY: [u8; 32] = [42; 32];
 
 struct FixedRandom;
@@ -95,6 +96,40 @@ fn reject_forged_and_stale_authority(
     assert!(matches!(
         store.tombstone(stale_epoch, UnixMicros::new(30)),
         Err(FolderShardStoreError::Unauthorized)
+    ));
+    Ok(())
+}
+
+#[test]
+fn applied_catalogue_revision_permanently_fences_older_removal_permits()
+-> Result<(), Box<dyn std::error::Error>> {
+    let registration = registration()?;
+    let permit = signed_removal(
+        registration,
+        ShardIdentity {
+            manifest_digest: [6; 32],
+            stripe_index: 7,
+            shard_index: 8,
+            generation: 9,
+        },
+    )?;
+    let mut verifier = verifier(registration.mesh_id)?;
+    assert!(verifier.authenticates_removal(permit));
+
+    verifier.advance_minimum_catalogue_revision(Revision::new(12))?;
+    assert!(!verifier.authenticates_removal(permit));
+    assert!(matches!(
+        verifier.advance_minimum_catalogue_revision(CATALOGUE_REVISION),
+        Err(FolderShardStoreError::Stale)
+    ));
+    assert!(matches!(
+        StoragePermitVerifier::new(
+            registration.mesh_id,
+            REMOVAL_EPOCH,
+            Revision::ZERO,
+            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
+        ),
+        Err(FolderShardStoreError::InvalidInput)
     ));
     Ok(())
 }
@@ -185,6 +220,7 @@ fn verifier(mesh_id: MeshId) -> Result<StoragePermitVerifier, Box<dyn std::error
     Ok(StoragePermitVerifier::new(
         mesh_id,
         REMOVAL_EPOCH,
+        CATALOGUE_REVISION,
         StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
     )?)
 }
@@ -234,7 +270,7 @@ fn signed_removal(
         shard,
         target_generation: registration.generation,
         authority_epoch: REMOVAL_EPOCH,
-        catalogue_revision: Revision::new(11),
+        catalogue_revision: CATALOGUE_REVISION,
         expires_at: UnixMicros::new(1_000),
         permit_digest: [0; 32],
     };

@@ -162,6 +162,7 @@ fn verifier(mesh_id: MeshId) -> Result<StoragePermitVerifier, Box<dyn std::error
     Ok(StoragePermitVerifier::new(
         mesh_id,
         7,
+        Revision::new(1),
         StoragePermitMacKey::from_bytes([42; 32])?,
     )?)
 }
