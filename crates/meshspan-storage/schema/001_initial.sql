@@ -30,7 +30,7 @@ CREATE TABLE reservations (
     reservation_class INTEGER NOT NULL CHECK (reservation_class BETWEEN 1 AND 3),
     maximum_bytes INTEGER NOT NULL CHECK (maximum_bytes > 0),
     expires_at INTEGER NOT NULL,
-    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 3),
+    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 4),
     created_at INTEGER NOT NULL,
     terminal_at INTEGER NULL
 ) STRICT;

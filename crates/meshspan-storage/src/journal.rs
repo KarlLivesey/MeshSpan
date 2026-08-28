@@ -14,6 +14,12 @@ use thiserror::Error;
 
 use crate::{TargetMarker, UsageLimit};
 
+mod inventory;
+
+pub use inventory::{
+    DurablePackEvidence, JournalPutRequest, PendingPut, PendingPutPage, PreparePutResult,
+};
+
 const SCHEMA_VERSION: u32 = 1;
 const SCHEMA: &str = include_str!("../schema/001_initial.sql");
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -546,7 +552,7 @@ fn expire_active_reservations(
         |row| row.get(0),
     )?;
     let changed = transaction.execute(
-        "UPDATE reservations SET state = 3, terminal_at = ?1
+        "UPDATE reservations SET state = 4, terminal_at = ?1
          WHERE state = 1 AND expires_at <= ?1",
         [now.get()],
     )?;

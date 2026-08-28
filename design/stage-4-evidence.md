@@ -33,6 +33,11 @@ implementation claim.
   Foreground, repair and relocation reservations are distinct, idempotent and
   atomically accounted; foreground work preserves repair headroom while exact
   replay remains resolvable after reservation expiry.
+- Canonical fixed-width shard identities back bounded seek pagination for both
+  committed inventory and incomplete recovery work. Preparing a put pins its
+  reservation; accepting independently durable pack evidence atomically commits
+  inventory, the exact receipt and capacity counters. Exact committed replays
+  remain resolvable after restart.
 
 ## Closure gates
 
@@ -40,7 +45,7 @@ implementation claim.
    daemon state from provider folders.
 2. [x] Stable marker identity, exclusive ownership, sibling isolation and real
    filesystem capability probes.
-3. Durable target journal, bounded inventory, reservations, recovery checkpoint
+3. [x] Durable target journal, bounded inventory, reservations, recovery checkpoint
    and target-incarnation fencing.
 4. Immutable packed shard put/get with exact replay, bounded read authority,
    durable receipts and independent integrity verification.
