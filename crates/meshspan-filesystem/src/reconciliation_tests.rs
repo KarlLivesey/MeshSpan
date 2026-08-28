@@ -5,8 +5,8 @@ use meshspan_domain::{
 };
 
 use super::{
-    ReconciliationCommit, ReconciliationError, ReconciliationFrontier, ReconciliationLimits,
-    plan_reconciliation,
+    ReconciliationCommit, ReconciliationCommitPayload, ReconciliationError, ReconciliationFrontier,
+    ReconciliationLimits, plan_reconciliation,
 };
 
 #[test]
@@ -165,6 +165,9 @@ fn commit(
             .collect::<Result<_, _>>()?,
         operation_id: OperationId::from_bytes([operation; 16])?,
         request_digest: [request; 32],
+        payload: ReconciliationCommitPayload::Mutation {
+            intent_digest: [commit; 32],
+        },
     })
 }
 

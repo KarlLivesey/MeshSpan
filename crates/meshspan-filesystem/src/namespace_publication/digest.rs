@@ -7,8 +7,8 @@ use meshspan_domain::{FileVersionId, NamespaceCommitId, ObjectRevisionId, Operat
 use super::repository::{ObjectRevisionInsert, StoredCommit};
 use super::{NamespaceIntent, publication_request_digest};
 use crate::{
-    BranchMutation, BranchMutationIntent, DirectoryNodeDigest, DirectoryPublication, NamespacePath,
-    NamespacePublicationPath, RootFilePublication,
+    DirectoryNodeDigest, DirectoryPublication, NamespacePath, NamespacePublicationPath,
+    RootFilePublication,
 };
 
 pub(super) fn file_request(publication: &RootFilePublication) -> [u8; 32] {
@@ -90,32 +90,6 @@ pub(super) fn object_revision(revision: &ObjectRevisionInsert) -> [u8; 32] {
     update_optional_version(&mut digest, revision.file_version_id);
     digest.update(&revision.created_by.as_bytes());
     digest.update(&revision.created_at.get().to_be_bytes());
-    digest.finalize().into()
-}
-
-pub(super) fn branch_intent(intent: &BranchMutationIntent) -> [u8; 32] {
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.branch-mutation-intent.v2\0");
-    digest.update(&intent.commit_id.as_bytes());
-    update_namespace_path(&mut digest, &intent.path);
-    for ancestor in &intent.ancestors {
-        digest.update(&ancestor.object_id().as_bytes());
-        digest.update(&ancestor.expected_revision_id().as_bytes());
-        digest.update(&ancestor.new_revision_id().as_bytes());
-    }
-    digest.update(&intent.object_id.as_bytes());
-    digest.update(&intent.object_revision_id.as_bytes());
-    update_optional_revision(&mut digest, intent.prior_object_revision_id);
-    digest.update(&intent.entry_generation.to_be_bytes());
-    match intent.mutation {
-        BranchMutation::File { version_id } => {
-            digest.update(&[1]);
-            digest.update(&version_id.as_bytes());
-        }
-        BranchMutation::CreateDirectory => {
-            digest.update(&[2]);
-        }
-    }
     digest.finalize().into()
 }
 
