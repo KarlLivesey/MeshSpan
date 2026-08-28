@@ -201,6 +201,9 @@ pub enum TransportError {
     /// Authenticated peers do not share an exact supported protocol version.
     #[error("private transport protocol version is unsupported")]
     UnsupportedProtocol,
+    /// Snapshot identity, offset, bound or digest verification failed.
+    #[error("private transport snapshot was rejected")]
+    SnapshotRejected,
     /// Protobuf framing or semantic validation rejected the message.
     #[error("private transport wire contract rejected the message")]
     Wire(#[from] meshspan_protocol::WireContractError),
