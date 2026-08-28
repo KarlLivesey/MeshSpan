@@ -5,8 +5,9 @@
 use std::collections::VecDeque;
 
 use meshspan_consensus::{
-    ConsensusCore, CoreEffect, CoreError, CoreInput, CoreMessage, DurableMutation, LogEntry,
-    LogPosition, PersistenceId, ProposalId, ReadBarrierId, Role,
+    ActiveQuorumPlan, ConsensusCore, CoreEffect, CoreError, CoreInput, CoreMessage,
+    DurableMutation, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
+    ReadBarrierId, Role,
 };
 use meshspan_domain::{NodeId, UnixMicros};
 use meshspan_metadata::{ConsensusStoreError, PartitionConsensusPersistence};
@@ -150,6 +151,42 @@ impl<P: PartitionConsensusPersistence> PartitionConsensusDriver<P> {
     #[must_use]
     pub const fn applied_index(&self) -> u64 {
         self.core.applied_index()
+    }
+
+    /// Returns the current independently proved stable or joint quorum phase.
+    #[must_use]
+    pub const fn active_plan(&self) -> &ActiveQuorumPlan {
+        self.core.active_plan()
+    }
+
+    /// Returns the exact current-incarnation map accepted by the consensus core.
+    #[must_use]
+    pub const fn member_incarnations(&self) -> &MemberIncarnations {
+        self.core.member_incarnations()
+    }
+
+    /// Returns the complete entry at the current non-genesis commit position.
+    #[must_use]
+    pub fn committed_entry(&self) -> Option<&LogEntry> {
+        self.core.committed_entry()
+    }
+
+    /// Returns one locally present replicated-log entry by exact index.
+    #[must_use]
+    pub fn log_entry(&self, index: u64) -> Option<&LogEntry> {
+        self.core.log_entry(index)
+    }
+
+    /// Returns the durable log tail entry, if the log is non-empty.
+    #[must_use]
+    pub fn last_log_entry(&self) -> Option<&LogEntry> {
+        self.core.last_log_entry()
+    }
+
+    /// Returns the leader's highest exact match position for one current member.
+    #[must_use]
+    pub fn peer_matched_index(&self, node_id: NodeId) -> Option<u64> {
+        self.core.peer_matched_index(node_id)
     }
 
     /// Borrows the durable repository for read-only state-machine queries.

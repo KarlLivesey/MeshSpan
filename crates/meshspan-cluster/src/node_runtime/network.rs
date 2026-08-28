@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -27,6 +28,10 @@ use tokio::sync::mpsc;
 use super::NodeRuntimeError;
 use super::config::{NodeConfig, PeerConfig};
 use crate::{decode_consensus_message, encode_consensus_message};
+
+mod snapshot;
+
+pub(in crate::node_runtime) use snapshot::{OutboundSnapshot, ReceivedSnapshot};
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
 const MAXIMUM_CONTROL_BYTES: usize = 64 * 1_024;
@@ -61,12 +66,14 @@ pub(super) struct PeerNetwork {
     partition_id: PartitionId,
     wire_limits: WireLimits,
     outbound: Arc<BTreeMap<NodeId, mpsc::Sender<CoreMessage>>>,
+    outbound_snapshots: Arc<BTreeMap<NodeId, mpsc::Sender<OutboundSnapshot>>>,
 }
 
 impl PeerNetwork {
     pub fn start(
         config: &NodeConfig,
         messages: mpsc::Sender<PeerMessage>,
+        snapshots: mpsc::Sender<ReceivedSnapshot>,
     ) -> Result<Self, NodeRuntimeError> {
         let wire_limits = wire_limits()?;
         let limits = TransportLimits::new(
@@ -101,15 +108,21 @@ impl PeerNetwork {
             partition_id,
             wire_limits,
             outbound: Arc::new(BTreeMap::new()),
+            outbound_snapshots: Arc::new(BTreeMap::new()),
         };
         let mut outbound = BTreeMap::new();
+        let mut outbound_snapshots = BTreeMap::new();
         for peer in config.peers.keys().copied() {
             let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
             network.spawn_outbound_worker(peer, receiver);
             outbound.insert(peer, sender);
+            let (snapshot_sender, snapshot_receiver) = mpsc::channel(1);
+            network.spawn_snapshot_worker(peer, snapshot_receiver);
+            outbound_snapshots.insert(peer, snapshot_sender);
         }
         network.outbound = Arc::new(outbound);
-        network.spawn_accept_loop(server, messages);
+        network.outbound_snapshots = Arc::new(outbound_snapshots);
+        network.spawn_accept_loop(server, messages, snapshots, config.state_path.clone());
         Ok(network)
     }
 
@@ -141,7 +154,13 @@ impl PeerNetwork {
         });
     }
 
-    fn spawn_accept_loop(&self, server: quinn::Endpoint, messages: mpsc::Sender<PeerMessage>) {
+    fn spawn_accept_loop(
+        &self,
+        server: quinn::Endpoint,
+        messages: mpsc::Sender<PeerMessage>,
+        snapshots: mpsc::Sender<ReceivedSnapshot>,
+        state_path: PathBuf,
+    ) {
         let network = self.clone();
         tokio::spawn(async move {
             while let Some(incoming) = server.accept().await {
@@ -154,9 +173,17 @@ impl PeerNetwork {
                 };
                 let connection_network = network.clone();
                 let connection_messages = messages.clone();
+                let connection_snapshots = snapshots.clone();
+                let connection_state_path = state_path.clone();
                 tokio::spawn(async move {
                     let result = connection_network
-                        .receive_connection(connection.clone(), peer, connection_messages)
+                        .receive_connection(
+                            connection.clone(),
+                            peer,
+                            connection_messages,
+                            connection_snapshots,
+                            connection_state_path,
+                        )
                         .await;
                     if result.is_err() {
                         connection.close(2_u32.into(), b"invalid peer traffic");
@@ -171,6 +198,8 @@ impl PeerNetwork {
         connection: quinn::Connection,
         peer: meshspan_transport::AuthenticatedPeer,
         messages: mpsc::Sender<PeerMessage>,
+        snapshots: mpsc::Sender<ReceivedSnapshot>,
+        state_path: PathBuf,
     ) -> Result<(), NodeRuntimeError> {
         let mut negotiation = accept_stream(&connection).await?;
         if negotiation.kind != StreamKind::Metadata {
@@ -202,22 +231,30 @@ impl PeerNetwork {
 
         loop {
             let mut accepted = accept_stream(&connection).await?;
-            if accepted.kind != StreamKind::Consensus {
-                return Err(NodeRuntimeError::InvalidConfiguration);
+            match accepted.kind {
+                StreamKind::Consensus => {
+                    let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
+                    self.verify_header(&envelope, peer.node_id(), peer.incarnation())?;
+                    let message = decode_consensus_message(&envelope)
+                        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+                    messages
+                        .send(PeerMessage {
+                            from: peer.node_id(),
+                            sender_incarnation: peer.incarnation(),
+                            message,
+                        })
+                        .await
+                        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+                    send_receipt(&mut accepted.send, self.wire_limits).await?;
+                }
+                StreamKind::Snapshot => {
+                    self.receive_snapshot(peer.node_id(), &state_path, &mut accepted, &snapshots)
+                        .await?;
+                }
+                StreamKind::Metadata | StreamKind::Data => {
+                    return Err(NodeRuntimeError::InvalidConfiguration);
+                }
             }
-            let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
-            self.verify_header(&envelope, peer.node_id(), peer.incarnation())?;
-            let message = decode_consensus_message(&envelope)
-                .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-            messages
-                .send(PeerMessage {
-                    from: peer.node_id(),
-                    sender_incarnation: peer.incarnation(),
-                    message,
-                })
-                .await
-                .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-            send_receipt(&mut accepted.send, self.wire_limits).await?;
         }
     }
 
@@ -259,18 +296,7 @@ impl PeerNetwork {
         let request_number = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed).max(1);
         let identifier = request_identifier(request_number);
         let envelope = ControlEnvelope {
-            header: Some(RequestHeader {
-                version: Some(ProtocolVersion { major: 1, minor: 0 }),
-                mesh_id: self.mesh_id.as_bytes().to_vec(),
-                partition_id: self.partition_id.as_bytes().to_vec(),
-                routing_epoch: 1,
-                sender_node_id: self.local_node_id.as_bytes().to_vec(),
-                sender_incarnation: INCARNATION,
-                request_id: identifier.to_vec(),
-                operation_id: OperationId::from_bytes(identifier)?.as_bytes().to_vec(),
-                deadline_unix_micros: i64::MAX,
-                trace_id: identifier.to_vec(),
-            }),
+            header: Some(self.request_header_for(identifier)?),
             message: Some(encode_consensus_message(&message)),
         };
         send_control(&mut send, &envelope, self.wire_limits).await?;
@@ -278,6 +304,26 @@ impl PeerNetwork {
             .map_err(meshspan_transport::TransportError::from)?;
         receive_receipt(&mut receive, self.wire_limits).await?;
         Ok(())
+    }
+
+    fn request_header(&self) -> Result<RequestHeader, NodeRuntimeError> {
+        let request_number = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed).max(1);
+        self.request_header_for(request_identifier(request_number))
+    }
+
+    fn request_header_for(&self, identifier: [u8; 16]) -> Result<RequestHeader, NodeRuntimeError> {
+        Ok(RequestHeader {
+            version: Some(ProtocolVersion { major: 1, minor: 0 }),
+            mesh_id: self.mesh_id.as_bytes().to_vec(),
+            partition_id: self.partition_id.as_bytes().to_vec(),
+            routing_epoch: 1,
+            sender_node_id: self.local_node_id.as_bytes().to_vec(),
+            sender_incarnation: INCARNATION,
+            request_id: identifier.to_vec(),
+            operation_id: OperationId::from_bytes(identifier)?.as_bytes().to_vec(),
+            deadline_unix_micros: i64::MAX,
+            trace_id: identifier.to_vec(),
+        })
     }
 
     async fn negotiate_outgoing(

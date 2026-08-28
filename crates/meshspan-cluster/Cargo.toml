@@ -19,6 +19,7 @@ meshspan-protocol = { path = "../meshspan-protocol" }
 meshspan-transport = { path = "../meshspan-transport" }
 quinn.workspace = true
 rustls.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 

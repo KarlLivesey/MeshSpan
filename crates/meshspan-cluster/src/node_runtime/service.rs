@@ -6,8 +6,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use meshspan_consensus::{
-    ConsensusCore, CoreConfig, CoreInput, MemberIncarnations, ProposalId, Role, compile_plan,
-    flat_plan,
+    ConsensusCore, CoreConfig, CoreInput, MEMBERSHIP_COMMAND_VERSION, MembershipTransitionCommand,
+    ProposalId, Role, compile_plan, flat_plan,
 };
 use meshspan_domain::{NodeId, OperationId, PartitionId, QuorumPlanId, UnixMicros};
 use meshspan_metadata::{
@@ -19,11 +19,17 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::NodeRuntimeError;
 use super::config::NodeConfig;
-use super::network::{PeerMessage, PeerNetwork};
+use super::membership_runtime::{
+    SnapshotDispatch, dispatch_learner_snapshots, install_admission_snapshot,
+    maybe_plan_membership_transition, restore_incarnations,
+};
+use super::network::{PeerMessage, PeerNetwork, ReceivedSnapshot};
 use super::proof_metadata::ProofMetadata;
-use crate::{DriverEffect, PartitionConsensusDriver};
+use crate::membership::{MembershipCoordinatorError, validate_transition};
+use crate::{ClusterDriverError, DriverEffect, PartitionConsensusDriver};
 
 const MEMBERSHIP_EPOCH: u64 = 1;
+const METADATA_COMMAND_VERSION: u16 = 1;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(200);
 const MAXIMUM_CONTROL_LINE_BYTES: usize = 128;
 const EVENT_CAPACITY: usize = 256;
@@ -54,14 +60,27 @@ pub async fn run_stage_three_node(
     arguments: impl Iterator<Item = String>,
 ) -> Result<(), NodeRuntimeError> {
     let config = NodeConfig::parse(arguments)?;
+    if config.bootstrap && config.node_id != node_id(1)? {
+        return Err(NodeRuntimeError::InvalidConfiguration);
+    }
+    let (peer_messages, received_peer_messages) = mpsc::channel(EVENT_CAPACITY);
+    let (snapshots, mut received_snapshots) = mpsc::channel(1);
+    let network = PeerNetwork::start(&config, peer_messages, snapshots)?;
+    if !config.bootstrap && !config.state_path.try_exists()? {
+        let received = received_snapshots
+            .recv()
+            .await
+            .ok_or(NodeRuntimeError::InvalidConfiguration)?;
+        install_admission_snapshot(&config, received)?;
+    }
     let mut repository = open_repository(&config)?;
     let core = restore_core(&config, &mut repository)?;
     let mut driver = PartitionConsensusDriver::new(core, repository);
     let (events, mut received_events) = mpsc::channel(EVENT_CAPACITY);
-    let (peer_messages, received_peer_messages) = mpsc::channel(EVENT_CAPACITY);
-    let network = PeerNetwork::start(&config, peer_messages)?;
     let proof_metadata = ProofMetadata::load(&config)?;
+    let mut snapshot_dispatch = SnapshotDispatch::new(config.state_path.clone());
     spawn_peer_forwarder(events.clone(), received_peer_messages);
+    spawn_snapshot_rejector(received_snapshots);
     spawn_control_listener(config.control_address, events).await?;
 
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
@@ -70,11 +89,23 @@ pub async fn run_stage_three_node(
         tokio::select! {
             _ = heartbeat.tick(), if driver.role() == Role::Leader => {
                 let effects = driver.step(CoreInput::Heartbeat, now())?;
-                apply_effects(&mut driver, &network, &proof_metadata, effects)?;
+                apply_effects(
+                    &mut driver,
+                    &network,
+                    &proof_metadata,
+                    &mut snapshot_dispatch,
+                    effects,
+                )?;
             }
             event = received_events.recv() => {
                 let event = event.ok_or(NodeRuntimeError::InvalidConfiguration)?;
-                handle_event(event, &mut driver, &network, &proof_metadata)?;
+                handle_event(
+                    event,
+                    &mut driver,
+                    &network,
+                    &proof_metadata,
+                    &mut snapshot_dispatch,
+                )?;
             }
         }
     }
@@ -95,14 +126,7 @@ fn restore_core(
         None => repository.initialise_consensus_quorum_plan(&bootstrap_plan, now())?,
     };
     let recovery_plan = active_plan.recovery_configuration_plan().clone();
-    let incarnations = MemberIncarnations::new(
-        active_plan
-            .members()
-            .into_iter()
-            .map(|node| (node, 1))
-            .collect(),
-        &recovery_plan,
-    )?;
+    let incarnations = restore_incarnations(repository, &active_plan)?;
     let durable = repository.load_consensus_state(active_plan.membership_epoch())?;
     ConsensusCore::restore_active(
         CoreConfig {
@@ -119,7 +143,7 @@ fn restore_core(
 }
 
 fn bootstrap_plan() -> Result<meshspan_consensus::CompiledQuorumPlan, NodeRuntimeError> {
-    let voters = (1..=3).map(node_id).collect::<Result<BTreeSet<_>, _>>()?;
+    let voters = BTreeSet::from([node_id(1)?]);
     Ok(compile_plan(flat_plan(
         QuorumPlanId::from_bytes([7; 16])?,
         MEMBERSHIP_EPOCH,
@@ -139,6 +163,10 @@ fn spawn_peer_forwarder(
             }
         }
     });
+}
+
+fn spawn_snapshot_rejector(mut snapshots: mpsc::Receiver<ReceivedSnapshot>) {
+    tokio::spawn(async move { while snapshots.recv().await.is_some() {} });
 }
 
 async fn spawn_control_listener(
@@ -215,21 +243,30 @@ fn handle_event(
     driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
     network: &PeerNetwork,
     proof_metadata: &ProofMetadata,
+    snapshot_dispatch: &mut SnapshotDispatch,
 ) -> Result<(), NodeRuntimeError> {
     match event {
         NodeEvent::Peer(peer) => {
-            let effects = driver.step(
+            let effects = match driver.step(
                 CoreInput::Message {
                     from: peer.from,
                     sender_incarnation: peer.sender_incarnation,
                     message: peer.message,
                 },
                 now(),
-            )?;
-            apply_effects(driver, network, proof_metadata, effects)
+            ) {
+                Ok(effects) => effects,
+                Err(ClusterDriverError::Core(
+                    meshspan_consensus::CoreError::StaleMember
+                    | meshspan_consensus::CoreError::InvalidInput,
+                )) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+            apply_effects(driver, network, proof_metadata, snapshot_dispatch, effects)
         }
         NodeEvent::Control { request, response } => {
-            let answer = handle_control(request, driver, network, proof_metadata)?;
+            let answer =
+                handle_control(request, driver, network, proof_metadata, snapshot_dispatch)?;
             let _receiver_closed = response.send(answer);
             Ok(())
         }
@@ -241,11 +278,12 @@ fn handle_control(
     driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
     network: &PeerNetwork,
     proof_metadata: &ProofMetadata,
+    snapshot_dispatch: &mut SnapshotDispatch,
 ) -> Result<&'static str, NodeRuntimeError> {
     match request {
         ControlRequest::Elect => {
             let effects = driver.step(CoreInput::ElectionTimeout, now())?;
-            apply_effects(driver, network, proof_metadata, effects)?;
+            apply_effects(driver, network, proof_metadata, snapshot_dispatch, effects)?;
             Ok("ELECTION_STARTED")
         }
         ControlRequest::Propose(value) if driver.role() == Role::Leader => {
@@ -258,7 +296,7 @@ fn handle_control(
                 },
                 now(),
             )?;
-            apply_effects(driver, network, proof_metadata, effects)?;
+            apply_effects(driver, network, proof_metadata, snapshot_dispatch, effects)?;
             Ok("ACCEPTED")
         }
         ControlRequest::Propose(_) => Ok(redirect_response(driver.leader_id())),
@@ -280,37 +318,98 @@ fn apply_effects(
     driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
     network: &PeerNetwork,
     proof_metadata: &ProofMetadata,
+    snapshot_dispatch: &mut SnapshotDispatch,
     effects: Vec<DriverEffect>,
 ) -> Result<(), NodeRuntimeError> {
     let mut pending = VecDeque::from(effects);
-    while let Some(effect) = pending.pop_front() {
-        match effect {
-            DriverEffect::Send { to, message } => network.send(to, message),
-            DriverEffect::ApplyCommitted { entries } => {
-                let applied_index = entries
-                    .last()
-                    .ok_or(NodeRuntimeError::InvalidConfiguration)?
-                    .position
-                    .index;
-                for entry in entries {
-                    let decoded = proof_metadata.decode(&entry)?;
-                    driver.persistence_mut().apply_committed(
-                        MetadataLogPosition {
-                            term: entry.position.term,
-                            index: entry.position.index,
-                        },
-                        decoded.context,
-                        &decoded.command,
-                    )?;
+    loop {
+        if let Some(effect) = pending.pop_front() {
+            match effect {
+                DriverEffect::Send { to, message } => network.send(to, message),
+                DriverEffect::ApplyCommitted { entries } => {
+                    for entry in entries {
+                        apply_committed_entry(driver, proof_metadata, &entry, &mut pending)?;
+                    }
                 }
-                pending.extend(driver.step(CoreInput::AppliedThrough(applied_index), now())?);
+                DriverEffect::Rejected { .. }
+                | DriverEffect::RoleChanged { .. }
+                | DriverEffect::ProposalAppended { .. }
+                | DriverEffect::ReadBarrierReady { .. } => {}
             }
-            DriverEffect::Rejected { .. }
-            | DriverEffect::RoleChanged { .. }
-            | DriverEffect::ProposalAppended { .. }
-            | DriverEffect::ReadBarrierReady { .. } => {}
+            continue;
         }
+        dispatch_learner_snapshots(driver, network, snapshot_dispatch)?;
+        let planned = maybe_plan_membership_transition(driver)?;
+        if planned.is_empty() {
+            return Ok(());
+        }
+        pending.extend(planned);
     }
+}
+
+fn apply_committed_entry(
+    driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
+    proof_metadata: &ProofMetadata,
+    entry: &meshspan_consensus::LogEntry,
+    pending: &mut VecDeque<DriverEffect>,
+) -> Result<(), NodeRuntimeError> {
+    if entry.command_version == METADATA_COMMAND_VERSION {
+        let decoded = proof_metadata.decode(entry)?;
+        driver.persistence_mut().apply_committed(
+            MetadataLogPosition {
+                term: entry.position.term,
+                index: entry.position.index,
+            },
+            decoded.context,
+            &decoded.command,
+        )?;
+        pending.extend(driver.step(CoreInput::AppliedThrough(entry.position.index), now())?);
+        return Ok(());
+    }
+    if entry.command_version != MEMBERSHIP_COMMAND_VERSION {
+        return Err(NodeRuntimeError::InvalidConfiguration);
+    }
+    let command = MembershipTransitionCommand::decode(&entry.command)
+        .map_err(MembershipCoordinatorError::from)?;
+    let evidence_entry = match &command {
+        MembershipTransitionCommand::PromoteLearner { evidence, .. } => {
+            driver.log_entry(evidence.committed_position.index).cloned()
+        }
+        MembershipTransitionCommand::AdmitLearner { .. }
+        | MembershipTransitionCommand::FinaliseStable { .. } => None,
+    };
+    let membership = driver
+        .persistence()
+        .partition_membership()?
+        .ok_or(MembershipCoordinatorError::InvalidAuthority)?;
+    let incarnations = validate_transition(
+        driver.active_plan(),
+        driver.member_incarnations(),
+        membership.active_voters(),
+        membership.admitted_learners(),
+        &command,
+        evidence_entry.as_ref(),
+    )?;
+    pending.extend(driver.step(CoreInput::AppliedThrough(entry.position.index), now())?);
+    if driver.role() == Role::Leader {
+        pending.extend(driver.step(CoreInput::Heartbeat, now())?);
+    }
+    let activation = match command {
+        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
+        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+            CoreInput::ActivateJointPlan {
+                joint_plan,
+                member_incarnations: incarnations,
+                committed_position: entry.position,
+            }
+        }
+        MembershipTransitionCommand::FinaliseStable { plan } => CoreInput::ActivateStablePlan {
+            plan,
+            member_incarnations: incarnations,
+            committed_position: entry.position,
+        },
+    };
+    pending.extend(driver.step(activation, now())?);
     Ok(())
 }
 
@@ -332,7 +431,7 @@ fn redirect_response(leader: Option<NodeId>) -> &'static str {
     }
 }
 
-fn node_number(node: NodeId) -> Option<u8> {
+pub(super) fn node_number(node: NodeId) -> Option<u8> {
     let bytes = node.as_bytes();
     bytes
         .iter()
@@ -348,11 +447,11 @@ fn operation_id(value: u8) -> Result<OperationId, NodeRuntimeError> {
     OperationId::from_bytes([value; 16]).map_err(Into::into)
 }
 
-fn partition_id() -> Result<PartitionId, NodeRuntimeError> {
+pub(super) fn partition_id() -> Result<PartitionId, NodeRuntimeError> {
     PartitionId::from_bytes([8; 16]).map_err(Into::into)
 }
 
-fn now() -> UnixMicros {
+pub(super) fn now() -> UnixMicros {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

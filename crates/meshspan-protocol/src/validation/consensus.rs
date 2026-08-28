@@ -69,10 +69,14 @@ pub(super) fn append_response(value: &AppendResponse) -> Result<(), WireContract
     validate_conditional_error(value.accepted, value.rejection.as_ref())
 }
 
-pub(super) fn snapshot_begin(value: &SnapshotBegin) -> Result<(), WireContractError> {
+pub(super) fn snapshot_begin(
+    value: &SnapshotBegin,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
     valid_identifier(&value.snapshot_id)?;
     valid_digest(&value.digest)?;
     valid_digest(&value.quorum_plan_digest)?;
+    valid_nonempty_bytes(&value.quorum_plan, limits.maximum_control_bytes())?;
     validate_position(value.included_position.as_ref(), false)?;
     if value.state_revision == 0
         || value.total_bytes == 0

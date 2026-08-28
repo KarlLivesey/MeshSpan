@@ -3,6 +3,7 @@
 //! Minimal headless three-voter runtime used before public service adapters arrive.
 
 mod config;
+mod membership_runtime;
 mod network;
 mod proof_metadata;
 mod service;
@@ -50,10 +51,19 @@ pub enum NodeRuntimeError {
     /// Durable consensus state could not be loaded.
     #[error("stage three node consensus store failed")]
     ConsensusStore(#[from] meshspan_metadata::ConsensusStoreError),
+    /// Authoritative membership, transition shape or catch-up evidence was inconsistent.
+    #[error("stage three node membership coordination failed")]
+    Membership,
     /// Identity construction failed.
     #[error("stage three node identity is invalid")]
     Identity(#[from] meshspan_domain::IdentifierError),
     /// QUIC task ended unexpectedly.
     #[error("stage three node task ended unexpectedly")]
     Task(#[from] tokio::task::JoinError),
+}
+
+impl From<crate::membership::MembershipCoordinatorError> for NodeRuntimeError {
+    fn from(_error: crate::membership::MembershipCoordinatorError) -> Self {
+        Self::Membership
+    }
 }

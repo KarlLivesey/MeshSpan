@@ -47,6 +47,11 @@ the final appliance daemon; those remain later roadmap stages.
   Consumption atomically creates the host/node, certificate binding and learner
   membership. Invalid secrets do not advance state; exact lost-response replay
   does not consume another use. Private identity keys remain node-local.
+- The live runtime starts with only the bootstrap voter. A newly authorised
+  learner receives a bounded SQLite snapshot plus the canonical quorum plan,
+  independently verifies both, catches up committed history, and is promoted
+  automatically through committed joint and stable phases. It receives no
+  consensus authority before admission and no vote before exact catch-up.
 - Signed partition routes and immutable route history support an initial
   catalogue partition, creation of another metadata partition and a fenced
   active → preparing → frozen → active scope handoff. Source is the sole writer
@@ -64,7 +69,7 @@ the final appliance daemon; those remain later roadmap stages.
 | Quorum correctness | Independent flat-plan truth tables for one through nine voters, weighted/hierarchical vectors, exhaustive minimal quorums/cut sets and old/new joint-transition proofs |
 | Multi-way partitions | Every 1–9-voter set partition (26,442 cases) campaigns independently; at most one component obtains authority and writes commit only when its compiled write family is satisfied |
 | Durability ordering | Campaign, higher-term step-down, proposal append and membership activation tests require exact SQLite persistence acknowledgement before dependent effects escape |
-| One/two/three and growth | The same core and flat-plan compiler exercise every voter count; promotion selects only an eligible fully caught-up learner and ordinary recommendations progress 1, 2, 3, 5, 7, 9 |
+| One/two/three and growth | The process proof grows one voter to two and then three through authoritative learner admission, exact catch-up and automatic joint/stable promotion; the compiler also exercises every voter count and ordinary recommendations progress 1, 2, 3, 5, 7, 9 |
 | Stale/replayed traffic | Wrong incarnation, membership epoch, quorum-plan digest, persistence ID, conflicting uncommitted tail and committed-tail replacement attempts fail closed |
 | Node identity | Real Quinn/rustls mTLS accepts an enrolled certificate-bound peer and rejects a TLS-valid certificate absent from committed topology |
 | Negotiation and bounds | Mandatory `NodeHello`/`NodeWelcome` chooses the highest exact common version and the lower peer resource ceilings; every control frame is length-bounded before allocation/decode |
@@ -72,15 +77,15 @@ the final appliance daemon; those remain later roadmap stages.
 | Snapshot recovery | Resumable transfer rejects corrupt, reordered and excessive chunks without advancing; installation rejects the wrong plan/image and preserves the receiver's newer durable vote |
 | Partition handoff | Signed route vectors reject forged activation and prove no dual-writer interval; the real-process log applies creation and the full prepare/freeze/activate handoff on every voter |
 | Traffic isolation | A real QUIC test stalls an 8 MiB bulk-data write while a consensus ping completes on its independent high-priority stream within one second |
-| Three-process cycle | Three OS processes use distinct SQLite databases, certificates and dynamic loopback ports; they commit bootstrap, two grants, two enrolments, a second partition and handoff; route a follower request; resolve a deliberately lost reply by durable operation ID; kill the leader; elect and write through another; restart the old process and catch it up |
+| Three-process cycle | Three OS processes use distinct SQLite databases, certificates and dynamic loopback ports; only node one starts authoritative; committed grants admit nodes two and three, which install verified snapshots, catch up and become voters; the cycle then commits routing proof records, redirects a follower request, resolves a deliberately lost reply by durable operation ID, kills the leader, elects and writes through another, restarts the old process and catches it up |
 | Outage bounds | Per-peer reusable connection workers bound queueing, timeout and reconnect work; the process cycle commits through the surviving pair while the killed peer is unreachable |
 | Complete local gate | `npm run check` runs generation drift, strict Rust/web lint, unit/conformance/simulation, real Quinn and real-process tests locally with four concurrent workers and no GitHub Actions |
 
 ## Feedback-loop observation
 
-The complete warm local gate measured 5.7–7.4 seconds during the final Stage 3
-work. The real three-process bootstrap, handoff, failover and restart cycle
-completes in approximately 3.5–5.4 seconds and remains isolated in the cluster
+The complete warm local gate measured 11.69 seconds after live learner admission
+was added. The real three-process bootstrap, admission, promotion, handoff,
+failover and restart cycle completes in approximately 4.9 seconds and remains isolated in the cluster
 lane, so unrelated lanes continue concurrently.
 
 ## Deliberate later-stage boundaries

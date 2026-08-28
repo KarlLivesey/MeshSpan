@@ -77,6 +77,16 @@ impl CompiledQuorumPlan {
         &self.ordered_voters
     }
 
+    /// Returns every voter and learner recognised by this stable plan.
+    #[must_use]
+    pub fn members(&self) -> BTreeSet<NodeId> {
+        self.spec
+            .voters
+            .union(&self.spec.learners)
+            .copied()
+            .collect()
+    }
+
     /// Returns one family's exhaustive minimal-quorum and cut-set proof.
     #[must_use]
     pub const fn family(&self, family: QuorumFamily) -> &FamilyProof {

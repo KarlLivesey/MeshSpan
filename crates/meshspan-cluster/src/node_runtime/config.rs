@@ -10,7 +10,7 @@ use meshspan_domain::NodeId;
 
 use super::NodeRuntimeError;
 
-const MAXIMUM_ARGUMENTS: usize = 32;
+const MAXIMUM_ARGUMENTS: usize = 34;
 
 #[derive(Clone)]
 pub(super) struct PeerConfig {
@@ -27,6 +27,7 @@ pub(super) struct NodeConfig {
     pub private_key_path: PathBuf,
     pub authority_path: PathBuf,
     pub state_path: PathBuf,
+    pub bootstrap: bool,
     pub peers: BTreeMap<NodeId, PeerConfig>,
 }
 
@@ -44,6 +45,7 @@ impl NodeConfig {
         let mut private_key_path = None;
         let mut authority_path = None;
         let mut state_path = None;
+        let mut bootstrap = None;
         let mut peers = BTreeMap::new();
         let mut index = 0;
         while index < values.len() {
@@ -59,6 +61,7 @@ impl NodeConfig {
                 "--private-key" => set_once(&mut private_key_path, PathBuf::from(value)),
                 "--authority" => set_once(&mut authority_path, PathBuf::from(value)),
                 "--state" => set_once(&mut state_path, PathBuf::from(value)),
+                "--bootstrap" => set_once(&mut bootstrap, parse_boolean(value)?),
                 "--peer" => {
                     let peer = parse_peer(value)?;
                     if peers.insert(peer.node_id, peer).is_some() {
@@ -83,6 +86,7 @@ impl NodeConfig {
             private_key_path: private_key_path.ok_or(NodeRuntimeError::InvalidConfiguration)?,
             authority_path: authority_path.ok_or(NodeRuntimeError::InvalidConfiguration)?,
             state_path: state_path.ok_or(NodeRuntimeError::InvalidConfiguration)?,
+            bootstrap: bootstrap.unwrap_or(false),
             peers,
         })
     }
@@ -125,6 +129,14 @@ fn parse_address(value: &str) -> Result<SocketAddr, NodeRuntimeError> {
     value
         .parse()
         .map_err(|_| NodeRuntimeError::InvalidConfiguration)
+}
+
+fn parse_boolean(value: &str) -> Result<bool, NodeRuntimeError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(NodeRuntimeError::InvalidConfiguration),
+    }
 }
 
 fn node_id(value: u8) -> Result<NodeId, NodeRuntimeError> {

@@ -14,6 +14,7 @@ use crate::TransportError;
 const DIGEST_BYTES: usize = 32;
 const IDENTIFIER_BYTES: usize = 16;
 const HASH_BUFFER_BYTES: usize = 64 * 1_024;
+const MAXIMUM_QUORUM_PLAN_BYTES: usize = 64 * 1_024;
 
 /// A closed snapshot whose exact staged bytes match the independently validated manifest.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,6 +33,8 @@ pub struct VerifiedSnapshot {
     pub membership_epoch: u64,
     /// Independently recompiled quorum-plan proof digest represented by the image.
     pub quorum_plan_digest: [u8; DIGEST_BYTES],
+    /// Canonical source quorum-plan specifications represented by the image.
+    pub quorum_plan: Vec<u8>,
     /// Exact staged image length.
     pub total_bytes: u64,
     /// SHA-256 of the complete staged image.
@@ -48,6 +51,7 @@ pub struct SnapshotStager {
     format_version: u32,
     membership_epoch: u64,
     quorum_plan_digest: [u8; DIGEST_BYTES],
+    quorum_plan: Vec<u8>,
     total_bytes: u64,
     expected_digest: [u8; DIGEST_BYTES],
     received_bytes: u64,
@@ -188,6 +192,7 @@ impl SnapshotStager {
             format_version: self.format_version,
             membership_epoch: self.membership_epoch,
             quorum_plan_digest: self.quorum_plan_digest,
+            quorum_plan: self.quorum_plan,
             total_bytes: self.total_bytes,
             digest: actual_digest,
         })
@@ -210,6 +215,7 @@ impl SnapshotStager {
             format_version: manifest.format_version,
             membership_epoch: manifest.membership_epoch,
             quorum_plan_digest: manifest.quorum_plan_digest,
+            quorum_plan: manifest.quorum_plan,
             total_bytes: manifest.total_bytes,
             expected_digest: manifest.digest,
             received_bytes,
@@ -219,7 +225,7 @@ impl SnapshotStager {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct StagingManifest {
     snapshot_id: [u8; IDENTIFIER_BYTES],
     included_position: LogPosition,
@@ -227,6 +233,7 @@ struct StagingManifest {
     format_version: u32,
     membership_epoch: u64,
     quorum_plan_digest: [u8; DIGEST_BYTES],
+    quorum_plan: Vec<u8>,
     total_bytes: u64,
     digest: [u8; DIGEST_BYTES],
 }
@@ -244,6 +251,8 @@ impl StagingManifest {
             || begin.state_revision == 0
             || begin.format_version == 0
             || begin.membership_epoch == 0
+            || begin.quorum_plan.is_empty()
+            || begin.quorum_plan.len() > MAXIMUM_QUORUM_PLAN_BYTES
             || begin.total_bytes == 0
             || begin.total_bytes > maximum_snapshot_bytes
         {
@@ -256,6 +265,7 @@ impl StagingManifest {
             format_version: begin.format_version,
             membership_epoch: begin.membership_epoch,
             quorum_plan_digest,
+            quorum_plan: begin.quorum_plan.clone(),
             total_bytes: begin.total_bytes,
             digest,
         })
@@ -357,6 +367,7 @@ mod tests {
             format_version: 1,
             membership_epoch: 4,
             quorum_plan_digest: vec![2; DIGEST_BYTES],
+            quorum_plan: vec![3; 32],
         }
     }
 
