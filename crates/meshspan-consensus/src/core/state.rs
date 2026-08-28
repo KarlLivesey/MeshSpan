@@ -8,8 +8,9 @@ use meshspan_domain::{NodeId, OperationId};
 
 use super::types::{
     AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
-    DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition, PersistenceId,
-    ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse, validate_append_entries,
+    DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition,
+    MemberIncarnations, PersistenceId, ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
+    validate_append_entries,
 };
 use crate::{ActiveQuorumPlan, CompiledQuorumPlan, JointQuorumPlan, QuorumFamily};
 
@@ -58,8 +59,8 @@ enum AfterPersistence {
         position: LogPosition,
     },
     StepDown,
-    ActivateJoint(Box<JointQuorumPlan>),
-    ActivateStable(Box<CompiledQuorumPlan>),
+    ActivateJoint(Box<JointQuorumPlan>, MemberIncarnations),
+    ActivateStable(Box<CompiledQuorumPlan>, MemberIncarnations),
 }
 
 /// Owned deterministic consensus core. It performs no IO and emits persistence before dependent
@@ -222,12 +223,14 @@ impl ConsensusCore {
             }
             CoreInput::ActivateJointPlan {
                 joint_plan,
+                member_incarnations,
                 committed_position,
-            } => self.activate_joint_plan(joint_plan, committed_position),
+            } => self.activate_joint_plan(joint_plan, member_incarnations, committed_position),
             CoreInput::ActivateStablePlan {
                 plan,
+                member_incarnations,
                 committed_position,
-            } => self.activate_stable_plan(plan, committed_position),
+            } => self.activate_stable_plan(plan, member_incarnations, committed_position),
             CoreInput::AppliedThrough(index) => self.applied_through(index),
         }
     }
@@ -556,14 +559,18 @@ impl ConsensusCore {
     fn activate_joint_plan(
         &mut self,
         joint_plan: Box<JointQuorumPlan>,
+        member_incarnations: MemberIncarnations,
         committed_position: LogPosition,
     ) -> Result<Vec<CoreEffect>, CoreError> {
         let ActiveQuorumPlan::Stable(current) = &self.active_plan else {
             return Err(CoreError::InvalidInput);
         };
+        let incumbent_members = self.active_members();
         if current.proof_digest() != joint_plan.old_plan().proof_digest()
             || current.spec().membership_epoch != joint_plan.old_plan().spec().membership_epoch
-            || joint_plan.members() != self.active_members()
+            || joint_plan.old_plan().members() != incumbent_members
+            || !member_incarnations.matches_members(&joint_plan.members())
+            || !member_incarnations.preserves(&self.config.member_incarnations, &incumbent_members)
         {
             return Err(CoreError::InvalidInput);
         }
@@ -579,21 +586,28 @@ impl ConsensusCore {
                     activated_position: committed_position,
                 }),
             },
-            AfterPersistence::ActivateJoint(joint_plan),
+            AfterPersistence::ActivateJoint(joint_plan, member_incarnations),
         )
     }
 
     fn activate_stable_plan(
         &mut self,
         plan: Box<CompiledQuorumPlan>,
+        member_incarnations: MemberIncarnations,
         committed_position: LogPosition,
     ) -> Result<Vec<CoreEffect>, CoreError> {
         let ActiveQuorumPlan::Joint(joint) = &self.active_plan else {
             return Err(CoreError::InvalidInput);
         };
+        let retained_members: BTreeSet<NodeId> = self
+            .active_members()
+            .intersection(&plan.members())
+            .copied()
+            .collect();
         if plan.proof_digest() != joint.new_plan().proof_digest()
             || plan.spec().membership_epoch != joint.membership_epoch()
-            || joint.members() != self.active_members()
+            || !member_incarnations.matches_members(&plan.members())
+            || !member_incarnations.preserves(&self.config.member_incarnations, &retained_members)
         {
             return Err(CoreError::InvalidInput);
         }
@@ -609,7 +623,7 @@ impl ConsensusCore {
                     activated_position: committed_position,
                 }),
             },
-            AfterPersistence::ActivateStable(plan),
+            AfterPersistence::ActivateStable(plan, member_incarnations),
         )
     }
 
@@ -751,17 +765,21 @@ impl ConsensusCore {
                     term: self.current_term,
                 }])
             }
-            AfterPersistence::ActivateJoint(joint_plan) => {
-                Ok(self.finish_plan_activation(ActiveQuorumPlan::Joint(joint_plan)))
-            }
-            AfterPersistence::ActivateStable(plan) => {
-                Ok(self.finish_plan_activation(ActiveQuorumPlan::Stable(plan)))
-            }
+            AfterPersistence::ActivateJoint(joint_plan, member_incarnations) => Ok(self
+                .finish_plan_activation(ActiveQuorumPlan::Joint(joint_plan), member_incarnations)),
+            AfterPersistence::ActivateStable(plan, member_incarnations) => Ok(
+                self.finish_plan_activation(ActiveQuorumPlan::Stable(plan), member_incarnations)
+            ),
         }
     }
 
-    fn finish_plan_activation(&mut self, active_plan: ActiveQuorumPlan) -> Vec<CoreEffect> {
+    fn finish_plan_activation(
+        &mut self,
+        active_plan: ActiveQuorumPlan,
+        member_incarnations: MemberIncarnations,
+    ) -> Vec<CoreEffect> {
         self.active_plan = active_plan;
+        self.config.member_incarnations = member_incarnations;
         let may_lead = self
             .active_eligible_leaders()
             .contains(&self.config.local_node_id);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::io;
 
@@ -358,54 +358,41 @@ fn conflicting_uncommitted_tail_is_replaced_but_committed_tail_is_protected()
 }
 
 #[test]
-fn committed_membership_change_moves_through_durable_joint_and_stable_plans()
+fn committed_membership_change_admits_a_learner_through_durable_joint_and_stable_plans()
 -> Result<(), Box<dyn Error>> {
-    let first = node(1)?;
-    let second = node(2)?;
-    let third = node(3)?;
-    let old = compile_plan(flat_plan(
-        QuorumPlanId::from_bytes([91; 16])?,
-        1,
-        BTreeSet::from([first, second]),
-        BTreeSet::from([third]),
-    )?)?;
-    let new = compile_plan(flat_plan(
-        QuorumPlanId::from_bytes([92; 16])?,
-        2,
-        BTreeSet::from([first, second, third]),
-        BTreeSet::new(),
-    )?)?;
-    let joint = JointQuorumPlan::new(old.clone(), new.clone())?;
-    let incarnations = MemberIncarnations::new(
-        BTreeSet::from([first, second, third])
-            .into_iter()
-            .map(|member| (member, 1))
-            .collect(),
-        &old,
-    )?;
-    let mut core = ConsensusCore::new(CoreConfig {
-        partition_id: PartitionId::from_bytes([81; 16])?,
-        local_node_id: first,
-        local_incarnation: 1,
-        plan: old.clone(),
-        member_incarnations: incarnations,
-    })?;
-    persist_only_effect(&mut core, CoreInput::ElectionTimeout)?;
-    core.step(vote_for_plan(2, 1, true, old.proof_digest())?)?;
+    let mut fixture = membership_admission_fixture()?;
+    let core = &mut fixture.core;
+    persist_only_effect(core, CoreInput::ElectionTimeout)?;
+    core.step(vote_for_plan(2, 1, true, fixture.old.proof_digest())?)?;
 
-    persist_only_effect(&mut core, proposal(1, b"enter-joint".to_vec())?)?;
+    persist_only_effect(core, proposal(1, b"enter-joint".to_vec())?)?;
     let transition = LogPosition { term: 1, index: 1 };
     assert_eq!(
         core.step(CoreInput::ActivateJointPlan {
-            joint_plan: Box::new(joint.clone()),
+            joint_plan: Box::new(fixture.joint.clone()),
+            member_incarnations: fixture.expanded_incarnations.clone(),
             committed_position: transition,
         }),
         Err(CoreError::InvalidInput)
     );
     core.step(CoreInput::AppliedThrough(1))?;
 
+    let changed_incumbent = MemberIncarnations::for_members(
+        BTreeMap::from([(fixture.first, 2), (fixture.second, 1), (fixture.third, 1)]),
+        &fixture.joint.members(),
+    )?;
+    assert_eq!(
+        core.step(CoreInput::ActivateJointPlan {
+            joint_plan: Box::new(fixture.joint.clone()),
+            member_incarnations: changed_incumbent,
+            committed_position: transition,
+        }),
+        Err(CoreError::InvalidInput)
+    );
+
     let effects = core.step(CoreInput::ActivateJointPlan {
-        joint_plan: Box::new(joint.clone()),
+        joint_plan: Box::new(fixture.joint.clone()),
+        member_incarnations: fixture.expanded_incarnations.clone(),
         committed_position: transition,
     })?;
     let [CoreEffect::Persist { id, mutation }] = effects.as_slice() else {
@@ -413,10 +400,10 @@ fn committed_membership_change_moves_through_durable_joint_and_stable_plans()
     };
     assert_eq!(mutation.membership_epoch, Some(2));
     assert_eq!(core.membership_epoch(), 1);
-    assert_eq!(core.plan_digest(), old.proof_digest());
+    assert_eq!(core.plan_digest(), fixture.old.proof_digest());
     core.step(CoreInput::Persisted(*id))?;
     assert_eq!(core.membership_epoch(), 2);
-    assert_eq!(core.plan_digest(), joint.proof_digest());
+    assert_eq!(core.plan_digest(), fixture.joint.proof_digest());
 
     assert_eq!(
         core.step(message(
@@ -425,42 +412,81 @@ fn committed_membership_change_moves_through_durable_joint_and_stable_plans()
                 term: 1,
                 granted: true,
                 membership_epoch: 1,
-                plan_digest: old.proof_digest(),
+                plan_digest: fixture.old.proof_digest(),
             }),
         )?),
         Err(CoreError::StaleMember)
     );
 
-    persist_only_effect(&mut core, proposal(2, b"leave-joint".to_vec())?)?;
-    assert_eq!(core.commit_index(), 1);
-    core.step(message(
-        3,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: true,
-            matched_index: 2,
-            next_index_hint: 3,
-            read_barrier_id: None,
-            membership_epoch: 2,
-            plan_digest: joint.proof_digest(),
-        }),
-    )?)?;
+    persist_only_effect(core, proposal(2, b"leave-joint".to_vec())?)?;
     assert_eq!(core.commit_index(), 2);
     core.step(CoreInput::AppliedThrough(2))?;
 
     let effects = core.step(CoreInput::ActivateStablePlan {
-        plan: Box::new(new.clone()),
+        plan: Box::new(fixture.new.clone()),
+        member_incarnations: fixture.expanded_incarnations,
         committed_position: LogPosition { term: 1, index: 2 },
     })?;
     let [CoreEffect::Persist { id, mutation }] = effects.as_slice() else {
         return Err(io::Error::other("stable activation was not a lone persistence effect").into());
     };
     assert_eq!(mutation.membership_epoch, Some(2));
-    assert_eq!(core.plan_digest(), joint.proof_digest());
+    assert_eq!(core.plan_digest(), fixture.joint.proof_digest());
     core.step(CoreInput::Persisted(*id))?;
     assert_eq!(core.membership_epoch(), 2);
-    assert_eq!(core.plan_digest(), new.proof_digest());
+    assert_eq!(core.plan_digest(), fixture.new.proof_digest());
     Ok(())
+}
+
+struct MembershipAdmissionFixture {
+    core: ConsensusCore,
+    old: crate::CompiledQuorumPlan,
+    new: crate::CompiledQuorumPlan,
+    joint: JointQuorumPlan,
+    expanded_incarnations: MemberIncarnations,
+    first: NodeId,
+    second: NodeId,
+    third: NodeId,
+}
+
+fn membership_admission_fixture() -> Result<MembershipAdmissionFixture, Box<dyn Error>> {
+    let first = node(1)?;
+    let second = node(2)?;
+    let third = node(3)?;
+    let old = compile_plan(flat_plan(
+        QuorumPlanId::from_bytes([91; 16])?,
+        1,
+        BTreeSet::from([first, second]),
+        BTreeSet::new(),
+    )?)?;
+    let new = compile_plan(flat_plan(
+        QuorumPlanId::from_bytes([92; 16])?,
+        2,
+        BTreeSet::from([first, second]),
+        BTreeSet::from([third]),
+    )?)?;
+    let joint = JointQuorumPlan::new(old.clone(), new.clone())?;
+    let old_incarnations =
+        MemberIncarnations::new(BTreeMap::from([(first, 1), (second, 1)]), &old)?;
+    let expanded_incarnations =
+        MemberIncarnations::new(BTreeMap::from([(first, 1), (second, 1), (third, 1)]), &new)?;
+    let core = ConsensusCore::new(CoreConfig {
+        partition_id: PartitionId::from_bytes([81; 16])?,
+        local_node_id: first,
+        local_incarnation: 1,
+        plan: old.clone(),
+        member_incarnations: old_incarnations,
+    })?;
+    Ok(MembershipAdmissionFixture {
+        core,
+        old,
+        new,
+        joint,
+        expanded_incarnations,
+        first,
+        second,
+        third,
+    })
 }
 
 fn core(voter_count: u8) -> Result<ConsensusCore, Box<dyn Error>> {

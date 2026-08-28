@@ -145,7 +145,19 @@ impl MemberIncarnations {
             .union(&plan.spec().learners)
             .copied()
             .collect();
-        if values.keys().copied().collect::<BTreeSet<_>>() != expected
+        Self::for_members(values, &expected)
+    }
+
+    /// Validates complete, positive incarnation coverage for an exact stable or joint member set.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, extra or zero-incarnation members.
+    pub fn for_members(
+        values: BTreeMap<NodeId, u64>,
+        expected: &BTreeSet<NodeId>,
+    ) -> Result<Self, CoreError> {
+        if values.keys().copied().collect::<BTreeSet<_>>() != *expected
             || values.values().any(|value| *value == 0)
         {
             Err(CoreError::InvalidConfiguration)
@@ -163,6 +175,12 @@ impl MemberIncarnations {
     pub(super) fn matches_members(&self, members: &BTreeSet<NodeId>) -> bool {
         self.0.keys().copied().collect::<BTreeSet<_>>() == *members
             && self.0.values().all(|incarnation| *incarnation > 0)
+    }
+
+    pub(super) fn preserves(&self, previous: &Self, incumbent_members: &BTreeSet<NodeId>) -> bool {
+        incumbent_members
+            .iter()
+            .all(|member| self.incarnation(*member) == previous.incarnation(*member))
     }
 }
 
@@ -316,6 +334,8 @@ pub enum CoreInput {
     ActivateJointPlan {
         /// Independently proved old+new plan.
         joint_plan: Box<JointQuorumPlan>,
+        /// Exact authoritative incarnations for every old or newly admitted member.
+        member_incarnations: MemberIncarnations,
         /// Applied log position containing the transition command.
         committed_position: LogPosition,
     },
@@ -323,6 +343,8 @@ pub enum CoreInput {
     ActivateStablePlan {
         /// Exact successor previously carried by the active joint plan.
         plan: Box<CompiledQuorumPlan>,
+        /// Exact authoritative incarnations for every member retained by the stable plan.
+        member_incarnations: MemberIncarnations,
         /// Applied log position containing the finalisation command.
         committed_position: LogPosition,
     },
