@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 8] = [
+const MIGRATIONS: [Migration; 9] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -58,8 +58,12 @@ const MIGRATIONS: [Migration; 8] = [
         version: 8,
         sql: include_str!("../schema/branch/008_snapshot_restore_operations.sql"),
     },
+    Migration {
+        version: 9,
+        sql: include_str!("../schema/branch/009_file_version_history.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 8;
+const SCHEMA_VERSION: u32 = 9;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -99,6 +103,10 @@ pub struct FilePublication {
     pub version_id: FileVersionId,
     /// Causal prior file version; must equal the expected current version.
     pub parent_version_id: Option<FileVersionId>,
+    /// Whether the version superseded by this publication enters ordinary history.
+    pub retain_superseded_history: bool,
+    /// Exact replicated retention-policy sequence that decided the history classification.
+    pub retention_policy_sequence: u64,
     /// Complete verified content manifest selected by the version.
     pub manifest: ManifestPublication,
     /// Principal responsible for publication.
@@ -402,6 +410,10 @@ pub struct NamespaceReconciliationApplication {
     pub namespace_commit_id: NamespaceCommitId,
     /// Principal responsible for the automatic reconciliation.
     pub created_by: PrincipalId,
+    /// Whether versions superseded while applying the replay enter ordinary history.
+    pub retain_superseded_history: bool,
+    /// Exact replicated retention-policy sequence used for replayed history decisions.
+    pub retention_policy_sequence: u64,
     /// Authoritative commit instant.
     pub created_at: UnixMicros,
 }
@@ -592,6 +604,35 @@ impl VersionPublicationStore {
         volume_id: VolumeId,
     ) -> Result<Option<BranchNamespaceHead>, PublicationError> {
         namespace::load_head(&self.connection, branch_id, volume_id)
+    }
+
+    /// Selects one bounded oldest-first page of preliminary file-version candidates.
+    ///
+    /// Current branch heads are excluded in SQL. Returned versions remain immutable and cannot
+    /// be physically reclaimed until a later catalogue-revision-bound reachability proof also
+    /// excludes every snapshot, namespace head, handle, branch and lifecycle pin.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid policy/bounds, corrupt durable history classification and SQLite failure.
+    pub fn version_retention_candidates(
+        &self,
+        volume_id: VolumeId,
+        policy: crate::VersionRetentionSelectionPolicy,
+        pressure: crate::VersionRetentionPressure,
+        now: UnixMicros,
+        after: Option<crate::VersionRetentionCursor>,
+        limit: crate::VersionRetentionPageLimit,
+    ) -> Result<crate::VersionRetentionCandidatePage, crate::VersionRetentionError> {
+        crate::version_retention::select_candidates(
+            &self.connection,
+            volume_id,
+            policy,
+            pressure,
+            now,
+            after,
+            limit,
+        )
     }
 
     /// Resolves an atomic namespace publication outcome after a lost response.
@@ -866,6 +907,8 @@ pub enum PublicationError {
 
 fn validate_publication(publication: FilePublication) -> Result<(), PublicationError> {
     if publication.parent_version_id != publication.expected_current_version_id
+        || publication.retention_policy_sequence == 0
+        || publication.retention_policy_sequence > MAXIMUM_SQLITE_INTEGER
         || publication.manifest.format_version == 0
         || publication.manifest.logical_length > MAXIMUM_SQLITE_INTEGER
     {
@@ -1107,7 +1150,7 @@ fn load_file_head(
 
 fn publication_request_digest(publication: FilePublication) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.file-publication.v1\0");
+    digest.update(b"meshspan.filesystem.file-publication.v2\0");
     digest.update(&publication.operation_id.as_bytes());
     digest.update(&publication.branch_id.as_bytes());
     digest.update(&publication.volume_id.as_bytes());
@@ -1115,6 +1158,8 @@ fn publication_request_digest(publication: FilePublication) -> [u8; 32] {
     update_optional_identifier(&mut digest, publication.expected_current_version_id);
     digest.update(&publication.version_id.as_bytes());
     update_optional_identifier(&mut digest, publication.parent_version_id);
+    digest.update(&[u8::from(publication.retain_superseded_history)]);
+    digest.update(&publication.retention_policy_sequence.to_be_bytes());
     digest.update(&publication.manifest.manifest_id.as_bytes());
     digest.update(&publication.manifest.format_version.to_be_bytes());
     digest.update(&publication.manifest.logical_length.to_be_bytes());

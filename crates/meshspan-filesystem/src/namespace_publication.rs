@@ -215,6 +215,7 @@ pub(super) fn publish(
     let file_head = prepare_file(&transaction, publication.file)?;
     persist_manifest(&transaction, publication.file.manifest)?;
     persist_version(&transaction, publication.file)?;
+    crate::version_retention::record_supersession(&transaction, publication.file)?;
     advance_file_head(&transaction, publication.file, file_head.sequence)?;
     inject(fault, NamespaceFaultPoint::FileVersion)?;
 

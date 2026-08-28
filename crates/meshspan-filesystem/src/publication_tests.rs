@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    OperationId, PrincipalId, SnapshotId, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, DurationMicros, FileVersionId, NamespaceCommitId, ObjectId,
+    ObjectRevisionId, OperationId, PrincipalId, SnapshotId, UnixMicros, VolumeId,
 };
 use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
@@ -17,7 +17,9 @@ use super::{
 use crate::{
     BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
     DirectoryTrie, DirectoryTrieError, NamespaceComponent, NamespaceLimits, NamespacePath,
-    NamespaceReplayDisposition, ReconciliationFrontier, ReconciliationLimits,
+    NamespaceReplayDisposition, ReconciliationFrontier, ReconciliationLimits, VersionReclaimMode,
+    VersionRetentionCandidateReason, VersionRetentionError, VersionRetentionPageLimit,
+    VersionRetentionPressure, VersionRetentionSelectionPolicy,
 };
 
 #[test]
@@ -170,6 +172,396 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         |row| row.get(0),
     )?;
     assert_eq!(snapshot_restores, 1);
+    let version_history: i64 = store.connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM sqlite_schema WHERE name = 'file_version_history'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(version_history, 1);
+    Ok(())
+}
+
+#[test]
+fn version_nine_migration_backfills_history_after_a_cross_branch_fork()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut connection = Connection::open_in_memory()?;
+    configure(&connection)?;
+    for migration in &MIGRATIONS[..8] {
+        connection.execute_batch(migration.sql)?;
+    }
+    seed_pre_v9_cross_branch_versions(&mut connection)?;
+    connection.execute_batch(MIGRATIONS[8].sql)?;
+    let stored: (Vec<u8>, i64) = connection.query_row(
+        "SELECT branch_id, policy_sequence FROM file_version_history",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(stored.0, vec![2; 16]);
+    assert_eq!(stored.1, 1);
+    Ok(())
+}
+
+fn seed_pre_v9_cross_branch_versions(
+    connection: &mut Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute(
+        "INSERT INTO content_manifests(
+            manifest_id, format_version, logical_length, content_digest, root_digest, state
+         ) VALUES (?1, 1, 1, ?2, ?3, 1)",
+        params![&[5_u8; 16], &[6_u8; 32], &[7_u8; 32]],
+    )?;
+    for branch in [1_u8, 2] {
+        transaction.execute(
+            "INSERT INTO branch_files(
+                branch_id, object_id, volume_id, current_version_id, head_sequence
+             ) VALUES (?1, ?2, ?3, ?4, 1)",
+            params![&[branch; 16], &[3_u8; 16], &[4_u8; 16], &[branch; 16]],
+        )?;
+    }
+    transaction.execute(
+        "INSERT INTO file_versions(
+            version_id, branch_id, volume_id, object_id, parent_version_id, manifest_id,
+            logical_length, content_digest, created_by, created_at, publication_operation_id
+         ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, 1, ?6, ?7, 10, ?8)",
+        params![
+            &[1_u8; 16],
+            &[1_u8; 16],
+            &[4_u8; 16],
+            &[3_u8; 16],
+            &[5_u8; 16],
+            &[6_u8; 32],
+            &[8_u8; 16],
+            &[9_u8; 16]
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO file_versions(
+            version_id, branch_id, volume_id, object_id, parent_version_id, manifest_id,
+            logical_length, content_digest, created_by, created_at, publication_operation_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, 20, ?9)",
+        params![
+            &[2_u8; 16],
+            &[2_u8; 16],
+            &[4_u8; 16],
+            &[3_u8; 16],
+            &[1_u8; 16],
+            &[5_u8; 16],
+            &[6_u8; 32],
+            &[8_u8; 16],
+            &[10_u8; 16]
+        ],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+#[test]
+fn version_retention_selection_is_bounded_oldest_first_and_policy_exact()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut third = following_root_publication(&second, 80, 81, 82, 83, 84)?;
+    third.file.retain_superseded_history = false;
+    let fourth = following_root_publication(&third, 90, 91, 92, 93, 94)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    for publication in [&first, &second, &third, &fourth] {
+        store.publish_root_file(publication)?;
+    }
+    let transaction = store
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    crate::version_retention::record_conflict_protection(
+        &transaction,
+        first.file.version_id,
+        UnixMicros::new(85),
+    )?;
+    transaction.commit()?;
+
+    let policy = VersionRetentionSelectionPolicy::new(
+        7,
+        DurationMicros::new(15),
+        None,
+        Some(1),
+        VersionReclaimMode::UnderPressure,
+        true,
+        DurationMicros::new(30),
+    )?;
+    assert_normal_retention_selection(&store, &first, &second, &fourth, policy)?;
+    assert_maximum_age_is_pressure_independent(&store, &third)?;
+    assert_critical_retention_selection(&store, &first, &second, &third)?;
+    let before_restart = store.version_retention_candidates(
+        first.file.volume_id,
+        policy,
+        VersionRetentionPressure::Pressure,
+        UnixMicros::new(120),
+        None,
+        VersionRetentionPageLimit::new(10)?,
+    )?;
+    drop(store);
+    assert_retention_restart_and_corruption(directory.path(), &first, policy, &before_restart)?;
+    Ok(())
+}
+
+fn assert_maximum_age_is_pressure_independent(
+    store: &VersionPublicationStore,
+    expected: &RootFilePublication,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let policy = VersionRetentionSelectionPolicy::new(
+        9,
+        DurationMicros::new(15),
+        Some(DurationMicros::new(30)),
+        None,
+        VersionReclaimMode::UnderPressure,
+        false,
+        DurationMicros::new(30),
+    )?;
+    let page = store.version_retention_candidates(
+        expected.file.volume_id,
+        policy,
+        VersionRetentionPressure::None,
+        UnixMicros::new(120),
+        None,
+        VersionRetentionPageLimit::new(10)?,
+    )?;
+    assert!(page.items.iter().any(|candidate| {
+        candidate.version_id == expected.file.version_id
+            && candidate.reason == VersionRetentionCandidateReason::MaximumAge
+    }));
+    Ok(())
+}
+
+#[test]
+fn version_retention_rejects_unsafe_policy_and_page_bounds() {
+    assert!(matches!(
+        VersionRetentionSelectionPolicy::new(
+            0,
+            DurationMicros::new(1),
+            None,
+            None,
+            VersionReclaimMode::UnderPressure,
+            false,
+            DurationMicros::new(1),
+        ),
+        Err(VersionRetentionError::InvalidPolicy)
+    ));
+    assert!(matches!(
+        VersionRetentionSelectionPolicy::new(
+            u64::MAX,
+            DurationMicros::new(1),
+            None,
+            None,
+            VersionReclaimMode::UnderPressure,
+            false,
+            DurationMicros::new(1),
+        ),
+        Err(VersionRetentionError::InvalidPolicy)
+    ));
+    assert!(matches!(
+        VersionRetentionSelectionPolicy::new(
+            1,
+            DurationMicros::new(2),
+            Some(DurationMicros::new(1)),
+            None,
+            VersionReclaimMode::AfterMaximumAge,
+            false,
+            DurationMicros::new(2),
+        ),
+        Err(VersionRetentionError::InvalidPolicy)
+    ));
+    assert!(matches!(
+        VersionRetentionPageLimit::new(0),
+        Err(VersionRetentionError::InvalidLimit)
+    ));
+    assert!(matches!(
+        VersionRetentionPageLimit::new(4_097),
+        Err(VersionRetentionError::InvalidLimit)
+    ));
+}
+
+fn assert_retention_restart_and_corruption(
+    state_directory: &std::path::Path,
+    first: &RootFilePublication,
+    policy: VersionRetentionSelectionPolicy,
+    before_restart: &crate::VersionRetentionCandidatePage,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reopened = VersionPublicationStore::open(state_directory, UnixMicros::new(121))?;
+    assert_eq!(
+        &reopened.version_retention_candidates(
+            first.file.volume_id,
+            policy,
+            VersionRetentionPressure::Pressure,
+            UnixMicros::new(120),
+            None,
+            VersionRetentionPageLimit::new(10)?,
+        )?,
+        before_restart
+    );
+    reopened
+        .connection
+        .pragma_update(None, "ignore_check_constraints", true)?;
+    reopened.connection.execute(
+        "UPDATE file_version_history SET superseded_by_version_id = version_id
+         WHERE version_id = ?1",
+        [first.file.version_id.as_bytes().as_slice()],
+    )?;
+    reopened
+        .connection
+        .pragma_update(None, "ignore_check_constraints", false)?;
+    assert!(matches!(
+        reopened.version_retention_candidates(
+            first.file.volume_id,
+            policy,
+            VersionRetentionPressure::None,
+            UnixMicros::new(120),
+            None,
+            VersionRetentionPageLimit::new(10)?,
+        ),
+        Err(VersionRetentionError::Corrupt)
+    ));
+    Ok(())
+}
+
+fn assert_normal_retention_selection(
+    store: &VersionPublicationStore,
+    first: &RootFilePublication,
+    second: &RootFilePublication,
+    current: &RootFilePublication,
+    policy: VersionRetentionSelectionPolicy,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let without_pressure = store.version_retention_candidates(
+        first.file.volume_id,
+        policy,
+        VersionRetentionPressure::None,
+        UnixMicros::new(100),
+        None,
+        VersionRetentionPageLimit::new(10)?,
+    )?;
+    assert_eq!(without_pressure.items.len(), 1);
+    assert_eq!(without_pressure.items[0].version_id, second.file.version_id);
+    assert_eq!(
+        without_pressure.items[0].reason,
+        VersionRetentionCandidateReason::HistoryDisabled
+    );
+    assert!(without_pressure.next.is_none());
+
+    let first_page = store.version_retention_candidates(
+        first.file.volume_id,
+        policy,
+        VersionRetentionPressure::Pressure,
+        UnixMicros::new(120),
+        None,
+        VersionRetentionPageLimit::new(1)?,
+    )?;
+    assert_eq!(first_page.items[0].version_id, first.file.version_id);
+    assert_eq!(
+        first_page.items[0].reason,
+        VersionRetentionCandidateReason::ConflictSafetyElapsed
+    );
+    let second_page = store.version_retention_candidates(
+        first.file.volume_id,
+        policy,
+        VersionRetentionPressure::Pressure,
+        UnixMicros::new(120),
+        first_page.next,
+        VersionRetentionPageLimit::new(1)?,
+    )?;
+    assert_eq!(second_page.items[0].version_id, second.file.version_id);
+    assert!(second_page.next.is_none());
+    assert!(
+        first_page
+            .items
+            .iter()
+            .chain(&second_page.items)
+            .all(|candidate| candidate.policy_sequence == 7
+                && candidate.supersession_policy_sequence == 1
+                && candidate.version_id != current.file.version_id)
+    );
+    Ok(())
+}
+
+fn assert_critical_retention_selection(
+    store: &VersionPublicationStore,
+    first: &RootFilePublication,
+    second: &RootFilePublication,
+    third: &RootFilePublication,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let critical = VersionRetentionSelectionPolicy::new(
+        8,
+        DurationMicros::new(40),
+        None,
+        None,
+        VersionReclaimMode::UnderPressure,
+        true,
+        DurationMicros::new(40),
+    )?;
+    let critical_page = store.version_retention_candidates(
+        first.file.volume_id,
+        critical,
+        VersionRetentionPressure::Critical,
+        UnixMicros::new(100),
+        None,
+        VersionRetentionPageLimit::new(10)?,
+    )?;
+    assert_eq!(
+        critical_page
+            .items
+            .iter()
+            .map(|candidate| (candidate.version_id, candidate.reason))
+            .collect::<Vec<_>>(),
+        [
+            (
+                second.file.version_id,
+                VersionRetentionCandidateReason::HistoryDisabled,
+            ),
+            (
+                third.file.version_id,
+                VersionRetentionCandidateReason::CriticalPressure,
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn supersession_history_rolls_back_with_a_failed_namespace_publication()
+-> Result<(), Box<dyn std::error::Error>> {
+    use super::namespace::NamespaceFaultPoint;
+
+    for fault in [
+        NamespaceFaultPoint::FileVersion,
+        NamespaceFaultPoint::ObjectRevisions,
+        NamespaceFaultPoint::NamespaceCommit,
+        NamespaceFaultPoint::Heads,
+        NamespaceFaultPoint::Operation,
+    ] {
+        let directory = tempdir()?;
+        let first = initial_root_publication()?;
+        let second = next_root_publication(&first)?;
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&first)?;
+        assert!(matches!(
+            super::namespace::publish(&mut store.connection, &second, Some(fault)),
+            Err(PublicationError::InjectedFault)
+        ));
+        let history: i64 =
+            store
+                .connection
+                .query_row("SELECT count(*) FROM file_version_history", [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(history, 0);
+        assert_eq!(
+            store
+                .namespace_head(first.file.branch_id, first.file.volume_id)?
+                .ok_or("head missing")?
+                .namespace_commit_id,
+            first.namespace_commit_id
+        );
+    }
     Ok(())
 }
 
@@ -573,6 +965,8 @@ fn divergent_roots_apply_one_atomic_merge_and_replay_its_receipt()
         operation_id: OperationId::from_bytes([120; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([121; 16])?,
         created_by: first.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
         created_at: UnixMicros::new(120),
     };
     let applied = {
@@ -604,6 +998,14 @@ fn divergent_roots_apply_one_atomic_merge_and_replay_its_receipt()
             .disposition,
         PublicationDisposition::Replayed
     );
+    let changed_policy = NamespaceReconciliationApplication {
+        retain_superseded_history: false,
+        ..application
+    };
+    assert!(matches!(
+        reopened.apply_namespace_reconciliation(changed_policy, &prepared),
+        Err(PublicationError::OperationConflict)
+    ));
     let report = stored_directory_entry(
         &reopened,
         applied.root_object_revision_id,
@@ -719,6 +1121,8 @@ fn every_reconciliation_fault_rolls_back_root_merge_and_receipt()
         operation_id: OperationId::from_bytes([120; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([121; 16])?,
         created_by: first.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
         created_at: UnixMicros::new(120),
     };
     let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
@@ -812,6 +1216,8 @@ fn concurrent_file_edits_materialise_one_owned_recovered_copy()
         operation_id: OperationId::from_bytes([140; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([141; 16])?,
         created_by: first.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
         created_at: UnixMicros::new(140),
     };
     let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
@@ -884,6 +1290,26 @@ fn concurrent_file_edits_materialise_one_owned_recovered_copy()
         recovered_entry.object_revision_id(),
         recovered.target_object_revision_id
     );
+    assert_recovered_version_is_conflict_protected(&store, &recovered)?;
+    Ok(())
+}
+
+fn assert_recovered_version_is_conflict_protected(
+    store: &VersionPublicationStore,
+    recovered: &crate::NamespaceReplayAction,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let BranchMutation::File {
+        version_id: source_version,
+    } = recovered.mutation
+    else {
+        return Err("recovered action is not a file".into());
+    };
+    let count: i64 = store.connection.query_row(
+        "SELECT count(*) FROM file_version_conflict_protections WHERE version_id = ?1",
+        [source_version.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(count, 1);
     Ok(())
 }
 
@@ -1109,6 +1535,8 @@ fn make_publication(
         expected_current_version_id: parent,
         version_id: FileVersionId::from_bytes([version; 16])?,
         parent_version_id: parent,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
         manifest: ManifestPublication {
             manifest_id: ContentManifestId::from_bytes([version.wrapping_add(1); 16])?,
             format_version: 1,
@@ -1219,6 +1647,8 @@ fn nested_file_publication(
             expected_current_version_id: None,
             version_id: FileVersionId::from_bytes([107; 16])?,
             parent_version_id: None,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
             manifest: ManifestPublication {
                 manifest_id: ContentManifestId::from_bytes([108; 16])?,
                 format_version: 1,
@@ -1286,6 +1716,32 @@ fn next_root_publication(
         namespace_commit_id: NamespaceCommitId::from_bytes([74; 16])?,
         path: NamespacePublicationPath::new(
             NamespacePath::from_components(["REPORT"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        entry_generation: 1,
+    })
+}
+
+fn following_root_publication(
+    previous: &RootFilePublication,
+    operation: u8,
+    version: u8,
+    file_revision: u8,
+    root_revision: u8,
+    commit_id: u8,
+) -> Result<RootFilePublication, Box<dyn std::error::Error>> {
+    let mut file = make_publication(operation, Some(previous.file.version_id), version)?;
+    file.created_at = UnixMicros::new(i64::from(operation));
+    Ok(RootFilePublication {
+        file,
+        root_object_id: previous.root_object_id,
+        expected_namespace_commit_id: Some(previous.namespace_commit_id),
+        expected_file_object_revision_id: Some(previous.file_object_revision_id),
+        file_object_revision_id: ObjectRevisionId::from_bytes([file_revision; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([root_revision; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([commit_id; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["report"], NamespaceLimits::PORTABLE)?,
             Vec::new(),
         )?,
         entry_generation: 1,

@@ -137,6 +137,8 @@ fn publication(
             expected_current_version_id: None,
             version_id: FileVersionId::from_bytes([25; 16])?,
             parent_version_id: None,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
             manifest: ManifestPublication {
                 manifest_id: ContentManifestId::from_bytes([26; 16])?,
                 format_version: 1,

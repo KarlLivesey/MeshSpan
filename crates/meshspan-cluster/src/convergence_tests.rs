@@ -34,6 +34,8 @@ fn local_merge_receipt_becomes_one_exact_replicated_head_command()
             operation_id: OperationId::from_bytes([40; 16])?,
             namespace_commit_id: NamespaceCommitId::from_bytes([41; 16])?,
             created_by: first.file.created_by,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
             created_at: UnixMicros::new(40),
         },
         &prepared,
@@ -139,6 +141,8 @@ fn publication(
             expected_current_version_id: None,
             version_id: FileVersionId::from_bytes([identity.saturating_add(2); 16])?,
             parent_version_id: None,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
             manifest: ManifestPublication {
                 manifest_id: ContentManifestId::from_bytes([identity.saturating_add(3); 16])?,
                 format_version: 1,
@@ -175,6 +179,8 @@ fn next_publication(
             expected_current_version_id: Some(previous.file.version_id),
             version_id: FileVersionId::from_bytes([61; 16])?,
             parent_version_id: Some(previous.file.version_id),
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
             manifest: ManifestPublication {
                 manifest_id: ContentManifestId::from_bytes([62; 16])?,
                 format_version: 1,

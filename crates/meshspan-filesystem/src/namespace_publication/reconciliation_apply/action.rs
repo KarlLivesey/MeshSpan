@@ -49,6 +49,15 @@ pub(super) fn apply_action(
         next_root,
         &path,
     )?;
+    if action.disposition == crate::NamespaceReplayDisposition::Recovered
+        && let BranchMutation::File { version_id } = action.mutation
+    {
+        crate::version_retention::record_conflict_protection(
+            transaction,
+            version_id,
+            context.application.created_at,
+        )?;
+    }
     prepare_leaf_revision(transaction, context, action)?;
     let entry = DirectoryEntry::new(
         path.leaf_name()
@@ -282,6 +291,8 @@ fn clone_file_version(
         expected_current_version_id: parent_version_id,
         version_id: target_version_id,
         parent_version_id,
+        retain_superseded_history: context.application.retain_superseded_history,
+        retention_policy_sequence: context.application.retention_policy_sequence,
         manifest,
         created_by: context.application.created_by,
         created_at: context.application.created_at,
@@ -289,6 +300,7 @@ fn clone_file_version(
     let head = prepare_file(transaction, publication)?;
     persist_manifest(transaction, manifest)?;
     persist_version(transaction, publication)?;
+    crate::version_retention::record_supersession(transaction, publication)?;
     advance_file_head(transaction, publication, head.sequence)?;
     Ok(())
 }
