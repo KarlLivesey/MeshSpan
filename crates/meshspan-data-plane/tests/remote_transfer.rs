@@ -180,8 +180,12 @@ impl Fixture {
             },
             &mut random,
         )?;
-        let verifier =
-            StoragePermitVerifier::new(self.mesh, 1, StoragePermitMacKey::from_bytes(PERMIT_KEY)?)?;
+        let verifier = StoragePermitVerifier::new(
+            self.mesh,
+            1,
+            Revision::new(1),
+            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
+        )?;
         let provider = FolderShardStore::open(
             folder,
             &state_path,

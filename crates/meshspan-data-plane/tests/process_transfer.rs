@@ -232,7 +232,12 @@ fn create_service(
             repair_reserve_bytes: 0,
             revision: Revision::new(1),
         },
-        StoragePermitVerifier::new(mesh_id, 1, StoragePermitMacKey::from_bytes(PERMIT_KEY)?)?,
+        StoragePermitVerifier::new(
+            mesh_id,
+            1,
+            Revision::new(1),
+            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
+        )?,
         UnixMicros::new(1),
         &mut random,
     )?;

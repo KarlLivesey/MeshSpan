@@ -11,7 +11,7 @@ use meshspan_contracts::{
     ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation, TombstoneReceipt,
     verify_read_permit_mac, verify_removal_permit_mac,
 };
-use meshspan_domain::{MeshId, RandomSource, UnixMicros};
+use meshspan_domain::{MeshId, RandomSource, Revision, UnixMicros};
 use thiserror::Error;
 
 use crate::journal::{
@@ -63,28 +63,49 @@ pub struct FolderShardStore {
 pub struct StoragePermitVerifier {
     mesh_id: MeshId,
     current_removal_authority_epoch: u64,
+    minimum_catalogue_revision: Revision,
     key: StoragePermitMacKey,
 }
 
 impl StoragePermitVerifier {
-    /// Installs the current removal epoch and MAC key from mesh secret distribution.
+    /// Installs the current removal epoch, applied catalogue fence and MAC key.
     ///
     /// # Errors
     ///
-    /// Rejects the reserved zero authority epoch.
+    /// Rejects the reserved zero authority epoch or catalogue revision. Callers must initialise
+    /// this only after the node has applied that catalogue revision locally.
     pub const fn new(
         mesh_id: MeshId,
         current_removal_authority_epoch: u64,
+        minimum_catalogue_revision: Revision,
         key: StoragePermitMacKey,
     ) -> Result<Self, FolderShardStoreError> {
-        if current_removal_authority_epoch == 0 {
+        if current_removal_authority_epoch == 0 || minimum_catalogue_revision.get() == 0 {
             Err(FolderShardStoreError::InvalidInput)
         } else {
             Ok(Self {
                 mesh_id,
                 current_removal_authority_epoch,
+                minimum_catalogue_revision,
                 key,
             })
+        }
+    }
+
+    /// Advances the local catalogue fence after the corresponding metadata revision is applied.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero or backwards movement. Equal revision replay is idempotent.
+    pub const fn advance_minimum_catalogue_revision(
+        &mut self,
+        revision: Revision,
+    ) -> Result<(), FolderShardStoreError> {
+        if revision.get() == 0 || revision.get() < self.minimum_catalogue_revision.get() {
+            Err(FolderShardStoreError::Stale)
+        } else {
+            self.minimum_catalogue_revision = revision;
+            Ok(())
         }
     }
 
@@ -95,6 +116,7 @@ impl StoragePermitVerifier {
     fn authenticates_removal(&self, permit: RemovalPermit) -> bool {
         permit.mesh_id == self.mesh_id
             && permit.authority_epoch == self.current_removal_authority_epoch
+            && permit.catalogue_revision >= self.minimum_catalogue_revision
             && verify_removal_permit_mac(&self.key, permit)
     }
 }
@@ -766,6 +788,7 @@ mod tests {
         Ok(StoragePermitVerifier::new(
             mesh_id,
             7,
+            Revision::new(1),
             StoragePermitMacKey::from_bytes([42; 32])?,
         )?)
     }

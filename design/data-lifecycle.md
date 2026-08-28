@@ -111,8 +111,11 @@ tombstones and cleanup when it returns.
    `RemovalPermit` from the current owning metadata-partition leader. The permit binds:
    `mesh_id`, target, object, version, shard, generation, catalogue revision,
    operation ID and expiry.
-4. The storage node validates the permit, current leader epoch and local shard
-   identity. It writes a local tombstone durably before unlinking bytes.
+4. The storage node validates the permit, current leader epoch, a catalogue
+   revision no older than the node's monotonically applied cleanup fence, and
+   the local shard identity. Applying a newer catalogue revision permanently
+   rejects older permits. It writes a local tombstone durably before unlinking
+   bytes.
 5. The node reports a typed result. The quorum records completion idempotently;
    a missing shard is success only when its identity and prior cleanup intent
    match.

@@ -108,6 +108,7 @@ fn open_provider(
         StoragePermitVerifier::new(
             folder_registration()?.mesh_id,
             1,
+            Revision::new(1),
             StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
         )?,
         opened_at,
