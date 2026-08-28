@@ -100,6 +100,68 @@ pub struct RequestContext {
     pub expected_revision: Option<Revision>,
 }
 
+/// Independently versioned bounded semantic payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionedPayload {
+    /// Payload format version interpreted only by its owning boundary.
+    pub format_version: u32,
+    /// Canonical bounded bytes.
+    pub bytes: BoundedBytes,
+}
+
+/// Owned items whose count was checked before construction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundedItems<T>(Vec<T>);
+
+impl<T> BoundedItems<T> {
+    /// Accepts items only when their count fits the operation-specific maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BoundedItemsError`] when the count is larger than the supplied limit.
+    pub fn new(items: Vec<T>, maximum_items: usize) -> Result<Self, BoundedItemsError> {
+        if items.len() > maximum_items {
+            return Err(BoundedItemsError {
+                actual: items.len(),
+                maximum: maximum_items,
+            });
+        }
+        Ok(Self(items))
+    }
+
+    /// Borrows the validated items.
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        &self.0
+    }
+
+    /// Returns the validated item count.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Reports whether the collection contains no items.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Consumes the bound proof and returns the owned items.
+    #[must_use]
+    pub fn into_inner(self) -> Vec<T> {
+        self.0
+    }
+}
+
+/// Rejection of an item count beyond an operation-specific bound.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("item count {actual} exceeds maximum {maximum}")]
+pub struct BoundedItemsError {
+    actual: usize,
+    maximum: usize,
+}
+
 /// Owned bytes whose allocation was checked before construction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoundedBytes(Vec<u8>);
@@ -145,6 +207,25 @@ impl BoundedBytes {
 pub struct BoundedBytesError {
     actual: usize,
     maximum: usize,
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::{BoundedBytes, BoundedItems};
+
+    #[test]
+    fn bounded_values_reject_only_excessive_allocations() {
+        assert!(BoundedBytes::copy_from(&[1, 2], 1).is_err());
+        assert_eq!(
+            BoundedBytes::copy_from(&[1, 2], 2).map(|value| value.len()),
+            Ok(2)
+        );
+        assert!(BoundedItems::new(vec![1, 2], 1).is_err());
+        assert_eq!(
+            BoundedItems::new(vec![1, 2], 2).map(|value| value.len()),
+            Ok(2)
+        );
+    }
 }
 
 /// Stable failure categories shared across capability implementations.
