@@ -63,6 +63,11 @@ Status: **draft for review**.
 | D-055 | Fully caught-up eligible nodes are promoted automatically to maintain the selected safe voter plan. Administrators control eligibility and policy intent rather than routine promotions. |
 | D-056 | Mesh identity uses an offline encrypted recovery bundle, rotatable online intermediates and per-node wrapping/signing keys whose private material never leaves that node. |
 | D-057 | The initial persistence adapter uses `rusqlite` with bundled SQLite while project SQL remains inside the portable SQLite-compatible contract. |
+| D-058 | Registered-folder ownership, return, capacity, encryption, chunking, deduplication, scrub, repair and drain follow the accepted contracts in `stage-4-5-decisions.md` sections 1–6. |
+| D-059 | Protocol-neutral staging, handles, namespace reconciliation, copy, move, snapshots and permission revalidation follow `stage-4-5-decisions.md` sections 7–9. |
+| D-060 | Direct retrieval uses one short-lived, explicitly typed Ed25519-signed JWT per authorised immutable file-version read, never a token per shard, under `stage-4-5-decisions.md` section 10. |
+| D-061 | Mesh time, non-wall-clock ordering and the `committed`, `branch-durable`, `eventual` and `ephemeral` state classes follow `stage-4-5-decisions.md` section 11. |
+| D-062 | Discovery and access are independent; anonymous live/pinned sharing and future read-only BitTorrent export follow `stage-4-5-decisions.md` section 12. |
 
 ## Open decisions
 
