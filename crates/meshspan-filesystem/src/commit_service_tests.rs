@@ -7,7 +7,7 @@ use std::rc::Rc;
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
     BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    OperationId, PrincipalId, StageId, UnixMicros, VolumeId,
+    OperationId, PrincipalId, Revision, StageId, UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
@@ -155,6 +155,8 @@ fn request(observed_at: UnixMicros) -> Result<RootFileCommitRequest, Box<dyn std
         version_id: FileVersionId::from_bytes([14; 16])?,
         manifest_id: ContentManifestId::from_bytes([15; 16])?,
         manifest_format_version: 1,
+        content_authorization_revision: Revision::new(1),
+        content_deadline: UnixMicros::new(200),
         root_object_id: ObjectId::from_bytes([16; 16])?,
         expected_namespace_commit_id: None,
         expected_file_object_revision_id: None,
@@ -223,7 +225,7 @@ impl DurableContentPublisher for RecordingPublisher {
             .durable
             .get(&request.operation_id)
             .map(|durable| {
-                if durable.request == request {
+                if durable.request.same_intent(request) {
                     Ok(durable.manifest)
                 } else {
                     Err(ContentPublicationError::Conflict)
