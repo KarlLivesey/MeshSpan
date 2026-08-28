@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 6;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 7;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
 
-const PARTITION_MIGRATIONS: [Migration; 6] = [
+const PARTITION_MIGRATIONS: [Migration; 7] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -35,8 +35,12 @@ const PARTITION_MIGRATIONS: [Migration; 6] = [
         sql: include_str!("../schema/partition/005_partition_routing.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 6,
         sql: include_str!("../schema/partition/006_active_quorum_plan.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/007_converged_volume_heads.sql"),
     },
 ];
 
@@ -239,6 +243,11 @@ pub(crate) fn partition_routing_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn partition_active_quorum_plan_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[5].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_volume_heads_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[6].sql)
 }
 
 #[cfg(test)]

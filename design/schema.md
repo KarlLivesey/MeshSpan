@@ -748,12 +748,22 @@ policy, session or absolute validity window.
 volumes(
   volume_id PK, display_name, canonical_name UNIQUE,
   root_object_id UNIQUE,
-  current_namespace_commit_id UNIQUE,
   protection_policy_id -> protection_policies,
   default_locality_policy_id NULL -> locality_policies,
   default_acknowledgement_policy_id -> acknowledgement_policies,
   state, quota_bytes NULL, new_child_owner_policy,
   stop_parent_grant_inheritance, revision
+)
+
+volume_head_transitions(
+  volume_id -> volumes, head_sequence,
+  previous_namespace_commit_id NULL, namespace_commit_id UNIQUE,
+  root_object_revision_id, evidence_kind,
+  source_operation_id UNIQUE, source_request_digest,
+  causal_plan_digest NULL, replay_plan_digest NULL, source_result_digest,
+  metadata_operation_id UNIQUE -> operations,
+  committed_at, revision UNIQUE,
+  PK(volume_id, head_sequence)
 )
 
 exports(
@@ -767,6 +777,13 @@ exports(
 
 `gateway_scope` supports all authorised gateways or an explicit gateway set
 without giving each gateway a different namespace truth.
+
+The highest contiguous `head_sequence` is the sole current globally converged
+head. Each later row must name the immediately preceding commit. Publication
+evidence has no causal/replay digests; reconciliation evidence requires both.
+Keeping immutable transitions instead of a separately mutable current row makes
+the CAS history directly auditable and lets restart recovery resolve the exact
+metadata operation and exact local source operation independently.
 
 ## 14. Namespace, ownership and tags
 

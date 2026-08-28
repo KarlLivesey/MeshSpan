@@ -86,6 +86,49 @@ pub(super) fn load_reconciliation_receipt(
     }
 }
 
+pub(super) fn verify_reconciliation_head(
+    connection: &Connection,
+    volume_id: VolumeId,
+    expected_namespace_commit_id: NamespaceCommitId,
+    receipt: super::NamespaceReconciliationReceipt,
+) -> Result<super::VerifiedReconciliationHead, PublicationError> {
+    let durable = load_reconciliation_receipt(connection, receipt.operation_id)?
+        .ok_or(PublicationError::InvalidInput)?;
+    if !same_reconciliation_outcome(durable, receipt) {
+        return Err(PublicationError::OperationConflict);
+    }
+    let commit = repository::load_reconciliation_commit(connection, receipt.namespace_commit_id)?
+        .ok_or(PublicationError::Corrupt)?;
+    if commit.volume_id != volume_id
+        || commit.root_object_revision_id != receipt.root_object_revision_id
+        || !commit.parents.contains(&expected_namespace_commit_id)
+        || !matches!(
+            commit.payload,
+            crate::ReconciliationCommitPayload::Merge { .. }
+        )
+    {
+        return Err(PublicationError::InvalidInput);
+    }
+    Ok(super::VerifiedReconciliationHead::new(
+        durable,
+        volume_id,
+        expected_namespace_commit_id,
+    ))
+}
+
+fn same_reconciliation_outcome(
+    left: super::NamespaceReconciliationReceipt,
+    right: super::NamespaceReconciliationReceipt,
+) -> bool {
+    left.operation_id == right.operation_id
+        && left.request_digest == right.request_digest
+        && left.causal_plan_digest == right.causal_plan_digest
+        && left.replay_plan_digest == right.replay_plan_digest
+        && left.namespace_commit_id == right.namespace_commit_id
+        && left.root_object_revision_id == right.root_object_revision_id
+        && left.result_digest == right.result_digest
+}
+
 pub(super) fn publish(
     connection: &mut Connection,
     publication: &RootFilePublication,

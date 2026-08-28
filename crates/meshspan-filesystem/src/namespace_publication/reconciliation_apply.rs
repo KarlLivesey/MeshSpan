@@ -2,12 +2,12 @@
 
 //! Atomic application of one exact affected-path replay and its durable merge receipt.
 
+use meshspan_contracts::namespace_reconciliation_result_digest;
 use meshspan_domain::{NamespaceCommitId, ObjectRevisionId, OperationId};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::digest::{
     MergeCommitDigest, merge_commit as merge_commit_digest, reconciliation_request,
-    reconciliation_result,
 };
 use super::repository::load_reconciliation_commit;
 use super::{NamespaceFaultPoint, inject};
@@ -210,7 +210,7 @@ fn persist_receipt(
 ) -> Result<NamespaceReconciliationReceipt, PublicationError> {
     let causal_digest = prepared.causal_plan().digest();
     let replay_digest = prepared.replay_plan().digest();
-    let result_digest = reconciliation_result(
+    let result_digest = namespace_reconciliation_result_digest(
         application.operation_id,
         application.namespace_commit_id,
         request_digest,
@@ -289,7 +289,7 @@ fn decode_receipt(
         ObjectRevisionId::from_bytes(stored.4.try_into().map_err(|_| PublicationError::Corrupt)?)
             .map_err(|_| PublicationError::Corrupt)?;
     let result_digest = stored.5.try_into().map_err(|_| PublicationError::Corrupt)?;
-    let expected = reconciliation_result(
+    let expected = namespace_reconciliation_result_digest(
         operation_id,
         namespace_commit_id,
         request_digest,

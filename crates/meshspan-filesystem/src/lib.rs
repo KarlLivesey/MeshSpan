@@ -45,7 +45,7 @@ pub use publication::{
     DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespacePublicationPath,
     NamespacePublicationReceipt, NamespaceReconciliationApplication,
     NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
-    RootFilePublication, VersionPublicationStore,
+    RootFilePublication, VerifiedReconciliationHead, VersionPublicationStore,
 };
 pub use reconciliation::{
     BranchMutation, BranchMutationIntent, NamespaceReplayAction, NamespaceReplayBase,

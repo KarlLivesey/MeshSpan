@@ -2,6 +2,7 @@
 
 //! Runtime composition boundary for deterministic consensus, metadata persistence and QUIC.
 
+mod convergence;
 mod driver;
 mod membership;
 mod node_runtime;
@@ -9,8 +10,11 @@ mod status;
 mod wire;
 
 #[cfg(test)]
+mod convergence_tests;
+#[cfg(test)]
 mod handoff_tests;
 
+pub use convergence::reconciliation_head_command;
 pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
 pub use status::{

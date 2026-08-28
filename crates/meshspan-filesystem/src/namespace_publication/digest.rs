@@ -156,25 +156,6 @@ pub(super) fn merge_commit(commit: &MergeCommitDigest<'_>) -> [u8; 32] {
     digest.finalize().into()
 }
 
-pub(super) fn reconciliation_result(
-    operation_id: OperationId,
-    namespace_commit_id: NamespaceCommitId,
-    request_digest: [u8; 32],
-    causal_digest: [u8; 32],
-    replay_digest: [u8; 32],
-    root_revision_id: ObjectRevisionId,
-) -> [u8; 32] {
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.namespace-reconciliation-result.v1\0");
-    digest.update(&operation_id.as_bytes());
-    digest.update(&request_digest);
-    digest.update(&causal_digest);
-    digest.update(&replay_digest);
-    digest.update(&namespace_commit_id.as_bytes());
-    digest.update(&root_revision_id.as_bytes());
-    digest.finalize().into()
-}
-
 pub(super) fn file_result(
     operation_id: OperationId,
     request_digest: [u8; 32],

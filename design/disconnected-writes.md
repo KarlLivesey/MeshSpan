@@ -161,8 +161,15 @@ and publication identities. Every created directory node/revision, recovered
 file head/version, multi-parent commit and digest-bound operation receipt either
 commits together or rolls back together. Exact retries return the original
 receipt, and subsequent causal planning validates the stored merge as a marker.
-Advancing the replicated globally converged volume head from this local receipt
-is the remaining authority transition before this gate closes.
+The cluster composition boundary reloads this receipt and its immutable merge
+commit before proposing convergence. It proves the exact volume, resulting root
+and inclusion of the current converged parent. The replicated metadata command
+then compare-and-swaps that per-volume parent and appends an immutable transition
+record containing every local evidence digest. The two SQLite databases are not
+treated as one transaction: a crash after local merge is resolved by operation
+ID and retried, while a stale replicated parent rejects without deleting the
+acknowledged local merge. This makes the boundary restart-safe without a false
+cross-database atomicity claim.
 
 ## Deterministic conflict rules
 

@@ -20,6 +20,7 @@ mod routing;
 mod snapshot;
 mod tags;
 mod verify;
+mod volume_head;
 
 use meshspan_domain::{OperationId, Revision, ScopeId, ScopeRoute};
 use thiserror::Error;
@@ -40,6 +41,7 @@ pub use query::{
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
+pub use volume_head::ConvergedVolumeHead;
 
 /// Authoritative metadata repository owning one identity-bound partition database.
 pub struct AuthoritativeRepository {
@@ -202,6 +204,18 @@ impl AuthoritativeRepository {
         query::namespace_children(&self.database, volume_id, parent_object_id, after, limit)
     }
 
+    /// Returns the latest replicated globally converged namespace head for one volume.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if any stored identity, digest, sequence or evidence shape is malformed.
+    pub fn converged_volume_head(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<ConvergedVolumeHead>, RepositoryError> {
+        volume_head::load(&self.database, volume_id)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -312,6 +326,9 @@ pub enum RepositoryError {
     /// The compare-and-swap state revision is stale.
     #[error("expected state revision is stale")]
     StaleRevision,
+    /// A per-volume converged-head compare-and-swap base is stale.
+    #[error("expected converged volume head is stale")]
+    StaleVolumeHead,
     /// A command violates a semantic precondition.
     #[error("authoritative command is invalid")]
     InvalidCommand,
@@ -343,3 +360,5 @@ pub enum RepositoryError {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod volume_head_tests;

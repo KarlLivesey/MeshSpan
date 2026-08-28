@@ -5,9 +5,9 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
-    DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId,
-    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId,
-    TagId, UnixMicros, VolumeId,
+    DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
+    PrincipalId, Revision, Rights, RoleId, ScopeId, TagId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -43,6 +43,8 @@ pub enum AuthoritativeCommand {
     CreateActivationPolicy(CreateActivationPolicy),
     /// Creates a volume root with one non-empty multi-principal owner set.
     CreateVolume(CreateVolume),
+    /// Advances one volume's globally converged namespace head from exact local evidence.
+    CommitConvergedVolumeHead(CommitConvergedVolumeHead),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
@@ -107,6 +109,7 @@ impl AuthoritativeCommand {
             Self::AddGroupMember(value) => value.update_digest(digest),
             Self::CreateActivationPolicy(value) => value.update_digest(digest),
             Self::CreateVolume(value) => value.update_digest(digest),
+            Self::CommitConvergedVolumeHead(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
@@ -221,6 +224,48 @@ pub struct CreateVolume {
     pub owner_set_id: OwnerSetId,
     /// Non-empty user/group owner principals.
     pub owners: BoundedItems<PrincipalId>,
+}
+
+/// Exact durable local outcome accepted as the source of a converged-head transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConvergedHeadEvidence {
+    /// One ordinary branch publication, including initial volume publication.
+    Publication {
+        /// Stable local publication operation.
+        operation_id: OperationId,
+        /// Digest binding every local publication input.
+        request_digest: [u8; 32],
+        /// Digest binding the complete local publication result.
+        result_digest: [u8; 32],
+    },
+    /// One deterministic multi-parent reconciliation transaction.
+    Reconciliation {
+        /// Stable local reconciliation operation.
+        operation_id: OperationId,
+        /// Digest binding the reconciliation application and both plans.
+        request_digest: [u8; 32],
+        /// Digest of the validated causal frontier and merge parents.
+        causal_plan_digest: [u8; 32],
+        /// Digest of the exact affected-path replay actions.
+        replay_plan_digest: [u8; 32],
+        /// Digest binding the complete local reconciliation result.
+        result_digest: [u8; 32],
+    },
+}
+
+/// Compare-and-swap of one volume's replicated globally converged namespace head.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommitConvergedVolumeHead {
+    /// Volume whose single authoritative head advances.
+    pub volume_id: VolumeId,
+    /// Exact current head required, or none for the first converged publication.
+    pub expected_namespace_commit_id: Option<NamespaceCommitId>,
+    /// Immutable namespace commit selected as the new globally converged head.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Root object revision bound by `namespace_commit_id` in the local immutable store.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// Exact durable local outcome from which this transition was proposed.
+    pub evidence: ConvergedHeadEvidence,
 }
 
 /// Namespace object kind stored as a closed integer contract.
@@ -689,6 +734,21 @@ digest_simple_record!(CreateVolume, b"create-volume", |value, digest| {
     digest.identifier(value.owner_set_id.as_bytes());
     digest.principals(&value.owners);
 });
+digest_simple_record!(
+    CommitConvergedVolumeHead,
+    b"commit-converged-volume-head",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.optional_identifier(
+            value
+                .expected_namespace_commit_id
+                .map(NamespaceCommitId::as_bytes),
+        );
+        digest.identifier(value.namespace_commit_id.as_bytes());
+        digest.identifier(value.root_object_revision_id.as_bytes());
+        digest.converged_head_evidence(value.evidence);
+    }
+);
 digest_simple_record!(CreateObject, b"create-object", |value, digest| {
     digest.identifier(value.object_id.as_bytes());
     digest.identifier(value.volume_id.as_bytes());
@@ -897,6 +957,35 @@ impl CanonicalDigest {
             TagTarget::Object(object_id) => {
                 self.byte(2);
                 self.identifier(object_id.as_bytes());
+            }
+        }
+    }
+
+    fn converged_head_evidence(&mut self, evidence: ConvergedHeadEvidence) {
+        match evidence {
+            ConvergedHeadEvidence::Publication {
+                operation_id,
+                request_digest,
+                result_digest,
+            } => {
+                self.byte(1);
+                self.identifier(operation_id.as_bytes());
+                self.bytes(&request_digest);
+                self.bytes(&result_digest);
+            }
+            ConvergedHeadEvidence::Reconciliation {
+                operation_id,
+                request_digest,
+                causal_plan_digest,
+                replay_plan_digest,
+                result_digest,
+            } => {
+                self.byte(2);
+                self.identifier(operation_id.as_bytes());
+                self.bytes(&request_digest);
+                self.bytes(&causal_plan_digest);
+                self.bytes(&replay_plan_digest);
+                self.bytes(&result_digest);
             }
         }
     }

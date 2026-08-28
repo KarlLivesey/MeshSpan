@@ -348,6 +348,46 @@ pub struct NamespaceReconciliationReceipt {
     pub result_digest: [u8; 32],
 }
 
+/// Locally revalidated reconciliation outcome safe to present at the replicated-head boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedReconciliationHead {
+    receipt: NamespaceReconciliationReceipt,
+    volume_id: VolumeId,
+    expected_namespace_commit_id: NamespaceCommitId,
+}
+
+impl VerifiedReconciliationHead {
+    pub(crate) const fn new(
+        receipt: NamespaceReconciliationReceipt,
+        volume_id: VolumeId,
+        expected_namespace_commit_id: NamespaceCommitId,
+    ) -> Self {
+        Self {
+            receipt,
+            volume_id,
+            expected_namespace_commit_id,
+        }
+    }
+
+    /// Exact durable reconciliation receipt reloaded from the local store.
+    #[must_use]
+    pub const fn receipt(self) -> NamespaceReconciliationReceipt {
+        self.receipt
+    }
+
+    /// Volume bound by the independently validated immutable merge commit.
+    #[must_use]
+    pub const fn volume_id(self) -> VolumeId {
+        self.volume_id
+    }
+
+    /// Replicated head that must still be current when consensus commits the transition.
+    #[must_use]
+    pub const fn expected_namespace_commit_id(self) -> NamespaceCommitId {
+        self.expected_namespace_commit_id
+    }
+}
+
 /// Current branch-local version pointer for one stable file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BranchFileHead {
@@ -588,6 +628,26 @@ impl VersionPublicationStore {
         operation_id: OperationId,
     ) -> Result<Option<NamespaceReconciliationReceipt>, PublicationError> {
         namespace::load_reconciliation_receipt(&self.connection, operation_id)
+    }
+
+    /// Reloads and verifies one reconciliation receipt, merge commit, volume and current-head base.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a lost, substituted or corrupt receipt, a non-merge commit, the wrong volume, or a
+    /// claimed current head that is not one of the immutable merge parents.
+    pub fn verify_reconciliation_head(
+        &self,
+        volume_id: VolumeId,
+        expected_namespace_commit_id: NamespaceCommitId,
+        receipt: NamespaceReconciliationReceipt,
+    ) -> Result<VerifiedReconciliationHead, PublicationError> {
+        namespace::verify_reconciliation_head(
+            &self.connection,
+            volume_id,
+            expected_namespace_commit_id,
+            receipt,
+        )
     }
 
     /// Loads and revalidates the canonical replay intent attached to one branch commit.
