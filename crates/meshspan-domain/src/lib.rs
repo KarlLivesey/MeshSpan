@@ -20,10 +20,12 @@ pub use operation::{
     CommitOutcome, DurabilityScope, OperationDecision, OperationReceipt, classify_operation,
 };
 pub use primitives::{
-    ActivationId, ActivationPolicyId, AuditEventId, BackupId, ComponentInstanceId, DurationMicros,
-    FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError, JoinGrantId,
-    MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId,
-    Revision, RevisionError, RoleId, ScopeId, SnapshotId, TagId, TargetId, UnixMicros, VolumeId,
+    ActivationId, ActivationPolicyId, AuditEventId, BackupId, BranchId, ComponentInstanceId,
+    ContentManifestId, DurationMicros, FaultGroupClassId, FaultGroupId, FileVersionId, GrantId,
+    GroupId, HandleId, HostId, IdentifierError, JoinGrantId, MeshId, NamespaceCommitId, NodeId,
+    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId,
+    Revision, RevisionError, RoleId, ScopeId, SnapshotId, StageId, TagId, TargetId, UnixMicros,
+    VolumeId,
 };
 pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};
