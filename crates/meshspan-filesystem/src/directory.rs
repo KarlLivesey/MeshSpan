@@ -129,6 +129,7 @@ pub struct DirectoryMutation {
 pub struct DirectoryTrie {
     root: DirectoryNodeDigest,
     nodes: BTreeMap<DirectoryNodeDigest, DirectoryNode>,
+    complete: bool,
 }
 
 impl DirectoryTrie {
@@ -142,7 +143,11 @@ impl DirectoryTrie {
         let root = node_digest(&node);
         let mut nodes = BTreeMap::new();
         nodes.insert(root, node);
-        Self { root, nodes }
+        Self {
+            root,
+            nodes,
+            complete: true,
+        }
     }
 
     /// Reconstructs a trie from untrusted immutable node records and verifies the selected root.
@@ -166,8 +171,37 @@ impl DirectoryTrie {
                 return Err(DirectoryTrieError::Corrupt);
             }
         }
-        let trie = Self { root, nodes };
+        let trie = Self {
+            root,
+            nodes,
+            complete: true,
+        };
         trie.verify()?;
+        Ok(trie)
+    }
+
+    pub(crate) fn from_selected_records(
+        root: DirectoryNodeDigest,
+        records: impl IntoIterator<Item = DirectoryNodeRecord>,
+        name: &NamespaceComponent,
+    ) -> Result<Self, DirectoryTrieError> {
+        let mut nodes = BTreeMap::new();
+        for record in records {
+            validate_node(&record.node)?;
+            if record.digest != node_digest(&record.node)
+                || nodes
+                    .insert(record.digest, record.node.clone())
+                    .is_some_and(|existing| existing != record.node)
+            {
+                return Err(DirectoryTrieError::Corrupt);
+            }
+        }
+        let trie = Self {
+            root,
+            nodes,
+            complete: false,
+        };
+        trie.lookup(name)?;
         Ok(trie)
     }
 
@@ -270,6 +304,9 @@ impl DirectoryTrie {
     ///
     /// Rejects cycles, missing nodes, wrong depths, malformed fanout/leaves and digest mismatch.
     pub fn verify(&self) -> Result<(), DirectoryTrieError> {
+        if !self.complete {
+            return Err(DirectoryTrieError::Corrupt);
+        }
         self.verify_node(self.root, 0, &mut Vec::new(), &mut BTreeMap::new())
     }
 
@@ -505,6 +542,25 @@ impl DirectoryNodeRecord {
             return Err(DirectoryTrieError::Corrupt);
         }
         Ok(Self { digest, node })
+    }
+
+    pub(crate) fn selected_child(
+        &self,
+        name: &NamespaceComponent,
+        depth: usize,
+    ) -> Result<Option<DirectoryNodeDigest>, DirectoryTrieError> {
+        let key_hash = name_hash(name.canonical());
+        match &self.node {
+            DirectoryNode::Internal(internal)
+                if depth < HASH_NIBBLES && usize::from(internal.depth) == depth =>
+            {
+                Ok(internal.children.get(&nibble(&key_hash, depth)).copied())
+            }
+            DirectoryNode::Leaf(leaf) if depth == HASH_NIBBLES && leaf.key_hash == key_hash => {
+                Ok(None)
+            }
+            _ => Err(DirectoryTrieError::Corrupt),
+        }
     }
 }
 

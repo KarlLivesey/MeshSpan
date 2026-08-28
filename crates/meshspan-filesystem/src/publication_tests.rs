@@ -1,137 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, ObjectId, OperationId, PrincipalId, UnixMicros,
-    VolumeId,
+    BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
+    OperationId, PrincipalId, UnixMicros, VolumeId,
 };
 use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
 
 use super::{
-    BranchFileHead, DATABASE_FILE, FilePublication, MIGRATIONS, ManifestPublication,
-    PublicationDisposition, PublicationError, PublicationFaultPoint, PublicationReceipt,
-    VersionPublicationStore, configure,
+    DATABASE_FILE, FilePublication, MIGRATIONS, ManifestPublication, NamespacePublicationReceipt,
+    PublicationDisposition, PublicationError, RootFilePublication, VersionPublicationStore,
+    configure,
 };
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
     NamespaceComponent, NamespaceLimits,
 };
-
-#[test]
-fn exact_retry_and_restart_return_one_immutable_version() -> Result<(), Box<dyn std::error::Error>>
-{
-    let directory = tempdir()?;
-    let publication = make_publication(1, None, 2)?;
-    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
-    let applied = store.publish(publication)?;
-    assert_eq!(applied.disposition, PublicationDisposition::Applied);
-    drop(store);
-
-    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(3))?;
-    let replayed = reopened.publish(publication)?;
-    assert_eq!(replayed.disposition, PublicationDisposition::Replayed);
-    assert_eq!(applied.result_digest, replayed.result_digest);
-    assert_eq!(
-        reopened.file_head(publication.branch_id, publication.object_id)?,
-        Some(BranchFileHead {
-            branch_id: publication.branch_id,
-            object_id: publication.object_id,
-            volume_id: publication.volume_id,
-            current_version_id: Some(publication.version_id),
-            sequence: 1,
-        })
-    );
-    let next = make_publication(3, Some(publication.version_id), 4)?;
-    reopened.publish(next)?;
-    assert_eq!(
-        reopened.resolve(publication.operation_id)?,
-        Some(PublicationReceipt {
-            disposition: PublicationDisposition::Replayed,
-            ..applied
-        })
-    );
-    Ok(())
-}
-
-#[test]
-fn stale_base_and_conflicting_replay_change_nothing() -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempdir()?;
-    let first = make_publication(4, None, 5)?;
-    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
-    store.publish(first)?;
-    let conflicting = FilePublication {
-        version_id: FileVersionId::from_bytes([6; 16])?,
-        ..first
-    };
-    assert!(matches!(
-        store.publish(conflicting),
-        Err(PublicationError::OperationConflict)
-    ));
-    let stale = make_publication(7, None, 8)?;
-    assert!(matches!(
-        store.publish(stale),
-        Err(PublicationError::StaleHead)
-    ));
-    assert_eq!(
-        store
-            .file_head(first.branch_id, first.object_id)?
-            .map(|head| head.current_version_id),
-        Some(Some(first.version_id))
-    );
-    Ok(())
-}
-
-#[test]
-fn every_transaction_fault_rolls_back_before_retry() -> Result<(), Box<dyn std::error::Error>> {
-    for (index, fault) in [
-        PublicationFaultPoint::Manifest,
-        PublicationFaultPoint::Version,
-        PublicationFaultPoint::Head,
-        PublicationFaultPoint::Operation,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let directory = tempdir()?;
-        let publication = make_publication(u8::try_from(index + 10)?, None, 20)?;
-        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
-        assert!(matches!(
-            store.publish_inner(publication, Some(fault)),
-            Err(PublicationError::InjectedFault)
-        ));
-        assert_eq!(store.resolve(publication.operation_id)?, None);
-        assert_eq!(
-            store.file_head(publication.branch_id, publication.object_id)?,
-            None
-        );
-        drop(store);
-
-        let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
-        assert_eq!(
-            reopened.publish(publication)?.disposition,
-            PublicationDisposition::Applied
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn corrupt_receipt_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempdir()?;
-    let publication = make_publication(40, None, 41)?;
-    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
-    store.publish(publication)?;
-    store.connection.execute(
-        "UPDATE publication_operations SET result_digest = zeroblob(32)
-         WHERE operation_id = ?1",
-        [publication.operation_id.as_bytes().as_slice()],
-    )?;
-    assert!(matches!(
-        store.resolve(publication.operation_id),
-        Err(PublicationError::Corrupt)
-    ));
-    Ok(())
-}
 
 #[test]
 fn directory_nodes_round_trip_after_restart_and_corruption_fails_closed()
@@ -191,13 +75,152 @@ fn version_one_database_migrates_to_directory_schema() -> Result<(), Box<dyn std
     let version: u32 = store
         .connection
         .pragma_query_value(None, "user_version", |row| row.get(0))?;
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let table: i64 = store.connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'directory_nodes')",
         [],
         |row| row.get(0),
     )?;
     assert_eq!(table, 1);
+    let namespace_table: i64 = store.connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM sqlite_schema WHERE name = 'branch_namespace_heads'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(namespace_table, 1);
+    Ok(())
+}
+
+#[test]
+fn root_file_publication_moves_file_and_volume_heads_once_across_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    let applied = store.publish_root_file(&first)?;
+    assert_eq!(applied.disposition, PublicationDisposition::Applied);
+    assert_eq!(applied.head_sequence, 1);
+    drop(store);
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let replayed = reopened.publish_root_file(&first)?;
+    assert_eq!(replayed.disposition, PublicationDisposition::Replayed);
+    assert_eq!(replayed.result_digest, applied.result_digest);
+    let second = next_root_publication(&first)?;
+    let next = reopened.publish_root_file(&second)?;
+    assert_eq!(next.head_sequence, 2);
+    assert_eq!(
+        reopened.resolve_namespace_publication(first.file.operation_id)?,
+        Some(NamespacePublicationReceipt {
+            disposition: PublicationDisposition::Replayed,
+            ..applied
+        })
+    );
+    assert_eq!(
+        reopened
+            .namespace_head(first.file.branch_id, first.file.volume_id)?
+            .map(|head| (head.namespace_commit_id, head.sequence)),
+        Some((second.namespace_commit_id, 2))
+    );
+    assert_eq!(
+        reopened.publish_root_file(&first)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    let mut stale = next_root_publication(&first)?;
+    stale.file.operation_id = OperationId::from_bytes([80; 16])?;
+    stale.file.version_id = FileVersionId::from_bytes([81; 16])?;
+    stale.file.manifest.manifest_id = ContentManifestId::from_bytes([82; 16])?;
+    stale.file_object_revision_id = ObjectRevisionId::from_bytes([83; 16])?;
+    stale.root_object_revision_id = ObjectRevisionId::from_bytes([84; 16])?;
+    stale.namespace_commit_id = NamespaceCommitId::from_bytes([85; 16])?;
+    assert!(matches!(
+        reopened.publish_root_file(&stale),
+        Err(PublicationError::StaleHead)
+    ));
+    assert_eq!(
+        reopened
+            .namespace_head(first.file.branch_id, first.file.volume_id)?
+            .map(|head| (head.namespace_commit_id, head.sequence)),
+        Some((second.namespace_commit_id, 2))
+    );
+    Ok(())
+}
+
+#[test]
+fn corrupt_namespace_receipt_commit_and_object_revision_fail_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    for corrupt_sql in [
+        "UPDATE namespace_publication_operations SET result_digest = zeroblob(32)",
+        "UPDATE namespace_commits SET commit_digest = zeroblob(32)",
+        "UPDATE object_revisions SET revision_digest = zeroblob(32) WHERE object_kind = 1",
+    ] {
+        let directory = tempdir()?;
+        let first = initial_root_publication()?;
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&first)?;
+        store.connection.execute(corrupt_sql, [])?;
+        let detected = if corrupt_sql.contains("namespace_publication_operations") {
+            store
+                .resolve_namespace_publication(first.file.operation_id)
+                .map(|_| ())
+        } else {
+            store
+                .publish_root_file(&next_root_publication(&first)?)
+                .map(|_| ())
+        };
+        assert!(matches!(detected, Err(PublicationError::Corrupt)));
+    }
+    Ok(())
+}
+
+#[test]
+fn every_namespace_transaction_fault_rolls_back_all_heads_and_nodes()
+-> Result<(), Box<dyn std::error::Error>> {
+    use super::namespace::NamespaceFaultPoint;
+
+    for fault in [
+        NamespaceFaultPoint::DirectoryNodes,
+        NamespaceFaultPoint::FileVersion,
+        NamespaceFaultPoint::ObjectRevisions,
+        NamespaceFaultPoint::NamespaceCommit,
+        NamespaceFaultPoint::Heads,
+        NamespaceFaultPoint::Operation,
+    ] {
+        let directory = tempdir()?;
+        let publication = initial_root_publication()?;
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        assert!(matches!(
+            super::namespace::publish(&mut store.connection, &publication, Some(fault)),
+            Err(PublicationError::InjectedFault)
+        ));
+        assert_eq!(
+            store.namespace_head(publication.file.branch_id, publication.file.volume_id)?,
+            None
+        );
+        assert_eq!(
+            super::load_file_head(
+                &store.connection,
+                publication.file.branch_id,
+                publication.file.object_id,
+            )?,
+            None
+        );
+        assert_eq!(
+            store.resolve_namespace_publication(publication.file.operation_id)?,
+            None
+        );
+        let node_count: i64 =
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM directory_nodes", [], |row| row.get(0))?;
+        assert_eq!(node_count, 0);
+        assert_eq!(
+            store.publish_root_file(&publication)?.disposition,
+            PublicationDisposition::Applied
+        );
+    }
     Ok(())
 }
 
@@ -231,4 +254,36 @@ fn mutation_records(
     digests: &[crate::DirectoryNodeDigest],
 ) -> Result<Vec<DirectoryNodeRecord>, DirectoryTrieError> {
     digests.iter().map(|digest| trie.record(*digest)).collect()
+}
+
+fn initial_root_publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
+    Ok(RootFilePublication {
+        file: make_publication(60, None, 61)?,
+        root_object_id: ObjectId::from_bytes([62; 16])?,
+        expected_namespace_commit_id: None,
+        expected_file_object_revision_id: None,
+        file_object_revision_id: ObjectRevisionId::from_bytes([63; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([64; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([65; 16])?,
+        entry_name: NamespaceComponent::new("Report", NamespaceLimits::PORTABLE)?,
+        entry_generation: 1,
+    })
+}
+
+fn next_root_publication(
+    previous: &RootFilePublication,
+) -> Result<RootFilePublication, Box<dyn std::error::Error>> {
+    let mut file = make_publication(70, Some(previous.file.version_id), 71)?;
+    file.created_at = UnixMicros::new(70);
+    Ok(RootFilePublication {
+        file,
+        root_object_id: previous.root_object_id,
+        expected_namespace_commit_id: Some(previous.namespace_commit_id),
+        expected_file_object_revision_id: Some(previous.file_object_revision_id),
+        file_object_revision_id: ObjectRevisionId::from_bytes([72; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([73; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([74; 16])?,
+        entry_name: NamespaceComponent::new("REPORT", NamespaceLimits::PORTABLE)?,
+        entry_generation: 1,
+    })
 }
