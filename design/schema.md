@@ -907,11 +907,27 @@ snapshot_expiry_requests(
   automatic, reason_code, requested_at, revision UNIQUE
 )
 
-snapshot_schedules(
-  schedule_id PK, volume_id -> volumes,
-  schedule_expression, retention_count NULL,
-  retention_duration NULL, locality_policy_id NULL -> locality_policies,
-  state, revision
+snapshot_schedule_revisions(
+  schedule_id, schedule_sequence, volume_id -> volumes,
+  interval_micros, retention_count NULL, retention_duration_micros NULL,
+  enabled, next_due_at, configured_by -> principals, configured_at, revision,
+  PK(schedule_id, schedule_sequence)
+)
+
+snapshot_schedule_heads(
+  schedule_id PK, schedule_sequence,
+  volume_id -> volumes, interval_micros,
+  retention_count NULL, retention_duration_micros NULL,
+  enabled, next_due_at, revision,
+  (schedule_id, schedule_sequence) -> snapshot_schedule_revisions
+)
+
+snapshot_schedule_runs(
+  schedule_id, schedule_sequence, scheduled_for,
+  snapshot_id UNIQUE -> snapshots, operation_id UNIQUE -> operations,
+  created_at, revision,
+  PK(schedule_id, scheduled_for),
+  (schedule_id, schedule_sequence) -> snapshot_schedule_revisions
 )
 
 version_retention_policy_revisions(
