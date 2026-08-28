@@ -18,5 +18,7 @@ pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
 pub use repository::{
     ApplyDisposition, AuthoritativeRepository, CommandReceipt, EntityKind, EntityReference,
-    LogPosition, RepositoryError,
+    GroupMemberCursor, LogPosition, NamespaceCursor, NamespaceRecord, Page, PageLimit,
+    PartitionBackupManifest, PrincipalKind, PrincipalRecord, RepositoryError,
+    restore_partition_backup,
 };

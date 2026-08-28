@@ -51,6 +51,35 @@ pub(super) fn apply_committed(
     context: CommandContext,
     command: &AuthoritativeCommand,
 ) -> Result<CommandReceipt, RepositoryError> {
+    apply_committed_inner(database, position, context, command, None)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ApplyFaultPoint {
+    AfterCommand,
+    AfterOperation,
+    AfterAudit,
+    BeforeCommit,
+}
+
+#[cfg(test)]
+pub(super) fn apply_committed_with_fault(
+    database: &mut PartitionDatabase,
+    position: LogPosition,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    fault: ApplyFaultPoint,
+) -> Result<CommandReceipt, RepositoryError> {
+    apply_committed_inner(database, position, context, command, Some(fault))
+}
+
+fn apply_committed_inner(
+    database: &mut PartitionDatabase,
+    position: LogPosition,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    fault: Option<ApplyFaultPoint>,
+) -> Result<CommandReceipt, RepositoryError> {
     validate_position(position)?;
     let partition_id = database.partition_id();
     let transaction = database
@@ -97,6 +126,7 @@ pub(super) fn apply_committed(
         command,
         revision,
     )?;
+    inject_fault(fault, ApplyFaultPoint::AfterCommand)?;
     let payload = encode_result(entity, revision, position)?;
     let stored_result_digest = result_digest(&payload);
     insert_operation(
@@ -110,6 +140,7 @@ pub(super) fn apply_committed(
         stored_result_digest,
         revision,
     )?;
+    inject_fault(fault, ApplyFaultPoint::AfterOperation)?;
     insert_audit_event(
         &transaction,
         context,
@@ -118,7 +149,9 @@ pub(super) fn apply_committed(
         request_digest,
         stored_result_digest,
     )?;
+    inject_fault(fault, ApplyFaultPoint::AfterAudit)?;
     advance_applied_position(&transaction, revision, position)?;
+    inject_fault(fault, ApplyFaultPoint::BeforeCommit)?;
     transaction.commit()?;
     Ok(CommandReceipt {
         disposition: ApplyDisposition::Applied,
@@ -130,6 +163,17 @@ pub(super) fn apply_committed(
         applied_position: position,
         entity,
     })
+}
+
+fn inject_fault(
+    selected: Option<ApplyFaultPoint>,
+    current: ApplyFaultPoint,
+) -> Result<(), RepositoryError> {
+    if selected == Some(current) {
+        Err(RepositoryError::InjectedFault)
+    } else {
+        Ok(())
+    }
 }
 
 fn read_applied_state(transaction: &Transaction<'_>) -> Result<AppliedState, RepositoryError> {

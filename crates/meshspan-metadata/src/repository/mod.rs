@@ -3,10 +3,12 @@
 //! Atomic authoritative command application and exact operation resolution.
 
 mod apply;
+mod backup;
 mod component;
 mod group_closure;
 mod identity;
 mod namespace;
+mod query;
 mod receipt;
 
 use meshspan_domain::{OperationId, Revision};
@@ -14,6 +16,11 @@ use thiserror::Error;
 
 use crate::{MetadataStoreError, PartitionDatabase};
 
+pub use backup::{PartitionBackupManifest, restore_partition_backup};
+pub use query::{
+    GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
+    PrincipalRecord,
+};
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 
 /// Authoritative metadata repository owning one identity-bound partition database.
@@ -64,6 +71,61 @@ impl AuthoritativeRepository {
         receipt::resolve_operation(&self.database, operation_id)
     }
 
+    /// Reads one exact user or group principal.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if stored identity bytes or enum values are malformed.
+    pub fn principal(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+    ) -> Result<Option<PrincipalRecord>, RepositoryError> {
+        query::principal(&self.database, principal_id)
+    }
+
+    /// Returns one stable, bounded page of active namespace children.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed stored identifiers and database failures.
+    pub fn namespace_children(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+        parent_object_id: meshspan_domain::ObjectId,
+        after: Option<&NamespaceCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<NamespaceRecord, NamespaceCursor>, RepositoryError> {
+        query::namespace_children(&self.database, volume_id, parent_object_id, after, limit)
+    }
+
+    /// Returns one stable, bounded page of direct members of a group.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed stored identifiers and database failures.
+    pub fn direct_group_members(
+        &self,
+        group_id: meshspan_domain::GroupId,
+        after: Option<GroupMemberCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<meshspan_domain::PrincipalId, GroupMemberCursor>, RepositoryError> {
+        query::direct_group_members(&self.database, group_id, after, limit)
+    }
+
+    /// Creates a transactionally consistent SQLite backup and its exact manifest.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an existing destination and reports IO, SQLite or state corruption.
+    pub fn create_backup(
+        &self,
+        backup_id: meshspan_domain::BackupId,
+        destination: &std::path::Path,
+        created_at: meshspan_domain::UnixMicros,
+    ) -> Result<PartitionBackupManifest, RepositoryError> {
+        backup::create_partition_backup(&self.database, backup_id, destination, created_at)
+    }
+
     /// Returns the underlying database after repository ownership is no longer needed.
     #[must_use]
     pub fn into_database(self) -> PartitionDatabase {
@@ -98,6 +160,21 @@ pub enum RepositoryError {
     /// Persisted bytes or relationships violate the compiled contract.
     #[error("authoritative metadata invariant is corrupt")]
     CorruptState,
+    /// A caller supplied an invalid explicit query bound.
+    #[error("repository page limit is outside supported bounds")]
+    InvalidPageLimit,
+    /// Filesystem IO rejected backup creation or verification.
+    #[error("metadata backup IO failed")]
+    Io(#[from] std::io::Error),
+    /// Backup creation never overwrites an existing path.
+    #[error("metadata backup destination already exists")]
+    BackupDestinationExists,
+    /// Backup bytes or their embedded state do not match the supplied manifest.
+    #[error("metadata backup does not match its manifest")]
+    BackupMismatch,
+    /// Deterministic internal transaction interruption used by the crash-proof harness.
+    #[error("injected authoritative transaction interruption")]
+    InjectedFault,
 }
 
 #[cfg(test)]
