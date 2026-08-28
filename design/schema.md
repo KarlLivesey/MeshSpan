@@ -908,11 +908,13 @@ snapshot_schedules(
   state, revision
 )
 
-version_retention_policies(
-  policy_id PK, volume_id UNIQUE -> volumes,
+version_retention_policy_revisions(
+  volume_id -> volumes, policy_sequence,
   history_enabled, minimum_age, minimum_versions NULL,
-  reclaim_mode, pressure_threshold NULL,
-  conflict_minimum_age, revision
+  maximum_age NULL, reclaim_mode, soft_minimum_breakable,
+  conflict_minimum_age, configured_by -> principals,
+  configured_at, revision,
+  PK(volume_id, policy_sequence)
 )
 ```
 
