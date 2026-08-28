@@ -23,6 +23,12 @@ copy-on-write filesystem service. This document records executable evidence only
   adapter's separator/escaping rules.
 - Cross-form vectors prove composed/decomposed Unicode and full folds such as
   `Straße`/`STRASSE` collide without losing the chosen display spelling.
+- The pure staged-write kernel fences resumed writers, independently verifies
+  every range digest, coalesces exact operation retries, rejects conflicting ID
+  reuse and orders overlapping writes deterministically. Checkpoints expose a
+  merged range map; commit refuses holes unless sparse completion was explicit,
+  in which case only logical zeroes fill them. This is the shared semantic oracle
+  for the durable staging backend and is not itself claimed as persistence.
 
 ## Closure gates
 
