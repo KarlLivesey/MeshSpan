@@ -8,14 +8,51 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
 
 use super::{
-    DATABASE_FILE, FilePublication, MIGRATIONS, ManifestPublication, NamespacePublicationReceipt,
-    PublicationDisposition, PublicationError, RootFilePublication, VersionPublicationStore,
-    configure,
+    DATABASE_FILE, DirectoryPublication, DirectoryRevisionTransition, FilePublication, MIGRATIONS,
+    ManifestPublication, NamespacePublicationPath, NamespacePublicationReceipt,
+    PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
+    VersionPublicationStore, configure,
 };
 use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
-    NamespaceComponent, NamespaceLimits,
+    NamespaceComponent, NamespaceLimits, NamespacePath,
 };
+
+#[test]
+fn publication_path_requires_every_ancestor_and_new_revision()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = NamespacePath::from_components(["a", "b", "file"], NamespaceLimits::PORTABLE)?;
+    let first = DirectoryRevisionTransition::new(
+        ObjectId::from_bytes([40; 16])?,
+        ObjectRevisionId::from_bytes([41; 16])?,
+        ObjectRevisionId::from_bytes([42; 16])?,
+    )?;
+    let second = DirectoryRevisionTransition::new(
+        ObjectId::from_bytes([43; 16])?,
+        ObjectRevisionId::from_bytes([44; 16])?,
+        ObjectRevisionId::from_bytes([45; 16])?,
+    )?;
+    let selected = NamespacePublicationPath::new(path.clone(), vec![first, second])?;
+    assert_eq!(selected.path(), &path);
+    assert_eq!(selected.ancestors(), &[first, second]);
+    assert_eq!(
+        selected.leaf_name().map(NamespaceComponent::display),
+        Some("file")
+    );
+    assert_eq!(
+        NamespacePublicationPath::new(path, vec![first]),
+        Err(PublicationPathError::TransitionCount)
+    );
+    assert_eq!(
+        DirectoryRevisionTransition::new(
+            ObjectId::from_bytes([46; 16])?,
+            ObjectRevisionId::from_bytes([47; 16])?,
+            ObjectRevisionId::from_bytes([47; 16])?,
+        ),
+        Err(PublicationPathError::ReusedRevision)
+    );
+    Ok(())
+}
 
 #[test]
 fn directory_nodes_round_trip_after_restart_and_corruption_fails_closed()
@@ -75,7 +112,7 @@ fn version_one_database_migrates_to_directory_schema() -> Result<(), Box<dyn std
     let version: u32 = store
         .connection
         .pragma_query_value(None, "user_version", |row| row.get(0))?;
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let table: i64 = store.connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'directory_nodes')",
         [],
@@ -90,6 +127,77 @@ fn version_one_database_migrates_to_directory_schema() -> Result<(), Box<dyn std
         |row| row.get(0),
     )?;
     assert_eq!(namespace_table, 1);
+    let directory_operations: i64 = store.connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM sqlite_schema WHERE name = 'directory_publication_operations'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(directory_operations, 1);
+    Ok(())
+}
+
+#[test]
+fn real_directory_creates_enable_nested_file_publication_across_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_directory_publication()?;
+    let second = nested_directory_publication(&first)?;
+    let file = nested_file_publication(&first, &second)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    assert_eq!(store.create_directory(&first)?.head_sequence, 1);
+    assert_eq!(store.create_directory(&second)?.head_sequence, 2);
+    assert_eq!(store.publish_root_file(&file)?.head_sequence, 3);
+    drop(store);
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(20))?;
+    assert_eq!(
+        reopened.create_directory(&first)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    assert_eq!(
+        reopened.create_directory(&second)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    assert_eq!(
+        reopened.publish_root_file(&file)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    assert_eq!(
+        reopened
+            .namespace_head(first.branch_id, first.volume_id)?
+            .map(|head| (head.namespace_commit_id, head.sequence)),
+        Some((file.namespace_commit_id, 3))
+    );
+    let root_entry = stored_directory_entry(
+        &reopened,
+        file.root_object_revision_id,
+        &file.path.path().components()[0],
+    )?;
+    assert_eq!(
+        root_entry.object_revision_id(),
+        file.path.ancestors()[0].new_revision_id()
+    );
+    let a_entry = stored_directory_entry(
+        &reopened,
+        root_entry.object_revision_id(),
+        &file.path.path().components()[1],
+    )?;
+    assert_eq!(
+        a_entry.object_revision_id(),
+        file.path.ancestors()[1].new_revision_id()
+    );
+    let file_entry = stored_directory_entry(
+        &reopened,
+        a_entry.object_revision_id(),
+        &file.path.path().components()[2],
+    )?;
+    assert_eq!(
+        file_entry.object_revision_id(),
+        file.file_object_revision_id
+    );
+    assert_eq!(file_entry.object_id(), file.file.object_id);
     Ok(())
 }
 
@@ -224,6 +332,75 @@ fn every_namespace_transaction_fault_rolls_back_all_heads_and_nodes()
     Ok(())
 }
 
+#[test]
+fn every_directory_transaction_fault_rolls_back_head_nodes_and_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    use super::namespace::NamespaceFaultPoint;
+
+    for fault in [
+        NamespaceFaultPoint::DirectoryNodes,
+        NamespaceFaultPoint::ObjectRevisions,
+        NamespaceFaultPoint::NamespaceCommit,
+        NamespaceFaultPoint::Heads,
+        NamespaceFaultPoint::Operation,
+    ] {
+        let directory = tempdir()?;
+        let publication = initial_directory_publication()?;
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        assert!(matches!(
+            super::namespace::create_directory(&mut store.connection, &publication, Some(fault)),
+            Err(PublicationError::InjectedFault)
+        ));
+        assert_eq!(
+            store.namespace_head(publication.branch_id, publication.volume_id)?,
+            None
+        );
+        assert_eq!(
+            store.resolve_directory_publication(publication.operation_id)?,
+            None
+        );
+        let node_count: i64 =
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM directory_nodes", [], |row| row.get(0))?;
+        assert_eq!(node_count, 0);
+        assert_eq!(
+            store.create_directory(&publication)?.disposition,
+            PublicationDisposition::Applied
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn directory_receipt_corruption_and_cross_kind_operation_reuse_fail_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let created = initial_directory_publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.create_directory(&created)?;
+    store.connection.execute(
+        "UPDATE directory_publication_operations SET result_digest = zeroblob(32)",
+        [],
+    )?;
+    assert!(matches!(
+        store.resolve_directory_publication(created.operation_id),
+        Err(PublicationError::Corrupt)
+    ));
+
+    let separate = tempdir()?;
+    let mut store = VersionPublicationStore::open(separate.path(), UnixMicros::new(1))?;
+    let file = initial_root_publication()?;
+    store.publish_root_file(&file)?;
+    let mut conflicting = initial_directory_publication()?;
+    conflicting.operation_id = file.file.operation_id;
+    assert!(matches!(
+        store.create_directory(&conflicting),
+        Err(PublicationError::OperationConflict)
+    ));
+    Ok(())
+}
+
 fn make_publication(
     operation: u8,
     parent: Option<FileVersionId>,
@@ -256,6 +433,132 @@ fn mutation_records(
     digests.iter().map(|digest| trie.record(*digest)).collect()
 }
 
+fn stored_directory_entry(
+    store: &VersionPublicationStore,
+    revision_id: ObjectRevisionId,
+    name: &NamespaceComponent,
+) -> Result<DirectoryEntry, Box<dyn std::error::Error>> {
+    let root_bytes: Vec<u8> = store.connection.query_row(
+        "SELECT directory_root_digest FROM object_revisions
+         WHERE object_revision_id = ?1 AND object_kind = 1",
+        [revision_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    let root = crate::DirectoryNodeDigest::from_bytes(super::copy_array(&root_bytes)?);
+    let mut selected = root;
+    let mut records = Vec::new();
+    for depth in 0..=64 {
+        let record = store
+            .directory_node(selected)?
+            .ok_or("missing directory node")?;
+        let child = record.selected_child(name, depth)?;
+        records.push(record);
+        let Some(child) = child else {
+            break;
+        };
+        selected = child;
+    }
+    DirectoryTrie::from_selected_records(root, records, name)?
+        .lookup(name)?
+        .ok_or_else(|| "missing directory entry".into())
+}
+
+fn initial_directory_publication() -> Result<DirectoryPublication, Box<dyn std::error::Error>> {
+    Ok(DirectoryPublication {
+        operation_id: OperationId::from_bytes([90; 16])?,
+        branch_id: BranchId::from_bytes([91; 16])?,
+        volume_id: VolumeId::from_bytes([92; 16])?,
+        root_object_id: ObjectId::from_bytes([93; 16])?,
+        expected_namespace_commit_id: None,
+        directory_object_id: ObjectId::from_bytes([94; 16])?,
+        directory_object_revision_id: ObjectRevisionId::from_bytes([95; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([96; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([97; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["a"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        entry_generation: 1,
+        created_by: PrincipalId::from_bytes([98; 16])?,
+        created_at: UnixMicros::new(2),
+    })
+}
+
+fn nested_directory_publication(
+    first: &DirectoryPublication,
+) -> Result<DirectoryPublication, Box<dyn std::error::Error>> {
+    Ok(DirectoryPublication {
+        operation_id: OperationId::from_bytes([99; 16])?,
+        branch_id: first.branch_id,
+        volume_id: first.volume_id,
+        root_object_id: first.root_object_id,
+        expected_namespace_commit_id: Some(first.namespace_commit_id),
+        directory_object_id: ObjectId::from_bytes([100; 16])?,
+        directory_object_revision_id: ObjectRevisionId::from_bytes([101; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([102; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([103; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["a", "b"], NamespaceLimits::PORTABLE)?,
+            vec![DirectoryRevisionTransition::new(
+                first.directory_object_id,
+                first.directory_object_revision_id,
+                ObjectRevisionId::from_bytes([104; 16])?,
+            )?],
+        )?,
+        entry_generation: 1,
+        created_by: first.created_by,
+        created_at: UnixMicros::new(3),
+    })
+}
+
+fn nested_file_publication(
+    first: &DirectoryPublication,
+    second: &DirectoryPublication,
+) -> Result<RootFilePublication, Box<dyn std::error::Error>> {
+    Ok(RootFilePublication {
+        file: FilePublication {
+            operation_id: OperationId::from_bytes([105; 16])?,
+            branch_id: first.branch_id,
+            volume_id: first.volume_id,
+            object_id: ObjectId::from_bytes([106; 16])?,
+            expected_current_version_id: None,
+            version_id: FileVersionId::from_bytes([107; 16])?,
+            parent_version_id: None,
+            manifest: ManifestPublication {
+                manifest_id: ContentManifestId::from_bytes([108; 16])?,
+                format_version: 1,
+                logical_length: 7,
+                content_digest: [109; 32],
+                root_digest: [110; 32],
+            },
+            created_by: first.created_by,
+            created_at: UnixMicros::new(4),
+        },
+        root_object_id: first.root_object_id,
+        expected_namespace_commit_id: Some(second.namespace_commit_id),
+        expected_file_object_revision_id: None,
+        file_object_revision_id: ObjectRevisionId::from_bytes([111; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([112; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([113; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["a", "b", "report"], NamespaceLimits::PORTABLE)?,
+            vec![
+                DirectoryRevisionTransition::new(
+                    first.directory_object_id,
+                    second.path.ancestors()[0].new_revision_id(),
+                    ObjectRevisionId::from_bytes([114; 16])?,
+                )?,
+                DirectoryRevisionTransition::new(
+                    second.directory_object_id,
+                    second.directory_object_revision_id,
+                    ObjectRevisionId::from_bytes([115; 16])?,
+                )?,
+            ],
+        )?,
+        entry_generation: 1,
+    })
+}
+
 fn initial_root_publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
     Ok(RootFilePublication {
         file: make_publication(60, None, 61)?,
@@ -265,7 +568,10 @@ fn initial_root_publication() -> Result<RootFilePublication, Box<dyn std::error:
         file_object_revision_id: ObjectRevisionId::from_bytes([63; 16])?,
         root_object_revision_id: ObjectRevisionId::from_bytes([64; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([65; 16])?,
-        entry_name: NamespaceComponent::new("Report", NamespaceLimits::PORTABLE)?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["Report"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
         entry_generation: 1,
     })
 }
@@ -283,7 +589,10 @@ fn next_root_publication(
         file_object_revision_id: ObjectRevisionId::from_bytes([72; 16])?,
         root_object_revision_id: ObjectRevisionId::from_bytes([73; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([74; 16])?,
-        entry_name: NamespaceComponent::new("REPORT", NamespaceLimits::PORTABLE)?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["REPORT"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
         entry_generation: 1,
     })
 }

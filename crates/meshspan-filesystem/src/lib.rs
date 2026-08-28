@@ -40,8 +40,10 @@ pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,
 };
 pub use publication::{
-    BranchNamespaceHead, FilePublication, ManifestPublication, NamespacePublicationReceipt,
-    PublicationDisposition, PublicationError, RootFilePublication, VersionPublicationStore,
+    BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,
+    DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespacePublicationPath,
+    NamespacePublicationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
+    RootFilePublication, VersionPublicationStore,
 };
 pub use stage_store::{
     CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration, StageStoreError,

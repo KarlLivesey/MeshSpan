@@ -15,12 +15,12 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespaceComponent};
+use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespacePath};
 
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 3] = [
+const MIGRATIONS: [Migration; 4] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -33,8 +33,12 @@ const MIGRATIONS: [Migration; 3] = [
         version: 3,
         sql: include_str!("../schema/branch/003_namespace_heads.sql"),
     },
+    Migration {
+        version: 4,
+        sql: include_str!("../schema/branch/004_directory_operations.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -82,6 +86,112 @@ pub struct FilePublication {
     pub created_at: UnixMicros,
 }
 
+/// One existing child directory whose immutable revision must change during path copying.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectoryRevisionTransition {
+    object: ObjectId,
+    expected_revision: ObjectRevisionId,
+    new_revision: ObjectRevisionId,
+}
+
+impl DirectoryRevisionTransition {
+    /// Binds a stable directory object to distinct old and new immutable revisions.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an attempted in-place revision update.
+    pub fn new(
+        object_id: ObjectId,
+        expected_revision_id: ObjectRevisionId,
+        new_revision_id: ObjectRevisionId,
+    ) -> Result<Self, PublicationPathError> {
+        if expected_revision_id == new_revision_id {
+            Err(PublicationPathError::ReusedRevision)
+        } else {
+            Ok(Self {
+                object: object_id,
+                expected_revision: expected_revision_id,
+                new_revision: new_revision_id,
+            })
+        }
+    }
+
+    /// Stable directory identity selected by its parent entry.
+    #[must_use]
+    pub const fn object_id(self) -> ObjectId {
+        self.object
+    }
+
+    /// Exact existing immutable revision selected by the current path.
+    #[must_use]
+    pub const fn expected_revision_id(self) -> ObjectRevisionId {
+        self.expected_revision
+    }
+
+    /// New immutable revision installed while copying the path back to the root.
+    #[must_use]
+    pub const fn new_revision_id(self) -> ObjectRevisionId {
+        self.new_revision
+    }
+}
+
+/// Validated namespace path paired with every existing directory below the volume root.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespacePublicationPath {
+    path: NamespacePath,
+    ancestors: Vec<DirectoryRevisionTransition>,
+}
+
+impl NamespacePublicationPath {
+    /// Creates an exact root-to-leaf chain for one namespace publication.
+    ///
+    /// A one-component path has no child-directory transitions. Every additional component before
+    /// the leaf requires exactly one transition in the same root-to-leaf order.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing or extra directory transitions.
+    pub fn new(
+        path: NamespacePath,
+        ancestors: Vec<DirectoryRevisionTransition>,
+    ) -> Result<Self, PublicationPathError> {
+        if ancestors.len().checked_add(1) == Some(path.components().len()) {
+            Ok(Self { path, ancestors })
+        } else {
+            Err(PublicationPathError::TransitionCount)
+        }
+    }
+
+    /// Complete validated root-relative namespace path.
+    #[must_use]
+    pub const fn path(&self) -> &NamespacePath {
+        &self.path
+    }
+
+    /// Existing child-directory transitions in root-to-leaf order.
+    #[must_use]
+    pub fn ancestors(&self) -> &[DirectoryRevisionTransition] {
+        &self.ancestors
+    }
+
+    /// Leaf object name selected by the path.
+    #[must_use]
+    pub fn leaf_name(&self) -> Option<&crate::NamespaceComponent> {
+        self.path.components().last()
+    }
+}
+
+/// Stable construction failures for an exact namespace-publication path.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum PublicationPathError {
+    /// The path and child-directory transition counts do not describe the same hierarchy.
+    #[error("namespace publication path has missing or extra directory transitions")]
+    TransitionCount,
+    /// Immutable object revision identity was reused for an in-place update.
+    #[error("namespace publication path reuses an immutable directory revision")]
+    ReusedRevision,
+}
+
 /// One root-directory file mutation that must advance a verified volume branch head atomically.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RootFilePublication {
@@ -99,10 +209,41 @@ pub struct RootFilePublication {
     pub root_object_revision_id: ObjectRevisionId,
     /// New immutable namespace commit that becomes the branch head.
     pub namespace_commit_id: NamespaceCommitId,
-    /// Case-preserved/canonical root-directory entry name.
-    pub entry_name: NamespaceComponent,
+    /// Validated root-relative path and exact existing child-directory transitions.
+    pub path: NamespacePublicationPath,
     /// Stable name-reuse generation.
     pub entry_generation: u64,
+}
+
+/// One atomic creation of a new empty directory at an exact namespace path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectoryPublication {
+    /// Idempotency identity for the complete namespace transaction.
+    pub operation_id: OperationId,
+    /// Writable local/cell branch receiving the directory.
+    pub branch_id: BranchId,
+    /// Volume containing the directory hierarchy.
+    pub volume_id: VolumeId,
+    /// Stable volume-root directory identity.
+    pub root_object_id: ObjectId,
+    /// Exact namespace commit required before creation, or none for a new volume.
+    pub expected_namespace_commit_id: Option<NamespaceCommitId>,
+    /// New stable directory object identity selected by the leaf entry.
+    pub directory_object_id: ObjectId,
+    /// New immutable empty directory revision.
+    pub directory_object_revision_id: ObjectRevisionId,
+    /// New immutable volume-root directory revision after path copying.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// New immutable namespace commit that becomes current.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Validated root-relative path and exact existing child-directory transitions.
+    pub path: NamespacePublicationPath,
+    /// Stable generation for this canonical leaf-name incarnation.
+    pub entry_generation: u64,
+    /// Principal responsible for creation.
+    pub created_by: PrincipalId,
+    /// Authoritative creation instant.
+    pub created_at: UnixMicros,
 }
 
 /// Current immutable namespace commit selected by one branch/volume pair.
@@ -129,6 +270,25 @@ pub struct NamespacePublicationReceipt {
     pub request_digest: [u8; 32],
     /// Newly published immutable file version.
     pub file_version_id: FileVersionId,
+    /// Namespace commit made current.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Resulting volume branch-head sequence.
+    pub head_sequence: u64,
+    /// Digest binding the exact durable result.
+    pub result_digest: [u8; 32],
+}
+
+/// Durable result of one atomic directory creation and namespace-head transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectoryPublicationReceipt {
+    /// Whether this call applied or replayed the exact operation.
+    pub disposition: PublicationDisposition,
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Digest of every mutation input and expected base.
+    pub request_digest: [u8; 32],
+    /// Newly created immutable directory revision.
+    pub directory_object_revision_id: ObjectRevisionId,
     /// Namespace commit made current.
     pub namespace_commit_id: NamespaceCommitId,
     /// Resulting volume branch-head sequence.
@@ -238,6 +398,19 @@ impl VersionPublicationStore {
         namespace::publish(&mut self.connection, publication, None)
     }
 
+    /// Atomically creates one empty directory and path-copies every selected ancestor.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed paths, existing leaves, stale heads/ancestors, identity reuse,
+    /// corruption and persistence failure. Exact retries return the original receipt.
+    pub fn create_directory(
+        &mut self,
+        publication: &DirectoryPublication,
+    ) -> Result<DirectoryPublicationReceipt, PublicationError> {
+        namespace::create_directory(&mut self.connection, publication, None)
+    }
+
     /// Loads the exact current namespace commit for one branch and volume.
     ///
     /// # Errors
@@ -261,6 +434,22 @@ impl VersionPublicationStore {
         operation_id: OperationId,
     ) -> Result<Option<NamespacePublicationReceipt>, PublicationError> {
         namespace::load_operation(
+            &self.connection,
+            operation_id,
+            PublicationDisposition::Replayed,
+        )
+    }
+
+    /// Resolves an atomic directory-publication outcome after a lost response.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or digest-inconsistent durable records and SQLite failure.
+    pub fn resolve_directory_publication(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<DirectoryPublicationReceipt>, PublicationError> {
+        namespace::load_directory_operation(
             &self.connection,
             operation_id,
             PublicationDisposition::Replayed,
