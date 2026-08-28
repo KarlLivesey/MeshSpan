@@ -173,7 +173,14 @@ copy-on-write filesystem service. This document records executable evidence only
    head rejects without hiding or deleting the local merge. Tests cover the real
    cross-crate path, restart/lost response, conflicting evidence, stale bases,
    broken history and rollback at every metadata transaction boundary.
-4. Snapshots, retention and restore-as-new-head.
+4. Snapshots, retention and restore-as-new-head. The first authoritative slice is
+   implemented: a manual snapshot command pins the exact current converged
+   commit and root in constant metadata work, records an idempotent audited
+   receipt, rejects stale heads and elapsed expiry, survives restart, and exposes
+   index-aligned bounded listing with a next cursor only when another page
+   exists. Snapshot expiry/removal, schedules, version-retention selection,
+   reachability guards and restore-as-new-head remain required before this gate
+   can close.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.

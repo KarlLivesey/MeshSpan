@@ -892,6 +892,7 @@ attribute_sets(
 snapshots(
   snapshot_id PK, volume_id -> volumes,
   namespace_commit_id -> namespace_commits,
+  root_object_revision_id,
   originating_branch_id NULL,
   display_name, canonical_name, state,
   locality_policy_id NULL -> locality_policies,
