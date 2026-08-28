@@ -10,7 +10,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 const AUTHENTICATION_TAG_BYTES: usize = 16;
-const HARD_MAXIMUM_PLAINTEXT_BYTES: usize = 64 * 1_024 * 1_024;
+const HARD_MAXIMUM_PLAINTEXT_BYTES: usize = 64 * 1_024 * 1_024 - AUTHENTICATION_TAG_BYTES;
 const KEY_DOMAIN: &[u8] = b"meshspan.content.chunk-key.v1\0";
 const NONCE_DOMAIN: &[u8] = b"meshspan.content.chunk-nonce.v1\0";
 const AAD_DOMAIN: &[u8] = b"meshspan.content.chunk-aad.v1\0";

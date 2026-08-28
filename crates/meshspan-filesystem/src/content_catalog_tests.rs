@@ -13,6 +13,31 @@ use crate::{
 };
 
 #[test]
+fn absent_exact_and_conflicting_lookups_are_distinct() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let request = request()?;
+    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+
+    assert_eq!(catalog.resolve(request)?, None);
+    assert_eq!(catalog.prepared_layout(request)?, None);
+    catalog.begin(request)?;
+    assert_eq!(catalog.resolve(request)?, None);
+    assert_eq!(catalog.prepared_layout(request)?, None);
+
+    let mut conflict = request;
+    conflict.request_digest[0] ^= 1;
+    assert!(matches!(
+        catalog.resolve(conflict),
+        Err(ContentCatalogError::Conflict)
+    ));
+    assert!(matches!(
+        catalog.prepared_layout(conflict),
+        Err(ContentCatalogError::Conflict)
+    ));
+    Ok(())
+}
+
+#[test]
 fn paged_layout_receipts_restart_and_exact_replay_are_durable()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;

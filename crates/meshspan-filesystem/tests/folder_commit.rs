@@ -19,8 +19,8 @@ use meshspan_filesystem::{
     ContentKeyEnvelopeCipher, ContentPublicationError, ContentPublicationRequest,
     DurableContentPublisher, EncryptedContentChunk, FilesystemCommitService, ManifestPublication,
     NamespaceComponent, NamespaceLimits, PublicationDisposition, RootFileCommitRequest,
-    StageCompletionRequest, StageRegistration, StageWrite, VolumeKeyEncryptionKey,
-    WrappedContentKey,
+    StageCompletionRequest, StageRegistration, StageWrite, UnprotectedContentPublisher,
+    UnprotectedContentTarget, VolumeKeyEncryptionKey, WrappedContentKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -123,6 +123,134 @@ fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
         b"untouched"
     );
     Ok(())
+}
+
+#[test]
+fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let storage_path = directory.path().join("production-storage");
+    let storage_state = directory.path().join("production-storage-state");
+    let filesystem_state = directory.path().join("production-filesystem-state");
+    fs::create_dir(&storage_path)?;
+    let registration = folder_registration()?;
+    let mut random = FixedRandom;
+    let folder = RegisteredFolder::register_new(&storage_path, registration, &mut random)?;
+    let provider = FolderShardStore::open(
+        folder,
+        &storage_state,
+        CapacityPolicy {
+            usage_limit: UsageLimit::DEFAULT,
+            repair_reserve_bytes: 0,
+            revision: Revision::new(1),
+        },
+        StoragePermitVerifier::new(
+            registration.mesh_id,
+            1,
+            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
+        )?,
+        UnixMicros::new(1),
+        &mut random,
+    )?;
+    let publisher = UnprotectedContentPublisher::open(
+        &filesystem_state,
+        UnixMicros::new(1),
+        provider,
+        FixedRandom,
+        ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(1, [24; 32])?),
+        ContentChunkLimits::new(4)?,
+        UnprotectedContentTarget {
+            target_id: registration.target_id,
+            target_generation: registration.generation,
+        },
+    )?;
+    let mut service =
+        FilesystemCommitService::open(&filesystem_state, UnixMicros::new(1), publisher)?;
+    prepare_stage(&mut service)?;
+    let request = commit_request()?;
+    service.commit_root_file(&request)?;
+    let publisher = service.into_content_publisher();
+    let content_request = request.content_publication_request();
+    assert_eq!(
+        read_prepared_file(&publisher, registration, &request)?,
+        b"helloworld"
+    );
+    assert!(
+        publisher
+            .catalog()
+            .pending_chunks(content_request, None, 10)?
+            .chunks
+            .is_empty()
+    );
+    Ok(())
+}
+
+fn read_prepared_file(
+    publisher: &UnprotectedContentPublisher<FolderShardStore, FixedRandom>,
+    registration: FolderRegistration,
+    request: &RootFileCommitRequest,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let content_request = request.content_publication_request();
+    let layout = publisher
+        .catalog()
+        .prepared_layout(content_request)?
+        .ok_or("missing prepared layout")?;
+    let content_key =
+        ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(1, [24; 32])?)
+            .unwrap(request.manifest_id, layout.wrapped_key)?;
+    let cipher = ContentChunkCipher::new(content_key, ContentChunkLimits::new(4)?);
+    let mut recovered = Vec::new();
+    for index in 0_u64..3 {
+        let chunk = publisher.catalog().content_chunk(content_request, index)?;
+        let read_context = RequestContext {
+            contract_version: ContractVersion::V1_0,
+            operation_id: OperationId::from_bytes([u8::try_from(50 + index)?; 16])?,
+            deadline: UnixMicros::new(500),
+            expected_revision: Some(Revision::new(9)),
+        };
+        let mut permit = ShardReadPermit {
+            operation_id: read_context.operation_id,
+            mesh_id: registration.mesh_id,
+            target_id: registration.target_id,
+            target_generation: registration.generation,
+            shard: ShardIdentity {
+                manifest_digest: layout.manifest.root_digest,
+                stripe_index: index,
+                shard_index: 0,
+                generation: 1,
+            },
+            authorization_revision: Revision::new(9),
+            expires_at: UnixMicros::new(500),
+            permit_digest: [0; 32],
+        };
+        permit.permit_digest =
+            read_permit_mac(&StoragePermitMacKey::from_bytes(PERMIT_KEY)?, permit);
+        let ciphertext = StorageProvider::get_exact(
+            publisher.provider(),
+            read_context,
+            permit,
+            UnixMicros::new(20),
+        )?;
+        let plaintext_start = usize::try_from(index * 4)?;
+        let plaintext_end = (plaintext_start + 4).min(b"helloworld".len());
+        assert_ne!(
+            ciphertext.as_slice(),
+            &b"helloworld"[plaintext_start..plaintext_end]
+        );
+        let plaintext = cipher.decrypt(
+            request.manifest_id,
+            1,
+            index,
+            &EncryptedContentChunk {
+                plaintext_length: chunk.plaintext_length,
+                plaintext_digest: chunk.plaintext_digest,
+                ciphertext_digest: chunk.ciphertext_digest,
+                ciphertext,
+            },
+        )?;
+        recovered.extend_from_slice(plaintext.as_slice());
+    }
+    Ok(recovered)
 }
 
 struct FolderPublisher {
@@ -288,8 +416,8 @@ fn map_contract(error: ContractError) -> ContentPublicationError {
     }
 }
 
-fn prepare_stage(
-    service: &mut FilesystemCommitService<FolderPublisher>,
+fn prepare_stage<P: DurableContentPublisher>(
+    service: &mut FilesystemCommitService<P>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let stage_id = StageId::from_bytes([1; 16])?;
     service.stages_mut().register(StageRegistration {

@@ -139,6 +139,23 @@ pub struct RootFileCommitRequest {
     pub created_at: UnixMicros,
 }
 
+impl RootFileCommitRequest {
+    /// Derives the exact content-publication contract shared with recovery and verified reads.
+    #[must_use]
+    pub fn content_publication_request(&self) -> ContentPublicationRequest {
+        ContentPublicationRequest {
+            operation_id: self.completion.operation_id,
+            request_digest: commit_request_digest(self),
+            manifest_id: self.manifest_id,
+            format_version: self.manifest_format_version,
+            logical_length: self.completion.final_length,
+            authorization_revision: self.content_authorization_revision,
+            deadline: self.content_deadline,
+            observed_at: self.completion.observed_at,
+        }
+    }
+}
+
 /// Filesystem save service over independent stage, content and branch durability domains.
 pub struct FilesystemCommitService<P> {
     stages: DurableStageStore,
@@ -186,16 +203,7 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         request: &RootFileCommitRequest,
     ) -> Result<NamespacePublicationReceipt, FilesystemCommitError> {
         validate_request(request)?;
-        let content_request = ContentPublicationRequest {
-            operation_id: request.completion.operation_id,
-            request_digest: commit_request_digest(request),
-            manifest_id: request.manifest_id,
-            format_version: request.manifest_format_version,
-            logical_length: request.completion.final_length,
-            authorization_revision: request.content_authorization_revision,
-            deadline: request.content_deadline,
-            observed_at: request.completion.observed_at,
-        };
+        let content_request = request.content_publication_request();
         let (manifest, completed) = if let Some(manifest) = self.content.resolve(content_request)? {
             (manifest, None)
         } else {

@@ -43,6 +43,17 @@ pub struct PendingContentChunkPage {
     pub next_index: Option<u64>,
 }
 
+/// Complete sealed layout state needed to resume provider publication after restart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedContentLayout {
+    /// Independently recomputed immutable manifest root.
+    pub manifest: ManifestPublication,
+    /// Authenticated wrapped per-layout content key.
+    pub wrapped_key: WrappedContentKey,
+    /// Selected maximum plaintext bytes per chunk.
+    pub chunk_bytes: u64,
+}
+
 /// Durable encrypted-manifest and provider-receipt catalogue.
 pub struct DurableContentCatalog {
     connection: Connection,
@@ -298,6 +309,56 @@ impl DurableContentCatalog {
         })
     }
 
+    /// Loads and revalidates the sealed layout required for exact recovery.
+    ///
+    /// # Errors
+    ///
+    /// Rejects conflicting request input and corrupt stored manifest/key records.
+    pub fn prepared_layout(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<Option<PreparedContentLayout>, ContentCatalogError> {
+        let Some(manifest) = load_prepared_manifest(&self.connection, request)? else {
+            return Ok(None);
+        };
+        let stored = self.connection.query_row(
+            "SELECT chunk_bytes, key_generation, key_nonce, key_ciphertext,
+                    key_envelope_digest
+             FROM content_publications WHERE operation_id = ?1",
+            [request.operation_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    from_sql(row.get(0)?)?,
+                    WrappedContentKey {
+                        key_generation: from_sql(row.get(1)?)?,
+                        nonce: copy_array(&row.get::<_, Vec<u8>>(2)?)?,
+                        ciphertext: copy_array(&row.get::<_, Vec<u8>>(3)?)?,
+                        envelope_digest: copy_array(&row.get::<_, Vec<u8>>(4)?)?,
+                    },
+                ))
+            },
+        )?;
+        Ok(Some(PreparedContentLayout {
+            manifest,
+            chunk_bytes: stored.0,
+            wrapped_key: stored.1,
+        }))
+    }
+
+    /// Loads one prepared chunk identity for verified read/recovery work.
+    ///
+    /// # Errors
+    ///
+    /// Rejects conflicting request input, unknown indices and corrupt stored rows.
+    pub fn content_chunk(
+        &self,
+        request: ContentPublicationRequest,
+        chunk_index: u64,
+    ) -> Result<PreparedContentChunk, ContentCatalogError> {
+        validate_exact_request(&self.connection, request)?;
+        load_chunk(&self.connection, request.operation_id, chunk_index)
+    }
+
     /// Marks the manifest durable only after every prepared chunk has a provider receipt.
     ///
     /// # Errors
@@ -339,7 +400,13 @@ impl DurableContentCatalog {
         &self,
         request: ContentPublicationRequest,
     ) -> Result<Option<ManifestPublication>, ContentCatalogError> {
-        validate_exact_request(&self.connection, request)?;
+        validate_request(request)?;
+        let Some(stored) = load_request(&self.connection, request.operation_id)? else {
+            return Ok(None);
+        };
+        if !stored.same_intent(request) {
+            return Err(ContentCatalogError::Conflict);
+        }
         let state: u8 = self.connection.query_row(
             "SELECT state FROM content_publications WHERE operation_id = ?1",
             [request.operation_id.as_bytes().as_slice()],
@@ -532,7 +599,13 @@ fn load_prepared_manifest(
     connection: &Connection,
     request: ContentPublicationRequest,
 ) -> Result<Option<ManifestPublication>, ContentCatalogError> {
-    validate_exact_request(connection, request)?;
+    validate_request(request)?;
+    let Some(stored_request) = load_request(connection, request.operation_id)? else {
+        return Ok(None);
+    };
+    if !stored_request.same_intent(request) {
+        return Err(ContentCatalogError::Conflict);
+    }
     let stored = connection
         .query_row(
             "SELECT content_digest, root_digest, chunk_bytes, key_generation,

@@ -6,6 +6,7 @@ mod commit_service;
 mod content_catalog;
 mod content_crypto;
 mod content_key;
+mod content_publisher;
 mod directory;
 mod name;
 mod publication;
@@ -18,6 +19,7 @@ pub use commit_service::{
 };
 pub use content_catalog::{
     ContentCatalogError, DurableContentCatalog, PendingContentChunkPage, PreparedContentChunk,
+    PreparedContentLayout,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,
@@ -26,6 +28,9 @@ pub use content_crypto::{
 pub use content_key::{
     ContentKeyEnvelopeCipher, ContentKeyError, VolumeKeyEncryptionKey, WrappedContentKey,
     rewrap_content_key,
+};
+pub use content_publisher::{
+    DurableContentSink, UnprotectedContentPublisher, UnprotectedContentTarget,
 };
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
