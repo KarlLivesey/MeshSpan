@@ -30,8 +30,9 @@ pub use repository::{
     LogPosition, NamespaceCursor, NamespaceRecord, Page, PageLimit, PartitionBackupManifest,
     PartitionConsensusPersistence, PartitionSnapshotManifest, PreservedVote, PrincipalKind,
     PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
-    RepositoryConformanceVector, RepositoryError, ScopeWriteAuthority, SnapshotCursor,
-    SnapshotExpiryCandidate, SnapshotExpiryCursor, SnapshotSchedule, SnapshotScheduleCursor,
-    VersionRetentionPolicy, VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
-    run_repository_conformance,
+    RepositoryConformanceVector, RepositoryError, RetainedNamespaceRoot,
+    RetainedNamespaceRootCursor, RetainedNamespaceRootPage, RetainedNamespaceRootSource,
+    ScopeWriteAuthority, SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor,
+    SnapshotSchedule, SnapshotScheduleCursor, VersionRetentionPolicy, VolumeSnapshot,
+    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };

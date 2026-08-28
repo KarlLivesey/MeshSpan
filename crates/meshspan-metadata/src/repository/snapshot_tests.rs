@@ -9,7 +9,10 @@ use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::volume_head_tests::{commit, context, fixture, open_and_prepare, publication_command};
-use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, RepositoryError};
+use super::{
+    ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, RepositoryError,
+    RetainedNamespaceRootSource,
+};
 use crate::{
     AuthoritativeCommand, CreateVolumeSnapshot, RecordName, RemoveVolumeSnapshotRoot,
     RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, SnapshotExpiryReason,
@@ -79,6 +82,72 @@ fn snapshots_pin_exact_heads_page_stably_and_replay_after_restart()
             .len(),
         3
     );
+    Ok(())
+}
+
+#[test]
+fn retained_root_pages_are_complete_and_one_revision_only() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempdir()?;
+    let fixture = fixture()?;
+    let mut repository = open_and_prepare(&directory.path().join("roots.sqlite3"), &fixture)?;
+    repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(51, fixture.administrator, 52, 102, Some(2))?,
+        &publication_command(&fixture, None, 30, 31, 32, 33, 34)?,
+    )?;
+    for (index, identity) in [(4, 53), (5, 54), (6, 55)] {
+        repository.apply_committed(
+            LogPosition { index, term: 1 },
+            context(
+                identity + 10,
+                fixture.administrator,
+                identity + 20,
+                110,
+                Some(index - 1),
+            )?,
+            &snapshot_command(identity, fixture.volume, &format!("Root {identity}"), 30)?,
+        )?;
+    }
+    let first = repository.retained_namespace_roots(
+        fixture.volume,
+        Revision::new(6),
+        None,
+        PageLimit::new(2)?,
+    )?;
+    assert_eq!(first.catalogue_revision, Revision::new(6));
+    assert_eq!(first.roots.len(), 2);
+    assert_eq!(
+        first.roots[0].source,
+        RetainedNamespaceRootSource::ConvergedHead(fixture.volume)
+    );
+    assert!(matches!(
+        first.roots[1].source,
+        RetainedNamespaceRootSource::Snapshot(_)
+    ));
+    let second = repository.retained_namespace_roots(
+        fixture.volume,
+        Revision::new(6),
+        first.next,
+        PageLimit::new(2)?,
+    )?;
+    assert_eq!(second.roots.len(), 2);
+    assert!(second.next.is_none());
+
+    repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        context(56, fixture.administrator, 57, 111, Some(6))?,
+        &snapshot_command(58, fixture.volume, "Later root", 30)?,
+    )?;
+    assert!(matches!(
+        repository.retained_namespace_roots(
+            fixture.volume,
+            Revision::new(6),
+            first.next,
+            PageLimit::new(2)?,
+        ),
+        Err(RepositoryError::StaleRevision)
+    ));
     Ok(())
 }
 
