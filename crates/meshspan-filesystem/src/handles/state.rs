@@ -83,6 +83,22 @@ pub(super) fn load_active(
     decode(connection, handle, observed_at, &stored)
 }
 
+pub(crate) fn uses_private_stage(
+    connection: &Connection,
+    handle: HandleId,
+) -> Result<bool, HandleError> {
+    let desired: Option<i64> = connection
+        .query_row(
+            "SELECT desired_access FROM open_handles WHERE handle_id = ?1",
+            [handle.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let desired = desired.ok_or(HandleError::StaleHandle)?;
+    let access = HandleAccess::from_bits(u8::try_from(desired).map_err(|_| HandleError::Corrupt)?)?;
+    Ok(access.writes())
+}
+
 fn decode(
     connection: &Connection,
     handle: HandleId,

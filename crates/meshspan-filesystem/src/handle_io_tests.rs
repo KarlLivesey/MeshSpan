@@ -209,6 +209,57 @@ fn substituted_authority_and_corrupt_admission_fail_before_stage_replay()
     Ok(())
 }
 
+#[test]
+fn writable_handle_takeover_moves_handle_stage_and_locks_to_one_fence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let open = writable_open(60, 61, 200)?;
+    let mut service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    service.write_handle(&handle_write(62, &open, 0, b"before")?)?;
+    let gateway = NodeId::from_bytes([63; 16])?;
+    let takeover = crate::HandleLeaseRequest {
+        operation_id: OperationId::from_bytes([64; 16])?,
+        handle_id: open.handle_id,
+        expected_fence: 1,
+        principal_id: open.principal_id,
+        authorization_revision: Revision::new(2),
+        gateway_node_id: gateway,
+        takeover: true,
+        lease_expires_at: UnixMicros::new(300),
+        observed_at: UnixMicros::new(30),
+    };
+    let applied = service.renew_handle_lease(takeover)?;
+    assert_eq!(applied.handle_fence, 2);
+    let old = handle_write(65, &open, 6, b"old")?;
+    assert!(matches!(
+        service.write_handle(&old),
+        Err(HandleIoError::Handle(HandleError::StaleHandle))
+    ));
+    drop(service);
+
+    let mut reopened =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(3), UnusedPublisher)?;
+    assert_eq!(
+        reopened.renew_handle_lease(takeover)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    let mut transferred = handle_write(66, &open, 6, b"after")?;
+    transferred.gateway_node_id = gateway;
+    transferred.authorization_revision = Revision::new(2);
+    transferred.write.stage_fence = 2;
+    assert_eq!(
+        reopened.write_handle(&transferred)?.stage_outcome,
+        StageWriteOutcome::Applied
+    );
+    Ok(())
+}
+
 fn handle_write(
     operation: u8,
     open: &OpenHandleRequest,

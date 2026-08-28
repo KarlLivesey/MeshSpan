@@ -231,6 +231,23 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         crate::handle_io::write(&mut self.stages, &mut self.publications, request)
     }
 
+    /// Renews a handle and its private stage, or transfers both under one higher fence.
+    ///
+    /// The stage transition is preflighted, then the authoritative handle transition is durable,
+    /// then the stage follows. A crash between databases exposes no successful service response;
+    /// exact retry replays the handle receipt and completes the stage transition.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale fences, substituted authority, shrinking/expired leases, operation conflicts,
+    /// corrupt state and persistence failure.
+    pub fn renew_handle_lease(
+        &mut self,
+        request: crate::HandleLeaseRequest,
+    ) -> Result<crate::HandleLeaseReceipt, crate::HandleIoError> {
+        crate::handle_io::renew_lease(&mut self.stages, &mut self.publications, request)
+    }
+
     /// Creates one empty directory and atomically publishes every copied ancestor revision.
     ///
     /// # Errors

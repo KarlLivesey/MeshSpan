@@ -39,6 +39,8 @@ use crate::{
     DirectoryEntry, DirectoryEntryKind, DirectoryNodeDigest, DirectoryTrie, NamespacePath,
 };
 
+pub(crate) use state::uses_private_stage;
+
 const READ_ACCESS: u8 = 1;
 const WRITE_ACCESS: u8 = 2;
 const DELETE_ACCESS: u8 = 4;

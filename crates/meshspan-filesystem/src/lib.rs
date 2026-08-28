@@ -69,7 +69,8 @@ pub use reconciliation::{
     ReconciliationStoreError, plan_namespace_replay, plan_reconciliation,
 };
 pub use stage_store::{
-    CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration, StageStoreError,
+    CompletedStage, DurableStageStore, StageCompletionRequest, StageLeaseReceipt,
+    StageLeaseRequest, StageRegistration, StageStoreError,
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
 pub use version_retention::{

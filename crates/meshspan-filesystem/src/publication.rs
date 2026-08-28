@@ -727,6 +727,13 @@ impl VersionPublicationStore {
         crate::handles::admit_write(&mut self.connection, request)
     }
 
+    pub(crate) fn handle_uses_private_stage(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+    ) -> Result<bool, crate::HandleError> {
+        crate::handles::uses_private_stage(&self.connection, handle_id)
+    }
+
     #[cfg(test)]
     pub(crate) fn test_connection(&mut self) -> &mut Connection {
         &mut self.connection

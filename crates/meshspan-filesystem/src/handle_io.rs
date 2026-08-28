@@ -6,9 +6,10 @@ use meshspan_domain::{HandleId, NodeId, PrincipalId, Revision, StageId, UnixMicr
 use thiserror::Error;
 
 use crate::{
-    ByteRange, Checkpoint, DurableStageStore, HandleError, HandleWriteAdmissionReceipt,
-    HandleWriteAdmissionRequest, OpenHandleReceipt, OpenHandleRequest, StageRegistration,
-    StageStoreError, StageWrite, StageWriteOutcome, VersionPublicationStore,
+    ByteRange, Checkpoint, DurableStageStore, HandleError, HandleLeaseReceipt, HandleLeaseRequest,
+    HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest, OpenHandleReceipt, OpenHandleRequest,
+    StageLeaseRequest, StageRegistration, StageStoreError, StageWrite, StageWriteOutcome,
+    VersionPublicationStore,
 };
 
 /// Complete open intent including the private-stage bound required by a writable handle.
@@ -124,6 +125,35 @@ pub(crate) fn write(
         stage_outcome,
         checkpoint,
     })
+}
+
+pub(crate) fn renew_lease(
+    stages: &mut DurableStageStore,
+    publications: &mut VersionPublicationStore,
+    request: HandleLeaseRequest,
+) -> Result<HandleLeaseReceipt, HandleIoError> {
+    let uses_stage = publications.handle_uses_private_stage(request.handle_id)?;
+    let stage_request = StageLeaseRequest {
+        operation_id: request.operation_id,
+        stage_id: stage_id(request.handle_id)?,
+        expected_fence: request.expected_fence,
+        takeover: request.takeover,
+        lease_expires_at: request.lease_expires_at,
+        observed_at: request.observed_at,
+    };
+    if uses_stage {
+        stages.preflight_lease(stage_request)?;
+    }
+    let receipt = publications.renew_handle_lease(request)?;
+    if uses_stage {
+        let stage_receipt = stages.renew_lease(stage_request)?;
+        if stage_receipt.stage_fence != receipt.handle_fence
+            || stage_receipt.lease_expires_at != receipt.lease_expires_at
+        {
+            return Err(HandleIoError::Stage(StageStoreError::Corrupt));
+        }
+    }
+    Ok(receipt)
 }
 
 fn stage_id(handle_id: HandleId) -> Result<StageId, HandleIoError> {

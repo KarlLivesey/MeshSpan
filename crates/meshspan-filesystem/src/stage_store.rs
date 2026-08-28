@@ -17,13 +17,28 @@ use thiserror::Error;
 use crate::staging::{covers, insert_range};
 use crate::{Checkpoint, StageWrite, StageWriteOutcome};
 
-const SCHEMA_VERSION: u32 = 1;
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
-const MIGRATION: &str = include_str!("../schema/stage/001_initial.sql");
+const MIGRATIONS: [Migration; 2] = [
+    Migration {
+        version: 1,
+        sql: include_str!("../schema/stage/001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("../schema/stage/002_lease_operations.sql"),
+    },
+];
+const SCHEMA_VERSION: u32 = 2;
 const STAGE_DIRECTORY: &str = "stages";
 const DATABASE_FILE: &str = "filesystem-stages.sqlite3";
 const COPY_BUFFER_BYTES: usize = 64 * 1_024;
 const COPY_BUFFER_BYTES_U64: u64 = 65_536;
+
+#[derive(Clone, Copy)]
+struct Migration {
+    version: u32,
+    sql: &'static str,
+}
 
 /// Durable identity, bounds and expiry for one private write stage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +81,42 @@ pub struct CompletedStage {
     pub logical_length: u64,
     /// BLAKE3 digest of the complete logical byte stream.
     pub content_digest: [u8; 32],
+}
+
+/// Exact idempotent private-stage lease transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageLeaseRequest {
+    /// Stable operation identity shared with the handle lease transition.
+    pub operation_id: OperationId,
+    /// Private stage derived from the writable handle identity.
+    pub stage_id: StageId,
+    /// Current positive fence.
+    pub expected_fence: u64,
+    /// Whether ownership transfer advances the fence by one.
+    pub takeover: bool,
+    /// New exclusive lease deadline, never earlier than the current deadline.
+    pub lease_expires_at: UnixMicros,
+    /// Authoritative attempt instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Observable durable stage-lease result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageLeaseReceipt {
+    /// Whether this transition was newly applied or exactly replayed.
+    pub outcome: StageWriteOutcome,
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Updated stage.
+    pub stage_id: StageId,
+    /// Exact request digest.
+    pub request_digest: [u8; 32],
+    /// Fence after renewal/takeover.
+    pub stage_fence: u64,
+    /// New exclusive lease deadline.
+    pub lease_expires_at: UnixMicros,
+    /// Digest binding the complete durable result.
+    pub result_digest: [u8; 32],
 }
 
 /// Durable stage journal and immutable part storage beneath one daemon state directory.
@@ -184,6 +235,121 @@ impl DurableStageStore {
             logical_extent: stage.logical_extent,
             initialised_ranges: ranges,
         })
+    }
+
+    /// Extends a private-stage lease or advances its fence during explicit handle takeover.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/expired stages, shrinking leases, fence overflow, operation conflicts,
+    /// corrupt receipts and persistence failure.
+    pub fn renew_lease(
+        &mut self,
+        request: StageLeaseRequest,
+    ) -> Result<StageLeaseReceipt, StageStoreError> {
+        validate_lease_request(request)?;
+        let request_digest = lease_request_digest(request);
+        if let Some(receipt) = load_lease_receipt(&self.connection, request.operation_id)? {
+            return matching_lease_replay(receipt, request, request_digest);
+        }
+        reject_stage_operation_collision(&self.connection, request.operation_id)?;
+        let stage = load_stage(&self.connection, request.stage_id)?;
+        let resulting_fence = if request.takeover {
+            request
+                .expected_fence
+                .checked_add(1)
+                .ok_or(StageStoreError::InvalidInput)?
+        } else {
+            request.expected_fence
+        };
+        if stage.state != 1
+            || stage.fence != request.expected_fence
+            || stage.expires_at <= request.observed_at
+            || request.lease_expires_at < stage.expires_at
+        {
+            return Err(StageStoreError::Stale);
+        }
+        let result_digest = lease_result_digest(
+            request.operation_id,
+            request.stage_id,
+            request_digest,
+            resulting_fence,
+            request.lease_expires_at,
+        );
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let updated = transaction.execute(
+            "UPDATE stages SET stage_fence = ?1, expires_at = ?2
+             WHERE stage_id = ?3 AND state = 1 AND stage_fence = ?4
+               AND expires_at > ?5 AND expires_at <= ?2",
+            params![
+                to_i64(resulting_fence)?,
+                request.lease_expires_at.get(),
+                request.stage_id.as_bytes().as_slice(),
+                to_i64(request.expected_fence)?,
+                request.observed_at.get(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err(StageStoreError::Stale);
+        }
+        transaction.execute(
+            "INSERT INTO stage_lease_operations(
+                operation_id, stage_id, request_digest, expected_fence, resulting_fence,
+                lease_expires_at, committed_at, receipt_digest
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                request.operation_id.as_bytes().as_slice(),
+                request.stage_id.as_bytes().as_slice(),
+                request_digest.as_slice(),
+                to_i64(request.expected_fence)?,
+                to_i64(resulting_fence)?,
+                request.lease_expires_at.get(),
+                request.observed_at.get(),
+                result_digest.as_slice(),
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(StageLeaseReceipt {
+            outcome: StageWriteOutcome::Applied,
+            operation_id: request.operation_id,
+            stage_id: request.stage_id,
+            request_digest,
+            stage_fence: resulting_fence,
+            lease_expires_at: request.lease_expires_at,
+            result_digest,
+        })
+    }
+
+    /// Checks whether a lease transition can proceed without changing durable state.
+    ///
+    /// The later renewal repeats all checks transactionally. Exact completed retries are valid.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, stale, expired, shrinking, conflicting or corrupt transitions.
+    pub fn preflight_lease(&self, request: StageLeaseRequest) -> Result<(), StageStoreError> {
+        validate_lease_request(request)?;
+        let request_digest = lease_request_digest(request);
+        if let Some(receipt) = load_lease_receipt(&self.connection, request.operation_id)? {
+            matching_lease_replay(receipt, request, request_digest)?;
+            return Ok(());
+        }
+        reject_stage_operation_collision(&self.connection, request.operation_id)?;
+        let stage = load_stage(&self.connection, request.stage_id)?;
+        if request.takeover && request.expected_fence == u64::MAX {
+            return Err(StageStoreError::InvalidInput);
+        }
+        if stage.state != 1
+            || stage.fence != request.expected_fence
+            || stage.expires_at <= request.observed_at
+            || request.lease_expires_at < stage.expires_at
+        {
+            Err(StageStoreError::Stale)
+        } else {
+            Ok(())
+        }
     }
 
     /// Reconstructs exact ordered acknowledged bytes for publication without changing stage state.
@@ -377,6 +543,139 @@ pub enum StageStoreError {
     /// SQLite persistence failed.
     #[error("durable stage database operation failed")]
     Sqlite(#[from] rusqlite::Error),
+}
+
+fn validate_lease_request(request: StageLeaseRequest) -> Result<(), StageStoreError> {
+    if request.expected_fence == 0 || request.lease_expires_at <= request.observed_at {
+        Err(StageStoreError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn reject_stage_operation_collision(
+    connection: &Connection,
+    operation_id: OperationId,
+) -> Result<(), StageStoreError> {
+    let collision: i64 = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM stage_writes WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM stage_lease_operations WHERE operation_id = ?1)",
+        [operation_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    if collision == 0 {
+        Ok(())
+    } else {
+        Err(StageStoreError::OperationConflict)
+    }
+}
+
+fn load_lease_receipt(
+    connection: &Connection,
+    operation_id: OperationId,
+) -> Result<Option<StageLeaseReceipt>, StageStoreError> {
+    type Stored = (Vec<u8>, Vec<u8>, i64, i64, Vec<u8>);
+    let stored: Option<Stored> = connection
+        .query_row(
+            "SELECT stage_id, request_digest, resulting_fence, lease_expires_at,
+                    receipt_digest
+             FROM stage_lease_operations WHERE operation_id = ?1",
+            [operation_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    stored
+        .as_ref()
+        .map(|stored| decode_lease_receipt(operation_id, stored))
+        .transpose()
+}
+
+fn decode_lease_receipt(
+    operation_id: OperationId,
+    stored: &(Vec<u8>, Vec<u8>, i64, i64, Vec<u8>),
+) -> Result<StageLeaseReceipt, StageStoreError> {
+    let stage_id = stage_identifier(&stored.0)?;
+    let request_digest = copy_digest(&stored.1)?;
+    let stage_fence = from_i64(stored.2)?;
+    let lease_expires_at = UnixMicros::new(stored.3);
+    let result_digest = copy_digest(&stored.4)?;
+    let expected = lease_result_digest(
+        operation_id,
+        stage_id,
+        request_digest,
+        stage_fence,
+        lease_expires_at,
+    );
+    if stage_fence == 0 || result_digest != expected {
+        return Err(StageStoreError::Corrupt);
+    }
+    Ok(StageLeaseReceipt {
+        outcome: StageWriteOutcome::Replayed,
+        operation_id,
+        stage_id,
+        request_digest,
+        stage_fence,
+        lease_expires_at,
+        result_digest,
+    })
+}
+
+fn matching_lease_replay(
+    receipt: StageLeaseReceipt,
+    request: StageLeaseRequest,
+    request_digest: [u8; 32],
+) -> Result<StageLeaseReceipt, StageStoreError> {
+    if receipt.stage_id == request.stage_id && receipt.request_digest == request_digest {
+        Ok(receipt)
+    } else {
+        Err(StageStoreError::OperationConflict)
+    }
+}
+
+fn stage_identifier(bytes: &[u8]) -> Result<StageId, StageStoreError> {
+    let exact: [u8; 16] = bytes.try_into().map_err(|_| StageStoreError::Corrupt)?;
+    StageId::from_bytes(exact).map_err(|_| StageStoreError::Corrupt)
+}
+
+fn copy_digest(bytes: &[u8]) -> Result<[u8; 32], StageStoreError> {
+    bytes.try_into().map_err(|_| StageStoreError::Corrupt)
+}
+
+fn lease_request_digest(request: StageLeaseRequest) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.stage-lease-request.v1\0");
+    digest.update(&request.operation_id.as_bytes());
+    digest.update(&request.stage_id.as_bytes());
+    digest.update(&request.expected_fence.to_be_bytes());
+    digest.update(&[u8::from(request.takeover)]);
+    digest.update(&request.lease_expires_at.get().to_be_bytes());
+    digest.update(&request.observed_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+fn lease_result_digest(
+    operation_id: OperationId,
+    stage_id: StageId,
+    request_digest: [u8; 32],
+    stage_fence: u64,
+    lease_expires_at: UnixMicros,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.stage-lease-result.v1\0");
+    digest.update(&operation_id.as_bytes());
+    digest.update(&stage_id.as_bytes());
+    digest.update(&request_digest);
+    digest.update(&stage_fence.to_be_bytes());
+    digest.update(&lease_expires_at.get().to_be_bytes());
+    digest.finalize().into()
 }
 
 fn validate_registration(stage: StageRegistration) -> Result<(), StageStoreError> {
@@ -722,27 +1021,32 @@ fn migrate(connection: &mut Connection, applied_at: UnixMicros) -> Result<(), St
         )
         .optional()?
         .is_some();
-    let digest: [u8; 32] = blake3::hash(MIGRATION.as_bytes()).into();
-    if !exists {
+    let current: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if current > SCHEMA_VERSION || (current == 0 && exists) || (current != 0 && !exists) {
+        return Err(StageStoreError::Corrupt);
+    }
+    for migration in MIGRATIONS {
+        let digest: [u8; 32] = blake3::hash(migration.sql.as_bytes()).into();
+        if migration.version <= current {
+            let stored: Vec<u8> = connection.query_row(
+                "SELECT migration_digest FROM schema_migrations WHERE version = ?1",
+                [migration.version],
+                |row| row.get(0),
+            )?;
+            if stored.as_slice() != digest {
+                return Err(StageStoreError::Corrupt);
+            }
+            continue;
+        }
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(MIGRATION)?;
+        transaction.execute_batch(migration.sql)?;
         transaction.execute(
             "INSERT INTO schema_migrations(version, migration_digest, applied_at)
              VALUES (?1, ?2, ?3)",
-            params![SCHEMA_VERSION, digest.as_slice(), applied_at.get()],
+            params![migration.version, digest.as_slice(), applied_at.get()],
         )?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.pragma_update(None, "user_version", migration.version)?;
         transaction.commit()?;
-        return Ok(());
-    }
-    let stored: Vec<u8> = connection.query_row(
-        "SELECT migration_digest FROM schema_migrations WHERE version = ?1",
-        [SCHEMA_VERSION],
-        |row| row.get(0),
-    )?;
-    let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if stored.as_slice() != digest || version != SCHEMA_VERSION {
-        return Err(StageStoreError::Corrupt);
     }
     Ok(())
 }
@@ -783,13 +1087,120 @@ mod tests {
 
     use meshspan_contracts::BoundedBytes;
     use meshspan_domain::{OperationId, StageId, UnixMicros};
+    use rusqlite::{Connection, params};
     use tempfile::tempdir;
 
     use super::{
-        CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration,
-        StageStoreError, install_part,
+        CompletedStage, DATABASE_FILE, DurableStageStore, MIGRATIONS, SCHEMA_VERSION,
+        StageCompletionRequest, StageLeaseRequest, StageRegistration, StageStoreError, configure,
+        install_part,
     };
     use crate::{StageWrite, StageWriteOutcome};
+
+    #[test]
+    fn version_one_stage_database_migrates_to_current_schema()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let connection = Connection::open(directory.path().join(DATABASE_FILE))?;
+        configure(&connection)?;
+        connection.execute_batch(MIGRATIONS[0].sql)?;
+        let digest: [u8; 32] = blake3::hash(MIGRATIONS[0].sql.as_bytes()).into();
+        connection.execute(
+            "INSERT INTO schema_migrations(version, migration_digest, applied_at)
+             VALUES (1, ?1, 1)",
+            params![digest.as_slice()],
+        )?;
+        connection.pragma_update(None, "user_version", 1)?;
+        drop(connection);
+
+        let store = DurableStageStore::open(directory.path(), UnixMicros::new(2))?;
+        let version: u32 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        assert_eq!(version, SCHEMA_VERSION);
+        let lease_table: i64 = store.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_schema
+                WHERE type = 'table' AND name = 'stage_lease_operations'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(lease_table, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn lease_takeover_fences_old_writes_and_replays_after_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([90; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 1, 100))?;
+        let takeover = StageLeaseRequest {
+            operation_id: OperationId::from_bytes([91; 16])?,
+            stage_id,
+            expected_fence: 1,
+            takeover: true,
+            lease_expires_at: UnixMicros::new(200),
+            observed_at: UnixMicros::new(20),
+        };
+        let applied = store.renew_lease(takeover)?;
+        assert_eq!(applied.outcome, StageWriteOutcome::Applied);
+        assert_eq!(applied.stage_fence, 2);
+        assert!(matches!(
+            store.write(stage_id, &write(92, 1, 0, b"old")?, UnixMicros::new(30)),
+            Err(StageStoreError::Stale)
+        ));
+        assert_eq!(
+            store.write(stage_id, &write(93, 2, 0, b"new")?, UnixMicros::new(30))?,
+            StageWriteOutcome::Applied
+        );
+        drop(store);
+
+        let mut reopened = DurableStageStore::open(directory.path(), UnixMicros::new(2))?;
+        let replayed = reopened.renew_lease(takeover)?;
+        assert_eq!(replayed.outcome, StageWriteOutcome::Replayed);
+        assert_eq!(replayed.result_digest, applied.result_digest);
+        let mut changed = takeover;
+        changed.lease_expires_at = UnixMicros::new(201);
+        assert!(matches!(
+            reopened.renew_lease(changed),
+            Err(StageStoreError::OperationConflict)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn lease_cannot_shrink_or_reuse_a_write_operation() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([94; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 1, 100))?;
+        let staged = write(95, 1, 0, b"data")?;
+        store.write(stage_id, &staged, UnixMicros::new(10))?;
+        let request = StageLeaseRequest {
+            operation_id: staged.operation_id,
+            stage_id,
+            expected_fence: 1,
+            takeover: false,
+            lease_expires_at: UnixMicros::new(99),
+            observed_at: UnixMicros::new(20),
+        };
+        assert!(matches!(
+            store.renew_lease(request),
+            Err(StageStoreError::OperationConflict)
+        ));
+        let distinct = StageLeaseRequest {
+            operation_id: OperationId::from_bytes([96; 16])?,
+            ..request
+        };
+        assert!(matches!(
+            store.renew_lease(distinct),
+            Err(StageStoreError::Stale)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn restart_replays_parts_and_reconstructs_acknowledged_order()
