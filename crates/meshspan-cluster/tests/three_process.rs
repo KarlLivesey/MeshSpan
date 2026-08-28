@@ -24,7 +24,7 @@ const CERTIFICATE_NAME: &str = "meshspan.internal";
 const WAIT_LIMIT: Duration = Duration::from_secs(15);
 const RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test]
 async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Result<(), Box<dyn Error>>
 {
     let temporary = TempDir::new()?;
@@ -120,7 +120,7 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test]
 async fn single_voter_restarts_and_resumes_writes() -> Result<(), Box<dyn Error>> {
     let temporary = TempDir::new()?;
     let launches = build_launches(temporary.path())?;
@@ -148,7 +148,7 @@ async fn single_voter_restarts_and_resumes_writes() -> Result<(), Box<dyn Error>
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test]
 async fn two_voters_fence_writes_after_one_loss_then_resume() -> Result<(), Box<dyn Error>> {
     let temporary = TempDir::new()?;
     let launches = build_launches(temporary.path())?;
@@ -202,12 +202,12 @@ async fn two_voters_fence_writes_after_one_loss_then_resume() -> Result<(), Box<
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test]
 async fn promotion_resumes_after_restart_from_durable_joint_plan() -> Result<(), Box<dyn Error>> {
     prove_promotion_restart("joint:3", false).await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test]
 async fn promotion_resumes_after_restart_from_durable_stable_plan() -> Result<(), Box<dyn Error>> {
     prove_promotion_restart("stable:3", true).await
 }
