@@ -121,6 +121,7 @@ struct EffectiveEntry {
 
 struct ReplayState {
     entries: BTreeMap<Vec<String>, EffectiveEntry>,
+    objects: BTreeMap<ObjectId, EffectiveEntry>,
     revisions: BTreeMap<ObjectRevisionId, EffectiveEntry>,
     current_root: Option<ObjectRevisionId>,
 }
@@ -179,8 +180,8 @@ pub fn plan_namespace_replay(
 impl ReplayState {
     fn from_base(base: &NamespaceReplayBase) -> Result<Self, ReconciliationError> {
         let mut entries = BTreeMap::new();
+        let mut objects = BTreeMap::new();
         let mut revisions = BTreeMap::new();
-        let mut objects = BTreeSet::new();
         for entry in &base.entries {
             if entry.entry_generation == 0 || entry.path.components().is_empty() {
                 return Err(ReconciliationError::InvalidInput);
@@ -196,15 +197,16 @@ impl ReplayState {
                 .insert(path_key(&entry.path), effective.clone())
                 .is_some()
                 || revisions
-                    .insert(entry.object_revision_id, effective)
+                    .insert(entry.object_revision_id, effective.clone())
                     .is_some()
-                || !objects.insert(entry.object_id)
+                || objects.insert(entry.object_id, effective).is_some()
             {
                 return Err(ReconciliationError::InvalidInput);
             }
         }
         Ok(Self {
             entries,
+            objects,
             revisions,
             current_root: base.root_object_revision_id,
         })
@@ -257,6 +259,7 @@ impl ReplayState {
             generation,
         };
         self.entries.insert(path_key(&target_path), target.clone());
+        self.objects.insert(target.object_id, target.clone());
         self.revisions
             .insert(intent.object_revision_id, target.clone());
         if target_kind == DirectoryEntryKind::Directory {
@@ -355,7 +358,11 @@ impl ReplayState {
         intent: &BranchMutationIntent,
     ) -> Result<NamespacePath, ReconciliationError> {
         for (index, ancestor) in intent.ancestors.iter().enumerate().rev() {
-            if let Some(target) = self.revisions.get(&ancestor.expected_revision_id()) {
+            if let Some(target) = self
+                .revisions
+                .get(&ancestor.expected_revision_id())
+                .or_else(|| self.objects.get(&ancestor.object_id()))
+            {
                 if target.kind != DirectoryEntryKind::Directory
                     || target.object_id != ancestor.object_id()
                 {
@@ -428,6 +435,7 @@ impl ReplayState {
             let source_target = self
                 .revisions
                 .get(&source.expected_revision_id())
+                .or_else(|| self.objects.get(&source.object_id()))
                 .cloned()
                 .ok_or(ReconciliationError::MissingBaseEntry)?;
             if source_target.kind != DirectoryEntryKind::Directory
@@ -466,6 +474,7 @@ impl ReplayState {
                 ..current
             };
             self.entries.insert(path_key(&prefix), updated.clone());
+            self.objects.insert(updated.object_id, updated.clone());
             self.revisions.insert(source.new_revision_id(), updated);
             transitions.push(transition);
         }

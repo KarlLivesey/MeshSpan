@@ -204,6 +204,53 @@ fn descendants_follow_a_conflicting_directory_to_its_recovered_path()
 }
 
 #[test]
+fn nested_edits_rebase_over_a_newer_converged_directory_revision()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut commits = vec![
+        commit(1, 1, &[], 1, 10)?,
+        commit(2, 1, &[1], 2, 20)?,
+        commit(3, 2, &[1], 3, 30)?,
+    ];
+    let intent = BranchMutationIntent {
+        commit_id: commit_id(3)?,
+        path: path(&["docs", "offline.txt"])?,
+        ancestors: vec![DirectoryRevisionTransition::new(
+            object(50)?,
+            revision(60)?,
+            revision(62)?,
+        )?],
+        object_id: object(51)?,
+        object_revision_id: revision(63)?,
+        prior_object_revision_id: None,
+        entry_generation: 1,
+        mutation: BranchMutation::File {
+            version_id: version(70)?,
+        },
+    };
+    bind_intents(&mut commits, std::slice::from_ref(&intent));
+    let causal = plan_reconciliation(&commits, &frontier(2, &[3])?, ReconciliationLimits::DEFAULT)?;
+    let replay = plan_namespace_replay(
+        &causal,
+        &commits,
+        &[intent],
+        &NamespaceReplayBase {
+            root_object_revision_id: Some(revision(20)?),
+            entries: vec![entry(&["docs"], 50, 61, DirectoryEntryKind::Directory)?],
+        },
+    )?;
+
+    let action = &replay.actions()[0];
+    assert_eq!(action.target_path, path(&["docs", "offline.txt"])?);
+    assert_eq!(action.target_ancestors.len(), 1);
+    assert_eq!(
+        action.target_ancestors[0].expected_revision_id(),
+        revision(61)?
+    );
+    assert_ne!(action.target_ancestors[0].new_revision_id(), revision(62)?);
+    Ok(())
+}
+
+#[test]
 fn merge_commits_are_causal_markers_not_namespace_mutations()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut commits = vec![
