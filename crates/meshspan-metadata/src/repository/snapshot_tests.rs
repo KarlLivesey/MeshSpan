@@ -11,8 +11,8 @@ use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::volume_head_tests::{commit, context, fixture, open_and_prepare, publication_command};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, RepositoryError};
 use crate::{
-    AuthoritativeCommand, CreateVolumeSnapshot, RecordName, RequestVolumeSnapshotExpiry,
-    RestoreVolumeSnapshot, SnapshotExpiryReason,
+    AuthoritativeCommand, CreateVolumeSnapshot, RecordName, RemoveVolumeSnapshotRoot,
+    RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, SnapshotExpiryReason,
 };
 
 #[test]
@@ -157,6 +157,144 @@ fn expiry_request_preserves_the_root_and_replays_after_restart()
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
     assert_eq!(replay.result_digest, receipt.result_digest);
     assert_eq!(only_snapshot(&reopened, fixture.volume)?.state, 2);
+    Ok(())
+}
+
+#[test]
+fn expiring_snapshot_root_removal_is_exact_audited_and_replayable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("remove-root.sqlite3");
+    let fixture = fixture()?;
+    let mut repository = prepared_snapshot(&file_path, &fixture, 93, false, 10_000)?;
+    let expiry_context = context(94, fixture.administrator, 95, 200, Some(4))?;
+    repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        expiry_context,
+        &expiry_command(93, 4, false)?,
+    )?;
+    let command = remove_root_command(93, 5, 94, 30, 31)?;
+    let remove_context = context(96, fixture.administrator, 97, 201, Some(5))?;
+    let receipt =
+        repository.apply_committed(LogPosition { index: 6, term: 1 }, remove_context, &command)?;
+    assert!(
+        repository
+            .volume_snapshots(fixture.volume, None, PageLimit::new(2)?)?
+            .items
+            .is_empty()
+    );
+    let stored: (i64, i64, i64, Vec<u8>, Vec<u8>) = repository.database.connection().query_row(
+        "SELECT s.state, s.removed_at, s.revision,
+                    r.expiry_operation_id, r.root_object_revision_id
+             FROM volume_snapshots s JOIN snapshot_root_removals r USING(snapshot_id)
+             WHERE s.snapshot_id = ?1",
+        [SnapshotId::from_bytes([93; 16])?.as_bytes().as_slice()],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    assert_eq!((stored.0, stored.1, stored.2), (3, 201, 6));
+    assert_eq!(
+        stored.3.as_slice(),
+        OperationId::from_bytes([94; 16])?.as_bytes()
+    );
+    assert_eq!(
+        stored.4.as_slice(),
+        ObjectRevisionId::from_bytes([31; 16])?.as_bytes()
+    );
+    drop(repository);
+
+    let database =
+        crate::PartitionDatabase::open(&file_path, fixture.partition, UnixMicros::new(500))?;
+    let mut reopened = AuthoritativeRepository::new(database);
+    let replay =
+        reopened.apply_committed(LogPosition { index: 7, term: 1 }, remove_context, &command)?;
+    assert_eq!(replay.disposition, ApplyDisposition::Replayed);
+    assert_eq!(replay.result_digest, receipt.result_digest);
+    Ok(())
+}
+
+#[test]
+fn root_removal_rejects_substitution_and_rolls_back_every_apply_boundary()
+-> Result<(), Box<dyn std::error::Error>> {
+    for fault in [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterOperation,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ] {
+        let directory = tempdir()?;
+        let fixture = fixture()?;
+        let mut repository = prepared_snapshot(
+            &directory.path().join("remove-fault.sqlite3"),
+            &fixture,
+            98,
+            false,
+            10_000,
+        )?;
+        repository.apply_committed(
+            LogPosition { index: 5, term: 1 },
+            context(99, fixture.administrator, 100, 200, Some(4))?,
+            &expiry_command(98, 4, false)?,
+        )?;
+        let command = remove_root_command(98, 5, 99, 30, 31)?;
+        let remove_context = context(101, fixture.administrator, 102, 201, Some(5))?;
+        assert!(matches!(
+            apply_committed_with_fault(
+                &mut repository.database,
+                LogPosition { index: 6, term: 1 },
+                remove_context,
+                &command,
+                fault,
+            ),
+            Err(RepositoryError::InjectedFault)
+        ));
+        assert_eq!(only_snapshot(&repository, fixture.volume)?.state, 2);
+        let removals: i64 = repository.database.connection().query_row(
+            "SELECT count(*) FROM snapshot_root_removals",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(removals, 0);
+        repository.apply_committed(LogPosition { index: 6, term: 1 }, remove_context, &command)?;
+    }
+
+    let directory = tempdir()?;
+    let fixture = fixture()?;
+    let mut repository = prepared_snapshot(
+        &directory.path().join("remove-reject.sqlite3"),
+        &fixture,
+        103,
+        false,
+        10_000,
+    )?;
+    repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(104, fixture.administrator, 105, 200, Some(4))?,
+        &expiry_command(103, 4, false)?,
+    )?;
+    for command in [
+        remove_root_command(103, 4, 104, 30, 31)?,
+        remove_root_command(103, 5, 106, 30, 31)?,
+        remove_root_command(103, 5, 104, 107, 31)?,
+        remove_root_command(103, 5, 104, 30, 108)?,
+    ] {
+        assert!(matches!(
+            repository.apply_committed(
+                LogPosition { index: 6, term: 1 },
+                context(109, fixture.administrator, 110, 201, Some(5))?,
+                &command,
+            ),
+            Err(RepositoryError::StaleSnapshot)
+        ));
+        assert_eq!(only_snapshot(&repository, fixture.volume)?.state, 2);
+    }
     Ok(())
 }
 
@@ -446,6 +584,24 @@ fn expiry_command(
             } else {
                 SnapshotExpiryReason::Manual
             },
+        },
+    ))
+}
+
+fn remove_root_command(
+    snapshot: u8,
+    expected_revision: u64,
+    expiry_operation: u8,
+    namespace_commit: u8,
+    root_revision: u8,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    Ok(AuthoritativeCommand::RemoveVolumeSnapshotRoot(
+        RemoveVolumeSnapshotRoot {
+            snapshot_id: SnapshotId::from_bytes([snapshot; 16])?,
+            expected_snapshot_revision: Revision::new(expected_revision),
+            expiry_operation_id: OperationId::from_bytes([expiry_operation; 16])?,
+            namespace_commit_id: NamespaceCommitId::from_bytes([namespace_commit; 16])?,
+            root_object_revision_id: ObjectRevisionId::from_bytes([root_revision; 16])?,
         },
     ))
 }

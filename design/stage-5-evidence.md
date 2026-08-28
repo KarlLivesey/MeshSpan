@@ -222,9 +222,13 @@ copy-on-write filesystem service. This document records executable evidence only
    into an explicit expiring state behind an exact snapshot-revision CAS. The
    same transaction retains an immutable reason record and normal operation/audit
    receipt; restart, exact replay, premature automation, protected roots, stale
-   revisions and every injected apply boundary are proven. This first phase does
-   not drop the root: removal remains blocked until handle and reachability guards
-   prove it safe. Fixed-interval schedules now use immutable configurations and
+   revisions and every injected apply boundary are proven. An expiring snapshot
+   can now drop its root only through a separate authoritative command bound to
+   the exact snapshot revision, pinned namespace commit/root and accepted expiry
+   operation. The atomic transition records immutable removal evidence plus the
+   normal operation/audit receipt; substitution, stale state, restart/replay and
+   every injected apply boundary are proven. It deliberately authorises no shard
+   deletion. Fixed-interval schedules now use immutable configurations and
    one indexed authoritative due head. Due work is bounded and cursor-paged; a
    late run captures the exact converged head once, records its occurrence,
    derives its expiry, and advances beyond the current instant without replaying
@@ -242,8 +246,7 @@ copy-on-write filesystem service. This document records executable evidence only
    insert. Only that committed authority permits idempotent local activation. Lost
    responses, restart, stale heads, substituted roots/evidence, premature causal
    reconciliation and every injected local/metadata transaction boundary are proven.
-   Guarded root removal remains required before this gate can close. Every new
-   volume now receives the
+   Every new volume now receives the
    accepted safe ordinary-history default: enabled, 30-day soft minimum,
    pressure-triggered reclamation and a
    separate 30-day conflict minimum. Policy changes append immutable per-volume
