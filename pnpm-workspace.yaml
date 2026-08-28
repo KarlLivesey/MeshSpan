@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+packages:
+  - "web"
+  - "tooling/*"
+allowBuilds:
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - "@types/node@26.4.0"
+  - eslint-plugin-solid@0.16.1

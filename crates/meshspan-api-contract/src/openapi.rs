@@ -94,6 +94,7 @@ fn paths() -> Value {
                 "responses": {
                     "200": {
                         "description": "This exact OpenAPI 3.1 document",
+                        "headers": response_headers(),
                         "content": {
                             "application/json": {
                                 "schema": {

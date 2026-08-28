@@ -21,7 +21,7 @@ updates must pass the same complete local gates as a human change.
 | --- | --- | --- |
 | Rust | Latest tested stable; currently planned around 1.98 | Daemon, embedded services and native tools |
 | Node.js | 26 | Reproducible web build/test tooling only; no production Node.js service |
-| TypeScript | 7.x | Strict web application and generated API types |
+| TypeScript | 6.0.3 | Strict web application and generated API types; upgrade to 7 when the generator and typed ESLint stack support it |
 | pnpm | Current pinned stable | Reproducible JavaScript dependency and workspace management |
 
 Solid 2 is available as the `next` release candidate `solid-js@2.0.0-rc.3`.

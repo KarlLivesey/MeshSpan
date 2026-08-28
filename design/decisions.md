@@ -21,7 +21,7 @@ Status: **draft for review**.
 | D-013 | Every eligible gateway may expose HTTPS and SMB against the same converged namespace plus its newest authorised local branch during isolation; there is no single active gateway design. |
 | D-014 | A valid administrator-issued join grant is pre-authorisation within its limits and does not require a second interactive approval. |
 | D-015 | Native Linux and macOS nodes and the supported container may be mixed in one mesh; native Windows hosting is deferred. |
-| D-016 | The web client uses Solid 2.0, Node.js 26 tooling, TypeScript 7.0 and Temporal, with no production Node.js service. |
+| D-016 | The web client uses Solid 2.0, Node.js 26 tooling, TypeScript 6.0.3 and Temporal, with no production Node.js service; TypeScript 7 remains the next upgrade target once the generator and typed ESLint stack support it. |
 | D-017 | `0.1.0` is the first minimal-useful-product candidate and carries no compatibility promise. |
 | D-018 | Major storage, access, administration, persistence, consensus, coding, policy, authentication, certificate, notification and observability implementations are replaceable behind versioned contracts. |
 | D-019 | Mesh-wide component selection and desired configuration are authoritative replicated metadata; only irreducibly local bindings and private material remain node-local. |

@@ -177,7 +177,6 @@
           },
           "expires_at_epoch_micros": {
             "description": "Authoritative UTC instant as epoch microseconds.",
-            "format": "int64",
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
@@ -340,7 +339,23 @@
                 }
               }
             },
-            "description": "This exact OpenAPI 3.1 document"
+            "description": "This exact OpenAPI 3.1 document",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Read this exact API contract",

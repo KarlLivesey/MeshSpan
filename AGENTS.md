@@ -135,6 +135,8 @@ operations or storage paths through the private protocol.
   so the main flow reads from top to bottom.
 - Keep pure decisions separate from IO and make side effects explicit.
 - Prefer concrete types for IDs, revisions, epochs, byte counts and timestamps.
+- Use TypeScript 6.0.3 until the selected generator and typed ESLint stack
+  officially support TypeScript 7; keep 7 as the next toolchain upgrade target.
 - Use `Temporal` in web code for date/time domain values; do not add new
   arithmetic based on JavaScript `Date`.
 - Bound untrusted allocations, collections, streams and recursion.

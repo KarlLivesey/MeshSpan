@@ -583,7 +583,9 @@ Status: **draft for review**.
 
 - **DEV-001** Rust builds MUST track the latest stable toolchain that passes the complete required
   suite; toolchain updates MUST be tested before merge.
-- **DEV-002** The web workspace MUST target Node.js 26 and TypeScript 7.0.
+- **DEV-002** The web workspace MUST target Node.js 26 and TypeScript 6.0.3; TypeScript 7 MUST
+  remain the next toolchain upgrade target once the selected generator and typed ESLint stack
+  officially support it.
 - **DEV-003** Web date/time domain logic MUST use Temporal rather than introducing new JavaScript
   `Date` arithmetic.
 - **DEV-004** Every Rust workspace crate and web package MUST participate in language-standard

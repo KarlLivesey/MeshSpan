@@ -1,0 +1,28 @@
+{
+  "name": "@meshspan/eslint",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-2.0-only",
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "scripts": {
+    "check": "cd ../.. && tooling/eslint/node_modules/.bin/eslint web/src web/tests --config tooling/eslint/eslint.config.mjs --max-warnings 0 --report-unused-disable-directives"
+  },
+  "devDependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "4.7.2",
+    "@eslint/js": "9.39.5",
+    "@vitest/eslint-plugin": "1.6.27",
+    "eslint": "9.39.5",
+    "eslint-plugin-import-x": "4.17.1",
+    "eslint-plugin-jsx-a11y": "6.10.2",
+    "eslint-plugin-n": "18.3.0",
+    "eslint-plugin-regexp": "3.2.0",
+    "eslint-plugin-solid": "0.16.1",
+    "eslint-plugin-sonarjs": "4.2.0",
+    "globals": "17.11.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.68.0"
+  }
+}

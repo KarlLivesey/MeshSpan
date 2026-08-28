@@ -1,0 +1,17 @@
+{
+  "name": "meshspan-workspace",
+  "private": true,
+  "license": "GPL-2.0-only",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=26 <27",
+    "pnpm": ">=11.19 <12"
+  },
+  "scripts": {
+    "generate:api": "cargo run --quiet -p meshspan-api-contract --bin generate-openapi && pnpm --filter @meshspan/api-codegen generate",
+    "web:format": "pnpm --filter @meshspan/web format",
+    "web:lint": "pnpm --filter @meshspan/eslint check",
+    "web:test": "pnpm --filter @meshspan/web test",
+    "web:typecheck": "pnpm --filter @meshspan/web typecheck"
+  }
+}
