@@ -281,7 +281,15 @@ fn presence(value: &PublishPresence, limits: WireLimits) -> Result<(), WireContr
     }
     validate_payload(value.health.as_ref(), limits)?;
     nonzero(value.incarnation)?;
-    nonzero(value.lease_expires_unix_micros)
+    nonzero(value.lease_expires_unix_micros)?;
+    nonzero(value.presence_sequence)?;
+    if value.observed_mesh_time <= 0
+        || u64::try_from(value.observed_mesh_time)
+            .map_or(true, |observed| value.lease_expires_unix_micros <= observed)
+    {
+        return Err(WireContractError::InvalidMessage);
+    }
+    Ok(())
 }
 
 fn component_support(
