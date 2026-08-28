@@ -90,10 +90,18 @@ copy-on-write filesystem service. This document records executable evidence only
   Conflicting retries and corrupt manifest identity/length/content evidence fail
   closed. A vertical real-IO proof drives the completed stage through the Stage
   4 registered-folder provider's reservation, packed-shard journal and receipt,
-  then retrieves the exact bytes under an authenticated read permit while
-  leaving sibling files untouched. Its deliberately simple unprotected content
-  publisher is test-only: gate 2 remains open until a production encrypted,
-  bounded manifest/layout publisher implements the same boundary.
+  then retrieves the exact stored bytes under an authenticated read permit,
+  authenticates/decrypts them back to the staged plaintext and leaves sibling
+  files untouched. Provider bytes are demonstrably not plaintext. The chunk
+  codec uses a per-layout, drop-zeroised content key so routine protection-key
+  rotation can rewrap that key rather than rewriting user data. Its XChaCha20-
+  Poly1305 key, nonce and associated data bind manifest, format, chunk index,
+  exact length and plaintext digest; ciphertext and recovered plaintext are
+  independently rechecked. Cross-platform vectors cover deterministic output,
+  wrong manifest/format/index, forged digest/tag, invalid keys and bounds. The
+  deliberately simple single-chunk publisher remains test-only: gate 2 stays
+  open until a production bounded/paged manifest publisher durably stores the
+  wrapped content key and chunk receipts through the same boundary.
 
 ## Closure gates
 

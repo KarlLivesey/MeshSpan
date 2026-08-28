@@ -13,12 +13,14 @@ version.workspace = true
 [dependencies]
 blake3.workspace = true
 cap-std.workspace = true
+chacha20poly1305.workspace = true
 meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-domain = { path = "../meshspan-domain" }
 rusqlite.workspace = true
 thiserror.workspace = true
 unicode-casefold.workspace = true
 unicode-normalization.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 meshspan-storage = { path = "../meshspan-storage" }
