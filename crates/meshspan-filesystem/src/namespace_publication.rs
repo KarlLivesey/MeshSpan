@@ -2,6 +2,8 @@
 
 //! Atomic immutable root-directory mutation and volume branch-head publication.
 
+use std::collections::BTreeSet;
+
 use meshspan_domain::{
     BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
 };
@@ -38,8 +40,9 @@ pub(super) fn publish(
     }
 
     let base = load_base(&transaction, publication)?;
-    let (directory_root, created_nodes) = mutate_directory(base.editor, publication)?;
-    for record in &created_nodes {
+    let head_sequence = base.head_sequence;
+    let namespace = mutate_directory_path(base.directories, publication)?;
+    for record in &namespace.created_nodes {
         persist_directory_node(&transaction, record, publication.file.created_at)?;
     }
     inject(fault, NamespaceFaultPoint::DirectoryNodes)?;
@@ -50,16 +53,11 @@ pub(super) fn publish(
     advance_file_head(&transaction, publication.file, file_head.sequence)?;
     inject(fault, NamespaceFaultPoint::FileVersion)?;
 
-    persist_object_revisions(
-        &transaction,
-        publication,
-        base.root_revision_id,
-        directory_root,
-    )?;
+    persist_object_revisions(&transaction, publication, &namespace.directories)?;
     inject(fault, NamespaceFaultPoint::ObjectRevisions)?;
     persist_commit(&transaction, publication, request_digest)?;
     inject(fault, NamespaceFaultPoint::NamespaceCommit)?;
-    let head_sequence = advance_namespace_head(&transaction, publication, base.head_sequence)?;
+    let head_sequence = advance_namespace_head(&transaction, publication, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Heads)?;
     let receipt =
         persist_namespace_operation(&transaction, publication, request_digest, head_sequence)?;
@@ -158,9 +156,15 @@ pub(super) enum NamespaceFaultPoint {
 }
 
 struct NamespaceBase {
-    editor: DirectoryTrie,
-    root_revision_id: Option<ObjectRevisionId>,
+    directories: Vec<LoadedDirectory>,
     head_sequence: u64,
+}
+
+struct LoadedDirectory {
+    editor: DirectoryTrie,
+    object_id: ObjectId,
+    prior_revision_id: Option<ObjectRevisionId>,
+    new_revision_id: ObjectRevisionId,
 }
 
 fn validate(publication: &RootFilePublication) -> Result<(), PublicationError> {
@@ -169,6 +173,26 @@ fn validate(publication: &RootFilePublication) -> Result<(), PublicationError> {
         || publication.root_object_revision_id == publication.file_object_revision_id
         || publication.entry_generation == 0
     {
+        return Err(PublicationError::InvalidInput);
+    }
+    let mut object_ids = BTreeSet::from([publication.root_object_id, publication.file.object_id]);
+    let mut new_revisions = BTreeSet::from([
+        publication.root_object_revision_id,
+        publication.file_object_revision_id,
+    ]);
+    let mut prior_revisions = publication
+        .expected_file_object_revision_id
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    for transition in publication.path.ancestors() {
+        if !object_ids.insert(transition.object_id())
+            || !new_revisions.insert(transition.new_revision_id())
+        {
+            return Err(PublicationError::InvalidInput);
+        }
+        prior_revisions.insert(transition.expected_revision_id());
+    }
+    if !new_revisions.is_disjoint(&prior_revisions) {
         return Err(PublicationError::InvalidInput);
     }
     Ok(())
@@ -195,12 +219,17 @@ fn load_base(
 fn load_initial_base(publication: &RootFilePublication) -> Result<NamespaceBase, PublicationError> {
     if publication.expected_file_object_revision_id.is_some()
         || publication.file.expected_current_version_id.is_some()
+        || !publication.path.ancestors().is_empty()
     {
         return Err(PublicationError::StaleHead);
     }
     Ok(NamespaceBase {
-        editor: DirectoryTrie::empty(),
-        root_revision_id: None,
+        directories: vec![LoadedDirectory {
+            editor: DirectoryTrie::empty(),
+            object_id: publication.root_object_id,
+            prior_revision_id: None,
+            new_revision_id: publication.root_object_revision_id,
+        }],
         head_sequence: 0,
     })
 }
@@ -217,13 +246,56 @@ fn load_existing_base(
     {
         return Err(PublicationError::Corrupt);
     }
-    let root_revision_id = commit.root_object_revision_id;
-    let directory_root = load_directory_root(transaction, publication, root_revision_id)?;
-    let editor = load_path_editor(transaction, directory_root, &publication.entry_name)?;
-    validate_old_entry(transaction, publication, &editor)?;
+    if publication.root_object_revision_id == commit.root_object_revision_id
+        || publication
+            .path
+            .ancestors()
+            .iter()
+            .any(|transition| transition.new_revision_id() == commit.root_object_revision_id)
+    {
+        return Err(PublicationError::InvalidInput);
+    }
+    let components = publication.path.path().components();
+    let selected = components.first().ok_or(PublicationError::InvalidInput)?;
+    let mut directories = vec![load_directory(
+        transaction,
+        commit.root_object_revision_id,
+        publication.root_object_id,
+        publication.root_object_revision_id,
+        publication.file.volume_id,
+        selected,
+    )?];
+    for (index, transition) in publication.path.ancestors().iter().enumerate() {
+        let parent_name = components
+            .get(index)
+            .ok_or(PublicationError::InvalidInput)?;
+        let next_name = components
+            .get(index.saturating_add(1))
+            .ok_or(PublicationError::InvalidInput)?;
+        let parent = directories.last().ok_or(PublicationError::Corrupt)?;
+        let entry = parent
+            .editor
+            .lookup(parent_name)?
+            .ok_or(PublicationError::StaleHead)?;
+        if entry.kind() != DirectoryEntryKind::Directory
+            || entry.object_id() != transition.object_id()
+            || entry.object_revision_id() != transition.expected_revision_id()
+        {
+            return Err(PublicationError::StaleHead);
+        }
+        directories.push(load_directory(
+            transaction,
+            transition.expected_revision_id(),
+            transition.object_id(),
+            transition.new_revision_id(),
+            publication.file.volume_id,
+            next_name,
+        )?);
+    }
+    let leaf = directories.last().ok_or(PublicationError::Corrupt)?;
+    validate_old_entry(transaction, publication, &leaf.editor)?;
     Ok(NamespaceBase {
-        editor,
-        root_revision_id: Some(root_revision_id),
+        directories,
         head_sequence: head.sequence,
     })
 }
@@ -323,19 +395,29 @@ fn load_single_parent(
         .transpose()
 }
 
-fn load_directory_root(
+fn load_directory(
     transaction: &Transaction<'_>,
-    publication: &RootFilePublication,
-    root_revision_id: ObjectRevisionId,
-) -> Result<DirectoryNodeDigest, PublicationError> {
-    let stored = load_object_revision(transaction, root_revision_id)?;
+    revision_id: ObjectRevisionId,
+    object_id: ObjectId,
+    new_revision_id: ObjectRevisionId,
+    volume_id: VolumeId,
+    selected_name: &crate::NamespaceComponent,
+) -> Result<LoadedDirectory, PublicationError> {
+    let stored = load_object_revision(transaction, revision_id)?;
     if stored.kind != 1
-        || stored.object_id != publication.root_object_id
-        || stored.volume_id != publication.file.volume_id
+        || stored.object_id != object_id
+        || stored.volume_id != volume_id
+        || stored.revision_id != revision_id
     {
         return Err(PublicationError::Corrupt);
     }
-    stored.directory_root.ok_or(PublicationError::Corrupt)
+    let root = stored.directory_root.ok_or(PublicationError::Corrupt)?;
+    Ok(LoadedDirectory {
+        editor: load_path_editor(transaction, root, selected_name)?,
+        object_id,
+        prior_revision_id: Some(revision_id),
+        new_revision_id,
+    })
 }
 
 fn load_path_editor(
@@ -363,7 +445,11 @@ fn validate_old_entry(
     publication: &RootFilePublication,
     editor: &DirectoryTrie,
 ) -> Result<(), PublicationError> {
-    let old = editor.lookup(&publication.entry_name)?;
+    let leaf_name = publication
+        .path
+        .leaf_name()
+        .ok_or(PublicationError::InvalidInput)?;
+    let old = editor.lookup(leaf_name)?;
     if old.as_ref().map(DirectoryEntry::object_revision_id)
         != publication.expected_file_object_revision_id
     {
@@ -391,18 +477,89 @@ fn validate_old_entry(
     }
 }
 
-fn mutate_directory(
-    mut editor: DirectoryTrie,
+struct DirectoryPathMutation {
+    directories: Vec<DirectoryRevisionResult>,
+    created_nodes: Vec<DirectoryNodeRecord>,
+}
+
+struct DirectoryRevisionResult {
+    object_id: ObjectId,
+    prior_revision_id: Option<ObjectRevisionId>,
+    new_revision_id: ObjectRevisionId,
+    directory_root: DirectoryNodeDigest,
+}
+
+fn mutate_directory_path(
+    mut directories: Vec<LoadedDirectory>,
     publication: &RootFilePublication,
-) -> Result<(DirectoryNodeDigest, Vec<DirectoryNodeRecord>), PublicationError> {
+) -> Result<DirectoryPathMutation, PublicationError> {
+    let leaf_name = publication
+        .path
+        .leaf_name()
+        .ok_or(PublicationError::InvalidInput)?;
     let entry = DirectoryEntry::new(
-        publication.entry_name.clone(),
+        leaf_name.clone(),
         publication.file.object_id,
         publication.file_object_revision_id,
         DirectoryEntryKind::File,
         publication.entry_generation,
     )?;
-    let mutation = editor.upsert(entry, publication.expected_file_object_revision_id)?;
+    let last = directories
+        .len()
+        .checked_sub(1)
+        .ok_or(PublicationError::Corrupt)?;
+    let (mut child_root, mut created_nodes) = mutate_entry(
+        &mut directories[last].editor,
+        entry,
+        publication.expected_file_object_revision_id,
+    )?;
+    let mut results = Vec::with_capacity(directories.len());
+    results.push(directory_result(&directories[last], child_root));
+
+    let components = publication.path.path().components();
+    for parent_index in (0..last).rev() {
+        let child_index = parent_index
+            .checked_add(1)
+            .ok_or(PublicationError::Corrupt)?;
+        let child = directories
+            .get(child_index)
+            .ok_or(PublicationError::Corrupt)?;
+        let name = components
+            .get(parent_index)
+            .ok_or(PublicationError::Corrupt)?;
+        let old_entry = directories[parent_index]
+            .editor
+            .lookup(name)?
+            .ok_or(PublicationError::Corrupt)?;
+        let replacement = DirectoryEntry::new(
+            name.clone(),
+            child.object_id,
+            child.new_revision_id,
+            DirectoryEntryKind::Directory,
+            old_entry.generation(),
+        )?;
+        let (parent_root, records) = mutate_entry(
+            &mut directories[parent_index].editor,
+            replacement,
+            Some(old_entry.object_revision_id()),
+        )?;
+        created_nodes.extend(records);
+        child_root = parent_root;
+        results.push(directory_result(&directories[parent_index], child_root));
+    }
+    results.reverse();
+    Ok(DirectoryPathMutation {
+        directories: results,
+        created_nodes,
+    })
+}
+
+fn mutate_entry(
+    editor: &mut DirectoryTrie,
+    entry: DirectoryEntry,
+    expected_revision_id: Option<ObjectRevisionId>,
+) -> Result<(DirectoryNodeDigest, Vec<DirectoryNodeRecord>), PublicationError> {
+    let mutation = editor.upsert(entry, expected_revision_id)?;
     let records = mutation
         .created_nodes
         .iter()
@@ -411,11 +568,22 @@ fn mutate_directory(
     Ok((mutation.new_root, records))
 }
 
+const fn directory_result(
+    loaded: &LoadedDirectory,
+    directory_root: DirectoryNodeDigest,
+) -> DirectoryRevisionResult {
+    DirectoryRevisionResult {
+        object_id: loaded.object_id,
+        prior_revision_id: loaded.prior_revision_id,
+        new_revision_id: loaded.new_revision_id,
+        directory_root,
+    }
+}
+
 fn persist_object_revisions(
     transaction: &Transaction<'_>,
     publication: &RootFilePublication,
-    prior_root_revision_id: Option<ObjectRevisionId>,
-    directory_root: DirectoryNodeDigest,
+    directories: &[DirectoryRevisionResult],
 ) -> Result<(), PublicationError> {
     persist_object_revision(
         transaction,
@@ -431,20 +599,23 @@ fn persist_object_revisions(
             created_at: publication.file.created_at,
         },
     )?;
-    persist_object_revision(
-        transaction,
-        ObjectRevisionInsert {
-            revision_id: publication.root_object_revision_id,
-            volume_id: publication.file.volume_id,
-            object_id: publication.root_object_id,
-            kind: 1,
-            prior_revision_id: prior_root_revision_id,
-            directory_root: Some(directory_root),
-            file_version_id: None,
-            created_by: publication.file.created_by,
-            created_at: publication.file.created_at,
-        },
-    )
+    for directory in directories {
+        persist_object_revision(
+            transaction,
+            ObjectRevisionInsert {
+                revision_id: directory.new_revision_id,
+                volume_id: publication.file.volume_id,
+                object_id: directory.object_id,
+                kind: 1,
+                prior_revision_id: directory.prior_revision_id,
+                directory_root: Some(directory.directory_root),
+                file_version_id: None,
+                created_by: publication.file.created_by,
+                created_at: publication.file.created_at,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -729,7 +900,7 @@ fn decode_receipt(
 
 fn request_digest(publication: &RootFilePublication) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.root-file-publication.v1\0");
+    digest.update(b"meshspan.filesystem.path-file-publication.v1\0");
     digest.update(&publication_request_digest(publication.file));
     digest.update(&publication.root_object_id.as_bytes());
     update_optional_commit(&mut digest, publication.expected_namespace_commit_id);
@@ -737,8 +908,20 @@ fn request_digest(publication: &RootFilePublication) -> [u8; 32] {
     digest.update(&publication.file_object_revision_id.as_bytes());
     digest.update(&publication.root_object_revision_id.as_bytes());
     digest.update(&publication.namespace_commit_id.as_bytes());
-    update_text(&mut digest, publication.entry_name.canonical());
-    update_text(&mut digest, publication.entry_name.display());
+    digest.update(
+        &u16::try_from(publication.path.path().components().len())
+            .unwrap_or(u16::MAX)
+            .to_be_bytes(),
+    );
+    for component in publication.path.path().components() {
+        update_text(&mut digest, component.canonical());
+        update_text(&mut digest, component.display());
+    }
+    for transition in publication.path.ancestors() {
+        digest.update(&transition.object_id().as_bytes());
+        digest.update(&transition.expected_revision_id().as_bytes());
+        digest.update(&transition.new_revision_id().as_bytes());
+    }
     digest.update(&publication.entry_generation.to_be_bytes());
     digest.finalize().into()
 }
@@ -851,3 +1034,7 @@ fn inject(
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "namespace_publication_tests.rs"]
+mod tests;

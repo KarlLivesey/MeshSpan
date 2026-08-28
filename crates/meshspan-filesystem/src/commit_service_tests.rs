@@ -16,7 +16,7 @@ use super::{
     FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
 };
 use crate::{
-    CompletedStage, ManifestPublication, NamespaceComponent, NamespaceLimits,
+    CompletedStage, FilePublicationPath, ManifestPublication, NamespaceLimits, NamespacePath,
     PublicationDisposition, StageCompletionRequest, StageRegistration, StageWrite,
 };
 
@@ -163,7 +163,10 @@ fn request(observed_at: UnixMicros) -> Result<RootFileCommitRequest, Box<dyn std
         file_object_revision_id: ObjectRevisionId::from_bytes([17; 16])?,
         root_object_revision_id: ObjectRevisionId::from_bytes([18; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([19; 16])?,
-        entry_name: NamespaceComponent::new("report.txt", NamespaceLimits::PORTABLE)?,
+        path: FilePublicationPath::new(
+            NamespacePath::from_components(["report.txt"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
         entry_generation: 1,
         created_by: PrincipalId::from_bytes([20; 16])?,
         created_at: UnixMicros::new(4),

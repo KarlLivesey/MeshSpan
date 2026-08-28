@@ -17,10 +17,11 @@ use meshspan_domain::{
 use meshspan_filesystem::{
     CompletedStage, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
     ContentKeyEnvelopeCipher, ContentPublicationError, ContentPublicationRequest,
-    DurableContentPublisher, EncryptedContentChunk, FilesystemCommitService, ManifestPublication,
-    NamespaceComponent, NamespaceLimits, PublicationDisposition, RootFileCommitRequest,
-    StageCompletionRequest, StageRegistration, StageWrite, UnprotectedContentPublisher,
-    UnprotectedContentTarget, VolumeKeyEncryptionKey, WrappedContentKey,
+    DurableContentPublisher, EncryptedContentChunk, FilePublicationPath, FilesystemCommitService,
+    ManifestPublication, NamespaceLimits, NamespacePath, PublicationDisposition,
+    RootFileCommitRequest, StageCompletionRequest, StageRegistration, StageWrite,
+    UnprotectedContentPublisher, UnprotectedContentTarget, VolumeKeyEncryptionKey,
+    WrappedContentKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -475,7 +476,10 @@ fn commit_request() -> Result<RootFileCommitRequest, Box<dyn std::error::Error>>
         file_object_revision_id: ObjectRevisionId::from_bytes([17; 16])?,
         root_object_revision_id: ObjectRevisionId::from_bytes([18; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([19; 16])?,
-        entry_name: NamespaceComponent::new("report.txt", NamespaceLimits::PORTABLE)?,
+        path: FilePublicationPath::new(
+            NamespacePath::from_components(["report.txt"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
         entry_generation: 1,
         created_by: PrincipalId::from_bytes([20; 16])?,
         created_at: UnixMicros::new(4),

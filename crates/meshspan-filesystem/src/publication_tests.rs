@@ -301,7 +301,10 @@ fn initial_root_publication() -> Result<RootFilePublication, Box<dyn std::error:
         file_object_revision_id: ObjectRevisionId::from_bytes([63; 16])?,
         root_object_revision_id: ObjectRevisionId::from_bytes([64; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([65; 16])?,
-        entry_name: NamespaceComponent::new("Report", NamespaceLimits::PORTABLE)?,
+        path: FilePublicationPath::new(
+            NamespacePath::from_components(["Report"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
         entry_generation: 1,
     })
 }
@@ -319,7 +322,10 @@ fn next_root_publication(
         file_object_revision_id: ObjectRevisionId::from_bytes([72; 16])?,
         root_object_revision_id: ObjectRevisionId::from_bytes([73; 16])?,
         namespace_commit_id: NamespaceCommitId::from_bytes([74; 16])?,
-        entry_name: NamespaceComponent::new("REPORT", NamespaceLimits::PORTABLE)?,
+        path: FilePublicationPath::new(
+            NamespacePath::from_components(["REPORT"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
         entry_generation: 1,
     })
 }

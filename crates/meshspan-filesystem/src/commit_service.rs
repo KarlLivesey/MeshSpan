@@ -12,7 +12,7 @@ use meshspan_domain::{
 use thiserror::Error;
 
 use crate::{
-    CompletedStage, DurableStageStore, FilePublication, ManifestPublication, NamespaceComponent,
+    CompletedStage, DurableStageStore, FilePublication, FilePublicationPath, ManifestPublication,
     NamespacePublicationReceipt, PublicationError, RootFilePublication, StageCompletionRequest,
     StageStoreError, VersionPublicationStore,
 };
@@ -129,8 +129,8 @@ pub struct RootFileCommitRequest {
     pub root_object_revision_id: ObjectRevisionId,
     /// New immutable namespace-commit identity.
     pub namespace_commit_id: NamespaceCommitId,
-    /// Case-preserved and canonical root-directory entry.
-    pub entry_name: NamespaceComponent,
+    /// Validated root-relative path and exact existing child-directory transitions.
+    pub path: FilePublicationPath,
     /// Stable name-reuse generation.
     pub entry_generation: u64,
     /// Principal responsible for the save.
@@ -333,7 +333,7 @@ fn root_publication(
         file_object_revision_id: request.file_object_revision_id,
         root_object_revision_id: request.root_object_revision_id,
         namespace_commit_id: request.namespace_commit_id,
-        entry_name: request.entry_name.clone(),
+        path: request.path.clone(),
         entry_generation: request.entry_generation,
     }
 }
@@ -377,8 +377,7 @@ fn commit_request_digest(request: &RootFileCommitRequest) -> [u8; 32] {
     digest.update(&request.file_object_revision_id.as_bytes());
     digest.update(&request.root_object_revision_id.as_bytes());
     digest.update(&request.namespace_commit_id.as_bytes());
-    update_text(&mut digest, request.entry_name.canonical());
-    update_text(&mut digest, request.entry_name.display());
+    update_publication_path(&mut digest, &request.path);
     digest.update(&request.entry_generation.to_be_bytes());
     digest.update(&request.created_by.as_bytes());
     digest.update(&request.created_at.get().to_be_bytes());
@@ -397,6 +396,23 @@ fn update_optional(digest: &mut blake3::Hasher, value: Option<[u8; 16]>) {
 fn update_text(digest: &mut blake3::Hasher, value: &str) {
     digest.update(&u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
     digest.update(value.as_bytes());
+}
+
+fn update_publication_path(digest: &mut blake3::Hasher, path: &FilePublicationPath) {
+    digest.update(
+        &u16::try_from(path.path().components().len())
+            .unwrap_or(u16::MAX)
+            .to_be_bytes(),
+    );
+    for component in path.path().components() {
+        update_text(digest, component.canonical());
+        update_text(digest, component.display());
+    }
+    for transition in path.ancestors() {
+        digest.update(&transition.object_id().as_bytes());
+        digest.update(&transition.expected_revision_id().as_bytes());
+        digest.update(&transition.new_revision_id().as_bytes());
+    }
 }
 
 #[cfg(test)]

@@ -15,9 +15,7 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::{
-    DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespaceComponent, NamespacePath,
-};
+use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespacePath};
 
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
@@ -207,8 +205,8 @@ pub struct RootFilePublication {
     pub root_object_revision_id: ObjectRevisionId,
     /// New immutable namespace commit that becomes the branch head.
     pub namespace_commit_id: NamespaceCommitId,
-    /// Case-preserved/canonical root-directory entry name.
-    pub entry_name: NamespaceComponent,
+    /// Validated root-relative path and exact existing child-directory transitions.
+    pub path: FilePublicationPath,
     /// Stable name-reuse generation.
     pub entry_generation: u64,
 }
