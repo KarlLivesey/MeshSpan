@@ -61,14 +61,11 @@ snapshots establish their databases, and exact current-incarnation catch-up
 evidence drives automatic committed joint then stable promotion. Every process
 finishes with revision 5, three active voters and no staged learners.
 
-The remaining composition does not yet satisfy the complete roadmap claim:
-
-- the process proof creates a second partition record and performs a fenced route
-  transition inside the original partition database. It does not start a second
-  consensus/database authority and therefore cannot prove cross-partition
-  handoff or the absence of two live writers.
-- one-, two- and three-voter arithmetic shares one model, but real process
-  execution currently covers only the fixed three-voter topology.
+Real process execution now covers one, two and three voters plus exact restart
+from durable joint and stable promotion phases. Two separately identity-bound
+SQLite databases and consensus cores also commit signed route transitions in
+different orders; every real scoped proposal is admitted by at most one
+authority. Only the consolidated adversarial closure gate remains.
 
 ### Stage 3 closure gates
 
@@ -82,7 +79,7 @@ The remaining composition does not yet satisfy the complete roadmap claim:
    manual membership repair or a hard-coded replacement plan.
 4. [x] Run the same real process cycle for one, two and three voters, including
    leader loss and return where the declared plan permits progress.
-5. Run two independent partition databases and consensus authorities, transfer
+5. [x] Run two independent partition databases and consensus authorities, transfer
    one scope through prepare/freeze/activate records, and prove every mutation is
    accepted by at most one authority throughout the handoff.
 6. Re-run multi-way partition, stale-incarnation, corrupt-snapshot, saturated

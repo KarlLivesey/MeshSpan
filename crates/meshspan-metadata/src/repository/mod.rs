@@ -20,7 +20,7 @@ mod routing;
 mod snapshot;
 mod verify;
 
-use meshspan_domain::{OperationId, Revision};
+use meshspan_domain::{OperationId, Revision, ScopeId, ScopeRoute};
 use thiserror::Error;
 
 use crate::{MetadataStoreError, PartitionDatabase};
@@ -43,6 +43,31 @@ pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
 /// Authoritative metadata repository owning one identity-bound partition database.
 pub struct AuthoritativeRepository {
     database: PartitionDatabase,
+}
+
+/// Read boundary used by a consensus authority before accepting a scope mutation.
+pub trait ScopeWriteAuthority {
+    /// Returns whether this exact local partition owns the scope at the presented route epoch.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the route is absent or its durable representation is corrupt.
+    fn permits_scope_write(
+        &self,
+        scope_id: ScopeId,
+        routing_epoch: u64,
+    ) -> Result<bool, RepositoryError>;
+}
+
+impl ScopeWriteAuthority for AuthoritativeRepository {
+    fn permits_scope_write(
+        &self,
+        scope_id: ScopeId,
+        routing_epoch: u64,
+    ) -> Result<bool, RepositoryError> {
+        let route = routing::load_scope(self.database.connection(), scope_id)?;
+        Ok(route.permits_write(self.database.partition_id(), routing_epoch))
+    }
 }
 
 impl AuthoritativeMetadataKernel for AuthoritativeRepository {
@@ -85,6 +110,15 @@ impl AuthoritativeRepository {
     /// Fails closed if persisted state is absent, malformed or outside the supported range.
     pub fn current_revision(&self) -> Result<Revision, RepositoryError> {
         apply::read_current_revision(&self.database)
+    }
+
+    /// Returns one independently validated durable scope route.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the route is absent or its durable representation is corrupt.
+    pub fn scope_route(&self, scope_id: ScopeId) -> Result<ScopeRoute, RepositoryError> {
+        routing::load_scope(self.database.connection(), scope_id)
     }
 
     /// Loads and verifies the exact durable consensus state for one membership epoch.

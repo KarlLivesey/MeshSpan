@@ -57,6 +57,9 @@ the final appliance daemon; those remain later roadmap stages.
   active → preparing → frozen → active scope handoff. Source is the sole writer
   while the destination catches up, neither writes while frozen, and only the
   destination writes after activation.
+- Scoped proposals cross one reusable consensus boundary that checks the exact
+  local committed route and presented routing epoch before touching consensus.
+  Missing, corrupt, stale or foreign authority fails closed.
 - The private catalogue already defines bounded branch-head comparison,
   cursor-paged immutable commit/object transfer and inclusion-result messages.
   Filesystem branch creation and deterministic merge behaviour intentionally
@@ -76,7 +79,7 @@ the final appliance daemon; those remain later roadmap stages.
 | Join admission | The authoritative join vector rejects a wrong secret, consumes one valid use, creates exactly one certificate-bound learner and returns the original receipt on replay |
 | Snapshot recovery | Resumable transfer rejects corrupt, reordered and excessive chunks without advancing; installation rejects the wrong plan/image and preserves the receiver's newer durable vote |
 | Promotion restart | Real processes enter exact epoch-3 joint and stable promotion phases, terminate together only after the phase is durable and propagated, reopen independent SQLite state, re-prove the stored plan, automatically finalise joint state and commit the next correctly sequenced metadata write without manual repair |
-| Partition handoff | Signed route vectors reject forged activation and prove no dual-writer interval; the real-process log applies creation and the full prepare/freeze/activate handoff on every voter |
+| Partition handoff | Two independent consensus cores over separately identity-bound SQLite files commit the signed active → preparing → frozen → active history in deliberately different orders. Actual scoped proposals are attempted on both after every partial update; accepted writer counts are exactly 1 → 1/0 → 1 → 1 → 0 → 0 → 1 and never two |
 | Traffic isolation | A real QUIC test stalls an 8 MiB bulk-data write while a consensus ping completes on its independent high-priority stream within one second |
 | Three-process cycle | Three OS processes use distinct SQLite databases, certificates and dynamic loopback ports; only node one starts authoritative; committed grants admit nodes two and three, which install verified snapshots, catch up and become voters; the cycle then commits routing proof records, redirects a follower request, resolves a deliberately lost reply by durable operation ID, kills the leader, elects and writes through another, restarts the old process and catches it up |
 | Outage bounds | Per-peer reusable connection workers bound queueing, timeout and reconnect work; the process cycle commits through the surviving pair while the killed peer is unreachable |
@@ -84,7 +87,7 @@ the final appliance daemon; those remain later roadmap stages.
 
 ## Feedback-loop observation
 
-The complete warm local gate measured 8.43 seconds with live learner admission,
+The complete warm local gate measured 7.44 seconds with live learner admission,
 the one/two/three process matrix and exact joint/stable restart proofs. All five
 real-process cases complete together in approximately 4.9 seconds, dominated by
 the main bootstrap, admission, promotion, handoff, failover and restart cycle.
