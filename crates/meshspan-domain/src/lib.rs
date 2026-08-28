@@ -12,9 +12,12 @@ mod topology;
 pub use access::{
     AccessActivation, AccessActivationError, AccessActivationPolicy, AccessActivationRequest,
     AccessWindow, ActivationSubject, AssuranceLevel, GroupGraph, GroupGraphError, MembershipChange,
+    OwnerSet, OwnerSetError, Rights, RightsError,
 };
 pub use lifecycle::{LifecycleEvent, LifecycleState, LifecycleTransitionError};
-pub use operation::{OperationDecision, OperationReceipt, classify_operation};
+pub use operation::{
+    CommitOutcome, DurabilityScope, OperationDecision, OperationReceipt, classify_operation,
+};
 pub use primitives::{
     DurationMicros, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError,
     MeshId, NodeId, ObjectId, OperationId, PartitionId, PrincipalId, Revision, RevisionError,

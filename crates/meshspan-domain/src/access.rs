@@ -11,6 +11,160 @@ use crate::{DurationMicros, GrantId, GroupId, OperationId, PrincipalId, Revision
 const MAX_GROUPS: usize = 4_096;
 const MAX_MEMBERSHIPS: usize = 65_536;
 const MAX_ACTIVATION_REASON_BYTES: usize = 512;
+const MAX_OWNERS: usize = 1_024;
+
+/// Protocol-neutral namespace rights stored as a validated bitset.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Rights(u32);
+
+impl Rights {
+    /// Traverse ancestor directories.
+    pub const TRAVERSE: Self = Self(1 << 0);
+    /// Enumerate directory entries.
+    pub const LIST: Self = Self(1 << 1);
+    /// Read file content.
+    pub const READ_DATA: Self = Self(1 << 2);
+    /// Create a child object.
+    pub const CREATE_CHILD: Self = Self(1 << 3);
+    /// Replace or modify file content.
+    pub const WRITE_DATA: Self = Self(1 << 4);
+    /// Append file content.
+    pub const APPEND_DATA: Self = Self(1 << 5);
+    /// Rename or move an object.
+    pub const RENAME: Self = Self(1 << 6);
+    /// Delete an object or empty directory.
+    pub const DELETE: Self = Self(1 << 7);
+    /// Read object attributes.
+    pub const READ_ATTRIBUTES: Self = Self(1 << 8);
+    /// Change object attributes.
+    pub const WRITE_ATTRIBUTES: Self = Self(1 << 9);
+    /// Read owners and permission grants.
+    pub const READ_PERMISSIONS: Self = Self(1 << 10);
+    /// Change permission grants.
+    pub const CHANGE_PERMISSIONS: Self = Self(1 << 11);
+    /// Change the owner set.
+    pub const CHANGE_OWNER: Self = Self(1 << 12);
+    /// Every currently defined right.
+    pub const ALL: Self = Self((1 << 13) - 1);
+
+    /// Validates a persisted or wire bitset.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RightsError::UnknownBits`] if any unknown bit is set.
+    pub const fn from_bits(bits: u32) -> Result<Self, RightsError> {
+        if bits & !Self::ALL.0 == 0 {
+            Ok(Self(bits))
+        } else {
+            Err(RightsError::UnknownBits)
+        }
+    }
+
+    /// Returns the stable wire/storage bitset.
+    #[must_use]
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    /// Returns the union of independently applicable allow grants.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Reports whether every requested right is present.
+    #[must_use]
+    pub const fn contains(self, requested: Self) -> bool {
+        self.0 & requested.0 == requested.0
+    }
+}
+
+/// Rejection of a persisted or wire rights representation.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum RightsError {
+    /// At least one undefined bit was set.
+    #[error("rights bitset contains an unknown right")]
+    UnknownBits,
+}
+
+/// Non-empty immutable owner set with an authority revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OwnerSet {
+    owners: BTreeSet<PrincipalId>,
+    revision: Revision,
+}
+
+impl OwnerSet {
+    /// Constructs an owner set after validating its cardinality.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty or excessively large owner set.
+    pub fn new(owners: BTreeSet<PrincipalId>, revision: Revision) -> Result<Self, OwnerSetError> {
+        validate_owners(&owners)?;
+        Ok(Self { owners, revision })
+    }
+
+    /// Returns owners in stable identity order.
+    #[must_use]
+    pub const fn owners(&self) -> &BTreeSet<PrincipalId> {
+        &self.owners
+    }
+
+    /// Returns the authoritative owner-set revision.
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    /// Atomically replaces all owners at an expected revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale input, an empty result, excessive cardinality or revision exhaustion.
+    pub fn replace(
+        &self,
+        expected_revision: Revision,
+        owners: BTreeSet<PrincipalId>,
+    ) -> Result<Self, OwnerSetError> {
+        if expected_revision != self.revision {
+            return Err(OwnerSetError::StaleRevision);
+        }
+        validate_owners(&owners)?;
+        let revision = self
+            .revision
+            .next()
+            .map_err(|_| OwnerSetError::RevisionExhausted)?;
+        Ok(Self { owners, revision })
+    }
+}
+
+fn validate_owners(owners: &BTreeSet<PrincipalId>) -> Result<(), OwnerSetError> {
+    if owners.is_empty() {
+        Err(OwnerSetError::Ownerless)
+    } else if owners.len() > MAX_OWNERS {
+        Err(OwnerSetError::CapacityExceeded)
+    } else {
+        Ok(())
+    }
+}
+
+/// Rejection of owner-set or rights input.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum OwnerSetError {
+    /// An object cannot have no owner principals.
+    #[error("owner set must contain at least one principal")]
+    Ownerless,
+    /// Owner cardinality exceeds the explicit domain bound.
+    #[error("owner set exceeds its bounded capacity")]
+    CapacityExceeded,
+    /// The caller attempted to replace a newer owner-set revision.
+    #[error("owner set revision is stale")]
+    StaleRevision,
+    /// The monotonic owner-set revision space is exhausted.
+    #[error("owner set revision space is exhausted")]
+    RevisionExhausted,
+}
 
 /// Authentication assurance available to an access decision.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -460,7 +614,8 @@ mod tests {
 
     use super::{
         AccessActivationError, AccessActivationPolicy, AccessActivationRequest, AccessWindow,
-        ActivationSubject, AssuranceLevel, GroupGraph, GroupGraphError, MembershipChange,
+        ActivationSubject, AssuranceLevel, GroupGraph, GroupGraphError, MembershipChange, OwnerSet,
+        OwnerSetError, Rights, RightsError,
     };
     use crate::{DurationMicros, GrantId, GroupId, OperationId, PrincipalId, Revision, UnixMicros};
 
@@ -607,6 +762,37 @@ mod tests {
             }),
             Err(AccessActivationError::SourceUnauthorized)
         );
+    }
+
+    #[test]
+    fn owner_replacement_is_atomic_nonempty_and_revision_guarded() {
+        let owners = OwnerSet::new(
+            BTreeSet::from([principal(1), principal(2)]),
+            Revision::new(4),
+        )
+        .expect("fixture owner set is valid");
+        assert_eq!(
+            owners.replace(Revision::new(3), BTreeSet::from([principal(3)])),
+            Err(OwnerSetError::StaleRevision)
+        );
+        assert_eq!(
+            owners.replace(Revision::new(4), BTreeSet::new()),
+            Err(OwnerSetError::Ownerless)
+        );
+        let replaced = owners
+            .replace(Revision::new(4), BTreeSet::from([principal(3)]))
+            .expect("replacement retains one owner");
+        assert_eq!(replaced.owners(), &BTreeSet::from([principal(3)]));
+        assert_eq!(replaced.revision(), Revision::new(5));
+    }
+
+    #[test]
+    fn rights_reject_unknown_bits_and_combine_allow_grants() {
+        let rights = Rights::READ_DATA.union(Rights::WRITE_DATA);
+        assert!(rights.contains(Rights::READ_DATA));
+        assert!(!rights.contains(Rights::DELETE));
+        assert_eq!(Rights::from_bits(rights.bits()), Ok(rights));
+        assert_eq!(Rights::from_bits(1 << 31), Err(RightsError::UnknownBits));
     }
 
     use std::collections::BTreeSet;

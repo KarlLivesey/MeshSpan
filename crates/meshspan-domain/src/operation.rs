@@ -4,6 +4,32 @@
 
 use crate::{OperationId, Revision};
 
+/// Exact durability scope proved when an ordinary filesystem branch is acknowledged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurabilityScope {
+    /// Durable on one named node only.
+    NodeLocal,
+    /// Durable under the declared predicate within one availability cell.
+    CellReplicated,
+    /// Included in the authoritative converged namespace head.
+    GloballyConverged,
+}
+
+/// Stable semantic outcome of a bounded domain operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommitOutcome {
+    /// No matching mutation committed.
+    Rejected,
+    /// A filesystem mutation committed at the returned local durability scope.
+    BranchCommitted(DurabilityScope),
+    /// Every required acknowledgement predicate and converged-head transition committed.
+    PolicyCommitted,
+    /// A previously local branch is included in the converged head.
+    GloballyConverged,
+    /// Durable work exists but has not reached a terminal outcome.
+    InProgress,
+}
+
 /// Durable identity and outcome evidence for an applied operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OperationReceipt {
