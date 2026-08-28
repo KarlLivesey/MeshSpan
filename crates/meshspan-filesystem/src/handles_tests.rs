@@ -29,6 +29,11 @@ fn open_resolves_canonical_path_and_replays_exactly_after_restart()
         assert_eq!(receipt.opened_version_id, file.file.version_id);
         assert_eq!(receipt.handle_fence, 1);
         assert!(receipt.truncate_on_first_write);
+        assert_eq!(
+            store.handle_path(request.handle_id)?.components()[0].display(),
+            "Report",
+            "opening with different case must retain the namespace entry's spelling"
+        );
         receipt
     };
 
@@ -136,6 +141,26 @@ fn corrupt_open_receipt_fails_closed() -> Result<(), Box<dyn std::error::Error>>
     )?;
     assert!(matches!(
         store.resolve_open_handle(request.operation_id),
+        Err(HandleError::Corrupt)
+    ));
+    Ok(())
+}
+
+#[test]
+fn corrupt_handle_path_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = publication()?;
+    let request = open_request(55, 56, CreateDisposition::OpenExisting, 100)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    store.open_handle(&request)?;
+    store.test_connection().execute(
+        "UPDATE open_handle_path_components SET canonical_name = 'forged'
+         WHERE handle_id = ?1 AND component_ordinal = 0",
+        [request.handle_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        store.handle_path(request.handle_id),
         Err(HandleError::Corrupt)
     ));
     Ok(())

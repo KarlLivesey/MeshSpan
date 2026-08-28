@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 12] = [
+const MIGRATIONS: [Migration; 13] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -74,8 +74,12 @@ const MIGRATIONS: [Migration; 12] = [
         version: 12,
         sql: include_str!("../schema/branch/012_handle_write_admissions.sql"),
     },
+    Migration {
+        version: 13,
+        sql: include_str!("../schema/branch/013_handle_paths.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 12;
+const SCHEMA_VERSION: u32 = 13;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -732,6 +736,14 @@ impl VersionPublicationStore {
         handle_id: meshspan_domain::HandleId,
     ) -> Result<bool, crate::HandleError> {
         crate::handles::uses_private_stage(&self.connection, handle_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handle_path(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+    ) -> Result<crate::NamespacePath, crate::HandleError> {
+        crate::handles::load_handle_path(&self.connection, handle_id)
     }
 
     #[cfg(test)]
