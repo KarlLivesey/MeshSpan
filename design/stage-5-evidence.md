@@ -156,8 +156,8 @@ copy-on-write filesystem service. This document records executable evidence only
   adjacency, expiry, explicit unlock and close-time release have executable
   vectors. Delete-on-close first blocks new opens, then becomes ready only after
   the final live handle disappears. No physical or namespace deletion is
-  authorised by this readiness record alone. Atomic creation, write/flush and
-  namespace rename/unlink remain required before gate 5 can close.
+  authorised by this readiness record alone. Atomic creation, close-time commit,
+  namespace rename and final unlink remain required before gate 5 can close.
 - The common filesystem service now creates a bounded private stage before it
   returns any writable handle and durably orders each immutable range write in
   the handle-authority database before accepting the corresponding stage part.
@@ -168,10 +168,21 @@ copy-on-write filesystem service. This document records executable evidence only
   authority, restart and receipt corruption have service-level vectors. A
   writable-handle lease takeover preflights and advances the private stage to
   the same fence, so the former gateway cannot continue through either database.
-  Handles also retain the resolved namespace entry's case-preserved canonical
-  path—not the caller's alternative casing and never a provider path—ready for
-  internal flush/rename planning. Durable content publication from that handle
-  stage remains the next open part of gate 5.
+  Handles retain the resolved namespace entry's case-preserved canonical path,
+  not the caller's alternative casing and never a provider path. Handle flush
+  now persists its exact namespace base, stage checkpoint and derived immutable
+  identities before content work. It reconstructs a bounded private completion
+  image by streaming the independently verified opened version and overlaying
+  durable stage ranges in order; uncovered extension bytes fail unless sparse
+  completion was explicit. Content becomes durable before one atomic namespace
+  transition advances both the branch head and handle progress. Exact retry
+  resolves the same receipt without rebasing, including after every filesystem,
+  catalogue and folder-provider store is dropped and reopened. A real-folder
+  proof publishes encrypted `helloworld` across three chunks, changes only its
+  middle bytes through a handle, reads authenticated encrypted base shards,
+  publishes the replacement and verifies `heZZoworld`. Substituted manifests,
+  changed retries, corrupt plans, incomplete ranges, stale fences and missing
+  content fail closed.
 
 ## Closure gates
 
@@ -254,9 +265,11 @@ copy-on-write filesystem service. This document records executable evidence only
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable
    and tested. Handle-bound random writes, their lock ordering and cross-database
-   stage takeover are also durable and tested. Atomic create dispositions,
-   handle-bound flush publication, rename/move and final namespace unlink remain
-   open.
+   stage takeover are also durable and tested. Handle-bound flush publication is
+   durable and tested through the real encrypted folder provider, including
+   bounded base-version overlay and lost-response recovery after complete
+   restart. Atomic create dispositions, implicit dirty close, rename/move and
+   final namespace unlink remain open.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 

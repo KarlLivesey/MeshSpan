@@ -18,7 +18,7 @@ use meshspan_filesystem::{
     ContentChunkCipher, ContentChunkLimits, ContentKeyEnvelopeCipher, ContentPublicationError,
     EncryptedContentChunk, FilesystemCommitError, FilesystemCommitService, NamespaceLimits,
     NamespacePath, NamespacePublicationPath, RootFileCommitRequest, StageCompletionRequest,
-    StageRegistration, StageWrite, UnprotectedContentPublisher, UnprotectedContentTarget,
+    StageRegistration, StageWrite, UnprotectedContentAccess, UnprotectedContentPublisher,
     VolumeKeyEncryptionKey,
 };
 use meshspan_storage::{
@@ -131,10 +131,13 @@ fn open_publisher<P: StorageProvider>(
                 .map_err(|_| ContentPublicationError::InvalidInput)?,
         ),
         ContentChunkLimits::new(4).map_err(|_| ContentPublicationError::InvalidInput)?,
-        UnprotectedContentTarget {
-            target_id: registration.target_id,
-            target_generation: registration.generation,
-        },
+        UnprotectedContentAccess::new(
+            registration.mesh_id,
+            registration.target_id,
+            registration.generation,
+            StoragePermitMacKey::from_bytes(PERMIT_KEY)
+                .map_err(|_| ContentPublicationError::InvalidInput)?,
+        )?,
     )
 }
 

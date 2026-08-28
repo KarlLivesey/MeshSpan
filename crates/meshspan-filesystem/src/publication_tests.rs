@@ -131,6 +131,8 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "pending_object_deletes",
         "handle_write_admissions",
         "open_handle_path_components",
+        "handle_flush_plans",
+        "handle_flush_progress",
     ] {
         assert_table_exists(&store.connection, table)?;
     }

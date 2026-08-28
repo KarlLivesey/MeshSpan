@@ -9,7 +9,10 @@ use meshspan_domain::{OperationId, UnixMicros};
 use rusqlite::{Connection, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::{CompletedStage, ContentPublicationRequest, ManifestPublication, WrappedContentKey};
+use crate::{
+    CompletedStage, ContentPublicationRequest, ManifestPublication, PublishedContentReference,
+    WrappedContentKey,
+};
 
 mod repository;
 
@@ -56,6 +59,11 @@ pub struct PreparedContentLayout {
     pub wrapped_key: WrappedContentKey,
     /// Selected maximum plaintext bytes per chunk.
     pub chunk_bytes: u64,
+}
+
+pub(crate) struct CommittedContentLayout {
+    pub(crate) request: ContentPublicationRequest,
+    pub(crate) layout: PreparedContentLayout,
 }
 
 /// Durable encrypted-manifest and provider-receipt catalogue.
@@ -342,6 +350,29 @@ impl DurableContentCatalog {
             chunk_bytes: stored.0,
             wrapped_key: stored.1,
         }))
+    }
+
+    pub(crate) fn committed_layout(
+        &self,
+        content: PublishedContentReference,
+    ) -> Result<CommittedContentLayout, ContentCatalogError> {
+        let request = load_request(&self.connection, content.publication_operation_id)?
+            .ok_or(ContentCatalogError::Incomplete)?;
+        let state: u8 = self.connection.query_row(
+            "SELECT state FROM content_publications WHERE operation_id = ?1",
+            [content.publication_operation_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        if state != 2 {
+            return Err(ContentCatalogError::Incomplete);
+        }
+        let layout = self
+            .prepared_layout(request)?
+            .ok_or(ContentCatalogError::Corrupt)?;
+        if layout.manifest != content.manifest {
+            return Err(ContentCatalogError::Conflict);
+        }
+        Ok(CommittedContentLayout { request, layout })
     }
 
     /// Loads one prepared chunk identity for verified read/recovery work.

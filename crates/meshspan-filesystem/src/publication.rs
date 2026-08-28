@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 13] = [
+const MIGRATIONS: [Migration; 14] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -78,8 +78,12 @@ const MIGRATIONS: [Migration; 13] = [
         version: 13,
         sql: include_str!("../schema/branch/013_handle_paths.sql"),
     },
+    Migration {
+        version: 14,
+        sql: include_str!("../schema/branch/014_handle_flush_plans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 13;
+const SCHEMA_VERSION: u32 = 14;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -744,6 +748,20 @@ impl VersionPublicationStore {
         handle_id: meshspan_domain::HandleId,
     ) -> Result<crate::NamespacePath, crate::HandleError> {
         crate::handles::load_handle_path(&self.connection, handle_id)
+    }
+
+    pub(crate) fn prepare_handle_flush(
+        &mut self,
+        request: crate::FilesystemHandleFlushRequest,
+    ) -> Result<crate::RootFileCommitRequest, crate::HandleError> {
+        crate::handles::prepare_flush(&mut self.connection, request)
+    }
+
+    pub(crate) fn handle_base_content(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+    ) -> Result<Option<crate::PublishedContentReference>, crate::HandleError> {
+        crate::handles::handle_base_content(&self.connection, handle_id)
     }
 
     #[cfg(test)]

@@ -3,14 +3,10 @@
 //! Canonical logical paths retained by stable handles independently of provider paths.
 
 use meshspan_domain::HandleId;
-#[cfg(test)]
-use rusqlite::Connection;
-use rusqlite::{Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 
 use super::HandleError;
-#[cfg(test)]
-use crate::NamespaceComponent;
-use crate::NamespacePath;
+use crate::{NamespaceComponent, NamespacePath};
 
 pub(super) fn persist(
     transaction: &Transaction<'_>,
@@ -33,7 +29,6 @@ pub(super) fn persist(
     Ok(())
 }
 
-#[cfg(test)]
 pub(crate) fn load(
     connection: &Connection,
     handle_id: HandleId,

@@ -18,6 +18,7 @@ use crate::staging::{covers, insert_range};
 use crate::{Checkpoint, StageWrite, StageWriteOutcome};
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
+type BaseLoader<'a> = dyn FnMut(&mut dyn Write) -> Result<(), StageStoreError> + 'a;
 const MIGRATIONS: [Migration; 2] = [
     Migration {
         version: 1,
@@ -395,10 +396,45 @@ impl DurableStageStore {
         request: StageCompletionRequest,
         destination: &mut impl Write,
     ) -> Result<CompletedStage, StageStoreError> {
+        self.stream_complete_inner(request, 0, None, destination)
+    }
+
+    /// Streams a checkpoint over an exact immutable base-version prefix.
+    ///
+    /// The base callback must write exactly `min(base_length, final_length)` verified bytes.
+    /// Private stage ranges then overwrite that prefix in durable mutation order. Extending past
+    /// the base still requires complete staged coverage unless sparse completion was explicit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/incomplete stages, a short/excess base stream, corrupt parts and every IO or
+    /// callback failure.
+    pub fn stream_complete_with_base(
+        &mut self,
+        request: StageCompletionRequest,
+        base_length: u64,
+        mut load_base: impl FnMut(&mut dyn Write) -> Result<(), StageStoreError>,
+        destination: &mut impl Write,
+    ) -> Result<CompletedStage, StageStoreError> {
+        self.stream_complete_inner(request, base_length, Some(&mut load_base), destination)
+    }
+
+    fn stream_complete_inner(
+        &mut self,
+        request: StageCompletionRequest,
+        base_length: u64,
+        load_base: Option<&mut BaseLoader<'_>>,
+        destination: &mut impl Write,
+    ) -> Result<CompletedStage, StageStoreError> {
         let stage = load_stage(&self.connection, request.stage_id)?;
         validate_completion(stage, request)?;
         let writes = load_stage_writes(&self.connection, request.stage_id)?;
-        if !request.sparse && !covers(&ranges(&writes)?, request.final_length) {
+        let base_prefix = base_length.min(request.final_length);
+        let mut initialised = ranges(&writes)?;
+        if base_prefix != 0 {
+            insert_range(&mut initialised, 0..base_prefix);
+        }
+        if !request.sparse && !covers(&initialised, request.final_length) {
             return Err(StageStoreError::Incomplete);
         }
         let directory = self.stages.open_dir(request.stage_id.to_string())?;
@@ -408,6 +444,14 @@ impl DurableStageStore {
         options.read(true).write(true).create_new(true);
         let mut image = directory.open_with(&pending_name, &options)?;
         image.set_len(request.final_length)?;
+        if let Some(load_base) = load_base {
+            image.seek(SeekFrom::Start(0))?;
+            let mut prefix = ExactPrefixWriter::new(&mut image, base_prefix);
+            load_base(&mut prefix)?;
+            prefix.finish()?;
+        } else if base_prefix != 0 {
+            return Err(StageStoreError::InvalidInput);
+        }
         for write in &writes {
             apply_part_to_image(&directory, write, request.final_length, &mut image)?;
         }
@@ -498,6 +542,51 @@ struct StoredWrite {
     length: u64,
     digest: [u8; 32],
     part_name: String,
+}
+
+struct ExactPrefixWriter<'a, W> {
+    destination: &'a mut W,
+    remaining: u64,
+}
+
+impl<'a, W: Write> ExactPrefixWriter<'a, W> {
+    const fn new(destination: &'a mut W, length: u64) -> Self {
+        Self {
+            destination,
+            remaining: length,
+        }
+    }
+
+    fn finish(self) -> Result<(), StageStoreError> {
+        if self.remaining == 0 {
+            Ok(())
+        } else {
+            Err(StageStoreError::Corrupt)
+        }
+    }
+}
+
+impl<W: Write> Write for ExactPrefixWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let length = u64::try_from(bytes.len())
+            .map_err(|_| std::io::Error::other("base write length exceeds u64"))?;
+        if length > self.remaining {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "base source exceeded requested prefix",
+            ));
+        }
+        let written = self.destination.write(bytes)?;
+        self.remaining = self
+            .remaining
+            .checked_sub(u64::try_from(written).map_err(std::io::Error::other)?)
+            .ok_or_else(|| std::io::Error::other("base write counter underflow"))?;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.destination.flush()
+    }
 }
 
 impl StoredWrite {
@@ -1199,6 +1288,55 @@ mod tests {
             store.renew_lease(distinct),
             Err(StageStoreError::Stale)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn completion_overlays_verified_base_and_requires_new_extension_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([97; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 1, 100))?;
+        store.write(stage_id, &write(98, 1, 5, b"X")?, UnixMicros::new(10))?;
+        let request = StageCompletionRequest {
+            operation_id: OperationId::from_bytes([99; 16])?,
+            stage_id,
+            stage_fence: 1,
+            expected_sequence: 1,
+            final_length: 10,
+            sparse: false,
+            observed_at: UnixMicros::new(20),
+        };
+        let mut output = Vec::new();
+        store.stream_complete_with_base(
+            request,
+            10,
+            |destination| destination.write_all(b"abcdefghij").map_err(Into::into),
+            &mut output,
+        )?;
+        assert_eq!(output, b"abcdeXghij");
+
+        let mut extended = request;
+        extended.operation_id = OperationId::from_bytes([100; 16])?;
+        extended.final_length = 12;
+        let result = store.stream_complete_with_base(
+            extended,
+            10,
+            |destination| destination.write_all(b"abcdefghij").map_err(Into::into),
+            &mut Vec::new(),
+        );
+        assert!(matches!(result, Err(StageStoreError::Incomplete)));
+        store.write(stage_id, &write(101, 1, 10, b"KL")?, UnixMicros::new(21))?;
+        extended.expected_sequence = 2;
+        let mut extended_output = Vec::new();
+        store.stream_complete_with_base(
+            extended,
+            10,
+            |destination| destination.write_all(b"abcdefghij").map_err(Into::into),
+            &mut extended_output,
+        )?;
+        assert_eq!(extended_output, b"abcdeXghijKL");
         Ok(())
     }
 

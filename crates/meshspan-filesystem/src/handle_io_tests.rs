@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use std::collections::BTreeMap;
+
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
     BranchId, ContentManifestId, FileVersionId, HandleId, LockId, NamespaceCommitId, NodeId,
@@ -9,8 +11,9 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    ContentPublicationError, ContentPublicationRequest, CreateDisposition, DurableContentPublisher,
-    FilePublication, FilesystemCommitService, HandleAccess, HandleShare, LockRangeRequest,
+    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
+    CreateDisposition, DurableContentPublisher, DurableContentReader, FilePublication,
+    FilesystemCommitError, FilesystemCommitService, HandleAccess, HandleShare, LockRangeRequest,
     ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
     PublicationDisposition, RangeLockKind, RootFilePublication, UnlockRangeRequest,
 };
@@ -260,6 +263,182 @@ fn writable_handle_takeover_moves_handle_stage_and_locks_to_one_fence()
     Ok(())
 }
 
+#[test]
+fn flush_plan_is_stable_across_restart_and_rejects_changed_retry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut open = writable_open(70, 71, 300)?;
+    open.create_disposition = CreateDisposition::OverwriteExisting;
+    {
+        let mut service =
+            FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+        service.open_handle(&FilesystemHandleOpenRequest {
+            handle: open.clone(),
+            maximum_stage_bytes: Some(1_024),
+        })?;
+        service.write_handle(&handle_write(72, &open, 0, b"replacement")?)?;
+    }
+    let request = flush_request(73, &open, 1, 11, 200)?;
+    let planned = {
+        let mut publications = VersionPublicationStore::open(directory.path(), UnixMicros::new(3))?;
+        publications.prepare_handle_flush(request)?
+    };
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(4))?;
+    assert_eq!(reopened.prepare_handle_flush(request)?, planned);
+    let mut changed = request;
+    changed.final_length = 10;
+    assert!(matches!(
+        reopened.prepare_handle_flush(changed),
+        Err(HandleError::OperationConflict)
+    ));
+    reopened.test_connection().execute(
+        "UPDATE handle_flush_plans SET result_digest = zeroblob(32) WHERE operation_id = ?1",
+        [request.operation_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        reopened.prepare_handle_flush(request),
+        Err(HandleError::Corrupt)
+    ));
+    Ok(())
+}
+
+#[test]
+fn complete_handle_flush_publishes_and_advances_repeatable_progress()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut open = writable_open(74, 75, 400)?;
+    open.create_disposition = CreateDisposition::OverwriteExisting;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    service.write_handle(&handle_write(76, &open, 0, b"first")?)?;
+    let first = flush_request(77, &open, 1, 5, 200)?;
+    assert_eq!(
+        service.flush_handle(first)?.disposition,
+        PublicationDisposition::Applied
+    );
+    assert_eq!(
+        service.flush_handle(first)?.disposition,
+        PublicationDisposition::Replayed
+    );
+
+    service.write_handle(&handle_write(78, &open, 0, b"again")?)?;
+    let second = flush_request(79, &open, 2, 5, 210)?;
+    assert_eq!(
+        service.flush_handle(second)?.disposition,
+        PublicationDisposition::Applied
+    );
+    let publisher = service.into_content_publisher();
+    assert_eq!(
+        publisher.bytes(&first.operation_id),
+        Some(b"first".as_slice())
+    );
+    assert_eq!(
+        publisher.bytes(&second.operation_id),
+        Some(b"again".as_slice())
+    );
+
+    let mut publications = VersionPublicationStore::open(directory.path(), UnixMicros::new(5))?;
+    let sequence: i64 = publications.test_connection().query_row(
+        "SELECT committed_stage_sequence FROM handle_flush_progress WHERE handle_id = ?1",
+        [open.handle_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(sequence, 2);
+    Ok(())
+}
+
+#[test]
+fn incomplete_handle_flush_publishes_no_namespace_version() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let open = writable_open(80, 81, 300)?;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    service.write_handle(&handle_write(82, &open, 8, b"x")?)?;
+    let request = flush_request(83, &open, 1, 9, 200)?;
+    assert!(matches!(
+        service.flush_handle(request),
+        Err(FilesystemCommitError::Stage(
+            crate::StageStoreError::Incomplete
+        ))
+    ));
+    assert!(service.resolve(request.operation_id)?.is_none());
+    Ok(())
+}
+
+#[test]
+fn partial_handle_flush_overlays_the_opened_immutable_version()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let open = writable_open(84, 85, 300)?;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::with_seed(publication()?.file, b"initial"),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    service.write_handle(&handle_write(86, &open, 2, b"ZZ")?)?;
+    let flush = flush_request(87, &open, 1, 7, 200)?;
+
+    assert_eq!(
+        service.flush_handle(flush)?.disposition,
+        PublicationDisposition::Applied
+    );
+    let publisher = service.into_content_publisher();
+    assert_eq!(
+        publisher.bytes(&flush.operation_id),
+        Some(b"inZZial".as_slice())
+    );
+    Ok(())
+}
+
+fn flush_request(
+    operation: u8,
+    open: &OpenHandleRequest,
+    sequence: u64,
+    final_length: u64,
+    deadline: i64,
+) -> Result<FilesystemHandleFlushRequest, Box<dyn std::error::Error>> {
+    Ok(FilesystemHandleFlushRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        handle_id: open.handle_id,
+        handle_fence: 1,
+        principal_id: open.principal_id,
+        authorization_revision: open.authorization_revision,
+        gateway_node_id: open.gateway_node_id,
+        expected_stage_sequence: sequence,
+        final_length,
+        sparse: false,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        manifest_format_version: 1,
+        content_authorization_revision: Revision::new(1),
+        content_deadline: UnixMicros::new(deadline),
+        observed_at: UnixMicros::new(40),
+    })
+}
+
 fn handle_write(
     operation: u8,
     open: &OpenHandleRequest,
@@ -312,6 +491,7 @@ fn seed_file(state: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 fn publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
+    let initial_digest = blake3::hash(b"initial").into();
     Ok(RootFilePublication {
         file: FilePublication {
             operation_id: OperationId::from_bytes([1; 16])?,
@@ -327,7 +507,7 @@ fn publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
                 manifest_id: ContentManifestId::from_bytes([15; 16])?,
                 format_version: 1,
                 logical_length: 7,
-                content_digest: [16; 32],
+                content_digest: initial_digest,
                 root_digest: [17; 32],
             },
             created_by: PrincipalId::from_bytes([18; 16])?,
@@ -348,6 +528,138 @@ fn publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
 }
 
 struct UnusedPublisher;
+
+#[derive(Default)]
+struct MemoryPublisher {
+    durable: BTreeMap<OperationId, (ContentPublicationRequest, ManifestPublication, Vec<u8>)>,
+}
+
+impl MemoryPublisher {
+    fn with_seed(publication: FilePublication, bytes: &[u8]) -> Self {
+        let request = ContentPublicationRequest {
+            operation_id: publication.operation_id,
+            request_digest: [0; 32],
+            manifest_id: publication.manifest.manifest_id,
+            format_version: publication.manifest.format_version,
+            logical_length: publication.manifest.logical_length,
+            authorization_revision: Revision::new(1),
+            deadline: UnixMicros::new(1),
+            observed_at: UnixMicros::new(0),
+        };
+        Self {
+            durable: BTreeMap::from([(
+                request.operation_id,
+                (request, publication.manifest, bytes.to_vec()),
+            )]),
+        }
+    }
+
+    fn bytes(&self, operation_id: &OperationId) -> Option<&[u8]> {
+        self.durable
+            .get(operation_id)
+            .map(|(_, _, bytes)| bytes.as_slice())
+    }
+}
+
+impl DurableContentReader for MemoryPublisher {
+    fn stream_range(
+        &mut self,
+        request: ContentReadRequest,
+        destination: &mut dyn std::io::Write,
+    ) -> Result<(), ContentReadError> {
+        if request.authorization_revision.get() == 0
+            || request.observed_at >= request.deadline
+            || request
+                .offset
+                .checked_add(request.length)
+                .is_none_or(|end| end > request.content.manifest.logical_length)
+        {
+            return Err(ContentReadError::InvalidInput);
+        }
+        let Some((_, manifest, bytes)) =
+            self.durable.get(&request.content.publication_operation_id)
+        else {
+            return Err(ContentReadError::Unavailable);
+        };
+        if *manifest != request.content.manifest
+            || u64::try_from(bytes.len()).ok() != Some(manifest.logical_length)
+            || blake3::hash(bytes).as_bytes() != &manifest.content_digest
+        {
+            return Err(ContentReadError::Corrupt);
+        }
+        let start = usize::try_from(request.offset).map_err(|_| ContentReadError::InvalidInput)?;
+        let end = usize::try_from(request.offset + request.length)
+            .map_err(|_| ContentReadError::InvalidInput)?;
+        destination.write_all(&bytes[start..end])?;
+        Ok(())
+    }
+}
+
+impl DurableContentPublisher for MemoryPublisher {
+    type Sink = Vec<u8>;
+
+    fn resolve(
+        &mut self,
+        request: ContentPublicationRequest,
+    ) -> Result<Option<ManifestPublication>, ContentPublicationError> {
+        let Some((stored, manifest, _)) = self.durable.get(&request.operation_id) else {
+            return Ok(None);
+        };
+        if stored.same_intent(request) {
+            Ok(Some(*manifest))
+        } else {
+            Err(ContentPublicationError::Conflict)
+        }
+    }
+
+    fn begin(
+        &mut self,
+        request: ContentPublicationRequest,
+    ) -> Result<Self::Sink, ContentPublicationError> {
+        if self.durable.contains_key(&request.operation_id) {
+            Err(ContentPublicationError::Conflict)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn finish(
+        &mut self,
+        request: ContentPublicationRequest,
+        sink: Self::Sink,
+        completed: crate::CompletedStage,
+    ) -> Result<ManifestPublication, ContentPublicationError> {
+        if u64::try_from(sink.len()).ok() != Some(completed.logical_length)
+            || blake3::hash(&sink).as_bytes() != &completed.content_digest
+        {
+            return Err(ContentPublicationError::Corrupt);
+        }
+        let mut root = blake3::Hasher::new();
+        root.update(b"meshspan.test.memory-publisher.v1\0");
+        root.update(&request.manifest_id.as_bytes());
+        root.update(&completed.content_digest);
+        let manifest = ManifestPublication {
+            manifest_id: request.manifest_id,
+            format_version: request.format_version,
+            logical_length: completed.logical_length,
+            content_digest: completed.content_digest,
+            root_digest: root.finalize().into(),
+        };
+        match self.durable.get(&request.operation_id) {
+            Some((stored, prior, bytes))
+                if stored.same_intent(request) && *prior == manifest && *bytes == sink =>
+            {
+                Ok(*prior)
+            }
+            Some(_) => Err(ContentPublicationError::Conflict),
+            None => {
+                self.durable
+                    .insert(request.operation_id, (request, manifest, sink));
+                Ok(manifest)
+            }
+        }
+    }
+}
 
 impl DurableContentPublisher for UnusedPublisher {
     type Sink = Vec<u8>;

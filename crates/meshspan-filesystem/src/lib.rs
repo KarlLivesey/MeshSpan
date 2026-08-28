@@ -7,6 +7,7 @@ mod content_catalog;
 mod content_crypto;
 mod content_key;
 mod content_publisher;
+mod content_reader;
 mod directory;
 mod handle_io;
 mod handles;
@@ -34,15 +35,18 @@ pub use content_key::{
     rewrap_content_key,
 };
 pub use content_publisher::{
-    DurableContentSink, UnprotectedContentPublisher, UnprotectedContentTarget,
+    DurableContentSink, UnprotectedContentAccess, UnprotectedContentPublisher,
+};
+pub use content_reader::{
+    ContentReadError, ContentReadRequest, DurableContentReader, PublishedContentReference,
 };
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
     DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
 };
 pub use handle_io::{
-    FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
-    HandleIoError,
+    FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt,
+    FilesystemHandleWriteRequest, HandleIoError,
 };
 pub use handles::{
     ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,

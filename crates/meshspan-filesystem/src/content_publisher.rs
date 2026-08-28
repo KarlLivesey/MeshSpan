@@ -10,14 +10,16 @@ use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 use meshspan_contracts::{
     ContractError, ContractVersion, PutShardRequest, RequestContext, ReservationClass,
-    ReserveStorageRequest, ShardIdentity, StorageProvider,
+    ReserveStorageRequest, ShardIdentity, ShardReadPermit, StoragePermitMacKey, StorageProvider,
+    read_permit_mac,
 };
-use meshspan_domain::{OperationId, RandomSource, TargetId};
+use meshspan_domain::{MeshId, OperationId, RandomSource, TargetId};
 
 use crate::{
     CompletedStage, ContentCatalogError, ContentChunkCipher, ContentChunkLimits,
     ContentEncryptionKey, ContentKeyEnvelopeCipher, ContentPublicationError,
-    ContentPublicationRequest, DurableContentCatalog, DurableContentPublisher, ManifestPublication,
+    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentCatalog,
+    DurableContentPublisher, DurableContentReader, EncryptedContentChunk, ManifestPublication,
     PreparedContentChunk,
 };
 
@@ -25,19 +27,55 @@ const SPOOL_DIRECTORY: &str = "content-spools";
 const PREPARE_PAGE_ITEMS: usize = 1_000;
 const COPY_BUFFER_BYTES: usize = 64 * 1_024;
 
-/// Exact single-target destination for the initial explicitly unprotected layout.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct UnprotectedContentTarget {
+/// Single-target placement and read capability for the initial unprotected layout.
+pub struct UnprotectedContentAccess {
+    /// Mesh whose authority signs storage reads.
+    mesh_id: MeshId,
     /// Registered provider target identity.
-    pub target_id: TargetId,
+    target_id: TargetId,
     /// Positive target incarnation admitted by authority.
-    pub target_generation: u64,
+    target_generation: u64,
+    /// Non-exportable authority for short-lived exact-shard read permits.
+    read_permit_key: StoragePermitMacKey,
+}
+
+impl UnprotectedContentAccess {
+    /// Binds one target generation to its mesh read authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the reserved zero target generation.
+    pub const fn new(
+        mesh_id: MeshId,
+        target_id: TargetId,
+        target_generation: u64,
+        read_permit_key: StoragePermitMacKey,
+    ) -> Result<Self, ContentPublicationError> {
+        if target_generation == 0 {
+            Err(ContentPublicationError::InvalidInput)
+        } else {
+            Ok(Self {
+                mesh_id,
+                target_id,
+                target_generation,
+                read_permit_key,
+            })
+        }
+    }
 }
 
 /// Private file-backed sink used while a stage is not yet content-durable.
 pub struct DurableContentSink {
     operation_id: OperationId,
     file: cap_std::fs::File,
+}
+
+struct ContentReadTraversal<'a> {
+    read: ContentReadRequest,
+    read_end: u64,
+    publication: ContentPublicationRequest,
+    layout: crate::PreparedContentLayout,
+    cipher: &'a ContentChunkCipher,
 }
 
 impl Write for DurableContentSink {
@@ -61,7 +99,7 @@ pub struct UnprotectedContentPublisher<P, R> {
     random: R,
     key_envelopes: ContentKeyEnvelopeCipher,
     chunk_limits: ContentChunkLimits,
-    target: UnprotectedContentTarget,
+    access: UnprotectedContentAccess,
 }
 
 impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
@@ -77,11 +115,8 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
         random: R,
         key_envelopes: ContentKeyEnvelopeCipher,
         chunk_limits: ContentChunkLimits,
-        target: UnprotectedContentTarget,
+        access: UnprotectedContentAccess,
     ) -> Result<Self, ContentPublicationError> {
-        if target.target_generation == 0 {
-            return Err(ContentPublicationError::InvalidInput);
-        }
         fs::create_dir_all(state_directory)?;
         let root = Dir::open_ambient_dir(state_directory, ambient_authority())?;
         match root.create_dir(SPOOL_DIRECTORY) {
@@ -97,7 +132,7 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
             random,
             key_envelopes,
             chunk_limits,
-            target,
+            access,
         })
     }
 
@@ -178,8 +213,8 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
                     .provider
                     .reserve(ReserveStorageRequest {
                         context,
-                        target_id: self.target.target_id,
-                        target_generation: self.target.target_generation,
+                        target_id: self.access.target_id,
+                        target_generation: self.access.target_generation,
                         class: ReservationClass::ForegroundWrite,
                         bytes: chunk.ciphertext_length,
                         observed_at: request.observed_at,
@@ -361,6 +396,141 @@ impl<P: StorageProvider, R: RandomSource> DurableContentPublisher
     }
 }
 
+impl<P: StorageProvider, R: RandomSource> DurableContentReader
+    for UnprotectedContentPublisher<P, R>
+{
+    fn stream_range(
+        &mut self,
+        request: ContentReadRequest,
+        destination: &mut dyn Write,
+    ) -> Result<(), ContentReadError> {
+        let end = validate_content_read(request)?;
+        let committed = self
+            .catalog
+            .committed_layout(request.content)
+            .map_err(map_catalog_read)?;
+        if request.length == 0 {
+            return Ok(());
+        }
+        let content_key = self
+            .key_envelopes
+            .unwrap(
+                request.content.manifest.manifest_id,
+                committed.layout.wrapped_key,
+            )
+            .map_err(|_| ContentReadError::Corrupt)?;
+        let limits = ContentChunkLimits::new(
+            usize::try_from(committed.layout.chunk_bytes).map_err(|_| ContentReadError::Corrupt)?,
+        )
+        .map_err(|_| ContentReadError::Corrupt)?;
+        let cipher = ContentChunkCipher::new(content_key, limits);
+        let first_chunk = request.offset / committed.layout.chunk_bytes;
+        let last_chunk = end.div_ceil(committed.layout.chunk_bytes);
+        let traversal = ContentReadTraversal {
+            read: request,
+            read_end: end,
+            publication: committed.request,
+            layout: committed.layout,
+            cipher: &cipher,
+        };
+        for chunk_index in first_chunk..last_chunk {
+            self.stream_chunk_slice(&traversal, chunk_index, destination)?;
+        }
+        Ok(())
+    }
+}
+
+impl<P: StorageProvider, R> UnprotectedContentPublisher<P, R> {
+    fn stream_chunk_slice(
+        &self,
+        traversal: &ContentReadTraversal<'_>,
+        chunk_index: u64,
+        destination: &mut dyn Write,
+    ) -> Result<(), ContentReadError> {
+        let chunk = self
+            .catalog
+            .content_chunk(traversal.publication, chunk_index)
+            .map_err(map_catalog_read)?;
+        let chunk_start = chunk_index
+            .checked_mul(traversal.layout.chunk_bytes)
+            .ok_or(ContentReadError::Corrupt)?;
+        let expected_length = traversal
+            .layout
+            .manifest
+            .logical_length
+            .checked_sub(chunk_start)
+            .ok_or(ContentReadError::Corrupt)?
+            .min(traversal.layout.chunk_bytes);
+        if chunk.plaintext_length != expected_length {
+            return Err(ContentReadError::Corrupt);
+        }
+        let encrypted = self.read_encrypted_chunk(traversal.read, traversal.layout, chunk)?;
+        let plaintext = traversal
+            .cipher
+            .decrypt(
+                traversal.layout.manifest.manifest_id,
+                traversal.layout.manifest.format_version,
+                chunk_index,
+                &encrypted,
+            )
+            .map_err(|_| ContentReadError::Corrupt)?;
+        let start = usize::try_from(traversal.read.offset.max(chunk_start) - chunk_start)
+            .map_err(|_| ContentReadError::Corrupt)?;
+        let end = usize::try_from(
+            traversal.read_end.min(chunk_start + chunk.plaintext_length) - chunk_start,
+        )
+        .map_err(|_| ContentReadError::Corrupt)?;
+        destination.write_all(&plaintext.as_slice()[start..end])?;
+        Ok(())
+    }
+
+    fn read_encrypted_chunk(
+        &self,
+        read: ContentReadRequest,
+        layout: crate::PreparedContentLayout,
+        chunk: PreparedContentChunk,
+    ) -> Result<EncryptedContentChunk, ContentReadError> {
+        let operation_id = read_operation_id(read.operation_id, chunk.chunk_index)?;
+        let context = RequestContext {
+            contract_version: ContractVersion::V1_0,
+            operation_id,
+            deadline: read.deadline,
+            expected_revision: Some(read.authorization_revision),
+        };
+        let mut permit = ShardReadPermit {
+            operation_id,
+            mesh_id: self.access.mesh_id,
+            target_id: self.access.target_id,
+            target_generation: self.access.target_generation,
+            shard: ShardIdentity {
+                manifest_digest: layout.manifest.root_digest,
+                stripe_index: chunk.chunk_index,
+                shard_index: 0,
+                generation: 1,
+            },
+            authorization_revision: read.authorization_revision,
+            expires_at: read.deadline,
+            permit_digest: [0; 32],
+        };
+        permit.permit_digest = read_permit_mac(&self.access.read_permit_key, permit);
+        let ciphertext = self
+            .provider
+            .get_exact(context, permit, read.observed_at)
+            .map_err(map_contract_read)?;
+        if u64::try_from(ciphertext.len()).ok() != Some(chunk.ciphertext_length)
+            || blake3::hash(ciphertext.as_slice()).as_bytes() != &chunk.ciphertext_digest
+        {
+            return Err(ContentReadError::Corrupt);
+        }
+        Ok(EncryptedContentChunk {
+            plaintext_length: chunk.plaintext_length,
+            plaintext_digest: chunk.plaintext_digest,
+            ciphertext_digest: chunk.ciphertext_digest,
+            ciphertext,
+        })
+    }
+}
+
 impl<P, R> UnprotectedContentPublisher<P, R> {
     fn cleanup_spool(&self, operation_id: OperationId) -> std::io::Result<()> {
         match self.spools.remove_file(spool_name(operation_id)) {
@@ -369,6 +539,38 @@ impl<P, R> UnprotectedContentPublisher<P, R> {
             Err(error) => Err(error),
         }
     }
+}
+
+fn validate_content_read(request: ContentReadRequest) -> Result<u64, ContentReadError> {
+    let end = request
+        .offset
+        .checked_add(request.length)
+        .ok_or(ContentReadError::InvalidInput)?;
+    if request.authorization_revision.get() == 0
+        || request.observed_at >= request.deadline
+        || end > request.content.manifest.logical_length
+        || request.content.manifest.format_version == 0
+    {
+        Err(ContentReadError::InvalidInput)
+    } else {
+        Ok(end)
+    }
+}
+
+fn read_operation_id(
+    operation_id: OperationId,
+    chunk_index: u64,
+) -> Result<OperationId, ContentReadError> {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.content.read-operation.v1\0");
+    digest.update(&operation_id.as_bytes());
+    digest.update(&chunk_index.to_be_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest.finalize().as_bytes()[..16]);
+    if bytes == [0; 16] {
+        bytes[15] = 1;
+    }
+    OperationId::from_bytes(bytes).map_err(|_| ContentReadError::Corrupt)
 }
 
 fn read_plaintext(
@@ -468,5 +670,33 @@ fn map_contract(error: ContractError) -> ContentPublicationError {
         | ContractError::ResourceExhausted
         | ContractError::DeadlineExceeded
         | ContractError::Unavailable => ContentPublicationError::Unavailable,
+    }
+}
+
+fn map_catalog_read(error: ContentCatalogError) -> ContentReadError {
+    match error {
+        ContentCatalogError::InvalidInput => ContentReadError::InvalidInput,
+        ContentCatalogError::Conflict => ContentReadError::Conflict,
+        ContentCatalogError::Corrupt => ContentReadError::Corrupt,
+        ContentCatalogError::Incomplete | ContentCatalogError::Sqlite(_) => {
+            ContentReadError::Unavailable
+        }
+        ContentCatalogError::Io(error) => ContentReadError::Io(error),
+    }
+}
+
+fn map_contract_read(error: ContractError) -> ContentReadError {
+    match error {
+        ContractError::InvalidInput | ContractError::UnsupportedVersion => {
+            ContentReadError::InvalidInput
+        }
+        ContractError::Conflict => ContentReadError::Conflict,
+        ContractError::Corrupt | ContractError::InternalContract => ContentReadError::Corrupt,
+        ContractError::Unauthorized
+        | ContractError::Stale
+        | ContractError::NotFound
+        | ContractError::ResourceExhausted
+        | ContractError::DeadlineExceeded
+        | ContractError::Unavailable => ContentReadError::Unavailable,
     }
 }

@@ -248,6 +248,86 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         crate::handle_io::renew_lease(&mut self.stages, &mut self.publications, request)
     }
 
+    /// Publishes one exact durable handle checkpoint as a new immutable file version.
+    ///
+    /// The authority first persists the selected namespace basis and derived identities. Content
+    /// durability then precedes the atomic namespace transition. Exact retry resolves a completed
+    /// result or reconstructs the original plan; it never silently rebases onto a newer head.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/substituted authority, stale checkpoints or namespace bases, incomplete
+    /// non-sparse content, conflicting retries, corrupt evidence and persistence failures.
+    pub fn flush_handle(
+        &mut self,
+        request: crate::FilesystemHandleFlushRequest,
+    ) -> Result<NamespacePublicationReceipt, FilesystemCommitError>
+    where
+        P: crate::DurableContentReader,
+    {
+        if let Some(receipt) = self.resolve(request.operation_id)? {
+            return Ok(receipt);
+        }
+        let plan = self.publications.prepare_handle_flush(request)?;
+        let base = self.publications.handle_base_content(request.handle_id)?;
+        self.commit_handle_plan(&plan, base, request)
+    }
+
+    fn commit_handle_plan(
+        &mut self,
+        request: &RootFileCommitRequest,
+        base: Option<crate::PublishedContentReference>,
+        flush: crate::FilesystemHandleFlushRequest,
+    ) -> Result<NamespacePublicationReceipt, FilesystemCommitError>
+    where
+        P: crate::DurableContentReader,
+    {
+        validate_request(request)?;
+        let content_request = request.content_publication_request();
+        let (manifest, completed) = if let Some(manifest) = self.content.resolve(content_request)? {
+            (manifest, None)
+        } else {
+            let mut sink = self.content.begin(content_request)?;
+            let completed = if let Some(base) = base {
+                let prefix = base
+                    .manifest
+                    .logical_length
+                    .min(request.completion.final_length);
+                let read = crate::ContentReadRequest {
+                    operation_id: flush.operation_id,
+                    content: base,
+                    offset: 0,
+                    length: prefix,
+                    authorization_revision: flush.authorization_revision,
+                    deadline: flush.content_deadline,
+                    observed_at: flush.observed_at,
+                };
+                let stages = &mut self.stages;
+                let content = &mut self.content;
+                stages.stream_complete_with_base(
+                    request.completion,
+                    base.manifest.logical_length,
+                    |destination| {
+                        content
+                            .stream_range(read, destination)
+                            .map_err(map_content_read_to_stage)
+                    },
+                    &mut sink,
+                )?
+            } else {
+                self.stages.stream_complete(request.completion, &mut sink)?
+            };
+            (
+                self.content.finish(content_request, sink, completed)?,
+                Some(completed),
+            )
+        };
+        validate_manifest(content_request, manifest, completed)?;
+        self.publications
+            .publish_root_file(&root_publication(request, manifest))
+            .map_err(Into::into)
+    }
+
     /// Creates one empty directory and atomically publishes every copied ancestor revision.
     ///
     /// # Errors
@@ -352,6 +432,9 @@ pub enum FilesystemCommitError {
     /// Atomic namespace publication failed.
     #[error("filesystem commit namespace publication failed")]
     Publication(#[from] PublicationError),
+    /// Handle authority rejected planning before content IO began.
+    #[error("filesystem commit handle authority failed")]
+    Handle(#[from] crate::HandleError),
 }
 
 fn validate_request(request: &RootFileCommitRequest) -> Result<(), FilesystemCommitError> {
@@ -388,6 +471,16 @@ fn validate_manifest(
     }
 }
 
+fn map_content_read_to_stage(error: crate::ContentReadError) -> StageStoreError {
+    match error {
+        crate::ContentReadError::InvalidInput => StageStoreError::InvalidInput,
+        crate::ContentReadError::Conflict => StageStoreError::OperationConflict,
+        crate::ContentReadError::Corrupt => StageStoreError::Corrupt,
+        crate::ContentReadError::Unavailable => StageStoreError::Unavailable,
+        crate::ContentReadError::Io(error) => StageStoreError::Io(error),
+    }
+}
+
 fn root_publication(
     request: &RootFileCommitRequest,
     manifest: ManifestPublication,
@@ -418,7 +511,7 @@ fn root_publication(
     }
 }
 
-fn commit_request_digest(request: &RootFileCommitRequest) -> [u8; 32] {
+pub(crate) fn commit_request_digest(request: &RootFileCommitRequest) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.filesystem.commit-root-file.v2\0");
     digest.update(&request.completion.operation_id.as_bytes());
