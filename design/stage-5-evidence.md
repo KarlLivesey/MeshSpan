@@ -158,6 +158,20 @@ copy-on-write filesystem service. This document records executable evidence only
   the final live handle disappears. No physical or namespace deletion is
   authorised by this readiness record alone. Atomic creation, write/flush and
   namespace rename/unlink remain required before gate 5 can close.
+- The common filesystem service now creates a bounded private stage before it
+  returns any writable handle and durably orders each immutable range write in
+  the handle-authority database before accepting the corresponding stage part.
+  This explicit two-database transition means a crash can leave a replayable
+  admission or an empty orphan stage, but cannot report unstaged bytes as
+  written. Live foreign byte-range locks are checked in that authority
+  transaction; exact write replay, changed-content reuse, forged gateway
+  authority, restart and receipt corruption have service-level vectors. A
+  writable-handle lease takeover preflights and advances the private stage to
+  the same fence, so the former gateway cannot continue through either database.
+  Handles also retain the resolved namespace entry's case-preserved canonical
+  path—not the caller's alternative casing and never a provider path—ready for
+  internal flush/rename planning. Durable content publication from that handle
+  stage remains the next open part of gate 5.
 
 ## Closure gates
 
@@ -239,8 +253,10 @@ copy-on-write filesystem service. This document records executable evidence only
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable
-   and tested. Atomic create dispositions, handle-bound staged writes and flush,
-   rename/move and final namespace unlink remain open.
+   and tested. Handle-bound random writes, their lock ordering and cross-database
+   stage takeover are also durable and tested. Atomic create dispositions,
+   handle-bound flush publication, rename/move and final namespace unlink remain
+   open.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 
