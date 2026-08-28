@@ -16,10 +16,11 @@ use meshspan_domain::{
 };
 use meshspan_filesystem::{
     CompletedStage, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
-    ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
-    EncryptedContentChunk, FilesystemCommitService, ManifestPublication, NamespaceComponent,
-    NamespaceLimits, PublicationDisposition, RootFileCommitRequest, StageCompletionRequest,
-    StageRegistration, StageWrite,
+    ContentKeyEnvelopeCipher, ContentPublicationError, ContentPublicationRequest,
+    DurableContentPublisher, EncryptedContentChunk, FilesystemCommitService, ManifestPublication,
+    NamespaceComponent, NamespaceLimits, PublicationDisposition, RootFileCommitRequest,
+    StageCompletionRequest, StageRegistration, StageWrite, VolumeKeyEncryptionKey,
+    WrappedContentKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -60,10 +61,10 @@ fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
     let publisher = FolderPublisher {
         provider,
         registration,
-        cipher: ContentChunkCipher::new(
-            ContentEncryptionKey::from_bytes([24; 32])?,
-            ContentChunkLimits::new(64)?,
-        ),
+        envelope_cipher: ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(
+            1, [24; 32],
+        )?),
+        random: FixedRandom,
         durable: None,
     };
     let mut service =
@@ -107,9 +108,12 @@ fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
         ciphertext,
         ..durable.encrypted
     };
+    let content_key = publisher
+        .envelope_cipher
+        .unwrap(request.manifest_id, durable.wrapped_key)?;
+    let cipher = ContentChunkCipher::new(content_key, ContentChunkLimits::new(64)?);
     assert_eq!(
-        publisher
-            .cipher
+        cipher
             .decrypt(request.manifest_id, 1, 0, &observed)?
             .as_slice(),
         b"helloworld"
@@ -124,7 +128,8 @@ fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
 struct FolderPublisher {
     provider: FolderShardStore,
     registration: FolderRegistration,
-    cipher: ContentChunkCipher,
+    envelope_cipher: ContentKeyEnvelopeCipher,
+    random: FixedRandom,
     durable: Option<DurableManifest>,
 }
 
@@ -133,6 +138,7 @@ struct DurableManifest {
     manifest: ManifestPublication,
     shard: ShardIdentity,
     encrypted: EncryptedContentChunk,
+    wrapped_key: WrappedContentKey,
 }
 
 impl DurableContentPublisher for FolderPublisher {
@@ -170,10 +176,18 @@ impl DurableContentPublisher for FolderPublisher {
         validate_completed(&bytes, completed)?;
         let plaintext = BoundedBytes::copy_from(&bytes, 64)
             .map_err(|_| ContentPublicationError::InvalidInput)?;
-        let encrypted = self
-            .cipher
-            .encrypt(request.manifest_id, request.format_version, 0, &plaintext)
-            .map_err(|_| ContentPublicationError::Corrupt)?;
+        let content_key = ContentEncryptionKey::generate(&mut self.random)
+            .map_err(|_| ContentPublicationError::Unavailable)?;
+        let wrapped_key = self
+            .envelope_cipher
+            .wrap(request.manifest_id, &content_key, &mut self.random)
+            .map_err(|_| ContentPublicationError::Unavailable)?;
+        let encrypted = ContentChunkCipher::new(
+            content_key,
+            ContentChunkLimits::new(64).map_err(|_| ContentPublicationError::InvalidInput)?,
+        )
+        .encrypt(request.manifest_id, request.format_version, 0, &plaintext)
+        .map_err(|_| ContentPublicationError::Corrupt)?;
         let root_digest = manifest_root(completed, &encrypted);
         let shard = ShardIdentity {
             manifest_digest: root_digest,
@@ -226,6 +240,7 @@ impl DurableContentPublisher for FolderPublisher {
             manifest,
             shard,
             encrypted,
+            wrapped_key,
         });
         Ok(manifest)
     }

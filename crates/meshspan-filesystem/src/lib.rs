@@ -4,6 +4,7 @@
 
 mod commit_service;
 mod content_crypto;
+mod content_key;
 mod directory;
 mod name;
 mod publication;
@@ -17,6 +18,10 @@ pub use commit_service::{
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,
     EncryptedContentChunk,
+};
+pub use content_key::{
+    ContentKeyEnvelopeCipher, ContentKeyError, VolumeKeyEncryptionKey, WrappedContentKey,
+    rewrap_content_key,
 };
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
