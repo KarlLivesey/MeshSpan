@@ -69,7 +69,7 @@ the final appliance daemon; those remain later roadmap stages.
 | Quorum correctness | Independent flat-plan truth tables for one through nine voters, weighted/hierarchical vectors, exhaustive minimal quorums/cut sets and old/new joint-transition proofs |
 | Multi-way partitions | Every 1–9-voter set partition (26,442 cases) campaigns independently; at most one component obtains authority and writes commit only when its compiled write family is satisfied |
 | Durability ordering | Campaign, higher-term step-down, proposal append and membership activation tests require exact SQLite persistence acknowledgement before dependent effects escape |
-| One/two/three and growth | The process proof grows one voter to two and then three through authoritative learner admission, exact catch-up and automatic joint/stable promotion; the compiler also exercises every voter count and ordinary recommendations progress 1, 2, 3, 5, 7, 9 |
+| One/two/three and growth | Real process cycles cover all three sizes: one voter restarts and resumes writes; two voters fence writes after one loss and resume after return; three voters lose the leader and continue through the surviving majority. The growth proof also moves one → two → three through authoritative learner admission, exact catch-up and automatic joint/stable promotion; the compiler exercises every voter count and ordinary recommendations progress 1, 2, 3, 5, 7, 9 |
 | Stale/replayed traffic | Wrong incarnation, membership epoch, quorum-plan digest, persistence ID, conflicting uncommitted tail and committed-tail replacement attempts fail closed |
 | Node identity | Real Quinn/rustls mTLS accepts an enrolled certificate-bound peer and rejects a TLS-valid certificate absent from committed topology |
 | Negotiation and bounds | Mandatory `NodeHello`/`NodeWelcome` chooses the highest exact common version and the lower peer resource ceilings; every control frame is length-bounded before allocation/decode |
@@ -84,11 +84,11 @@ the final appliance daemon; those remain later roadmap stages.
 
 ## Feedback-loop observation
 
-The complete warm local gate measured 9.37 seconds with live learner admission
-and exact joint/stable restart proofs. The main three-process bootstrap,
-admission, promotion, handoff, failover and restart cycle completes in
-approximately 4.9 seconds and remains isolated in the cluster lane, so unrelated
-lanes continue concurrently.
+The complete warm local gate measured 8.43 seconds with live learner admission,
+the one/two/three process matrix and exact joint/stable restart proofs. All five
+real-process cases complete together in approximately 4.9 seconds, dominated by
+the main bootstrap, admission, promotion, handoff, failover and restart cycle.
+The cluster lane remains isolated, so unrelated lanes continue concurrently.
 
 ## Deliberate later-stage boundaries
 

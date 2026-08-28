@@ -80,7 +80,7 @@ The remaining composition does not yet satisfy the complete roadmap claim:
    catch-up evidence and automatically commit joint then stable promotion.
 3. [x] Restart during each promotion phase and continue from durable state without
    manual membership repair or a hard-coded replacement plan.
-4. Run the same real process cycle for one, two and three voters, including
+4. [x] Run the same real process cycle for one, two and three voters, including
    leader loss and return where the declared plan permits progress.
 5. Run two independent partition databases and consensus authorities, transfer
    one scope through prepare/freeze/activate records, and prove every mutation is

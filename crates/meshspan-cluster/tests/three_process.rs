@@ -121,6 +121,88 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn single_voter_restarts_and_resumes_writes() -> Result<(), Box<dyn Error>> {
+    let temporary = TempDir::new()?;
+    let launches = build_launches(temporary.path())?;
+    let mut cluster = ProcessCluster::start_count(&launches, 1)?;
+
+    wait_for_response(launches[0].control_address, "INFO", None).await?;
+    assert_eq!(
+        command(launches[0].control_address, "ELECT").await?,
+        "ELECTION_STARTED"
+    );
+    wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
+    commit_on_nodes(&launches, 0, 1, 1).await?;
+
+    cluster.stop(1)?;
+    cluster.restart(&launches[0])?;
+    wait_for_response(launches[0].control_address, "INFO", None).await?;
+    assert_eq!(
+        command(launches[0].control_address, "ELECT").await?,
+        "ELECTION_STARTED"
+    );
+    wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
+    commit_on_nodes(&launches, 0, 2, 1).await?;
+    cluster.stop(1)?;
+    assert_plan_phase(&launches[..1], 1, true)?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_voters_fence_writes_after_one_loss_then_resume() -> Result<(), Box<dyn Error>> {
+    let temporary = TempDir::new()?;
+    let launches = build_launches(temporary.path())?;
+    let mut cluster = ProcessCluster::start_count(&launches, 2)?;
+
+    wait_for_response(launches[0].control_address, "INFO", None).await?;
+    assert_eq!(
+        command(launches[0].control_address, "ELECT").await?,
+        "ELECTION_STARTED"
+    );
+    wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
+    for operation in 1_u8..=3 {
+        commit_on_nodes(&launches, 0, operation, 1).await?;
+    }
+    wait_for_plan_phase(&launches[..2], 3, true).await?;
+    wait_for_response(
+        launches[1].control_address,
+        "INFO",
+        Some("FOLLOWER_WITH_LEADER"),
+    )
+    .await?;
+
+    cluster.stop(1)?;
+    assert_eq!(
+        command(launches[1].control_address, "ELECT").await?,
+        "ELECTION_STARTED"
+    );
+    wait_for_response(launches[1].control_address, "INFO", Some("CANDIDATE")).await?;
+    assert_eq!(
+        command(launches[1].control_address, "PROPOSE 4").await?,
+        "NO_LEADER"
+    );
+
+    cluster.restart(&launches[0])?;
+    wait_for_response(launches[0].control_address, "INFO", None).await?;
+    assert_eq!(
+        command(launches[1].control_address, "ELECT").await?,
+        "ELECTION_STARTED"
+    );
+    wait_for_response(launches[1].control_address, "INFO", Some("LEADER")).await?;
+    wait_for_response(
+        launches[0].control_address,
+        "INFO",
+        Some("FOLLOWER_WITH_LEADER"),
+    )
+    .await?;
+    commit_on_nodes(&launches, 1, 4, 2).await?;
+    cluster.stop(1)?;
+    cluster.stop(2)?;
+    assert_plan_phase(&launches[..2], 3, true)?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn promotion_resumes_after_restart_from_durable_joint_plan() -> Result<(), Box<dyn Error>> {
     prove_promotion_restart("joint:3", false).await
 }
@@ -291,8 +373,13 @@ struct ProcessCluster {
 
 impl ProcessCluster {
     fn start(launches: &[NodeLaunch]) -> Result<Self, Box<dyn Error>> {
+        Self::start_count(launches, launches.len())
+    }
+
+    fn start_count(launches: &[NodeLaunch], count: usize) -> Result<Self, Box<dyn Error>> {
         let nodes = launches
             .iter()
+            .take(count)
             .map(spawn_node)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { nodes })
