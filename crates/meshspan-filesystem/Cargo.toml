@@ -21,6 +21,7 @@ unicode-casefold.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
+meshspan-storage = { path = "../meshspan-storage" }
 tempfile = "3.27.0"
 
 [lints]

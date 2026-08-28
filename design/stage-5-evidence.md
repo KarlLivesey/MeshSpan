@@ -81,6 +81,19 @@ copy-on-write filesystem service. This document records executable evidence only
   prove exact old-or-new atomicity. Gate 2 remains open until durable stage
   completion and manifest construction are composed with this publication as
   one recoverable service operation.
+- The filesystem commit service now composes an exact fenced stage checkpoint,
+  a replaceable durable-content publisher and the atomic namespace transaction
+  under one operation identity. Content must resolve or become independently
+  durable before a namespace head can move. A lost content reply publishes no
+  name; exact retry resolves the durable manifest without rereading an expired
+  stage, and a lost namespace reply resolves through the branch receipt.
+  Conflicting retries and corrupt manifest identity/length/content evidence fail
+  closed. A vertical real-IO proof drives the completed stage through the Stage
+  4 registered-folder provider's reservation, packed-shard journal and receipt,
+  then retrieves the exact bytes under an authenticated read permit while
+  leaving sibling files untouched. Its deliberately simple unprotected content
+  publisher is test-only: gate 2 remains open until a production encrypted,
+  bounded manifest/layout publisher implements the same boundary.
 
 ## Closure gates
 
