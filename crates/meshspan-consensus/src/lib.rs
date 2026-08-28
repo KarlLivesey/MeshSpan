@@ -4,6 +4,7 @@
 
 mod core;
 mod membership;
+mod membership_command;
 mod plan_record;
 mod quorum;
 
@@ -11,6 +12,9 @@ pub use membership::{
     CatchUpEvidence, JointQuorumPlan, MembershipChangeError, PlannedLearnerAdmission,
     PlannedPromotion, plan_next_flat_learner_admission, plan_next_flat_promotion,
     recommended_voter_count,
+};
+pub use membership_command::{
+    MEMBERSHIP_COMMAND_VERSION, MembershipCommandError, MembershipTransitionCommand,
 };
 pub use plan_record::{ActiveQuorumPlan, QuorumPlanRecordError};
 

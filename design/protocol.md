@@ -98,6 +98,20 @@ Terms, log positions, membership configuration and snapshot checksums are
 explicit. Snapshot chunks are bounded and resumable. No application request may
 bypass consensus by writing a peer database directly.
 
+Replicated log commands have their own positive version. Membership command
+version `2` uses the canonical `MSMC` record and only permits three shapes:
+
+- admit exactly one authoritative identity as a non-voting learner, carrying
+  its exact positive incarnation;
+- promote exactly one existing learner, carrying its exact incarnation,
+  committed log position and entry digest; or
+- finalise the exact stable successor already proved by the active joint plan.
+
+The record embeds source quorum-plan specifications, never trusted cached proof
+output. Every receiver independently recompiles the plan, rejects trailing or
+excessive bytes, checks the one-member set difference and verifies evidence
+against its own committed history before changing the active membership.
+
 ## 6. Metadata commands and queries
 
 `MetadataCommand` contains a closed, versioned `oneof`; it is not raw SQL, a KV

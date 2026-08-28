@@ -193,6 +193,26 @@ impl ConsensusCore {
         self.active_plan_digest()
     }
 
+    /// Returns the exact currently active stable or joint quorum phase.
+    #[must_use]
+    pub const fn active_plan(&self) -> &ActiveQuorumPlan {
+        &self.active_plan
+    }
+
+    /// Returns the exact accepted incarnation of every current plan member.
+    #[must_use]
+    pub const fn member_incarnations(&self) -> &MemberIncarnations {
+        &self.config.member_incarnations
+    }
+
+    /// Returns the complete log entry at the current commit position, if non-genesis.
+    #[must_use]
+    pub fn committed_entry(&self) -> Option<&LogEntry> {
+        (self.commit_index > 0)
+            .then(|| self.entry(self.commit_index))
+            .flatten()
+    }
+
     /// Consumes one deterministic input and returns ordered side effects.
     ///
     /// # Errors

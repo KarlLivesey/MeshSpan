@@ -5,8 +5,9 @@
 use std::collections::VecDeque;
 
 use meshspan_consensus::{
-    ConsensusCore, CoreEffect, CoreError, CoreInput, CoreMessage, DurableMutation, LogEntry,
-    LogPosition, PersistenceId, ProposalId, ReadBarrierId, Role,
+    ActiveQuorumPlan, ConsensusCore, CoreEffect, CoreError, CoreInput, CoreMessage,
+    DurableMutation, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
+    ReadBarrierId, Role,
 };
 use meshspan_domain::{NodeId, UnixMicros};
 use meshspan_metadata::{ConsensusStoreError, PartitionConsensusPersistence};
@@ -150,6 +151,24 @@ impl<P: PartitionConsensusPersistence> PartitionConsensusDriver<P> {
     #[must_use]
     pub const fn applied_index(&self) -> u64 {
         self.core.applied_index()
+    }
+
+    /// Returns the current independently proved stable or joint quorum phase.
+    #[must_use]
+    pub const fn active_plan(&self) -> &ActiveQuorumPlan {
+        self.core.active_plan()
+    }
+
+    /// Returns the exact current-incarnation map accepted by the consensus core.
+    #[must_use]
+    pub const fn member_incarnations(&self) -> &MemberIncarnations {
+        self.core.member_incarnations()
+    }
+
+    /// Returns the complete entry at the current non-genesis commit position.
+    #[must_use]
+    pub fn committed_entry(&self) -> Option<&LogEntry> {
+        self.core.committed_entry()
     }
 
     /// Borrows the durable repository for read-only state-machine queries.
