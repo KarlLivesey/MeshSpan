@@ -6,7 +6,11 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use meshspan_domain::{MeshId, NodeId, PartitionId};
 use meshspan_protocol::v1::control_envelope::Message;
-use meshspan_protocol::v1::{ControlEnvelope, NodeHello, Ping, ProtocolVersion};
+use meshspan_protocol::v1::data_control_envelope::Message as DataMessage;
+use meshspan_protocol::v1::{
+    ControlEnvelope, DataControlEnvelope, DataFrame, NodeHello, Ping, ProtocolVersion,
+    PutShardFinish,
+};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
     KeyPair, KeyUsagePurpose,
@@ -18,7 +22,8 @@ use super::identity::certificate_fingerprint;
 use super::{
     NegotiationConfig, NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportError,
     TransportLimits, accept_stream, client_endpoint, connect, open_stream, receive_control,
-    send_control, server_endpoint,
+    receive_data_control, receive_data_frame, send_control, send_data_control, send_data_frame,
+    server_endpoint,
 };
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -120,10 +125,47 @@ async fn real_quinn_mtls_binds_peers_and_round_trips_an_independent_stream()
         envelope
     );
 
+    prove_data_framing(&client_connection, &server_connection, limits.wire).await?;
+
     client_connection.close(0_u32.into(), b"test complete");
     server_connection.close(0_u32.into(), b"test complete");
     client.wait_idle().await;
     server.wait_idle().await;
+    Ok(())
+}
+
+async fn prove_data_framing(
+    client: &quinn::Connection,
+    server: &quinn::Connection,
+    limits: meshspan_protocol::WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    let (mut send, _receive) = open_stream(client, StreamKind::Data).await?;
+    let mut accepted = accept_stream(server).await?;
+    assert_eq!(accepted.kind, StreamKind::Data);
+    let finish = DataControlEnvelope {
+        message: Some(DataMessage::PutShardFinish(PutShardFinish {
+            final_length: 4,
+            final_digest: vec![8; 32],
+        })),
+    };
+    let data = DataFrame {
+        offset: 0,
+        bytes: vec![1, 2, 3, 4],
+    };
+    send_data_control(&mut send, &finish, limits).await?;
+    send_data_frame(&mut send, &data, limits).await?;
+    assert_eq!(
+        receive_data_control(&mut accepted.receive, limits)
+            .await?
+            .into_inner(),
+        finish
+    );
+    assert_eq!(
+        receive_data_frame(&mut accepted.receive, limits)
+            .await?
+            .into_inner(),
+        data
+    );
     Ok(())
 }
 

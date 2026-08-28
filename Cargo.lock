@@ -856,6 +856,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-data-plane"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "meshspan-contracts",
+ "meshspan-domain",
+ "meshspan-protocol",
+ "meshspan-storage",
+ "meshspan-transport",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "meshspan-domain"
 version = "0.1.0"
 dependencies = [

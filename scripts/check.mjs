@@ -132,6 +132,23 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "storage and remote data-plane proofs",
+      steps: [
+        [
+          "cargo",
+          [
+            "test",
+            "-p",
+            "meshspan-storage",
+            "-p",
+            "meshspan-data-plane",
+            "--all-targets",
+            "--all-features",
+          ],
+        ],
+      ],
+    },
+    {
       name: "cluster driver and wire tests",
       steps: [
         [

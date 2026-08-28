@@ -13,7 +13,8 @@ pub use identity::{
 };
 pub use snapshot::{SnapshotStager, VerifiedSnapshot};
 pub use stream::{
-    AcceptedStream, StreamKind, accept_stream, open_stream, receive_control, send_control,
+    AcceptedStream, StreamKind, accept_stream, open_stream, receive_control, receive_data_control,
+    receive_data_frame, send_control, send_data_control, send_data_frame,
 };
 pub use tls::{
     NodeCredentials, TransportError, TransportLimits, client_endpoint, connect, server_endpoint,

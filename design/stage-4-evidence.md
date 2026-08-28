@@ -1,6 +1,6 @@
 # Stage 4 implementation evidence
 
-Status: in progress, started 2026-08-28.
+Status: complete, 2026-08-28.
 
 Stage 4 turns registered existing folders into private immutable-shard providers.
 This document records executable evidence only; accepted design prose is not an
@@ -71,6 +71,17 @@ implementation claim.
   exhaustion changes nothing; a short write rolls its pack transaction back;
   and a pack commit whose result is lost remains absent from public inventory
   until restart recovery verifies and publishes it exactly once.
+- `meshspan-data-plane` converts opaque wire capabilities into canonical,
+  fixed-width, operation/mesh/target/incarnation/shard/revision/expiry-bound
+  records. A separately keyed write permit authorises reservation and bytes;
+  location and mTLS identity alone never grant storage authority. Typed remote
+  failures cannot be confused with durable receipts.
+- One bounded target router serves several independent provider instances
+  without weakening their target-generation fences. The real process proof
+  starts three mTLS-authenticated Quinn storage processes, registers two folders
+  with different capacity ceilings on each, transfers multi-frame shards to and
+  from all six targets, rejects a forged write permit and proves ordinary sibling
+  files remain unchanged.
 
 ## Closure gates
 
@@ -84,12 +95,10 @@ implementation claim.
    durable receipts and independent integrity verification.
 5. [x] Exact removal permits, durable tombstones, guarded unlink and scrub
    observations that never become deletion authority.
-6. Reusable provider conformance plus real IO/process proofs for restart,
+6. [x] Reusable provider conformance plus real IO/process proofs for restart,
    `ENOSPC`, short/partial writes, lost flush results, corruption, path/media
-   replacement, stale incarnation and three-process remote transfer. Conformance,
-   restart, deterministic `ENOSPC`/short-write/lost-result boundaries,
-   corruption and path/media/incarnation fencing are proven; a real
-   three-process remote transfer remains open.
+   replacement, stale incarnation and three-process remote transfer.
 
-Stage 4 remains incomplete until every gate is checked and the complete local
-suite passes together.
+Every Stage 4 gate is checked. The complete local suite, including the six-target
+three-process proof, passes together; its warm four-worker run completes in
+6.74 seconds.

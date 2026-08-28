@@ -2,9 +2,11 @@
 
 //! Independent typed QUIC streams and allocation-safe control framing.
 
-use meshspan_protocol::v1::ControlEnvelope;
+use meshspan_protocol::v1::{ControlEnvelope, DataControlEnvelope, DataFrame};
 use meshspan_protocol::{
-    ValidatedControlEnvelope, WireLimits, decode_control_frame, encode_control_frame,
+    ValidatedControlEnvelope, ValidatedDataControlEnvelope, ValidatedDataFrame, WireLimits,
+    decode_control_frame, decode_data_control_frame, decode_data_frame, encode_control_frame,
+    encode_data_control_frame, encode_data_frame,
 };
 use quinn::{Connection, RecvStream, SendStream};
 
@@ -112,11 +114,79 @@ pub async fn receive_control(
     receive: &mut RecvStream,
     limits: WireLimits,
 ) -> Result<ValidatedControlEnvelope, TransportError> {
+    let frame = receive_prefixed(receive, limits.maximum_control_bytes()).await?;
+    decode_control_frame(&frame, limits).map_err(Into::into)
+}
+
+/// Encodes and writes one validated data-stream control envelope.
+///
+/// # Errors
+///
+/// Rejects invalid control fields and negotiated-limit violations before writing.
+pub async fn send_data_control(
+    send: &mut SendStream,
+    envelope: &DataControlEnvelope,
+    limits: WireLimits,
+) -> Result<(), TransportError> {
+    let frame = encode_data_control_frame(envelope, limits)?;
+    send.write_all(&frame).await?;
+    Ok(())
+}
+
+/// Reads one bounded and semantically validated data-stream control envelope.
+///
+/// # Errors
+///
+/// Rejects truncation, excess, malformed Protobuf and invalid fields.
+pub async fn receive_data_control(
+    receive: &mut RecvStream,
+    limits: WireLimits,
+) -> Result<ValidatedDataControlEnvelope, TransportError> {
+    let frame = receive_prefixed(receive, limits.maximum_control_bytes()).await?;
+    decode_data_control_frame(&frame, limits).map_err(Into::into)
+}
+
+/// Encodes and writes one independently bounded bulk data frame.
+///
+/// # Errors
+///
+/// Rejects empty/excessive bytes or reports stream failure.
+pub async fn send_data_frame(
+    send: &mut SendStream,
+    frame: &DataFrame,
+    limits: WireLimits,
+) -> Result<(), TransportError> {
+    let encoded = encode_data_frame(frame, limits)?;
+    send.write_all(&encoded).await?;
+    Ok(())
+}
+
+/// Reads one independently bounded and validated bulk data frame.
+///
+/// # Errors
+///
+/// Rejects declared sizes before allocation, truncation and malformed/invalid bytes.
+pub async fn receive_data_frame(
+    receive: &mut RecvStream,
+    limits: WireLimits,
+) -> Result<ValidatedDataFrame, TransportError> {
+    let maximum_encoded = limits
+        .maximum_data_frame_bytes()
+        .checked_add(32)
+        .ok_or(TransportError::InvalidFrame)?;
+    let frame = receive_prefixed(receive, maximum_encoded).await?;
+    decode_data_frame(&frame, limits).map_err(Into::into)
+}
+
+async fn receive_prefixed(
+    receive: &mut RecvStream,
+    maximum_payload_bytes: usize,
+) -> Result<Vec<u8>, TransportError> {
     let mut prefix = [0_u8; FRAME_PREFIX_BYTES];
     receive.read_exact(&mut prefix).await?;
     let payload_length =
         usize::try_from(u32::from_be_bytes(prefix)).map_err(|_| TransportError::InvalidFrame)?;
-    if payload_length == 0 || payload_length > limits.maximum_control_bytes() {
+    if payload_length == 0 || payload_length > maximum_payload_bytes {
         return Err(TransportError::InvalidFrame);
     }
     let frame_length = payload_length
@@ -125,5 +195,5 @@ pub async fn receive_control(
     let mut frame = vec![0_u8; frame_length];
     frame[..FRAME_PREFIX_BYTES].copy_from_slice(&prefix);
     receive.read_exact(&mut frame[FRAME_PREFIX_BYTES..]).await?;
-    decode_control_frame(&frame, limits).map_err(Into::into)
+    Ok(frame)
 }
