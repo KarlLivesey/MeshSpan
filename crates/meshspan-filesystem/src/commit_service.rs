@@ -7,7 +7,7 @@ use std::path::Path;
 
 use meshspan_domain::{
     BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    PrincipalId, UnixMicros, VolumeId,
+    PrincipalId, Revision, UnixMicros, VolumeId,
 };
 use thiserror::Error;
 
@@ -30,6 +30,26 @@ pub struct ContentPublicationRequest {
     pub format_version: u16,
     /// Exact logical length expected from stage completion.
     pub logical_length: u64,
+    /// Authoritative revision that admitted storage publication.
+    pub authorization_revision: Revision,
+    /// Exclusive deadline for new provider work.
+    pub deadline: UnixMicros,
+    /// Current authoritative attempt time; exact retry may advance this value.
+    pub observed_at: UnixMicros,
+}
+
+impl ContentPublicationRequest {
+    /// Compares immutable operation intent while excluding the advancing attempt time.
+    #[must_use]
+    pub fn same_intent(self, other: Self) -> bool {
+        self.operation_id == other.operation_id
+            && self.request_digest == other.request_digest
+            && self.manifest_id == other.manifest_id
+            && self.format_version == other.format_version
+            && self.logical_length == other.logical_length
+            && self.authorization_revision == other.authorization_revision
+            && self.deadline == other.deadline
+    }
 }
 
 /// Replaceable boundary that turns an exact logical byte stream into a durable manifest.
@@ -93,6 +113,10 @@ pub struct RootFileCommitRequest {
     pub manifest_id: ContentManifestId,
     /// Selected content-manifest encoding version.
     pub manifest_format_version: u16,
+    /// Authoritative revision that admitted content placement.
+    pub content_authorization_revision: Revision,
+    /// Exclusive deadline for new content-provider work.
+    pub content_deadline: UnixMicros,
     /// Stable volume-root directory identity.
     pub root_object_id: ObjectId,
     /// Exact prior namespace commit, or none for initial creation.
@@ -168,6 +192,9 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             manifest_id: request.manifest_id,
             format_version: request.manifest_format_version,
             logical_length: request.completion.final_length,
+            authorization_revision: request.content_authorization_revision,
+            deadline: request.content_deadline,
+            observed_at: request.completion.observed_at,
         };
         let (manifest, completed) = if let Some(manifest) = self.content.resolve(content_request)? {
             (manifest, None)
@@ -245,6 +272,7 @@ pub enum FilesystemCommitError {
 
 fn validate_request(request: &RootFileCommitRequest) -> Result<(), FilesystemCommitError> {
     if request.manifest_format_version == 0
+        || request.content_deadline <= request.completion.observed_at
         || request.entry_generation == 0
         || request.object_id == request.root_object_id
         || request.file_object_revision_id == request.root_object_revision_id
@@ -323,6 +351,8 @@ fn commit_request_digest(request: &RootFileCommitRequest) -> [u8; 32] {
     digest.update(&request.version_id.as_bytes());
     digest.update(&request.manifest_id.as_bytes());
     digest.update(&request.manifest_format_version.to_be_bytes());
+    digest.update(&request.content_authorization_revision.get().to_be_bytes());
+    digest.update(&request.content_deadline.get().to_be_bytes());
     digest.update(&request.root_object_id.as_bytes());
     update_optional(
         &mut digest,

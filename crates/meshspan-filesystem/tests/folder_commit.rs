@@ -151,7 +151,7 @@ impl DurableContentPublisher for FolderPublisher {
         self.durable
             .as_ref()
             .map(|durable| {
-                if durable.request == request {
+                if durable.request.same_intent(request) {
                     Ok(durable.manifest)
                 } else {
                     Err(ContentPublicationError::Conflict)
@@ -339,6 +339,8 @@ fn commit_request() -> Result<RootFileCommitRequest, Box<dyn std::error::Error>>
         version_id: FileVersionId::from_bytes([14; 16])?,
         manifest_id: ContentManifestId::from_bytes([15; 16])?,
         manifest_format_version: 1,
+        content_authorization_revision: Revision::new(9),
+        content_deadline: UnixMicros::new(500),
         root_object_id: ObjectId::from_bytes([16; 16])?,
         expected_namespace_commit_id: None,
         expected_file_object_revision_id: None,
