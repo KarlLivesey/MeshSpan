@@ -18,7 +18,7 @@ use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::{
-    ApplyDisposition, AuthoritativeRepository, LogPosition, PageLimit, PreservedVote,
+    ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, PageLimit, PreservedVote,
     PrincipalKind, RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
     restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };
@@ -29,7 +29,7 @@ use crate::{
     CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
     DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
     NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName, RegisterRoutingSigner,
-    RouteAttestation, TagTarget,
+    ReplaceObjectOwners, RouteAttestation, TagTarget,
 };
 
 struct FixtureIds {
@@ -39,6 +39,270 @@ struct FixtureIds {
     inner_group: GroupId,
     outer_group: GroupId,
     partition: PartitionId,
+}
+
+#[test]
+fn owner_replacement_is_atomic_validated_and_restart_safe() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempdir()?;
+    let file_path = directory.path().join("owner-replacement.sqlite3");
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    let object_id = prepare_owner_replacement_fixture(&mut repository, &ids)?;
+
+    reject_invalid_owner_replacements(&mut repository, &ids, object_id)?;
+    set_principal_state(&mut repository, ids.second_user, 2)?;
+    assert_invalid_owner_replacement(
+        &mut repository,
+        &ids,
+        object_id,
+        214,
+        OwnerSetId::from_bytes([215; 16])?,
+        vec![ids.second_user],
+    )?;
+    set_principal_state(&mut repository, ids.second_user, 1)?;
+
+    let replacement_context = context(216, ids.administrator, 217, 105, Some(5))?;
+    let replacement = AuthoritativeCommand::ReplaceObjectOwners(ReplaceObjectOwners {
+        object_id,
+        owner_set_id: OwnerSetId::from_bytes([218; 16])?,
+        owners: BoundedItems::new(vec![ids.second_user, ids.outer_group.principal_id()], 1_024)?,
+    });
+    let receipt = repository.apply_committed(
+        LogPosition { index: 6, term: 1 },
+        replacement_context,
+        &replacement,
+    )?;
+    assert_eq!(receipt.entity.kind, EntityKind::NamespaceObject);
+    assert_eq!(receipt.entity.id, object_id.as_bytes());
+
+    let conflict = AuthoritativeCommand::ReplaceObjectOwners(ReplaceObjectOwners {
+        object_id,
+        owner_set_id: OwnerSetId::from_bytes([219; 16])?,
+        owners: BoundedItems::new(vec![ids.administrator], 1_024)?,
+    });
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 7, term: 1 },
+            replacement_context,
+            &conflict,
+        ),
+        Err(RepositoryError::OperationConflict)
+    ));
+
+    drop(repository.into_database());
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(106))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    let replay = repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        replacement_context,
+        &replacement,
+    )?;
+    assert_eq!(replay.disposition, ApplyDisposition::Replayed);
+    assert_eq!(replay.result_digest, receipt.result_digest);
+    verify_replaced_owners(repository, &ids, object_id)
+}
+
+fn prepare_owner_replacement_fixture(
+    repository: &mut AuthoritativeRepository,
+    ids: &FixtureIds,
+) -> Result<ObjectId, Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        1,
+        context(190, ids.administrator, 191, 100, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([192; 16])?,
+            mesh_name: RecordName::new("Owner replacement proof")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([193; 16])?,
+            host_id: HostId::from_bytes([194; 16])?,
+            host_name: RecordName::new("Owner host")?,
+            node_id: NodeId::from_bytes([195; 16])?,
+            node_name: RecordName::new("Owner node")?,
+            partition_name: RecordName::new("Owner authority")?,
+        }),
+    )?;
+    for (index, operation, audit, principal, name) in [
+        (2, 196, 197, ids.user, "First owner"),
+        (3, 198, 199, ids.second_user, "Second owner"),
+    ] {
+        apply(
+            repository,
+            index,
+            context(
+                operation,
+                ids.administrator,
+                audit,
+                98 + i64::try_from(index)?,
+                Some(index - 1),
+            )?,
+            &AuthoritativeCommand::CreateUser(CreateUser {
+                principal_id: principal,
+                name: RecordName::new(name)?,
+            }),
+        )?;
+    }
+    apply(
+        repository,
+        4,
+        context(200, ids.administrator, 201, 103, Some(3))?,
+        &AuthoritativeCommand::CreateGroup(CreateGroup {
+            group_id: ids.outer_group,
+            name: RecordName::new("Recovery owners")?,
+            activation_policy_id: None,
+        }),
+    )?;
+    let object_id = ObjectId::from_bytes([202; 16])?;
+    apply(
+        repository,
+        5,
+        context(203, ids.administrator, 204, 104, Some(4))?,
+        &AuthoritativeCommand::CreateVolume(CreateVolume {
+            volume_id: VolumeId::from_bytes([205; 16])?,
+            name: RecordName::new("Owned volume")?,
+            root_object_id: object_id,
+            owner_set_id: OwnerSetId::from_bytes([206; 16])?,
+            owners: BoundedItems::new(vec![ids.administrator], 1_024)?,
+        }),
+    )?;
+    Ok(object_id)
+}
+
+fn reject_invalid_owner_replacements(
+    repository: &mut AuthoritativeRepository,
+    ids: &FixtureIds,
+    object_id: ObjectId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (operation, owner_set, target, owners) in [
+        (207, 208, object_id, Vec::new()),
+        (209, 210, object_id, vec![ids.user, ids.user]),
+        (
+            211,
+            212,
+            object_id,
+            vec![PrincipalId::from_bytes([213; 16])?],
+        ),
+        (220, 221, ObjectId::from_bytes([222; 16])?, vec![ids.user]),
+    ] {
+        assert_invalid_owner_replacement(
+            repository,
+            ids,
+            target,
+            operation,
+            OwnerSetId::from_bytes([owner_set; 16])?,
+            owners,
+        )?;
+    }
+    Ok(())
+}
+
+fn assert_invalid_owner_replacement(
+    repository: &mut AuthoritativeRepository,
+    ids: &FixtureIds,
+    object_id: ObjectId,
+    operation: u8,
+    owner_set_id: OwnerSetId,
+    owners: Vec<PrincipalId>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 6, term: 1 },
+            context(
+                operation,
+                ids.administrator,
+                operation.saturating_add(1),
+                105,
+                Some(5),
+            )?,
+            &AuthoritativeCommand::ReplaceObjectOwners(ReplaceObjectOwners {
+                object_id,
+                owner_set_id,
+                owners: BoundedItems::new(owners, 1_024)?,
+            }),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(repository.current_revision()?, Revision::new(5));
+    Ok(())
+}
+
+fn set_principal_state(
+    repository: &mut AuthoritativeRepository,
+    principal_id: PrincipalId,
+    state: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let principal = principal_id.as_bytes();
+    repository.database.connection_mut().execute(
+        "UPDATE principals SET state = ?1 WHERE principal_id = ?2",
+        rusqlite::params![state, principal.as_slice()],
+    )?;
+    Ok(())
+}
+
+fn verify_replaced_owners(
+    repository: AuthoritativeRepository,
+    ids: &FixtureIds,
+    object_id: ObjectId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let invariant_report = repository.check_invariants(PageLimit::new(100)?)?;
+    assert!(invariant_report.findings.is_empty());
+    assert!(!invariant_report.truncated);
+    let database = repository.into_database();
+    let object = object_id.as_bytes();
+    let old_set = OwnerSetId::from_bytes([206; 16])?.as_bytes();
+    let new_set = OwnerSetId::from_bytes([218; 16])?.as_bytes();
+    let (stored_set, object_revision, old_count, new_count, audit_count): (
+        Vec<u8>,
+        i64,
+        i64,
+        i64,
+        i64,
+    ) = database.connection().query_row(
+        "SELECT
+            n.owner_set_id,
+            n.revision,
+            (SELECT count(*) FROM object_owners WHERE owner_set_id = ?2),
+            (SELECT count(*) FROM object_owners WHERE owner_set_id = ?3),
+            (SELECT count(*) FROM audit_events WHERE operation_id = ?4)
+         FROM namespace_objects n WHERE n.object_id = ?1",
+        rusqlite::params![
+            object.as_slice(),
+            old_set.as_slice(),
+            new_set.as_slice(),
+            OperationId::from_bytes([216; 16])?.as_bytes().as_slice(),
+        ],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    assert_eq!(stored_set, new_set);
+    assert_eq!(
+        (object_revision, old_count, new_count, audit_count),
+        (6, 1, 2, 1)
+    );
+    let expected = BTreeSet::from([ids.second_user, ids.outer_group.principal_id()]);
+    let mut statement = database.connection().prepare(
+        "SELECT owner_principal_id FROM object_owners
+         WHERE owner_set_id = ?1 ORDER BY owner_principal_id",
+    )?;
+    let rows = statement.query_map([new_set.as_slice()], |row| row.get::<_, Vec<u8>>(0))?;
+    let actual = rows
+        .map(|row| {
+            let bytes: [u8; 16] = row?.try_into().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            PrincipalId::from_bytes(bytes).map_err(|_| rusqlite::Error::InvalidQuery)
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    assert_eq!(actual, expected);
+    Ok(())
 }
 
 #[test]

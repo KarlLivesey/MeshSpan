@@ -1,10 +1,9 @@
 # Stage 2 completion evidence
 
-Status: historical evidence; completion audit reopened on 2026-08-28.
+Status: complete after executable re-audit on 2026-08-28.
 
-The behaviours below still pass, but this document's original completion claim
-was broader than its executable proof. The authoritative correction and closure
-gates are in [stage-1-3-audit.md](stage-1-3-audit.md).
+The authoritative correction and all closure gates are recorded in
+[stage-1-3-audit.md](stage-1-3-audit.md).
 
 Stage 2 establishes the single-partition authoritative metadata kernel. It does
 not claim network consensus, node enrolment, storage folders, erasure coding or
@@ -45,6 +44,10 @@ public file access; those remain later roadmap stages.
   active user/group owners. Parent kind/volume, scope and inheritance are
   validated before SQL mutation. Component configuration history and
   assignments use the same authorisation, replay and audit machinery.
+- Atomic owner replacement first validates a complete non-empty set of active
+  user/group principals, persists a fresh immutable owner set and switches the
+  logical object's pointer in one transaction. Failed input leaves both the
+  object and revision unchanged; prior owner sets remain immutable history.
 - Typed tag commands create bounded canonical definitions and attach/detach them
   only to active principals or logical objects. They share exact replay,
   conflict and audit machinery but never modify ownership, grants or authority.
@@ -67,6 +70,7 @@ public file access; those remain later roadmap stages.
 | Replay and hostile state | Exact replay preserves the original revision/result; conflicting reuse, stale position/revision, transitive cycles, malformed identifiers, digest drift and changed backup bytes fail closed |
 | Migration and integrity | Three immutable authoritative migrations and one local migration; reopen, wrong identity, newer/drifted history, strict constraints, `quick_check` and foreign-key vectors |
 | IAM and ownership | Shared user/group namespace, bounded exact closure, scheduled grants, grant/group self-activation and non-empty multiple user/group owner sets |
+| Atomic owner replacement | Empty, duplicate, missing and inactive owners plus missing objects fail without revision movement; a valid user/group replacement survives restart, exact replay and invariant verification while preserving the old immutable set |
 | Descriptive tags | Create/attach/detach covers principal and object targets, exact replay, conflicting reuse, duplicate/missing-edge rejection, name bounds, audit rows and proof that a tagged user gains no authority |
 | Desired configuration | Versioned component instances, retained configuration history, assignments, node support and desired-versus-observed records |
 | Backup and restore | Exact position/revision/schema/identity manifest, SHA-256 byte verification, active-voter admission and never-overwrite staged restore |
@@ -76,7 +80,5 @@ public file access; those remain later roadmap stages.
 
 ## Feedback-loop observation
 
-The complete warm local gate remained approximately 3.5–5.1 seconds during the
-Stage 2 work. A cold incremental Rust rebuild raised one observed run to 6.3
-seconds; the normal lanes remain independently scheduled across four
-resource-approved workers.
+The complete local gate passed after re-audit in 11.48 seconds. Its lanes remain
+independently scheduled across four resource-approved workers.

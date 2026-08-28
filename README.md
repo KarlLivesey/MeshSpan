@@ -56,11 +56,10 @@ administrator to operate a separate certificate system.
 ## Status
 
 MeshSpan is a clean-slate, pre-alpha project. No compatibility or stability guarantee applies
-before version 1.0. Stages 1 and 3 are complete; Stage 2 remains under executable re-audit after
-gaps were found between its roadmap language and process proof. See the
-[Stage 1–3 implementation audit](design/stage-1-3-audit.md). Folder storage work remains blocked on
-the two open Stage 2 command boundaries. The accepted requirements, architecture and
-implementation order are in the [design review pack](design/README.md).
+before version 1.0. Stages 1–3 are complete after executable re-audit; see the
+[Stage 1–3 implementation audit](design/stage-1-3-audit.md). Stage 4 folder-storage work is next.
+The accepted requirements, architecture and implementation order are in the
+[design review pack](design/README.md).
 
 ## Development
 
