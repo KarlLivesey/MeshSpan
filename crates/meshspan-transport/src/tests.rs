@@ -171,6 +171,72 @@ async fn certificate_valid_in_tls_but_absent_from_topology_is_rejected()
     Ok(())
 }
 
+#[tokio::test]
+async fn saturated_data_stream_does_not_block_consensus_control() -> Result<(), Box<dyn Error>> {
+    let certificates = certificates()?;
+    let limits = limits()?;
+    let server = server_endpoint(
+        loopback(),
+        certificates.server_credentials()?,
+        roots(&certificates.authority_certificate)?,
+        limits,
+    )?;
+    let client = client_endpoint(
+        loopback(),
+        certificates.client_credentials()?,
+        roots(&certificates.authority_certificate)?,
+        limits,
+    )?;
+    let server_address = server.local_addr()?;
+    let server_connection = async {
+        server
+            .accept()
+            .await
+            .ok_or(TransportError::InvalidConfiguration)?
+            .await
+            .map_err(TransportError::from)
+    };
+    let (client_connection, server_connection) = tokio::try_join!(
+        connect(&client, server_address, CERTIFICATE_NAME),
+        server_connection
+    )?;
+
+    let (mut data_send, _data_receive) = open_stream(&client_connection, StreamKind::Data).await?;
+    let held_data_stream = accept_stream(&server_connection).await?;
+    assert_eq!(held_data_stream.kind, StreamKind::Data);
+    let blocked_data_write =
+        tokio::spawn(async move { data_send.write_all(&vec![7_u8; 8 * 1_024 * 1_024]).await });
+
+    let (mut consensus_send, _consensus_receive) =
+        open_stream(&client_connection, StreamKind::Consensus).await?;
+    let envelope = ControlEnvelope {
+        header: None,
+        message: Some(Message::Ping(Ping {
+            nonce: 71,
+            sent_monotonic_micros: 9,
+        })),
+    };
+    send_control(&mut consensus_send, &envelope, limits.wire).await?;
+    let received = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        let mut accepted = accept_stream(&server_connection).await?;
+        if accepted.kind != StreamKind::Consensus {
+            return Err(TransportError::InvalidFrame);
+        }
+        receive_control(&mut accepted.receive, limits.wire).await
+    })
+    .await??;
+    assert_eq!(received.into_inner(), envelope);
+    assert!(!blocked_data_write.is_finished());
+    blocked_data_write.abort();
+    drop(held_data_stream);
+
+    client_connection.close(0_u32.into(), b"test complete");
+    server_connection.close(0_u32.into(), b"test complete");
+    client.wait_idle().await;
+    server.wait_idle().await;
+    Ok(())
+}
+
 struct Certificates {
     authority_certificate: CertificateDer<'static>,
     server_certificate: CertificateDer<'static>,
