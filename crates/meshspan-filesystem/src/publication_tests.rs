@@ -145,6 +145,14 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         |row| row.get(0),
     )?;
     assert_eq!(reconciliation_intents, 1);
+    let reconciliation_lineage: i64 = store.connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM sqlite_schema WHERE name = 'namespace_commit_intent_ancestors'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(reconciliation_lineage, 1);
     Ok(())
 }
 
@@ -174,6 +182,16 @@ fn real_directory_creates_enable_nested_file_publication_across_restart()
         reopened.publish_root_file(&file)?.disposition,
         PublicationDisposition::Replayed
     );
+    let file_intent = reopened
+        .branch_mutation_intent(file.namespace_commit_id)?
+        .ok_or("missing nested file intent")?;
+    assert_eq!(&file_intent.path, file.path.path());
+    assert_eq!(file_intent.ancestors, file.path.ancestors());
+    let directory_intent = reopened
+        .branch_mutation_intent(second.namespace_commit_id)?
+        .ok_or("missing nested directory intent")?;
+    assert_eq!(&directory_intent.path, second.path.path());
+    assert_eq!(directory_intent.ancestors, second.path.ancestors());
     assert_eq!(
         reopened
             .namespace_head(first.branch_id, first.volume_id)?
@@ -208,6 +226,15 @@ fn real_directory_creates_enable_nested_file_publication_across_restart()
         file.file_object_revision_id
     );
     assert_eq!(file_entry.object_id(), file.file.object_id);
+    reopened.connection.execute(
+        "UPDATE namespace_commit_intent_ancestors SET object_id = zeroblob(16)
+         WHERE namespace_commit_id = ?1 AND ancestor_ordinal = 0",
+        [file.namespace_commit_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        reopened.branch_mutation_intent(file.namespace_commit_id),
+        Err(PublicationError::Corrupt)
+    ));
     Ok(())
 }
 
@@ -318,6 +345,7 @@ fn branch_mutation_intents_round_trip_restart_and_reject_path_corruption()
     let expected = BranchMutationIntent {
         commit_id: file.namespace_commit_id,
         path: file.path.path().clone(),
+        ancestors: Vec::new(),
         object_id: file.file.object_id,
         object_revision_id: file.file_object_revision_id,
         prior_object_revision_id: None,
@@ -362,6 +390,7 @@ fn directory_commit_records_a_typed_replay_intent() -> Result<(), Box<dyn std::e
         Some(BranchMutationIntent {
             commit_id: publication.namespace_commit_id,
             path: publication.path.path().clone(),
+            ancestors: Vec::new(),
             object_id: publication.directory_object_id,
             object_revision_id: publication.directory_object_revision_id,
             prior_object_revision_id: None,
