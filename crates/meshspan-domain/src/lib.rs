@@ -2,11 +2,17 @@
 
 //! Pure `MeshSpan` domain types, decisions and deterministic state transitions.
 
+mod access;
 mod lifecycle;
 mod operation;
 mod primitives;
 mod seams;
+mod topology;
 
+pub use access::{
+    AccessActivation, AccessActivationError, AccessActivationPolicy, AccessActivationRequest,
+    AccessWindow, ActivationSubject, AssuranceLevel, GroupGraph, GroupGraphError, MembershipChange,
+};
 pub use lifecycle::{LifecycleEvent, LifecycleState, LifecycleTransitionError};
 pub use operation::{OperationDecision, OperationReceipt, classify_operation};
 pub use primitives::{
@@ -15,3 +21,7 @@ pub use primitives::{
     TargetId, UnixMicros, VolumeId,
 };
 pub use seams::{Clock, EntropyError, RandomSource};
+pub use topology::{
+    FailureScenario, FailureTerm, FaultGroupMember, ProtectionError, ProtectionLayout,
+    ProtectionProof, Topology, prove_protection,
+};

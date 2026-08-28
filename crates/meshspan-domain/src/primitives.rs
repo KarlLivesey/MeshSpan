@@ -117,6 +117,14 @@ define_identifier!(
     "Stable identity of one fault-group classification."
 );
 
+impl GroupId {
+    /// Returns the principal identity represented by this group.
+    #[must_use]
+    pub const fn principal_id(self) -> PrincipalId {
+        PrincipalId(self.0)
+    }
+}
+
 /// Authoritative UTC instant represented as epoch microseconds.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct UnixMicros(i64);
