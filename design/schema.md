@@ -1104,10 +1104,30 @@ cleanup_completions(
   PK(cleanup_id, item_index),
   FK(cleanup_id, item_index) -> cleanup_items
 )
+
+cleanup_attestation_keys(
+  node_id -> nodes, generation, verifying_key, state,
+  created_at, retired_at NULL, revision,
+  PK(node_id, generation)
+)
+
+version_cleanup_participants(
+  cleanup_operation_id -> version_cleanup_intents,
+  node_id -> nodes, node_incarnation, state,
+  attestation_operation_id NULL -> operations,
+  key_generation NULL, scan_operation_id NULL,
+  scan_request_digest NULL, reachability_subject_digest NULL,
+  local_roots_digest NULL, scan_result_digest NULL,
+  signature NULL, attested_at NULL, revision,
+  PK(cleanup_operation_id, node_id)
+)
 ```
 
 The removal permit is derived from one current cleanup item and leader epoch. It
-is not a generic stored bearer token.
+is not a generic stored bearer token. A cleanup proposal snapshots required
+gateway node incarnations; final authority remains unavailable until every row
+has one signature-verified terminal scan for the proposal's common reachability
+subject.
 
 ## 20. Repair, scrub and drain
 

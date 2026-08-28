@@ -119,6 +119,12 @@ fn persist_initial_topology(
          ) VALUES (?1, ?2, 1, 1, 1, ?3)",
         params![partition_id.as_slice(), node.as_slice(), stored_revision],
     )?;
+    for role_code in [1_u8, 2, 3] {
+        transaction.execute(
+            "INSERT INTO node_roles(node_id, role_code, revision) VALUES (?1, ?2, ?3)",
+            params![node.as_slice(), role_code, stored_revision],
+        )?;
+    }
     Ok(())
 }
 

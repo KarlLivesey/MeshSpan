@@ -101,6 +101,8 @@ pub struct VersionUnreachableProof {
     pub manifest_id: ContentManifestId,
     /// Digest binding the candidate, retention selection and retained-root authority.
     pub scan_request_digest: [u8; 32],
+    /// Operation-independent digest shared by honest scans of this exact cleanup subject.
+    pub subject_digest: [u8; 32],
     /// Exact retention-policy sequence used to select the version.
     pub retention_policy_sequence: u64,
     /// Replicated metadata revision governing authoritative roots.
@@ -176,7 +178,8 @@ pub(crate) fn begin(
     request: &VersionReachabilityScanRequest,
 ) -> Result<VersionReachabilityProgress, VersionReachabilityError> {
     validate_scan_request(request)?;
-    let digest = scan_request_digest(request);
+    let subject_digest = reachability_subject_digest(request);
+    let digest = scan_request_digest(request.operation_id, subject_digest);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(stored) = load_scan_request(&transaction, request.operation_id)? {
         if stored == digest {
@@ -199,9 +202,9 @@ pub(crate) fn begin(
         "INSERT INTO version_reachability_scans(
             operation_id, request_digest, volume_id, version_id, manifest_id,
             metadata_revision, expected_root_count, expected_root_digest,
-            retention_policy_sequence,
+            retention_policy_sequence, subject_digest,
             roots_received, local_roots_digest, state, started_at, completed_at, result_digest
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, NULL, 1, ?10, NULL, NULL)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, NULL, 1, ?11, NULL, NULL)",
         params![
             request.operation_id.as_bytes().as_slice(),
             digest.as_slice(),
@@ -212,6 +215,7 @@ pub(crate) fn begin(
             to_i64(request.root_count)?,
             request.root_digest.as_slice(),
             to_i64(request.candidate.policy_sequence)?,
+            subject_digest.as_slice(),
             request.selected_at.get(),
         ],
     )?;
@@ -351,6 +355,7 @@ pub(crate) fn advance(
 struct StoredScan {
     operation_id: OperationId,
     request_digest: [u8; 32],
+    subject_digest: [u8; 32],
     volume_id: VolumeId,
     version_id: FileVersionId,
     manifest_id: ContentManifestId,
@@ -372,7 +377,8 @@ fn load_scan(
         .query_row(
             "SELECT request_digest, volume_id, version_id, manifest_id, metadata_revision,
                     expected_root_count, expected_root_digest, roots_received,
-                    local_roots_digest, state, result_digest, retention_policy_sequence
+                    local_roots_digest, state, result_digest, retention_policy_sequence,
+                    subject_digest
              FROM version_reachability_scans WHERE operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
@@ -389,6 +395,7 @@ fn load_scan(
                     row.get::<_, i64>(9)?,
                     row.get::<_, Option<Vec<u8>>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<Vec<u8>>>(12)?,
                 ))
             },
         )
@@ -403,6 +410,12 @@ fn load_scan(
     Ok(StoredScan {
         operation_id,
         request_digest: array(&stored.0)?,
+        subject_digest: stored
+            .12
+            .as_deref()
+            .map(array)
+            .transpose()?
+            .ok_or(VersionReachabilityError::Corrupt)?,
         volume_id: identifier(&stored.1, VolumeId::from_bytes)?,
         version_id: identifier(&stored.2, FileVersionId::from_bytes)?,
         manifest_id: identifier(&stored.3, ContentManifestId::from_bytes)?,
@@ -452,10 +465,11 @@ fn validate_scan_request(
     }
 }
 
-fn scan_request_digest(request: &VersionReachabilityScanRequest) -> [u8; 32] {
+/// Calculates the operation-independent identity shared by scans of one exact cleanup subject.
+#[must_use]
+pub fn reachability_subject_digest(request: &VersionReachabilityScanRequest) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.version-reachability-request.v1\0");
-    digest.update(&request.operation_id.as_bytes());
+    digest.update(b"meshspan.version-reachability-subject.v1\0");
     digest.update(&request.candidate.version_id.as_bytes());
     digest.update(&request.candidate.superseded_by_version_id.as_bytes());
     digest.update(&request.candidate.branch_id.as_bytes());
@@ -475,6 +489,14 @@ fn scan_request_digest(request: &VersionReachabilityScanRequest) -> [u8; 32] {
     digest.update(&request.metadata_revision.get().to_be_bytes());
     digest.update(&request.root_count.to_be_bytes());
     digest.update(&request.root_digest);
+    digest.finalize().into()
+}
+
+fn scan_request_digest(operation_id: OperationId, subject_digest: [u8; 32]) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.version-reachability-request.v2\0");
+    digest.update(&operation_id.as_bytes());
+    digest.update(&subject_digest);
     digest.finalize().into()
 }
 
@@ -955,6 +977,7 @@ fn progress(
             version_id: scan.version_id,
             manifest_id: scan.manifest_id,
             scan_request_digest: scan.request_digest,
+            subject_digest: scan.subject_digest,
             retention_policy_sequence: scan.retention_policy_sequence,
             metadata_revision: scan.metadata_revision,
             root_count: scan.root_count,

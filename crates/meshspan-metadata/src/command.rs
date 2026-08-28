@@ -62,6 +62,10 @@ pub enum AuthoritativeCommand {
     ConfigureVersionRetention(ConfigureVersionRetention),
     /// Proposes cleanup from one exact proof; cross-node validation remains required.
     ProposeVersionCleanup(ProposeVersionCleanup),
+    /// Registers a node-scoped Ed25519 key for cleanup reachability attestations.
+    RegisterCleanupAttestationKey(RegisterCleanupAttestationKey),
+    /// Records one required node incarnation's signed unreachable-version attestation.
+    AttestVersionCleanup(AttestVersionCleanup),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
@@ -135,6 +139,8 @@ impl AuthoritativeCommand {
             Self::RunSnapshotSchedule(value) => value.update_digest(digest),
             Self::ConfigureVersionRetention(value) => value.update_digest(digest),
             Self::ProposeVersionCleanup(value) => value.update_digest(digest),
+            Self::RegisterCleanupAttestationKey(value) => value.update_digest(digest),
+            Self::AttestVersionCleanup(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
@@ -457,6 +463,8 @@ pub struct ProposeVersionCleanup {
     pub source_scan_operation_id: OperationId,
     /// Digest binding the scan candidate, policy and root authority.
     pub scan_request_digest: [u8; 32],
+    /// Operation-independent digest of the exact candidate, policy and root authority.
+    pub reachability_subject_digest: [u8; 32],
     /// Exact current retention policy sequence used by preliminary selection.
     pub retention_policy_sequence: u64,
     /// Metadata revision against which every retained root was enumerated.
@@ -469,6 +477,71 @@ pub struct ProposeVersionCleanup {
     pub local_roots_digest: [u8; 32],
     /// Terminal scanner digest proving the unreachable outcome.
     pub proof_result_digest: [u8; 32],
+}
+
+/// Public key authorised only for one node's cleanup reachability attestations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisterCleanupAttestationKey {
+    /// Existing admitted or active node.
+    pub node_id: NodeId,
+    /// Strictly increasing key generation for that node.
+    pub generation: u64,
+    /// Strict Ed25519 verifying-key bytes.
+    pub verifying_key: [u8; 32],
+}
+
+/// Signed statement that one exact node incarnation found no local reference to a cleanup target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VersionCleanupAttestation {
+    /// Replicated cleanup proposal being attested.
+    pub cleanup_operation_id: OperationId,
+    /// Revision that created the immutable participant snapshot.
+    pub cleanup_revision: Revision,
+    /// Required node identity.
+    pub node_id: NodeId,
+    /// Exact required node incarnation, fencing restored or restarted state.
+    pub node_incarnation: u64,
+    /// Exact cleanup-attestation key generation.
+    pub key_generation: u64,
+    /// Node-local durable reachability scan identity.
+    pub scan_operation_id: OperationId,
+    /// Exact node-local scan request digest, including its unique operation identity.
+    pub scan_request_digest: [u8; 32],
+    /// Operation-independent digest shared with the proposal and every honest peer scan.
+    pub reachability_subject_digest: [u8; 32],
+    /// Digest of the node's unchanged local branch and lifecycle roots.
+    pub local_roots_digest: [u8; 32],
+    /// Terminal unreachable result digest from that node's scanner.
+    pub scan_result_digest: [u8; 32],
+    /// Ed25519 signature over [`Self::signing_digest`].
+    pub signature: [u8; 64],
+}
+
+impl VersionCleanupAttestation {
+    /// Returns the domain-separated digest signed by the attesting node.
+    #[must_use]
+    pub fn signing_digest(&self) -> [u8; 32] {
+        let mut digest = blake3::Hasher::new();
+        digest.update(b"meshspan.version-cleanup-attestation.v1\0");
+        digest.update(&self.cleanup_operation_id.as_bytes());
+        digest.update(&self.cleanup_revision.get().to_be_bytes());
+        digest.update(&self.node_id.as_bytes());
+        digest.update(&self.node_incarnation.to_be_bytes());
+        digest.update(&self.key_generation.to_be_bytes());
+        digest.update(&self.scan_operation_id.as_bytes());
+        digest.update(&self.scan_request_digest);
+        digest.update(&self.reachability_subject_digest);
+        digest.update(&self.local_roots_digest);
+        digest.update(&self.scan_result_digest);
+        digest.finalize().into()
+    }
+}
+
+/// One replicated signed cleanup reachability attestation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AttestVersionCleanup {
+    /// Complete signed statement.
+    pub attestation: VersionCleanupAttestation,
 }
 
 /// Namespace object kind stored as a closed integer contract.
@@ -1040,12 +1113,40 @@ digest_simple_record!(
         digest.identifier(value.manifest_id.as_bytes());
         digest.identifier(value.source_scan_operation_id.as_bytes());
         digest.bytes(&value.scan_request_digest);
+        digest.bytes(&value.reachability_subject_digest);
         digest.unsigned(value.retention_policy_sequence);
         digest.unsigned(value.reachability_revision.get());
         digest.unsigned(value.retained_root_count);
         digest.bytes(&value.retained_root_digest);
         digest.bytes(&value.local_roots_digest);
         digest.bytes(&value.proof_result_digest);
+    }
+);
+digest_simple_record!(
+    RegisterCleanupAttestationKey,
+    b"register-cleanup-attestation-key",
+    |value, digest| {
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.generation);
+        digest.bytes(&value.verifying_key);
+    }
+);
+digest_simple_record!(
+    AttestVersionCleanup,
+    b"attest-version-cleanup",
+    |value, digest| {
+        let value = value.attestation;
+        digest.identifier(value.cleanup_operation_id.as_bytes());
+        digest.unsigned(value.cleanup_revision.get());
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.node_incarnation);
+        digest.unsigned(value.key_generation);
+        digest.identifier(value.scan_operation_id.as_bytes());
+        digest.bytes(&value.scan_request_digest);
+        digest.bytes(&value.reachability_subject_digest);
+        digest.bytes(&value.local_roots_digest);
+        digest.bytes(&value.scan_result_digest);
+        digest.bytes(&value.signature);
     }
 );
 digest_simple_record!(CreateVolume, b"create-volume", |value, digest| {

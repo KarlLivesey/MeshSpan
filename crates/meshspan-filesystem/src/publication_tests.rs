@@ -22,7 +22,7 @@ use crate::{
     VersionReachabilityScanRequest, VersionReachabilityState, VersionReclaimMode,
     VersionRetentionCandidate, VersionRetentionCandidateReason, VersionRetentionError,
     VersionRetentionPageLimit, VersionRetentionPressure, VersionRetentionSelectionPolicy,
-    reachability_root_digest,
+    reachability_root_digest, reachability_subject_digest,
 };
 
 #[test]
@@ -377,6 +377,12 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
     let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
     let roots = vec![publication_root(&second)];
     let request = reachability_request(candidate, policy, &roots, 170)?;
+    let mut peer_request = request;
+    peer_request.operation_id = OperationId::from_bytes([169; 16])?;
+    assert_eq!(
+        reachability_subject_digest(&request),
+        reachability_subject_digest(&peer_request)
+    );
 
     let begun = store.begin_version_reachability_scan(&request)?;
     assert_eq!(begun.state, VersionReachabilityState::CollectingRoots);
@@ -415,6 +421,7 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
     assert_eq!(proof.retention_policy_sequence, policy.sequence());
     assert_eq!(proof.root_count, request.root_count);
     assert_eq!(proof.root_digest, request.root_digest);
+    assert_eq!(proof.subject_digest, reachability_subject_digest(&request));
     assert!(progress.work_processed >= 3);
     assert_eq!(progress.work_pending, 0);
     assert_eq!(

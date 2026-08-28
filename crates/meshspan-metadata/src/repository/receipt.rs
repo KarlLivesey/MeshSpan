@@ -76,6 +76,8 @@ pub enum EntityKind {
     SnapshotSchedule = 20,
     /// Replicated unreachable-version cleanup intent.
     VersionCleanup = 21,
+    /// Node-scoped public key for cleanup attestations.
+    CleanupAttestationKey = 22,
 }
 
 impl EntityKind {
@@ -102,6 +104,7 @@ impl EntityKind {
             19 => Ok(Self::VolumeSnapshot),
             20 => Ok(Self::SnapshotSchedule),
             21 => Ok(Self::VersionCleanup),
+            22 => Ok(Self::CleanupAttestationKey),
             _ => Err(RepositoryError::CorruptState),
         }
     }
