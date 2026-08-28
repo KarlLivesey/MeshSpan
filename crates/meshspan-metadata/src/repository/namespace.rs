@@ -12,6 +12,7 @@ use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{CommandContext, CreateObject, CreateVolume, NamespaceObjectKind, ReplaceObjectOwners};
 
 const MAXIMUM_OWNERS: usize = 1_024;
+const DEFAULT_RETENTION_MICROS: i64 = 2_592_000_000_000;
 
 pub(super) fn create_volume(
     transaction: &Transaction<'_>,
@@ -40,6 +41,20 @@ pub(super) fn create_volume(
             actor.as_slice(),
             context.occurred_at.get(),
             stored_revision
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO version_retention_policy_revisions(
+            volume_id, policy_sequence, history_enabled, minimum_age_micros,
+            maximum_age_micros, minimum_versions, reclaim_mode, soft_minimum_breakable,
+            conflict_minimum_age_micros, configured_by, configured_at, revision
+         ) VALUES (?1, 1, 1, ?2, NULL, NULL, 1, 1, ?2, ?3, ?4, ?5)",
+        params![
+            volume.as_slice(),
+            DEFAULT_RETENTION_MICROS,
+            actor.as_slice(),
+            context.occurred_at.get(),
+            stored_revision,
         ],
     )?;
     let root = command.root_object_id.as_bytes();

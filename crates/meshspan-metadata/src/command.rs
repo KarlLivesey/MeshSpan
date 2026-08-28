@@ -47,6 +47,8 @@ pub enum AuthoritativeCommand {
     CommitConvergedVolumeHead(CommitConvergedVolumeHead),
     /// Pins one exact current converged namespace root as a read-only volume snapshot.
     CreateVolumeSnapshot(CreateVolumeSnapshot),
+    /// Appends and selects one immutable per-volume file-version retention policy.
+    ConfigureVersionRetention(ConfigureVersionRetention),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
@@ -113,6 +115,7 @@ impl AuthoritativeCommand {
             Self::CreateVolume(value) => value.update_digest(digest),
             Self::CommitConvergedVolumeHead(value) => value.update_digest(digest),
             Self::CreateVolumeSnapshot(value) => value.update_digest(digest),
+            Self::ConfigureVersionRetention(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
@@ -286,6 +289,40 @@ pub struct CreateVolumeSnapshot {
     pub expires_at: Option<UnixMicros>,
     /// Whether automatic expiry and pressure reclamation are forbidden.
     pub protected_from_expiry: bool,
+}
+
+/// Closed trigger deciding when an otherwise eligible historical version is reclaimed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetentionReclaimMode {
+    /// Reclaim after the minimum age only when the storage target is under pressure.
+    UnderPressure,
+    /// Reclaim once the configured maximum age is reached.
+    AfterMaximumAge,
+    /// Reclaim eagerly as soon as the minimum age is reached.
+    EagerAfterMinimumAge,
+}
+
+/// One complete immutable replacement for a volume's version-retention policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigureVersionRetention {
+    /// Volume receiving the policy.
+    pub volume_id: VolumeId,
+    /// Exact currently selected policy sequence.
+    pub expected_policy_sequence: u64,
+    /// Whether future superseded versions enter ordinary history.
+    pub history_enabled: bool,
+    /// Ordinary minimum retention age.
+    pub minimum_age: DurationMicros,
+    /// Optional maximum retention age, never shorter than the minimum.
+    pub maximum_age: Option<DurationMicros>,
+    /// Optional number of newest historical versions retained regardless of age.
+    pub minimum_versions: Option<u32>,
+    /// Trigger used after other reachability and hard-retention guards pass.
+    pub reclaim_mode: RetentionReclaimMode,
+    /// Whether critical pressure may break the ordinary minimum as a last resort.
+    pub soft_minimum_breakable: bool,
+    /// Mandatory safety age for acknowledged concurrent alternatives.
+    pub conflict_minimum_age: DurationMicros,
 }
 
 /// Namespace object kind stored as a closed integer contract.
@@ -757,6 +794,25 @@ digest_simple_record!(
         digest.name(&value.name);
         digest.optional_instant(value.expires_at);
         digest.boolean(value.protected_from_expiry);
+    }
+);
+digest_simple_record!(
+    ConfigureVersionRetention,
+    b"configure-version-retention",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.unsigned(value.expected_policy_sequence);
+        digest.boolean(value.history_enabled);
+        digest.unsigned(value.minimum_age.get());
+        digest.optional_unsigned(value.maximum_age.map(DurationMicros::get));
+        digest.optional_unsigned(value.minimum_versions.map(u64::from));
+        digest.byte(match value.reclaim_mode {
+            RetentionReclaimMode::UnderPressure => 1,
+            RetentionReclaimMode::AfterMaximumAge => 2,
+            RetentionReclaimMode::EagerAfterMinimumAge => 3,
+        });
+        digest.boolean(value.soft_minimum_breakable);
+        digest.unsigned(value.conflict_minimum_age.get());
     }
 );
 digest_simple_record!(CreateVolume, b"create-volume", |value, digest| {

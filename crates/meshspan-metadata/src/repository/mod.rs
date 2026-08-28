@@ -16,6 +16,7 @@ mod namespace;
 mod query;
 mod quorum_plan;
 mod receipt;
+mod retention;
 mod routing;
 mod snapshot;
 mod tags;
@@ -40,6 +41,7 @@ pub use query::{
     PrincipalRecord,
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
+pub use retention::VersionRetentionPolicy;
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use user_snapshot::{SnapshotCursor, VolumeSnapshot};
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
@@ -232,6 +234,18 @@ impl AuthoritativeRepository {
         user_snapshot::list(&self.database, volume_id, after, limit)
     }
 
+    /// Returns the exact currently selected version-retention policy for one volume.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for sequence gaps, malformed values or database failure.
+    pub fn version_retention_policy(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VersionRetentionPolicy>, RepositoryError> {
+        retention::load(&self.database, volume_id)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -345,6 +359,9 @@ pub enum RepositoryError {
     /// A per-volume converged-head compare-and-swap base is stale.
     #[error("expected converged volume head is stale")]
     StaleVolumeHead,
+    /// A per-volume immutable retention-policy sequence is stale.
+    #[error("expected version-retention policy is stale")]
+    StaleRetentionPolicy,
     /// A command violates a semantic precondition.
     #[error("authoritative command is invalid")]
     InvalidCommand,
@@ -374,6 +391,8 @@ pub enum RepositoryError {
     InjectedFault,
 }
 
+#[cfg(test)]
+mod retention_tests;
 #[cfg(test)]
 mod snapshot_tests;
 #[cfg(test)]

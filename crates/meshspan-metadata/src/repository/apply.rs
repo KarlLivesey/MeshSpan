@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
-    cluster, component, identity, namespace, routing, tags, user_snapshot, volume_head,
+    cluster, component, identity, namespace, retention, routing, tags, user_snapshot, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -333,6 +333,9 @@ fn execute(
         AuthoritativeCommand::CreateVolumeSnapshot(value) => {
             user_snapshot::create(transaction, context, value, revision)
         }
+        AuthoritativeCommand::ConfigureVersionRetention(value) => {
+            retention::configure(transaction, context, *value, revision)
+        }
         AuthoritativeCommand::CreateObject(value) => {
             namespace::create_object(transaction, context, value, revision)
         }
@@ -571,6 +574,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ReplaceObjectOwners(_) => 26,
         AuthoritativeCommand::CommitConvergedVolumeHead(_) => 27,
         AuthoritativeCommand::CreateVolumeSnapshot(_) => 28,
+        AuthoritativeCommand::ConfigureVersionRetention(_) => 29,
     }
 }
 

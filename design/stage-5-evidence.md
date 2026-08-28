@@ -180,7 +180,13 @@ copy-on-write filesystem service. This document records executable evidence only
    index-aligned bounded listing with a next cursor only when another page
    exists. Snapshot expiry/removal, schedules, version-retention selection,
    reachability guards and restore-as-new-head remain required before this gate
-   can close.
+   can close. Every new volume now receives the accepted safe ordinary-history
+   default: enabled, 30-day soft minimum, pressure-triggered reclamation and a
+   separate 30-day conflict minimum. Policy changes append immutable per-volume
+   revisions behind an exact sequence CAS; validation rejects zero counts,
+   inverted ages, unsafe conflict minima and maximum-age mode without a maximum.
+   The current policy is restart-safe and fails closed on sequence gaps. Candidate
+   selection and guarded physical reclamation are still outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
