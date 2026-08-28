@@ -29,6 +29,16 @@ copy-on-write filesystem service. This document records executable evidence only
   merged range map; commit refuses holes unless sparse completion was explicit,
   in which case only logical zeroes fill them. This is the shared semantic oracle
   for the durable staging backend and is not itself claimed as persistence.
+- The durable staging backend now journals stage identity and ordered accepted
+  ranges in a dedicated SQLite-compatible WAL with `FULL` synchronisation, and
+  stores each operation as an immutable, digest-verified part beneath the daemon
+  state directory. A part is synced and its directory entry made durable before
+  its journal acknowledgement; orphan parts are ignored until an exact retry
+  adopts them. Executable restart tests cover overlapping writes, holes, sparse
+  completion, expiry, corrupted parts, recovery of a missing stage directory,
+  and process loss after durable part installation but before journal commit.
+  This advances gate 2 but does not close it: immutable published versions and
+  atomic volume-head publication remain to be implemented.
 
 ## Closure gates
 

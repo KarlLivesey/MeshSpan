@@ -210,7 +210,7 @@ fn validate_write(
     })
 }
 
-fn insert_range(ranges: &mut Vec<Range<u64>>, mut inserted: Range<u64>) {
+pub(crate) fn insert_range(ranges: &mut Vec<Range<u64>>, mut inserted: Range<u64>) {
     let mut merged = Vec::with_capacity(ranges.len().saturating_add(1));
     let mut placed = false;
     for range in ranges.drain(..) {
@@ -233,7 +233,7 @@ fn insert_range(ranges: &mut Vec<Range<u64>>, mut inserted: Range<u64>) {
     *ranges = merged;
 }
 
-fn covers(ranges: &[Range<u64>], final_length: u64) -> bool {
+pub(crate) fn covers(ranges: &[Range<u64>], final_length: u64) -> bool {
     final_length > 0
         && ranges
             .first()
