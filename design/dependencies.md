@@ -48,6 +48,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `serde_json` | 1.0.151 | `MIT OR Apache-2.0` |
 | `sha2` | 0.10.9 | `MIT OR Apache-2.0` |
 | `thiserror` | 2.0.20 | `MIT OR Apache-2.0` |
+| `unicode-normalization` | 0.1.25 | `MIT OR Apache-2.0` |
 | `tempfile` (test only) | 3.27.0 | `MIT OR Apache-2.0` |
 
 | Web/runtime dependency | Version | Declared licence |

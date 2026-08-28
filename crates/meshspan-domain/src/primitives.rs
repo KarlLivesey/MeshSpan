@@ -108,6 +108,22 @@ define_identifier!(VolumeId, "Stable identity of one volume.");
 define_identifier!(ObjectId, "Stable identity of one namespace object.");
 define_identifier!(GrantId, "Stable identity of one permission grant.");
 define_identifier!(
+    ActivationPolicyId,
+    "Stable identity of one access-activation policy."
+);
+define_identifier!(
+    ActivationId,
+    "Stable identity of one accepted access activation."
+);
+define_identifier!(OwnerSetId, "Stable identity of one immutable owner set.");
+define_identifier!(
+    ComponentInstanceId,
+    "Stable identity of one configured component instance."
+);
+define_identifier!(AuditEventId, "Stable identity of one audit event.");
+define_identifier!(TagId, "Stable identity of one descriptive tag.");
+define_identifier!(BackupId, "Stable identity of one metadata backup.");
+define_identifier!(
     OperationId,
     "Stable idempotency identity of one logical mutation."
 );
