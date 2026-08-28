@@ -901,6 +901,12 @@ snapshots(
   UNIQUE(volume_id, canonical_name)
 )
 
+snapshot_expiry_requests(
+  snapshot_id PK -> snapshots,
+  operation_id UNIQUE -> operations,
+  automatic, reason_code, requested_at, revision UNIQUE
+)
+
 snapshot_schedules(
   schedule_id PK, volume_id -> volumes,
   schedule_expression, retention_count NULL,
