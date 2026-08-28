@@ -6,11 +6,13 @@ mod config;
 mod folder;
 mod journal;
 mod marker;
+mod shard;
 
 pub use config::{HeadlessStorageConfig, StorageConfigError, UsageLimit};
 pub use folder::{FolderRegistration, RegisteredFolder, StorageFolderError};
 pub use journal::{
-    CapacityObservation, CapacityPolicy, JournalCapacity, ReserveCapacityRequest, TargetJournal,
+    CapacityObservation, CapacityPolicy, DurablePackEvidence, JournalCapacity, JournalPutRequest,
+    PendingPut, PendingPutPage, PreparePutResult, ReserveCapacityRequest, TargetJournal,
     TargetJournalError,
 };
 pub use marker::{MarkerFingerprint, TargetMarker};
