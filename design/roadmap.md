@@ -77,6 +77,8 @@ REL-002, DEV-001–006, EXT-001–005.
 
 **Depends on:** Stage 1.
 
+**Status:** complete. See [`stage-2-evidence.md`](stage-2-evidence.md).
+
 Build:
 
 - SQLite-compatible migrations for the state-machine and node-local records;

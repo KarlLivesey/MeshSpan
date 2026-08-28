@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Atomic creation of the first mesh, authority, administrator and voter.
+
+use meshspan_domain::Revision;
+use rusqlite::{Transaction, params};
+
+use super::apply::to_i64;
+use super::{EntityKind, EntityReference, RepositoryError, identity};
+use crate::{BootstrapMesh, CommandContext};
+
+const PRINCIPAL_USER: u8 = 1;
+const ALL_SYSTEM_RIGHTS: u16 = 255;
+
+pub(super) fn bootstrap(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    context: CommandContext,
+    command: &BootstrapMesh,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    identity::insert_principal(
+        transaction,
+        command.administrator_id,
+        PRINCIPAL_USER,
+        &command.administrator_name,
+        context,
+        revision,
+    )?;
+    let administrator = command.administrator_id.as_bytes();
+    transaction.execute(
+        "INSERT INTO users(principal_id, primary_email) VALUES (?1, NULL)",
+        [administrator.as_slice()],
+    )?;
+    let mesh = persist_mesh(transaction, context, command, revision)?;
+    persist_initial_topology(transaction, partition_id, context, command, revision)?;
+    persist_administrator_role(transaction, context, command, revision)?;
+    Ok(EntityReference {
+        kind: EntityKind::Mesh,
+        id: mesh,
+    })
+}
+
+fn persist_mesh(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &BootstrapMesh,
+    revision: Revision,
+) -> Result<[u8; 16], RepositoryError> {
+    let mesh = command.mesh_id.as_bytes();
+    let stored_revision = to_i64(revision.get())?;
+    transaction.execute(
+        "INSERT INTO meshes(
+            mesh_id, display_name, canonical_name, created_at, configuration_revision,
+            identity_revision, namespace_revision, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5, ?5)",
+        params![
+            mesh.as_slice(),
+            command.mesh_name.display(),
+            command.mesh_name.canonical(),
+            context.occurred_at.get(),
+            stored_revision
+        ],
+    )?;
+    Ok(mesh)
+}
+
+fn persist_initial_topology(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    context: CommandContext,
+    command: &BootstrapMesh,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let stored_revision = to_i64(revision.get())?;
+    let host = command.host_id.as_bytes();
+    transaction.execute(
+        "INSERT INTO hosts(
+            host_id, display_name, canonical_name, state, created_at, retired_at, revision
+         ) VALUES (?1, ?2, ?3, 1, ?4, NULL, ?5)",
+        params![
+            host.as_slice(),
+            command.host_name.display(),
+            command.host_name.canonical(),
+            context.occurred_at.get(),
+            stored_revision
+        ],
+    )?;
+    let node = command.node_id.as_bytes();
+    transaction.execute(
+        "INSERT INTO nodes(
+            node_id, host_id, display_name, canonical_name, state, current_incarnation,
+            admitted_at, activated_at, retired_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, 2, 1, ?5, ?5, NULL, ?6)",
+        params![
+            node.as_slice(),
+            host.as_slice(),
+            command.node_name.display(),
+            command.node_name.canonical(),
+            context.occurred_at.get(),
+            stored_revision
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO metadata_partitions(
+            partition_id, partition_kind, display_name, state, routing_epoch,
+            current_membership_revision, created_at, retired_at, revision
+         ) VALUES (?1, 1, ?2, 1, 1, 1, ?3, NULL, ?4)",
+        params![
+            partition_id.as_slice(),
+            command.partition_name.display(),
+            context.occurred_at.get(),
+            stored_revision
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO partition_voters(
+            partition_id, node_id, membership_revision, member_role, state, revision
+         ) VALUES (?1, ?2, 1, 1, 1, ?3)",
+        params![partition_id.as_slice(), node.as_slice(), stored_revision],
+    )?;
+    Ok(())
+}
+
+fn persist_administrator_role(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &BootstrapMesh,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let stored_revision = to_i64(revision.get())?;
+    let administrator = command.administrator_id.as_bytes();
+    let role = command.administrator_role_id.as_bytes();
+    transaction.execute(
+        "INSERT INTO roles(
+            role_id, display_name, canonical_name, system_rights, created_at, revision
+         ) VALUES (?1, 'System administrators', 'system administrators', ?2, ?3, ?4)",
+        params![
+            role.as_slice(),
+            ALL_SYSTEM_RIGHTS,
+            context.occurred_at.get(),
+            stored_revision
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO role_grants(
+            role_id, principal_id, valid_from, valid_until, activation_policy_id,
+            created_by, created_at, revision
+         ) VALUES (?1, ?2, NULL, NULL, NULL, ?2, ?3, ?4)",
+        params![
+            role.as_slice(),
+            administrator.as_slice(),
+            context.occurred_at.get(),
+            stored_revision
+        ],
+    )?;
+    Ok(())
+}

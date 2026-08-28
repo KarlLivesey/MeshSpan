@@ -19,9 +19,10 @@ pub use operation::{
     CommitOutcome, DurabilityScope, OperationDecision, OperationReceipt, classify_operation,
 };
 pub use primitives::{
-    DurationMicros, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError,
-    MeshId, NodeId, ObjectId, OperationId, PartitionId, PrincipalId, Revision, RevisionError,
-    TargetId, UnixMicros, VolumeId,
+    ActivationId, ActivationPolicyId, AuditEventId, BackupId, ComponentInstanceId, DurationMicros,
+    FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError, MeshId, NodeId,
+    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, RevisionError, RoleId,
+    TagId, TargetId, UnixMicros, VolumeId,
 };
 pub use seams::{Clock, EntropyError, RandomSource};
 pub use topology::{

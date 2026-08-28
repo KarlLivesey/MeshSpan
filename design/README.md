@@ -29,9 +29,10 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 20. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
 21. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
 22. [stage-1-evidence.md](stage-1-evidence.md) — completed foundation evidence and measured gate.
-23. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
-24. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
-25. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
+23. [stage-2-evidence.md](stage-2-evidence.md) — completed authoritative-kernel evidence and recovery proof.
+24. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
+25. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
+26. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
 
 ## Document rules
 
