@@ -99,6 +99,7 @@ define_identifier!(
     "Stable identity of one registered storage target."
 );
 define_identifier!(PartitionId, "Stable identity of one metadata partition.");
+define_identifier!(ScopeId, "Stable identity of one routed metadata scope.");
 define_identifier!(
     PrincipalId,
     "Stable identity of one user or group principal."

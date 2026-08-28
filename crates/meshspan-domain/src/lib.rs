@@ -6,6 +6,7 @@ mod access;
 mod lifecycle;
 mod operation;
 mod primitives;
+mod routing;
 mod seams;
 mod topology;
 
@@ -22,8 +23,9 @@ pub use primitives::{
     ActivationId, ActivationPolicyId, AuditEventId, BackupId, ComponentInstanceId, DurationMicros,
     FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, IdentifierError, JoinGrantId,
     MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId,
-    Revision, RevisionError, RoleId, TagId, TargetId, UnixMicros, VolumeId,
+    Revision, RevisionError, RoleId, ScopeId, TagId, TargetId, UnixMicros, VolumeId,
 };
+pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};
 pub use topology::{
     FailureScenario, FailureTerm, FaultGroupMember, ProtectionError, ProtectionLayout,
