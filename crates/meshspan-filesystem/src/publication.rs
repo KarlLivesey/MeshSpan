@@ -2,22 +2,25 @@
 
 //! Immutable manifest/version publication with one atomic branch-file head transition.
 
+#[path = "namespace_publication.rs"]
+mod namespace;
+
 use std::fs;
 use std::path::Path;
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, ObjectId, OperationId, PrincipalId, UnixMicros,
-    VolumeId,
+    BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
+    OperationId, PrincipalId, UnixMicros, VolumeId,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError};
+use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespaceComponent};
 
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 2] = [
+const MIGRATIONS: [Migration; 3] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -26,8 +29,12 @@ const MIGRATIONS: [Migration; 2] = [
         version: 2,
         sql: include_str!("../schema/branch/002_directory_nodes.sql"),
     },
+    Migration {
+        version: 3,
+        sql: include_str!("../schema/branch/003_namespace_heads.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -75,6 +82,61 @@ pub struct FilePublication {
     pub created_at: UnixMicros,
 }
 
+/// One root-directory file mutation that must advance a verified volume branch head atomically.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RootFilePublication {
+    /// File manifest/version and per-file causal base.
+    pub file: FilePublication,
+    /// Stable volume-root directory identity.
+    pub root_object_id: ObjectId,
+    /// Exact namespace commit required before mutation, or no commit for initial creation.
+    pub expected_namespace_commit_id: Option<NamespaceCommitId>,
+    /// Exact prior file object revision selected by the old directory root, or absent for create.
+    pub expected_file_object_revision_id: Option<ObjectRevisionId>,
+    /// New immutable file object revision selecting `file.version_id`.
+    pub file_object_revision_id: ObjectRevisionId,
+    /// New immutable root-directory object revision selecting the path-copied directory root.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// New immutable namespace commit that becomes the branch head.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Case-preserved/canonical root-directory entry name.
+    pub entry_name: NamespaceComponent,
+    /// Stable name-reuse generation.
+    pub entry_generation: u64,
+}
+
+/// Current immutable namespace commit selected by one branch/volume pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BranchNamespaceHead {
+    /// Writable branch identity.
+    pub branch_id: BranchId,
+    /// Volume identity.
+    pub volume_id: VolumeId,
+    /// Current immutable namespace commit.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Monotonic successful volume-head transition sequence.
+    pub sequence: u64,
+}
+
+/// Durable result of one atomic file-version and volume-branch-head publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespacePublicationReceipt {
+    /// Whether this call applied or replayed the exact operation.
+    pub disposition: PublicationDisposition,
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Digest of every mutation input and expected base.
+    pub request_digest: [u8; 32],
+    /// Newly published immutable file version.
+    pub file_version_id: FileVersionId,
+    /// Namespace commit made current.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Resulting volume branch-head sequence.
+    pub head_sequence: u64,
+    /// Digest binding the exact durable result.
+    pub result_digest: [u8; 32],
+}
+
 /// Current branch-local version pointer for one stable file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BranchFileHead {
@@ -99,23 +161,6 @@ pub enum PublicationDisposition {
     Replayed,
 }
 
-/// Durable evidence for one atomic immutable version publication.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PublicationReceipt {
-    /// Whether this call applied or replayed the transaction.
-    pub disposition: PublicationDisposition,
-    /// Stable operation identity.
-    pub operation_id: OperationId,
-    /// Exact committed request digest.
-    pub request_digest: [u8; 32],
-    /// Published immutable version.
-    pub version_id: FileVersionId,
-    /// Resulting file-head sequence.
-    pub head_sequence: u64,
-    /// Digest binding the durable result fields.
-    pub result_digest: [u8; 32],
-}
-
 /// SQLite-compatible branch store for immutable versions and atomic file heads.
 pub struct VersionPublicationStore {
     connection: Connection,
@@ -134,48 +179,6 @@ impl VersionPublicationStore {
         migrate(&mut connection, opened_at)?;
         verify_database(&connection)?;
         Ok(Self { connection })
-    }
-
-    /// Atomically persists one immutable manifest/version and advances its exact file head.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed input, stale bases, identity reuse, corrupt durable state and IO/SQLite
-    /// failure. A failed call publishes neither the version nor the file-head transition.
-    pub fn publish(
-        &mut self,
-        publication: FilePublication,
-    ) -> Result<PublicationReceipt, PublicationError> {
-        self.publish_inner(publication, None)
-    }
-
-    /// Resolves the immutable durable receipt for one operation, if committed.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed or digest-inconsistent durable records and SQLite failure.
-    pub fn resolve(
-        &self,
-        operation_id: OperationId,
-    ) -> Result<Option<PublicationReceipt>, PublicationError> {
-        load_operation(
-            &self.connection,
-            operation_id,
-            PublicationDisposition::Replayed,
-        )
-    }
-
-    /// Loads the exact current version pointer for one branch file.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed durable identities/counters and SQLite failure.
-    pub fn file_head(
-        &self,
-        branch_id: BranchId,
-        object_id: ObjectId,
-    ) -> Result<Option<BranchFileHead>, PublicationError> {
-        load_file_head(&self.connection, branch_id, object_id)
     }
 
     /// Persists one bounded path-copy node set before a later namespace-head transaction.
@@ -218,38 +221,50 @@ impl VersionPublicationStore {
         load_directory_node(&self.connection, digest)
     }
 
-    fn publish_inner(
+    /// Atomically publishes one root-directory file mutation and advances the volume branch head.
+    ///
+    /// The store independently loads the selected old directory path, recomputes its immutable
+    /// path-copy, verifies every new node, publishes both object revisions and one namespace
+    /// commit, then advances the file and volume pointers in the same SQLite transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale heads, inconsistent file/directory bases, identity reuse, malformed graph
+    /// state and persistence failure. Exact retries return the original immutable receipt.
+    pub fn publish_root_file(
         &mut self,
-        publication: FilePublication,
-        fault: Option<PublicationFaultPoint>,
-    ) -> Result<PublicationReceipt, PublicationError> {
-        validate_publication(publication)?;
-        let request_digest = publication_request_digest(publication);
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(receipt) = load_operation(
-            &transaction,
-            publication.operation_id,
+        publication: &RootFilePublication,
+    ) -> Result<NamespacePublicationReceipt, PublicationError> {
+        namespace::publish(&mut self.connection, publication, None)
+    }
+
+    /// Loads the exact current namespace commit for one branch and volume.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed stored identities/counters and SQLite failure.
+    pub fn namespace_head(
+        &self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+    ) -> Result<Option<BranchNamespaceHead>, PublicationError> {
+        namespace::load_head(&self.connection, branch_id, volume_id)
+    }
+
+    /// Resolves an atomic namespace publication outcome after a lost response.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or digest-inconsistent durable records and SQLite failure.
+    pub fn resolve_namespace_publication(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<NamespacePublicationReceipt>, PublicationError> {
+        namespace::load_operation(
+            &self.connection,
+            operation_id,
             PublicationDisposition::Replayed,
-        )? {
-            return if receipt.request_digest == request_digest {
-                Ok(receipt)
-            } else {
-                Err(PublicationError::OperationConflict)
-            };
-        }
-        let head = prepare_file(&transaction, publication)?;
-        persist_manifest(&transaction, publication.manifest)?;
-        inject_fault(fault, PublicationFaultPoint::Manifest)?;
-        persist_version(&transaction, publication)?;
-        inject_fault(fault, PublicationFaultPoint::Version)?;
-        let head_sequence = advance_file_head(&transaction, publication, head.sequence)?;
-        inject_fault(fault, PublicationFaultPoint::Head)?;
-        let receipt = persist_operation(&transaction, publication, request_digest, head_sequence)?;
-        inject_fault(fault, PublicationFaultPoint::Operation)?;
-        transaction.commit()?;
-        Ok(receipt)
+        )
     }
 }
 
@@ -281,16 +296,6 @@ pub enum PublicationError {
     #[error("file publication database operation failed")]
     Sqlite(#[from] rusqlite::Error),
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PublicationFaultPoint {
-    Manifest,
-    Version,
-    Head,
-    Operation,
-}
-
-type StoredReceiptColumns = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
 
 fn validate_publication(publication: FilePublication) -> Result<(), PublicationError> {
     if publication.parent_version_id != publication.expected_current_version_id
@@ -445,41 +450,6 @@ fn advance_file_head(
     }
 }
 
-fn persist_operation(
-    transaction: &Transaction<'_>,
-    publication: FilePublication,
-    request_digest: [u8; 32],
-    head_sequence: u64,
-) -> Result<PublicationReceipt, PublicationError> {
-    let result_digest = publication_result_digest(
-        publication.operation_id,
-        request_digest,
-        publication.version_id,
-        head_sequence,
-    );
-    transaction.execute(
-        "INSERT INTO publication_operations(
-            operation_id, request_digest, version_id, head_sequence, result_digest, committed_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            publication.operation_id.as_bytes().as_slice(),
-            request_digest.as_slice(),
-            publication.version_id.as_bytes().as_slice(),
-            to_i64(head_sequence)?,
-            result_digest.as_slice(),
-            publication.created_at.get()
-        ],
-    )?;
-    Ok(PublicationReceipt {
-        disposition: PublicationDisposition::Applied,
-        operation_id: publication.operation_id,
-        request_digest,
-        version_id: publication.version_id,
-        head_sequence,
-        result_digest,
-    })
-}
-
 fn persist_directory_node(
     transaction: &Transaction<'_>,
     record: &DirectoryNodeRecord,
@@ -536,50 +506,6 @@ fn load_directory_node(
         .transpose()
 }
 
-fn load_operation(
-    connection: &Connection,
-    operation_id: OperationId,
-    disposition: PublicationDisposition,
-) -> Result<Option<PublicationReceipt>, PublicationError> {
-    let operation = operation_id.as_bytes();
-    let stored: Option<StoredReceiptColumns> = connection
-        .query_row(
-            "SELECT o.request_digest, o.version_id, o.result_digest, o.head_sequence
-             FROM publication_operations o
-             WHERE o.operation_id = ?1",
-            [operation.as_slice()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .optional()?;
-    stored
-        .map(|values| decode_receipt(operation_id, disposition, &values))
-        .transpose()
-}
-
-fn decode_receipt(
-    operation_id: OperationId,
-    disposition: PublicationDisposition,
-    values: &StoredReceiptColumns,
-) -> Result<PublicationReceipt, PublicationError> {
-    let request_digest = copy_array(&values.0)?;
-    let version_id = decode_identifier(&values.1, FileVersionId::from_bytes)?;
-    let result_digest = copy_array(&values.2)?;
-    let head_sequence = from_i64(values.3)?;
-    let expected =
-        publication_result_digest(operation_id, request_digest, version_id, head_sequence);
-    if result_digest != expected {
-        return Err(PublicationError::Corrupt);
-    }
-    Ok(PublicationReceipt {
-        disposition,
-        operation_id,
-        request_digest,
-        version_id,
-        head_sequence,
-        result_digest,
-    })
-}
-
 fn load_file_head(
     connection: &Connection,
     branch_id: BranchId,
@@ -632,38 +558,12 @@ fn publication_request_digest(publication: FilePublication) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn publication_result_digest(
-    operation_id: OperationId,
-    request_digest: [u8; 32],
-    version_id: FileVersionId,
-    sequence: u64,
-) -> [u8; 32] {
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.file-publication-result.v1\0");
-    digest.update(&operation_id.as_bytes());
-    digest.update(&request_digest);
-    digest.update(&version_id.as_bytes());
-    digest.update(&sequence.to_be_bytes());
-    digest.finalize().into()
-}
-
 fn update_optional_identifier(digest: &mut blake3::Hasher, value: Option<FileVersionId>) {
     if let Some(value) = value {
         digest.update(&[1]);
         digest.update(&value.as_bytes());
     } else {
         digest.update(&[0]);
-    }
-}
-
-fn inject_fault(
-    selected: Option<PublicationFaultPoint>,
-    current: PublicationFaultPoint,
-) -> Result<(), PublicationError> {
-    if selected == Some(current) {
-        Err(PublicationError::InjectedFault)
-    } else {
-        Ok(())
     }
 }
 

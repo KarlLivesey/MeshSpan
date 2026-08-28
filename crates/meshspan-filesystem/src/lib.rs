@@ -16,8 +16,8 @@ pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,
 };
 pub use publication::{
-    BranchFileHead, FilePublication, ManifestPublication, PublicationDisposition, PublicationError,
-    PublicationReceipt, VersionPublicationStore,
+    BranchNamespaceHead, FilePublication, ManifestPublication, NamespacePublicationReceipt,
+    PublicationDisposition, PublicationError, RootFilePublication, VersionPublicationStore,
 };
 pub use stage_store::{DurableStageStore, StageRegistration, StageStoreError};
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};

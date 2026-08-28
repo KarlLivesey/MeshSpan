@@ -39,16 +39,11 @@ copy-on-write filesystem service. This document records executable evidence only
   and process loss after durable part installation but before journal commit.
   This supplies the durable private-input half of gate 2; publication is a
   separate receipt-bound transition into the branch database described next.
-- The separate branch database now persists complete verified manifest roots,
-  immutable file versions and a branch-local current-version pointer in one
-  `IMMEDIATE` ACID transaction. The request digest binds every identity, causal
-  parent, manifest field, author and timestamp; an immutable result receipt
-  retains the exact head sequence even after later versions advance. Tests prove
-  exact retry after restart, stale-base and identity-conflict rejection,
-  fail-closed receipt corruption, and rollback/retry after interruption at every
-  manifest/version/head/receipt boundary. This closes the per-file atomicity
-  part of gate 2; a verified persistent directory graph and atomic volume branch
-  head are still required before the gate can close.
+- The branch database persists complete verified manifest roots and immutable
+  file versions. Its file-current pointer is now an internal projection updated
+  only by the namespace publication transaction; the earlier unattached
+  publication API and operation table were removed rather than leaving a path
+  that could claim a file save without moving the namespace head.
 - The directory-block semantic kernel is a content-addressed 16-way radix trie
   over the complete BLAKE3 canonical-name key. Every immutable node has bounded
   fanout, hostile true-hash collisions have a bounded sorted bucket, and one
@@ -69,6 +64,17 @@ copy-on-write filesystem service. This document records executable evidence only
   database constructed at schema v1 migrates transactionally to v2 with both
   migration digests retained. The volume-head transaction can now consume these
   exact durable node identities without scanning or rewriting a directory.
+- Branch schema v3 adds immutable file/root object revisions, causal namespace
+  commits and branch/volume heads. The public root-file publication transaction
+  loads and revalidates only the selected old radix path, independently
+  recomputes its path-copy, inserts the manifest, file version, new nodes, both
+  object revisions and commit, then compare-and-swaps both file and volume heads
+  with one receipt. The request/record/commit/result digests bind every causal
+  base and result. Restart replay, stale concurrent base, corrupt receipt/commit/
+  object revision, and injected interruption after each of six internal phases
+  prove exact old-or-new atomicity. Gate 2 remains open until durable stage
+  completion and manifest construction are composed with this publication as
+  one recoverable service operation.
 
 ## Closure gates
 
