@@ -17,11 +17,11 @@ use meshspan_domain::{
 use meshspan_filesystem::{
     CompletedStage, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
     ContentKeyEnvelopeCipher, ContentPublicationError, ContentPublicationRequest,
-    DurableContentPublisher, EncryptedContentChunk, FilesystemCommitService, ManifestPublication,
-    NamespaceLimits, NamespacePath, NamespacePublicationPath, PublicationDisposition,
-    RootFileCommitRequest, StageCompletionRequest, StageRegistration, StageWrite,
-    UnprotectedContentPublisher, UnprotectedContentTarget, VolumeKeyEncryptionKey,
-    WrappedContentKey,
+    DirectoryPublication, DirectoryRevisionTransition, DurableContentPublisher,
+    EncryptedContentChunk, FilesystemCommitService, ManifestPublication, NamespaceLimits,
+    NamespacePath, NamespacePublicationPath, PublicationDisposition, RootFileCommitRequest,
+    StageCompletionRequest, StageRegistration, StageWrite, UnprotectedContentPublisher,
+    UnprotectedContentTarget, VolumeKeyEncryptionKey, WrappedContentKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -167,8 +167,40 @@ fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
     )?;
     let mut service =
         FilesystemCommitService::open(&filesystem_state, UnixMicros::new(1), publisher)?;
+    let (first_directory, second_directory) = directory_publications()?;
+    assert_eq!(
+        service.create_directory(&first_directory)?.disposition,
+        PublicationDisposition::Applied
+    );
+    assert_eq!(
+        service.create_directory(&second_directory)?.disposition,
+        PublicationDisposition::Applied
+    );
+    assert_eq!(
+        service.create_directory(&first_directory)?.disposition,
+        PublicationDisposition::Replayed
+    );
     prepare_stage(&mut service)?;
-    let request = commit_request()?;
+    let mut request = commit_request()?;
+    request.expected_namespace_commit_id = Some(second_directory.namespace_commit_id);
+    request.path = NamespacePublicationPath::new(
+        NamespacePath::from_components(
+            ["accounts", "2026", "report.txt"],
+            NamespaceLimits::PORTABLE,
+        )?,
+        vec![
+            DirectoryRevisionTransition::new(
+                first_directory.directory_object_id,
+                ObjectRevisionId::from_bytes([69; 16])?,
+                ObjectRevisionId::from_bytes([70; 16])?,
+            )?,
+            DirectoryRevisionTransition::new(
+                second_directory.directory_object_id,
+                second_directory.directory_object_revision_id,
+                ObjectRevisionId::from_bytes([71; 16])?,
+            )?,
+        ],
+    )?;
     service.commit_root_file(&request)?;
     let publisher = service.into_content_publisher();
     let content_request = request.content_publication_request();
@@ -184,6 +216,51 @@ fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
             .is_empty()
     );
     Ok(())
+}
+
+fn directory_publications()
+-> Result<(DirectoryPublication, DirectoryPublication), Box<dyn std::error::Error>> {
+    let first = DirectoryPublication {
+        operation_id: OperationId::from_bytes([64; 16])?,
+        branch_id: BranchId::from_bytes([11; 16])?,
+        volume_id: VolumeId::from_bytes([12; 16])?,
+        root_object_id: ObjectId::from_bytes([16; 16])?,
+        expected_namespace_commit_id: None,
+        directory_object_id: ObjectId::from_bytes([62; 16])?,
+        directory_object_revision_id: ObjectRevisionId::from_bytes([63; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([60; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([61; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["accounts"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        entry_generation: 1,
+        created_by: PrincipalId::from_bytes([20; 16])?,
+        created_at: UnixMicros::new(2),
+    };
+    let second = DirectoryPublication {
+        operation_id: OperationId::from_bytes([65; 16])?,
+        branch_id: first.branch_id,
+        volume_id: first.volume_id,
+        root_object_id: first.root_object_id,
+        expected_namespace_commit_id: Some(first.namespace_commit_id),
+        directory_object_id: ObjectId::from_bytes([67; 16])?,
+        directory_object_revision_id: ObjectRevisionId::from_bytes([68; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([66; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([72; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["accounts", "2026"], NamespaceLimits::PORTABLE)?,
+            vec![DirectoryRevisionTransition::new(
+                first.directory_object_id,
+                first.directory_object_revision_id,
+                ObjectRevisionId::from_bytes([69; 16])?,
+            )?],
+        )?,
+        entry_generation: 1,
+        created_by: first.created_by,
+        created_at: UnixMicros::new(3),
+    };
+    Ok((first, second))
 }
 
 fn read_prepared_file(

@@ -81,6 +81,16 @@ copy-on-write filesystem service. This document records executable evidence only
   prove exact old-or-new atomicity. Gate 2 remains open until durable stage
   completion and manifest construction are composed with this publication as
   one recoverable service operation.
+- Branch schema v4 adds receipt-bound directory creation and generalises file
+  publication from a root leaf to a validated root-relative path. Every existing
+  ancestor is bound by stable object identity plus exact prior and replacement
+  revision; the leaf is changed first and each selected directory is then
+  path-copied back to the volume root in the same transaction. A production
+  sequence creates `accounts`, creates `accounts/2026`, commits encrypted staged
+  content at `accounts/2026/report.txt`, and verifies exact replay. Restart tests
+  inspect every durable root-to-leaf edge. Corrupt receipts, cross-kind operation
+  reuse, missing/stale ancestors and injected failure at every transaction phase
+  all fail without a partial namespace transition.
 - The filesystem commit service now composes an exact fenced stage checkpoint,
   a replaceable durable-content publisher and the atomic namespace transaction
   under one operation identity. Content must resolve or become independently

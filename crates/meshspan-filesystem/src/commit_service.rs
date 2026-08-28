@@ -12,9 +12,10 @@ use meshspan_domain::{
 use thiserror::Error;
 
 use crate::{
-    CompletedStage, DurableStageStore, FilePublication, ManifestPublication,
-    NamespacePublicationPath, NamespacePublicationReceipt, PublicationError, RootFilePublication,
-    StageCompletionRequest, StageStoreError, VersionPublicationStore,
+    CompletedStage, DirectoryPublication, DirectoryPublicationReceipt, DurableStageStore,
+    FilePublication, ManifestPublication, NamespacePublicationPath, NamespacePublicationReceipt,
+    PublicationError, RootFilePublication, StageCompletionRequest, StageStoreError,
+    VersionPublicationStore,
 };
 
 /// Exact stage and manifest identity presented to a replaceable durable-content publisher.
@@ -185,6 +186,21 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
     #[must_use]
     pub fn stages_mut(&mut self) -> &mut DurableStageStore {
         &mut self.stages
+    }
+
+    /// Creates one empty directory and atomically publishes every copied ancestor revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed paths, stale namespace state, conflicting identities, corruption and
+    /// persistence failure. Exact retries resolve the original durable result.
+    pub fn create_directory(
+        &mut self,
+        publication: &DirectoryPublication,
+    ) -> Result<DirectoryPublicationReceipt, FilesystemCommitError> {
+        self.publications
+            .create_directory(publication)
+            .map_err(Into::into)
     }
 
     /// Commits one exact stage as durable content and then atomically advances the namespace head.
