@@ -2,11 +2,16 @@
 
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
+mod directory;
 mod name;
 mod publication;
 mod stage_store;
 mod staging;
 
+pub use directory::{
+    DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
+    DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
+};
 pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,
 };
