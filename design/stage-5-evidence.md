@@ -49,6 +49,17 @@ copy-on-write filesystem service. This document records executable evidence only
   manifest/version/head/receipt boundary. This closes the per-file atomicity
   part of gate 2; a verified persistent directory graph and atomic volume branch
   head are still required before the gate can close.
+- The directory-block semantic kernel is a content-addressed 16-way radix trie
+  over the complete BLAKE3 canonical-name key. Every immutable node has bounded
+  fanout, hostile true-hash collisions have a bounded sorted bucket, and one
+  entry mutation path-copies at most 65 nodes regardless of directory size.
+  Lookups revalidate every selected node; complete graph validation rejects
+  digest mismatch, wrong-depth edges, cycles/shared-edge aliases, malformed
+  ordering and keys placed under the wrong radix path. Historical roots retain
+  unchanged subtrees. A 512-entry executable vector proves constant mutation
+  work, while stale revision and stable-object replacement attempts fail without
+  moving the root. Durable node persistence and volume-head integration remain
+  the next gate-2 transition.
 
 ## Closure gates
 
