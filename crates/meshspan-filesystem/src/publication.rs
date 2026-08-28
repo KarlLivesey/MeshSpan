@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 9] = [
+const MIGRATIONS: [Migration; 11] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -62,8 +62,16 @@ const MIGRATIONS: [Migration; 9] = [
         version: 9,
         sql: include_str!("../schema/branch/009_file_version_history.sql"),
     },
+    Migration {
+        version: 10,
+        sql: include_str!("../schema/branch/010_handles_and_locks.sql"),
+    },
+    Migration {
+        version: 11,
+        sql: include_str!("../schema/branch/011_pending_deletes.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 11;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -606,6 +614,92 @@ impl VersionPublicationStore {
         namespace::load_head(&self.connection, branch_id, volume_id)
     }
 
+    /// Atomically resolves and opens one existing file under authority-owned share modes.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent/non-file paths, unsafe create dispositions, sharing conflicts, stale
+    /// authorisation, identity reuse, corrupt namespace records and persistence failure.
+    pub fn open_handle(
+        &mut self,
+        request: &crate::OpenHandleRequest,
+    ) -> Result<crate::OpenHandleReceipt, crate::HandleError> {
+        crate::handles::open_existing(&mut self.connection, request)
+    }
+
+    /// Resolves the immutable receipt for one prior open operation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt stored identities, lineage or result evidence.
+    pub fn resolve_open_handle(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<crate::OpenHandleReceipt>, crate::HandleError> {
+        crate::handles::load_open_receipt(
+            &self.connection,
+            operation_id,
+            PublicationDisposition::Replayed,
+        )
+    }
+
+    /// Extends a live handle lease or explicitly transfers it under a new fence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale fences, expired handles, principal/gateway substitution, decreasing
+    /// authorisation/lease revisions, conflicting retries and corrupt durable state.
+    pub fn renew_handle_lease(
+        &mut self,
+        request: crate::HandleLeaseRequest,
+    ) -> Result<crate::HandleLeaseReceipt, crate::HandleError> {
+        crate::handles::renew(&mut self.connection, request)
+    }
+
+    /// Closes one fenced handle, releases its locks and advances delete-on-close readiness.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/expired fences, principal/gateway substitution, conflicting retries,
+    /// corrupt state and persistence failure.
+    pub fn close_handle(
+        &mut self,
+        request: crate::CloseHandleRequest,
+    ) -> Result<crate::CloseHandleReceipt, crate::HandleError> {
+        crate::handles::close(&mut self.connection, request)
+    }
+
+    /// Acquires one fenced, leased byte-range lock on a live file handle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid or stale handle authority, incompatible overlapping locks, identity or
+    /// retry conflicts, corrupt durable state and persistence failure.
+    pub fn lock_range(
+        &mut self,
+        request: crate::LockRangeRequest,
+    ) -> Result<crate::LockRangeReceipt, crate::HandleError> {
+        crate::handles::lock_range(&mut self.connection, request)
+    }
+
+    /// Releases one byte-range lock under the handle's current fence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale handle or lock authority, principal/gateway substitution, conflicting
+    /// retries, corrupt durable state and persistence failure.
+    pub fn unlock_range(
+        &mut self,
+        request: crate::UnlockRangeRequest,
+    ) -> Result<crate::UnlockRangeReceipt, crate::HandleError> {
+        crate::handles::unlock_range(&mut self.connection, request)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_connection(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+
     /// Selects one bounded oldest-first page of preliminary file-version candidates.
     ///
     /// Current branch heads are excluded in SQL. Returned versions remain immutable and cannot
@@ -1094,7 +1188,7 @@ fn persist_directory_node(
     Ok(())
 }
 
-fn load_directory_node(
+pub(crate) fn load_directory_node(
     connection: &Connection,
     digest: DirectoryNodeDigest,
 ) -> Result<Option<DirectoryNodeRecord>, PublicationError> {

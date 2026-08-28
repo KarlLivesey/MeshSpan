@@ -118,68 +118,40 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         .connection
         .pragma_query_value(None, "user_version", |row| row.get(0))?;
     assert_eq!(version, SCHEMA_VERSION);
-    let table: i64 = store.connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'directory_nodes')",
+    for table in [
+        "directory_nodes",
+        "branch_namespace_heads",
+        "directory_publication_operations",
+        "namespace_commit_intents",
+        "namespace_commit_intent_ancestors",
+        "namespace_reconciliation_operations",
+        "namespace_snapshot_restore_operations",
+        "file_version_history",
+        "open_handles",
+        "pending_object_deletes",
+    ] {
+        assert_table_exists(&store.connection, table)?;
+    }
+    let acquired_lock_fence: i64 = store.connection.query_row(
+        "SELECT count(*) FROM pragma_table_info('range_locks')
+         WHERE name = 'acquired_handle_fence' AND \"notnull\" = 1",
         [],
         |row| row.get(0),
     )?;
-    assert_eq!(table, 1);
-    let namespace_table: i64 = store.connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM sqlite_schema WHERE name = 'branch_namespace_heads'
-         )",
-        [],
+    assert_eq!(acquired_lock_fence, 1);
+    Ok(())
+}
+
+fn assert_table_exists(
+    connection: &Connection,
+    table: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let exists: i64 = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1)",
+        [table],
         |row| row.get(0),
     )?;
-    assert_eq!(namespace_table, 1);
-    let directory_operations: i64 = store.connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM sqlite_schema WHERE name = 'directory_publication_operations'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    assert_eq!(directory_operations, 1);
-    let reconciliation_intents: i64 = store.connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM sqlite_schema WHERE name = 'namespace_commit_intents'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    assert_eq!(reconciliation_intents, 1);
-    let reconciliation_lineage: i64 = store.connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM sqlite_schema WHERE name = 'namespace_commit_intent_ancestors'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    assert_eq!(reconciliation_lineage, 1);
-    let reconciliation_receipts: i64 = store.connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM sqlite_schema WHERE name = 'namespace_reconciliation_operations'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    assert_eq!(reconciliation_receipts, 1);
-    let snapshot_restores: i64 = store.connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM sqlite_schema WHERE name = 'namespace_snapshot_restore_operations'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    assert_eq!(snapshot_restores, 1);
-    let version_history: i64 = store.connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM sqlite_schema WHERE name = 'file_version_history'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    assert_eq!(version_history, 1);
+    assert_eq!(exists, 1, "missing migrated table {table}");
     Ok(())
 }
 

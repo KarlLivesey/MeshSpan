@@ -143,6 +143,21 @@ copy-on-write filesystem service. This document records executable evidence only
   reaches the same atomic namespace result. Absent, exact-retry and conflicting-
   operation catalogue lookups are separately exercised. Gate 2 is therefore
   closed.
+- Branch schemas v10 and v11 establish authority-owned durable file handles,
+  share reservations, leased byte-range locks and pending delete-on-close state.
+  Open resolves a canonical logical path through the exact current immutable
+  namespace root and binds the resulting object revision and file version; it
+  never accepts or stores a provider path. Desired access and share permissions
+  are checked bidirectionally across every live gateway handle in one immediate
+  transaction. Exact retries survive restart, while stale namespace lineage,
+  identity reuse and corrupt receipts fail closed. Lease renewal retains a
+  fence; explicit gateway takeover advances it and transfers active locks so the
+  old gateway can no longer mutate them. Shared/exclusive range overlap,
+  adjacency, expiry, explicit unlock and close-time release have executable
+  vectors. Delete-on-close first blocks new opens, then becomes ready only after
+  the final live handle disappears. No physical or namespace deletion is
+  authorised by this readiness record alone. Atomic creation, write/flush and
+  namespace rename/unlink remain required before gate 5 can close.
 
 ## Closure gates
 
@@ -222,6 +237,10 @@ copy-on-write filesystem service. This document records executable evidence only
    rollback are executable. No returned candidate authorises deletion; guarded
    catalogue-revision reachability and physical reclamation remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
+   Existing-file opens, cross-gateway share admission, leased/fenced handle
+   takeover, byte-range locks and guarded delete-on-close readiness are durable
+   and tested. Atomic create dispositions, handle-bound staged writes and flush,
+   rename/move and final namespace unlink remain open.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 
