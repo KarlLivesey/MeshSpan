@@ -75,6 +75,7 @@ the final appliance daemon; those remain later roadmap stages.
 | Negotiation and bounds | Mandatory `NodeHello`/`NodeWelcome` chooses the highest exact common version and the lower peer resource ceilings; every control frame is length-bounded before allocation/decode |
 | Join admission | The authoritative join vector rejects a wrong secret, consumes one valid use, creates exactly one certificate-bound learner and returns the original receipt on replay |
 | Snapshot recovery | Resumable transfer rejects corrupt, reordered and excessive chunks without advancing; installation rejects the wrong plan/image and preserves the receiver's newer durable vote |
+| Promotion restart | Real processes enter exact epoch-3 joint and stable promotion phases, terminate together only after the phase is durable and propagated, reopen independent SQLite state, re-prove the stored plan, automatically finalise joint state and commit the next correctly sequenced metadata write without manual repair |
 | Partition handoff | Signed route vectors reject forged activation and prove no dual-writer interval; the real-process log applies creation and the full prepare/freeze/activate handoff on every voter |
 | Traffic isolation | A real QUIC test stalls an 8 MiB bulk-data write while a consensus ping completes on its independent high-priority stream within one second |
 | Three-process cycle | Three OS processes use distinct SQLite databases, certificates and dynamic loopback ports; only node one starts authoritative; committed grants admit nodes two and three, which install verified snapshots, catch up and become voters; the cycle then commits routing proof records, redirects a follower request, resolves a deliberately lost reply by durable operation ID, kills the leader, elects and writes through another, restarts the old process and catches it up |
@@ -83,10 +84,11 @@ the final appliance daemon; those remain later roadmap stages.
 
 ## Feedback-loop observation
 
-The complete warm local gate measured 11.69 seconds after live learner admission
-was added. The real three-process bootstrap, admission, promotion, handoff,
-failover and restart cycle completes in approximately 4.9 seconds and remains isolated in the cluster
-lane, so unrelated lanes continue concurrently.
+The complete warm local gate measured 9.37 seconds with live learner admission
+and exact joint/stable restart proofs. The main three-process bootstrap,
+admission, promotion, handoff, failover and restart cycle completes in
+approximately 4.9 seconds and remains isolated in the cluster lane, so unrelated
+lanes continue concurrently.
 
 ## Deliberate later-stage boundaries
 

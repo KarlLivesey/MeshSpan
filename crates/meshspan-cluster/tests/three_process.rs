@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use meshspan_consensus::ActiveQuorumPlan;
 use meshspan_domain::{PartitionId, Revision, UnixMicros};
 use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
 use rcgen::{
@@ -119,6 +120,136 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotion_resumes_after_restart_from_durable_joint_plan() -> Result<(), Box<dyn Error>> {
+    prove_promotion_restart("joint:3", false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotion_resumes_after_restart_from_durable_stable_plan() -> Result<(), Box<dyn Error>> {
+    prove_promotion_restart("stable:3", true).await
+}
+
+async fn prove_promotion_restart(
+    exit_after_plan: &'static str,
+    expected_stable: bool,
+) -> Result<(), Box<dyn Error>> {
+    let temporary = TempDir::new()?;
+    let launches = build_launches_with_exit(temporary.path(), Some(exit_after_plan))?;
+    let mut cluster = ProcessCluster::start(&launches)?;
+
+    wait_for_response(launches[0].control_address, "INFO", None).await?;
+    assert_eq!(
+        command(launches[0].control_address, "ELECT").await?,
+        "ELECTION_STARTED"
+    );
+    wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
+    commit_on_nodes(&launches, 0, 1, 1).await?;
+    commit_on_nodes(&launches, 0, 2, 1).await?;
+    assert_eq!(
+        command(launches[0].control_address, "PROPOSE 3").await?,
+        "ACCEPTED"
+    );
+
+    cluster.wait_for_test_exit(1)?;
+    cluster.wait_for_test_exit(2)?;
+    assert_plan_phase(&launches[..2], 3, expected_stable)?;
+
+    cluster.restart(&launches[0])?;
+    cluster.restart(&launches[1])?;
+    wait_for_response(launches[0].control_address, "INFO", None).await?;
+    wait_for_response(launches[1].control_address, "INFO", None).await?;
+    assert_eq!(
+        command(launches[0].control_address, "ELECT").await?,
+        "ELECTION_STARTED"
+    );
+    wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
+    wait_for_response(
+        launches[1].control_address,
+        "INFO",
+        Some("FOLLOWER_WITH_LEADER"),
+    )
+    .await?;
+    wait_for_response(launches[1].control_address, "STATUS 3", Some("COMMITTED")).await?;
+    wait_for_plan_phase(&launches[..2], 3, true).await?;
+    let response = command(launches[0].control_address, "PROPOSE 4").await?;
+    if response != "ACCEPTED" {
+        std::thread::sleep(RETRY_INTERVAL);
+        let process = cluster.process_status(1)?;
+        let log = fs::read_to_string(&launches[0].log_path).unwrap_or_default();
+        return Err(format!(
+            "recovered PROPOSE 4 returned {response:?}; process={process:?}; log={log:?}",
+        )
+        .into());
+    }
+    wait_for_response(launches[0].control_address, "STATUS 4", Some("COMMITTED")).await?;
+    wait_for_response(launches[1].control_address, "STATUS 4", Some("COMMITTED")).await?;
+
+    cluster.stop(1)?;
+    cluster.stop(2)?;
+    assert_plan_phase(&launches[..2], 3, true)?;
+    Ok(())
+}
+
+fn assert_plan_phase(
+    launches: &[NodeLaunch],
+    expected_epoch: u64,
+    expected_stable: bool,
+) -> Result<(), Box<dyn Error>> {
+    if !plan_phase_matches(launches, expected_epoch, expected_stable)? {
+        return Err(format!(
+            "quorum phase did not match epoch {expected_epoch}, stable={expected_stable}",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn plan_phase_matches(
+    launches: &[NodeLaunch],
+    expected_epoch: u64,
+    expected_stable: bool,
+) -> Result<bool, Box<dyn Error>> {
+    let partition_id = PartitionId::from_bytes([8; 16])?;
+    for launch in launches {
+        let database = PartitionDatabase::open(
+            &launch.state_path,
+            partition_id,
+            UnixMicros::new(20_000_000),
+        )?;
+        let repository = AuthoritativeRepository::new(database);
+        let active = repository
+            .load_active_consensus_quorum_plan()?
+            .ok_or("active quorum plan was absent after restart boundary")?;
+        if active.membership_epoch() != expected_epoch
+            || matches!(active, ActiveQuorumPlan::Stable(_)) != expected_stable
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn wait_for_plan_phase(
+    launches: &[NodeLaunch],
+    expected_epoch: u64,
+    expected_stable: bool,
+) -> Result<(), Box<dyn Error>> {
+    let started = Instant::now();
+    loop {
+        if plan_phase_matches(launches, expected_epoch, expected_stable)? {
+            return Ok(());
+        }
+        if started.elapsed() >= WAIT_LIMIT {
+            return Err(format!(
+                "timed out waiting for quorum phase epoch {expected_epoch}, stable={expected_stable}",
+            )
+            .into());
+        }
+        tokio::time::sleep(RETRY_INTERVAL).await;
+    }
+}
+
 fn assert_promoted_membership(launches: &[NodeLaunch]) -> Result<(), Box<dyn Error>> {
     let partition_id = PartitionId::from_bytes([8; 16])?;
     for launch in launches {
@@ -146,6 +277,7 @@ struct NodeLaunch {
     authority_path: PathBuf,
     state_path: PathBuf,
     log_path: PathBuf,
+    exit_after_plan: Option<&'static str>,
 }
 
 struct RunningNode {
@@ -182,6 +314,40 @@ impl ProcessCluster {
         self.nodes.push(spawn_node(launch)?);
         Ok(())
     }
+
+    fn wait_for_test_exit(&mut self, number: u8) -> Result<(), Box<dyn Error>> {
+        let index = self
+            .nodes
+            .iter()
+            .position(|node| node.number == number)
+            .ok_or("running node was not found")?;
+        let started = Instant::now();
+        loop {
+            if let Some(exit) = self.nodes[index].child.try_wait()? {
+                if exit.code() != Some(86) {
+                    return Err(format!("node {number} exited unexpectedly with {exit}").into());
+                }
+                self.nodes.swap_remove(index);
+                return Ok(());
+            }
+            if started.elapsed() >= WAIT_LIMIT {
+                return Err(format!("timed out waiting for node {number} test exit").into());
+            }
+            std::thread::sleep(RETRY_INTERVAL);
+        }
+    }
+
+    fn process_status(
+        &mut self,
+        number: u8,
+    ) -> Result<Option<std::process::ExitStatus>, Box<dyn Error>> {
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.number == number)
+            .ok_or("running node was not found")?;
+        Ok(node.child.try_wait()?)
+    }
 }
 
 impl Drop for ProcessCluster {
@@ -212,6 +378,9 @@ fn spawn_node(launch: &NodeLaunch) -> Result<RunningNode, Box<dyn Error>> {
     for peer in launch_peers(launch)? {
         command.args(["--peer", &peer]);
     }
+    if let Some(target) = launch.exit_after_plan {
+        command.env("MESHSPAN_TEST_EXIT_AFTER_PLAN", target);
+    }
     let child = command
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(error_log))
@@ -239,6 +408,13 @@ fn launch_peers(launch: &NodeLaunch) -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 fn build_launches(directory: &Path) -> Result<Vec<NodeLaunch>, Box<dyn Error>> {
+    build_launches_with_exit(directory, None)
+}
+
+fn build_launches_with_exit(
+    directory: &Path,
+    exit_after_plan: Option<&'static str>,
+) -> Result<Vec<NodeLaunch>, Box<dyn Error>> {
     let quic_addresses = unique_addresses(3, reserve_udp_address)?;
     let control_addresses = unique_addresses(3, reserve_tcp_address)?;
     write_addresses(directory, &quic_addresses)?;
@@ -256,6 +432,7 @@ fn build_launches(directory: &Path) -> Result<Vec<NodeLaunch>, Box<dyn Error>> {
                 authority_path: authority_path.clone(),
                 state_path: directory.join(format!("node-{number}.sqlite")),
                 log_path: directory.join(format!("node-{number}.log")),
+                exit_after_plan,
             }
         })
         .collect())
@@ -344,10 +521,15 @@ async fn commit_on_nodes(
     node_count: usize,
 ) -> Result<(), Box<dyn Error>> {
     let proposal = format!("PROPOSE {operation}");
-    assert_eq!(
-        command(launches[leader_index].control_address, &proposal).await?,
-        "ACCEPTED"
-    );
+    let response = command(launches[leader_index].control_address, &proposal).await?;
+    if response != "ACCEPTED" {
+        let log = fs::read_to_string(&launches[leader_index].log_path).unwrap_or_default();
+        return Err(format!(
+            "{proposal} returned {response:?} from node {}; log: {log}",
+            launches[leader_index].number,
+        )
+        .into());
+    }
     let status = format!("STATUS {operation}");
     for launch in launches.iter().take(node_count) {
         wait_for_response(launch.control_address, &status, Some("COMMITTED")).await?;
