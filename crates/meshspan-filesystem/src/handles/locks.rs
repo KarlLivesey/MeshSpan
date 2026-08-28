@@ -47,7 +47,7 @@ impl ByteRange {
         self.length
     }
 
-    fn end(self) -> u64 {
+    pub(super) fn end(self) -> u64 {
         self.start + self.length
     }
 }

@@ -11,6 +11,8 @@ mod state;
 #[cfg(test)]
 #[path = "handles_tests.rs"]
 mod tests;
+#[path = "handles/write.rs"]
+mod write;
 
 pub use lease::{
     CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, HandleLeaseReceipt,
@@ -22,6 +24,8 @@ pub use locks::{
     UnlockRangeRequest,
 };
 pub(crate) use locks::{lock_range, unlock_range};
+pub(crate) use write::admit_write;
+pub use write::{HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest};
 
 use meshspan_domain::{
     BranchId, FileVersionId, HandleId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
@@ -359,6 +363,28 @@ pub(crate) fn open_existing(
     Ok(receipt)
 }
 
+pub(crate) fn preflight_open(
+    connection: &Connection,
+    request: &OpenHandleRequest,
+) -> Result<(), HandleError> {
+    validate_open(request)?;
+    let Some(resolved) = resolve_file(connection, request)? else {
+        return match request.create_disposition {
+            CreateDisposition::OpenExisting | CreateDisposition::OverwriteExisting => {
+                Err(HandleError::NotFound)
+            }
+            CreateDisposition::CreateNew
+            | CreateDisposition::OpenOrCreate
+            | CreateDisposition::OverwriteOrCreate => Err(HandleError::CreationRequired),
+        };
+    };
+    if request.create_disposition == CreateDisposition::CreateNew {
+        return Err(HandleError::AlreadyExists);
+    }
+    reject_pending_delete(connection, request, resolved.object)?;
+    enforce_share_modes(connection, request, resolved.object)
+}
+
 fn validate_open(request: &OpenHandleRequest) -> Result<(), HandleError> {
     if request.authorization_revision == Revision::ZERO
         || request.lease_expires_at <= request.opened_at
@@ -561,7 +587,7 @@ fn lookup_entry(
 }
 
 fn enforce_share_modes(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     request: &OpenHandleRequest,
     object_id: ObjectId,
 ) -> Result<(), HandleError> {
@@ -832,7 +858,8 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM namespace_reconciliation_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM namespace_snapshot_restore_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
-             OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)",
+             OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;
@@ -860,7 +887,7 @@ fn reject_handle_collision(
 }
 
 fn reject_pending_delete(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     request: &OpenHandleRequest,
     object_id: ObjectId,
 ) -> Result<(), HandleError> {
