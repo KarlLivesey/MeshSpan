@@ -13,6 +13,7 @@ version.workspace = true
 [dependencies]
 meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-domain = { path = "../meshspan-domain" }
+meshspan-metadata = { path = "../meshspan-metadata" }
 meshspan-protocol = { path = "../meshspan-protocol" }
 thiserror.workspace = true
 

@@ -718,6 +718,7 @@ version = "0.1.0"
 dependencies = [
  "meshspan-consensus",
  "meshspan-domain",
+ "meshspan-metadata",
  "meshspan-protocol",
  "thiserror",
 ]
