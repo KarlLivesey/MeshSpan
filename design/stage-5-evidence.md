@@ -37,8 +37,18 @@ copy-on-write filesystem service. This document records executable evidence only
   adopts them. Executable restart tests cover overlapping writes, holes, sparse
   completion, expiry, corrupted parts, recovery of a missing stage directory,
   and process loss after durable part installation but before journal commit.
-  This advances gate 2 but does not close it: immutable published versions and
-  atomic volume-head publication remain to be implemented.
+  This supplies the durable private-input half of gate 2; publication is a
+  separate receipt-bound transition into the branch database described next.
+- The separate branch database now persists complete verified manifest roots,
+  immutable file versions and a branch-local current-version pointer in one
+  `IMMEDIATE` ACID transaction. The request digest binds every identity, causal
+  parent, manifest field, author and timestamp; an immutable result receipt
+  retains the exact head sequence even after later versions advance. Tests prove
+  exact retry after restart, stale-base and identity-conflict rejection,
+  fail-closed receipt corruption, and rollback/retry after interruption at every
+  manifest/version/head/receipt boundary. This closes the per-file atomicity
+  part of gate 2; a verified persistent directory graph and atomic volume branch
+  head are still required before the gate can close.
 
 ## Closure gates
 
