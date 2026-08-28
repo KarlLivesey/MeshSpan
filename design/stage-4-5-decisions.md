@@ -152,6 +152,11 @@ not require tuning.
 - The protocol-neutral staging API has three distinct operations:
   `checkpoint` durably preserves progress, `commit` atomically publishes a
   complete version, and `abort` makes the stage eligible for guarded cleanup.
+- Closing a dirty filesystem handle implicitly commits it under its configured
+  acknowledgement policy. A lost close response has an `unknown` outcome that
+  resolves by operation ID. Multipart and resumable-transfer sessions publish
+  nothing until their client explicitly requests `commit`; disconnect and
+  inactivity never imply completion.
 - SMB random writes, HTTPS resumable uploads, a future S3 multipart adapter and
   future access adapters share this staging service. Upload parts are not
   MeshSpan content chunks or erasure shards.
@@ -175,6 +180,15 @@ not require tuning.
 - Logical names are case-preserving and case-insensitive with one canonical
   Unicode comparison rule. Provider paths and host filesystem case behaviour do
   not affect namespace identity.
+- Portable component, depth and encoded-path limits are selectable volume policy,
+  not a universal MeshSpan capability ceiling. The UI explains which HTTPS, SMB
+  and host-client interoperability constraints each compatibility profile
+  protects. A deployment may select larger limits supported by all of its access
+  clients.
+- Every profile remains inside larger mandatory parser, allocation and recursion
+  safety ceilings. “No portability profile” never means accepting unbounded
+  hostile input. Logical namespace limits do not inherit incidental limits from
+  provider folders because provider paths are opaque implementation details.
 - Exact names that collide after canonicalisation during disconnected operation
   are both preserved. Reconciliation chooses one deterministic ordinary name and
   assigns a deterministic visible conflict name to the alternative.
@@ -279,9 +293,10 @@ in [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037.html).
   repair continue; time-sensitive irreversible work pauses once the uncertainty
   bound is exceeded.
 - The UI distinguishes synchronised, internally compensated and unsafe time.
-- File access time is optional and disabled by default. When enabled it belongs
-  to non-consensus eventually consistent metadata rather than producing a
-  consensus write for every read.
+- File access time is optional and disabled by default. Stage 5 initially offers
+  only `off` and coarse eventually consistent tracking, avoiding a metadata write
+  for every read. The typed metadata and adapter boundary reserves a future
+  precise mode without forcing its cost or semantics into the initial service.
 - State has four explicit authority/durability classes:
   - `committed`: authoritative under its required quorum policy;
   - `branch-durable`: acknowledged user work awaiting reconciliation;
@@ -338,18 +353,25 @@ features. The initial model still reserves deliberate boundaries:
 Future symbolic links resolve only inside the MeshSpan logical namespace and
 never expose host/provider paths.
 
-## 14. Remaining lock questions
+## 14. Stage acceptance measurements
 
-Five substantive Stage 4/5 questions remain after this checkpoint:
+No Stage 4 or Stage 5 product-contract question remains open after this review.
+Numeric performance thresholds are evidence produced from reproducible benchmarks,
+not guessed constants in the design.
 
-1. exact dirty-close, flush and explicit-abort mappings for the protocol-neutral
-   handle service;
-2. bounded logical component, path-depth and encoded-path limits;
-3. the optional access-time modes beyond the accepted off-by-default behaviour;
-4. measurable fast-return, repair and degraded-read targets for the Stage 4 exit
-   gate; and
-5. measurable namespace, random-write and permission-evaluation targets for the
-   Stage 5 exit gate.
+- Stage 4 publishes Raspberry Pi-class, desktop and server reference profiles
+  with absolute minimum results and regression budgets for target return, scrub,
+  repair and healthy/degraded reads.
+- Stage 5 publishes the same reference profiles for namespace latency,
+  enumeration, random writes, staging and permission evaluation.
+- Stage 5 additionally measures scaling across increasing node and workload
+  counts. It reports both useful absolute behaviour at each tested scale and the
+  scaling curve until a named CPU, memory, storage, network or authority resource
+  saturates.
+- A result cannot hide a poor small-appliance experience behind server numbers or
+  claim scalability from one fast machine. Test fixtures, hardware, topology,
+  concurrency, data shape, percentile latency and saturated resource remain part
+  of the published evidence.
 
 Exact SMB dialect and optional-feature selection remains the later SMB-adapter
 decision, not a Stage 5 filesystem-core decision. Exact automatic chunk and
