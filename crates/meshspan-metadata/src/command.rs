@@ -52,6 +52,8 @@ pub enum AuthoritativeCommand {
     RestoreVolumeSnapshot(RestoreVolumeSnapshot),
     /// Marks one snapshot as expiring without dropping its namespace root.
     RequestVolumeSnapshotExpiry(RequestVolumeSnapshotExpiry),
+    /// Drops one exact expiring snapshot root without authorising byte reclamation.
+    RemoveVolumeSnapshotRoot(RemoveVolumeSnapshotRoot),
     /// Creates or replaces one authoritative fixed-interval snapshot schedule.
     ConfigureSnapshotSchedule(ConfigureSnapshotSchedule),
     /// Materialises exactly one due occurrence from an authoritative snapshot schedule.
@@ -126,6 +128,7 @@ impl AuthoritativeCommand {
             Self::CreateVolumeSnapshot(value) => value.update_digest(digest),
             Self::RestoreVolumeSnapshot(value) => value.update_digest(digest),
             Self::RequestVolumeSnapshotExpiry(value) => value.update_digest(digest),
+            Self::RemoveVolumeSnapshotRoot(value) => value.update_digest(digest),
             Self::ConfigureSnapshotSchedule(value) => value.update_digest(digest),
             Self::RunSnapshotSchedule(value) => value.update_digest(digest),
             Self::ConfigureVersionRetention(value) => value.update_digest(digest),
@@ -349,6 +352,21 @@ pub struct RequestVolumeSnapshotExpiry {
     pub expected_snapshot_revision: Revision,
     /// Exact manual or automatically proven retention reason.
     pub reason: SnapshotExpiryReason,
+}
+
+/// Exact final transition that stops one expiring snapshot from retaining its root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoveVolumeSnapshotRoot {
+    /// Expiring snapshot whose root reference is removed.
+    pub snapshot_id: SnapshotId,
+    /// Exact snapshot record revision observed by the requester.
+    pub expected_snapshot_revision: Revision,
+    /// Specific accepted expiry request authorising this later transition.
+    pub expiry_operation_id: OperationId,
+    /// Exact namespace commit whose snapshot reference is being dropped.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Exact immutable root revision whose snapshot reference is being dropped.
+    pub root_object_revision_id: ObjectRevisionId,
 }
 
 /// One complete immutable revision of a fixed-interval volume snapshot schedule.
@@ -917,6 +935,17 @@ digest_simple_record!(
         digest.identifier(value.snapshot_id.as_bytes());
         digest.unsigned(value.expected_snapshot_revision.get());
         digest.byte(snapshot_expiry_reason_code(value.reason));
+    }
+);
+digest_simple_record!(
+    RemoveVolumeSnapshotRoot,
+    b"remove-volume-snapshot-root",
+    |value, digest| {
+        digest.identifier(value.snapshot_id.as_bytes());
+        digest.unsigned(value.expected_snapshot_revision.get());
+        digest.identifier(value.expiry_operation_id.as_bytes());
+        digest.identifier(value.namespace_commit_id.as_bytes());
+        digest.identifier(value.root_object_revision_id.as_bytes());
     }
 );
 

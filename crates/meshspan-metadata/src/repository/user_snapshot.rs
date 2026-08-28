@@ -10,8 +10,8 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, Page, PageLimit, RepositoryError};
 use crate::{
-    CommandContext, CreateVolumeSnapshot, PartitionDatabase, RequestVolumeSnapshotExpiry,
-    SnapshotExpiryReason,
+    CommandContext, CreateVolumeSnapshot, PartitionDatabase, RemoveVolumeSnapshotRoot,
+    RequestVolumeSnapshotExpiry, SnapshotExpiryReason,
 };
 
 mod expiry;
@@ -62,6 +62,8 @@ pub struct VolumeSnapshot {
     /// Last authoritative record revision.
     pub revision: Revision,
 }
+
+type StoredRemovalBase = (i64, i64, i64, Vec<u8>, Vec<u8>, Vec<u8>, i64);
 
 pub(super) fn create(
     transaction: &Transaction<'_>,
@@ -162,6 +164,84 @@ pub(super) fn request_expiry(
             context.operation_id.as_bytes().as_slice(),
             command.reason != SnapshotExpiryReason::Manual,
             expiry_reason_code(command.reason),
+            context.occurred_at.get(),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    Ok(EntityReference {
+        kind: EntityKind::VolumeSnapshot,
+        id: command.snapshot_id.as_bytes(),
+    })
+}
+
+pub(super) fn remove_root(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: RemoveVolumeSnapshotRoot,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    if command.expected_snapshot_revision == Revision::ZERO {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let stored: StoredRemovalBase = transaction
+        .query_row(
+            "SELECT s.state, s.protected_from_expiry, s.revision,
+                    s.namespace_commit_id, s.root_object_revision_id,
+                    e.operation_id, e.revision
+             FROM volume_snapshots s
+             JOIN snapshot_expiry_requests e USING(snapshot_id)
+             WHERE s.snapshot_id = ?1",
+            [command.snapshot_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(RepositoryError::InvalidCommand)?;
+    let expected_revision = command.expected_snapshot_revision.get();
+    if stored.0 != 2
+        || stored.1 != 0
+        || parse_u64(stored.2)? != expected_revision
+        || parse_u64(stored.6)? != expected_revision
+        || stored.3.as_slice() != command.namespace_commit_id.as_bytes()
+        || stored.4.as_slice() != command.root_object_revision_id.as_bytes()
+        || stored.5.as_slice() != command.expiry_operation_id.as_bytes()
+    {
+        return Err(RepositoryError::StaleSnapshot);
+    }
+    let updated = transaction.execute(
+        "UPDATE volume_snapshots
+         SET state = 3, removed_at = ?1, revision = ?2
+         WHERE snapshot_id = ?3 AND state = 2 AND revision = ?4",
+        params![
+            context.occurred_at.get(),
+            to_i64(revision.get())?,
+            command.snapshot_id.as_bytes().as_slice(),
+            stored.2,
+        ],
+    )?;
+    if updated != 1 {
+        return Err(RepositoryError::StaleSnapshot);
+    }
+    transaction.execute(
+        "INSERT INTO snapshot_root_removals(
+            snapshot_id, operation_id, expiry_operation_id, namespace_commit_id,
+            root_object_revision_id, removed_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            command.snapshot_id.as_bytes().as_slice(),
+            context.operation_id.as_bytes().as_slice(),
+            command.expiry_operation_id.as_bytes().as_slice(),
+            command.namespace_commit_id.as_bytes().as_slice(),
+            command.root_object_revision_id.as_bytes().as_slice(),
             context.occurred_at.get(),
             to_i64(revision.get())?,
         ],

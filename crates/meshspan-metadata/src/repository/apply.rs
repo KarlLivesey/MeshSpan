@@ -334,6 +334,7 @@ fn execute(
         AuthoritativeCommand::CreateVolumeSnapshot(_)
         | AuthoritativeCommand::RestoreVolumeSnapshot(_)
         | AuthoritativeCommand::RequestVolumeSnapshotExpiry(_)
+        | AuthoritativeCommand::RemoveVolumeSnapshotRoot(_)
         | AuthoritativeCommand::ConfigureSnapshotSchedule(_)
         | AuthoritativeCommand::RunSnapshotSchedule(_) => {
             execute_snapshot_command(transaction, context, command, revision)
@@ -419,6 +420,9 @@ fn execute_snapshot_command(
         }
         AuthoritativeCommand::RequestVolumeSnapshotExpiry(value) => {
             user_snapshot::request_expiry(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RemoveVolumeSnapshotRoot(value) => {
+            user_snapshot::remove_root(transaction, context, *value, revision)
         }
         AuthoritativeCommand::ConfigureSnapshotSchedule(value) => {
             snapshot_schedule::configure(transaction, context, *value, revision)
@@ -610,6 +614,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ConfigureSnapshotSchedule(_) => 31,
         AuthoritativeCommand::RunSnapshotSchedule(_) => 32,
         AuthoritativeCommand::RestoreVolumeSnapshot(_) => 33,
+        AuthoritativeCommand::RemoveVolumeSnapshotRoot(_) => 34,
     }
 }
 
