@@ -713,6 +713,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-cluster"
+version = "0.1.0"
+dependencies = [
+ "meshspan-consensus",
+ "meshspan-domain",
+ "meshspan-protocol",
+ "thiserror",
+]
+
+[[package]]
 name = "meshspan-consensus"
 version = "0.1.0"
 dependencies = [

@@ -132,6 +132,15 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "cluster driver and wire tests",
+      steps: [
+        [
+          "cargo",
+          ["test", "-p", "meshspan-cluster", "--all-targets", "--all-features"],
+        ],
+      ],
+    },
+    {
       name: "workspace format",
       steps: [
         [
