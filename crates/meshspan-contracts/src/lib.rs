@@ -46,7 +46,9 @@ pub use security::{
 };
 pub use storage::{
     InventoryEntry, InventoryPage, PutShardRequest, RemovalPermit, ReservationClass, ShardIdentity,
-    ShardReadPermit, ShardReceipt, StorageProvider, StorageReservation, TombstoneReceipt,
+    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
+    TombstoneReceipt, read_permit_mac, removal_permit_mac, verify_read_permit_mac,
+    verify_removal_permit_mac,
 };
 pub use suites::{
     run_access_connector_suite, run_administration_client_suite, run_authentication_handler_suite,

@@ -80,6 +80,9 @@ credential blobs are not accepted.
   and ACL revisions, gateway/node fence and expiry.
 - A capability for read cannot write; a shard ID cannot grant read; a storage
   location cannot grant delete.
+- Storage read and removal permits use canonical domain-separated keyed BLAKE3
+  MACs. The provider verifies the MAC and every bound identity, revision, epoch,
+  incarnation and expiry; a plain digest supplied by a caller is never authority.
 - Permission changes and principal disablement increment epochs/revisions used
   to invalidate capabilities and sessions.
 - Administration and content access are separate; break-glass access is explicit,
