@@ -2,7 +2,7 @@
 
 //! Replaceable storage-provider capability contract.
 
-use meshspan_domain::{OperationId, TargetId, UnixMicros};
+use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 
 use crate::{BoundedBytes, BoundedItems, ComponentLifecycle, ContractError, RequestContext};
 
@@ -70,19 +70,65 @@ pub struct ShardReceipt {
     pub target_generation: u64,
 }
 
+/// Exact short-lived authority to read one immutable shard from one target generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShardReadPermit {
+    /// Read operation identity whose retries share one authority decision.
+    pub operation_id: OperationId,
+    /// Mesh whose authority issued the permit.
+    pub mesh_id: MeshId,
+    /// Exact storage target on which the permit is valid.
+    pub target_id: TargetId,
+    /// Exact target generation on which the permit is valid.
+    pub target_generation: u64,
+    /// Exact immutable shard generation authorised for reading.
+    pub shard: ShardIdentity,
+    /// Authorisation state revision against which the read was admitted.
+    pub authorization_revision: Revision,
+    /// Exclusive expiry.
+    pub expires_at: UnixMicros,
+    /// Digest or signature binding every permit field and its issuing authority.
+    pub permit_digest: [u8; 32],
+}
+
 /// Authority-derived permission to make one exact shard generation unreachable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemovalPermit {
     /// Cleanup operation identity.
     pub operation_id: OperationId,
+    /// Mesh whose current metadata authority issued the cleanup decision.
+    pub mesh_id: MeshId,
+    /// Exact target on which removal is authorised.
+    pub target_id: TargetId,
     /// Exact shard generation authorised for removal.
     pub shard: ShardIdentity,
     /// Exact target generation authorised for removal.
     pub target_generation: u64,
+    /// Current authority epoch that fences prior cleanup issuers.
+    pub authority_epoch: u64,
+    /// Exact catalogue revision at which reachability was revalidated.
+    pub catalogue_revision: Revision,
     /// Exclusive expiry.
     pub expires_at: UnixMicros,
     /// Digest binding authority, identity, generation and expiry.
     pub permit_digest: [u8; 32],
+}
+
+/// Durable proof that one exact removal permit became irreversible locally.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TombstoneReceipt {
+    /// Cleanup operation identity whose replay returns this exact receipt.
+    pub operation_id: OperationId,
+    /// Exact shard generation made ineligible for reads.
+    pub shard: ShardIdentity,
+    /// Exact target holding the durable tombstone.
+    pub target_id: TargetId,
+    /// Target generation fenced by the tombstone.
+    pub target_generation: u64,
+    /// Digest of the exact authority permit accepted by the provider.
+    pub permit_digest: [u8; 32],
+    /// Digest binding the durable provider tombstone and its identity.
+    pub tombstone_digest: [u8; 32],
 }
 
 /// One bounded provider inventory result.
@@ -137,8 +183,7 @@ pub trait StorageProvider: ComponentLifecycle {
     fn get_exact(
         &self,
         context: RequestContext,
-        shard: ShardIdentity,
-        read_capability_digest: [u8; 32],
+        permit: ShardReadPermit,
     ) -> Result<BoundedBytes, ContractError>;
 
     /// Records an irreversible tombstone before physical unlink is permitted.
@@ -146,14 +191,14 @@ pub trait StorageProvider: ComponentLifecycle {
     /// # Errors
     ///
     /// Rejects every permit not bound to this exact target and shard generation.
-    fn tombstone(&mut self, permit: RemovalPermit) -> Result<ShardReceipt, ContractError>;
+    fn tombstone(&mut self, permit: RemovalPermit) -> Result<TombstoneReceipt, ContractError>;
 
     /// Physically unlinks only a previously durable tombstone.
     ///
     /// # Errors
     ///
     /// Rejects missing, stale or mismatched tombstone receipts.
-    fn unlink_tombstoned(&mut self, receipt: ShardReceipt) -> Result<(), ContractError>;
+    fn unlink_tombstoned(&mut self, receipt: TombstoneReceipt) -> Result<(), ContractError>;
 
     /// Returns one stable bounded inventory page.
     ///
