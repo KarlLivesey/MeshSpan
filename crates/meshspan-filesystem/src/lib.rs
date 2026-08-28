@@ -35,7 +35,7 @@ pub use content_key::{
     rewrap_content_key,
 };
 pub use content_publisher::{
-    DurableContentSink, UnprotectedContentPublisher, UnprotectedContentTarget,
+    DurableContentSink, UnprotectedContentAccess, UnprotectedContentPublisher,
 };
 pub use content_reader::{
     ContentReadError, ContentReadRequest, DurableContentReader, PublishedContentReference,

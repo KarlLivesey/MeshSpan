@@ -10,18 +10,21 @@ use meshspan_contracts::{
     StorageProvider, read_permit_mac,
 };
 use meshspan_domain::{
-    BranchId, ContentManifestId, EntropyError, FileVersionId, MeshId, NamespaceCommitId, ObjectId,
-    ObjectRevisionId, OperationId, PrincipalId, RandomSource, Revision, StageId, TargetId,
-    UnixMicros, VolumeId,
+    BranchId, ContentManifestId, EntropyError, FileVersionId, HandleId, MeshId, NamespaceCommitId,
+    NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, RandomSource, Revision, StageId,
+    TargetId, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     CompletedStage, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
     ContentKeyEnvelopeCipher, ContentPublicationError, ContentPublicationRequest,
-    DirectoryPublication, DirectoryRevisionTransition, DurableContentPublisher,
-    EncryptedContentChunk, FilesystemCommitService, ManifestPublication, NamespaceLimits,
-    NamespacePath, NamespacePublicationPath, PublicationDisposition, RootFileCommitRequest,
-    StageCompletionRequest, StageRegistration, StageWrite, UnprotectedContentPublisher,
-    UnprotectedContentTarget, VolumeKeyEncryptionKey, WrappedContentKey,
+    ContentReadRequest, CreateDisposition, DirectoryPublication, DirectoryRevisionTransition,
+    DurableContentPublisher, DurableContentReader, EncryptedContentChunk, FilesystemCommitService,
+    FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleWriteRequest,
+    HandleAccess, HandleShare, ManifestPublication, NamespaceLimits, NamespacePath,
+    NamespacePublicationPath, OpenHandleRequest, PublicationDisposition, PublishedContentReference,
+    RootFileCommitRequest, StageCompletionRequest, StageRegistration, StageWrite,
+    UnprotectedContentAccess, UnprotectedContentPublisher, VolumeKeyEncryptionKey,
+    WrappedContentKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -160,10 +163,12 @@ fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
         FixedRandom,
         ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(1, [24; 32])?),
         ContentChunkLimits::new(4)?,
-        UnprotectedContentTarget {
-            target_id: registration.target_id,
-            target_generation: registration.generation,
-        },
+        UnprotectedContentAccess::new(
+            registration.mesh_id,
+            registration.target_id,
+            registration.generation,
+            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
+        )?,
     )?;
     let mut service =
         FilesystemCommitService::open(&filesystem_state, UnixMicros::new(1), publisher)?;
@@ -202,8 +207,14 @@ fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
         ],
     )?;
     service.commit_root_file(&request)?;
-    let publisher = service.into_content_publisher();
+    let flush = overwrite_through_handle(&mut service)?;
+    let mut publisher = service.into_content_publisher();
     let content_request = request.content_publication_request();
+    assert_verified_range_read(&mut publisher, &request)?;
+    assert_eq!(
+        read_published_version(&mut publisher, &filesystem_state, flush.file_version_id)?,
+        b"heZZoworld"
+    );
     assert_eq!(
         read_prepared_file(&publisher, registration, &request)?,
         b"helloworld"
@@ -215,6 +226,158 @@ fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
             .chunks
             .is_empty()
     );
+    Ok(())
+}
+
+fn overwrite_through_handle(
+    service: &mut FilesystemCommitService<
+        UnprotectedContentPublisher<FolderShardStore, FixedRandom>,
+    >,
+) -> Result<meshspan_filesystem::NamespacePublicationReceipt, Box<dyn std::error::Error>> {
+    let principal_id = PrincipalId::from_bytes([20; 16])?;
+    let gateway_node_id = NodeId::from_bytes([80; 16])?;
+    let handle_id = HandleId::from_bytes([81; 16])?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: OpenHandleRequest {
+            operation_id: OperationId::from_bytes([82; 16])?,
+            handle_id,
+            branch_id: BranchId::from_bytes([11; 16])?,
+            volume_id: VolumeId::from_bytes([12; 16])?,
+            path: NamespacePath::from_components(
+                ["accounts", "2026", "report.txt"],
+                NamespaceLimits::PORTABLE,
+            )?,
+            principal_id,
+            authorization_revision: Revision::new(9),
+            gateway_node_id,
+            desired_access: HandleAccess::new(true, true, false)?,
+            share_access: HandleShare::new(true, true, false),
+            create_disposition: CreateDisposition::OpenExisting,
+            delete_on_close: false,
+            lease_expires_at: UnixMicros::new(500),
+            opened_at: UnixMicros::new(10),
+        },
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    let bytes = BoundedBytes::copy_from(b"ZZ", 2)?;
+    service.write_handle(&FilesystemHandleWriteRequest {
+        handle_id,
+        principal_id,
+        authorization_revision: Revision::new(9),
+        gateway_node_id,
+        write: StageWrite {
+            operation_id: OperationId::from_bytes([83; 16])?,
+            stage_fence: 1,
+            offset: 2,
+            digest: blake3::hash(bytes.as_slice()).into(),
+            bytes,
+        },
+        observed_at: UnixMicros::new(20),
+    })?;
+    service
+        .flush_handle(FilesystemHandleFlushRequest {
+            operation_id: OperationId::from_bytes([84; 16])?,
+            handle_id,
+            handle_fence: 1,
+            principal_id,
+            authorization_revision: Revision::new(9),
+            gateway_node_id,
+            expected_stage_sequence: 1,
+            final_length: 10,
+            sparse: false,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
+            manifest_format_version: 1,
+            content_authorization_revision: Revision::new(9),
+            content_deadline: UnixMicros::new(400),
+            observed_at: UnixMicros::new(30),
+        })
+        .map_err(Into::into)
+}
+
+fn read_published_version(
+    publisher: &mut UnprotectedContentPublisher<FolderShardStore, FixedRandom>,
+    state_directory: &std::path::Path,
+    version_id: FileVersionId,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let connection = rusqlite::Connection::open(state_directory.join("filesystem-branch.sqlite3"))?;
+    let stored = connection.query_row(
+        "SELECT v.publication_operation_id, m.manifest_id, m.format_version,
+                m.logical_length, m.content_digest, m.root_digest
+         FROM file_versions v JOIN content_manifests m USING(manifest_id)
+         WHERE v.version_id = ?1",
+        [version_id.as_bytes().as_slice()],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+            ))
+        },
+    )?;
+    let reference = PublishedContentReference {
+        publication_operation_id: OperationId::from_bytes(exact_array(stored.0)?)?,
+        manifest: ManifestPublication {
+            manifest_id: ContentManifestId::from_bytes(exact_array(stored.1)?)?,
+            format_version: u16::try_from(stored.2)?,
+            logical_length: u64::try_from(stored.3)?,
+            content_digest: exact_array(stored.4)?,
+            root_digest: exact_array(stored.5)?,
+        },
+    };
+    let mut bytes = Vec::new();
+    publisher.stream_range(
+        ContentReadRequest {
+            operation_id: OperationId::from_bytes([85; 16])?,
+            content: reference,
+            offset: 0,
+            length: reference.manifest.logical_length,
+            authorization_revision: Revision::new(9),
+            deadline: UnixMicros::new(500),
+            observed_at: UnixMicros::new(40),
+        },
+        &mut bytes,
+    )?;
+    Ok(bytes)
+}
+
+fn exact_array<const N: usize>(bytes: Vec<u8>) -> Result<[u8; N], std::io::Error> {
+    bytes.try_into().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stored identity has the wrong width",
+        )
+    })
+}
+
+fn assert_verified_range_read(
+    publisher: &mut UnprotectedContentPublisher<FolderShardStore, FixedRandom>,
+    request: &RootFileCommitRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let layout = publisher
+        .catalog()
+        .prepared_layout(request.content_publication_request())?
+        .ok_or("missing prepared layout")?;
+    let mut range = Vec::new();
+    publisher.stream_range(
+        ContentReadRequest {
+            operation_id: OperationId::from_bytes([73; 16])?,
+            content: PublishedContentReference {
+                publication_operation_id: request.completion.operation_id,
+                manifest: layout.manifest,
+            },
+            offset: 2,
+            length: 6,
+            authorization_revision: Revision::new(9),
+            deadline: UnixMicros::new(500),
+            observed_at: UnixMicros::new(20),
+        },
+        &mut range,
+    )?;
+    assert_eq!(range, b"llowor");
     Ok(())
 }
 
