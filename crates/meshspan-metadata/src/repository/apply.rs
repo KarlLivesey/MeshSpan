@@ -10,7 +10,7 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
     cluster, component, identity, namespace, retention, routing, snapshot_schedule, tags,
-    user_snapshot, volume_head,
+    user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -342,6 +342,9 @@ fn execute(
         AuthoritativeCommand::ConfigureVersionRetention(value) => {
             retention::configure(transaction, context, *value, revision)
         }
+        AuthoritativeCommand::ProposeVersionCleanup(value) => {
+            version_cleanup::propose(transaction, context, *value, revision)
+        }
         AuthoritativeCommand::CreateObject(value) => {
             namespace::create_object(transaction, context, value, revision)
         }
@@ -615,6 +618,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RunSnapshotSchedule(_) => 32,
         AuthoritativeCommand::RestoreVolumeSnapshot(_) => 33,
         AuthoritativeCommand::RemoveVolumeSnapshotRoot(_) => 34,
+        AuthoritativeCommand::ProposeVersionCleanup(_) => 35,
     }
 }
 

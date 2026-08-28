@@ -412,6 +412,8 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
     let proof = progress.proof.ok_or("missing unreachable proof")?;
     assert_eq!(proof.version_id, first.file.version_id);
     assert_eq!(proof.manifest_id, first.file.manifest.manifest_id);
+    assert_eq!(proof.retention_policy_sequence, policy.sequence());
+    assert_eq!(proof.root_count, request.root_count);
     assert_eq!(proof.root_digest, request.root_digest);
     assert!(progress.work_processed >= 3);
     assert_eq!(progress.work_pending, 0);

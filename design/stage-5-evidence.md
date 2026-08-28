@@ -267,8 +267,18 @@ copy-on-write filesystem service. This document records executable evidence only
    rules, and binds each result to both the selection policy and supersession
    policy sequences. Restart equality, disabled-history selection, conflict
    safety, pressure ordering, page bounds, corrupt lineage and transaction
-   rollback are executable. No returned candidate authorises deletion; guarded
-   catalogue-revision reachability and physical reclamation remain outstanding.
+   rollback are executable. No returned candidate authorises deletion. A durable
+   bounded graph scanner now ingests the exact revision-bound retained-root set,
+   adds node-local branch/handle/lifecycle roots, traverses immutable directory and
+   object records across restart, and emits a terminal unreachable proof only if
+   every root remains unchanged. Missing records, corrupt encodings, substituted
+   roots and changed local heads fail closed. The cluster boundary preserves every
+   proof field in a replicated cleanup proposal; the metadata transaction
+   independently recomputes the current retained-root digest and count, validates
+   the selected retention-policy sequence and terminal proof digest, then records
+   one audited idempotent proposal. A proposal deliberately cannot issue removal
+   permits: cross-node branch attestations, final fencing, shared-manifest checks
+   and physical catalogue/provider completion remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

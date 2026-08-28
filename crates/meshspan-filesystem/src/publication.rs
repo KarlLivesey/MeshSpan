@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 15] = [
+const MIGRATIONS: [Migration; 16] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -86,8 +86,12 @@ const MIGRATIONS: [Migration; 15] = [
         version: 15,
         sql: include_str!("../schema/branch/015_version_reachability_scans.sql"),
     },
+    Migration {
+        version: 16,
+        sql: include_str!("../schema/branch/016_reachability_policy_sequence.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 15;
+const SCHEMA_VERSION: u32 = 16;
 
 #[derive(Clone, Copy)]
 struct Migration {
