@@ -177,6 +177,7 @@ impl ConsensusCore {
         }
         match input {
             CoreInput::ElectionTimeout => self.start_election(),
+            CoreInput::Heartbeat => self.heartbeat(),
             CoreInput::Persisted(id) => self.finish_persistence(id),
             CoreInput::Message {
                 from,
@@ -221,6 +222,16 @@ impl ConsensusCore {
             },
             AfterPersistence::Campaign,
         )
+    }
+
+    fn heartbeat(&self) -> Result<Vec<CoreEffect>, CoreError> {
+        if self.role() != Role::Leader {
+            return Err(CoreError::NotLeader);
+        }
+        self.peers()
+            .into_iter()
+            .map(|peer| self.append_effect(peer, None))
+            .collect()
     }
 
     fn receive(

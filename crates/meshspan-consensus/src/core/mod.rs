@@ -8,6 +8,9 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod simulation_tests;
+
 pub use state::ConsensusCore;
 pub use types::{
     AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,

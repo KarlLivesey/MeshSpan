@@ -273,6 +273,8 @@ pub enum CoreMessage {
 pub enum CoreInput {
     /// Election timer selected by the driver expired.
     ElectionTimeout,
+    /// Current leader's driver heartbeat timer expired.
+    Heartbeat,
     /// One authenticated, framed, semantically decoded peer message arrived.
     Message {
         /// Exact authenticated sender.
