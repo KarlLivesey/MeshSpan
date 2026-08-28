@@ -103,10 +103,13 @@ fn validate_snapshot(
     };
     let snapshot_revision =
         u64::try_from(stored_revision).map_err(|_| RepositoryError::CorruptState)?;
+    if !matches!(state, 1..=3) {
+        return Err(RepositoryError::CorruptState);
+    }
     if volume.as_slice() != command.volume_id.as_bytes()
         || source_commit.as_slice() != command.snapshot_namespace_commit_id.as_bytes()
         || root.as_slice() != command.root_object_revision_id.as_bytes()
-        || !matches!(state, 1 | 2)
+        || state == 3
     {
         return Err(RepositoryError::InvalidCommand);
     }
