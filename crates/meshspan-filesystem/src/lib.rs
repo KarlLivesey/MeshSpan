@@ -13,6 +13,7 @@ mod handle_io;
 mod handles;
 mod name;
 mod publication;
+mod reachability;
 mod reconciliation;
 mod stage_store;
 mod staging;
@@ -64,6 +65,11 @@ pub use publication::{
     NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
     RootFilePublication, SnapshotRestorePublication, SnapshotRestoreReceipt,
     VerifiedReconciliationHead, VerifiedSnapshotRestoreHead, VersionPublicationStore,
+};
+pub use reachability::{
+    ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource, VersionReachabilityError,
+    VersionReachabilityProgress, VersionReachabilityScanRequest, VersionReachabilityState,
+    VersionUnreachableProof, reachability_root_digest,
 };
 pub use reconciliation::{
     BranchMutation, BranchMutationIntent, NamespaceReplayAction, NamespaceReplayBase,

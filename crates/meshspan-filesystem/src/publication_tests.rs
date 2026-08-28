@@ -2,7 +2,7 @@
 
 use meshspan_domain::{
     BranchId, ContentManifestId, DurationMicros, FileVersionId, NamespaceCommitId, ObjectId,
-    ObjectRevisionId, OperationId, PrincipalId, SnapshotId, UnixMicros, VolumeId,
+    ObjectRevisionId, OperationId, PrincipalId, Revision, SnapshotId, UnixMicros, VolumeId,
 };
 use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
@@ -17,9 +17,12 @@ use super::{
 use crate::{
     BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
     DirectoryTrie, DirectoryTrieError, NamespaceComponent, NamespaceLimits, NamespacePath,
-    NamespaceReplayDisposition, ReconciliationFrontier, ReconciliationLimits, VersionReclaimMode,
-    VersionRetentionCandidateReason, VersionRetentionError, VersionRetentionPageLimit,
-    VersionRetentionPressure, VersionRetentionSelectionPolicy,
+    NamespaceReplayDisposition, ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource,
+    ReconciliationFrontier, ReconciliationLimits, VersionReachabilityError,
+    VersionReachabilityScanRequest, VersionReachabilityState, VersionReclaimMode,
+    VersionRetentionCandidate, VersionRetentionCandidateReason, VersionRetentionError,
+    VersionRetentionPageLimit, VersionRetentionPressure, VersionRetentionSelectionPolicy,
+    reachability_root_digest,
 };
 
 #[test]
@@ -133,6 +136,9 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "open_handle_path_components",
         "handle_flush_plans",
         "handle_flush_progress",
+        "version_reachability_scans",
+        "version_reachability_roots",
+        "version_reachability_work",
     ] {
         assert_table_exists(&store.connection, table)?;
     }
@@ -356,6 +362,232 @@ fn version_retention_rejects_unsafe_policy_and_page_bounds() {
         VersionRetentionPageLimit::new(4_097),
         Err(VersionRetentionError::InvalidLimit)
     ));
+}
+
+#[test]
+fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
+    let request = reachability_request(candidate, policy, &roots, 170)?;
+
+    let begun = store.begin_version_reachability_scan(&request)?;
+    assert_eq!(begun.state, VersionReachabilityState::CollectingRoots);
+    let page = ReachabilityRootPage {
+        operation_id: request.operation_id,
+        start_ordinal: 0,
+        roots,
+    };
+    store.append_version_reachability_roots(&page)?;
+    drop(store);
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(121))?;
+    let resumed = reopened.begin_version_reachability_scan(&request)?;
+    assert_eq!(resumed.state, VersionReachabilityState::CollectingRoots);
+    assert_eq!(resumed.roots_received, 1);
+    assert_eq!(
+        reopened
+            .append_version_reachability_roots(&page)?
+            .roots_received,
+        1
+    );
+    let mut progress =
+        reopened.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
+    assert_eq!(progress.state, VersionReachabilityState::Scanning);
+    while progress.state == VersionReachabilityState::Scanning {
+        progress = reopened.advance_version_reachability_scan(
+            request.operation_id,
+            1,
+            UnixMicros::new(123),
+        )?;
+    }
+    assert_eq!(progress.state, VersionReachabilityState::Unreachable);
+    let proof = progress.proof.ok_or("missing unreachable proof")?;
+    assert_eq!(proof.version_id, first.file.version_id);
+    assert_eq!(proof.manifest_id, first.file.manifest.manifest_id);
+    assert_eq!(proof.root_digest, request.root_digest);
+    assert!(progress.work_processed >= 3);
+    assert_eq!(progress.work_pending, 0);
+    assert_eq!(
+        reopened.advance_version_reachability_scan(
+            request.operation_id,
+            1,
+            UnixMicros::new(124),
+        )?,
+        progress
+    );
+    Ok(())
+}
+
+#[test]
+fn retained_snapshot_root_and_substituted_root_manifest_fail_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![
+        publication_root(&second),
+        ReachabilityRoot {
+            source: ReachabilityRootSource::Snapshot(SnapshotId::from_bytes([199; 16])?),
+            namespace_commit_id: first.namespace_commit_id,
+            root_object_revision_id: first.root_object_revision_id,
+        },
+    ];
+    let request = reachability_request(candidate, policy, &roots, 171)?;
+    store.begin_version_reachability_scan(&request)?;
+    let mut substituted = roots.clone();
+    substituted[1].namespace_commit_id = second.namespace_commit_id;
+    assert!(matches!(
+        store.append_version_reachability_roots(&ReachabilityRootPage {
+            operation_id: request.operation_id,
+            start_ordinal: 0,
+            roots: substituted,
+        }),
+        Err(VersionReachabilityError::Stale)
+    ));
+    store.append_version_reachability_roots(&ReachabilityRootPage {
+        operation_id: request.operation_id,
+        start_ordinal: 0,
+        roots,
+    })?;
+    let mut progress =
+        store.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
+    while progress.state == VersionReachabilityState::Scanning {
+        progress = store.advance_version_reachability_scan(
+            request.operation_id,
+            1,
+            UnixMicros::new(123),
+        )?;
+    }
+    assert_eq!(progress.state, VersionReachabilityState::Reachable);
+    assert!(progress.proof.is_none());
+    Ok(())
+}
+
+#[test]
+fn reachability_scan_rejects_corrupt_evidence_and_changed_local_roots()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let third = following_root_publication(&second, 180, 181, 182, 183, 184)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
+
+    let corrupt_request = reachability_request(candidate, policy, &roots, 172)?;
+    store.begin_version_reachability_scan(&corrupt_request)?;
+    store.append_version_reachability_roots(&ReachabilityRootPage {
+        operation_id: corrupt_request.operation_id,
+        start_ordinal: 0,
+        roots: roots.clone(),
+    })?;
+    store.connection.execute(
+        "UPDATE version_reachability_roots SET record_digest = zeroblob(32)
+         WHERE operation_id = ?1",
+        [corrupt_request.operation_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        store.seal_version_reachability_roots(corrupt_request.operation_id, UnixMicros::new(121)),
+        Err(VersionReachabilityError::Corrupt)
+    ));
+
+    let stale_request = reachability_request(candidate, policy, &roots, 173)?;
+    store.begin_version_reachability_scan(&stale_request)?;
+    store.append_version_reachability_roots(&ReachabilityRootPage {
+        operation_id: stale_request.operation_id,
+        start_ordinal: 0,
+        roots,
+    })?;
+    assert_eq!(
+        store
+            .seal_version_reachability_roots(stale_request.operation_id, UnixMicros::new(122))?
+            .state,
+        VersionReachabilityState::Scanning
+    );
+    store.publish_root_file(&third)?;
+    assert!(matches!(
+        store.advance_version_reachability_scan(
+            stale_request.operation_id,
+            1,
+            UnixMicros::new(123)
+        ),
+        Err(VersionReachabilityError::Stale)
+    ));
+    Ok(())
+}
+
+fn eager_retention_policy() -> Result<VersionRetentionSelectionPolicy, Box<dyn std::error::Error>> {
+    Ok(VersionRetentionSelectionPolicy::new(
+        7,
+        DurationMicros::new(0),
+        None,
+        None,
+        VersionReclaimMode::EagerAfterMinimumAge,
+        false,
+        DurationMicros::new(0),
+    )?)
+}
+
+fn retention_candidate(
+    store: &VersionPublicationStore,
+    volume_id: VolumeId,
+    policy: VersionRetentionSelectionPolicy,
+) -> Result<VersionRetentionCandidate, Box<dyn std::error::Error>> {
+    let page = store.version_retention_candidates(
+        volume_id,
+        policy,
+        VersionRetentionPressure::None,
+        UnixMicros::new(120),
+        None,
+        VersionRetentionPageLimit::new(10)?,
+    )?;
+    page.items
+        .first()
+        .copied()
+        .ok_or_else(|| "missing candidate".into())
+}
+
+fn publication_root(publication: &RootFilePublication) -> ReachabilityRoot {
+    ReachabilityRoot {
+        source: ReachabilityRootSource::ConvergedHead(publication.file.volume_id),
+        namespace_commit_id: publication.namespace_commit_id,
+        root_object_revision_id: publication.root_object_revision_id,
+    }
+}
+
+fn reachability_request(
+    candidate: VersionRetentionCandidate,
+    policy: VersionRetentionSelectionPolicy,
+    roots: &[ReachabilityRoot],
+    operation: u8,
+) -> Result<VersionReachabilityScanRequest, Box<dyn std::error::Error>> {
+    let metadata_revision = Revision::new(42);
+    Ok(VersionReachabilityScanRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        candidate,
+        policy,
+        pressure: VersionRetentionPressure::None,
+        selected_at: UnixMicros::new(120),
+        metadata_revision,
+        root_count: u64::try_from(roots.len())?,
+        root_digest: reachability_root_digest(candidate.volume_id, metadata_revision, roots)?,
+    })
 }
 
 fn assert_retention_restart_and_corruption(

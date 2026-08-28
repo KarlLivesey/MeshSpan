@@ -562,6 +562,30 @@ impl DirectoryNodeRecord {
             _ => Err(DirectoryTrieError::Corrupt),
         }
     }
+
+    pub(crate) fn reachability_references(&self) -> Vec<DirectoryReachabilityReference> {
+        match &self.node {
+            DirectoryNode::Internal(internal) => internal
+                .children
+                .values()
+                .copied()
+                .map(DirectoryReachabilityReference::Node)
+                .collect(),
+            DirectoryNode::Leaf(leaf) => leaf
+                .entries
+                .iter()
+                .map(|entry| {
+                    DirectoryReachabilityReference::ObjectRevision(entry.object_revision_id())
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DirectoryReachabilityReference {
+    Node(DirectoryNodeDigest),
+    ObjectRevision(ObjectRevisionId),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
