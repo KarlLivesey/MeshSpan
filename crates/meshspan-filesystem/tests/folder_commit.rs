@@ -15,10 +15,11 @@ use meshspan_domain::{
     UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    CompletedStage, ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
-    FilesystemCommitService, ManifestPublication, NamespaceComponent, NamespaceLimits,
-    PublicationDisposition, RootFileCommitRequest, StageCompletionRequest, StageRegistration,
-    StageWrite,
+    CompletedStage, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
+    ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
+    EncryptedContentChunk, FilesystemCommitService, ManifestPublication, NamespaceComponent,
+    NamespaceLimits, PublicationDisposition, RootFileCommitRequest, StageCompletionRequest,
+    StageRegistration, StageWrite,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -59,6 +60,10 @@ fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
     let publisher = FolderPublisher {
         provider,
         registration,
+        cipher: ContentChunkCipher::new(
+            ContentEncryptionKey::from_bytes([24; 32])?,
+            ContentChunkLimits::new(64)?,
+        ),
         durable: None,
     };
     let mut service =
@@ -91,13 +96,24 @@ fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
         permit_digest: [0; 32],
     };
     permit.permit_digest = read_permit_mac(&StoragePermitMacKey::from_bytes(PERMIT_KEY)?, permit);
-    let bytes = StorageProvider::get_exact(
+    let ciphertext = StorageProvider::get_exact(
         &publisher.provider,
         read_context,
         permit,
         UnixMicros::new(20),
     )?;
-    assert_eq!(bytes.as_slice(), b"helloworld");
+    assert_ne!(ciphertext.as_slice(), b"helloworld");
+    let observed = EncryptedContentChunk {
+        ciphertext,
+        ..durable.encrypted
+    };
+    assert_eq!(
+        publisher
+            .cipher
+            .decrypt(request.manifest_id, 1, 0, &observed)?
+            .as_slice(),
+        b"helloworld"
+    );
     assert_eq!(
         fs::read(storage_path.join("ordinary-file.txt"))?,
         b"untouched"
@@ -108,6 +124,7 @@ fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
 struct FolderPublisher {
     provider: FolderShardStore,
     registration: FolderRegistration,
+    cipher: ContentChunkCipher,
     durable: Option<DurableManifest>,
 }
 
@@ -115,6 +132,7 @@ struct DurableManifest {
     request: ContentPublicationRequest,
     manifest: ManifestPublication,
     shard: ShardIdentity,
+    encrypted: EncryptedContentChunk,
 }
 
 impl DurableContentPublisher for FolderPublisher {
@@ -150,7 +168,13 @@ impl DurableContentPublisher for FolderPublisher {
         completed: CompletedStage,
     ) -> Result<ManifestPublication, ContentPublicationError> {
         validate_completed(&bytes, completed)?;
-        let root_digest = manifest_root(completed);
+        let plaintext = BoundedBytes::copy_from(&bytes, 64)
+            .map_err(|_| ContentPublicationError::InvalidInput)?;
+        let encrypted = self
+            .cipher
+            .encrypt(request.manifest_id, request.format_version, 0, &plaintext)
+            .map_err(|_| ContentPublicationError::Corrupt)?;
+        let root_digest = manifest_root(completed, &encrypted);
         let shard = ShardIdentity {
             manifest_digest: root_digest,
             stripe_index: 0,
@@ -163,8 +187,8 @@ impl DurableContentPublisher for FolderPublisher {
             deadline: UnixMicros::new(500),
             expected_revision: Some(Revision::new(9)),
         };
-        let length =
-            u64::try_from(bytes.len()).map_err(|_| ContentPublicationError::InvalidInput)?;
+        let length = u64::try_from(encrypted.ciphertext.len())
+            .map_err(|_| ContentPublicationError::InvalidInput)?;
         let reservation = StorageProvider::reserve(
             &mut self.provider,
             ReserveStorageRequest {
@@ -177,8 +201,6 @@ impl DurableContentPublisher for FolderPublisher {
             },
         )
         .map_err(map_contract)?;
-        let bounded = BoundedBytes::copy_from(&bytes, 64)
-            .map_err(|_| ContentPublicationError::InvalidInput)?;
         StorageProvider::put_exact(
             &mut self.provider,
             PutShardRequest {
@@ -186,8 +208,8 @@ impl DurableContentPublisher for FolderPublisher {
                 reservation,
                 shard,
                 expected_length: length,
-                expected_digest: blake3::hash(&bytes).into(),
-                bytes: bounded,
+                expected_digest: encrypted.ciphertext_digest,
+                bytes: encrypted.ciphertext.clone(),
             },
             UnixMicros::new(11),
         )
@@ -203,6 +225,7 @@ impl DurableContentPublisher for FolderPublisher {
             request,
             manifest,
             shard,
+            encrypted,
         });
         Ok(manifest)
     }
@@ -222,11 +245,13 @@ fn validate_completed(
     }
 }
 
-fn manifest_root(completed: CompletedStage) -> [u8; 32] {
+fn manifest_root(completed: CompletedStage, encrypted: &EncryptedContentChunk) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.test.unprotected-layout.v1\0");
     digest.update(&completed.logical_length.to_be_bytes());
     digest.update(&completed.content_digest);
+    digest.update(&encrypted.plaintext_digest);
+    digest.update(&encrypted.ciphertext_digest);
     digest.finalize().into()
 }
 
