@@ -51,6 +51,11 @@ implementation claim.
   deadline, mesh, target incarnation and exact shard; forged, expired or
   mismatched authority fails before independently length/digest-verified bytes
   leave the provider.
+- Removal accepts only a current-epoch, exact-target keyed permit. It records a
+  journal intent, durably tombstones the pack before removing inventory, and
+  refuses physical unlink until the journal confirms the exact receipt. Restart
+  proof stops between pack and journal commits, recovers once, rejects forged
+  permits/receipts and releases capacity exactly once only after unlink.
 
 ## Closure gates
 

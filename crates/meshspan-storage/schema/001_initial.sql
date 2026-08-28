@@ -80,6 +80,22 @@ CREATE TABLE tombstones (
     bytes_unlinked_at INTEGER NULL
 ) STRICT;
 
+CREATE TABLE removal_intents (
+    operation_id BLOB PRIMARY KEY REFERENCES provider_operations(operation_id)
+        CHECK (length(operation_id) = 16),
+    mesh_id BLOB NOT NULL CHECK (length(mesh_id) = 16),
+    target_id BLOB NOT NULL CHECK (length(target_id) = 16),
+    target_generation INTEGER NOT NULL CHECK (target_generation > 0),
+    shard_identity BLOB NOT NULL CHECK (length(shard_identity) = 46),
+    authority_epoch INTEGER NOT NULL CHECK (authority_epoch > 0),
+    catalogue_revision INTEGER NOT NULL CHECK (catalogue_revision > 0),
+    expires_at INTEGER NOT NULL,
+    permit_digest BLOB NOT NULL CHECK (length(permit_digest) = 32)
+) STRICT;
+
+CREATE INDEX removal_intents_by_operation
+ON removal_intents(operation_id, shard_identity);
+
 CREATE TABLE scrub_cursor (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     cursor_version INTEGER NOT NULL CHECK (cursor_version > 0),

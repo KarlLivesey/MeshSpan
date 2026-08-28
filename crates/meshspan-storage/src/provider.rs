@@ -5,17 +5,19 @@
 use std::path::Path;
 
 use meshspan_contracts::{
-    BoundedBytes, BoundedItems, ContractVersion, InventoryPage, PutShardRequest, RequestContext,
-    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageReservation, verify_read_permit_mac,
+    BoundedBytes, BoundedItems, ContractVersion, InventoryPage, PutShardRequest, RemovalPermit,
+    RequestContext, ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageReservation,
+    TombstoneReceipt, verify_read_permit_mac, verify_removal_permit_mac,
 };
 use meshspan_domain::{MeshId, RandomSource, UnixMicros};
 use thiserror::Error;
 
 use crate::journal::{
-    CapacityPolicy, JournalPutRequest, PendingPutPage, PreparePutResult, ReserveCapacityRequest,
-    TargetJournal, TargetJournalError,
+    CapacityPolicy, DurableTombstoneEvidence, JournalPutRequest, JournalTombstoneRequest,
+    PendingPutPage, PendingTombstonePage, PreparePutResult, PrepareTombstoneResult,
+    ReserveCapacityRequest, TargetJournal, TargetJournalError,
 };
-use crate::pack::{PackPutRequest, PackStore, PackStoreError};
+use crate::pack::{PackPutRequest, PackStore, PackStoreError, PackTombstoneRequest};
 use crate::{RegisteredFolder, StorageFolderError};
 
 const ACTIVE_PACK_SEQUENCE: u64 = 1;
@@ -31,6 +33,17 @@ pub struct RecoveryPage {
     pub next_cursor: Option<BoundedBytes>,
 }
 
+/// Bounded tombstone recovery outcomes plus continuation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TombstoneRecoveryPage {
+    /// Tombstones strengthened from pack-durable to journal-committed during this call.
+    pub committed: BoundedItems<TombstoneReceipt>,
+    /// Prepared operations whose pack tombstone is not yet durable.
+    pub awaiting_pack: usize,
+    /// Opaque next-page cursor when more prepared work exists.
+    pub next_cursor: Option<BoundedBytes>,
+}
+
 /// Exact local shard store composing one registered folder, journal and active pack segment.
 pub struct FolderShardStore {
     folder: RegisteredFolder,
@@ -42,18 +55,40 @@ pub struct FolderShardStore {
 /// Current mesh authority material used to authenticate short-lived storage permits.
 pub struct StoragePermitVerifier {
     mesh_id: MeshId,
+    current_removal_authority_epoch: u64,
     key: StoragePermitMacKey,
 }
 
 impl StoragePermitVerifier {
-    /// Installs the secret MAC key delivered through the mesh secret-distribution boundary.
-    #[must_use]
-    pub const fn new(mesh_id: MeshId, key: StoragePermitMacKey) -> Self {
-        Self { mesh_id, key }
+    /// Installs the current removal epoch and MAC key from mesh secret distribution.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the reserved zero authority epoch.
+    pub const fn new(
+        mesh_id: MeshId,
+        current_removal_authority_epoch: u64,
+        key: StoragePermitMacKey,
+    ) -> Result<Self, FolderShardStoreError> {
+        if current_removal_authority_epoch == 0 {
+            Err(FolderShardStoreError::InvalidInput)
+        } else {
+            Ok(Self {
+                mesh_id,
+                current_removal_authority_epoch,
+                key,
+            })
+        }
     }
 
     fn authenticates_read(&self, permit: ShardReadPermit) -> bool {
         permit.mesh_id == self.mesh_id && verify_read_permit_mac(&self.key, permit)
+    }
+
+    fn authenticates_removal(&self, permit: RemovalPermit) -> bool {
+        permit.mesh_id == self.mesh_id
+            && permit.authority_epoch == self.current_removal_authority_epoch
+            && verify_removal_permit_mac(&self.key, permit)
     }
 }
 
@@ -183,6 +218,109 @@ impl FolderShardStore {
         })
     }
 
+    /// Makes one exact shard unreadable only under a current authenticated removal permit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects forged, expired, stale-epoch or target-mismatched authority and conflicting replay.
+    /// The journal publishes no tombstone until the pack independently proves it durable.
+    pub fn tombstone(
+        &mut self,
+        permit: RemovalPermit,
+        now: UnixMicros,
+    ) -> Result<TombstoneReceipt, FolderShardStoreError> {
+        validate_removal(permit, self.folder.marker(), now)?;
+        if !self.permits.authenticates_removal(permit) {
+            return Err(FolderShardStoreError::Unauthorized);
+        }
+        let request_digest = removal_request_digest(permit);
+        let journal_request = JournalTombstoneRequest {
+            permit,
+            request_digest,
+            now,
+        };
+        if let PrepareTombstoneResult::Committed(receipt) =
+            self.journal.prepare_tombstone(journal_request)?
+        {
+            return Ok(receipt);
+        }
+        let receipt = self
+            .pack
+            .tombstone_exact(PackTombstoneRequest {
+                permit,
+                request_digest,
+                now,
+            })
+            .map_err(|error| map_pack(&error))?;
+        self.journal
+            .commit_tombstone(journal_request, DurableTombstoneEvidence { receipt })
+            .map_err(Into::into)
+    }
+
+    /// Reconciles bounded prepared journal removals with durable pack tombstones.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed bounds/cursors and conflicting or corrupt durable evidence.
+    pub fn recover_pending_tombstones(
+        &mut self,
+        cursor: Option<&BoundedBytes>,
+        limit: usize,
+        now: UnixMicros,
+    ) -> Result<TombstoneRecoveryPage, FolderShardStoreError> {
+        let PendingTombstonePage {
+            tombstones,
+            next_cursor,
+        } = self.journal.pending_tombstones(cursor, limit)?;
+        let mut committed = Vec::with_capacity(tombstones.len());
+        let mut awaiting_pack = 0_usize;
+        for pending in tombstones.as_slice() {
+            match self
+                .pack
+                .recover_tombstone(pending.permit.operation_id, pending.request_digest)
+                .map_err(|error| map_pack(&error))?
+            {
+                Some(receipt) => committed.push(self.journal.commit_tombstone(
+                    JournalTombstoneRequest {
+                        permit: pending.permit,
+                        request_digest: pending.request_digest,
+                        now,
+                    },
+                    DurableTombstoneEvidence { receipt },
+                )?),
+                None => awaiting_pack = awaiting_pack.saturating_add(1),
+            }
+        }
+        Ok(TombstoneRecoveryPage {
+            committed: BoundedItems::new(committed, limit)
+                .map_err(|_| FolderShardStoreError::Corrupt)?,
+            awaiting_pack,
+            next_cursor,
+        })
+    }
+
+    /// Physically reclaims bytes only for an exact journal-committed tombstone receipt.
+    ///
+    /// # Errors
+    ///
+    /// Rejects foreign, missing, forged or conflicting receipts and unavailable durable IO.
+    pub fn unlink_tombstoned(
+        &mut self,
+        receipt: TombstoneReceipt,
+        now: UnixMicros,
+    ) -> Result<(), FolderShardStoreError> {
+        if receipt.target_id != self.folder.marker().target_id()
+            || receipt.target_generation != self.folder.marker().generation()
+        {
+            return Err(FolderShardStoreError::InvalidInput);
+        }
+        self.journal.verify_committed_tombstone(receipt)?;
+        self.pack
+            .unlink_tombstoned(receipt, now)
+            .map_err(|error| map_pack(&error))?;
+        self.journal.commit_unlink(receipt, now).map_err(Into::into)
+    }
+
     /// Returns one bounded seek page of journal-confirmed shards.
     ///
     /// # Errors
@@ -254,6 +392,33 @@ fn validate_read(
         return Err(FolderShardStoreError::Unauthorized);
     }
     Ok(())
+}
+
+fn validate_removal(
+    permit: RemovalPermit,
+    marker: crate::TargetMarker,
+    now: UnixMicros,
+) -> Result<(), FolderShardStoreError> {
+    if permit.authority_epoch == 0 {
+        return Err(FolderShardStoreError::InvalidInput);
+    }
+    if permit.expires_at <= now {
+        return Err(FolderShardStoreError::Stale);
+    }
+    if permit.mesh_id != marker.mesh_id()
+        || permit.target_id != marker.target_id()
+        || permit.target_generation != marker.generation()
+    {
+        return Err(FolderShardStoreError::Unauthorized);
+    }
+    Ok(())
+}
+
+fn removal_request_digest(permit: RemovalPermit) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.storage.removal-request.v1");
+    digest.update(&permit.permit_digest);
+    digest.finalize().into()
 }
 
 fn validate_put(
@@ -379,8 +544,9 @@ mod tests {
     ) -> Result<StoragePermitVerifier, Box<dyn std::error::Error>> {
         Ok(StoragePermitVerifier::new(
             mesh_id,
+            7,
             StoragePermitMacKey::from_bytes([42; 32])?,
-        ))
+        )?)
     }
 
     fn reserve_put(
@@ -598,3 +764,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod removal_tests;
