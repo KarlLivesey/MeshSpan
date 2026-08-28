@@ -309,8 +309,12 @@ copy-on-write filesystem service. This document records executable evidence only
    transaction as its audited terminal revision. Cancellation grants no deletion
    authority. Restart/replay, incomplete coverage, changed roots or policy,
    rotated keys, tampered persisted signatures and every injected transaction
-   boundary are executable. Bounded physical cleanup-item issue and provider
-   completion remain outstanding.
+   boundary are executable. The durable content catalogue now opens a
+   borrow-scoped shard inventory only after independently revalidating the
+   complete committed manifest once, then exposes exact provider receipts in
+   bounded keyset pages without repeating that whole-layout scan. Missing receipt
+   state and invalid bounds fail closed. Replicated cleanup-item sealing, permit
+   issue and provider completion remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

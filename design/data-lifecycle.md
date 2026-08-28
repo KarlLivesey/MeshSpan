@@ -133,6 +133,10 @@ tombstones and cleanup when it returns.
    key generation, and every stored signature. Any mismatch leaves the proposal
    pending without deletion authority. Cancellation is a separate terminal
    transition that can never authorise deletion.
+   The owning content catalogue validates the complete committed manifest once,
+   then enumerates its exact durable shard placements through bounded keyset
+   pages while held under an immutable borrow. Enumeration never allocates or
+   rescans the complete placement set for each page.
 5. Immediately before deletion, the worker obtains a short-lived
    `RemovalPermit` from the current owning metadata-partition leader. The permit binds:
    `mesh_id`, target, object, version, shard, generation, catalogue revision,

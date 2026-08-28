@@ -25,8 +25,8 @@ pub use commit_service::{
     FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
 };
 pub use content_catalog::{
-    ContentCatalogError, DurableContentCatalog, PendingContentChunkPage, PreparedContentChunk,
-    PreparedContentLayout,
+    CommittedShardInventory, CommittedShardPage, ContentCatalogError, DurableContentCatalog,
+    PendingContentChunkPage, PreparedContentChunk, PreparedContentLayout,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,

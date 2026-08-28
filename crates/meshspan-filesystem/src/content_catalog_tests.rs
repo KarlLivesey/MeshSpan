@@ -70,6 +70,27 @@ fn paged_layout_receipts_restart_and_exact_replay_are_durable()
     }
     assert!(catalog.pending_chunks(request, None, 10)?.chunks.is_empty());
     assert_eq!(catalog.finish(request, UnixMicros::new(5))?, manifest);
+    let content = crate::PublishedContentReference {
+        publication_operation_id: request.operation_id,
+        manifest,
+    };
+    {
+        let inventory = catalog.committed_shard_inventory(content)?;
+        let first_inventory = inventory.page(None, 2)?;
+        assert_eq!(first_inventory.shards.len(), 2);
+        assert_eq!(first_inventory.next_index, Some(1));
+        let second_inventory = inventory.page(first_inventory.next_index, 2)?;
+        assert_eq!(second_inventory.shards.len(), 1);
+        assert_eq!(second_inventory.next_index, None);
+        assert_eq!(
+            first_inventory.shards.as_slice()[0],
+            receipt(chunks[0], manifest.root_digest)?
+        );
+        assert!(matches!(
+            inventory.page(None, 0),
+            Err(ContentCatalogError::InvalidInput)
+        ));
+    }
     drop(catalog);
 
     let reopened = DurableContentCatalog::open(directory.path(), UnixMicros::new(6))?;
@@ -83,6 +104,49 @@ fn paged_layout_receipts_restart_and_exact_replay_are_durable()
     assert!(matches!(
         reopened.resolve(conflict),
         Err(ContentCatalogError::Conflict)
+    ));
+    Ok(())
+}
+
+#[test]
+fn committed_inventory_rejects_missing_receipt_state() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let request = request()?;
+    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+    catalog.begin(request)?;
+    let chunks = chunks()?;
+    catalog.append_chunks(request, &chunks)?;
+    let manifest = catalog.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 6,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for chunk in chunks {
+        catalog.record_receipt(
+            request,
+            chunk.chunk_index,
+            receipt(chunk, manifest.root_digest)?,
+            UnixMicros::new(4),
+        )?;
+    }
+    catalog.finish(request, UnixMicros::new(5))?;
+    catalog.connection.execute(
+        "UPDATE content_chunks SET receipt_target_id = NULL,
+            receipt_target_generation = NULL, receipt_recorded_at = NULL
+         WHERE operation_id = ?1 AND chunk_index = 1",
+        [request.operation_id.as_bytes().as_slice()],
+    )?;
+    let inventory = catalog.committed_shard_inventory(crate::PublishedContentReference {
+        publication_operation_id: request.operation_id,
+        manifest,
+    })?;
+    assert!(matches!(
+        inventory.page(None, 10),
+        Err(ContentCatalogError::Sqlite(_))
     ));
     Ok(())
 }
