@@ -66,6 +66,11 @@ implementation claim.
   authority. The real folder store implements the replaceable provider contract
   directly, and fresh-folder conformance vectors cover reserve, put, authorised
   read, forged read, scrub, tombstone, guarded unlink and bounded inventory.
+- Deterministic provider failpoints exercise three different ambiguous-write
+  boundaries through the real pack and journal composition. Pre-write capacity
+  exhaustion changes nothing; a short write rolls its pack transaction back;
+  and a pack commit whose result is lost remains absent from public inventory
+  until restart recovery verifies and publishes it exactly once.
 
 ## Closure gates
 
@@ -81,7 +86,10 @@ implementation claim.
    observations that never become deletion authority.
 6. Reusable provider conformance plus real IO/process proofs for restart,
    `ENOSPC`, short/partial writes, lost flush results, corruption, path/media
-   replacement, stale incarnation and three-process remote transfer.
+   replacement, stale incarnation and three-process remote transfer. Conformance,
+   restart, deterministic `ENOSPC`/short-write/lost-result boundaries,
+   corruption and path/media/incarnation fencing are proven; a real
+   three-process remote transfer remains open.
 
 Stage 4 remains incomplete until every gate is checked and the complete local
 suite passes together.

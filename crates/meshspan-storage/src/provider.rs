@@ -543,6 +543,7 @@ fn contract_error(error: FolderShardStoreError) -> ContractError {
         FolderShardStoreError::Unauthorized => ContractError::Unauthorized,
         FolderShardStoreError::Stale => ContractError::Stale,
         FolderShardStoreError::OperationConflict => ContractError::Conflict,
+        FolderShardStoreError::ResourceExhausted => ContractError::ResourceExhausted,
         FolderShardStoreError::NotFound => ContractError::NotFound,
         FolderShardStoreError::Corrupt => ContractError::Corrupt,
         FolderShardStoreError::Unavailable | FolderShardStoreError::Folder(_) => {
@@ -685,11 +686,14 @@ fn map_pack(error: &PackStoreError) -> FolderShardStoreError {
         PackStoreError::InvalidInput => FolderShardStoreError::InvalidInput,
         PackStoreError::OperationConflict => FolderShardStoreError::OperationConflict,
         PackStoreError::NotFound => FolderShardStoreError::NotFound,
+        PackStoreError::NoSpace => FolderShardStoreError::ResourceExhausted,
         PackStoreError::Corrupt
         | PackStoreError::IdentityMismatch
         | PackStoreError::MigrationMismatch
         | PackStoreError::UnsupportedSchema => FolderShardStoreError::Corrupt,
-        PackStoreError::Folder(_) | PackStoreError::Sqlite(_) => FolderShardStoreError::Unavailable,
+        PackStoreError::Indeterminate | PackStoreError::Folder(_) | PackStoreError::Sqlite(_) => {
+            FolderShardStoreError::Unavailable
+        }
     }
 }
 
@@ -711,6 +715,9 @@ pub enum FolderShardStoreError {
     /// Exact requested provider bytes do not exist.
     #[error("folder shard was not found")]
     NotFound,
+    /// Target-local physical or configured capacity rejects this operation.
+    #[error("folder shard target capacity is exhausted")]
+    ResourceExhausted,
     /// Durable provider state or bytes fail identity/integrity validation.
     #[error("folder shard state is corrupt")]
     Corrupt,
@@ -988,3 +995,6 @@ mod removal_tests;
 
 #[cfg(test)]
 mod conformance_tests;
+
+#[cfg(test)]
+mod fault_tests;

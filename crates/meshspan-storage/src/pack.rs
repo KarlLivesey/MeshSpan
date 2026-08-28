@@ -33,6 +33,14 @@ pub(crate) struct PackStore {
     connection: Connection,
     marker: TargetMarker,
     sequence: u64,
+    injected_fault: Option<PackFault>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PackFault {
+    FullBeforeWrite,
+    ShortWriteAfterShardInsert,
+    LostResultAfterCommit,
 }
 
 #[derive(Clone, Copy)]
@@ -61,6 +69,7 @@ impl PackStore {
             connection,
             marker,
             sequence,
+            injected_fault: None,
         })
     }
 
@@ -69,6 +78,10 @@ impl PackStore {
         request: PackPutRequest<'_>,
     ) -> Result<DurablePackEvidence, PackStoreError> {
         validate_put(request)?;
+        let fault = self.injected_fault.take();
+        if fault == Some(PackFault::FullBeforeWrite) {
+            return Err(PackStoreError::NoSpace);
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -85,6 +98,9 @@ impl PackStore {
             return Ok(self.evidence(receipt, offset));
         }
         let offset = install_or_reuse_shard(&transaction, request)?;
+        if fault == Some(PackFault::ShortWriteAfterShardInsert) {
+            return Err(PackStoreError::Indeterminate);
+        }
         let receipt = ShardReceipt {
             operation_id: request.operation_id,
             shard: request.shard,
@@ -96,7 +112,15 @@ impl PackStore {
         store_operation(&transaction, request, receipt)?;
         transaction.commit()?;
         self.verify_receipt(receipt)?;
+        if fault == Some(PackFault::LostResultAfterCommit) {
+            return Err(PackStoreError::Indeterminate);
+        }
         Ok(self.evidence(receipt, offset))
+    }
+
+    #[cfg(test)]
+    pub fn inject_fault(&mut self, fault: PackFault) {
+        self.injected_fault = Some(fault);
     }
 
     pub fn get_exact(&self, shard: ShardIdentity) -> Result<BoundedBytes, PackStoreError> {
@@ -451,6 +475,10 @@ pub(crate) enum PackStoreError {
     OperationConflict,
     #[error("pack shard was not found")]
     NotFound,
+    #[error("pack has no space for the requested operation")]
+    NoSpace,
+    #[error("pack operation outcome is indeterminate")]
+    Indeterminate,
     #[error("pack bytes or state are corrupt")]
     Corrupt,
     #[error("pack identity does not match the registered target")]
