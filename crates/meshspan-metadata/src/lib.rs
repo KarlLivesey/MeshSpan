@@ -10,14 +10,15 @@ mod repository;
 
 pub use command::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
-    AssignComponent, AttachTag, AttestVersionCleanup, AuthoritativeCommand, BeginScopeHandoff,
-    BootstrapMesh, CommandContext, CommitConvergedVolumeHead, ConfigureComponent,
-    ConfigureSnapshotSchedule, ConfigureVersionRetention, ConsumeJoinGrant, ConvergedHeadEvidence,
-    CreateActivationPolicy, CreateComponent, CreateGroup, CreateMetadataPartition, CreateObject,
-    CreateScopeRoute, CreateTag, CreateUser, CreateVolume, CreateVolumeSnapshot, DetachTag,
-    FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
-    NamespaceObjectKind, PermissionScope, ProposeVersionCleanup, RegisterCleanupAttestationKey,
-    RegisterRoutingSigner, RemoveVolumeSnapshotRoot, ReplaceObjectOwners, RepositoryCommandError,
+    AssignComponent, AttachTag, AttestVersionCleanup, AuthoriseVersionCleanup,
+    AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CancelVersionCleanup, CommandContext,
+    CommitConvergedVolumeHead, ConfigureComponent, ConfigureSnapshotSchedule,
+    ConfigureVersionRetention, ConsumeJoinGrant, ConvergedHeadEvidence, CreateActivationPolicy,
+    CreateComponent, CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute,
+    CreateTag, CreateUser, CreateVolume, CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff,
+    GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles, NamespaceObjectKind,
+    PermissionScope, ProposeVersionCleanup, RegisterCleanupAttestationKey, RegisterRoutingSigner,
+    RemoveVolumeSnapshotRoot, ReplaceObjectOwners, RepositoryCommandError,
     RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode, RouteAttestation,
     RunSnapshotSchedule, SnapshotExpiryReason, TagTarget, VersionCleanupAttestation,
 };
@@ -35,6 +36,6 @@ pub use repository::{
     RetainedNamespaceRootCursor, RetainedNamespaceRootPage, RetainedNamespaceRootSource,
     ScopeWriteAuthority, SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor,
     SnapshotSchedule, SnapshotScheduleCursor, VersionCleanupAttestationProgress,
-    VersionCleanupIntent, VersionRetentionPolicy, VolumeSnapshot, restore_partition_backup,
-    restore_partition_snapshot, run_repository_conformance,
+    VersionCleanupIntent, VersionCleanupState, VersionRetentionPolicy, VolumeSnapshot,
+    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };

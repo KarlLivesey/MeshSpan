@@ -66,6 +66,10 @@ pub enum AuthoritativeCommand {
     RegisterCleanupAttestationKey(RegisterCleanupAttestationKey),
     /// Records one required node incarnation's signed unreachable-version attestation.
     AttestVersionCleanup(AttestVersionCleanup),
+    /// Finalises one fully attested, still-current cleanup proposal as deletion authority.
+    AuthoriseVersionCleanup(AuthoriseVersionCleanup),
+    /// Terminates one pending cleanup proposal without authorising deletion.
+    CancelVersionCleanup(CancelVersionCleanup),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
@@ -141,6 +145,8 @@ impl AuthoritativeCommand {
             Self::ProposeVersionCleanup(value) => value.update_digest(digest),
             Self::RegisterCleanupAttestationKey(value) => value.update_digest(digest),
             Self::AttestVersionCleanup(value) => value.update_digest(digest),
+            Self::AuthoriseVersionCleanup(value) => value.update_digest(digest),
+            Self::CancelVersionCleanup(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
@@ -546,6 +552,28 @@ impl VersionCleanupAttestation {
 pub struct AttestVersionCleanup {
     /// Complete signed statement.
     pub attestation: VersionCleanupAttestation,
+}
+
+/// Exact proposal identity required for the terminal cleanup-authority transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthoriseVersionCleanup {
+    /// Pending replicated cleanup proposal.
+    pub cleanup_operation_id: OperationId,
+    /// Revision that created the immutable participant snapshot.
+    pub cleanup_revision: Revision,
+    /// Operation-independent subject shared by every accepted attestation.
+    pub reachability_subject_digest: [u8; 32],
+}
+
+/// Exact proposal identity terminated without granting deletion authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CancelVersionCleanup {
+    /// Pending replicated cleanup proposal.
+    pub cleanup_operation_id: OperationId,
+    /// Revision that created the immutable participant snapshot.
+    pub cleanup_revision: Revision,
+    /// Operation-independent subject being abandoned.
+    pub reachability_subject_digest: [u8; 32],
 }
 
 /// Namespace object kind stored as a closed integer contract.
@@ -1153,6 +1181,24 @@ digest_simple_record!(
         digest.bytes(&value.local_roots_digest);
         digest.bytes(&value.scan_result_digest);
         digest.bytes(&value.signature);
+    }
+);
+digest_simple_record!(
+    AuthoriseVersionCleanup,
+    b"authorise-version-cleanup",
+    |value, digest| {
+        digest.identifier(value.cleanup_operation_id.as_bytes());
+        digest.unsigned(value.cleanup_revision.get());
+        digest.bytes(&value.reachability_subject_digest);
+    }
+);
+digest_simple_record!(
+    CancelVersionCleanup,
+    b"cancel-version-cleanup",
+    |value, digest| {
+        digest.identifier(value.cleanup_operation_id.as_bytes());
+        digest.unsigned(value.cleanup_revision.get());
+        digest.bytes(&value.reachability_subject_digest);
     }
 );
 digest_simple_record!(CreateVolume, b"create-volume", |value, digest| {

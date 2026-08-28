@@ -16,15 +16,16 @@ use crate::{
 };
 
 const NODE_IDENTITY: u8 = 15;
-const SIGNING_KEY: [u8; 32] = [91; 32];
+pub(super) const SIGNING_KEY: [u8; 32] = [91; 32];
 
-struct ProposalFixture {
-    repository: super::AuthoritativeRepository,
-    administrator: meshspan_domain::PrincipalId,
-    partition: meshspan_domain::PartitionId,
-    cleanup_id: OperationId,
-    scan_request_digest: [u8; 32],
-    subject_digest: [u8; 32],
+pub(super) struct ProposalFixture {
+    pub(super) repository: super::AuthoritativeRepository,
+    pub(super) administrator: meshspan_domain::PrincipalId,
+    pub(super) partition: meshspan_domain::PartitionId,
+    pub(super) volume: meshspan_domain::VolumeId,
+    pub(super) cleanup_id: OperationId,
+    pub(super) scan_request_digest: [u8; 32],
+    pub(super) subject_digest: [u8; 32],
 }
 
 #[test]
@@ -36,6 +37,7 @@ fn exact_node_attestation_is_replayable_complete_and_restart_safe()
         mut repository,
         administrator,
         partition,
+        volume: _,
         cleanup_id,
         scan_request_digest: _,
         subject_digest,
@@ -313,7 +315,9 @@ fn progress(
     Ok((progress.required, progress.attested, progress.complete()))
 }
 
-fn proposal(file_path: &std::path::Path) -> Result<ProposalFixture, Box<dyn std::error::Error>> {
+pub(super) fn proposal(
+    file_path: &std::path::Path,
+) -> Result<ProposalFixture, Box<dyn std::error::Error>> {
     let fixture = fixture()?;
     let mut repository = open_and_prepare(file_path, &fixture)?;
     repository.apply_committed(
@@ -337,13 +341,14 @@ fn proposal(file_path: &std::path::Path) -> Result<ProposalFixture, Box<dyn std:
         repository,
         administrator: fixture.administrator,
         partition: fixture.partition,
+        volume: fixture.volume,
         cleanup_id: command_context.operation_id,
         scan_request_digest: proposal.scan_request_digest,
         subject_digest: proposal.reachability_subject_digest,
     })
 }
 
-fn register_key(
+pub(super) fn register_key(
     repository: &mut super::AuthoritativeRepository,
     administrator: meshspan_domain::PrincipalId,
     index: u64,
@@ -393,7 +398,7 @@ fn register_node_key_generation(
     Ok(())
 }
 
-fn signed_attestation(
+pub(super) fn signed_attestation(
     cleanup_operation_id: OperationId,
     cleanup_revision: Revision,
     scan_request_digest: [u8; 32],

@@ -185,6 +185,140 @@ pub(super) fn progress(
     }))
 }
 
+pub(super) fn validate_complete(
+    transaction: &Transaction<'_>,
+    cleanup_operation_id: OperationId,
+    cleanup_revision: Revision,
+    subject_digest: [u8; 32],
+) -> Result<(), RepositoryError> {
+    let required: i64 = transaction
+        .query_row(
+            "SELECT required_attestation_count FROM version_cleanup_intents
+             WHERE cleanup_operation_id = ?1 AND revision = ?2
+               AND reachability_subject_digest = ?3 AND state = ?4",
+            params![
+                cleanup_operation_id.as_bytes().as_slice(),
+                to_i64(cleanup_revision.get())?,
+                subject_digest.as_slice(),
+                PROPOSAL_PENDING,
+            ],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(RepositoryError::StaleRevision)?;
+    let required = positive(required)?;
+    if super::version_cleanup::current_participant_count(transaction)? != required {
+        return Err(RepositoryError::StaleRevision);
+    }
+
+    let mut statement = transaction.prepare(
+        "SELECT p.node_id, p.node_incarnation, p.key_generation,
+                p.scan_operation_id, p.scan_request_digest,
+                p.reachability_subject_digest, p.local_roots_digest,
+                p.scan_result_digest, p.signature, keys.verifying_key
+         FROM version_cleanup_participants p
+         JOIN nodes n ON n.node_id = p.node_id
+         JOIN cleanup_attestation_keys keys
+           ON keys.node_id = p.node_id AND keys.generation = p.key_generation
+         WHERE p.cleanup_operation_id = ?1 AND p.state = ?2
+           AND n.state IN (1, 2) AND n.current_incarnation = p.node_incarnation
+           AND keys.state = ?3
+           AND (
+             EXISTS(
+               SELECT 1 FROM node_roles nr
+               WHERE nr.node_id = n.node_id AND nr.role_code = 2
+             )
+             OR (
+               NOT EXISTS(SELECT 1 FROM node_roles nr WHERE nr.node_id = n.node_id)
+               AND EXISTS(
+                 SELECT 1 FROM partition_voters pv
+                 WHERE pv.node_id = n.node_id AND pv.state IN (1, 2)
+               )
+             )
+           )
+         ORDER BY p.node_id",
+    )?;
+    let rows = statement.query_map(
+        params![
+            cleanup_operation_id.as_bytes().as_slice(),
+            PARTICIPANT_ATTESTED,
+            KEY_ACTIVE,
+        ],
+        |row| {
+            Ok(StoredCompleteAttestation {
+                node_id: row.get(0)?,
+                node_incarnation: row.get(1)?,
+                key_generation: row.get(2)?,
+                scan_operation_id: row.get(3)?,
+                scan_request_digest: row.get(4)?,
+                subject_digest: row.get(5)?,
+                local_roots_digest: row.get(6)?,
+                scan_result_digest: row.get(7)?,
+                signature: row.get(8)?,
+                verifying_key: row.get(9)?,
+            })
+        },
+    )?;
+    let mut verified = 0_u64;
+    for row in rows {
+        validate_stored_attestation(
+            cleanup_operation_id,
+            cleanup_revision,
+            subject_digest,
+            &row?,
+        )?;
+        verified = verified
+            .checked_add(1)
+            .ok_or(RepositoryError::CapacityExceeded)?;
+    }
+    if verified == required {
+        Ok(())
+    } else {
+        Err(RepositoryError::StaleRevision)
+    }
+}
+
+struct StoredCompleteAttestation {
+    node_id: Vec<u8>,
+    node_incarnation: i64,
+    key_generation: i64,
+    scan_operation_id: Vec<u8>,
+    scan_request_digest: Vec<u8>,
+    subject_digest: Vec<u8>,
+    local_roots_digest: Vec<u8>,
+    scan_result_digest: Vec<u8>,
+    signature: Vec<u8>,
+    verifying_key: Vec<u8>,
+}
+
+fn validate_stored_attestation(
+    cleanup_operation_id: OperationId,
+    cleanup_revision: Revision,
+    subject_digest: [u8; 32],
+    stored: &StoredCompleteAttestation,
+) -> Result<(), RepositoryError> {
+    let attestation = VersionCleanupAttestation {
+        cleanup_operation_id,
+        cleanup_revision,
+        node_id: meshspan_domain::NodeId::from_bytes(array(&stored.node_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        node_incarnation: positive(stored.node_incarnation)?,
+        key_generation: positive(stored.key_generation)?,
+        scan_operation_id: OperationId::from_bytes(array(&stored.scan_operation_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        scan_request_digest: array(&stored.scan_request_digest)?,
+        reachability_subject_digest: array(&stored.subject_digest)?,
+        local_roots_digest: array(&stored.local_roots_digest)?,
+        scan_result_digest: array(&stored.scan_result_digest)?,
+        signature: array(&stored.signature)?,
+    };
+    if attestation.reachability_subject_digest != subject_digest {
+        return Err(RepositoryError::CorruptState);
+    }
+    validate_scan_result(&attestation)?;
+    verify_with_key(&attestation, &stored.verifying_key)
+}
+
 fn validate_attestation_input(
     context: CommandContext,
     attestation: &VersionCleanupAttestation,
@@ -290,6 +424,13 @@ fn verify_signature(
         )
         .optional()?
         .ok_or(RepositoryError::InvalidCommand)?;
+    verify_with_key(attestation, &key)
+}
+
+fn verify_with_key(
+    attestation: &VersionCleanupAttestation,
+    key: &[u8],
+) -> Result<(), RepositoryError> {
     let verifying_key =
         VerifyingKey::from_bytes(&key.try_into().map_err(|_| RepositoryError::CorruptState)?)
             .map_err(|_| RepositoryError::CorruptState)?;
@@ -299,6 +440,10 @@ fn verify_signature(
             &Signature::from_bytes(&attestation.signature),
         )
         .map_err(|_| RepositoryError::InvalidCommand)
+}
+
+fn array<const N: usize>(bytes: &[u8]) -> Result<[u8; N], RepositoryError> {
+    bytes.try_into().map_err(|_| RepositoryError::CorruptState)
 }
 
 fn positive(value: i64) -> Result<u64, RepositoryError> {

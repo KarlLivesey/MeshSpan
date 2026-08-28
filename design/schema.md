@@ -1127,7 +1127,10 @@ The removal permit is derived from one current cleanup item and leader epoch. It
 is not a generic stored bearer token. A cleanup proposal snapshots required
 gateway node incarnations; final authority remains unavailable until every row
 has one signature-verified terminal scan for the proposal's common reachability
-subject.
+subject. A proposal has one terminal transition: `authorised` records its exact
+terminal operation, revision and instant only after full current revalidation;
+`cancelled` records a distinct operation, revision and instant and grants no
+deletion authority. The database rejects mixed or partial terminal state.
 
 ## 20. Repair, scrub and drain
 
