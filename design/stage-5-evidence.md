@@ -99,6 +99,12 @@ copy-on-write filesystem service. This document records executable evidence only
   namespace. Loads revalidate the stored Unicode key, aggregate path bounds,
   intent digest, commit, object-revision kind and selected file version. Restart
   and deliberate stored-path corruption proofs exercise the durable contract.
+- Branch schema v6 extends every nested replay intent with the exact stable
+  directory identity and prior/resulting revision at each source ancestor. This
+  prevents a descendant from being replayed beneath the wrong same-named
+  directory after a disconnected create conflict. Loads verify the full lineage
+  length, ordering, identity, directory kinds and revision chain; restart and
+  corrupted-lineage tests cover nested directory and file commits.
 - The filesystem commit service now composes an exact fenced stage checkpoint,
   a replaceable durable-content publisher and the atomic namespace transaction
   under one operation identity. Content must resolve or become independently

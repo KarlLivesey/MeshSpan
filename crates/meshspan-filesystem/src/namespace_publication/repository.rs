@@ -245,6 +245,7 @@ pub(super) fn persist_file_intent(
         &BranchMutationIntent {
             commit_id: publication.namespace_commit_id,
             path: publication.path.path().clone(),
+            ancestors: publication.path.ancestors().to_vec(),
             object_id: publication.file.object_id,
             object_revision_id: publication.file_object_revision_id,
             prior_object_revision_id: publication.expected_file_object_revision_id,
@@ -265,6 +266,7 @@ pub(super) fn persist_directory_intent(
         &BranchMutationIntent {
             commit_id: publication.namespace_commit_id,
             path: publication.path.path().clone(),
+            ancestors: publication.path.ancestors().to_vec(),
             object_id: publication.directory_object_id,
             object_revision_id: publication.directory_object_revision_id,
             prior_object_revision_id: None,
@@ -316,6 +318,21 @@ fn persist_branch_intent(
                 to_i64(u64::try_from(ordinal).map_err(|_| PublicationError::InvalidInput)?)?,
                 component.display(),
                 component.canonical(),
+            ],
+        )?;
+    }
+    for (ordinal, ancestor) in intent.ancestors.iter().enumerate() {
+        transaction.execute(
+            "INSERT INTO namespace_commit_intent_ancestors(
+                namespace_commit_id, ancestor_ordinal, object_id, prior_revision_id,
+                resulting_revision_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                intent.commit_id.as_bytes().as_slice(),
+                to_i64(u64::try_from(ordinal).map_err(|_| PublicationError::InvalidInput)?)?,
+                ancestor.object_id().as_bytes().as_slice(),
+                ancestor.expected_revision_id().as_bytes().as_slice(),
+                ancestor.new_revision_id().as_bytes().as_slice(),
             ],
         )?;
     }
@@ -405,6 +422,7 @@ fn decode_branch_intent(
         commit_id,
         path: NamespacePath::from_stored_components(components)
             .map_err(|_| PublicationError::Corrupt)?,
+        ancestors: load_intent_ancestors(connection, commit_id, path_depth)?,
         object_id: decode_identifier(&stored.1, ObjectId::from_bytes)?,
         object_revision_id: decode_identifier(&stored.2, ObjectRevisionId::from_bytes)?,
         prior_object_revision_id: decode_optional(
@@ -417,6 +435,46 @@ fn decode_branch_intent(
     validate_loaded_intent(connection, &intent)?;
     if copy_array(&stored.7)? == branch_intent_digest(&intent) {
         Ok(intent)
+    } else {
+        Err(PublicationError::Corrupt)
+    }
+}
+
+fn load_intent_ancestors(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+    path_depth: usize,
+) -> Result<Vec<crate::DirectoryRevisionTransition>, PublicationError> {
+    let mut statement = connection.prepare(
+        "SELECT ancestor_ordinal, object_id, prior_revision_id, resulting_revision_id
+         FROM namespace_commit_intent_ancestors
+         WHERE namespace_commit_id = ?1 ORDER BY ancestor_ordinal",
+    )?;
+    let rows = statement.query_map([commit_id.as_bytes().as_slice()], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, Vec<u8>>(1)?,
+            row.get::<_, Vec<u8>>(2)?,
+            row.get::<_, Vec<u8>>(3)?,
+        ))
+    })?;
+    let mut ancestors = Vec::new();
+    for row in rows {
+        let (ordinal, object, prior, resulting) = row?;
+        if usize::try_from(from_i64(ordinal)?) != Ok(ancestors.len()) {
+            return Err(PublicationError::Corrupt);
+        }
+        ancestors.push(
+            crate::DirectoryRevisionTransition::new(
+                decode_identifier(&object, ObjectId::from_bytes)?,
+                decode_identifier(&prior, ObjectRevisionId::from_bytes)?,
+                decode_identifier(&resulting, ObjectRevisionId::from_bytes)?,
+            )
+            .map_err(|_| PublicationError::Corrupt)?,
+        );
+    }
+    if ancestors.len().checked_add(1) == Some(path_depth) {
+        Ok(ancestors)
     } else {
         Err(PublicationError::Corrupt)
     }
@@ -447,6 +505,24 @@ fn validate_loaded_intent(
         || !valid_kind
     {
         return Err(PublicationError::Corrupt);
+    }
+    for ancestor in &intent.ancestors {
+        let prior = load_object_revision(connection, ancestor.expected_revision_id())?;
+        let resulting = load_object_revision(connection, ancestor.new_revision_id())?;
+        if prior.volume_id != commit.volume_id
+            || resulting.volume_id != commit.volume_id
+            || prior.object_id != ancestor.object_id()
+            || resulting.object_id != ancestor.object_id()
+            || prior.kind != 1
+            || resulting.kind != 1
+            || prior.directory_root.is_none()
+            || resulting.directory_root.is_none()
+            || prior.file_version_id.is_some()
+            || resulting.file_version_id.is_some()
+            || resulting.prior_revision_id != Some(ancestor.expected_revision_id())
+        {
+            return Err(PublicationError::Corrupt);
+        }
     }
     Ok(())
 }

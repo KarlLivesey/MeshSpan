@@ -32,6 +32,8 @@ pub struct BranchMutationIntent {
     pub commit_id: NamespaceCommitId,
     /// Original validated root-relative path.
     pub path: crate::NamespacePath,
+    /// Source child-directory lineage in root-to-leaf order.
+    pub ancestors: Vec<crate::DirectoryRevisionTransition>,
     /// Stable object selected by the leaf entry.
     pub object_id: ObjectId,
     /// Immutable leaf-object revision produced by the source commit.

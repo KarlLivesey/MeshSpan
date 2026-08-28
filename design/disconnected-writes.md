@@ -136,9 +136,12 @@ therefore repeat the same plan instead of inventing a second merge.
 Each ordinary branch commit stores its canonical replay intent atomically with
 the commit: typed mutation, validated display/canonical path, stable leaf object,
 new and causal-prior revisions, name generation and selected immutable file
-version where applicable. Reconciliation applies these bounded affected paths;
-it never discovers user operations by scanning or heuristically diffing an
-entire namespace tree.
+version where applicable. Nested intents also bind each source ancestor's stable
+directory identity and exact prior/resulting revision. If a directory is moved
+to a recovered conflict path, later descendant intents follow that identity
+mapping rather than the losing display path. Reconciliation applies these
+bounded affected paths; it never discovers user operations by scanning or
+heuristically diffing an entire namespace tree.
 
 ## Deterministic conflict rules
 

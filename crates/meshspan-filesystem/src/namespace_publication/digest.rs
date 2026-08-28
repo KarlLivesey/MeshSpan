@@ -95,9 +95,14 @@ pub(super) fn object_revision(revision: &ObjectRevisionInsert) -> [u8; 32] {
 
 pub(super) fn branch_intent(intent: &BranchMutationIntent) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.branch-mutation-intent.v1\0");
+    digest.update(b"meshspan.filesystem.branch-mutation-intent.v2\0");
     digest.update(&intent.commit_id.as_bytes());
     update_namespace_path(&mut digest, &intent.path);
+    for ancestor in &intent.ancestors {
+        digest.update(&ancestor.object_id().as_bytes());
+        digest.update(&ancestor.expected_revision_id().as_bytes());
+        digest.update(&ancestor.new_revision_id().as_bytes());
+    }
     digest.update(&intent.object_id.as_bytes());
     digest.update(&intent.object_revision_id.as_bytes());
     update_optional_revision(&mut digest, intent.prior_object_revision_id);
