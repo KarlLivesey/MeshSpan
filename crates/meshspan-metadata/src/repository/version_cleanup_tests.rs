@@ -21,16 +21,24 @@ fn exact_unreachable_proof_creates_one_replayable_cleanup_intent()
         context(30, fixture.administrator, 31, 102, Some(2))?,
         &publication_command(&fixture, None, 32, 33, 34, 35, 36)?,
     )?;
-    let (root_count, root_digest) = retained_root_summary(
+    let root_summary = retained_root_summary(
         repository.database.connection(),
         fixture.volume,
         Revision::new(3),
     )?;
-    let command = cleanup_command(fixture.volume, root_count, root_digest, 40)?;
+    let command = cleanup_command(fixture.volume, root_summary, 40)?;
     let command_context = context(41, fixture.administrator, 42, 103, Some(3))?;
     let receipt =
         repository.apply_committed(LogPosition { index: 4, term: 1 }, command_context, &command)?;
     assert_eq!(receipt.entity.kind, EntityKind::VersionCleanup);
+    let after_proposal = retained_root_summary(
+        repository.database.connection(),
+        fixture.volume,
+        Revision::new(4),
+    )?;
+    assert_eq!(after_proposal.count, root_summary.count);
+    assert_eq!(after_proposal.set_digest, root_summary.set_digest);
+    assert_ne!(after_proposal.revision_digest, root_summary.revision_digest);
     let intent = repository
         .version_cleanup_intent(command_context.operation_id)?
         .ok_or("missing cleanup intent")?;
@@ -81,12 +89,12 @@ fn stale_roots_policy_and_forged_terminal_proofs_change_nothing()
         context(50, fixture.administrator, 51, 102, Some(2))?,
         &publication_command(&fixture, None, 52, 53, 54, 55, 56)?,
     )?;
-    let (root_count, root_digest) = retained_root_summary(
+    let root_summary = retained_root_summary(
         repository.database.connection(),
         fixture.volume,
         Revision::new(3),
     )?;
-    let valid = cleanup_command(fixture.volume, root_count, root_digest, 60)?;
+    let valid = cleanup_command(fixture.volume, root_summary, 60)?;
     let AuthoritativeCommand::ProposeVersionCleanup(valid_value) = valid else {
         return Err("wrong command fixture".into());
     };
@@ -110,6 +118,17 @@ fn stale_roots_policy_and_forged_terminal_proofs_change_nothing()
             LogPosition { index: 4, term: 1 },
             command_context,
             &AuthoritativeCommand::ProposeVersionCleanup(substituted),
+        ),
+        Err(RepositoryError::StaleRevision)
+    ));
+    let mut substituted_set = valid_value;
+    substituted_set.retained_root_set_digest[0] ^= 1;
+    substituted_set.proof_result_digest = terminal_digest(&substituted_set);
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 4, term: 1 },
+            command_context,
+            &AuthoritativeCommand::ProposeVersionCleanup(substituted_set),
         ),
         Err(RepositoryError::StaleRevision)
     ));
@@ -150,12 +169,12 @@ fn every_apply_fault_rolls_back_the_complete_cleanup_proposal()
             context(70, fixture.administrator, 71, 102, Some(2))?,
             &publication_command(&fixture, None, 72, 73, 74, 75, 76)?,
         )?;
-        let (root_count, root_digest) = retained_root_summary(
+        let root_summary = retained_root_summary(
             repository.database.connection(),
             fixture.volume,
             Revision::new(3),
         )?;
-        let command = cleanup_command(fixture.volume, root_count, root_digest, 80)?;
+        let command = cleanup_command(fixture.volume, root_summary, 80)?;
         let command_context = context(81, fixture.administrator, 82, 103, Some(3))?;
         assert!(matches!(
             apply_committed_with_fault(
@@ -185,8 +204,7 @@ fn every_apply_fault_rolls_back_the_complete_cleanup_proposal()
 
 pub(super) fn cleanup_command(
     volume_id: meshspan_domain::VolumeId,
-    root_count: u64,
-    root_digest: [u8; 32],
+    root_summary: super::reachability::RetainedRootSummary,
     identity: u8,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     let mut value = ProposeVersionCleanup {
@@ -199,8 +217,9 @@ pub(super) fn cleanup_command(
         reachability_subject_digest: [identity.saturating_add(5); 32],
         retention_policy_sequence: 1,
         reachability_revision: Revision::new(3),
-        retained_root_count: root_count,
-        retained_root_digest: root_digest,
+        retained_root_count: root_summary.count,
+        retained_root_digest: root_summary.revision_digest,
+        retained_root_set_digest: root_summary.set_digest,
         local_roots_digest: [identity.saturating_add(4); 32],
         proof_result_digest: [0; 32],
     };

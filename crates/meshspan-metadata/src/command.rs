@@ -475,6 +475,8 @@ pub struct ProposeVersionCleanup {
     pub retained_root_count: u64,
     /// Canonical digest of those roots in stable order.
     pub retained_root_digest: [u8; 32],
+    /// Revision-independent digest used to compare the same root set after later commands.
+    pub retained_root_set_digest: [u8; 32],
     /// Digest of unchanged node-local branch and lifecycle roots.
     pub local_roots_digest: [u8; 32],
     /// Terminal scanner digest proving the unreachable outcome.
@@ -1121,6 +1123,7 @@ digest_simple_record!(
         digest.unsigned(value.reachability_revision.get());
         digest.unsigned(value.retained_root_count);
         digest.bytes(&value.retained_root_digest);
+        digest.bytes(&value.retained_root_set_digest);
         digest.bytes(&value.local_roots_digest);
         digest.bytes(&value.proof_result_digest);
     }

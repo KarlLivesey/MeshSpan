@@ -191,13 +191,13 @@ fn every_snapshotted_gateway_must_attest_before_coverage_is_complete()
         context(30, fixture.administrator, 31, 102, Some(4))?,
         &publication_command(&fixture, None, 32, 33, 34, 35, 36)?,
     )?;
-    let (root_count, root_digest) = retained_root_summary(
+    let root_summary = retained_root_summary(
         repository.database.connection(),
         fixture.volume,
         Revision::new(5),
     )?;
     let AuthoritativeCommand::ProposeVersionCleanup(mut proposal) =
-        cleanup_command(fixture.volume, root_count, root_digest, 40)?
+        cleanup_command(fixture.volume, root_summary, 40)?
     else {
         return Err("wrong proposal fixture".into());
     };
@@ -321,12 +321,12 @@ fn proposal(file_path: &std::path::Path) -> Result<ProposalFixture, Box<dyn std:
         context(30, fixture.administrator, 31, 102, Some(2))?,
         &publication_command(&fixture, None, 32, 33, 34, 35, 36)?,
     )?;
-    let (root_count, root_digest) = retained_root_summary(
+    let root_summary = retained_root_summary(
         repository.database.connection(),
         fixture.volume,
         Revision::new(3),
     )?;
-    let command = cleanup_command(fixture.volume, root_count, root_digest, 40)?;
+    let command = cleanup_command(fixture.volume, root_summary, 40)?;
     let AuthoritativeCommand::ProposeVersionCleanup(proposal) = command else {
         return Err("wrong proposal fixture".into());
     };

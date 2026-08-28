@@ -41,6 +41,8 @@ pub struct VersionCleanupIntent {
     pub retained_root_count: u64,
     /// Digest of the complete retained-root set.
     pub retained_root_digest: [u8; 32],
+    /// Revision-independent digest of the same retained-root set.
+    pub retained_root_set_digest: [u8; 32],
     /// Digest of unchanged local branch and lifecycle roots.
     pub local_roots_digest: [u8; 32],
     /// Terminal unreachable proof digest.
@@ -61,12 +63,15 @@ pub(super) fn propose(
 ) -> Result<EntityReference, RepositoryError> {
     validate_input(context, command)?;
     validate_policy(transaction, command)?;
-    let (root_count, root_digest) = retained_root_summary(
+    let root_summary = retained_root_summary(
         transaction,
         command.volume_id,
         command.reachability_revision,
     )?;
-    if root_count != command.retained_root_count || root_digest != command.retained_root_digest {
+    if root_summary.count != command.retained_root_count
+        || root_summary.revision_digest != command.retained_root_digest
+        || root_summary.set_digest != command.retained_root_set_digest
+    {
         return Err(RepositoryError::StaleRevision);
     }
     if terminal_result_digest(command) != command.proof_result_digest {
@@ -83,8 +88,8 @@ pub(super) fn propose(
             reachability_revision, retained_root_count, retained_root_digest,
             local_roots_digest, proof_result_digest, state, proposed_at,
             completed_at, revision, required_attestation_count,
-            reachability_subject_digest, manifest_root_digest
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, NULL, ?14, ?15, ?16, ?17)",
+            reachability_subject_digest, manifest_root_digest, retained_root_set_digest
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, NULL, ?14, ?15, ?16, ?17, ?18)",
         params![
             context.operation_id.as_bytes().as_slice(),
             command.volume_id.as_bytes().as_slice(),
@@ -103,6 +108,7 @@ pub(super) fn propose(
             to_i64(required_attestation_count)?,
             command.reachability_subject_digest.as_slice(),
             command.manifest_root_digest.as_slice(),
+            command.retained_root_set_digest.as_slice(),
         ],
     )?;
     let participant_rows = transaction.execute(
@@ -154,7 +160,7 @@ pub(super) fn load(
                     retained_root_count, retained_root_digest, local_roots_digest,
                     proof_result_digest, state, proposed_at, completed_at, revision,
                     required_attestation_count, reachability_subject_digest,
-                    manifest_root_digest
+                    manifest_root_digest, retained_root_set_digest
              FROM version_cleanup_intents WHERE cleanup_operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
@@ -177,6 +183,7 @@ pub(super) fn load(
                     row.get::<_, Option<i64>>(15)?,
                     row.get::<_, Option<Vec<u8>>>(16)?,
                     row.get::<_, Option<Vec<u8>>>(17)?,
+                    row.get::<_, Option<Vec<u8>>>(18)?,
                 ))
             },
         )
@@ -204,6 +211,7 @@ type StoredIntent = (
     Option<i64>,
     i64,
     Option<i64>,
+    Option<Vec<u8>>,
     Option<Vec<u8>>,
     Option<Vec<u8>>,
 );
@@ -238,6 +246,12 @@ fn decode(
         reachability_revision: revision(row.6)?,
         retained_root_count: parse_positive(row.7)?,
         retained_root_digest: array(&row.8)?,
+        retained_root_set_digest: row
+            .18
+            .as_deref()
+            .map(array)
+            .transpose()?
+            .ok_or(RepositoryError::CorruptState)?,
         local_roots_digest: array(&row.9)?,
         proof_result_digest: array(&row.10)?,
         required_attestation_count: row
@@ -260,6 +274,7 @@ fn decode(
         reachability_revision: intent.reachability_revision,
         retained_root_count: intent.retained_root_count,
         retained_root_digest: intent.retained_root_digest,
+        retained_root_set_digest: intent.retained_root_set_digest,
         local_roots_digest: intent.local_roots_digest,
         proof_result_digest: intent.proof_result_digest,
     };
@@ -304,6 +319,7 @@ fn validate_input(
         || command.manifest_root_digest == [0; 32]
         || command.reachability_subject_digest == [0; 32]
         || command.retained_root_digest == [0; 32]
+        || command.retained_root_set_digest == [0; 32]
         || command.local_roots_digest == [0; 32]
         || command.proof_result_digest == [0; 32]
         || context.operation_id == command.source_scan_operation_id

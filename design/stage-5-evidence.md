@@ -296,7 +296,12 @@ copy-on-write filesystem service. This document records executable evidence only
    it atomically, while an unreachable proof remains loadable only with its exact
    active fence. Restart, parallel-scan exclusion, alternate manifest IDs sharing
    a fenced root, forged release state and subsequent permitted publication after
-   a reachable result are executable. Final replicated cancellation/completion
+   a reachable result are executable. Scan evidence and replicated proposals now
+   also carry a revision-independent digest of the exact ordered retained-root
+   set. Tests prove that the digest survives unrelated global revision advances
+   while the revision-bound digest does not. Whole-volume restore preparation is
+   blocked while a volume has an active cleanup fence, closing the existing-root
+   head-activation path without scanning every ordinary write. Final replicated cancellation/completion
    authority and physical catalogue/provider completion remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
