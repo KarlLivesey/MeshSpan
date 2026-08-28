@@ -9,7 +9,7 @@ use meshspan_contracts::{
 use meshspan_domain::{OperationId, UnixMicros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
-use super::{TargetJournal, TargetJournalError, to_i64, to_u64};
+use super::{TargetJournal, TargetJournalError, decode_reservation_class, to_i64, to_u64};
 use crate::shard::{SHARD_KEY_BYTES, decode_receipt, decode_shard, encode_receipt, encode_shard};
 
 const MAXIMUM_INVENTORY_ITEMS: usize = 1_000;
@@ -62,8 +62,8 @@ pub enum PreparePutResult {
 /// One bounded incomplete put recovered after restart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PendingPut {
-    /// Operation whose provider outcome must be reconciled.
-    pub operation_id: OperationId,
+    /// Pinned capacity authority whose provider outcome must be reconciled.
+    pub reservation: StorageReservation,
     /// Exact canonical request digest.
     pub request_digest: [u8; 32],
     /// Immutable shard identity.
@@ -256,10 +256,13 @@ impl TargetJournal {
             None => &[],
         };
         let mut statement = self.connection.prepare(
-            "SELECT operation_id, request_digest, shard_identity, expected_length, expected_digest
-             FROM provider_operations
-             WHERE operation_kind = ?1 AND state = ?2 AND operation_id > ?3
-             ORDER BY operation_id LIMIT ?4",
+            "SELECT o.operation_id, o.request_digest, o.shard_identity,
+                    o.expected_length, o.expected_digest,
+                    r.reservation_digest, r.reservation_class, r.maximum_bytes, r.expires_at
+             FROM provider_operations o
+             JOIN reservations r ON r.operation_id = o.operation_id
+             WHERE o.operation_kind = ?1 AND o.state = ?2 AND o.operation_id > ?3
+             ORDER BY o.operation_id LIMIT ?4",
         )?;
         let rows = statement.query_map(
             params![
@@ -278,6 +281,10 @@ impl TargetJournal {
                     row.get::<_, Vec<u8>>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
                 ))
             },
         )?;
@@ -285,8 +292,16 @@ impl TargetJournal {
             .map(|row| {
                 let row = row?;
                 Ok(PendingPut {
-                    operation_id: OperationId::from_bytes(copy_array(&row.0)?)
-                        .map_err(|_| TargetJournalError::CorruptState)?,
+                    reservation: StorageReservation {
+                        operation_id: OperationId::from_bytes(copy_array(&row.0)?)
+                            .map_err(|_| TargetJournalError::CorruptState)?,
+                        target_id: self.marker.target_id(),
+                        target_generation: self.marker.generation(),
+                        class: decode_reservation_class(row.6)?,
+                        maximum_bytes: to_u64(row.7)?,
+                        expires_at: UnixMicros::new(row.8),
+                        reservation_digest: copy_array(&row.5)?,
+                    },
                     request_digest: copy_array(&row.1)?,
                     shard: decode_shard(&row.2)?,
                     expected_length: to_u64(row.3)?,
@@ -298,6 +313,7 @@ impl TargetJournal {
             let operation = puts
                 .get(limit - 1)
                 .ok_or(TargetJournalError::CorruptState)?
+                .reservation
                 .operation_id
                 .as_bytes();
             Some(
