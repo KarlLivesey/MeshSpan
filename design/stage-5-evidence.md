@@ -202,15 +202,25 @@ copy-on-write filesystem service. This document records executable evidence only
    insert. Only that committed authority permits idempotent local activation. Lost
    responses, restart, stale heads, substituted roots/evidence, premature causal
    reconciliation and every injected local/metadata transaction boundary are proven.
-   Ordinary file-version retention selection and guarded root removal remain
-   required before this gate can close. Every new volume now receives the
+   Guarded root removal remains required before this gate can close. Every new
+   volume now receives the
    accepted safe ordinary-history default: enabled, 30-day soft minimum,
    pressure-triggered reclamation and a
    separate 30-day conflict minimum. Policy changes append immutable per-volume
    revisions behind an exact sequence CAS; validation rejects zero counts,
    inverted ages, unsafe conflict minima and maximum-age mode without a maximum.
-   The current policy is restart-safe and fails closed on sequence gaps. Candidate
-   selection and guarded physical reclamation are still outstanding.
+   The current policy is restart-safe and fails closed on sequence gaps. Branch
+   schema v9 now records each superseded version's ordinary-history decision and
+   exact policy sequence in the same transaction as its new version and namespace
+   head. Reconciliation uses that same explicit decision and separately protects
+   acknowledged concurrent alternatives. Bounded seek pagination selects
+   preliminary candidates oldest first, excludes every current branch-file head,
+   enforces minimum count/age, maximum-age, pressure and critical soft-minimum
+   rules, and binds each result to both the selection policy and supersession
+   policy sequences. Restart equality, disabled-history selection, conflict
+   safety, pressure ordering, page bounds, corrupt lineage and transaction
+   rollback are executable. No returned candidate authorises deletion; guarded
+   catalogue-revision reachability and physical reclamation remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.

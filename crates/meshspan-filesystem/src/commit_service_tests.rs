@@ -13,7 +13,7 @@ use tempfile::tempdir;
 
 use super::{
     ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
-    FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
+    FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest, validate_request,
 };
 use crate::{
     CompletedStage, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
@@ -103,6 +103,23 @@ fn conflicting_retry_and_corrupt_manifest_never_advance_the_namespace()
     Ok(())
 }
 
+#[test]
+fn missing_retention_policy_authority_is_rejected_before_content_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut invalid = request(UnixMicros::new(4))?;
+    invalid.retention_policy_sequence = 0;
+    assert!(matches!(
+        validate_request(&invalid),
+        Err(FilesystemCommitError::InvalidInput)
+    ));
+    invalid.retention_policy_sequence = u64::MAX;
+    assert!(matches!(
+        validate_request(&invalid),
+        Err(FilesystemCommitError::InvalidInput)
+    ));
+    Ok(())
+}
+
 fn prepare_stage(
     service: &mut FilesystemCommitService<RecordingPublisher>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -153,6 +170,8 @@ fn request(observed_at: UnixMicros) -> Result<RootFileCommitRequest, Box<dyn std
         object_id: ObjectId::from_bytes([13; 16])?,
         expected_current_version_id: None,
         version_id: FileVersionId::from_bytes([14; 16])?,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
         manifest_id: ContentManifestId::from_bytes([15; 16])?,
         manifest_format_version: 1,
         content_authorization_revision: Revision::new(1),

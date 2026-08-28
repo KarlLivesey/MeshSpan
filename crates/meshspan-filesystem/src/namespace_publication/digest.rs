@@ -17,7 +17,7 @@ use crate::{NamespaceReconciliationApplication, PreparedNamespaceReconciliation}
 
 pub(super) fn file_request(publication: &RootFilePublication) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.path-file-publication.v1\0");
+    digest.update(b"meshspan.filesystem.path-file-publication.v2\0");
     digest.update(&publication_request_digest(publication.file));
     digest.update(&publication.root_object_id.as_bytes());
     update_optional_commit(&mut digest, publication.expected_namespace_commit_id);
@@ -87,10 +87,12 @@ pub(super) fn reconciliation_request(
     let causal = prepared.causal_plan();
     let replay = prepared.replay_plan();
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.namespace-reconciliation-request.v1\0");
+    digest.update(b"meshspan.filesystem.namespace-reconciliation-request.v2\0");
     digest.update(&application.operation_id.as_bytes());
     digest.update(&application.namespace_commit_id.as_bytes());
     digest.update(&application.created_by.as_bytes());
+    digest.update(&[u8::from(application.retain_superseded_history)]);
+    digest.update(&application.retention_policy_sequence.to_be_bytes());
     digest.update(&application.created_at.get().to_be_bytes());
     digest.update(&causal.digest());
     digest.update(&replay.digest());

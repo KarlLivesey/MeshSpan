@@ -163,6 +163,17 @@ immediately destroy existing versions or permit reconciliation to discard
 acknowledged work. Current content and every version reachable from a snapshot,
 pin, branch, open handle or unresolved conflict remain ineligible for cleanup.
 
+Every successful supersession records, atomically with the new namespace head,
+whether ordinary history was enabled and the exact replicated policy sequence
+that made that classification. Reconciliation applies the same rule and records
+acknowledged concurrent alternatives under a distinct conflict-safety guard.
+Local selection is bounded, seek-paged and oldest first. It excludes every
+current branch-file head and returns only preliminary candidates tied to the
+current policy sequence and their original classification sequence. It never
+deletes data: a later catalogue-revision-bound reachability proof must still
+exclude snapshots, branches, handles, lifecycle work and every other retained
+root before guarded physical cleanup can begin.
+
 `restore` creates a new current file version derived from the selected immutable
 version. `restore as copy` creates a new object. Neither operation rewinds or
 alters history.

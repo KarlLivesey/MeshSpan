@@ -187,6 +187,8 @@ fn commit_request() -> Result<RootFileCommitRequest, Box<dyn std::error::Error>>
         object_id: ObjectId::from_bytes([13; 16])?,
         expected_current_version_id: None,
         version_id: FileVersionId::from_bytes([14; 16])?,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
         manifest_id: ContentManifestId::from_bytes([15; 16])?,
         manifest_format_version: 1,
         content_authorization_revision: Revision::new(9),

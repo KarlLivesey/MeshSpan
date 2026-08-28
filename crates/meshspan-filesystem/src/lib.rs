@@ -13,6 +13,7 @@ mod publication;
 mod reconciliation;
 mod stage_store;
 mod staging;
+mod version_retention;
 
 pub use commit_service::{
     ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
@@ -59,3 +60,8 @@ pub use stage_store::{
     CompletedStage, DurableStageStore, StageCompletionRequest, StageRegistration, StageStoreError,
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
+pub use version_retention::{
+    VersionReclaimMode, VersionRetentionCandidate, VersionRetentionCandidatePage,
+    VersionRetentionCandidateReason, VersionRetentionCursor, VersionRetentionError,
+    VersionRetentionPageLimit, VersionRetentionPressure, VersionRetentionSelectionPolicy,
+};

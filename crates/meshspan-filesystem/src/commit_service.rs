@@ -18,6 +18,8 @@ use crate::{
     VersionPublicationStore,
 };
 
+const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
+
 /// Exact stage and manifest identity presented to a replaceable durable-content publisher.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContentPublicationRequest {
@@ -110,6 +112,10 @@ pub struct RootFileCommitRequest {
     pub expected_current_version_id: Option<FileVersionId>,
     /// New immutable file-version identity.
     pub version_id: FileVersionId,
+    /// Whether the superseded current version enters ordinary version history.
+    pub retain_superseded_history: bool,
+    /// Exact replicated retention-policy sequence used for the history decision.
+    pub retention_policy_sequence: u64,
     /// Reserved immutable content-manifest identity.
     pub manifest_id: ContentManifestId,
     /// Selected content-manifest encoding version.
@@ -296,6 +302,8 @@ pub enum FilesystemCommitError {
 
 fn validate_request(request: &RootFileCommitRequest) -> Result<(), FilesystemCommitError> {
     if request.manifest_format_version == 0
+        || request.retention_policy_sequence == 0
+        || request.retention_policy_sequence > MAXIMUM_SQLITE_INTEGER
         || request.content_deadline <= request.completion.observed_at
         || request.entry_generation == 0
         || request.object_id == request.root_object_id
@@ -339,6 +347,8 @@ fn root_publication(
             expected_current_version_id: request.expected_current_version_id,
             version_id: request.version_id,
             parent_version_id: request.expected_current_version_id,
+            retain_superseded_history: request.retain_superseded_history,
+            retention_policy_sequence: request.retention_policy_sequence,
             manifest,
             created_by: request.created_by,
             created_at: request.created_at,
@@ -356,7 +366,7 @@ fn root_publication(
 
 fn commit_request_digest(request: &RootFileCommitRequest) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.commit-root-file.v1\0");
+    digest.update(b"meshspan.filesystem.commit-root-file.v2\0");
     digest.update(&request.completion.operation_id.as_bytes());
     digest.update(&request.completion.stage_id.as_bytes());
     digest.update(&request.completion.stage_fence.to_be_bytes());
@@ -373,6 +383,8 @@ fn commit_request_digest(request: &RootFileCommitRequest) -> [u8; 32] {
             .map(FileVersionId::as_bytes),
     );
     digest.update(&request.version_id.as_bytes());
+    digest.update(&[u8::from(request.retain_superseded_history)]);
+    digest.update(&request.retention_policy_sequence.to_be_bytes());
     digest.update(&request.manifest_id.as_bytes());
     digest.update(&request.manifest_format_version.to_be_bytes());
     digest.update(&request.content_authorization_revision.get().to_be_bytes());

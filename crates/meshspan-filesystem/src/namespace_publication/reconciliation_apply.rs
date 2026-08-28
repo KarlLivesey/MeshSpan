@@ -129,6 +129,7 @@ fn validate(
     let causal = prepared.causal_plan();
     if causal.converged_head().is_none()
         || causal.converged_branch_id().is_none()
+        || application.retention_policy_sequence == 0
         || causal.merge_parents().len() < 2
         || prepared
             .replay_plan()
