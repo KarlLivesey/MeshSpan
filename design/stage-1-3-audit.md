@@ -78,7 +78,7 @@ The remaining composition does not yet satisfy the complete roadmap claim:
 2. [x] Start one voter, admit additional node identities through the authoritative
    join transaction, replicate them as learners, derive exact current-incarnation
    catch-up evidence and automatically commit joint then stable promotion.
-3. Restart during each promotion phase and continue from durable state without
+3. [x] Restart during each promotion phase and continue from durable state without
    manual membership repair or a hard-coded replacement plan.
 4. Run the same real process cycle for one, two and three voters, including
    leader loss and return where the declared plan permits progress.

@@ -7,6 +7,7 @@ mod membership_runtime;
 mod network;
 mod proof_metadata;
 mod service;
+mod test_plan_exit;
 
 use thiserror::Error;
 

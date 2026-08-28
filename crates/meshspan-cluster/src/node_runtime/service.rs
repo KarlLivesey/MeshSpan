@@ -25,6 +25,7 @@ use super::membership_runtime::{
 };
 use super::network::{PeerMessage, PeerNetwork, ReceivedSnapshot};
 use super::proof_metadata::ProofMetadata;
+use super::test_plan_exit::TestPlanExit;
 use crate::membership::{MembershipCoordinatorError, validate_transition};
 use crate::{ClusterDriverError, DriverEffect, PartitionConsensusDriver};
 
@@ -76,6 +77,9 @@ pub async fn run_stage_three_node(
     let mut repository = open_repository(&config)?;
     let core = restore_core(&config, &mut repository)?;
     let mut driver = PartitionConsensusDriver::new(core, repository);
+    let test_plan_exit = TestPlanExit::load(&config.state_path)?;
+    test_plan_exit.arm_if_reached(driver.active_plan());
+    test_plan_exit.exit_if_armed()?;
     let (events, mut received_events) = mpsc::channel(EVENT_CAPACITY);
     let proof_metadata = ProofMetadata::load(&config)?;
     let mut snapshot_dispatch = SnapshotDispatch::new(config.state_path.clone());
@@ -94,6 +98,7 @@ pub async fn run_stage_three_node(
                     &network,
                     &proof_metadata,
                     &mut snapshot_dispatch,
+                    &test_plan_exit,
                     effects,
                 )?;
             }
@@ -105,6 +110,7 @@ pub async fn run_stage_three_node(
                     &network,
                     &proof_metadata,
                     &mut snapshot_dispatch,
+                    &test_plan_exit,
                 )?;
             }
         }
@@ -244,6 +250,7 @@ fn handle_event(
     network: &PeerNetwork,
     proof_metadata: &ProofMetadata,
     snapshot_dispatch: &mut SnapshotDispatch,
+    test_plan_exit: &TestPlanExit,
 ) -> Result<(), NodeRuntimeError> {
     match event {
         NodeEvent::Peer(peer) => {
@@ -262,11 +269,24 @@ fn handle_event(
                 )) => return Ok(()),
                 Err(error) => return Err(error.into()),
             };
-            apply_effects(driver, network, proof_metadata, snapshot_dispatch, effects)
+            apply_effects(
+                driver,
+                network,
+                proof_metadata,
+                snapshot_dispatch,
+                test_plan_exit,
+                effects,
+            )
         }
         NodeEvent::Control { request, response } => {
-            let answer =
-                handle_control(request, driver, network, proof_metadata, snapshot_dispatch)?;
+            let answer = handle_control(
+                request,
+                driver,
+                network,
+                proof_metadata,
+                snapshot_dispatch,
+                test_plan_exit,
+            )?;
             let _receiver_closed = response.send(answer);
             Ok(())
         }
@@ -279,11 +299,19 @@ fn handle_control(
     network: &PeerNetwork,
     proof_metadata: &ProofMetadata,
     snapshot_dispatch: &mut SnapshotDispatch,
+    test_plan_exit: &TestPlanExit,
 ) -> Result<&'static str, NodeRuntimeError> {
     match request {
         ControlRequest::Elect => {
             let effects = driver.step(CoreInput::ElectionTimeout, now())?;
-            apply_effects(driver, network, proof_metadata, snapshot_dispatch, effects)?;
+            apply_effects(
+                driver,
+                network,
+                proof_metadata,
+                snapshot_dispatch,
+                test_plan_exit,
+                effects,
+            )?;
             Ok("ELECTION_STARTED")
         }
         ControlRequest::Propose(value) if driver.role() == Role::Leader => {
@@ -296,7 +324,14 @@ fn handle_control(
                 },
                 now(),
             )?;
-            apply_effects(driver, network, proof_metadata, snapshot_dispatch, effects)?;
+            apply_effects(
+                driver,
+                network,
+                proof_metadata,
+                snapshot_dispatch,
+                test_plan_exit,
+                effects,
+            )?;
             Ok("ACCEPTED")
         }
         ControlRequest::Propose(_) => Ok(redirect_response(driver.leader_id())),
@@ -319,6 +354,7 @@ fn apply_effects(
     network: &PeerNetwork,
     proof_metadata: &ProofMetadata,
     snapshot_dispatch: &mut SnapshotDispatch,
+    test_plan_exit: &TestPlanExit,
     effects: Vec<DriverEffect>,
 ) -> Result<(), NodeRuntimeError> {
     let mut pending = VecDeque::from(effects);
@@ -328,7 +364,13 @@ fn apply_effects(
                 DriverEffect::Send { to, message } => network.send(to, message),
                 DriverEffect::ApplyCommitted { entries } => {
                     for entry in entries {
-                        apply_committed_entry(driver, proof_metadata, &entry, &mut pending)?;
+                        apply_committed_entry(
+                            driver,
+                            proof_metadata,
+                            test_plan_exit,
+                            &entry,
+                            &mut pending,
+                        )?;
                     }
                 }
                 DriverEffect::Rejected { .. }
@@ -338,6 +380,7 @@ fn apply_effects(
             }
             continue;
         }
+        test_plan_exit.exit_if_armed()?;
         dispatch_learner_snapshots(driver, network, snapshot_dispatch)?;
         let planned = maybe_plan_membership_transition(driver)?;
         if planned.is_empty() {
@@ -350,6 +393,7 @@ fn apply_effects(
 fn apply_committed_entry(
     driver: &mut PartitionConsensusDriver<AuthoritativeRepository>,
     proof_metadata: &ProofMetadata,
+    test_plan_exit: &TestPlanExit,
     entry: &meshspan_consensus::LogEntry,
     pending: &mut VecDeque<DriverEffect>,
 ) -> Result<(), NodeRuntimeError> {
@@ -409,7 +453,9 @@ fn apply_committed_entry(
             committed_position: entry.position,
         },
     };
-    pending.extend(driver.step(activation, now())?);
+    let activation_effects = driver.step(activation, now())?;
+    test_plan_exit.arm_if_reached(driver.active_plan());
+    pending.extend(activation_effects);
     Ok(())
 }
 
