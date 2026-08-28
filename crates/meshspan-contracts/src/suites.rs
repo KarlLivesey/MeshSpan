@@ -58,12 +58,31 @@ macro_rules! typed_suite {
     };
 }
 
-typed_suite!(
-    run_storage_provider_suite,
-    StorageProvider,
-    ContractKind::StorageProvider,
-    "Runs exact vectors against fresh storage-provider implementations."
-);
+/// Runs exact vectors against fresh storage-provider implementations.
+///
+/// # Errors
+///
+/// Rejects an invalid descriptor/suite or returns exact deterministic case failures.
+pub fn run_storage_provider_suite<Input, Output, Failure, Component, Factory, Handler>(
+    cases: &[ConformanceCase<Input, Output, Failure>],
+    mut factory: Factory,
+    handler: Handler,
+) -> Result<Vec<ConformanceFailure>, HarnessError>
+where
+    Input: Clone,
+    Output: Debug + Eq,
+    Failure: Debug + Eq,
+    Component: StorageProvider,
+    Factory: FnMut() -> Component,
+    Handler: Clone + Fn(&mut Component, Input) -> Result<Output, Failure>,
+{
+    verify_descriptor(factory().describe(), ContractKind::StorageProvider)?;
+    run_conformance_cases(cases, || {
+        let mut component = factory();
+        let execute = handler.clone();
+        move |input| execute(&mut component, input)
+    })
+}
 typed_suite!(
     run_access_connector_suite,
     AccessConnector,

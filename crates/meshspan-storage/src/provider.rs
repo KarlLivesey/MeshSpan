@@ -5,10 +5,11 @@
 use std::path::Path;
 
 use meshspan_contracts::{
-    BoundedBytes, BoundedItems, ContractVersion, InventoryPage, PutShardRequest, RemovalPermit,
-    RequestContext, ScrubObservation, ScrubOutcome, ScrubPage, ShardReadPermit, ShardReceipt,
-    StoragePermitMacKey, StorageReservation, TombstoneReceipt, verify_read_permit_mac,
-    verify_removal_permit_mac,
+    BoundedBytes, BoundedItems, ContractError, ContractKind, ContractLimits, ContractVersion,
+    ImplementationDescriptor, InventoryPage, PutShardRequest, RemovalPermit, RequestContext,
+    ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage, ShardReadPermit,
+    ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation, TombstoneReceipt,
+    verify_read_permit_mac, verify_removal_permit_mac,
 };
 use meshspan_domain::{MeshId, RandomSource, UnixMicros};
 use thiserror::Error;
@@ -24,6 +25,9 @@ use crate::pack::{
 use crate::{RegisteredFolder, StorageFolderError};
 
 const ACTIVE_PACK_SEQUENCE: u64 = 1;
+const PROVIDER_VERSIONS: &[ContractVersion] = &[ContractVersion::V1_0];
+const MAXIMUM_CONTROL_BYTES: usize = 64 * 1024 * 1024;
+const MAXIMUM_PAGE_ITEMS: usize = 1_000;
 
 /// Bounded recovery outcomes plus continuation for remaining prepared work.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,16 +128,27 @@ impl FolderShardStore {
         })
     }
 
-    /// Persists one exact capacity reservation in the target journal.
+    /// Measures the owned filesystem and persists one exact capacity reservation.
     ///
     /// # Errors
     ///
-    /// Rejects stale identity/time, conflicting replay and unsafe capacity consumption.
+    /// Rejects stale identity/time, conflicting replay, measurement failure and unsafe capacity.
     pub fn reserve(
         &mut self,
-        request: ReserveCapacityRequest,
+        request: ReserveStorageRequest,
     ) -> Result<StorageReservation, FolderShardStoreError> {
-        self.journal.reserve(request).map_err(Into::into)
+        let observation = self.folder.capacity_observation()?;
+        self.journal
+            .reserve(ReserveCapacityRequest {
+                context: request.context,
+                target_id: request.target_id,
+                target_generation: request.target_generation,
+                class: request.class,
+                bytes: request.bytes,
+                observation,
+                now: request.observed_at,
+            })
+            .map_err(Into::into)
     }
 
     /// Makes exact immutable shard bytes durable in the pack, then commits journal inventory.
@@ -450,6 +465,111 @@ impl FolderShardStore {
     }
 }
 
+impl StorageProvider for FolderShardStore {
+    fn describe(&self) -> ImplementationDescriptor {
+        ImplementationDescriptor {
+            implementation_id: "folder-pack",
+            contract: ContractKind::StorageProvider,
+            versions: PROVIDER_VERSIONS,
+            limits: ContractLimits {
+                maximum_control_bytes: MAXIMUM_CONTROL_BYTES,
+                maximum_items: MAXIMUM_PAGE_ITEMS,
+                maximum_concurrency: 1,
+            },
+        }
+    }
+
+    fn reserve(
+        &mut self,
+        request: ReserveStorageRequest,
+    ) -> Result<StorageReservation, ContractError> {
+        FolderShardStore::reserve(self, request).map_err(contract_error)
+    }
+
+    fn put_exact(
+        &mut self,
+        request: PutShardRequest,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        FolderShardStore::put_exact(self, &request, observed_at).map_err(contract_error)
+    }
+
+    fn get_exact(
+        &self,
+        context: RequestContext,
+        permit: ShardReadPermit,
+        observed_at: UnixMicros,
+    ) -> Result<BoundedBytes, ContractError> {
+        FolderShardStore::get_exact(self, context, permit, observed_at).map_err(contract_error)
+    }
+
+    fn tombstone(
+        &mut self,
+        permit: RemovalPermit,
+        observed_at: UnixMicros,
+    ) -> Result<TombstoneReceipt, ContractError> {
+        FolderShardStore::tombstone(self, permit, observed_at).map_err(contract_error)
+    }
+
+    fn unlink_tombstoned(
+        &mut self,
+        receipt: TombstoneReceipt,
+        observed_at: UnixMicros,
+    ) -> Result<(), ContractError> {
+        FolderShardStore::unlink_tombstoned(self, receipt, observed_at).map_err(contract_error)
+    }
+
+    fn inventory(
+        &self,
+        cursor: Option<&BoundedBytes>,
+        limit: usize,
+    ) -> Result<InventoryPage, ContractError> {
+        FolderShardStore::inventory(self, cursor, limit).map_err(contract_error)
+    }
+
+    fn scrub(
+        &mut self,
+        cursor: Option<&BoundedBytes>,
+        limit: usize,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubPage, ContractError> {
+        FolderShardStore::scrub(self, cursor, limit, observed_at).map_err(contract_error)
+    }
+}
+
+fn contract_error(error: FolderShardStoreError) -> ContractError {
+    match error {
+        FolderShardStoreError::InvalidInput => ContractError::InvalidInput,
+        FolderShardStoreError::Unauthorized => ContractError::Unauthorized,
+        FolderShardStoreError::Stale => ContractError::Stale,
+        FolderShardStoreError::OperationConflict => ContractError::Conflict,
+        FolderShardStoreError::NotFound => ContractError::NotFound,
+        FolderShardStoreError::Corrupt => ContractError::Corrupt,
+        FolderShardStoreError::Unavailable | FolderShardStoreError::Folder(_) => {
+            ContractError::Unavailable
+        }
+        FolderShardStoreError::Journal(error) => journal_contract_error(&error),
+    }
+}
+
+fn journal_contract_error(error: &TargetJournalError) -> ContractError {
+    match error {
+        TargetJournalError::InvalidInput => ContractError::InvalidInput,
+        TargetJournalError::StalePolicy => ContractError::Stale,
+        TargetJournalError::PolicyConflict | TargetJournalError::OperationConflict => {
+            ContractError::Conflict
+        }
+        TargetJournalError::CapacityExhausted => ContractError::ResourceExhausted,
+        TargetJournalError::IdentityMismatch
+        | TargetJournalError::MigrationMismatch
+        | TargetJournalError::CorruptState => ContractError::Corrupt,
+        TargetJournalError::UnsupportedSchema => ContractError::UnsupportedVersion,
+        TargetJournalError::Entropy(_)
+        | TargetJournalError::Io(_)
+        | TargetJournalError::Sqlite(_) => ContractError::Unavailable,
+    }
+}
+
 fn validate_read(
     context: RequestContext,
     permit: ShardReadPermit,
@@ -611,7 +731,8 @@ mod tests {
 
     use meshspan_contracts::{
         BoundedBytes, ContractVersion, PutShardRequest, RequestContext, ReservationClass,
-        ScrubOutcome, ShardIdentity, ShardReadPermit, StoragePermitMacKey, read_permit_mac,
+        ReserveStorageRequest, ScrubOutcome, ShardIdentity, ShardReadPermit, StoragePermitMacKey,
+        read_permit_mac,
     };
     use meshspan_domain::{
         EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId, UnixMicros,
@@ -621,10 +742,7 @@ mod tests {
     use super::{FolderShardStore, StoragePermitVerifier, put_request_digest};
     use crate::journal::{JournalPutRequest, PreparePutResult};
     use crate::pack::PackPutRequest;
-    use crate::{
-        CapacityObservation, CapacityPolicy, FolderRegistration, RegisteredFolder,
-        ReserveCapacityRequest, UsageLimit,
-    };
+    use crate::{CapacityPolicy, FolderRegistration, RegisteredFolder, UsageLimit};
 
     struct FixedRandom;
 
@@ -659,17 +777,13 @@ mod tests {
             deadline: UnixMicros::new(1_000),
             expected_revision: Some(Revision::new(5)),
         };
-        let reservation = store.reserve(ReserveCapacityRequest {
+        let reservation = store.reserve(ReserveStorageRequest {
             context,
             target_id: registration.target_id,
             target_generation: registration.generation,
             class: ReservationClass::ForegroundWrite,
             bytes: u64::try_from(payload.len())?,
-            observation: CapacityObservation {
-                total_bytes: 10_000,
-                available_bytes: 10_000,
-            },
-            now,
+            observed_at: now,
         })?;
         let bytes = BoundedBytes::copy_from(payload, 1_024)?;
         Ok(PutShardRequest {
@@ -871,3 +985,6 @@ mod tests {
 
 #[cfg(test)]
 mod removal_tests;
+
+#[cfg(test)]
+mod conformance_tests;

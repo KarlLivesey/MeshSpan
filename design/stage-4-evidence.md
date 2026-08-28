@@ -61,6 +61,11 @@ implementation claim.
   onto unchanged inventory; corrupt, missing and unreadable findings remain
   typed observations with no deletion path. A WAL/FULL-sync per-target cursor
   advances only after a complete bounded page and resumes across restart.
+- Capacity admission now obtains `statvfs` from the already-open folder
+  capability; no caller-supplied free-space claim or replacement path can grant
+  authority. The real folder store implements the replaceable provider contract
+  directly, and fresh-folder conformance vectors cover reserve, put, authorised
+  read, forged read, scrub, tombstone, guarded unlink and bounded inventory.
 
 ## Closure gates
 

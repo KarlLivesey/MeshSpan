@@ -4,7 +4,7 @@
 
 use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 
-use crate::{BoundedBytes, BoundedItems, ComponentLifecycle, ContractError, RequestContext};
+use crate::{BoundedBytes, BoundedItems, ContractError, ImplementationDescriptor, RequestContext};
 
 const READ_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.read-permit.v1";
 const REMOVAL_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.removal-permit.v1";
@@ -71,6 +71,23 @@ pub struct StorageReservation {
     pub expires_at: UnixMicros,
     /// Digest binding the complete reservation fields and authority.
     pub reservation_digest: [u8; 32],
+}
+
+/// Complete bounded request for target-local capacity authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReserveStorageRequest {
+    /// Version, operation, deadline and optional authority revision.
+    pub context: RequestContext,
+    /// Exact storage target.
+    pub target_id: TargetId,
+    /// Exact target incarnation/generation.
+    pub target_generation: u64,
+    /// Independent capacity budget being requested.
+    pub class: ReservationClass,
+    /// Maximum bytes the operation may make durable.
+    pub bytes: u64,
+    /// Current authoritative instant; filesystem capacity is measured by the provider itself.
+    pub observed_at: UnixMicros,
 }
 
 /// Complete exact-write request presented to a provider.
@@ -289,7 +306,10 @@ pub struct ScrubPage {
 }
 
 /// Byte storage beneath one registered target, without namespace or ACL knowledge.
-pub trait StorageProvider: ComponentLifecycle {
+pub trait StorageProvider {
+    /// Describes the compiled provider implementation and explicit bounds.
+    fn describe(&self) -> ImplementationDescriptor;
+
     /// Reserves capacity for one exact operation without publishing a shard.
     ///
     /// # Errors
@@ -297,11 +317,7 @@ pub trait StorageProvider: ComponentLifecycle {
     /// Returns a stable rejection without consuming unbounded claimed capacity.
     fn reserve(
         &mut self,
-        context: RequestContext,
-        target_id: TargetId,
-        target_generation: u64,
-        class: ReservationClass,
-        bytes: u64,
+        request: ReserveStorageRequest,
     ) -> Result<StorageReservation, ContractError>;
 
     /// Persists exactly the declared bytes or publishes no shard.
@@ -309,7 +325,11 @@ pub trait StorageProvider: ComponentLifecycle {
     /// # Errors
     ///
     /// Rejects stale reservations, wrong lengths/digests, conflicting replay and IO failure.
-    fn put_exact(&mut self, request: PutShardRequest) -> Result<ShardReceipt, ContractError>;
+    fn put_exact(
+        &mut self,
+        request: PutShardRequest,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError>;
 
     /// Reads and verifies one exact shard after validating the authority capability.
     ///
@@ -320,6 +340,7 @@ pub trait StorageProvider: ComponentLifecycle {
         &self,
         context: RequestContext,
         permit: ShardReadPermit,
+        observed_at: UnixMicros,
     ) -> Result<BoundedBytes, ContractError>;
 
     /// Records an irreversible tombstone before physical unlink is permitted.
@@ -327,14 +348,22 @@ pub trait StorageProvider: ComponentLifecycle {
     /// # Errors
     ///
     /// Rejects every permit not bound to this exact target and shard generation.
-    fn tombstone(&mut self, permit: RemovalPermit) -> Result<TombstoneReceipt, ContractError>;
+    fn tombstone(
+        &mut self,
+        permit: RemovalPermit,
+        observed_at: UnixMicros,
+    ) -> Result<TombstoneReceipt, ContractError>;
 
     /// Physically unlinks only a previously durable tombstone.
     ///
     /// # Errors
     ///
     /// Rejects missing, stale or mismatched tombstone receipts.
-    fn unlink_tombstoned(&mut self, receipt: TombstoneReceipt) -> Result<(), ContractError>;
+    fn unlink_tombstoned(
+        &mut self,
+        receipt: TombstoneReceipt,
+        observed_at: UnixMicros,
+    ) -> Result<(), ContractError>;
 
     /// Returns one stable bounded inventory page.
     ///

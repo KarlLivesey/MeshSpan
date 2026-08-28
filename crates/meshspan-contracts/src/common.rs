@@ -246,6 +246,9 @@ pub enum ContractError {
     /// Requested semantic version is unsupported.
     #[error("contract version is unsupported")]
     UnsupportedVersion,
+    /// Exact requested resource does not exist in the selected capability scope.
+    #[error("capability resource was not found")]
+    NotFound,
     /// Explicit local capacity or admission bounds reject the work.
     #[error("bounded capability capacity is exhausted")]
     ResourceExhausted,

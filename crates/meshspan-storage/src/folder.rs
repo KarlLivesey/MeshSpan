@@ -12,6 +12,7 @@ use meshspan_domain::{EntropyError, MeshId, RandomSource, TargetId};
 use thiserror::Error;
 
 use crate::config::UsageLimit;
+use crate::journal::CapacityObservation;
 use crate::marker::{MARKER_BYTES, MarkerFingerprint, TargetMarker};
 
 const PRIVATE_DIRECTORY: &str = ".meshspan";
@@ -150,6 +151,11 @@ impl RegisteredFolder {
         probe_capabilities(&self.private_directory)
     }
 
+    /// Measures capacity from the already-open capability rather than a caller-supplied path.
+    pub(crate) fn capacity_observation(&self) -> Result<CapacityObservation, StorageFolderError> {
+        capacity_observation(&self.private_directory)
+    }
+
     pub(crate) fn pack_database_path(&self, sequence: u64) -> Result<PathBuf, StorageFolderError> {
         if sequence == 0 {
             return Err(StorageFolderError::InvalidRegistration);
@@ -160,6 +166,38 @@ impl RegisteredFolder {
             .join(PACK_DIRECTORY)
             .join(format!("{sequence:016x}.sqlite3")))
     }
+}
+
+#[cfg(unix)]
+fn capacity_observation(directory: &Dir) -> Result<CapacityObservation, StorageFolderError> {
+    let statistics = rustix::fs::fstatvfs(directory).map_err(|error| {
+        StorageFolderError::Io(std::io::Error::from_raw_os_error(error.raw_os_error()))
+    })?;
+    let fragment_bytes = if statistics.f_frsize == 0 {
+        statistics.f_bsize
+    } else {
+        statistics.f_frsize
+    };
+    let total_bytes = statistics
+        .f_blocks
+        .checked_mul(fragment_bytes)
+        .ok_or(StorageFolderError::CapabilityProbeFailed)?;
+    let available_bytes = statistics
+        .f_bavail
+        .checked_mul(fragment_bytes)
+        .ok_or(StorageFolderError::CapabilityProbeFailed)?;
+    if total_bytes == 0 || available_bytes > total_bytes {
+        return Err(StorageFolderError::CapabilityProbeFailed);
+    }
+    Ok(CapacityObservation {
+        total_bytes,
+        available_bytes,
+    })
+}
+
+#[cfg(not(unix))]
+fn capacity_observation(_directory: &Dir) -> Result<CapacityObservation, StorageFolderError> {
+    Err(StorageFolderError::CapabilityProbeFailed)
 }
 
 fn open_and_lock(storage_path: &Path) -> Result<(PathBuf, Dir, std::fs::File), StorageFolderError> {
