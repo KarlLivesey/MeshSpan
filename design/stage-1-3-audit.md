@@ -23,17 +23,15 @@ creates users, nested groups, multi-principal-owned namespace records and an
 activated time-bounded grant, then returns the exact receipt after restart.
 Migration, crash, integrity, backup/restore and bounded-query tests also pass.
 
-Two Stage 2 requirements currently stop at schema/domain representation rather
-than a typed authoritative mutation:
+One Stage 2 requirement still stops at schema/domain representation rather than
+a typed authoritative mutation:
 
-- descriptive tags can be stored by the schema, but no command can create a tag
-  or attach it to a principal or logical object;
 - owner sets are created with namespace objects, but no atomic owner-transfer
   command proves that the final active owner cannot be removed.
 
 ### Stage 2 closure gates
 
-1. Typed, audited and idempotent tag create/attach/detach commands prove tags
+1. [x] Typed, audited and idempotent tag create/attach/detach commands prove tags
    never affect authority and attach only to logical objects or principals.
 2. One atomic owner replacement command rejects an empty/inactive owner set and
    proves exact replay, conflicting reuse and restart recovery.

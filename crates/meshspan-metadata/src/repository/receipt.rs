@@ -66,6 +66,10 @@ pub enum EntityKind {
     MetadataPartition = 15,
     /// Signed scope route or handoff transition.
     ScopeRoute = 16,
+    /// Descriptive tag definition.
+    Tag = 17,
+    /// Descriptive principal/object tag edge.
+    TagAttachment = 18,
 }
 
 impl EntityKind {
@@ -87,6 +91,8 @@ impl EntityKind {
             14 => Ok(Self::RoutingSigner),
             15 => Ok(Self::MetadataPartition),
             16 => Ok(Self::ScopeRoute),
+            17 => Ok(Self::Tag),
+            18 => Ok(Self::TagAttachment),
             _ => Err(RepositoryError::CorruptState),
         }
     }

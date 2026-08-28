@@ -10,12 +10,12 @@ mod repository;
 
 pub use command::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
-    AssignComponent, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext,
-    ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy, CreateComponent, CreateGroup,
-    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateUser, CreateVolume,
-    FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
-    NamespaceObjectKind, PermissionScope, RegisterRoutingSigner, RepositoryCommandError,
-    RouteAttestation,
+    AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh,
+    CommandContext, ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy, CreateComponent,
+    CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser,
+    CreateVolume, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant,
+    JoinRoles, NamespaceObjectKind, PermissionScope, RegisterRoutingSigner, RepositoryCommandError,
+    RouteAttestation, TagTarget,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;

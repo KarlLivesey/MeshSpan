@@ -18,6 +18,7 @@ mod quorum_plan;
 mod receipt;
 mod routing;
 mod snapshot;
+mod tags;
 mod verify;
 
 use meshspan_domain::{OperationId, Revision, ScopeId, ScopeRoute};

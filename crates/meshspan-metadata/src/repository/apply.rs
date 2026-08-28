@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
-    cluster, component, identity, namespace, routing,
+    cluster, component, identity, namespace, routing, tags,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -330,6 +330,15 @@ fn execute(
         AuthoritativeCommand::CreateObject(value) => {
             namespace::create_object(transaction, context, value, revision)
         }
+        AuthoritativeCommand::CreateTag(value) => {
+            tags::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AttachTag(value) => {
+            tags::attach(transaction, context, value.tag_id, value.target)
+        }
+        AuthoritativeCommand::DetachTag(value) => {
+            tags::detach(transaction, value.tag_id, value.target)
+        }
         AuthoritativeCommand::GrantPermission(value) => {
             identity::grant_permission(transaction, context, *value, revision)
         }
@@ -547,6 +556,9 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::FreezeScopeHandoff(_) => 20,
         AuthoritativeCommand::ActivateScopeHandoff(_) => 21,
         AuthoritativeCommand::AbortScopeHandoff(_) => 22,
+        AuthoritativeCommand::CreateTag(_) => 23,
+        AuthoritativeCommand::AttachTag(_) => 24,
+        AuthoritativeCommand::DetachTag(_) => 25,
     }
 }
 
