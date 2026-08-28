@@ -2,6 +2,8 @@
 
 //! Durable authority-owned file handles and cross-gateway share-mode admission.
 
+#[path = "handles/flush.rs"]
+mod flush;
 #[path = "handles/lease.rs"]
 mod lease;
 #[path = "handles/locks.rs"]
@@ -16,6 +18,7 @@ mod tests;
 #[path = "handles/write.rs"]
 mod write;
 
+pub(crate) use flush::{advance_progress as advance_flush_progress, prepare as prepare_flush};
 pub use lease::{
     CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, HandleLeaseReceipt,
     HandleLeaseRequest,
@@ -916,7 +919,8 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM namespace_snapshot_restore_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
-             OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)",
+             OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM handle_flush_plans WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;

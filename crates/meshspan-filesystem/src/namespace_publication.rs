@@ -226,6 +226,7 @@ pub(super) fn publish(
     inject(fault, NamespaceFaultPoint::NamespaceCommit)?;
     let head_sequence = advance_namespace_head(&transaction, intent, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Heads)?;
+    crate::handles::advance_flush_progress(&transaction, publication)?;
     let receipt =
         persist_namespace_operation(&transaction, publication, request_digest, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Operation)?;

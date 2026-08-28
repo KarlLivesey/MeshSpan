@@ -248,6 +248,27 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         crate::handle_io::renew_lease(&mut self.stages, &mut self.publications, request)
     }
 
+    /// Publishes one exact durable handle checkpoint as a new immutable file version.
+    ///
+    /// The authority first persists the selected namespace basis and derived identities. Content
+    /// durability then precedes the atomic namespace transition. Exact retry resolves a completed
+    /// result or reconstructs the original plan; it never silently rebases onto a newer head.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/substituted authority, stale checkpoints or namespace bases, incomplete
+    /// non-sparse content, conflicting retries, corrupt evidence and persistence failures.
+    pub fn flush_handle(
+        &mut self,
+        request: crate::FilesystemHandleFlushRequest,
+    ) -> Result<NamespacePublicationReceipt, FilesystemCommitError> {
+        if let Some(receipt) = self.resolve(request.operation_id)? {
+            return Ok(receipt);
+        }
+        let plan = self.publications.prepare_handle_flush(request)?;
+        self.commit_root_file(&plan)
+    }
+
     /// Creates one empty directory and atomically publishes every copied ancestor revision.
     ///
     /// # Errors
@@ -352,6 +373,9 @@ pub enum FilesystemCommitError {
     /// Atomic namespace publication failed.
     #[error("filesystem commit namespace publication failed")]
     Publication(#[from] PublicationError),
+    /// Handle authority rejected planning before content IO began.
+    #[error("filesystem commit handle authority failed")]
+    Handle(#[from] crate::HandleError),
 }
 
 fn validate_request(request: &RootFileCommitRequest) -> Result<(), FilesystemCommitError> {
@@ -418,7 +442,7 @@ fn root_publication(
     }
 }
 
-fn commit_request_digest(request: &RootFileCommitRequest) -> [u8; 32] {
+pub(crate) fn commit_request_digest(request: &RootFileCommitRequest) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.filesystem.commit-root-file.v2\0");
     digest.update(&request.completion.operation_id.as_bytes());

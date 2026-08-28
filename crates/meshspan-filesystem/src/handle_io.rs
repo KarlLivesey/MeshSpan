@@ -2,7 +2,7 @@
 
 //! Cross-database orchestration for fenced handles and private write stages.
 
-use meshspan_domain::{HandleId, NodeId, PrincipalId, Revision, StageId, UnixMicros};
+use meshspan_domain::{HandleId, NodeId, OperationId, PrincipalId, Revision, StageId, UnixMicros};
 use thiserror::Error;
 
 use crate::{
@@ -49,6 +49,41 @@ pub struct FilesystemHandleWriteReceipt {
     pub stage_outcome: StageWriteOutcome,
     /// Exact durable checkpoint after the write.
     pub checkpoint: Checkpoint,
+}
+
+/// Exact durable-publication intent for one selected writable-handle checkpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilesystemHandleFlushRequest {
+    /// Stable end-to-end flush identity.
+    pub operation_id: OperationId,
+    /// Handle whose private checkpoint is selected.
+    pub handle_id: HandleId,
+    /// Exact current handle/stage fence.
+    pub handle_fence: u64,
+    /// Authenticated principal bound to the handle.
+    pub principal_id: PrincipalId,
+    /// Exact currently revalidated file authorisation revision.
+    pub authorization_revision: Revision,
+    /// Gateway holding the current lease.
+    pub gateway_node_id: NodeId,
+    /// Exact durable stage sequence selected by this flush.
+    pub expected_stage_sequence: u64,
+    /// Exact resulting logical length.
+    pub final_length: u64,
+    /// Whether missing ranges represent explicit logical zeroes.
+    pub sparse: bool,
+    /// Whether the superseded version enters ordinary history.
+    pub retain_superseded_history: bool,
+    /// Exact replicated retention-policy sequence used for that decision.
+    pub retention_policy_sequence: u64,
+    /// Selected manifest format.
+    pub manifest_format_version: u16,
+    /// Authority revision admitting durable content placement.
+    pub content_authorization_revision: Revision,
+    /// Exclusive provider-work deadline, bounded by the handle lease.
+    pub content_deadline: UnixMicros,
+    /// Authoritative planning instant.
+    pub observed_at: UnixMicros,
 }
 
 /// Stable failures from handle/stage composition.
