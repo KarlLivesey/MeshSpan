@@ -74,7 +74,7 @@ claim:
 
 ### Stage 3 closure gates
 
-1. Persist the canonical active stable or joint quorum plan with its proof,
+1. [x] Persist the canonical active stable or joint quorum plan with its proof,
    restore and independently recompile it, and fail closed on missing, stale or
    corrupt plan state. Crash every plan-transition persistence boundary.
 2. Start one voter, admit additional node identities through the authoritative

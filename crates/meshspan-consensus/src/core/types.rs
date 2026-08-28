@@ -8,8 +8,7 @@ use meshspan_domain::{NodeId, OperationId, PartitionId};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::CompiledQuorumPlan;
-use crate::JointQuorumPlan;
+use crate::{ActiveQuorumPlan, CompiledQuorumPlan, JointQuorumPlan};
 
 const MAXIMUM_LOG_ENTRY_BYTES: usize = 16 * 1_024 * 1_024;
 const MAXIMUM_APPEND_ENTRIES: usize = 64;
@@ -159,6 +158,11 @@ impl MemberIncarnations {
     #[must_use]
     pub fn incarnation(&self, node_id: NodeId) -> Option<u64> {
         self.0.get(&node_id).copied()
+    }
+
+    pub(super) fn matches_members(&self, members: &BTreeSet<NodeId>) -> bool {
+        self.0.keys().copied().collect::<BTreeSet<_>>() == *members
+            && self.0.values().all(|incarnation| *incarnation > 0)
     }
 }
 
@@ -337,6 +341,17 @@ pub struct DurableMutation {
     pub append: Vec<LogEntry>,
     /// Adjacent membership epoch to persist before emitting messages under a new plan.
     pub membership_epoch: Option<u64>,
+    /// Canonical active-plan replacement committed at one already-applied log position.
+    pub quorum_plan: Option<DurableQuorumPlan>,
+}
+
+/// One atomic stable/joint plan activation persisted with its membership epoch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DurableQuorumPlan {
+    /// Independently proved active phase.
+    pub active_plan: ActiveQuorumPlan,
+    /// Applied log position containing the authoritative transition command.
+    pub activated_position: LogPosition,
 }
 
 /// Driver effects emitted by one deterministic step.

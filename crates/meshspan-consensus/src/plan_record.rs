@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use meshspan_domain::NodeId;
 use thiserror::Error;
 
-use crate::{CompiledQuorumPlan, JointQuorumPlan};
+use crate::{CompiledQuorumPlan, JointQuorumPlan, QuorumFamily};
 
 const RECORD_MAGIC: &[u8; 4] = b"MSQP";
 const RECORD_VERSION: u16 = 1;
@@ -55,6 +55,48 @@ impl ActiveQuorumPlan {
                 .copied()
                 .collect(),
             Self::Joint(plan) => plan.members(),
+        }
+    }
+
+    /// Returns every voter recognised during the active phase.
+    #[must_use]
+    pub fn voters(&self) -> BTreeSet<NodeId> {
+        match self {
+            Self::Stable(plan) => plan.spec().voters.clone(),
+            Self::Joint(plan) => plan
+                .old_plan()
+                .spec()
+                .voters
+                .union(&plan.new_plan().spec().voters)
+                .copied()
+                .collect(),
+        }
+    }
+
+    /// Evaluates one active quorum family, composing both plans during a joint phase.
+    #[must_use]
+    pub fn satisfies(&self, family: QuorumFamily, acknowledgements: &BTreeSet<NodeId>) -> bool {
+        match self {
+            Self::Stable(plan) => plan.satisfies(family, acknowledgements),
+            Self::Joint(plan) => plan.satisfies(family, acknowledgements),
+        }
+    }
+
+    /// Returns voters permitted to campaign in the active phase.
+    #[must_use]
+    pub fn eligible_leaders(&self) -> BTreeSet<NodeId> {
+        match self {
+            Self::Stable(plan) => plan.spec().eligible_leaders.clone(),
+            Self::Joint(plan) => plan.eligible_leaders(),
+        }
+    }
+
+    /// Returns the stable plan used to validate construction identities during recovery.
+    #[must_use]
+    pub fn recovery_configuration_plan(&self) -> &CompiledQuorumPlan {
+        match self {
+            Self::Stable(plan) => plan,
+            Self::Joint(plan) => plan.old_plan(),
         }
     }
 

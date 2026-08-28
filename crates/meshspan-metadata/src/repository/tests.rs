@@ -128,7 +128,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 14);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        5
+        6
     );
     Ok(())
 }
@@ -349,6 +349,13 @@ fn consensus_snapshot_restores_exact_state_without_forgetting_receiver_vote()
     let database = PartitionDatabase::open(&source_path, partition_id, UnixMicros::new(1))?;
     let mut repository = AuthoritativeRepository::new(database);
     bootstrap_snapshot_repository(&mut repository, administrator, voter)?;
+    let plan = meshspan_consensus::compile_plan(meshspan_consensus::flat_plan(
+        QuorumPlanId::from_bytes([111; 16])?,
+        1,
+        BTreeSet::from([voter]),
+        BTreeSet::new(),
+    )?)?;
+    repository.initialise_consensus_quorum_plan(&plan, UnixMicros::new(19))?;
     let entry = meshspan_consensus::LogEntry::new(
         meshspan_consensus::LogPosition { term: 1, index: 1 },
         OperationId::from_bytes([110; 16])?,
@@ -362,15 +369,10 @@ fn consensus_snapshot_restores_exact_state_without_forgetting_receiver_vote()
             truncate_from: None,
             append: vec![entry],
             membership_epoch: None,
+            quorum_plan: None,
         },
         UnixMicros::new(20),
     )?;
-    let plan = meshspan_consensus::compile_plan(meshspan_consensus::flat_plan(
-        QuorumPlanId::from_bytes([111; 16])?,
-        1,
-        BTreeSet::from([voter]),
-        BTreeSet::new(),
-    )?)?;
     let manifest = repository.create_snapshot(
         SnapshotId::from_bytes([112; 16])?,
         &snapshot_path,
