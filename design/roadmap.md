@@ -45,7 +45,7 @@ No production implementation is claimed in this stage.
 Build:
 
 - Rust workspace tracking the latest tested stable toolchain, plus a Node.js 26
-  and TypeScript 7.0 web workspace using Temporal for date/time domain logic;
+  and TypeScript 6.0.3 web workspace using Temporal for date/time domain logic;
 - one root task runner for format, lint, unit, conformance and integration lanes;
 - domain crates for typed IDs, revisions, outcomes, principals, topology,
   protection scenarios and lifecycle transitions;

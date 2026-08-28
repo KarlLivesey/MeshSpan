@@ -1,0 +1,229 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Public JSON boundary models.
+
+use std::fmt;
+
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// The maximum number of field issues returned in one public error.
+pub const MAX_ERROR_ISSUES: usize = 16;
+
+/// A client-generated idempotency key for a mutation.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct OperationId(
+    #[schemars(
+        length(equal = 36),
+        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    String,
+);
+
+/// A durable authenticated-session identifier.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionId(
+    #[schemars(
+        length(equal = 36),
+        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    String,
+);
+
+/// An optional property that distinguishes omission from an explicit JSON null.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum NullableField<T> {
+    /// The property was not sent.
+    #[default]
+    Missing,
+    /// The property was explicitly set to JSON null.
+    Null,
+    /// The property contained a value.
+    Value(T),
+}
+
+impl<T> NullableField<T> {
+    /// Returns true only when the property was omitted.
+    #[must_use]
+    pub const fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+}
+
+impl<T: Serialize> Serialize for NullableField<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Missing | Self::Null => serializer.serialize_none(),
+            Self::Value(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for NullableField<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<T>::deserialize(deserializer).map(|value| match value {
+            Some(value) => Self::Value(value),
+            None => Self::Null,
+        })
+    }
+}
+
+impl<T: JsonSchema> JsonSchema for NullableField<T> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        format!("Nullable_{}", T::schema_name()).into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        <Option<T>>::json_schema(generator)
+    }
+}
+
+/// A validated display label that can be cleared independently of omission.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionLabel(
+    #[schemars(length(min = 1, max = 80), pattern(r"^[^\x00-\x1f\x7f]+$"))] String,
+);
+
+/// Input for the initial password authentication ceremony.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSessionRequest {
+    /// Client-generated idempotency key.
+    pub operation_id: OperationId,
+    /// Mesh-wide canonical login name supplied by the user.
+    #[schemars(length(min = 1, max = 254), pattern(r"^[^\x00-\x1f\x7f]+$"))]
+    pub login_name: String,
+    /// Secret password. It is accepted only in the request and must never be logged.
+    #[schemars(length(min = 1, max = 1024), extend("writeOnly" = true))]
+    pub password: String,
+    /// Optional client label: omitted means unchanged and null means clear.
+    #[serde(default, skip_serializing_if = "NullableField::is_missing")]
+    pub client_label: NullableField<SessionLabel>,
+    /// Whether the caller requests the policy's longer-lived session profile.
+    pub remember: bool,
+}
+
+/// Authentication assurance reached by a session.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssuranceLevel {
+    /// One accepted authentication factor.
+    SingleFactor,
+    /// Multiple independent accepted factors.
+    MultiFactor,
+    /// A recent privileged step-up ceremony.
+    RecentStepUp,
+}
+
+/// Successful session creation response.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSessionResponse {
+    /// The operation whose durable outcome this response represents.
+    pub operation_id: OperationId,
+    /// Newly created session identifier.
+    pub session_id: SessionId,
+    /// Authoritative UTC instant as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_i64))]
+    pub expires_at_epoch_micros: i64,
+    /// Assurance reached by the accepted authentication factors.
+    pub assurance: AssuranceLevel,
+}
+
+/// Cheap readiness state returned without authentication.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthStatus {
+    /// The process is initialising and cannot yet serve normal traffic.
+    Starting,
+    /// The process can serve its declared API contract.
+    Ready,
+    /// The process is serving traffic with a declared impaired capability.
+    Degraded,
+}
+
+/// Bounded anonymous health response.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthResponse {
+    /// Current readiness state.
+    pub status: HealthStatus,
+    /// Resolved rolling API label.
+    #[schemars(length(equal = 6), pattern(r"^latest$"))]
+    pub api_version: String,
+    /// Digest of the exact `OpenAPI` document served by this process.
+    #[schemars(length(equal = 71), pattern(r"^sha256:[0-9a-f]{64}$"))]
+    pub schema_digest: String,
+}
+
+/// Stable public error category.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiErrorCode {
+    /// Authentication was absent or invalid.
+    Unauthenticated,
+    /// The authenticated caller lacks current authority.
+    Forbidden,
+    /// The message did not satisfy the public contract.
+    InvalidRequest,
+    /// An idempotency key was reused with different canonical input.
+    OperationConflict,
+    /// Work was rejected by a bounded admission policy.
+    Busy,
+    /// An outgoing response failed its own contract.
+    InternalContract,
+}
+
+/// A bounded field-specific validation issue.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiErrorIssue {
+    /// JSON Pointer to the rejected field or collection element.
+    #[schemars(length(max = 256))]
+    pub path: String,
+    /// Stable violated-constraint label.
+    #[schemars(length(min = 1, max = 64), pattern(r"^[a-z][a-z0-9_]*$"))]
+    pub constraint: String,
+}
+
+/// Public error envelope that never includes raw untrusted values.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiError {
+    /// Stable machine-readable error category.
+    pub code: ApiErrorCode,
+    /// Plain bounded description safe to show to the caller.
+    #[schemars(length(min = 1, max = 512))]
+    pub message: String,
+    /// Server request identifier for support correlation.
+    #[schemars(
+        length(equal = 36),
+        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    pub request_id: String,
+    /// Mutation operation identifier, or null for requests without one.
+    pub operation_id: Option<OperationId>,
+    /// Independently actionable field failures, capped at the trust boundary.
+    #[schemars(length(max = 16))]
+    pub issues: Vec<ApiErrorIssue>,
+}
+
+impl fmt::Display for AssuranceLevel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::SingleFactor => "single_factor",
+            Self::MultiFactor => "multi_factor",
+            Self::RecentStepUp => "recent_step_up",
+        };
+        formatter.write_str(value)
+    }
+}

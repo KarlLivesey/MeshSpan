@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "exactOptionalPropertyTypes": true,
+    "isolatedModules": true,
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleDetection": "force",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": false,
+    "strict": true,
+    "target": "ES2024",
+    "types": ["node", "vitest/globals"],
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

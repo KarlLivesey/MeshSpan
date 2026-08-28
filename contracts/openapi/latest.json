@@ -1,0 +1,547 @@
+{
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "additionalProperties": false,
+        "description": "Public error envelope that never includes raw untrusted values.",
+        "properties": {
+          "code": {
+            "description": "Stable machine-readable error category.",
+            "oneOf": [
+              {
+                "const": "unauthenticated",
+                "description": "Authentication was absent or invalid.",
+                "type": "string"
+              },
+              {
+                "const": "forbidden",
+                "description": "The authenticated caller lacks current authority.",
+                "type": "string"
+              },
+              {
+                "const": "invalid_request",
+                "description": "The message did not satisfy the public contract.",
+                "type": "string"
+              },
+              {
+                "const": "operation_conflict",
+                "description": "An idempotency key was reused with different canonical input.",
+                "type": "string"
+              },
+              {
+                "const": "busy",
+                "description": "Work was rejected by a bounded admission policy.",
+                "type": "string"
+              },
+              {
+                "const": "internal_contract",
+                "description": "An outgoing response failed its own contract.",
+                "type": "string"
+              }
+            ]
+          },
+          "issues": {
+            "description": "Independently actionable field failures, capped at the trust boundary.",
+            "items": {
+              "additionalProperties": false,
+              "description": "A bounded field-specific validation issue.",
+              "properties": {
+                "constraint": {
+                  "description": "Stable violated-constraint label.",
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "JSON Pointer to the rejected field or collection element.",
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "constraint"
+              ],
+              "type": "object"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "message": {
+            "description": "Plain bounded description safe to show to the caller.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Mutation operation identifier, or null for requests without one.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "description": "Server request identifier for support correlation.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "request_id",
+          "operation_id",
+          "issues"
+        ],
+        "title": "ApiError",
+        "type": "object"
+      },
+      "CreateSessionRequest": {
+        "additionalProperties": false,
+        "description": "Input for the initial password authentication ceremony.",
+        "properties": {
+          "client_label": {
+            "description": "Optional client label: omitted means unchanged and null means clear.",
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "login_name": {
+            "description": "Mesh-wide canonical login name supplied by the user.",
+            "maxLength": 254,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Client-generated idempotency key.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "password": {
+            "description": "Secret password. It is accepted only in the request and must never be logged.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string",
+            "writeOnly": true
+          },
+          "remember": {
+            "description": "Whether the caller requests the policy's longer-lived session profile.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation_id",
+          "login_name",
+          "password",
+          "remember"
+        ],
+        "title": "CreateSessionRequest",
+        "type": "object"
+      },
+      "CreateSessionResponse": {
+        "additionalProperties": false,
+        "description": "Successful session creation response.",
+        "properties": {
+          "assurance": {
+            "description": "Assurance reached by the accepted authentication factors.",
+            "oneOf": [
+              {
+                "const": "single_factor",
+                "description": "One accepted authentication factor.",
+                "type": "string"
+              },
+              {
+                "const": "multi_factor",
+                "description": "Multiple independent accepted factors.",
+                "type": "string"
+              },
+              {
+                "const": "recent_step_up",
+                "description": "A recent privileged step-up ceremony.",
+                "type": "string"
+              }
+            ]
+          },
+          "expires_at_epoch_micros": {
+            "description": "Authoritative UTC instant as epoch microseconds.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "The operation whose durable outcome this response represents.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Newly created session identifier.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "session_id",
+          "expires_at_epoch_micros",
+          "assurance"
+        ],
+        "title": "CreateSessionResponse",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "additionalProperties": false,
+        "description": "Bounded anonymous health response.",
+        "properties": {
+          "api_version": {
+            "description": "Resolved rolling API label.",
+            "maxLength": 6,
+            "minLength": 6,
+            "pattern": "^latest$",
+            "type": "string"
+          },
+          "schema_digest": {
+            "description": "Digest of the exact `OpenAPI` document served by this process.",
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "status": {
+            "description": "Current readiness state.",
+            "oneOf": [
+              {
+                "const": "starting",
+                "description": "The process is initialising and cannot yet serve normal traffic.",
+                "type": "string"
+              },
+              {
+                "const": "ready",
+                "description": "The process can serve its declared API contract.",
+                "type": "string"
+              },
+              {
+                "const": "degraded",
+                "description": "The process is serving traffic with a declared impaired capability.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "api_version",
+          "schema_digest"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "license": {
+      "identifier": "GPL-2.0-only",
+      "name": "GNU General Public License v2.0 only"
+    },
+    "title": "MeshSpan public API",
+    "version": "latest"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Process readiness",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read bounded process readiness",
+        "x-meshspan-access": "anonymous"
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "x-meshspan-intentionally-extensible": true
+                }
+              }
+            },
+            "description": "This exact OpenAPI 3.1 document",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read this exact API contract",
+        "x-meshspan-access": "anonymous"
+      }
+    },
+    "/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSessionResponse"
+                }
+              }
+            },
+            "description": "Authenticated session created",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Malformed or structurally invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Operation identifier conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bounded admission rejected the request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start a bounded authentication ceremony",
+        "x-meshspan-access": "anonymous",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "/api/latest"
+    }
+  ]
+}

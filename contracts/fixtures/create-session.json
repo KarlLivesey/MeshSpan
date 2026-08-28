@@ -1,0 +1,185 @@
+{
+  "license": "GPL-2.0-only",
+  "cases": [
+    {
+      "name": "request accepts required fields",
+      "direction": "request",
+      "accepted": true,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": "ada@example.test",
+        "password": "correct horse battery staple",
+        "remember": false
+      }
+    },
+    {
+      "name": "request preserves explicit null",
+      "direction": "request",
+      "accepted": true,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": "ada@example.test",
+        "password": "correct horse battery staple",
+        "client_label": null,
+        "remember": true
+      }
+    },
+    {
+      "name": "request accepts a bounded client label",
+      "direction": "request",
+      "accepted": true,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": "ada@example.test",
+        "password": "correct horse battery staple",
+        "client_label": "front desk",
+        "remember": true
+      }
+    },
+    {
+      "name": "request rejects an unknown field",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": "ada@example.test",
+        "password": "correct horse battery staple",
+        "remember": false,
+        "administrator": true
+      }
+    },
+    {
+      "name": "request rejects Boolean coercion",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": "ada@example.test",
+        "password": "correct horse battery staple",
+        "remember": "false"
+      }
+    },
+    {
+      "name": "request rejects an empty password",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": "ada@example.test",
+        "password": "",
+        "remember": false
+      }
+    },
+    {
+      "name": "request rejects a non-canonical operation identifier",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018F1D20-7B4C-7A1E-9D22-39A1558B4C61",
+        "login_name": "ada@example.test",
+        "password": "correct horse battery staple",
+        "remember": false
+      }
+    },
+    {
+      "name": "request rejects null for a non-nullable field",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": null,
+        "password": "correct horse battery staple",
+        "remember": false
+      }
+    },
+    {
+      "name": "request rejects a missing required field",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": "ada@example.test",
+        "password": "correct horse battery staple"
+      }
+    },
+    {
+      "name": "request rejects an empty present label",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "login_name": "ada@example.test",
+        "password": "correct horse battery staple",
+        "client_label": "",
+        "remember": false
+      }
+    },
+    {
+      "name": "response accepts the exact success shape",
+      "direction": "response",
+      "accepted": true,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "session_id": "018f1d21-9319-7b98-8538-5af5b47bd0bc",
+        "expires_at_epoch_micros": 1800000000000000,
+        "assurance": "multi_factor"
+      }
+    },
+    {
+      "name": "response rejects an additive field",
+      "direction": "response",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "session_id": "018f1d21-9319-7b98-8538-5af5b47bd0bc",
+        "expires_at_epoch_micros": 1800000000000000,
+        "assurance": "multi_factor",
+        "raw_token": "must-not-cross-this-boundary"
+      }
+    },
+    {
+      "name": "response rejects numeric coercion",
+      "direction": "response",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "session_id": "018f1d21-9319-7b98-8538-5af5b47bd0bc",
+        "expires_at_epoch_micros": "1800000000000000",
+        "assurance": "multi_factor"
+      }
+    },
+    {
+      "name": "response rejects a negative instant",
+      "direction": "response",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "session_id": "018f1d21-9319-7b98-8538-5af5b47bd0bc",
+        "expires_at_epoch_micros": -1,
+        "assurance": "multi_factor"
+      }
+    },
+    {
+      "name": "response rejects an unknown assurance variant",
+      "direction": "response",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "session_id": "018f1d21-9319-7b98-8538-5af5b47bd0bc",
+        "expires_at_epoch_micros": 1800000000000000,
+        "assurance": "root"
+      }
+    },
+    {
+      "name": "response rejects a missing operation identifier",
+      "direction": "response",
+      "accepted": false,
+      "value": {
+        "session_id": "018f1d21-9319-7b98-8538-5af5b47bd0bc",
+        "expires_at_epoch_micros": 1800000000000000,
+        "assurance": "multi_factor"
+      }
+    }
+  ]
+}
+

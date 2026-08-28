@@ -135,6 +135,8 @@ operations or storage paths through the private protocol.
   so the main flow reads from top to bottom.
 - Keep pure decisions separate from IO and make side effects explicit.
 - Prefer concrete types for IDs, revisions, epochs, byte counts and timestamps.
+- Use TypeScript 6.0.3 until the selected generator and typed ESLint stack
+  officially support TypeScript 7; keep 7 as the next toolchain upgrade target.
 - Use `Temporal` in web code for date/time domain values; do not add new
   arithmetic based on JavaScript `Date`.
 - Bound untrusted allocations, collections, streams and recursion.
@@ -332,8 +334,10 @@ race, fix the shared state instead of serialising the suite.
 
 ## Local validation
 
-Once the workspace exists, the root task runner will provide canonical commands
-for these gates:
+Run `npm run check` from the repository root as the canonical fast local gate.
+It verifies generated API drift first, then schedules independent lanes with a
+bounded worker pool. Set `MESHSPAN_CHECK_WORKERS` from 1 to 32 only when the
+machine needs a different limit. The gate includes:
 
 - format check;
 - Rust workspace build and unit tests;
@@ -342,8 +346,7 @@ for these gates:
 - schema and protocol compatibility tests;
 - affected integration tests.
 
-Until those commands exist, do not invent successful results. Record exactly
-what was run and what could not yet run.
+Record exactly what was run, its duration and anything that could not run.
 
 For a defect:
 
