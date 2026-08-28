@@ -3,12 +3,14 @@
 //! Committed canonical-byte and hostile-frame compatibility vectors.
 
 use meshspan_protocol::v1::control_envelope::Message;
+use meshspan_protocol::v1::data_control_envelope::Message as DataMessage;
 use meshspan_protocol::v1::{
-    ComponentSupport, ControlEnvelope, DataFrame, NodeHello, Ping, ProtocolVersion, VoteRequest,
+    ComponentSupport, ControlEnvelope, DataControlEnvelope, DataFrame, DeleteShardRequest,
+    NodeHello, Ping, ProtocolVersion, PutShardBegin, RequestHeader, ShardIdentity, VoteRequest,
 };
 use meshspan_protocol::{
-    WireContractError, WireLimits, decode_control_frame, decode_data_frame, encode_control_frame,
-    encode_data_frame,
+    WireContractError, WireLimits, decode_control_frame, decode_data_control_frame,
+    decode_data_frame, encode_control_frame, encode_data_control_frame, encode_data_frame,
 };
 use serde::Deserialize;
 
@@ -139,6 +141,43 @@ fn bulk_frames_have_independent_payload_bounds() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[test]
+fn shard_control_requires_bound_authority_and_round_trips() -> Result<(), Box<dyn std::error::Error>>
+{
+    let wire_limits = limits()?;
+    let accepted = DataControlEnvelope {
+        message: Some(DataMessage::PutShardBegin(PutShardBegin {
+            header: Some(valid_header()),
+            target_id: vec![7; 16],
+            target_generation: 2,
+            shard: Some(valid_shard()),
+            declared_length: 4,
+            declared_digest: vec![8; 32],
+            write_capability: vec![9; 32],
+        })),
+    };
+    let encoded = encode_data_control_frame(&accepted, wire_limits)?;
+    assert_eq!(
+        decode_data_control_frame(&encoded, wire_limits)?.into_inner(),
+        accepted
+    );
+
+    let missing_permit = DataControlEnvelope {
+        message: Some(DataMessage::DeleteShardRequest(DeleteShardRequest {
+            header: Some(valid_header()),
+            target_id: vec![7; 16],
+            target_generation: 2,
+            shard: Some(valid_shard()),
+            removal_permit: None,
+        })),
+    };
+    assert_eq!(
+        encode_data_control_frame(&missing_permit, wire_limits),
+        Err(WireContractError::InvalidMessage)
+    );
+    Ok(())
+}
+
 fn hello_envelope(fixture: &HelloFixture) -> Result<ControlEnvelope, Box<dyn std::error::Error>> {
     let version = ProtocolVersion {
         major: fixture.protocol_major,
@@ -204,4 +243,28 @@ fn hex_to_bytes(value: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
             Ok(u8::from_str_radix(pair, 16)?)
         })
         .collect()
+}
+
+fn valid_header() -> RequestHeader {
+    RequestHeader {
+        version: Some(ProtocolVersion { major: 1, minor: 0 }),
+        mesh_id: vec![1; 16],
+        partition_id: vec![2; 16],
+        routing_epoch: 1,
+        sender_node_id: vec![3; 16],
+        sender_incarnation: 1,
+        request_id: vec![4; 16],
+        operation_id: vec![5; 16],
+        deadline_unix_micros: 1,
+        trace_id: vec![6; 16],
+    }
+}
+
+fn valid_shard() -> ShardIdentity {
+    ShardIdentity {
+        manifest_digest: vec![10; 32],
+        stripe_index: 0,
+        shard_index: 0,
+        generation: 1,
+    }
 }
