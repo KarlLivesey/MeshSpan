@@ -14,8 +14,8 @@ pub use command::{
     CommandContext, ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy, CreateComponent,
     CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser,
     CreateVolume, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant,
-    JoinRoles, NamespaceObjectKind, PermissionScope, RegisterRoutingSigner, RepositoryCommandError,
-    RouteAttestation, TagTarget,
+    JoinRoles, NamespaceObjectKind, PermissionScope, RegisterRoutingSigner, ReplaceObjectOwners,
+    RepositoryCommandError, RouteAttestation, TagTarget,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;

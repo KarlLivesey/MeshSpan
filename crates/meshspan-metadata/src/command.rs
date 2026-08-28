@@ -45,6 +45,8 @@ pub enum AuthoritativeCommand {
     CreateVolume(CreateVolume),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
+    /// Atomically points one logical object at a new immutable owner set.
+    ReplaceObjectOwners(ReplaceObjectOwners),
     /// Creates one descriptive tag with no authority semantics.
     CreateTag(CreateTag),
     /// Attaches one descriptive tag to a principal or logical object.
@@ -106,6 +108,7 @@ impl AuthoritativeCommand {
             Self::CreateActivationPolicy(value) => value.update_digest(digest),
             Self::CreateVolume(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
+            Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
             Self::AttachTag(value) => value.update_digest(digest),
             Self::DetachTag(value) => value.update_digest(digest),
@@ -245,6 +248,17 @@ pub struct CreateObject {
     /// Immutable owner-set identity.
     pub owner_set_id: OwnerSetId,
     /// Non-empty user/group owner principals.
+    pub owners: BoundedItems<PrincipalId>,
+}
+
+/// Complete atomic owner-set replacement for one logical object.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplaceObjectOwners {
+    /// Existing active folder or file, including a volume root.
+    pub object_id: ObjectId,
+    /// Fresh immutable owner-set identity.
+    pub owner_set_id: OwnerSetId,
+    /// Complete non-empty set of active user/group owners after replacement.
     pub owners: BoundedItems<PrincipalId>,
 }
 
@@ -687,6 +701,15 @@ digest_simple_record!(CreateObject, b"create-object", |value, digest| {
     digest.identifier(value.owner_set_id.as_bytes());
     digest.principals(&value.owners);
 });
+digest_simple_record!(
+    ReplaceObjectOwners,
+    b"replace-object-owners",
+    |value, digest| {
+        digest.identifier(value.object_id.as_bytes());
+        digest.identifier(value.owner_set_id.as_bytes());
+        digest.principals(&value.owners);
+    }
+);
 digest_simple_record!(CreateTag, b"create-tag", |value, digest| {
     digest.identifier(value.tag_id.as_bytes());
     digest.name(&value.name);

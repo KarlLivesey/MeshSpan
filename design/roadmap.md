@@ -77,7 +77,8 @@ REL-002, DEV-001–006, EXT-001–005.
 
 **Depends on:** Stage 1.
 
-**Status:** completion audit reopened. See [`stage-1-3-audit.md`](stage-1-3-audit.md).
+**Status:** complete after executable re-audit. See
+[`stage-1-3-audit.md`](stage-1-3-audit.md).
 
 Build:
 

@@ -330,6 +330,9 @@ fn execute(
         AuthoritativeCommand::CreateObject(value) => {
             namespace::create_object(transaction, context, value, revision)
         }
+        AuthoritativeCommand::ReplaceObjectOwners(value) => {
+            namespace::replace_object_owners(transaction, context, value, revision)
+        }
         AuthoritativeCommand::CreateTag(value) => {
             tags::create(transaction, context, value, revision)
         }
@@ -559,6 +562,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CreateTag(_) => 23,
         AuthoritativeCommand::AttachTag(_) => 24,
         AuthoritativeCommand::DetachTag(_) => 25,
+        AuthoritativeCommand::ReplaceObjectOwners(_) => 26,
     }
 }
 

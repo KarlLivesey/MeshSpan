@@ -1,6 +1,6 @@
 # Stage 1–3 implementation audit
 
-Status: active executable audit, started 2026-08-28.
+Status: complete, 2026-08-28.
 
 This audit checks roadmap claims against production code and behavioural tests.
 Schemas, message shapes, design prose and unused helpers are not implementation
@@ -23,19 +23,17 @@ creates users, nested groups, multi-principal-owned namespace records and an
 activated time-bounded grant, then returns the exact receipt after restart.
 Migration, crash, integrity, backup/restore and bounded-query tests also pass.
 
-One Stage 2 requirement still stops at schema/domain representation rather than
-a typed authoritative mutation:
-
-- owner sets are created with namespace objects, but no atomic owner-transfer
-  command proves that the final active owner cannot be removed.
+The two behaviours reopened by this audit now have typed authoritative commands
+and exact executable evidence. The complete combined Stage 2 gate passed in
+11.48 seconds with four workers.
 
 ### Stage 2 closure gates
 
 1. [x] Typed, audited and idempotent tag create/attach/detach commands prove tags
    never affect authority and attach only to logical objects or principals.
-2. One atomic owner replacement command rejects an empty/inactive owner set and
+2. [x] One atomic owner replacement command rejects an empty/inactive owner set and
    proves exact replay, conflicting reuse and restart recovery.
-3. The complete Stage 2 vertical, crash-boundary, migration, integrity,
+3. [x] The complete Stage 2 vertical, crash-boundary, migration, integrity,
    backup/restore and indexed-query suites pass together.
 
 ## Stage 3 repairs already merged
@@ -84,8 +82,7 @@ test selection.
 6. [x] Re-run multi-way partition, stale-incarnation, corrupt-snapshot, saturated
    bulk-stream and complete local gates with exact expected outcomes.
 
-Stage 3 is complete. Its six closure gates now have executable local evidence;
-`npm run check:stage3-adversarial` also prevents an exact test filter from
-silently succeeding with zero tests. Stage 4 remains blocked on the open Stage 2
-tag and owner-transfer closure gates, because storage authority must build on the
-complete metadata contract rather than bypass it.
+Stages 1–3 are complete. Every reopened closure gate has executable local
+evidence; `npm run check:stage3-adversarial` also prevents an exact test filter
+from silently succeeding with zero tests. Stage 4 can now build on the proven
+metadata contract rather than bypass it.

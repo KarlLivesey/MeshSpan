@@ -9,7 +9,7 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError};
-use crate::{CommandContext, CreateObject, CreateVolume, NamespaceObjectKind};
+use crate::{CommandContext, CreateObject, CreateVolume, NamespaceObjectKind, ReplaceObjectOwners};
 
 const MAXIMUM_OWNERS: usize = 1_024;
 
@@ -115,6 +115,50 @@ pub(super) fn create_object(
             to_i64(revision.get())?
         ],
     )?;
+    update_namespace_revision(transaction, revision)?;
+    Ok(EntityReference {
+        kind: EntityKind::NamespaceObject,
+        id: object,
+    })
+}
+
+pub(super) fn replace_object_owners(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &ReplaceObjectOwners,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    let object = command.object_id.as_bytes();
+    let exists: i64 = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM namespace_objects WHERE object_id = ?1 AND state = 1
+         )",
+        [object.as_slice()],
+        |row| row.get(0),
+    )?;
+    if exists != 1 {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    persist_owner_set(
+        transaction,
+        context,
+        command.owner_set_id.as_bytes(),
+        command.owners.as_slice(),
+        revision,
+    )?;
+    let owner_set = command.owner_set_id.as_bytes();
+    let updated = transaction.execute(
+        "UPDATE namespace_objects SET owner_set_id = ?1, revision = ?2
+         WHERE object_id = ?3 AND state = 1",
+        params![
+            owner_set.as_slice(),
+            to_i64(revision.get())?,
+            object.as_slice()
+        ],
+    )?;
+    if updated != 1 {
+        return Err(RepositoryError::CorruptState);
+    }
     update_namespace_revision(transaction, revision)?;
     Ok(EntityReference {
         kind: EntityKind::NamespaceObject,
