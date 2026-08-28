@@ -37,8 +37,14 @@ copy-on-write filesystem service. This document records executable evidence only
   adopts them. Executable restart tests cover overlapping writes, holes, sparse
   completion, expiry, corrupted parts, recovery of a missing stage directory,
   and process loss after durable part installation but before journal commit.
-  This supplies the durable private-input half of gate 2; publication is a
-  separate receipt-bound transition into the branch database described next.
+  Completion can now materialise overlapping random writes and stream the exact
+  logical image through a fixed 64 KiB heap buffer, including large sparse
+  extents, while rechecking every immutable part and hashing the complete
+  output. A failed destination write publishes nothing and an exact retry
+  reconstructs the same image. This removes file-size-proportional memory from
+  the production completion path. It supplies the durable private-input half of
+  gate 2; manifest construction and branch publication remain a separate
+  receipt-bound transition into the branch database described next.
 - The branch database persists complete verified manifest roots and immutable
   file versions. Its file-current pointer is now an internal projection updated
   only by the namespace publication transaction; the earlier unattached
