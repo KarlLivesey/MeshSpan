@@ -9,8 +9,11 @@ use meshspan_contracts::ShardReceipt;
 use meshspan_domain::{ContentManifestId, OperationId, TargetId, UnixMicros};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use super::{ContentCatalogError, PreparedContentChunk};
-use crate::{CompletedStage, ContentPublicationRequest, ManifestPublication, WrappedContentKey};
+use super::{CommittedShardPage, ContentCatalogError, PreparedContentChunk};
+use crate::{
+    CompletedStage, ContentPublicationRequest, ManifestPublication, PublishedContentReference,
+    WrappedContentKey,
+};
 
 const DATABASE_FILE: &str = "filesystem-content.sqlite3";
 const MIGRATION: &str = include_str!("../../schema/content/001_initial.sql");
@@ -309,6 +312,69 @@ pub(super) fn load_receipt(
         )
         .optional()
         .map_err(Into::into)
+}
+
+pub(super) fn load_committed_shard_page(
+    connection: &Connection,
+    content: PublishedContentReference,
+    after_index: Option<u64>,
+    limit: usize,
+) -> Result<CommittedShardPage, ContentCatalogError> {
+    let after = after_index.map_or(-1, |value| i64::try_from(value).unwrap_or(i64::MAX));
+    let mut statement = connection.prepare(
+        "SELECT chunk_index, provider_operation_id, ciphertext_length,
+                ciphertext_digest, receipt_target_id, receipt_target_generation,
+                receipt_recorded_at
+         FROM content_chunks
+         WHERE operation_id = ?1 AND chunk_index > ?2
+         ORDER BY chunk_index LIMIT ?3",
+    )?;
+    let rows = statement.query_map(
+        params![
+            content.publication_operation_id.as_bytes().as_slice(),
+            after,
+            i64::try_from(limit.saturating_add(1))
+                .map_err(|_| ContentCatalogError::InvalidInput)?,
+        ],
+        |row| {
+            let index = from_sql(row.get(0)?)?;
+            let target = row
+                .get::<_, Option<Vec<u8>>>(4)?
+                .ok_or(rusqlite::Error::InvalidQuery)?;
+            let target_generation = row
+                .get::<_, Option<i64>>(5)?
+                .ok_or(rusqlite::Error::InvalidQuery)?;
+            let recorded_at = row.get::<_, Option<i64>>(6)?;
+            if recorded_at.is_none() {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            Ok(ShardReceipt {
+                operation_id: decode_operation(&row.get::<_, Vec<u8>>(1)?)?,
+                shard: meshspan_contracts::ShardIdentity {
+                    manifest_digest: content.manifest.root_digest,
+                    stripe_index: index,
+                    shard_index: 0,
+                    generation: 1,
+                },
+                length: from_sql(row.get(2)?)?,
+                digest: copy_array(&row.get::<_, Vec<u8>>(3)?)?,
+                target_id: decode_target(&target)?,
+                target_generation: from_sql(target_generation)?,
+            })
+        },
+    )?;
+    let mut shards = rows.collect::<Result<Vec<_>, _>>()?;
+    let next_index = if shards.len() > limit {
+        shards.pop();
+        shards.last().map(|receipt| receipt.shard.stripe_index)
+    } else {
+        None
+    };
+    Ok(CommittedShardPage {
+        shards: meshspan_contracts::BoundedItems::new(shards, limit)
+            .map_err(|_| ContentCatalogError::Corrupt)?,
+        next_index,
+    })
 }
 
 pub(super) fn to_i64(value: u64) -> Result<i64, ContentCatalogError> {

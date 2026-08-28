@@ -50,6 +50,47 @@ pub struct PendingContentChunkPage {
     pub next_index: Option<u64>,
 }
 
+/// Stable bounded page of exact durable shard placements for one committed manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommittedShardPage {
+    /// Exact provider receipts in ascending logical stripe order.
+    pub shards: BoundedItems<ShardReceipt>,
+    /// Last returned stripe index when another page exists.
+    pub next_index: Option<u64>,
+}
+
+/// Borrow-scoped view of one independently verified committed manifest inventory.
+///
+/// Construction verifies the complete immutable manifest once. The immutable borrow then prevents
+/// catalogue mutation while callers consume bounded keyset pages without rescanning the layout.
+pub struct CommittedShardInventory<'a> {
+    catalog: &'a DurableContentCatalog,
+    content: PublishedContentReference,
+}
+
+impl CommittedShardInventory<'_> {
+    /// Loads one bounded page without repeating complete manifest validation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds and any missing, malformed or substituted durable receipt.
+    pub fn page(
+        &self,
+        after_index: Option<u64>,
+        limit: usize,
+    ) -> Result<CommittedShardPage, ContentCatalogError> {
+        if limit == 0 || limit > MAXIMUM_PAGE_ITEMS {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        repository::load_committed_shard_page(
+            &self.catalog.connection,
+            self.content,
+            after_index,
+            limit,
+        )
+    }
+}
+
 /// Complete sealed layout state needed to resume provider publication after restart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedContentLayout {
@@ -373,6 +414,22 @@ impl DurableContentCatalog {
             return Err(ContentCatalogError::Conflict);
         }
         Ok(CommittedContentLayout { request, layout })
+    }
+
+    /// Verifies one committed manifest and opens its immutable bounded shard inventory.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown, incomplete, conflicting or corrupt content state.
+    pub fn committed_shard_inventory(
+        &self,
+        content: PublishedContentReference,
+    ) -> Result<CommittedShardInventory<'_>, ContentCatalogError> {
+        self.committed_layout(content)?;
+        Ok(CommittedShardInventory {
+            catalog: self,
+            content,
+        })
     }
 
     /// Loads one prepared chunk identity for verified read/recovery work.
