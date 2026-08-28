@@ -228,7 +228,12 @@ copy-on-write filesystem service. This document records executable evidence only
    operation. The atomic transition records immutable removal evidence plus the
    normal operation/audit receipt; substitution, stale state, restart/replay and
    every injected apply boundary are proven. It deliberately authorises no shard
-   deletion. Fixed-interval schedules now use immutable configurations and
+   deletion. The metadata repository also exposes the complete converged-head
+   plus active/expiring-snapshot root set as stable bounded pages tied to one
+   exact catalogue revision. Any mutation between pages makes continuation fail
+   stale instead of mixing root sets; an absent head or malformed root fails
+   closed. This is the authority input for the separately durable filesystem
+   graph scan. Fixed-interval schedules now use immutable configurations and
    one indexed authoritative due head. Due work is bounded and cursor-paged; a
    late run captures the exact converged head once, records its occurrence,
    derives its expiry, and advances beyond the current instant without replaying
