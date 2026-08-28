@@ -19,6 +19,17 @@ pub struct ShardIdentity {
     pub generation: u32,
 }
 
+/// Capacity budget whose use is visible and governed independently.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReservationClass {
+    /// New user-visible data; must preserve configured repair headroom.
+    ForegroundWrite,
+    /// Work restoring required recoverability; may consume repair headroom.
+    Repair,
+    /// Copy-on-write movement or drain work; may consume repair headroom.
+    Relocation,
+}
+
 /// Bounded capacity held for one exact operation on one target generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StorageReservation {
@@ -28,6 +39,8 @@ pub struct StorageReservation {
     pub target_id: TargetId,
     /// Target incarnation/generation that admitted the reservation.
     pub target_generation: u64,
+    /// Capacity budget against which this reservation was admitted.
+    pub class: ReservationClass,
     /// Maximum bytes that may become durable.
     pub maximum_bytes: u64,
     /// Exclusive expiry.
@@ -165,6 +178,7 @@ pub trait StorageProvider: ComponentLifecycle {
         context: RequestContext,
         target_id: TargetId,
         target_generation: u64,
+        class: ReservationClass,
         bytes: u64,
     ) -> Result<StorageReservation, ContractError>;
 

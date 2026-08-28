@@ -45,8 +45,8 @@ pub use security::{
     CertificateChallengeKind, CertificateChallengeReceipt, CertificateChallengeRequest,
 };
 pub use storage::{
-    InventoryEntry, InventoryPage, PutShardRequest, RemovalPermit, ShardIdentity, ShardReadPermit,
-    ShardReceipt, StorageProvider, StorageReservation, TombstoneReceipt,
+    InventoryEntry, InventoryPage, PutShardRequest, RemovalPermit, ReservationClass, ShardIdentity,
+    ShardReadPermit, ShardReceipt, StorageProvider, StorageReservation, TombstoneReceipt,
 };
 pub use suites::{
     run_access_connector_suite, run_administration_client_suite, run_authentication_handler_suite,
