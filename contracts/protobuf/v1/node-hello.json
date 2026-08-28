@@ -1,0 +1,18 @@
+{
+  "name": "node-hello-v1.0",
+  "protocol_major": 1,
+  "protocol_minor": 0,
+  "mesh_id_hex": "11111111111111111111111111111111",
+  "node_id_hex": "22222222222222222222222222222222",
+  "incarnation": 7,
+  "roles": [1, 2],
+  "feature_bits": [1, 9],
+  "component_contract_kind": 1,
+  "component_implementation_id": "folder-storage",
+  "maximum_control_bytes": 1048576,
+  "maximum_data_frame_bytes": 262144,
+  "maximum_items": 1024,
+  "maximum_concurrency": 64,
+  "maximum_streams": 128,
+  "expected_frame_hex": "00000060525e0a0208011210111111111111111111111111111111111a102222222222222222222222222222222220072a020102321f0801120e666f6c6465722d73746f726167651a0208012080804028800830403a0201094080804048808010508001"
+}

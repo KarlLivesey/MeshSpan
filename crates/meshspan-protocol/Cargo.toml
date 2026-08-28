@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-protocol"
+description = "Bounded private Protobuf wire contract for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+prost.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+prost-build = "0.14.4"
+protoc-bin-vendored = "3.2.0"
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

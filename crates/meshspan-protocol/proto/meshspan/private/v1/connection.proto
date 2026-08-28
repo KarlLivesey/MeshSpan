@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+syntax = "proto3";
+
+package meshspan.private.v1;
+
+import "meshspan/private/v1/common.proto";
+
+enum NodeRole {
+  NODE_ROLE_UNSPECIFIED = 0;
+  NODE_ROLE_STORAGE = 1;
+  NODE_ROLE_GATEWAY = 2;
+  NODE_ROLE_METADATA_LEARNER = 3;
+  NODE_ROLE_METADATA_VOTER = 4;
+}
+
+message ComponentSupport {
+  uint32 contract_kind = 1;
+  string implementation_id = 2;
+  repeated ProtocolVersion versions = 3;
+  uint64 maximum_control_bytes = 4;
+  uint32 maximum_items = 5;
+  uint32 maximum_concurrency = 6;
+}
+
+message NodeHello {
+  repeated ProtocolVersion versions = 1;
+  bytes mesh_id = 2;
+  bytes node_id = 3;
+  uint64 incarnation = 4;
+  repeated NodeRole roles = 5;
+  repeated ComponentSupport components = 6;
+  repeated uint32 feature_bits = 7;
+  uint64 maximum_control_bytes = 8;
+  uint64 maximum_data_frame_bytes = 9;
+  uint32 maximum_streams = 10;
+}
+
+message NodeWelcome {
+  ProtocolVersion selected_version = 1;
+  bytes peer_node_id = 2;
+  uint64 peer_incarnation = 3;
+  repeated bytes partition_ids = 4;
+  optional bytes leader_node_id = 5;
+  uint64 routing_epoch = 6;
+  uint64 maximum_control_bytes = 7;
+  uint64 maximum_data_frame_bytes = 8;
+  uint32 maximum_streams = 9;
+}
+
+message Ping {
+  fixed64 nonce = 1;
+  uint64 sent_monotonic_micros = 2;
+}
+
+message Pong {
+  fixed64 nonce = 1;
+  uint64 received_monotonic_micros = 2;
+  uint64 sent_monotonic_micros = 3;
+}
+
+message GoAway {
+  uint32 reason_code = 1;
+  optional uint64 retry_after_micros = 2;
+}
+
+message ProtocolError {
+  ErrorCode code = 1;
+  bytes offending_request_id = 2;
+  uint32 diagnostic_code = 3;
+}

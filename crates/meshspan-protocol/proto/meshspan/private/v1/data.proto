@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+syntax = "proto3";
+
+package meshspan.private.v1;
+
+import "meshspan/private/v1/common.proto";
+
+message PutShardBegin {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  uint64 declared_length = 5;
+  bytes declared_digest = 6;
+  bytes write_capability = 7;
+}
+
+message PutShardReady {
+  bytes reservation = 1;
+  uint64 maximum_frame_bytes = 2;
+  optional WireError rejection = 3;
+}
+
+message DataFrame {
+  uint64 offset = 1;
+  bytes bytes = 2;
+}
+
+message PutShardFinish {
+  uint64 final_length = 1;
+  bytes final_digest = 2;
+}
+
+message PutShardResult {
+  OperationResult result = 1;
+  VersionedPayload receipt = 2;
+}
+
+message GetShardRequest {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  bytes read_capability = 5;
+}
+
+message GetShardHeader {
+  ShardIdentity shard = 1;
+  uint64 length = 2;
+  bytes digest = 3;
+  uint64 maximum_frame_bytes = 4;
+  optional WireError rejection = 5;
+}
+
+message GetShardResult {
+  OperationResult result = 1;
+}
+
+message DeleteShardRequest {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  VersionedPayload removal_permit = 5;
+}
+
+message DeleteShardResult {
+  OperationResult result = 1;
+  VersionedPayload receipt = 2;
+}
+
+message ValidateRemoval {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  bytes permit_digest = 5;
+}
+
+message DataControlEnvelope {
+  oneof message {
+    PutShardBegin put_shard_begin = 10;
+    PutShardReady put_shard_ready = 11;
+    PutShardFinish put_shard_finish = 12;
+    PutShardResult put_shard_result = 13;
+    GetShardRequest get_shard_request = 20;
+    GetShardHeader get_shard_header = 21;
+    GetShardResult get_shard_result = 22;
+    DeleteShardRequest delete_shard_request = 30;
+    DeleteShardResult delete_shard_result = 31;
+    ValidateRemoval validate_removal = 32;
+  }
+}

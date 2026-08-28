@@ -1,0 +1,80 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+syntax = "proto3";
+
+package meshspan.private.v1;
+
+import "meshspan/private/v1/common.proto";
+
+message VoteRequest {
+  uint64 term = 1;
+  bytes candidate_node_id = 2;
+  uint64 candidate_incarnation = 3;
+  LogPosition last_log = 4;
+  uint64 membership_epoch = 5;
+  bytes quorum_plan_digest = 6;
+}
+
+message VoteResponse {
+  uint64 term = 1;
+  bool granted = 2;
+  uint64 membership_epoch = 3;
+  optional WireError rejection = 4;
+}
+
+message LogEntry {
+  LogPosition position = 1;
+  bytes operation_id = 2;
+  bytes command_digest = 3;
+  VersionedPayload command = 4;
+}
+
+message AppendRequest {
+  uint64 term = 1;
+  bytes leader_node_id = 2;
+  uint64 leader_incarnation = 3;
+  LogPosition previous = 4;
+  bytes previous_digest = 5;
+  repeated LogEntry entries = 6;
+  uint64 leader_commit_index = 7;
+  uint64 membership_epoch = 8;
+  bytes quorum_plan_digest = 9;
+}
+
+message AppendResponse {
+  uint64 term = 1;
+  bool accepted = 2;
+  uint64 matched_index = 3;
+  uint64 next_index_hint = 4;
+  optional WireError rejection = 5;
+}
+
+message SnapshotBegin {
+  bytes snapshot_id = 1;
+  LogPosition included_position = 2;
+  uint64 state_revision = 3;
+  uint64 total_bytes = 4;
+  bytes digest = 5;
+  uint32 format_version = 6;
+  uint64 membership_epoch = 7;
+}
+
+message SnapshotChunk {
+  bytes snapshot_id = 1;
+  uint64 offset = 2;
+  bytes bytes = 3;
+  bytes chunk_digest = 4;
+}
+
+message SnapshotFinish {
+  bytes snapshot_id = 1;
+  uint64 total_bytes = 2;
+  bytes digest = 3;
+}
+
+message SnapshotResult {
+  bytes snapshot_id = 1;
+  bool installed = 2;
+  optional LogPosition included_position = 3;
+  optional WireError error = 4;
+}

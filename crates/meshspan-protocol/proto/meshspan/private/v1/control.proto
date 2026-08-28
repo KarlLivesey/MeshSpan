@@ -1,0 +1,415 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+syntax = "proto3";
+
+package meshspan.private.v1;
+
+import "meshspan/private/v1/common.proto";
+import "meshspan/private/v1/connection.proto";
+import "meshspan/private/v1/consensus.proto";
+
+message MetadataCommand {
+  optional uint64 expected_revision = 1;
+  bytes request_digest = 2;
+  oneof command {
+    VersionedPayload topology = 10;
+    VersionedPayload identity_access = 11;
+    VersionedPayload namespace = 12;
+    VersionedPayload policy = 13;
+    VersionedPayload lifecycle = 14;
+    VersionedPayload cluster_control = 15;
+  }
+}
+
+enum QueryConsistency {
+  QUERY_CONSISTENCY_UNSPECIFIED = 0;
+  QUERY_CONSISTENCY_LINEARIZABLE = 1;
+  QUERY_CONSISTENCY_BOUNDED_STALE = 2;
+  QUERY_CONSISTENCY_SNAPSHOT_REVISION = 3;
+}
+
+message MetadataQuery {
+  QueryConsistency consistency = 1;
+  optional uint64 at_revision = 2;
+  bytes cursor = 3;
+  uint32 limit = 4;
+  oneof query {
+    VersionedPayload topology = 10;
+    VersionedPayload identity_access = 11;
+    VersionedPayload namespace = 12;
+    VersionedPayload policy = 13;
+    VersionedPayload lifecycle = 14;
+    VersionedPayload cluster_control = 15;
+  }
+}
+
+message MetadataPage {
+  uint64 revision = 1;
+  repeated VersionedPayload records = 2;
+  bytes next_cursor = 3;
+}
+
+message MetadataWatch {
+  uint64 after_revision = 1;
+  repeated uint32 families = 2;
+  uint32 maximum_events = 3;
+}
+
+message MetadataChangeBatch {
+  uint64 first_revision = 1;
+  uint64 last_revision = 2;
+  repeated VersionedPayload changes = 3;
+  bool snapshot_required = 4;
+}
+
+message OperationStatusRequest {
+  bytes operation_id = 1;
+}
+
+message OperationStatusResponse {
+  OperationResult result = 1;
+}
+
+message ResolveScopeRoute {
+  bytes scope_id = 1;
+  uint64 known_routing_epoch = 2;
+}
+
+message ScopeRoute {
+  bytes scope_id = 1;
+  bytes partition_id = 2;
+  uint64 routing_epoch = 3;
+  bytes owner_node_id = 4;
+  bytes signature = 5;
+}
+
+message FetchRoutingDelta {
+  uint64 after_routing_epoch = 1;
+  bytes cursor = 2;
+  uint32 limit = 3;
+}
+
+message RoutingDelta {
+  uint64 routing_epoch = 1;
+  repeated ScopeRoute routes = 2;
+  bytes next_cursor = 3;
+}
+
+message RoutingSnapshotRequired {
+  uint64 current_routing_epoch = 1;
+}
+
+message BeginScopeHandoff {
+  bytes scope_id = 1;
+  bytes source_partition_id = 2;
+  bytes destination_partition_id = 3;
+  uint64 routing_epoch = 4;
+}
+
+message FreezeScope {
+  bytes scope_id = 1;
+  bytes source_partition_id = 2;
+  bytes destination_partition_id = 3;
+  uint64 routing_epoch = 4;
+  uint64 frozen_revision = 5;
+  bytes snapshot_digest = 6;
+}
+
+message ActivateScope {
+  bytes scope_id = 1;
+  bytes source_partition_id = 2;
+  bytes destination_partition_id = 3;
+  uint64 routing_epoch = 4;
+  uint64 frozen_revision = 5;
+  bytes snapshot_digest = 6;
+}
+
+message AbortScopeHandoff {
+  bytes scope_id = 1;
+  bytes source_partition_id = 2;
+  bytes destination_partition_id = 3;
+  uint64 routing_epoch = 4;
+  uint32 reason_code = 5;
+}
+
+message FetchIdentityProjection {
+  uint64 after_identity_revision = 1;
+  bytes cursor = 2;
+  uint32 limit = 3;
+}
+
+message IdentityProjection {
+  uint64 identity_revision = 1;
+  repeated VersionedPayload records = 2;
+  bytes next_cursor = 3;
+  bytes signature = 4;
+}
+
+message PublishPresence {
+  bytes node_id = 1;
+  uint64 incarnation = 2;
+  repeated NodeRole roles = 3;
+  repeated string private_addresses = 4;
+  uint64 lease_expires_unix_micros = 5;
+  VersionedPayload health = 6;
+}
+
+enum ComponentLifecycleState {
+  COMPONENT_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  COMPONENT_LIFECYCLE_STATE_DECLARED = 1;
+  COMPONENT_LIFECYCLE_STATE_PREPARING = 2;
+  COMPONENT_LIFECYCLE_STATE_ACTIVE = 3;
+  COMPONENT_LIFECYCLE_STATE_DRAINING = 4;
+  COMPONENT_LIFECYCLE_STATE_RETIRED = 5;
+  COMPONENT_LIFECYCLE_STATE_FAILED = 6;
+}
+
+message PublishComponentSupport {
+  repeated ComponentSupport components = 1;
+}
+
+message PublishComponentObservation {
+  uint32 contract_kind = 1;
+  string implementation_id = 2;
+  uint64 desired_revision = 3;
+  uint64 active_revision = 4;
+  ComponentLifecycleState lifecycle_state = 5;
+  VersionedPayload detail = 6;
+}
+
+message PublishTargetStatus {
+  bytes target_id = 1;
+  uint64 target_generation = 2;
+  uint64 capacity_bytes = 3;
+  uint64 available_bytes = 4;
+  uint64 reserved_bytes = 5;
+  VersionedPayload health = 6;
+}
+
+message InventoryBegin {
+  bytes target_id = 1;
+  uint64 target_generation = 2;
+  bytes inventory_id = 3;
+}
+
+message InventoryBatch {
+  bytes inventory_id = 1;
+  repeated VersionedPayload entries = 2;
+  bytes next_cursor = 3;
+}
+
+message InventoryFinish {
+  bytes inventory_id = 1;
+  uint64 entry_count = 2;
+  bytes inventory_digest = 3;
+}
+
+message ScrubObservation {
+  bytes target_id = 1;
+  uint64 target_generation = 2;
+  ShardIdentity shard = 3;
+  bool bytes_verified = 4;
+  bytes observed_digest = 5;
+}
+
+message CompareBranchHeads {
+  bytes scope_id = 1;
+  repeated bytes head_digests = 2;
+  repeated bytes causal_frontier = 3;
+}
+
+message BranchHeadSummary {
+  bytes scope_id = 1;
+  repeated bytes head_digests = 2;
+  repeated bytes missing_commit_digests = 3;
+  bool truncated = 4;
+}
+
+message FetchBranchCommits {
+  bytes scope_id = 1;
+  repeated bytes commit_digests = 2;
+  bytes cursor = 3;
+  uint32 limit = 4;
+}
+
+message BranchCommitBatch {
+  bytes scope_id = 1;
+  repeated VersionedPayload commits = 2;
+  bytes next_cursor = 3;
+}
+
+message FetchImmutableObjects {
+  repeated bytes object_digests = 1;
+  bytes cursor = 2;
+  uint32 limit = 3;
+}
+
+message ImmutableObjectBatch {
+  repeated VersionedPayload objects = 1;
+  bytes next_cursor = 2;
+}
+
+message ProposeBranchInclusion {
+  bytes scope_id = 1;
+  repeated bytes head_digests = 2;
+  bytes expected_converged_head = 3;
+}
+
+message BranchInclusionResult {
+  OperationResult result = 1;
+  bytes converged_head = 2;
+  repeated bytes alternative_heads = 3;
+}
+
+message FetchMergeCommit {
+  bytes scope_id = 1;
+  bytes merge_commit_digest = 2;
+}
+
+message MergeCommitResult {
+  VersionedPayload merge_commit = 1;
+}
+
+message PublishConvergenceReceipt {
+  bytes scope_id = 1;
+  bytes converged_head = 2;
+  repeated bytes operation_ids = 3;
+  repeated VersionedPayload achieved_predicates = 4;
+  repeated VersionedPayload remaining_debt = 5;
+}
+
+message PublishIsolationDelegation {
+  bytes delegation_id = 1;
+  uint64 generation = 2;
+  VersionedPayload signed_delegation = 3;
+}
+
+message FetchIsolationDelegation {
+  bytes delegation_id = 1;
+  uint64 generation = 2;
+}
+
+message ClaimWork {
+  uint32 work_kind = 1;
+  repeated bytes eligible_target_ids = 2;
+  uint64 requested_lease_micros = 3;
+}
+
+message WorkLease {
+  bytes work_id = 1;
+  uint64 fence = 2;
+  uint64 lease_expires_unix_micros = 3;
+  VersionedPayload assignment = 4;
+}
+
+message RenewWork {
+  bytes work_id = 1;
+  uint64 fence = 2;
+  uint64 requested_lease_micros = 3;
+}
+
+message ReportWorkProgress {
+  bytes work_id = 1;
+  uint64 fence = 2;
+  VersionedPayload progress = 3;
+}
+
+message CompleteWork {
+  bytes work_id = 1;
+  uint64 fence = 2;
+  optional uint64 expected_revision = 3;
+  repeated VersionedPayload receipts = 4;
+}
+
+message PublishCertificateBundle {
+  bytes bundle_id = 1;
+  uint64 generation = 2;
+  bytes public_certificate_chain = 3;
+  repeated VersionedPayload recipient_envelopes = 4;
+}
+
+message FetchCertificateEnvelope {
+  bytes bundle_id = 1;
+  uint64 generation = 2;
+  bytes recipient_node_id = 3;
+}
+
+message AcknowledgeCertificateInstall {
+  bytes bundle_id = 1;
+  uint64 generation = 2;
+  bytes public_fingerprint = 3;
+}
+
+message RevokeCertificateEnvelope {
+  bytes bundle_id = 1;
+  uint64 generation = 2;
+  bytes recipient_node_id = 3;
+}
+
+message ControlEnvelope {
+  RequestHeader header = 1;
+  oneof message {
+    NodeHello node_hello = 10;
+    NodeWelcome node_welcome = 11;
+    Ping ping = 12;
+    Pong pong = 13;
+    GoAway go_away = 14;
+    ProtocolError protocol_error = 15;
+    VoteRequest vote_request = 20;
+    VoteResponse vote_response = 21;
+    AppendRequest append_request = 22;
+    AppendResponse append_response = 23;
+    SnapshotBegin snapshot_begin = 24;
+    SnapshotChunk snapshot_chunk = 25;
+    SnapshotFinish snapshot_finish = 26;
+    SnapshotResult snapshot_result = 27;
+    MetadataCommand metadata_command = 30;
+    MetadataQuery metadata_query = 31;
+    MetadataPage metadata_page = 32;
+    OperationStatusRequest operation_status_request = 33;
+    OperationStatusResponse operation_status_response = 34;
+    MetadataWatch metadata_watch = 35;
+    MetadataChangeBatch metadata_change_batch = 36;
+    ResolveScopeRoute resolve_scope_route = 40;
+    ScopeRoute scope_route = 41;
+    FetchRoutingDelta fetch_routing_delta = 42;
+    RoutingDelta routing_delta = 43;
+    RoutingSnapshotRequired routing_snapshot_required = 44;
+    BeginScopeHandoff begin_scope_handoff = 45;
+    FreezeScope freeze_scope = 46;
+    ActivateScope activate_scope = 47;
+    AbortScopeHandoff abort_scope_handoff = 48;
+    FetchIdentityProjection fetch_identity_projection = 49;
+    IdentityProjection identity_projection = 50;
+    PublishPresence publish_presence = 60;
+    PublishComponentSupport publish_component_support = 61;
+    PublishComponentObservation publish_component_observation = 62;
+    PublishTargetStatus publish_target_status = 63;
+    InventoryBegin inventory_begin = 64;
+    InventoryBatch inventory_batch = 65;
+    InventoryFinish inventory_finish = 66;
+    ScrubObservation scrub_observation = 67;
+    CompareBranchHeads compare_branch_heads = 70;
+    BranchHeadSummary branch_head_summary = 71;
+    FetchBranchCommits fetch_branch_commits = 72;
+    BranchCommitBatch branch_commit_batch = 73;
+    FetchImmutableObjects fetch_immutable_objects = 74;
+    ImmutableObjectBatch immutable_object_batch = 75;
+    ProposeBranchInclusion propose_branch_inclusion = 76;
+    BranchInclusionResult branch_inclusion_result = 77;
+    FetchMergeCommit fetch_merge_commit = 78;
+    MergeCommitResult merge_commit_result = 79;
+    PublishConvergenceReceipt publish_convergence_receipt = 80;
+    PublishIsolationDelegation publish_isolation_delegation = 81;
+    FetchIsolationDelegation fetch_isolation_delegation = 82;
+    ClaimWork claim_work = 90;
+    WorkLease work_lease = 91;
+    RenewWork renew_work = 92;
+    ReportWorkProgress report_work_progress = 93;
+    CompleteWork complete_work = 94;
+    PublishCertificateBundle publish_certificate_bundle = 100;
+    FetchCertificateEnvelope fetch_certificate_envelope = 101;
+    AcknowledgeCertificateInstall acknowledge_certificate_install = 102;
+    RevokeCertificateEnvelope revoke_certificate_envelope = 103;
+  }
+}
