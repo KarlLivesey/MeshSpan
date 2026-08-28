@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use meshspan_consensus::CoreMessage;
 use meshspan_domain::{MeshId, NodeId, OperationId, PartitionId};
@@ -37,6 +38,9 @@ const MAXIMUM_STREAMS: u32 = 128;
 const STREAM_WINDOW: u32 = 64 * 1_024;
 const CONNECTION_WINDOW: u32 = 4 * 1_024 * 1_024;
 const INCARNATION: u64 = 1;
+const OUTBOUND_QUEUE_CAPACITY: usize = 8;
+const PEER_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
+const RECONNECT_BACKOFF: Duration = Duration::from_millis(100);
 
 static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
 
@@ -56,6 +60,7 @@ pub(super) struct PeerNetwork {
     mesh_id: MeshId,
     partition_id: PartitionId,
     wire_limits: WireLimits,
+    outbound: Arc<BTreeMap<NodeId, mpsc::Sender<CoreMessage>>>,
 }
 
 impl PeerNetwork {
@@ -87,7 +92,7 @@ impl PeerNetwork {
         )?;
         let mesh_id = MeshId::from_bytes([9; 16])?;
         let partition_id = PartitionId::from_bytes([8; 16])?;
-        let network = Self {
+        let mut network = Self {
             client,
             registry,
             peers: Arc::new(config.peers.clone()),
@@ -95,15 +100,44 @@ impl PeerNetwork {
             mesh_id,
             partition_id,
             wire_limits,
+            outbound: Arc::new(BTreeMap::new()),
         };
+        let mut outbound = BTreeMap::new();
+        for peer in config.peers.keys().copied() {
+            let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+            network.spawn_outbound_worker(peer, receiver);
+            outbound.insert(peer, sender);
+        }
+        network.outbound = Arc::new(outbound);
         network.spawn_accept_loop(server, messages);
         Ok(network)
     }
 
+    /// Enqueues one lossy consensus datagram for its peer worker.
+    ///
+    /// A full/disconnected queue drops the message. Consensus heartbeats and election retries
+    /// repair that loss without allowing an unreachable peer to block the single-owner core.
     pub fn send(&self, to: NodeId, message: CoreMessage) {
+        if let Some(sender) = self.outbound.get(&to) {
+            let _full_or_closed = sender.try_send(message);
+        }
+    }
+
+    fn spawn_outbound_worker(&self, peer: NodeId, mut messages: mpsc::Receiver<CoreMessage>) {
         let network = self.clone();
         tokio::spawn(async move {
-            let _ignored = network.send_one(to, message).await;
+            let mut connection = None;
+            while let Some(message) = messages.recv().await {
+                let result = tokio::time::timeout(
+                    PEER_OPERATION_TIMEOUT,
+                    network.send_with_connection(peer, &mut connection, message),
+                )
+                .await;
+                if !matches!(result, Ok(Ok(()))) {
+                    connection = None;
+                    tokio::time::sleep(RECONNECT_BACKOFF).await;
+                }
+            }
         });
     }
 
@@ -187,7 +221,22 @@ impl PeerNetwork {
         }
     }
 
-    async fn send_one(&self, to: NodeId, message: CoreMessage) -> Result<(), NodeRuntimeError> {
+    async fn send_with_connection(
+        &self,
+        to: NodeId,
+        connection: &mut Option<quinn::Connection>,
+        message: CoreMessage,
+    ) -> Result<(), NodeRuntimeError> {
+        if connection.is_none() {
+            *connection = Some(self.connect_peer(to).await?);
+        }
+        let active = connection
+            .as_ref()
+            .ok_or(NodeRuntimeError::InvalidConfiguration)?;
+        self.send_message(active, message).await
+    }
+
+    async fn connect_peer(&self, to: NodeId) -> Result<quinn::Connection, NodeRuntimeError> {
         let peer = self
             .peers
             .get(&to)
@@ -198,7 +247,15 @@ impl PeerNetwork {
             return Err(NodeRuntimeError::InvalidConfiguration);
         }
         self.negotiate_outgoing(&connection).await?;
-        let (mut send, mut receive) = open_stream(&connection, StreamKind::Consensus).await?;
+        Ok(connection)
+    }
+
+    async fn send_message(
+        &self,
+        connection: &quinn::Connection,
+        message: CoreMessage,
+    ) -> Result<(), NodeRuntimeError> {
+        let (mut send, mut receive) = open_stream(connection, StreamKind::Consensus).await?;
         let request_number = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed).max(1);
         let identifier = request_identifier(request_number);
         let envelope = ControlEnvelope {
