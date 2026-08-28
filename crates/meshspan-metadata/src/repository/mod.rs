@@ -19,6 +19,7 @@ mod receipt;
 mod retention;
 mod routing;
 mod snapshot;
+mod snapshot_schedule;
 mod tags;
 mod user_snapshot;
 mod verify;
@@ -43,6 +44,7 @@ pub use query::{
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use retention::VersionRetentionPolicy;
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
+pub use snapshot_schedule::{SnapshotSchedule, SnapshotScheduleCursor};
 pub use user_snapshot::{SnapshotCursor, VolumeSnapshot};
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
 pub use volume_head::ConvergedVolumeHead;
@@ -234,6 +236,32 @@ impl AuthoritativeRepository {
         user_snapshot::list(&self.database, volume_id, after, limit)
     }
 
+    /// Returns the current authoritative configuration and due state of one snapshot schedule.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed stored identifiers, intervals, counts or revisions.
+    pub fn snapshot_schedule(
+        &self,
+        schedule_id: meshspan_domain::SnapshotScheduleId,
+    ) -> Result<Option<SnapshotSchedule>, RepositoryError> {
+        snapshot_schedule::load(&self.database, schedule_id)
+    }
+
+    /// Returns one stable bounded page of enabled snapshot schedules due at `now`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed stored schedules and invalid query bounds.
+    pub fn due_snapshot_schedules(
+        &self,
+        now: meshspan_domain::UnixMicros,
+        after: Option<&SnapshotScheduleCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<SnapshotSchedule, SnapshotScheduleCursor>, RepositoryError> {
+        snapshot_schedule::due(&self.database, now, after, limit)
+    }
+
     /// Returns the exact currently selected version-retention policy for one volume.
     ///
     /// # Errors
@@ -365,6 +393,9 @@ pub enum RepositoryError {
     /// A snapshot-specific compare-and-swap revision is stale.
     #[error("expected volume snapshot revision is stale")]
     StaleSnapshot,
+    /// A snapshot schedule's immutable configuration sequence is stale.
+    #[error("expected snapshot schedule sequence is stale")]
+    StaleSnapshotSchedule,
     /// A command violates a semantic precondition.
     #[error("authoritative command is invalid")]
     InvalidCommand,
@@ -396,6 +427,8 @@ pub enum RepositoryError {
 
 #[cfg(test)]
 mod retention_tests;
+#[cfg(test)]
+mod snapshot_schedule_tests;
 #[cfg(test)]
 mod snapshot_tests;
 #[cfg(test)]
