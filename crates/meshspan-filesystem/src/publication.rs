@@ -12,10 +12,28 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
 
+use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError};
+
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
-const MIGRATION: &str = include_str!("../schema/branch/001_initial.sql");
-const SCHEMA_VERSION: u32 = 1;
+const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
+const MIGRATIONS: [Migration; 2] = [
+    Migration {
+        version: 1,
+        sql: include_str!("../schema/branch/001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("../schema/branch/002_directory_nodes.sql"),
+    },
+];
+const SCHEMA_VERSION: u32 = 2;
+
+#[derive(Clone, Copy)]
+struct Migration {
+    version: u32,
+    sql: &'static str,
+}
 
 /// One complete, independently verified immutable content-manifest root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,6 +178,46 @@ impl VersionPublicationStore {
         load_file_head(&self.connection, branch_id, object_id)
     }
 
+    /// Persists one bounded path-copy node set before a later namespace-head transaction.
+    ///
+    /// Immutable nodes may safely exist without a reachable head. Exact retries coalesce by
+    /// content identity; different bytes under one digest fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty/excessive batches, malformed node encodings, digest collisions and SQLite
+    /// failure. The whole node batch commits or rolls back together.
+    pub fn persist_directory_nodes(
+        &mut self,
+        records: &[DirectoryNodeRecord],
+        recorded_at: UnixMicros,
+    ) -> Result<(), PublicationError> {
+        if records.is_empty() || records.len() > MAXIMUM_NODES_PER_DIRECTORY_MUTATION {
+            return Err(PublicationError::InvalidInput);
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for record in records {
+            persist_directory_node(&transaction, record, recorded_at)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Loads and revalidates one immutable directory node by content identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsupported format, excessive/truncated encoding, digest mismatch and SQLite
+    /// failure.
+    pub fn directory_node(
+        &self,
+        digest: DirectoryNodeDigest,
+    ) -> Result<Option<DirectoryNodeRecord>, PublicationError> {
+        load_directory_node(&self.connection, digest)
+    }
+
     fn publish_inner(
         &mut self,
         publication: FilePublication,
@@ -213,6 +271,9 @@ pub enum PublicationError {
     /// Deterministic test-only transaction interruption.
     #[error("file publication transaction fault injected")]
     InjectedFault,
+    /// Immutable directory-node encoding or graph validation failed.
+    #[error("file publication directory node is invalid")]
+    Directory(#[from] DirectoryTrieError),
     /// State-directory IO failed.
     #[error("file publication filesystem operation failed")]
     Io(#[from] std::io::Error),
@@ -419,6 +480,62 @@ fn persist_operation(
     })
 }
 
+fn persist_directory_node(
+    transaction: &Transaction<'_>,
+    record: &DirectoryNodeRecord,
+    recorded_at: UnixMicros,
+) -> Result<(), PublicationError> {
+    let encoded = record.encode();
+    let verified = DirectoryNodeRecord::decode(record.digest(), &encoded)?;
+    if &verified != record {
+        return Err(PublicationError::Corrupt);
+    }
+    let digest = record.digest().as_bytes();
+    let existing: Option<(i64, Vec<u8>)> = transaction
+        .query_row(
+            "SELECT format_version, encoded_node FROM directory_nodes WHERE node_digest = ?1",
+            [digest.as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((format, existing)) = existing {
+        let stored = DirectoryNodeRecord::decode(record.digest(), &existing)?;
+        return if format == 1 && &stored == record {
+            Ok(())
+        } else {
+            Err(PublicationError::Corrupt)
+        };
+    }
+    transaction.execute(
+        "INSERT INTO directory_nodes(node_digest, format_version, encoded_node, recorded_at)
+         VALUES (?1, 1, ?2, ?3)",
+        params![digest.as_slice(), encoded, recorded_at.get()],
+    )?;
+    Ok(())
+}
+
+fn load_directory_node(
+    connection: &Connection,
+    digest: DirectoryNodeDigest,
+) -> Result<Option<DirectoryNodeRecord>, PublicationError> {
+    let identifier = digest.as_bytes();
+    let stored: Option<(i64, Vec<u8>)> = connection
+        .query_row(
+            "SELECT format_version, encoded_node FROM directory_nodes WHERE node_digest = ?1",
+            [identifier.as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    stored
+        .map(|(format, encoded)| {
+            if format != 1 {
+                return Err(PublicationError::Corrupt);
+            }
+            DirectoryNodeRecord::decode(digest, &encoded).map_err(Into::into)
+        })
+        .transpose()
+}
+
 fn load_operation(
     connection: &Connection,
     operation_id: OperationId,
@@ -563,7 +680,7 @@ fn configure(connection: &Connection) -> Result<(), PublicationError> {
 }
 
 fn migrate(connection: &mut Connection, applied_at: UnixMicros) -> Result<(), PublicationError> {
-    let exists = connection
+    let migration_table_exists = connection
         .query_row(
             "SELECT 1 FROM sqlite_schema
              WHERE type = 'table' AND name = 'schema_migrations' LIMIT 1",
@@ -572,30 +689,34 @@ fn migrate(connection: &mut Connection, applied_at: UnixMicros) -> Result<(), Pu
         )
         .optional()?
         .is_some();
-    let digest: [u8; 32] = blake3::hash(MIGRATION.as_bytes()).into();
-    if !exists {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(MIGRATION)?;
+    let current: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if current > SCHEMA_VERSION || (current == 0 && migration_table_exists) {
+        return Err(PublicationError::Corrupt);
+    }
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for migration in MIGRATIONS {
+        let digest: [u8; 32] = blake3::hash(migration.sql.as_bytes()).into();
+        if migration.version <= current {
+            let stored: Vec<u8> = transaction.query_row(
+                "SELECT migration_digest FROM schema_migrations WHERE version = ?1",
+                [migration.version],
+                |row| row.get(0),
+            )?;
+            if stored.as_slice() != digest {
+                return Err(PublicationError::Corrupt);
+            }
+            continue;
+        }
+        transaction.execute_batch(migration.sql)?;
         transaction.execute(
             "INSERT INTO schema_migrations(version, migration_digest, applied_at)
              VALUES (?1, ?2, ?3)",
-            params![SCHEMA_VERSION, digest.as_slice(), applied_at.get()],
+            params![migration.version, digest.as_slice(), applied_at.get()],
         )?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        transaction.commit()?;
-        return Ok(());
+        transaction.pragma_update(None, "user_version", migration.version)?;
     }
-    let stored: Vec<u8> = connection.query_row(
-        "SELECT migration_digest FROM schema_migrations WHERE version = ?1",
-        [SCHEMA_VERSION],
-        |row| row.get(0),
-    )?;
-    let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if stored.as_slice() == digest && version == SCHEMA_VERSION {
-        Ok(())
-    } else {
-        Err(PublicationError::Corrupt)
-    }
+    transaction.commit()?;
+    Ok(())
 }
 
 fn verify_database(connection: &Connection) -> Result<(), PublicationError> {

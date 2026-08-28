@@ -87,6 +87,27 @@ fn digest_mismatch_in_untrusted_records_fails_closed() -> Result<(), Box<dyn std
 }
 
 #[test]
+fn canonical_node_codec_round_trips_and_rejects_corruption()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut trie = DirectoryTrie::empty();
+    trie.upsert(entry("codec", 20, 21)?, None)?;
+    for record in trie.records() {
+        let mut encoded = record.encode();
+        assert_eq!(
+            super::DirectoryNodeRecord::decode(record.digest(), &encoded)?,
+            record
+        );
+        let last = encoded.last_mut().ok_or("empty encoding")?;
+        *last ^= 1;
+        assert!(matches!(
+            super::DirectoryNodeRecord::decode(record.digest(), &encoded),
+            Err(DirectoryTrieError::Corrupt)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn mutation_work_stays_bounded_as_directory_grows() -> Result<(), Box<dyn std::error::Error>> {
     let mut trie = DirectoryTrie::empty();
     for index in 0_u64..512 {

@@ -11,6 +11,7 @@ use crate::NamespaceComponent;
 
 const HASH_NIBBLES: usize = 64;
 const MAXIMUM_HASH_COLLISION_ENTRIES: usize = 8;
+const MAXIMUM_ENCODED_NODE_BYTES: usize = 300 * 1_024;
 
 /// BLAKE3 identity of one immutable directory trie node.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -478,6 +479,33 @@ impl DirectoryNodeRecord {
     pub const fn digest(&self) -> DirectoryNodeDigest {
         self.digest
     }
+
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        encode_node(&self.node)
+    }
+
+    pub(crate) fn decode(
+        digest: DirectoryNodeDigest,
+        encoded: &[u8],
+    ) -> Result<Self, DirectoryTrieError> {
+        if encoded.len() > MAXIMUM_ENCODED_NODE_BYTES {
+            return Err(DirectoryTrieError::Corrupt);
+        }
+        let mut cursor = DecodeCursor::new(encoded);
+        let node = match cursor.byte()? {
+            1 => decode_internal(&mut cursor)?,
+            2 => decode_leaf(&mut cursor)?,
+            _ => return Err(DirectoryTrieError::Corrupt),
+        };
+        if !cursor.is_empty() {
+            return Err(DirectoryTrieError::Corrupt);
+        }
+        validate_node(&node)?;
+        if node_digest(&node) != digest {
+            return Err(DirectoryTrieError::Corrupt);
+        }
+        Ok(Self { digest, node })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -562,46 +590,155 @@ fn nibble(hash: &[u8; 32], depth: usize) -> u8 {
 fn node_digest(node: &DirectoryNode) -> DirectoryNodeDigest {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.filesystem.directory-node.v1\0");
+    digest.update(&encode_node(node));
+    DirectoryNodeDigest::from_bytes(digest.finalize().into())
+}
+
+fn encode_node(node: &DirectoryNode) -> Vec<u8> {
+    let mut encoded = Vec::new();
     match node {
         DirectoryNode::Internal(internal) => {
-            digest.update(&[1, internal.depth]);
-            digest.update(
+            encoded.extend_from_slice(&[1, internal.depth]);
+            encoded.extend_from_slice(
                 &u16::try_from(internal.children.len())
                     .unwrap_or(u16::MAX)
                     .to_be_bytes(),
             );
             for (slot, child) in &internal.children {
-                digest.update(&[*slot]);
-                digest.update(&child.as_bytes());
+                encoded.push(*slot);
+                encoded.extend_from_slice(&child.as_bytes());
             }
         }
         DirectoryNode::Leaf(leaf) => {
-            digest.update(&[2]);
-            digest.update(&leaf.key_hash);
-            digest.update(
+            encoded.push(2);
+            encoded.extend_from_slice(&leaf.key_hash);
+            encoded.extend_from_slice(
                 &u16::try_from(leaf.entries.len())
                     .unwrap_or(u16::MAX)
                     .to_be_bytes(),
             );
             for entry in &leaf.entries {
-                update_text(&mut digest, entry.name.canonical());
-                update_text(&mut digest, entry.name.display());
-                digest.update(&entry.object_id.as_bytes());
-                digest.update(&entry.object_revision_id.as_bytes());
-                digest.update(&[match entry.kind {
+                encode_text(&mut encoded, entry.name.canonical());
+                encode_text(&mut encoded, entry.name.display());
+                encoded.extend_from_slice(&entry.object_id.as_bytes());
+                encoded.extend_from_slice(&entry.object_revision_id.as_bytes());
+                encoded.push(match entry.kind {
                     DirectoryEntryKind::Directory => 1,
                     DirectoryEntryKind::File => 2,
-                }]);
-                digest.update(&entry.generation.to_be_bytes());
+                });
+                encoded.extend_from_slice(&entry.generation.to_be_bytes());
             }
         }
     }
-    DirectoryNodeDigest::from_bytes(digest.finalize().into())
+    encoded
 }
 
-fn update_text(digest: &mut blake3::Hasher, value: &str) {
-    digest.update(&u32::try_from(value.len()).unwrap_or(u32::MAX).to_be_bytes());
-    digest.update(value.as_bytes());
+fn encode_text(encoded: &mut Vec<u8>, value: &str) {
+    encoded.extend_from_slice(&u32::try_from(value.len()).unwrap_or(u32::MAX).to_be_bytes());
+    encoded.extend_from_slice(value.as_bytes());
+}
+
+fn decode_internal(cursor: &mut DecodeCursor<'_>) -> Result<DirectoryNode, DirectoryTrieError> {
+    let depth = cursor.byte()?;
+    let count = usize::from(cursor.u16()?);
+    if count > 16 {
+        return Err(DirectoryTrieError::Corrupt);
+    }
+    let mut children = BTreeMap::new();
+    for _ in 0..count {
+        let slot = cursor.byte()?;
+        let child = DirectoryNodeDigest::from_bytes(cursor.array()?);
+        if children.insert(slot, child).is_some() {
+            return Err(DirectoryTrieError::Corrupt);
+        }
+    }
+    Ok(DirectoryNode::Internal(InternalNode { depth, children }))
+}
+
+fn decode_leaf(cursor: &mut DecodeCursor<'_>) -> Result<DirectoryNode, DirectoryTrieError> {
+    let key_hash = cursor.array()?;
+    let count = usize::from(cursor.u16()?);
+    if count == 0 || count > MAXIMUM_HASH_COLLISION_ENTRIES {
+        return Err(DirectoryTrieError::Corrupt);
+    }
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        entries.push(decode_entry(cursor)?);
+    }
+    Ok(DirectoryNode::Leaf(LeafNode { key_hash, entries }))
+}
+
+fn decode_entry(cursor: &mut DecodeCursor<'_>) -> Result<DirectoryEntry, DirectoryTrieError> {
+    let canonical = cursor.text()?;
+    let display = cursor.text()?;
+    let name = NamespaceComponent::from_stored(display, canonical)
+        .map_err(|_| DirectoryTrieError::Corrupt)?;
+    let object_id =
+        ObjectId::from_bytes(cursor.array()?).map_err(|_| DirectoryTrieError::Corrupt)?;
+    let object_revision_id =
+        ObjectRevisionId::from_bytes(cursor.array()?).map_err(|_| DirectoryTrieError::Corrupt)?;
+    let kind = match cursor.byte()? {
+        1 => DirectoryEntryKind::Directory,
+        2 => DirectoryEntryKind::File,
+        _ => return Err(DirectoryTrieError::Corrupt),
+    };
+    DirectoryEntry::new(name, object_id, object_revision_id, kind, cursor.u64()?)
+        .map_err(|_| DirectoryTrieError::Corrupt)
+}
+
+struct DecodeCursor<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> DecodeCursor<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { remaining: bytes }
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.remaining.is_empty()
+    }
+
+    fn byte(&mut self) -> Result<u8, DirectoryTrieError> {
+        let (first, remaining) = self
+            .remaining
+            .split_first()
+            .ok_or(DirectoryTrieError::Corrupt)?;
+        self.remaining = remaining;
+        Ok(*first)
+    }
+
+    fn array<const LENGTH: usize>(&mut self) -> Result<[u8; LENGTH], DirectoryTrieError> {
+        self.take(LENGTH)?
+            .try_into()
+            .map_err(|_| DirectoryTrieError::Corrupt)
+    }
+
+    fn u16(&mut self) -> Result<u16, DirectoryTrieError> {
+        Ok(u16::from_be_bytes(self.array()?))
+    }
+
+    fn u32(&mut self) -> Result<u32, DirectoryTrieError> {
+        Ok(u32::from_be_bytes(self.array()?))
+    }
+
+    fn u64(&mut self) -> Result<u64, DirectoryTrieError> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+
+    fn text(&mut self) -> Result<&'a str, DirectoryTrieError> {
+        let length = usize::try_from(self.u32()?).map_err(|_| DirectoryTrieError::Corrupt)?;
+        std::str::from_utf8(self.take(length)?).map_err(|_| DirectoryTrieError::Corrupt)
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8], DirectoryTrieError> {
+        let (selected, remaining) = self
+            .remaining
+            .split_at_checked(length)
+            .ok_or(DirectoryTrieError::Corrupt)?;
+        self.remaining = remaining;
+        Ok(selected)
+    }
 }
 
 #[cfg(test)]

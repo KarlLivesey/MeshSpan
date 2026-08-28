@@ -58,8 +58,17 @@ copy-on-write filesystem service. This document records executable evidence only
   ordering and keys placed under the wrong radix path. Historical roots retain
   unchanged subtrees. A 512-entry executable vector proves constant mutation
   work, while stale revision and stable-object replacement attempts fail without
-  moving the root. Durable node persistence and volume-head integration remain
-  the next gate-2 transition.
+  moving the root. Durable node persistence is described next; volume-head
+  integration remains open.
+- Branch schema v2 adds a bounded immutable directory-node repository without
+  rewriting schema v1 history. Each canonical node encoding is decoded,
+  structurally revalidated and rehashed before insertion and after every load;
+  at most the 65 nodes produced by one path mutation enter a transaction. Exact
+  retries coalesce, while different/corrupt bytes under a digest fail closed.
+  Restart and deliberate-blob-corruption tests exercise the durable codec, and a
+  database constructed at schema v1 migrates transactionally to v2 with both
+  migration digests retained. The volume-head transaction can now consume these
+  exact durable node identities without scanning or rewriting a directory.
 
 ## Closure gates
 
