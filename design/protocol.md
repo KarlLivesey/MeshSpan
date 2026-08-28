@@ -240,7 +240,10 @@ the same subject; per-node request digests are deliberately different. A node
 may produce unreachable evidence only while its exact durable manifest-reference
 fence remains active. The fence is installed atomically with scan admission and
 prevents later local publication or reconciliation from invalidating an earlier
-attestation.
+attestation. The subject binds both the revision-scoped root manifest and a
+revision-independent digest of the same ordered root set, so finalisation can
+distinguish harmless intervening attestation commands from a changed namespace
+head or retained snapshot.
 
 `DeleteShardRequest` carries the exact shard identity and a quorum-issued
 `RemovalPermit`. `DeleteShardResult` reports `removed`, `already_absent`,

@@ -105,6 +105,25 @@ pub(crate) fn reject_manifest_reference(
     reject_manifest_identity(connection, manifest.manifest_id, manifest.root_digest)
 }
 
+pub(crate) fn reject_volume_restore(
+    connection: &Connection,
+    volume_id: VolumeId,
+) -> Result<(), PublicationError> {
+    let fenced: i64 = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM version_cleanup_reference_fences
+            WHERE volume_id = ?1 AND state = 1
+         )",
+        [volume_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    if fenced == 0 {
+        Ok(())
+    } else {
+        Err(PublicationError::CleanupFenced)
+    }
+}
+
 fn reject_manifest_identity(
     connection: &Connection,
     manifest_id: ContentManifestId,

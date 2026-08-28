@@ -32,6 +32,7 @@ pub const fn version_cleanup_proposal(proof: VersionUnreachableProof) -> Authori
         reachability_revision: proof.metadata_revision,
         retained_root_count: proof.root_count,
         retained_root_digest: proof.root_digest,
+        retained_root_set_digest: proof.root_set_digest,
         local_roots_digest: proof.local_roots_digest,
         proof_result_digest: proof.result_digest,
     })
@@ -99,6 +100,7 @@ mod tests {
             metadata_revision: Revision::new(7),
             root_count: 8,
             root_digest: [9; 32],
+            root_set_digest: [10; 32],
             local_roots_digest: [10; 32],
             result_digest: [11; 32],
         };
@@ -120,6 +122,7 @@ mod tests {
         assert_eq!(command.reachability_revision, proof.metadata_revision);
         assert_eq!(command.retained_root_count, proof.root_count);
         assert_eq!(command.retained_root_digest, proof.root_digest);
+        assert_eq!(command.retained_root_set_digest, proof.root_set_digest);
         assert_eq!(command.local_roots_digest, proof.local_roots_digest);
         assert_eq!(command.proof_result_digest, proof.result_digest);
         Ok(())
@@ -171,6 +174,7 @@ mod tests {
             metadata_revision: Revision::new(7),
             root_count: 8,
             root_digest: [9; 32],
+            root_set_digest: [10; 32],
             local_roots_digest: [10; 32],
             result_digest: [11; 32],
         })

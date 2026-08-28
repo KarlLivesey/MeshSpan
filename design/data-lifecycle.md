@@ -116,7 +116,11 @@ tombstones and cleanup when it returns.
    to the logical manifest or its immutable root. A reachable result releases
    the fence in the same transaction as the terminal result; an unreachable
    result retains it until replicated completion or cancellation authority is
-   applied. Reachability
+   applied. The proof binds both its enumeration revision and a canonical
+   revision-independent root-set digest. Later attestation commands may advance
+   the partition revision, but final authority still rejects any actual retained-
+   root change. Whole-volume restore preparation is rejected while any cleanup
+   reference fence for that volume remains active. Reachability
    follows both the selected version and any other retained version sharing its
    immutable manifest, so logical copies cannot lose shared shards. The subject
    and proposal bind both the logical manifest ID and its immutable root digest;

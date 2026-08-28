@@ -46,6 +46,14 @@ pub struct RetainedNamespaceRootPage {
     pub next: Option<RetainedNamespaceRootCursor>,
 }
 
+/// Complete current retained-root identity in revision-bound and stable forms.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RetainedRootSummary {
+    pub count: u64,
+    pub revision_digest: [u8; 32],
+    pub set_digest: [u8; 32],
+}
+
 pub(super) fn retained_roots(
     database: &PartitionDatabase,
     volume_id: VolumeId,
@@ -134,7 +142,7 @@ pub(super) fn retained_root_summary(
     connection: &Connection,
     volume_id: VolumeId,
     catalogue_revision: Revision,
-) -> Result<(u64, [u8; 32]), RepositoryError> {
+) -> Result<RetainedRootSummary, RepositoryError> {
     if catalogue_revision == Revision::ZERO
         || current_connection_revision(connection)? != catalogue_revision
     {
@@ -164,10 +172,13 @@ pub(super) fn retained_root_summary(
         ))
     })?;
     let mut digest = retained_root_hasher(volume_id, catalogue_revision);
+    let mut stable = retained_root_set_hasher(volume_id);
     let mut count = 0_u64;
     for row in rows {
         let root = decode_root(volume_id, &row?)?;
-        digest.update(&retained_root_record_digest(root));
+        let record_digest = retained_root_record_digest(root);
+        digest.update(&record_digest);
+        stable.update(&record_digest);
         count = count
             .checked_add(1)
             .ok_or(RepositoryError::CapacityExceeded)?;
@@ -175,7 +186,11 @@ pub(super) fn retained_root_summary(
     if count == 0 {
         return Err(RepositoryError::CorruptState);
     }
-    Ok((count, digest.finalize().into()))
+    Ok(RetainedRootSummary {
+        count,
+        revision_digest: digest.finalize().into(),
+        set_digest: stable.finalize().into(),
+    })
 }
 
 fn current_connection_revision(connection: &Connection) -> Result<Revision, RepositoryError> {
@@ -197,6 +212,13 @@ fn retained_root_hasher(volume_id: VolumeId, revision: Revision) -> blake3::Hash
     digest.update(b"meshspan.retained-namespace-roots.v1\0");
     digest.update(&volume_id.as_bytes());
     digest.update(&revision.get().to_be_bytes());
+    digest
+}
+
+fn retained_root_set_hasher(volume_id: VolumeId) -> blake3::Hasher {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.retained-namespace-root-set.v1\0");
+    digest.update(&volume_id.as_bytes());
     digest
 }
 

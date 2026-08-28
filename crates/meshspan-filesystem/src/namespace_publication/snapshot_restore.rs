@@ -47,6 +47,7 @@ pub(super) fn prepare(
         };
     }
     reject_operation_collision(&transaction, publication.operation_id)?;
+    crate::cleanup_fence::reject_volume_restore(&transaction, publication.volume_id)?;
     validate_source_state(&transaction, publication)?;
 
     persist_stored_commit(

@@ -62,6 +62,8 @@ pub struct VersionReachabilityScanRequest {
     pub root_count: u64,
     /// Canonical digest of all roots in stable order.
     pub root_digest: [u8; 32],
+    /// Revision-independent digest used to revalidate the same current root set later.
+    pub root_set_digest: [u8; 32],
 }
 
 /// One bounded append to the durable authoritative root manifest.
@@ -113,6 +115,8 @@ pub struct VersionUnreachableProof {
     pub root_count: u64,
     /// Digest of the complete metadata root manifest.
     pub root_digest: [u8; 32],
+    /// Revision-independent digest of the same complete metadata root set.
+    pub root_set_digest: [u8; 32],
     /// Digest of local branch and lifecycle roots revalidated at completion.
     pub local_roots_digest: [u8; 32],
     /// Digest binding the final proof result.
@@ -175,6 +179,26 @@ pub fn reachability_root_digest(
     Ok(digest.finalize().into())
 }
 
+/// Calculates the canonical revision-independent digest of one complete metadata-root set.
+///
+/// # Errors
+///
+/// Rejects an empty, misordered or wrong-volume root set.
+pub fn reachability_root_set_digest(
+    volume_id: VolumeId,
+    roots: &[ReachabilityRoot],
+) -> Result<[u8; 32], VersionReachabilityError> {
+    if roots.is_empty() {
+        return Err(VersionReachabilityError::InvalidInput);
+    }
+    validate_root_order(volume_id, roots, 0, None)?;
+    let mut digest = root_set_digest_hasher(volume_id);
+    for root in roots {
+        digest.update(&root_record_digest(*root));
+    }
+    Ok(digest.finalize().into())
+}
+
 pub(crate) fn begin(
     connection: &mut Connection,
     request: &VersionReachabilityScanRequest,
@@ -205,9 +229,9 @@ pub(crate) fn begin(
             operation_id, request_digest, volume_id, version_id, manifest_id,
             manifest_root_digest,
             metadata_revision, expected_root_count, expected_root_digest,
-            retention_policy_sequence, subject_digest,
+            retention_policy_sequence, subject_digest, root_set_digest,
             roots_received, local_roots_digest, state, started_at, completed_at, result_digest
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, NULL, 1, ?12, NULL, NULL)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, NULL, 1, ?13, NULL, NULL)",
         params![
             request.operation_id.as_bytes().as_slice(),
             digest.as_slice(),
@@ -220,6 +244,7 @@ pub(crate) fn begin(
             request.root_digest.as_slice(),
             to_i64(request.candidate.policy_sequence)?,
             subject_digest.as_slice(),
+            request.root_set_digest.as_slice(),
             request.selected_at.get(),
         ],
     )?;
@@ -285,8 +310,10 @@ pub(crate) fn seal(
         transaction.commit()?;
         return Ok(result);
     }
+    let stored_digests = stored_root_digests(&transaction, &scan)?;
     if scan.roots_received != scan.root_count
-        || stored_root_digest(&transaction, &scan)? != scan.root_digest
+        || stored_digests.revision != scan.root_digest
+        || stored_digests.stable != scan.root_set_digest
     {
         return Err(VersionReachabilityError::InvalidInput);
     }
@@ -372,6 +399,7 @@ struct StoredScan {
     retention_policy_sequence: u64,
     root_count: u64,
     root_digest: [u8; 32],
+    root_set_digest: [u8; 32],
     roots_received: u64,
     local_roots_digest: Option<[u8; 32]>,
     state: i64,
@@ -400,7 +428,7 @@ fn load_scan(
             "SELECT request_digest, volume_id, version_id, manifest_id, metadata_revision,
                     expected_root_count, expected_root_digest, roots_received,
                     local_roots_digest, state, result_digest, retention_policy_sequence,
-                    subject_digest, manifest_root_digest
+                    subject_digest, manifest_root_digest, root_set_digest
              FROM version_reachability_scans WHERE operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
@@ -419,6 +447,7 @@ fn load_scan(
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, Option<Vec<u8>>>(12)?,
                     row.get::<_, Option<Vec<u8>>>(13)?,
+                    row.get::<_, Option<Vec<u8>>>(14)?,
                 ))
             },
         )
@@ -457,6 +486,12 @@ fn load_scan(
             .ok_or(VersionReachabilityError::Corrupt)?,
         root_count: from_i64(stored.5)?,
         root_digest: array(&stored.6)?,
+        root_set_digest: stored
+            .14
+            .as_deref()
+            .map(array)
+            .transpose()?
+            .ok_or(VersionReachabilityError::Corrupt)?,
         roots_received: from_i64(stored.7)?,
         local_roots_digest: stored.8.as_deref().map(array).transpose()?,
         state: stored.9,
@@ -487,6 +522,7 @@ fn validate_scan_request(
         || request.root_count == 0
         || i64::try_from(request.root_count).is_err()
         || request.root_digest == [0; 32]
+        || request.root_set_digest == [0; 32]
     {
         Err(VersionReachabilityError::InvalidInput)
     } else {
@@ -498,7 +534,7 @@ fn validate_scan_request(
 #[must_use]
 pub fn reachability_subject_digest(request: &VersionReachabilityScanRequest) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.version-reachability-subject.v1\0");
+    digest.update(b"meshspan.version-reachability-subject.v2\0");
     digest.update(&request.candidate.version_id.as_bytes());
     digest.update(&request.candidate.superseded_by_version_id.as_bytes());
     digest.update(&request.candidate.branch_id.as_bytes());
@@ -519,6 +555,7 @@ pub fn reachability_subject_digest(request: &VersionReachabilityScanRequest) -> 
     digest.update(&request.metadata_revision.get().to_be_bytes());
     digest.update(&request.root_count.to_be_bytes());
     digest.update(&request.root_digest);
+    digest.update(&request.root_set_digest);
     digest.finalize().into()
 }
 
@@ -578,6 +615,13 @@ fn root_digest_hasher(volume_id: VolumeId, revision: Revision) -> blake3::Hasher
     digest.update(b"meshspan.retained-namespace-roots.v1\0");
     digest.update(&volume_id.as_bytes());
     digest.update(&revision.get().to_be_bytes());
+    digest
+}
+
+fn root_set_digest_hasher(volume_id: VolumeId) -> blake3::Hasher {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.retained-namespace-root-set.v1\0");
+    digest.update(&volume_id.as_bytes());
     digest
 }
 
@@ -701,10 +745,15 @@ fn insert_roots(
     Ok(())
 }
 
-fn stored_root_digest(
+struct StoredRootDigests {
+    revision: [u8; 32],
+    stable: [u8; 32],
+}
+
+fn stored_root_digests(
     transaction: &Transaction<'_>,
     scan: &StoredScan,
-) -> Result<[u8; 32], VersionReachabilityError> {
+) -> Result<StoredRootDigests, VersionReachabilityError> {
     let mut statement = transaction.prepare(
         "SELECT root_ordinal, source_kind, source_id, namespace_commit_id,
                 root_object_revision_id, record_digest
@@ -722,6 +771,7 @@ fn stored_root_digest(
         ))
     })?;
     let mut digest = root_digest_hasher(scan.volume_id, scan.metadata_revision);
+    let mut stable = root_set_digest_hasher(scan.volume_id);
     let mut count = 0_u64;
     for row in rows {
         let row = row?;
@@ -734,6 +784,7 @@ fn stored_root_digest(
             return Err(VersionReachabilityError::Corrupt);
         }
         digest.update(&record_digest);
+        stable.update(&record_digest);
         count = count
             .checked_add(1)
             .ok_or(VersionReachabilityError::Corrupt)?;
@@ -741,7 +792,10 @@ fn stored_root_digest(
     if count != scan.root_count {
         return Err(VersionReachabilityError::Corrupt);
     }
-    Ok(digest.finalize().into())
+    Ok(StoredRootDigests {
+        revision: digest.finalize().into(),
+        stable: stable.finalize().into(),
+    })
 }
 
 fn enqueue_authoritative_roots(
@@ -1050,6 +1104,7 @@ fn progress(
             metadata_revision: scan.metadata_revision,
             root_count: scan.root_count,
             root_digest: scan.root_digest,
+            root_set_digest: scan.root_set_digest,
             local_roots_digest: scan
                 .local_roots_digest
                 .ok_or(VersionReachabilityError::Corrupt)?,

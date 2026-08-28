@@ -22,7 +22,7 @@ use crate::{
     VersionReachabilityScanRequest, VersionReachabilityState, VersionReclaimMode,
     VersionRetentionCandidate, VersionRetentionCandidateReason, VersionRetentionError,
     VersionRetentionPageLimit, VersionRetentionPressure, VersionRetentionSelectionPolicy,
-    reachability_root_digest, reachability_subject_digest,
+    reachability_root_digest, reachability_root_set_digest, reachability_subject_digest,
 };
 
 #[test]
@@ -399,6 +399,10 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
     let resumed = reopened.begin_version_reachability_scan(&request)?;
     assert_eq!(resumed.state, VersionReachabilityState::CollectingRoots);
     assert_eq!(resumed.roots_received, 1);
+    assert!(matches!(
+        reopened.prepare_snapshot_restore(snapshot_restore_publication(&first, &second)?),
+        Err(PublicationError::CleanupFenced)
+    ));
     assert_eq!(
         reopened
             .append_version_reachability_roots(&page)?
@@ -684,6 +688,7 @@ fn reachability_request(
         metadata_revision,
         root_count: u64::try_from(roots.len())?,
         root_digest: reachability_root_digest(candidate.volume_id, metadata_revision, roots)?,
+        root_set_digest: reachability_root_set_digest(candidate.volume_id, roots)?,
     })
 }
 
