@@ -48,7 +48,11 @@ fn paged_layout_receipts_restart_and_exact_replay_are_durable()
     drop(catalog);
 
     let reopened = DurableContentCatalog::open(directory.path(), UnixMicros::new(6))?;
-    assert_eq!(reopened.resolve(request)?, Some(manifest));
+    let expired_resolution = ContentPublicationRequest {
+        observed_at: UnixMicros::new(101),
+        ..request
+    };
+    assert_eq!(reopened.resolve(expired_resolution)?, Some(manifest));
     let mut conflict = request;
     conflict.request_digest[0] ^= 1;
     assert!(matches!(

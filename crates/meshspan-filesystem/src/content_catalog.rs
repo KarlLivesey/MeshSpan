@@ -72,7 +72,7 @@ impl DurableContentCatalog {
     ///
     /// Rejects expired/malformed input and conflicting operation or manifest reuse.
     pub fn begin(&mut self, request: ContentPublicationRequest) -> Result<(), ContentCatalogError> {
-        validate_request(request)?;
+        validate_live_request(request)?;
         if let Some(stored) = load_request(&self.connection, request.operation_id)? {
             return if stored.same_intent(request) {
                 Ok(())
@@ -108,6 +108,7 @@ impl DurableContentCatalog {
         request: ContentPublicationRequest,
         chunks: &[PreparedContentChunk],
     ) -> Result<(), ContentCatalogError> {
+        validate_live_request(request)?;
         validate_exact_request(&self.connection, request)?;
         if chunks.is_empty()
             || chunks.len() > MAXIMUM_PAGE_ITEMS
@@ -156,6 +157,7 @@ impl DurableContentCatalog {
         chunk_bytes: u64,
         wrapped_key: WrappedContentKey,
     ) -> Result<ManifestPublication, ContentCatalogError> {
+        validate_live_request(request)?;
         validate_exact_request(&self.connection, request)?;
         if chunk_bytes == 0 || completed.logical_length != request.logical_length {
             return Err(ContentCatalogError::InvalidInput);
@@ -383,8 +385,16 @@ fn validate_request(request: ContentPublicationRequest) -> Result<(), ContentCat
     if request.format_version == 0
         || request.logical_length > MAXIMUM_SQLITE_INTEGER
         || request.authorization_revision.get() == 0
-        || request.observed_at >= request.deadline
     {
+        Err(ContentCatalogError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_live_request(request: ContentPublicationRequest) -> Result<(), ContentCatalogError> {
+    validate_request(request)?;
+    if request.observed_at >= request.deadline {
         Err(ContentCatalogError::InvalidInput)
     } else {
         Ok(())
