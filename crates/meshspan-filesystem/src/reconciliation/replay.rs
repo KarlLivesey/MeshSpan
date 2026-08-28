@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use meshspan_domain::{NamespaceCommitId, ObjectId, ObjectRevisionId};
+use meshspan_domain::{FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId};
 
 use super::{
     BranchMutation, BranchMutationIntent, ReconciliationCommit, ReconciliationCommitPayload,
@@ -18,7 +18,10 @@ mod digest;
 mod naming;
 
 use digest::replay_digest;
-use naming::{derived_object, derived_revision, path_key, path_prefix, recovered_path};
+use naming::{
+    derived_file_version, derived_object, derived_operation, derived_revision, path_key,
+    path_prefix, recovered_path,
+};
 
 /// One exact namespace entry visible at the converged replay base.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,6 +75,12 @@ pub struct NamespaceReplayAction {
     pub source_object_revision_id: ObjectRevisionId,
     /// Effective immutable leaf revision selected by the target path.
     pub target_object_revision_id: ObjectRevisionId,
+    /// Exact target leaf revision replaced by this action, if any.
+    pub target_prior_object_revision_id: Option<ObjectRevisionId>,
+    /// Effective file version; derived for a recovered logical copy and absent for directories.
+    pub target_file_version_id: Option<FileVersionId>,
+    /// Deterministic publication identity used only when a recovered file version is cloned.
+    pub target_publication_operation_id: Option<OperationId>,
     /// Exact target ancestor revisions in root-to-leaf order.
     pub target_ancestors: Vec<DirectoryRevisionTransition>,
     /// Resulting root revision after this action, unchanged only for exact inclusion.
@@ -132,6 +141,9 @@ enum LeafSelection {
         path: NamespacePath,
         object_id: ObjectId,
         revision_id: ObjectRevisionId,
+        prior_revision_id: Option<ObjectRevisionId>,
+        file_version_id: Option<FileVersionId>,
+        publication_operation_id: Option<OperationId>,
         generation: u64,
         disposition: NamespaceReplayDisposition,
     },
@@ -225,6 +237,9 @@ impl ReplayState {
             path: target_path,
             object_id: target_object,
             revision_id: target_revision,
+            prior_revision_id,
+            file_version_id,
+            publication_operation_id,
             generation,
             disposition,
         } = selection
@@ -273,6 +288,9 @@ impl ReplayState {
             target_object_id: target_object,
             source_object_revision_id: intent.object_revision_id,
             target_object_revision_id: target_revision,
+            target_prior_object_revision_id: prior_revision_id,
+            target_file_version_id: file_version_id,
+            target_publication_operation_id: publication_operation_id,
             target_ancestors,
             target_root_object_revision_id: root_revision,
             mutation: intent.mutation,
@@ -336,6 +354,25 @@ impl ReplayState {
         } else {
             self.recovered_target(plan_digest, commit, intent, &selected_path)?
         };
+        let prior_revision_id = current.as_ref().map(|entry| entry.revision_id);
+        let (file_version_id, publication_operation_id) = match intent.mutation {
+            BranchMutation::CreateDirectory => (None, None),
+            BranchMutation::File { version_id } if object_id == intent.object_id => {
+                (Some(version_id), None)
+            }
+            BranchMutation::File { version_id } => (
+                Some(derived_file_version(
+                    plan_digest,
+                    commit.commit_id,
+                    version_id,
+                )?),
+                Some(derived_operation(
+                    plan_digest,
+                    commit.commit_id,
+                    commit.operation_id,
+                )?),
+            ),
+        };
         let generation =
             if disposition == NamespaceReplayDisposition::Recovered && path != intent.path {
                 1
@@ -348,6 +385,9 @@ impl ReplayState {
             path,
             object_id,
             revision_id,
+            prior_revision_id,
+            file_version_id,
+            publication_operation_id,
             generation,
             disposition,
         })
@@ -635,6 +675,12 @@ fn already_applied(
         target_object_id: intent.object_id,
         source_object_revision_id: intent.object_revision_id,
         target_object_revision_id: intent.object_revision_id,
+        target_prior_object_revision_id: Some(intent.object_revision_id),
+        target_file_version_id: match intent.mutation {
+            BranchMutation::File { version_id } => Some(version_id),
+            BranchMutation::CreateDirectory => None,
+        },
+        target_publication_operation_id: None,
         target_ancestors: Vec::new(),
         target_root_object_revision_id: root,
         mutation: intent.mutation,

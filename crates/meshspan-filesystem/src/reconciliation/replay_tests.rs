@@ -124,6 +124,22 @@ fn concurrent_file_loser_and_its_later_edit_follow_one_recovered_copy()
     assert_eq!(recovered.target_object_id, recovered_edit.target_object_id);
     assert_ne!(recovered.target_object_id, recovered.source_object_id);
     assert_ne!(
+        recovered.target_file_version_id,
+        match recovered.mutation {
+            BranchMutation::File { version_id } => Some(version_id),
+            BranchMutation::CreateDirectory => None,
+        }
+    );
+    assert!(recovered.target_publication_operation_id.is_some());
+    assert_eq!(
+        recovered_edit.target_prior_object_revision_id,
+        Some(recovered.target_object_revision_id)
+    );
+    assert_ne!(
+        recovered.target_file_version_id,
+        recovered_edit.target_file_version_id
+    );
+    assert_ne!(
         recovered.target_object_revision_id,
         recovered_edit.target_object_revision_id
     );

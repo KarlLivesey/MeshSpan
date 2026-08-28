@@ -2,7 +2,7 @@
 
 //! Canonical digest for exact namespace replay plans.
 
-use meshspan_domain::ObjectRevisionId;
+use meshspan_domain::{FileVersionId, ObjectRevisionId, OperationId};
 
 use super::naming::path_key;
 use super::{NamespaceReplayAction, NamespaceReplayBase, NamespaceReplayDisposition};
@@ -44,6 +44,17 @@ fn update_action(digest: &mut blake3::Hasher, action: &NamespaceReplayAction) {
     digest.update(&action.target_object_id.as_bytes());
     digest.update(&action.source_object_revision_id.as_bytes());
     digest.update(&action.target_object_revision_id.as_bytes());
+    update_optional_revision(digest, action.target_prior_object_revision_id);
+    update_optional_identifier(
+        digest,
+        action.target_file_version_id.map(FileVersionId::as_bytes),
+    );
+    update_optional_identifier(
+        digest,
+        action
+            .target_publication_operation_id
+            .map(OperationId::as_bytes),
+    );
     match action.mutation {
         BranchMutation::File { version_id } => {
             digest.update(&[1]);
@@ -105,9 +116,13 @@ fn update_path(digest: &mut blake3::Hasher, path: &NamespacePath) {
 }
 
 fn update_optional_revision(digest: &mut blake3::Hasher, revision: Option<ObjectRevisionId>) {
-    if let Some(revision) = revision {
+    update_optional_identifier(digest, revision.map(ObjectRevisionId::as_bytes));
+}
+
+fn update_optional_identifier(digest: &mut blake3::Hasher, value: Option<[u8; 16]>) {
+    if let Some(value) = value {
         digest.update(&[1]);
-        digest.update(&revision.as_bytes());
+        digest.update(&value);
     } else {
         digest.update(&[0]);
     }
