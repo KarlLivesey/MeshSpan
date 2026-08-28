@@ -8,8 +8,8 @@ use meshspan_domain::{NodeId, OperationId, PartitionId, QuorumPlanId};
 
 use super::{
     AppendRequest, AppendResponse, ConsensusCore, CoreConfig, CoreEffect, CoreError, CoreInput,
-    CoreMessage, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId, Role,
-    VoteResponse,
+    CoreMessage, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
+    ReadBarrierId, Role, VoteResponse,
 };
 use crate::{compile_plan, flat_plan};
 
@@ -93,6 +93,7 @@ fn three_voters_require_peer_election_and_commit_acknowledgements() -> Result<()
             accepted: true,
             matched_index: 1,
             next_index_hint: 2,
+            read_barrier_id: None,
         }),
     )?)?;
     assert_eq!(core.commit_index(), 1);
@@ -122,6 +123,7 @@ fn four_voters_elect_with_three_and_commit_with_two() -> Result<(), Box<dyn Erro
             accepted: true,
             matched_index: 1,
             next_index_hint: 2,
+            read_barrier_id: None,
         }),
     )?)?;
     assert_eq!(core.commit_index(), 1);
@@ -174,6 +176,7 @@ fn higher_term_is_persisted_before_step_down() -> Result<(), Box<dyn Error>> {
             accepted: false,
             matched_index: 0,
             next_index_hint: 1,
+            read_barrier_id: None,
         }),
     )?)?;
     let persistence_id = only_persistence_id(&effects)?;
@@ -188,6 +191,84 @@ fn higher_term_is_persisted_before_step_down() -> Result<(), Box<dyn Error>> {
         [CoreEffect::RoleChanged {
             role: Role::Follower,
             term: 2
+        }]
+    ));
+    Ok(())
+}
+
+#[test]
+fn read_barrier_requires_current_read_quorum_response() -> Result<(), Box<dyn Error>> {
+    let mut core = elected_core(3, 2)?;
+    let read_barrier_id = ReadBarrierId(41);
+    let effects = core.step(CoreInput::BeginReadBarrier(read_barrier_id))?;
+    assert_eq!(effects.len(), 2);
+    assert!(effects.iter().all(|effect| matches!(
+        effect,
+        CoreEffect::Send {
+            message: CoreMessage::AppendRequest(AppendRequest {
+                read_barrier_id: Some(ReadBarrierId(41)),
+                ..
+            }),
+            ..
+        }
+    )));
+
+    let effects = core.step(message(
+        2,
+        CoreMessage::AppendResponse(AppendResponse {
+            term: 1,
+            accepted: false,
+            matched_index: 0,
+            next_index_hint: 1,
+            read_barrier_id: Some(read_barrier_id),
+        }),
+    )?)?;
+    assert!(matches!(
+        effects.as_slice(),
+        [CoreEffect::ReadBarrierReady {
+            read_barrier_id: ReadBarrierId(41),
+            applied_index: 0
+        }]
+    ));
+    Ok(())
+}
+
+#[test]
+fn read_barrier_waits_for_local_state_machine_application() -> Result<(), Box<dyn Error>> {
+    let mut core = elected_core(3, 2)?;
+    let persistence_id = only_persistence_id(&core.step(proposal(1, b"write".to_vec())?)?)?;
+    core.step(CoreInput::Persisted(persistence_id))?;
+    core.step(message(
+        2,
+        CoreMessage::AppendResponse(AppendResponse {
+            term: 1,
+            accepted: true,
+            matched_index: 1,
+            next_index_hint: 2,
+            read_barrier_id: None,
+        }),
+    )?)?;
+
+    let read_barrier_id = ReadBarrierId(42);
+    core.step(CoreInput::BeginReadBarrier(read_barrier_id))?;
+    let effects = core.step(message(
+        2,
+        CoreMessage::AppendResponse(AppendResponse {
+            term: 1,
+            accepted: true,
+            matched_index: 1,
+            next_index_hint: 2,
+            read_barrier_id: Some(read_barrier_id),
+        }),
+    )?)?;
+    assert!(effects.is_empty());
+
+    let effects = core.step(CoreInput::AppliedThrough(1))?;
+    assert!(matches!(
+        effects.as_slice(),
+        [CoreEffect::ReadBarrierReady {
+            read_barrier_id: ReadBarrierId(42),
+            applied_index: 1
         }]
     ));
     Ok(())
@@ -235,6 +316,7 @@ fn conflicting_uncommitted_tail_is_replaced_but_committed_tail_is_protected()
             accepted: true,
             matched_index: 2,
             next_index_hint: 3,
+            read_barrier_id: None,
         }),
     )?)?;
     assert_eq!(follower.commit_index(), 2);
@@ -349,6 +431,7 @@ fn append_after(
             previous_digest,
             entries: vec![entry],
             leader_commit_index: 0,
+            read_barrier_id: None,
             membership_epoch: 1,
             plan_digest: fixture_plan_digest()?,
         }),

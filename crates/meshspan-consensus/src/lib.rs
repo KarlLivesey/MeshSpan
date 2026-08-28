@@ -8,7 +8,7 @@ mod quorum;
 pub use core::{
     AppendRequest, AppendResponse, ConsensusCore, CoreConfig, CoreEffect, CoreError, CoreInput,
     CoreMessage, DurableMutation, LogEntry, LogPosition, MemberIncarnations, PersistenceId,
-    ProposalId, Role, VoteRequest, VoteResponse,
+    ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
 };
 
 pub use quorum::{

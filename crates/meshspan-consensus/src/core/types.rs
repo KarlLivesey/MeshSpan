@@ -110,6 +110,10 @@ pub struct PersistenceId(pub u64);
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProposalId(pub u64);
 
+/// Exact positive local linearizable-read correlation identity.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ReadBarrierId(pub u64);
+
 /// Current volatile role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
@@ -215,6 +219,8 @@ pub struct AppendRequest {
     pub entries: Vec<LogEntry>,
     /// Leader's current committed index.
     pub leader_commit_index: u64,
+    /// Optional exact linearizable-read probe correlation.
+    pub read_barrier_id: Option<ReadBarrierId>,
     /// Exact membership epoch.
     pub membership_epoch: u64,
     /// Exact compiled plan digest.
@@ -232,6 +238,8 @@ pub struct AppendResponse {
     pub matched_index: u64,
     /// Positive next-index hint when rejected or caught up.
     pub next_index_hint: u64,
+    /// Exact read probe being answered, if the request carried one.
+    pub read_barrier_id: Option<ReadBarrierId>,
 }
 
 /// Closed peer messages owned by the consensus core.
@@ -274,6 +282,8 @@ pub enum CoreInput {
         /// Bounded canonical command bytes.
         command: Vec<u8>,
     },
+    /// Current leader begins one quorum-confirmed linearizable read barrier.
+    BeginReadBarrier(ReadBarrierId),
     /// State-machine driver applied every committed entry through this index.
     AppliedThrough(u64),
 }
@@ -325,6 +335,13 @@ pub enum CoreEffect {
         /// Contiguous entries above the prior commit index.
         entries: Vec<LogEntry>,
     },
+    /// Read quorum is current and the local state machine has applied this position.
+    ReadBarrierReady {
+        /// Caller correlation.
+        read_barrier_id: ReadBarrierId,
+        /// Minimum state-machine position safe to read.
+        applied_index: u64,
+    },
     /// Input cannot complete on this node without inventing success.
     Rejected {
         /// Stable rejection category.
@@ -362,6 +379,9 @@ pub(super) fn validate_append_entries(request: &AppendRequest) -> Result<(), Cor
     if request.term == 0
         || !request.previous.is_valid()
         || request.entries.len() > MAXIMUM_APPEND_ENTRIES
+        || request
+            .read_barrier_id
+            .is_some_and(|read_barrier_id| read_barrier_id.0 == 0)
         || (request.previous == LogPosition::GENESIS && request.previous_digest != [0; 32])
     {
         return Err(CoreError::InvalidInput);

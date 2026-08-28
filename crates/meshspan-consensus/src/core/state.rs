@@ -8,12 +8,13 @@ use meshspan_domain::{NodeId, OperationId};
 
 use super::types::{
     AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
-    DurableMutation, LogEntry, LogPosition, PersistenceId, ProposalId, Role, VoteRequest,
-    VoteResponse, validate_append_entries,
+    DurableMutation, LogEntry, LogPosition, PersistenceId, ProposalId, ReadBarrierId, Role,
+    VoteRequest, VoteResponse, validate_append_entries,
 };
 use crate::QuorumFamily;
 
 const MAXIMUM_APPEND_ENTRIES: usize = 64;
+const MAXIMUM_PENDING_READ_BARRIERS: usize = 1_024;
 
 enum RoleState {
     Follower,
@@ -24,6 +25,13 @@ enum RoleState {
 struct LeaderState {
     matched: BTreeMap<NodeId, u64>,
     next: BTreeMap<NodeId, u64>,
+    read_barriers: BTreeMap<ReadBarrierId, ReadBarrierState>,
+}
+
+struct ReadBarrierState {
+    acknowledgements: BTreeSet<NodeId>,
+    required_applied_index: u64,
+    quorum_confirmed: bool,
 }
 
 struct PendingPersistence {
@@ -43,6 +51,7 @@ enum AfterPersistence {
         leader: NodeId,
         leader_commit_index: u64,
         accepted: bool,
+        read_barrier_id: Option<ReadBarrierId>,
     },
     Proposal {
         proposal_id: ProposalId,
@@ -166,6 +175,9 @@ impl ConsensusCore {
                 command_version,
                 command,
             } => self.propose(proposal_id, operation_id, command_version, command),
+            CoreInput::BeginReadBarrier(read_barrier_id) => {
+                self.begin_read_barrier(read_barrier_id)
+            }
             CoreInput::AppliedThrough(index) => self.applied_through(index),
         }
     }
@@ -293,7 +305,11 @@ impl ConsensusCore {
             return Err(CoreError::InvalidInput);
         }
         if request.term < self.current_term {
-            return Ok(vec![self.append_response_effect(from, false)]);
+            return Ok(vec![self.append_response_effect(
+                from,
+                false,
+                request.read_barrier_id,
+            )]);
         }
         let previous_matches = self.position_matches(request.previous, request.previous_digest);
         if !previous_matches {
@@ -309,10 +325,15 @@ impl ConsensusCore {
                         leader: from,
                         leader_commit_index: 0,
                         accepted: false,
+                        read_barrier_id: request.read_barrier_id,
                     },
                 );
             }
-            return Ok(vec![self.append_response_effect(from, false)]);
+            return Ok(vec![self.append_response_effect(
+                from,
+                false,
+                request.read_barrier_id,
+            )]);
         }
         let (truncate_from, append) = self.log_delta(&request.entries)?;
         let changes_term = request.term > self.current_term;
@@ -328,12 +349,13 @@ impl ConsensusCore {
                     leader: from,
                     leader_commit_index: request.leader_commit_index,
                     accepted: true,
+                    read_barrier_id: request.read_barrier_id,
                 },
             );
         }
         self.follow_leader(Some(from));
         let mut effects = self.advance_follower_commit(request.leader_commit_index)?;
-        effects.push(self.append_response_effect(from, true));
+        effects.push(self.append_response_effect(from, true, request.read_barrier_id));
         Ok(effects)
     }
 
@@ -342,7 +364,12 @@ impl ConsensusCore {
         from: NodeId,
         response: AppendResponse,
     ) -> Result<Vec<CoreEffect>, CoreError> {
-        if response.term == 0 || response.next_index_hint == 0 {
+        if response.term == 0
+            || response.next_index_hint == 0
+            || response
+                .read_barrier_id
+                .is_some_and(|read_barrier_id| read_barrier_id.0 == 0)
+        {
             return Err(CoreError::InvalidInput);
         }
         if response.term > self.current_term {
@@ -377,8 +404,9 @@ impl ConsensusCore {
             leader.next.get(&from).copied().unwrap_or(1)
         };
         let mut effects = self.advance_leader_commit()?;
+        effects.extend(self.acknowledge_read_barrier(from, response.read_barrier_id)?);
         if peer_next <= last_index {
-            effects.push(self.append_effect(from)?);
+            effects.push(self.append_effect(from, None)?);
         }
         Ok(effects)
     }
@@ -419,12 +447,103 @@ impl ConsensusCore {
         )
     }
 
+    fn begin_read_barrier(
+        &mut self,
+        read_barrier_id: ReadBarrierId,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        if read_barrier_id.0 == 0 {
+            return Err(CoreError::InvalidInput);
+        }
+        let required_applied_index = self.commit_index;
+        let local_node_id = self.config.local_node_id;
+        let quorum_confirmed = self
+            .config
+            .plan
+            .satisfies(QuorumFamily::Read, &BTreeSet::from([local_node_id]));
+        {
+            let RoleState::Leader(leader) = &mut self.role else {
+                return Err(CoreError::NotLeader);
+            };
+            if leader.read_barriers.len() >= MAXIMUM_PENDING_READ_BARRIERS
+                || leader.read_barriers.contains_key(&read_barrier_id)
+            {
+                return Err(CoreError::InvalidInput);
+            }
+            leader.read_barriers.insert(
+                read_barrier_id,
+                ReadBarrierState {
+                    acknowledgements: BTreeSet::from([local_node_id]),
+                    required_applied_index,
+                    quorum_confirmed,
+                },
+            );
+        }
+        if quorum_confirmed {
+            return Ok(self.complete_read_barriers());
+        }
+        self.peers()
+            .into_iter()
+            .map(|peer| self.append_effect(peer, Some(read_barrier_id)))
+            .collect()
+    }
+
+    fn acknowledge_read_barrier(
+        &mut self,
+        from: NodeId,
+        read_barrier_id: Option<ReadBarrierId>,
+    ) -> Result<Vec<CoreEffect>, CoreError> {
+        let Some(read_barrier_id) = read_barrier_id else {
+            return Ok(Vec::new());
+        };
+        if read_barrier_id.0 == 0 {
+            return Err(CoreError::InvalidInput);
+        }
+        let RoleState::Leader(leader) = &mut self.role else {
+            return Ok(Vec::new());
+        };
+        let Some(barrier) = leader.read_barriers.get_mut(&read_barrier_id) else {
+            return Ok(Vec::new());
+        };
+        barrier.acknowledgements.insert(from);
+        barrier.quorum_confirmed = self
+            .config
+            .plan
+            .satisfies(QuorumFamily::Read, &barrier.acknowledgements);
+        Ok(self.complete_read_barriers())
+    }
+
+    fn complete_read_barriers(&mut self) -> Vec<CoreEffect> {
+        let RoleState::Leader(leader) = &mut self.role else {
+            return Vec::new();
+        };
+        let completed: Vec<(ReadBarrierId, u64)> = leader
+            .read_barriers
+            .iter()
+            .filter_map(|(id, barrier)| {
+                (barrier.quorum_confirmed && barrier.required_applied_index <= self.applied_index)
+                    .then_some((*id, barrier.required_applied_index))
+            })
+            .collect();
+        for (id, _) in &completed {
+            leader.read_barriers.remove(id);
+        }
+        completed
+            .into_iter()
+            .map(
+                |(read_barrier_id, applied_index)| CoreEffect::ReadBarrierReady {
+                    read_barrier_id,
+                    applied_index,
+                },
+            )
+            .collect()
+    }
+
     fn applied_through(&mut self, index: u64) -> Result<Vec<CoreEffect>, CoreError> {
         if index < self.applied_index || index > self.commit_index {
             return Err(CoreError::InvalidInput);
         }
         self.applied_index = index;
-        Ok(Vec::new())
+        Ok(self.complete_read_barriers())
     }
 
     fn begin_persistence(
@@ -463,6 +582,7 @@ impl ConsensusCore {
                 leader,
                 leader_commit_index,
                 accepted,
+                read_barrier_id,
             } => {
                 self.follow_leader(Some(leader));
                 let mut effects = if accepted {
@@ -470,7 +590,7 @@ impl ConsensusCore {
                 } else {
                     Vec::new()
                 };
-                effects.push(self.append_response_effect(to, accepted));
+                effects.push(self.append_response_effect(to, accepted, read_barrier_id));
                 Ok(effects)
             }
             AfterPersistence::Proposal {
@@ -531,14 +651,18 @@ impl ConsensusCore {
             matched.entry(member).or_insert(0);
             next.insert(member, next_index);
         }
-        self.role = RoleState::Leader(LeaderState { matched, next });
+        self.role = RoleState::Leader(LeaderState {
+            matched,
+            next,
+            read_barriers: BTreeMap::new(),
+        });
         self.leader_id = Some(self.config.local_node_id);
         let mut effects = vec![CoreEffect::RoleChanged {
             role: Role::Leader,
             term: self.current_term,
         }];
         for peer in self.peers() {
-            effects.push(self.append_effect(peer)?);
+            effects.push(self.append_effect(peer, None)?);
         }
         Ok(effects)
     }
@@ -563,7 +687,7 @@ impl ConsensusCore {
             position,
         }];
         for peer in self.peers() {
-            effects.push(self.append_effect(peer)?);
+            effects.push(self.append_effect(peer, None)?);
         }
         effects.extend(self.advance_leader_commit()?);
         Ok(effects)
@@ -631,7 +755,11 @@ impl ConsensusCore {
         })
     }
 
-    fn append_effect(&self, peer: NodeId) -> Result<CoreEffect, CoreError> {
+    fn append_effect(
+        &self,
+        peer: NodeId,
+        read_barrier_id: Option<ReadBarrierId>,
+    ) -> Result<CoreEffect, CoreError> {
         let RoleState::Leader(leader) = &self.role else {
             return Err(CoreError::NotLeader);
         };
@@ -668,6 +796,7 @@ impl ConsensusCore {
                 previous_digest,
                 entries,
                 leader_commit_index: self.commit_index,
+                read_barrier_id,
                 membership_epoch: self.config.plan.spec().membership_epoch,
                 plan_digest: self.config.plan.proof_digest(),
             }),
@@ -753,7 +882,12 @@ impl ConsensusCore {
         }
     }
 
-    fn append_response_effect(&self, to: NodeId, accepted: bool) -> CoreEffect {
+    fn append_response_effect(
+        &self,
+        to: NodeId,
+        accepted: bool,
+        read_barrier_id: Option<ReadBarrierId>,
+    ) -> CoreEffect {
         let last_index = self.last_position().index;
         let matched_index = if accepted { last_index } else { 0 };
         let next_index_hint = last_index.saturating_add(1).max(1);
@@ -764,6 +898,7 @@ impl ConsensusCore {
                 accepted,
                 matched_index,
                 next_index_hint,
+                read_barrier_id,
             }),
         }
     }
