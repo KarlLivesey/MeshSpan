@@ -16,7 +16,7 @@ use meshspan_domain::{
 };
 use meshspan_filesystem::{
     CompletedStage, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
-    ContentKeyEnvelopeCipher, ContentPublicationError, ContentPublicationRequest,
+    ContentKeyEnvelopeCipher, ContentPublicationError, ContentPublicationRequest, ContentReadError,
     ContentReadRequest, CreateDisposition, DirectoryPublication, DirectoryRevisionTransition,
     DurableContentPublisher, DurableContentReader, EncryptedContentChunk, FilesystemCommitService,
     FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleWriteRequest,
@@ -140,35 +140,13 @@ fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
     let registration = folder_registration()?;
     let mut random = FixedRandom;
     let folder = RegisteredFolder::register_new(&storage_path, registration, &mut random)?;
-    let provider = FolderShardStore::open(
-        folder,
-        &storage_state,
-        CapacityPolicy {
-            usage_limit: UsageLimit::DEFAULT,
-            repair_reserve_bytes: 0,
-            revision: Revision::new(1),
-        },
-        StoragePermitVerifier::new(
-            registration.mesh_id,
-            1,
-            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
-        )?,
-        UnixMicros::new(1),
-        &mut random,
-    )?;
-    let publisher = UnprotectedContentPublisher::open(
+    let fingerprint = folder.marker().fingerprint();
+    let provider = production_provider(folder, &storage_state, registration, UnixMicros::new(1))?;
+    let publisher = production_publisher(
         &filesystem_state,
-        UnixMicros::new(1),
         provider,
-        FixedRandom,
-        ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(1, [24; 32])?),
-        ContentChunkLimits::new(4)?,
-        UnprotectedContentAccess::new(
-            registration.mesh_id,
-            registration.target_id,
-            registration.generation,
-            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
-        )?,
+        registration,
+        UnixMicros::new(1),
     )?;
     let mut service =
         FilesystemCommitService::open(&filesystem_state, UnixMicros::new(1), publisher)?;
@@ -207,12 +185,16 @@ fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
         ],
     )?;
     service.commit_root_file(&request)?;
-    let flush = overwrite_through_handle(&mut service)?;
+    let (flush_request, flush_receipt) = overwrite_through_handle(&mut service)?;
     let mut publisher = service.into_content_publisher();
     let content_request = request.content_publication_request();
     assert_verified_range_read(&mut publisher, &request)?;
     assert_eq!(
-        read_published_version(&mut publisher, &filesystem_state, flush.file_version_id)?,
+        read_published_version(
+            &mut publisher,
+            &filesystem_state,
+            flush_receipt.file_version_id,
+        )?,
         b"heZZoworld"
     );
     assert_eq!(
@@ -226,6 +208,43 @@ fn production_publisher_chunks_encrypts_journals_and_reads_the_exact_file()
             .chunks
             .is_empty()
     );
+    drop(publisher.into_provider());
+    assert_flush_replays_after_restart(
+        &storage_path,
+        &storage_state,
+        &filesystem_state,
+        registration,
+        fingerprint,
+        flush_request,
+        flush_receipt,
+    )?;
+    Ok(())
+}
+
+fn assert_flush_replays_after_restart(
+    storage_path: &std::path::Path,
+    storage_state: &std::path::Path,
+    filesystem_state: &std::path::Path,
+    registration: FolderRegistration,
+    fingerprint: meshspan_storage::MarkerFingerprint,
+    request: FilesystemHandleFlushRequest,
+    receipt: meshspan_filesystem::NamespacePublicationReceipt,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let folder = RegisteredFolder::reopen(storage_path, registration, fingerprint)?;
+    let provider = production_provider(folder, storage_state, registration, UnixMicros::new(50))?;
+    let publisher = production_publisher(
+        filesystem_state,
+        provider,
+        registration,
+        UnixMicros::new(50),
+    )?;
+    let mut recovered =
+        FilesystemCommitService::open(filesystem_state, UnixMicros::new(50), publisher)?;
+    let expected = meshspan_filesystem::NamespacePublicationReceipt {
+        disposition: PublicationDisposition::Replayed,
+        ..receipt
+    };
+    assert_eq!(recovered.flush_handle(request)?, expected);
     Ok(())
 }
 
@@ -233,7 +252,13 @@ fn overwrite_through_handle(
     service: &mut FilesystemCommitService<
         UnprotectedContentPublisher<FolderShardStore, FixedRandom>,
     >,
-) -> Result<meshspan_filesystem::NamespacePublicationReceipt, Box<dyn std::error::Error>> {
+) -> Result<
+    (
+        FilesystemHandleFlushRequest,
+        meshspan_filesystem::NamespacePublicationReceipt,
+    ),
+    Box<dyn std::error::Error>,
+> {
     let principal_id = PrincipalId::from_bytes([20; 16])?;
     let gateway_node_id = NodeId::from_bytes([80; 16])?;
     let handle_id = HandleId::from_bytes([81; 16])?;
@@ -274,25 +299,72 @@ fn overwrite_through_handle(
         },
         observed_at: UnixMicros::new(20),
     })?;
-    service
-        .flush_handle(FilesystemHandleFlushRequest {
-            operation_id: OperationId::from_bytes([84; 16])?,
-            handle_id,
-            handle_fence: 1,
-            principal_id,
-            authorization_revision: Revision::new(9),
-            gateway_node_id,
-            expected_stage_sequence: 1,
-            final_length: 10,
-            sparse: false,
-            retain_superseded_history: true,
-            retention_policy_sequence: 1,
-            manifest_format_version: 1,
-            content_authorization_revision: Revision::new(9),
-            content_deadline: UnixMicros::new(400),
-            observed_at: UnixMicros::new(30),
-        })
-        .map_err(Into::into)
+    let flush = FilesystemHandleFlushRequest {
+        operation_id: OperationId::from_bytes([84; 16])?,
+        handle_id,
+        handle_fence: 1,
+        principal_id,
+        authorization_revision: Revision::new(9),
+        gateway_node_id,
+        expected_stage_sequence: 1,
+        final_length: 10,
+        sparse: false,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        manifest_format_version: 1,
+        content_authorization_revision: Revision::new(9),
+        content_deadline: UnixMicros::new(400),
+        observed_at: UnixMicros::new(30),
+    };
+    let receipt = service.flush_handle(flush)?;
+    Ok((flush, receipt))
+}
+
+fn production_provider(
+    folder: RegisteredFolder,
+    state_directory: &std::path::Path,
+    registration: FolderRegistration,
+    opened_at: UnixMicros,
+) -> Result<FolderShardStore, Box<dyn std::error::Error>> {
+    Ok(FolderShardStore::open(
+        folder,
+        state_directory,
+        CapacityPolicy {
+            usage_limit: UsageLimit::DEFAULT,
+            repair_reserve_bytes: 0,
+            revision: Revision::new(1),
+        },
+        StoragePermitVerifier::new(
+            registration.mesh_id,
+            1,
+            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
+        )?,
+        opened_at,
+        &mut FixedRandom,
+    )?)
+}
+
+fn production_publisher(
+    state_directory: &std::path::Path,
+    provider: FolderShardStore,
+    registration: FolderRegistration,
+    opened_at: UnixMicros,
+) -> Result<UnprotectedContentPublisher<FolderShardStore, FixedRandom>, Box<dyn std::error::Error>>
+{
+    Ok(UnprotectedContentPublisher::open(
+        state_directory,
+        opened_at,
+        provider,
+        FixedRandom,
+        ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(1, [24; 32])?),
+        ContentChunkLimits::new(4)?,
+        UnprotectedContentAccess::new(
+            registration.mesh_id,
+            registration.target_id,
+            registration.generation,
+            StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
+        )?,
+    )?)
 }
 
 fn read_published_version(
@@ -378,6 +450,23 @@ fn assert_verified_range_read(
         &mut range,
     )?;
     assert_eq!(range, b"llowor");
+    let mut substituted = ContentReadRequest {
+        operation_id: OperationId::from_bytes([74; 16])?,
+        content: PublishedContentReference {
+            publication_operation_id: request.completion.operation_id,
+            manifest: layout.manifest,
+        },
+        offset: 0,
+        length: 1,
+        authorization_revision: Revision::new(9),
+        deadline: UnixMicros::new(500),
+        observed_at: UnixMicros::new(20),
+    };
+    substituted.content.manifest.root_digest = [99; 32];
+    assert!(matches!(
+        publisher.stream_range(substituted, &mut Vec::new()),
+        Err(ContentReadError::Conflict)
+    ));
     Ok(())
 }
 

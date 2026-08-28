@@ -292,6 +292,14 @@ fn flush_plan_is_stable_across_restart_and_rejects_changed_retry()
         reopened.prepare_handle_flush(changed),
         Err(HandleError::OperationConflict)
     ));
+    reopened.test_connection().execute(
+        "UPDATE handle_flush_plans SET result_digest = zeroblob(32) WHERE operation_id = ?1",
+        [request.operation_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        reopened.prepare_handle_flush(request),
+        Err(HandleError::Corrupt)
+    ));
     Ok(())
 }
 
