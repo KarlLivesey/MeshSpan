@@ -50,7 +50,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         maximum_shard_bytes: usize,
     ) -> Result<Self, DataPlaneError> {
         if target_generation == 0 || maximum_shard_bytes == 0 {
-            return Err(DataPlaneError::InvalidMessage);
+            return Err(DataPlaneError::InvalidConfiguration);
         }
         Ok(Self {
             provider,
@@ -80,7 +80,27 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         let first = receive_data_control(&mut stream.receive, limits)
             .await?
             .into_inner();
-        match first.message.ok_or(DataPlaneError::InvalidMessage)? {
+        self.serve_message(
+            stream,
+            limits,
+            observed_at,
+            first.message.ok_or(DataPlaneError::InvalidMessage)?,
+        )
+        .await
+    }
+
+    pub(crate) const fn route(&self) -> (TargetId, u64) {
+        (self.target_id, self.target_generation)
+    }
+
+    pub(crate) async fn serve_message(
+        &mut self,
+        mut stream: AcceptedStream,
+        limits: WireLimits,
+        observed_at: UnixMicros,
+        message: Message,
+    ) -> Result<(), DataPlaneError> {
+        match message {
             Message::PutShardBegin(begin) => {
                 self.serve_put(&mut stream, limits, observed_at, begin)
                     .await

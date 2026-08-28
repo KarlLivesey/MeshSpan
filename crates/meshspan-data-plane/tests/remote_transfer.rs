@@ -10,13 +10,13 @@ use meshspan_contracts::{
     BoundedBytes, ReservationClass, ShardIdentity, ShardReadPermit, ShardWritePermit,
     StoragePermitMacKey, read_permit_mac, write_permit_mac,
 };
-use meshspan_data_plane::{RemoteShardService, get_shard, put_shard};
+use meshspan_data_plane::{DataPlaneError, RemoteShardService, get_shard, put_shard};
 use meshspan_domain::{
     EntropyError, MeshId, NodeId, OperationId, PartitionId, RandomSource, Revision, TargetId,
     UnixMicros,
 };
 use meshspan_protocol::WireLimits;
-use meshspan_protocol::v1::{ProtocolVersion, RequestHeader};
+use meshspan_protocol::v1::{ErrorCode, ProtocolVersion, RequestHeader};
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
     UsageLimit,
@@ -92,7 +92,7 @@ async fn real_mtls_stream_puts_and_gets_verified_folder_bytes() -> Result<(), Bo
     let write = fixture.write_permit(payload.len())?;
     let read = fixture.read_permit()?;
     let server_task = async {
-        for _ in 0..2 {
+        for _ in 0..3 {
             let stream = accept_stream(&server_connection).await?;
             service
                 .serve_stream(stream, limits, UnixMicros::new(20))
@@ -101,6 +101,19 @@ async fn real_mtls_stream_puts_and_gets_verified_folder_bytes() -> Result<(), Bo
         Ok::<_, Box<dyn Error>>(())
     };
     let client_task = async {
+        let mut forged = write;
+        forged.permit_digest[0] ^= 1;
+        assert!(matches!(
+            put_shard(
+                &client_connection,
+                request_header(fixture.mesh, client_node, forged.operation_id)?,
+                forged,
+                &payload,
+                limits,
+            )
+            .await,
+            Err(DataPlaneError::Remote(ErrorCode::Unauthorised))
+        ));
         let receipt = put_shard(
             &client_connection,
             request_header(fixture.mesh, client_node, write.operation_id)?,

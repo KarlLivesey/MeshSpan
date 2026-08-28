@@ -12,6 +12,9 @@ use crate::CapabilityCodecError;
 /// Failure while serving or invoking one private shard stream.
 #[derive(Debug, Error)]
 pub enum DataPlaneError {
+    /// A service/router bound, target set or target incarnation is invalid.
+    #[error("private shard service configuration is invalid")]
+    InvalidConfiguration,
     /// Authenticated QUIC framing or stream IO failed.
     #[error("private shard transport failed")]
     Transport(#[from] TransportError),

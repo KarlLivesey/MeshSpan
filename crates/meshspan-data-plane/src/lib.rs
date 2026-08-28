@@ -5,6 +5,7 @@
 mod capability;
 mod client;
 mod error;
+mod router;
 mod server;
 mod wire;
 
@@ -14,4 +15,5 @@ pub use capability::{
 };
 pub use client::{get_shard, put_shard};
 pub use error::DataPlaneError;
+pub use router::RemoteShardRouter;
 pub use server::RemoteShardService;
