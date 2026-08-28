@@ -210,6 +210,8 @@ fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
         repository.apply_committed(LogPosition { index: 4, term: 1 }, consume_context, &command)?;
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
 
+    assert_authoritative_join_projection(&repository)?;
+
     let database = repository.into_database();
     let (uses, nodes, learner, certificates): (i64, i64, i64, i64) =
         database.connection().query_row(
@@ -229,6 +231,24 @@ fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
     assert_eq!((uses, nodes, learner, certificates), (1, 1, 1, 1));
+    Ok(())
+}
+
+fn assert_authoritative_join_projection(
+    repository: &AuthoritativeRepository,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let membership = repository
+        .partition_membership()?
+        .ok_or("partition membership was absent after bootstrap")?;
+    assert_eq!(membership.revision(), Revision::new(1));
+    assert_eq!(
+        membership.active_voters(),
+        &std::collections::BTreeMap::from([(NodeId::from_bytes([135; 16])?, 1)])
+    );
+    assert_eq!(
+        membership.admitted_learners(),
+        &std::collections::BTreeMap::from([(NodeId::from_bytes([143; 16])?, 1)])
+    );
     Ok(())
 }
 

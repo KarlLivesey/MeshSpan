@@ -21,11 +21,12 @@ pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
 pub use repository::{
-    ApplyDisposition, AuthoritativeMetadataKernel, AuthoritativeRepository, CommandReceipt,
-    ConsensusStoreError, EntityKind, EntityReference, GroupMemberCursor, InvariantFinding,
-    InvariantKind, InvariantReport, LogPosition, NamespaceCursor, NamespaceRecord, Page, PageLimit,
-    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
-    PreservedVote, PrincipalKind, PrincipalRecord, RepositoryConformanceCheck,
-    RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
-    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
+    ApplyDisposition, AuthoritativeMembership, AuthoritativeMetadataKernel,
+    AuthoritativeRepository, CommandReceipt, ConsensusStoreError, EntityKind, EntityReference,
+    GroupMemberCursor, InvariantFinding, InvariantKind, InvariantReport, LogPosition,
+    NamespaceCursor, NamespaceRecord, Page, PageLimit, PartitionBackupManifest,
+    PartitionConsensusPersistence, PartitionSnapshotManifest, PreservedVote, PrincipalKind,
+    PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
+    RepositoryConformanceVector, RepositoryError, restore_partition_backup,
+    restore_partition_snapshot, run_repository_conformance,
 };

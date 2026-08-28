@@ -11,6 +11,7 @@ mod consensus;
 mod group_closure;
 mod identity;
 mod kernel;
+mod membership;
 mod namespace;
 mod query;
 mod quorum_plan;
@@ -30,6 +31,7 @@ pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, run_repository_conformance,
 };
+pub use membership::AuthoritativeMembership;
 pub use query::{
     GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
     PrincipalRecord,
@@ -177,6 +179,15 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<meshspan_domain::PrincipalId, GroupMemberCursor>, RepositoryError> {
         query::direct_group_members(&self.database, group_id, after, limit)
+    }
+
+    /// Returns the authoritative active-voter and admitted-learner projection, if bootstrapped.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on malformed identities, incarnations or unsupported role/state pairings.
+    pub fn partition_membership(&self) -> Result<Option<AuthoritativeMembership>, RepositoryError> {
+        membership::load(&self.database)
     }
 
     /// Creates a transactionally consistent SQLite backup and its exact manifest.
