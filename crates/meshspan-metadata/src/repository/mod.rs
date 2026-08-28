@@ -13,6 +13,7 @@ mod identity;
 mod kernel;
 mod namespace;
 mod query;
+mod quorum_plan;
 mod receipt;
 mod routing;
 mod snapshot;
@@ -205,6 +206,30 @@ impl AuthoritativeRepository {
         created_at: meshspan_domain::UnixMicros,
     ) -> Result<PartitionSnapshotManifest, RepositoryError> {
         snapshot::create_snapshot(&self.database, snapshot_id, destination, plan, created_at)
+    }
+
+    /// Installs the immutable bootstrap plan or verifies the exact existing durable plan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a different existing plan, unsafe record or database failure.
+    pub fn initialise_consensus_quorum_plan(
+        &mut self,
+        plan: &meshspan_consensus::CompiledQuorumPlan,
+        updated_at: meshspan_domain::UnixMicros,
+    ) -> Result<meshspan_consensus::ActiveQuorumPlan, ConsensusStoreError> {
+        quorum_plan::initialise(&mut self.database, plan, updated_at)
+    }
+
+    /// Loads and independently re-proves the exact durable stable or joint phase.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, corrupt, stale or unproved durable state.
+    pub fn load_active_consensus_quorum_plan(
+        &self,
+    ) -> Result<Option<meshspan_consensus::ActiveQuorumPlan>, ConsensusStoreError> {
+        quorum_plan::load(&self.database)
     }
 
     /// Runs bounded relational/domain checks that go beyond SQLite structural integrity.

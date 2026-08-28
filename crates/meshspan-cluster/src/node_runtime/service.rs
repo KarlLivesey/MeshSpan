@@ -54,8 +54,8 @@ pub async fn run_stage_three_node(
     arguments: impl Iterator<Item = String>,
 ) -> Result<(), NodeRuntimeError> {
     let config = NodeConfig::parse(arguments)?;
-    let repository = open_repository(&config)?;
-    let core = restore_core(&config, &repository)?;
+    let mut repository = open_repository(&config)?;
+    let core = restore_core(&config, &mut repository)?;
     let mut driver = PartitionConsensusDriver::new(core, repository);
     let (events, mut received_events) = mpsc::channel(EVENT_CAPACITY);
     let (peer_messages, received_peer_messages) = mpsc::channel(EVENT_CAPACITY);
@@ -87,29 +87,45 @@ fn open_repository(config: &NodeConfig) -> Result<AuthoritativeRepository, NodeR
 
 fn restore_core(
     config: &NodeConfig,
-    repository: &AuthoritativeRepository,
+    repository: &mut AuthoritativeRepository,
 ) -> Result<ConsensusCore, NodeRuntimeError> {
-    let voters = (1..=3).map(node_id).collect::<Result<BTreeSet<_>, _>>()?;
-    let plan = compile_plan(flat_plan(
-        QuorumPlanId::from_bytes([7; 16])?,
-        MEMBERSHIP_EPOCH,
-        voters.clone(),
-        BTreeSet::new(),
-    )?)?;
-    let incarnations =
-        MemberIncarnations::new(voters.into_iter().map(|node| (node, 1)).collect(), &plan)?;
-    let durable = repository.load_consensus_state(MEMBERSHIP_EPOCH)?;
-    ConsensusCore::restore(
+    let bootstrap_plan = bootstrap_plan()?;
+    let active_plan = match repository.load_active_consensus_quorum_plan()? {
+        Some(plan) => plan,
+        None => repository.initialise_consensus_quorum_plan(&bootstrap_plan, now())?,
+    };
+    let recovery_plan = active_plan.recovery_configuration_plan().clone();
+    let incarnations = MemberIncarnations::new(
+        active_plan
+            .members()
+            .into_iter()
+            .map(|node| (node, 1))
+            .collect(),
+        &recovery_plan,
+    )?;
+    let durable = repository.load_consensus_state(active_plan.membership_epoch())?;
+    ConsensusCore::restore_active(
         CoreConfig {
             partition_id: partition_id()?,
             local_node_id: config.node_id,
             local_incarnation: 1,
-            plan,
+            plan: recovery_plan,
             member_incarnations: incarnations,
         },
         durable,
+        active_plan,
     )
     .map_err(Into::into)
+}
+
+fn bootstrap_plan() -> Result<meshspan_consensus::CompiledQuorumPlan, NodeRuntimeError> {
+    let voters = (1..=3).map(node_id).collect::<Result<BTreeSet<_>, _>>()?;
+    Ok(compile_plan(flat_plan(
+        QuorumPlanId::from_bytes([7; 16])?,
+        MEMBERSHIP_EPOCH,
+        voters,
+        BTreeSet::new(),
+    )?)?)
 }
 
 fn spawn_peer_forwarder(

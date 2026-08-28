@@ -4,17 +4,19 @@
 
 mod core;
 mod membership;
+mod plan_record;
 mod quorum;
 
 pub use membership::{
     CatchUpEvidence, JointQuorumPlan, MembershipChangeError, PlannedPromotion,
     plan_next_flat_promotion, recommended_voter_count,
 };
+pub use plan_record::{ActiveQuorumPlan, QuorumPlanRecordError};
 
 pub use core::{
     AppendRequest, AppendResponse, ConsensusCore, CoreConfig, CoreEffect, CoreError, CoreInput,
-    CoreMessage, DurableCoreState, DurableMutation, LogEntry, LogPosition, MemberIncarnations,
-    PersistenceId, ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
+    CoreMessage, DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition,
+    MemberIncarnations, PersistenceId, ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
 };
 
 pub use quorum::{

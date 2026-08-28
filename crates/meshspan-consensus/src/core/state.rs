@@ -8,10 +8,10 @@ use meshspan_domain::{NodeId, OperationId};
 
 use super::types::{
     AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
-    DurableCoreState, DurableMutation, LogEntry, LogPosition, PersistenceId, ProposalId,
-    ReadBarrierId, Role, VoteRequest, VoteResponse, validate_append_entries,
+    DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition, PersistenceId,
+    ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse, validate_append_entries,
 };
-use crate::{CompiledQuorumPlan, JointQuorumPlan, QuorumFamily};
+use crate::{ActiveQuorumPlan, CompiledQuorumPlan, JointQuorumPlan, QuorumFamily};
 
 const MAXIMUM_APPEND_ENTRIES: usize = 64;
 const MAXIMUM_PENDING_READ_BARRIERS: usize = 1_024;
@@ -20,11 +20,6 @@ enum RoleState {
     Follower,
     Candidate { votes: BTreeSet<NodeId> },
     Leader(LeaderState),
-}
-
-enum ActivePlan {
-    Stable(Box<CompiledQuorumPlan>),
-    Joint(Box<JointQuorumPlan>),
 }
 
 struct LeaderState {
@@ -71,7 +66,7 @@ enum AfterPersistence {
 /// messages or commit evidence.
 pub struct ConsensusCore {
     config: CoreConfig,
-    active_plan: ActivePlan,
+    active_plan: ActiveQuorumPlan,
     current_term: u64,
     voted_for: Option<NodeId>,
     log: Vec<LogEntry>,
@@ -113,7 +108,7 @@ impl ConsensusCore {
             return Err(CoreError::InvalidConfiguration);
         }
         validate_durable_state(&durable)?;
-        let active_plan = ActivePlan::Stable(Box::new(config.plan.clone()));
+        let active_plan = ActiveQuorumPlan::Stable(Box::new(config.plan.clone()));
         Ok(Self {
             config,
             active_plan,
@@ -127,6 +122,28 @@ impl ConsensusCore {
             pending: None,
             next_persistence_id: 1,
         })
+    }
+
+    /// Restores a core from a durable stable or joint phase after independently decoding its plan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a plan whose members do not exactly match accepted incarnations or whose epoch
+    /// differs from durable vote state.
+    pub fn restore_active(
+        config: CoreConfig,
+        durable: DurableCoreState,
+        active_plan: ActiveQuorumPlan,
+    ) -> Result<Self, CoreError> {
+        if !config
+            .member_incarnations
+            .matches_members(&active_plan.members())
+        {
+            return Err(CoreError::InvalidConfiguration);
+        }
+        let mut core = Self::restore(config, durable)?;
+        core.active_plan = active_plan;
+        Ok(core)
     }
 
     /// Returns current volatile role.
@@ -235,6 +252,7 @@ impl ConsensusCore {
                 truncate_from: None,
                 append: Vec::new(),
                 membership_epoch: None,
+                quorum_plan: None,
             },
             AfterPersistence::Campaign,
         )
@@ -294,6 +312,7 @@ impl ConsensusCore {
                     truncate_from: None,
                     append: Vec::new(),
                     membership_epoch: None,
+                    quorum_plan: None,
                 },
                 AfterPersistence::VoteReply { to: from, granted },
             );
@@ -362,6 +381,7 @@ impl ConsensusCore {
                         truncate_from: None,
                         append: Vec::new(),
                         membership_epoch: None,
+                        quorum_plan: None,
                     },
                     AfterPersistence::AppendReply {
                         to: from,
@@ -387,6 +407,7 @@ impl ConsensusCore {
                     truncate_from,
                     append,
                     membership_epoch: None,
+                    quorum_plan: None,
                 },
                 AfterPersistence::AppendReply {
                     to: from,
@@ -485,6 +506,7 @@ impl ConsensusCore {
                 truncate_from: None,
                 append: vec![entry],
                 membership_epoch: None,
+                quorum_plan: None,
             },
             AfterPersistence::Proposal {
                 proposal_id,
@@ -536,7 +558,7 @@ impl ConsensusCore {
         joint_plan: Box<JointQuorumPlan>,
         committed_position: LogPosition,
     ) -> Result<Vec<CoreEffect>, CoreError> {
-        let ActivePlan::Stable(current) = &self.active_plan else {
+        let ActiveQuorumPlan::Stable(current) = &self.active_plan else {
             return Err(CoreError::InvalidInput);
         };
         if current.proof_digest() != joint_plan.old_plan().proof_digest()
@@ -552,6 +574,10 @@ impl ConsensusCore {
                 truncate_from: None,
                 append: Vec::new(),
                 membership_epoch: Some(joint_plan.membership_epoch()),
+                quorum_plan: Some(DurableQuorumPlan {
+                    active_plan: ActiveQuorumPlan::Joint(joint_plan.clone()),
+                    activated_position: committed_position,
+                }),
             },
             AfterPersistence::ActivateJoint(joint_plan),
         )
@@ -562,7 +588,7 @@ impl ConsensusCore {
         plan: Box<CompiledQuorumPlan>,
         committed_position: LogPosition,
     ) -> Result<Vec<CoreEffect>, CoreError> {
-        let ActivePlan::Joint(joint) = &self.active_plan else {
+        let ActiveQuorumPlan::Joint(joint) = &self.active_plan else {
             return Err(CoreError::InvalidInput);
         };
         if plan.proof_digest() != joint.new_plan().proof_digest()
@@ -578,6 +604,10 @@ impl ConsensusCore {
                 truncate_from: None,
                 append: Vec::new(),
                 membership_epoch: Some(plan.spec().membership_epoch),
+                quorum_plan: Some(DurableQuorumPlan {
+                    active_plan: ActiveQuorumPlan::Stable(plan.clone()),
+                    activated_position: committed_position,
+                }),
             },
             AfterPersistence::ActivateStable(plan),
         )
@@ -722,15 +752,15 @@ impl ConsensusCore {
                 }])
             }
             AfterPersistence::ActivateJoint(joint_plan) => {
-                Ok(self.finish_plan_activation(ActivePlan::Joint(joint_plan)))
+                Ok(self.finish_plan_activation(ActiveQuorumPlan::Joint(joint_plan)))
             }
             AfterPersistence::ActivateStable(plan) => {
-                Ok(self.finish_plan_activation(ActivePlan::Stable(plan)))
+                Ok(self.finish_plan_activation(ActiveQuorumPlan::Stable(plan)))
             }
         }
     }
 
-    fn finish_plan_activation(&mut self, active_plan: ActivePlan) -> Vec<CoreEffect> {
+    fn finish_plan_activation(&mut self, active_plan: ActiveQuorumPlan) -> Vec<CoreEffect> {
         self.active_plan = active_plan;
         let may_lead = self
             .active_eligible_leaders()
@@ -1009,6 +1039,7 @@ impl ConsensusCore {
                 truncate_from: None,
                 append: Vec::new(),
                 membership_epoch: None,
+                quorum_plan: None,
             },
             AfterPersistence::StepDown,
         )
@@ -1093,56 +1124,27 @@ impl ConsensusCore {
     }
 
     fn active_satisfies(&self, family: QuorumFamily, acknowledgements: &BTreeSet<NodeId>) -> bool {
-        match &self.active_plan {
-            ActivePlan::Stable(plan) => plan.satisfies(family, acknowledgements),
-            ActivePlan::Joint(plan) => plan.satisfies(family, acknowledgements),
-        }
+        self.active_plan.satisfies(family, acknowledgements)
     }
 
     fn active_membership_epoch(&self) -> u64 {
-        match &self.active_plan {
-            ActivePlan::Stable(plan) => plan.spec().membership_epoch,
-            ActivePlan::Joint(plan) => plan.membership_epoch(),
-        }
+        self.active_plan.membership_epoch()
     }
 
     fn active_plan_digest(&self) -> [u8; 32] {
-        match &self.active_plan {
-            ActivePlan::Stable(plan) => plan.proof_digest(),
-            ActivePlan::Joint(plan) => plan.proof_digest(),
-        }
+        self.active_plan.proof_digest()
     }
 
     fn active_voters(&self) -> BTreeSet<NodeId> {
-        match &self.active_plan {
-            ActivePlan::Stable(plan) => plan.spec().voters.clone(),
-            ActivePlan::Joint(plan) => plan
-                .old_plan()
-                .spec()
-                .voters
-                .union(&plan.new_plan().spec().voters)
-                .copied()
-                .collect(),
-        }
+        self.active_plan.voters()
     }
 
     fn active_members(&self) -> BTreeSet<NodeId> {
-        match &self.active_plan {
-            ActivePlan::Stable(plan) => plan
-                .spec()
-                .voters
-                .union(&plan.spec().learners)
-                .copied()
-                .collect(),
-            ActivePlan::Joint(plan) => plan.members(),
-        }
+        self.active_plan.members()
     }
 
     fn active_eligible_leaders(&self) -> BTreeSet<NodeId> {
-        match &self.active_plan {
-            ActivePlan::Stable(plan) => plan.spec().eligible_leaders.clone(),
-            ActivePlan::Joint(plan) => plan.eligible_leaders(),
-        }
+        self.active_plan.eligible_leaders()
     }
 
     fn last_position(&self) -> LogPosition {
