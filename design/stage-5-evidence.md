@@ -190,9 +190,13 @@ copy-on-write filesystem service. This document records executable evidence only
    derives its expiry, and advances beyond the current instant without replaying
    a storm of missed intervals. Sequence/due CAS, disabled and premature runs,
    stale heads, restart/replay, duplicated configuration corruption and every
-   injected apply boundary are proven. Version-retention selection, count-based
-   snapshot expiry, guarded root removal and restore-as-new-head remain required
-   before this gate can close. Every new volume now receives the accepted safe ordinary-history
+   injected apply boundary are proven. Each successful run also receives a
+   gap-free per-schedule sequence. Indexed bounded selection now finds exact age
+   and “older than newest N” candidates, and the expiry mutation independently
+   revalidates the typed reason against current retention state. Corrupt run or
+   configuration ledgers fail closed. Ordinary file-version retention selection,
+   guarded root removal and restore-as-new-head remain required before this gate
+   can close. Every new volume now receives the accepted safe ordinary-history
    default: enabled, 30-day soft minimum, pressure-triggered reclamation and a
    separate 30-day conflict minimum. Policy changes append immutable per-volume
    revisions behind an exact sequence CAS; validation rejects zero counts,

@@ -918,12 +918,13 @@ snapshot_schedule_heads(
   schedule_id PK, schedule_sequence,
   volume_id -> volumes, interval_micros,
   retention_count NULL, retention_duration_micros NULL,
-  enabled, next_due_at, revision,
+  enabled, next_due_at, run_sequence, revision,
   (schedule_id, schedule_sequence) -> snapshot_schedule_revisions
 )
 
 snapshot_schedule_runs(
   schedule_id, schedule_sequence, scheduled_for,
+  run_sequence,
   snapshot_id UNIQUE -> snapshots, operation_id UNIQUE -> operations,
   created_at, revision,
   PK(schedule_id, scheduled_for),

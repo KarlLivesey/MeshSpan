@@ -124,6 +124,9 @@ directly to the first boundary after its current authoritative time; it does not
 emit every missed occurrence after downtime. Every run compare-and-swaps the
 schedule sequence and due instant, pins the exact current converged head, and is
 idempotent by operation and `(schedule, scheduled_for)` identity.
+Successful runs receive a gap-free per-schedule sequence, making “retain newest
+N” an indexed comparison. Age and count candidates are returned in bounded pages
+and revalidated from current policy before the snapshot enters expiring state.
 
 ## Restore
 
