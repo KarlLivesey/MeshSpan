@@ -7,7 +7,7 @@ use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
     DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId,
     NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
-    PrincipalId, Revision, Rights, RoleId, ScopeId, TagId, UnixMicros, VolumeId,
+    PrincipalId, Revision, Rights, RoleId, ScopeId, SnapshotId, TagId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -45,6 +45,8 @@ pub enum AuthoritativeCommand {
     CreateVolume(CreateVolume),
     /// Advances one volume's globally converged namespace head from exact local evidence.
     CommitConvergedVolumeHead(CommitConvergedVolumeHead),
+    /// Pins one exact current converged namespace root as a read-only volume snapshot.
+    CreateVolumeSnapshot(CreateVolumeSnapshot),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
@@ -110,6 +112,7 @@ impl AuthoritativeCommand {
             Self::CreateActivationPolicy(value) => value.update_digest(digest),
             Self::CreateVolume(value) => value.update_digest(digest),
             Self::CommitConvergedVolumeHead(value) => value.update_digest(digest),
+            Self::CreateVolumeSnapshot(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
@@ -266,6 +269,23 @@ pub struct CommitConvergedVolumeHead {
     pub root_object_revision_id: ObjectRevisionId,
     /// Exact durable local outcome from which this transition was proposed.
     pub evidence: ConvergedHeadEvidence,
+}
+
+/// Constant-metadata creation of one read-only snapshot at an exact converged head.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateVolumeSnapshot {
+    /// Stable snapshot identity.
+    pub snapshot_id: SnapshotId,
+    /// Volume whose current converged root is pinned.
+    pub volume_id: VolumeId,
+    /// Exact current converged commit required by the request.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Human-facing and canonicalised snapshot name.
+    pub name: RecordName,
+    /// Optional automatic expiry instant.
+    pub expires_at: Option<UnixMicros>,
+    /// Whether automatic expiry and pressure reclamation are forbidden.
+    pub protected_from_expiry: bool,
 }
 
 /// Namespace object kind stored as a closed integer contract.
@@ -725,6 +745,18 @@ digest_simple_record!(
         digest.byte(assurance_code(value.minimum_assurance));
         digest.optional_instant(value.valid_from);
         digest.optional_instant(value.valid_until);
+    }
+);
+digest_simple_record!(
+    CreateVolumeSnapshot,
+    b"create-volume-snapshot",
+    |value, digest| {
+        digest.identifier(value.snapshot_id.as_bytes());
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.namespace_commit_id.as_bytes());
+        digest.name(&value.name);
+        digest.optional_instant(value.expires_at);
+        digest.boolean(value.protected_from_expiry);
     }
 );
 digest_simple_record!(CreateVolume, b"create-volume", |value, digest| {

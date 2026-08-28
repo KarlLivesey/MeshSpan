@@ -17,10 +17,10 @@ use crate::{
     ConvergedHeadEvidence, CreateVolume, PartitionDatabase, RecordName,
 };
 
-struct HeadFixture {
-    administrator: PrincipalId,
-    partition: PartitionId,
-    volume: VolumeId,
+pub(super) struct HeadFixture {
+    pub(super) administrator: PrincipalId,
+    pub(super) partition: PartitionId,
+    pub(super) volume: VolumeId,
 }
 
 #[test]
@@ -290,7 +290,7 @@ fn broken_head_history_fails_closed_in_reads_and_invariant_checks()
     Ok(())
 }
 
-fn open_and_prepare(
+pub(super) fn open_and_prepare(
     file_path: &std::path::Path,
     fixture: &HeadFixture,
 ) -> Result<AuthoritativeRepository, Box<dyn std::error::Error>> {
@@ -326,7 +326,7 @@ fn open_and_prepare(
     Ok(repository)
 }
 
-fn publication_command(
+pub(super) fn publication_command(
     fixture: &HeadFixture,
     expected: Option<NamespaceCommitId>,
     commit_byte: u8,
@@ -394,7 +394,7 @@ fn reconciliation_command(
     ))
 }
 
-fn context(
+pub(super) fn context(
     operation_byte: u8,
     administrator: PrincipalId,
     audit_byte: u8,
@@ -410,7 +410,7 @@ fn context(
     })
 }
 
-fn fixture() -> Result<HeadFixture, meshspan_domain::IdentifierError> {
+pub(super) fn fixture() -> Result<HeadFixture, meshspan_domain::IdentifierError> {
     Ok(HeadFixture {
         administrator: PrincipalId::from_bytes([2; 16])?,
         partition: PartitionId::from_bytes([1; 16])?,
@@ -418,10 +418,12 @@ fn fixture() -> Result<HeadFixture, meshspan_domain::IdentifierError> {
     })
 }
 
-fn commit(value: u8) -> Result<NamespaceCommitId, meshspan_domain::IdentifierError> {
+pub(super) fn commit(value: u8) -> Result<NamespaceCommitId, meshspan_domain::IdentifierError> {
     NamespaceCommitId::from_bytes([value; 16])
 }
 
-fn object_revision(value: u8) -> Result<ObjectRevisionId, meshspan_domain::IdentifierError> {
+pub(super) fn object_revision(
+    value: u8,
+) -> Result<ObjectRevisionId, meshspan_domain::IdentifierError> {
     ObjectRevisionId::from_bytes([value; 16])
 }

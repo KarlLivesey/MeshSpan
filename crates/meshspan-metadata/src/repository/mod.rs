@@ -19,6 +19,7 @@ mod receipt;
 mod routing;
 mod snapshot;
 mod tags;
+mod user_snapshot;
 mod verify;
 mod volume_head;
 
@@ -40,6 +41,7 @@ pub use query::{
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
+pub use user_snapshot::{SnapshotCursor, VolumeSnapshot};
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
 pub use volume_head::ConvergedVolumeHead;
 
@@ -216,6 +218,20 @@ impl AuthoritativeRepository {
         volume_head::load(&self.database, volume_id)
     }
 
+    /// Returns one stable bounded page of active or expiring read-only volume snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed stored identifiers, states or bounds and database failure.
+    pub fn volume_snapshots(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+        after: Option<&SnapshotCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<VolumeSnapshot, SnapshotCursor>, RepositoryError> {
+        user_snapshot::list(&self.database, volume_id, after, limit)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -358,6 +374,8 @@ pub enum RepositoryError {
     InjectedFault,
 }
 
+#[cfg(test)]
+mod snapshot_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

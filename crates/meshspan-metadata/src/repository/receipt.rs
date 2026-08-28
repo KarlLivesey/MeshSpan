@@ -70,6 +70,8 @@ pub enum EntityKind {
     Tag = 17,
     /// Descriptive principal/object tag edge.
     TagAttachment = 18,
+    /// Read-only volume namespace snapshot.
+    VolumeSnapshot = 19,
 }
 
 impl EntityKind {
@@ -93,6 +95,7 @@ impl EntityKind {
             16 => Ok(Self::ScopeRoute),
             17 => Ok(Self::Tag),
             18 => Ok(Self::TagAttachment),
+            19 => Ok(Self::VolumeSnapshot),
             _ => Err(RepositoryError::CorruptState),
         }
     }

@@ -14,9 +14,9 @@ pub use command::{
     CommandContext, CommitConvergedVolumeHead, ConfigureComponent, ConsumeJoinGrant,
     ConvergedHeadEvidence, CreateActivationPolicy, CreateComponent, CreateGroup,
     CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
-    DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
-    NamespaceObjectKind, PermissionScope, RegisterRoutingSigner, ReplaceObjectOwners,
-    RepositoryCommandError, RouteAttestation, TagTarget,
+    CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission,
+    IssueJoinGrant, JoinRoles, NamespaceObjectKind, PermissionScope, RegisterRoutingSigner,
+    ReplaceObjectOwners, RepositoryCommandError, RouteAttestation, TagTarget,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;
@@ -28,6 +28,7 @@ pub use repository::{
     LogPosition, NamespaceCursor, NamespaceRecord, Page, PageLimit, PartitionBackupManifest,
     PartitionConsensusPersistence, PartitionSnapshotManifest, PreservedVote, PrincipalKind,
     PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
-    RepositoryConformanceVector, RepositoryError, ScopeWriteAuthority, restore_partition_backup,
-    restore_partition_snapshot, run_repository_conformance,
+    RepositoryConformanceVector, RepositoryError, ScopeWriteAuthority, SnapshotCursor,
+    VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
+    run_repository_conformance,
 };
