@@ -24,14 +24,14 @@ use super::{
     restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };
 use crate::{
-    ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember, AssignComponent, AttachTag,
-    AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext, ConfigureComponent,
-    ConsumeJoinGrant, CreateActivationPolicy, CreateComponent, CreateGroup,
-    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
-    DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, InstallScopeRouteProjection,
-    IssueAuthenticationSession, IssueJoinGrant, JoinRoles, NamespaceObjectKind, PartitionDatabase,
-    PermissionScope, RecordName, RegisterRoutingSigner, ReplaceObjectOwners,
-    RevokeAuthenticationSession, RouteAttestation, TagTarget,
+    AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
+    AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh,
+    CommandContext, ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy, CreateComponent,
+    CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser,
+    CreateVolume, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission,
+    InstallScopeRouteProjection, IssueAuthenticationSession, IssueJoinGrant, JoinRoles,
+    NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName, RegisterRoutingSigner,
+    ReplaceObjectOwners, RevokeAuthenticationSession, RouteAttestation, TagTarget,
 };
 
 struct FixtureIds {
@@ -1106,6 +1106,195 @@ fn every_apply_boundary_rolls_back_permanent_root_scope_creation()
         assert_eq!(retained, (0, 0, 0));
         assert_eq!(read_current_revision(&database)?, Revision::new(3));
     }
+    Ok(())
+}
+
+#[test]
+fn every_root_delegation_transition_rolls_back_its_command_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    prove_root_handoff_transition_rollbacks()?;
+    prove_root_abort_transition_rollback()?;
+    prove_child_projection_transition_rollback()
+}
+
+fn prove_root_handoff_transition_rollbacks() -> Result<(), Box<dyn std::error::Error>> {
+    let RoutingProofFixture {
+        _directory: _keep_directory_alive,
+        mut repository,
+        source,
+        destination,
+        scope_id,
+        administrator,
+        signer_node,
+        signing_key,
+    } = RoutingProofFixture::open()?;
+    let scope = DelegatedMetadataScope::new(
+        scope_id,
+        MetadataOperationFamily::Namespace,
+        MetadataKeyRange::All,
+    )?;
+    let mut route = RootDelegatedRoute::new(source, scope, 1, 1)?;
+    apply_root_after_rollback(
+        &mut repository,
+        LogPosition { index: 4, term: 1 },
+        context(200, administrator, 201, 14, Some(3))?,
+        &create_root_route(source, scope, signer_node, &signing_key, &route),
+        scope_id,
+    )?;
+    let admission = delegation_admission()?;
+    route.begin_delegation(destination, 2, admission)?;
+    apply_root_after_rollback(
+        &mut repository,
+        LogPosition { index: 5, term: 1 },
+        context(202, administrator, 203, 15, Some(4))?,
+        &AuthoritativeCommand::BeginScopeHandoff(BeginScopeHandoff {
+            scope_id,
+            destination_partition_id: destination,
+            routing_epoch: 2,
+            admission,
+            attestation: attestation(&signing_key, signer_node, &route),
+        }),
+        scope_id,
+    )?;
+    let evidence = HandoffEvidence {
+        frozen_revision: Revision::new(5),
+        snapshot_digest: [204; 32],
+    };
+    route.freeze(2, evidence)?;
+    apply_root_after_rollback(
+        &mut repository,
+        LogPosition { index: 6, term: 1 },
+        context(205, administrator, 206, 16, Some(5))?,
+        &AuthoritativeCommand::FreezeScopeHandoff(FreezeScopeHandoff {
+            scope_id,
+            routing_epoch: 2,
+            evidence,
+            attestation: attestation(&signing_key, signer_node, &route),
+        }),
+        scope_id,
+    )?;
+    route.activate(destination, 2, evidence)?;
+    apply_root_after_rollback(
+        &mut repository,
+        LogPosition { index: 7, term: 1 },
+        context(207, administrator, 208, 17, Some(6))?,
+        &AuthoritativeCommand::ActivateScopeHandoff(ActivateScopeHandoff {
+            scope_id,
+            destination_partition_id: destination,
+            routing_epoch: 2,
+            evidence,
+            attestation: attestation(&signing_key, signer_node, &route),
+        }),
+        scope_id,
+    )?;
+    assert_eq!(repository.root_delegated_route(scope_id)?, route);
+    Ok(())
+}
+
+fn prove_root_abort_transition_rollback() -> Result<(), Box<dyn std::error::Error>> {
+    let RoutingProofFixture {
+        _directory: _keep_directory_alive,
+        mut repository,
+        source,
+        destination,
+        scope_id,
+        administrator,
+        signer_node,
+        signing_key,
+    } = RoutingProofFixture::open()?;
+    let scope = DelegatedMetadataScope::new(
+        scope_id,
+        MetadataOperationFamily::Namespace,
+        MetadataKeyRange::All,
+    )?;
+    let mut route = RootDelegatedRoute::new(source, scope, 1, 1)?;
+    apply_route(
+        &mut repository,
+        4,
+        administrator,
+        &create_root_route(source, scope, signer_node, &signing_key, &route),
+    )?;
+    let admission = delegation_admission()?;
+    route.begin_delegation(destination, 2, admission)?;
+    apply_route(
+        &mut repository,
+        5,
+        administrator,
+        &AuthoritativeCommand::BeginScopeHandoff(BeginScopeHandoff {
+            scope_id,
+            destination_partition_id: destination,
+            routing_epoch: 2,
+            admission,
+            attestation: attestation(&signing_key, signer_node, &route),
+        }),
+    )?;
+    route.abort(3)?;
+    apply_root_after_rollback(
+        &mut repository,
+        LogPosition { index: 6, term: 1 },
+        context(209, administrator, 210, 16, Some(5))?,
+        &AuthoritativeCommand::AbortScopeHandoff(AbortScopeHandoff {
+            scope_id,
+            routing_epoch: 3,
+            reason_code: 1,
+            attestation: attestation(&signing_key, signer_node, &route),
+        }),
+        scope_id,
+    )?;
+    assert_eq!(repository.root_delegated_route(scope_id)?, route);
+    Ok(())
+}
+
+fn prove_child_projection_transition_rollback() -> Result<(), Box<dyn std::error::Error>> {
+    let ProjectionProofFixture {
+        _directory: _keep_directory_alive,
+        root_repository: _,
+        mut child_repository,
+        destination,
+        scope_id,
+        administrator,
+        signer_node,
+        signing_key,
+        mut route,
+    } = ProjectionProofFixture::open()?;
+    route.begin_delegation(destination, 2, delegation_admission()?)?;
+    apply_root_after_rollback(
+        &mut child_repository,
+        LogPosition { index: 5, term: 1 },
+        context(211, administrator, 212, 15, Some(4))?,
+        &projection_command(signer_node, &signing_key, &route),
+        scope_id,
+    )?;
+    assert_eq!(child_repository.root_delegated_route(scope_id)?, route);
+    Ok(())
+}
+
+fn apply_root_after_rollback(
+    repository: &mut AuthoritativeRepository,
+    position: LogPosition,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    scope_id: ScopeId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let before = repository.root_delegated_route(scope_id).ok();
+    let revision = repository.current_revision()?;
+    assert!(matches!(
+        repository.apply_committed_with_fault(
+            position,
+            context,
+            command,
+            ApplyFaultPoint::AfterCommand,
+        ),
+        Err(RepositoryError::InjectedFault)
+    ));
+    assert_eq!(repository.root_delegated_route(scope_id).ok(), before);
+    assert_eq!(repository.current_revision()?, revision);
+    assert!(
+        repository
+            .resolve_operation(context.operation_id)?
+            .is_none()
+    );
+    repository.apply_committed(position, context, command)?;
     Ok(())
 }
 
