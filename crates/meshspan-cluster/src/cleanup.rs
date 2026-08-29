@@ -3,10 +3,13 @@
 //! Exact boundary from durable filesystem reachability evidence to a replicated cleanup proposal.
 
 use ed25519_dalek::{Signer, SigningKey};
-use meshspan_domain::{NodeId, OperationId, Revision};
+use meshspan_contracts::{RemovalPermit, StoragePermitMacKey, removal_permit_mac};
+use meshspan_domain::{DurationMicros, MeshId, NodeId, OperationId, Revision, UnixMicros};
 use meshspan_filesystem::VersionUnreachableProof;
 use meshspan_metadata::{
-    AttestVersionCleanup, AuthoritativeCommand, ProposeVersionCleanup, VersionCleanupAttestation,
+    AttestVersionCleanup, AuthoritativeCommand, IssueVersionCleanupPermit,
+    MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, ProposeVersionCleanup, VersionCleanupAttestation,
+    VersionCleanupPermitAuthority,
 };
 
 /// Stable local construction failures before a cleanup attestation enters consensus.
@@ -15,6 +18,14 @@ pub enum CleanupAttestationError {
     /// Cleanup revision, node incarnation and key generation must all be positive.
     #[error("cleanup attestation fence is invalid")]
     InvalidFence,
+}
+
+/// Stable local rejection before a removal-permit attempt enters consensus.
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+pub enum CleanupPermitError {
+    /// The attempt sequence, epoch, operation identity or lifetime is not current and bounded.
+    #[error("cleanup removal-permit authority is invalid")]
+    InvalidAuthority,
 }
 
 /// Converts one terminal unreachable proof without dropping or inventing proposal fields.
@@ -74,16 +85,80 @@ pub fn version_cleanup_attestation(
     ))
 }
 
+/// Constructs and MACs one exact short-lived permit attempt from repository-issued authority.
+///
+/// The returned command remains inert until its exact catalogue revision is committed. A lost
+/// response is resolved through the metadata operation record instead of regenerating authority.
+///
+/// # Errors
+///
+/// Rejects zero or stale epochs, invalid operation identity, zero/excessive lifetime and overflow.
+pub fn version_cleanup_removal_permit(
+    authority: VersionCleanupPermitAuthority,
+    mesh_id: MeshId,
+    permit_operation_id: OperationId,
+    authority_epoch: u64,
+    issued_at: UnixMicros,
+    lifetime: DurationMicros,
+    key: &StoragePermitMacKey,
+) -> Result<AuthoritativeCommand, CleanupPermitError> {
+    if authority_epoch == 0
+        || authority_epoch < authority.previous_authority_epoch
+        || lifetime.get() == 0
+        || lifetime > MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME
+        || permit_operation_id == authority.cleanup_operation_id
+        || (authority.attempt_sequence == 1
+            && permit_operation_id != authority.item.removal_operation_id)
+        || (authority_epoch == authority.previous_authority_epoch
+            && authority
+                .previous_expires_at
+                .is_some_and(|expires_at| expires_at > issued_at))
+    {
+        return Err(CleanupPermitError::InvalidAuthority);
+    }
+    let expires_at = issued_at
+        .checked_add(lifetime)
+        .ok_or(CleanupPermitError::InvalidAuthority)?;
+    let mut permit = RemovalPermit {
+        operation_id: permit_operation_id,
+        mesh_id,
+        target_id: authority.item.target_id,
+        shard: authority.item.shard,
+        target_generation: authority.item.target_generation,
+        authority_epoch,
+        catalogue_revision: authority.issue_revision,
+        expires_at,
+        permit_digest: [0; 32],
+    };
+    permit.permit_digest = removal_permit_mac(key, permit);
+    Ok(AuthoritativeCommand::IssueVersionCleanupPermit(
+        IssueVersionCleanupPermit {
+            cleanup_operation_id: authority.cleanup_operation_id,
+            inventory_sealed_revision: authority.inventory_sealed_revision,
+            item_index: authority.item.item_index,
+            attempt_sequence: authority.attempt_sequence,
+            permit,
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+    use meshspan_contracts::{ShardIdentity, StoragePermitMacKey, verify_removal_permit_mac};
     use meshspan_domain::{
-        ContentManifestId, FileVersionId, NodeId, OperationId, Revision, VolumeId,
+        ContentManifestId, DurationMicros, FileVersionId, MeshId, NodeId, OperationId, Revision,
+        TargetId, UnixMicros, VolumeId,
     };
     use meshspan_filesystem::VersionUnreachableProof;
-    use meshspan_metadata::AuthoritativeCommand;
+    use meshspan_metadata::{
+        AuthoritativeCommand, VersionCleanupItem, VersionCleanupPermitAuthority,
+    };
 
-    use super::{version_cleanup_attestation, version_cleanup_proposal};
+    use super::{
+        CleanupPermitError, version_cleanup_attestation, version_cleanup_proposal,
+        version_cleanup_removal_permit,
+    };
 
     #[test]
     fn every_unreachable_proof_field_crosses_the_proposal_boundary_exactly()
@@ -161,6 +236,52 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn removal_permit_binds_exact_authority_and_rejects_unsafe_renewal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authority = permit_authority()?;
+        let key = StoragePermitMacKey::from_bytes([30; 32])?;
+        let command = version_cleanup_removal_permit(
+            authority,
+            MeshId::from_bytes([31; 16])?,
+            authority.item.removal_operation_id,
+            5,
+            UnixMicros::new(1_000),
+            DurationMicros::new(60_000_000),
+            &key,
+        )?;
+        let AuthoritativeCommand::IssueVersionCleanupPermit(command) = command else {
+            return Err("wrong permit command".into());
+        };
+        assert_eq!(command.cleanup_operation_id, authority.cleanup_operation_id);
+        assert_eq!(
+            command.inventory_sealed_revision,
+            authority.inventory_sealed_revision
+        );
+        assert_eq!(command.permit.catalogue_revision, authority.issue_revision);
+        assert_eq!(command.permit.shard, authority.item.shard);
+        assert_eq!(command.permit.target_id, authority.item.target_id);
+        assert!(verify_removal_permit_mac(&key, command.permit));
+
+        let mut renewing = authority;
+        renewing.attempt_sequence = 2;
+        renewing.previous_authority_epoch = 5;
+        renewing.previous_expires_at = Some(UnixMicros::new(2_000));
+        assert_eq!(
+            version_cleanup_removal_permit(
+                renewing,
+                MeshId::from_bytes([31; 16])?,
+                OperationId::from_bytes([32; 16])?,
+                5,
+                UnixMicros::new(1_500),
+                DurationMicros::new(1),
+                &key,
+            ),
+            Err(CleanupPermitError::InvalidAuthority)
+        );
+        Ok(())
+    }
+
     fn proof() -> Result<VersionUnreachableProof, meshspan_domain::IdentifierError> {
         Ok(VersionUnreachableProof {
             operation_id: OperationId::from_bytes([1; 16])?,
@@ -177,6 +298,30 @@ mod tests {
             root_set_digest: [10; 32],
             local_roots_digest: [10; 32],
             result_digest: [11; 32],
+        })
+    }
+
+    fn permit_authority() -> Result<VersionCleanupPermitAuthority, Box<dyn std::error::Error>> {
+        Ok(VersionCleanupPermitAuthority {
+            cleanup_operation_id: OperationId::from_bytes([20; 16])?,
+            inventory_sealed_revision: Revision::new(21),
+            item: VersionCleanupItem {
+                item_index: 0,
+                removal_operation_id: OperationId::from_bytes([22; 16])?,
+                shard: ShardIdentity {
+                    manifest_digest: [23; 32],
+                    stripe_index: 24,
+                    shard_index: 25,
+                    generation: 26,
+                },
+                target_id: TargetId::from_bytes([27; 16])?,
+                target_generation: 28,
+                revision: Revision::new(29),
+            },
+            issue_revision: Revision::new(30),
+            attempt_sequence: 1,
+            previous_authority_epoch: 0,
+            previous_expires_at: None,
         })
     }
 }

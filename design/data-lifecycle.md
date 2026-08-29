@@ -145,8 +145,14 @@ tombstones and cleanup when it returns.
    manifest after physical work may have begun.
 5. Immediately before deletion, the worker obtains a short-lived
    `RemovalPermit` from the current owning metadata-partition leader. The permit binds:
-   `mesh_id`, target, object, version, shard, generation, catalogue revision,
-   operation ID and expiry.
+   `mesh_id`, target, shard identity and generation, target generation, catalogue
+   revision, operation ID, authority epoch and expiry. The exact attempt is
+   replicated before use. Its lifetime is positive and has a compiled 24-hour
+   ceiling, while policy may choose a shorter duration. The first attempt uses
+   the inventory item's reserved provider operation ID. A retry in the same
+   authority epoch waits for the previous attempt to expire; a higher epoch may
+   fence it immediately. A lost response is resolved from the committed attempt
+   instead of manufacturing different authority.
 6. The storage node validates the permit, current leader epoch, a catalogue
    revision no older than the node's monotonically applied cleanup fence, and
    the local shard identity. Applying a newer catalogue revision permanently

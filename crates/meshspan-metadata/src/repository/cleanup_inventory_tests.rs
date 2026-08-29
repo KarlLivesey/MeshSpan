@@ -333,7 +333,28 @@ fn prove_seal_fault(fault: ApplyFaultPoint) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-fn append_command(
+pub(super) fn sealed_inventory(
+    file_path: &std::path::Path,
+) -> Result<ProposalFixture, Box<dyn std::error::Error>> {
+    let mut fixture = authorised_proposal(file_path)?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 8, term: 1 },
+        context(186, fixture.administrator, 187, 108, Some(7))?,
+        &append_command(fixture.cleanup_id, fixture.manifest_root_digest, 1, 0, 1)?,
+    )?;
+    let inventory = fixture
+        .repository
+        .version_cleanup_inventory(fixture.cleanup_id)?
+        .ok_or("missing inventory")?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 9, term: 1 },
+        context(188, fixture.administrator, 189, 109, Some(8))?,
+        &seal_command(fixture.cleanup_id, 1, inventory.inventory_digest),
+    )?;
+    Ok(fixture)
+}
+
+pub(super) fn append_command(
     cleanup_operation_id: OperationId,
     manifest_digest: [u8; 32],
     expected_item_count: u64,
@@ -352,7 +373,7 @@ fn append_command(
     ))
 }
 
-fn placements(
+pub(super) fn placements(
     manifest_digest: [u8; 32],
     start_index: u64,
     count: usize,
@@ -376,7 +397,7 @@ fn placements(
         .collect()
 }
 
-fn seal_command(
+pub(super) fn seal_command(
     cleanup_operation_id: OperationId,
     expected_item_count: u64,
     inventory_digest: [u8; 32],
