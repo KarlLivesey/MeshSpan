@@ -56,8 +56,8 @@ administrator to operate a separate certificate system.
 ## Status
 
 MeshSpan is a clean-slate, pre-alpha project. No compatibility or stability guarantee applies
-before version 1.0. The original Stages 1–4 evidence remains valid, but Stages 0–5 are reopened for
-the accepted autonomous-swarm federation contract and Stage 5 completion-audit corrections. See
+before version 1.0. The autonomous-swarm federation contract and Stage 1 executable foundation are
+complete; Stages 2–5 remain reopened for federation and Stage 5 completion-audit corrections. See
 the [federation contract](design/federation.md) and [roadmap](design/roadmap.md).
 The accepted requirements, architecture and implementation order are in the
 [design review pack](design/README.md).

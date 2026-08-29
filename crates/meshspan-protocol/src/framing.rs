@@ -5,9 +5,10 @@
 use prost::Message;
 use thiserror::Error;
 
-use crate::v1::{ControlEnvelope, DataControlEnvelope, DataFrame};
+use crate::v1::{ControlEnvelope, DataControlEnvelope, DataFrame, FederationEnvelope};
 use crate::validation::{
     validate_control_envelope, validate_data_control_envelope, validate_data_frame,
+    validate_federation_envelope,
 };
 
 const FRAME_PREFIX_BYTES: usize = 4;
@@ -136,6 +137,24 @@ impl ValidatedDataControlEnvelope {
     }
 }
 
+/// A cross-swarm envelope that passed framing and federation-specific validation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValidatedFederationEnvelope(FederationEnvelope);
+
+impl ValidatedFederationEnvelope {
+    /// Borrows the generated message after validation.
+    #[must_use]
+    pub const fn as_inner(&self) -> &FederationEnvelope {
+        &self.0
+    }
+
+    /// Consumes the proof wrapper and returns the generated message.
+    #[must_use]
+    pub fn into_inner(self) -> FederationEnvelope {
+        self.0
+    }
+}
+
 /// Stable rejection categories for hostile private-wire bytes.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum WireContractError {
@@ -214,6 +233,34 @@ pub fn decode_data_control_frame(
         DataControlEnvelope::decode(payload).map_err(|_| WireContractError::Malformed)?;
     validate_data_control_envelope(&envelope, limits)?;
     Ok(ValidatedDataControlEnvelope(envelope))
+}
+
+/// Validates and length-prefixes one outgoing cross-swarm federation envelope.
+///
+/// # Errors
+///
+/// Rejects every invalid value or encoded payload beyond the control-message limit.
+pub fn encode_federation_frame(
+    envelope: &FederationEnvelope,
+    limits: WireLimits,
+) -> Result<Vec<u8>, WireContractError> {
+    validate_federation_envelope(envelope, limits)?;
+    encode_prefixed(envelope, limits.control_bytes)
+}
+
+/// Decodes one cross-swarm message and returns only a federation-validated wrapper.
+///
+/// # Errors
+///
+/// Rejects truncation and excess before allocation, then validates every authority-bound field.
+pub fn decode_federation_frame(
+    frame: &[u8],
+    limits: WireLimits,
+) -> Result<ValidatedFederationEnvelope, WireContractError> {
+    let payload = payload_after_prefix(frame, limits.control_bytes)?;
+    let envelope = FederationEnvelope::decode(payload).map_err(|_| WireContractError::Malformed)?;
+    validate_federation_envelope(&envelope, limits)?;
+    Ok(ValidatedFederationEnvelope(envelope))
 }
 
 /// Validates and length-prefixes one outgoing bulk data frame.

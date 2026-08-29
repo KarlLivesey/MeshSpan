@@ -75,12 +75,39 @@ message ResolveScopeRoute {
   uint64 known_routing_epoch = 2;
 }
 
+enum MetadataOperationFamily {
+  METADATA_OPERATION_FAMILY_UNSPECIFIED = 0;
+  METADATA_OPERATION_FAMILY_IDENTITY = 1;
+  METADATA_OPERATION_FAMILY_AUTHENTICATION = 2;
+  METADATA_OPERATION_FAMILY_NAMESPACE = 3;
+  METADATA_OPERATION_FAMILY_CONFIGURATION = 4;
+  METADATA_OPERATION_FAMILY_AUDIT = 5;
+  METADATA_OPERATION_FAMILY_STORAGE_CATALOGUE = 6;
+  METADATA_OPERATION_FAMILY_WORK = 7;
+}
+
+message MetadataKeyRange {
+  oneof range {
+    bool all = 1;
+    BoundedMetadataKeyRange bounded = 2;
+  }
+}
+
+message BoundedMetadataKeyRange {
+  bytes start_inclusive = 1;
+  bytes end_exclusive = 2;
+}
+
 message ScopeRoute {
   bytes scope_id = 1;
   bytes partition_id = 2;
   uint64 routing_epoch = 3;
   bytes owner_node_id = 4;
   bytes signature = 5;
+  bytes root_partition_id = 6;
+  uint64 ownership_epoch = 7;
+  MetadataOperationFamily operation_family = 8;
+  MetadataKeyRange key_range = 9;
 }
 
 message FetchRoutingDelta {
@@ -104,6 +131,14 @@ message BeginScopeHandoff {
   bytes source_partition_id = 2;
   bytes destination_partition_id = 3;
   uint64 routing_epoch = 4;
+  bytes root_partition_id = 5;
+  MetadataOperationFamily operation_family = 6;
+  MetadataKeyRange key_range = 7;
+  uint32 eligible_member_count = 8;
+  uint32 planned_voter_count = 9;
+  bytes quorum_plan_digest = 10;
+  bytes load_evidence_digest = 11;
+  sint64 measured_at_unix_micros = 12;
 }
 
 message FreezeScope {
