@@ -1,11 +1,6 @@
 # Stage 2 completion evidence
 
-Status: original scope complete after executable re-audit on 2026-08-28; Stage 2
-reopened for federation metadata.
-
-The missing federation records/transitions and new closure gates are recorded in
-[`federation.md`](federation.md) and [`roadmap.md`](roadmap.md). This document does
-not claim that retrofit is implemented.
+Status: complete, including the federation retrofit, on 2026-08-29.
 
 The authoritative correction and all closure gates are recorded in
 [stage-1-3-audit.md](stage-1-3-audit.md).
@@ -25,6 +20,15 @@ public file access; those remain later roadmap stages.
   volumes and namespace objects, tags, desired component configuration,
   assignments, observations, operation receipts, audit chaining and exact
   backup/snapshot positions.
+- Federation schemas and typed commands cover independently administered swarm
+  relationships, rotating identities, signed governance ancestry, bilateral
+  grants/restrictions, remote-principal projections, recovery succession and
+  retained quarantine outcomes. Governance and succession ancestry reject
+  direct and transitive cycles.
+- A permanent root directory owns immutable metadata scopes and signed route
+  epochs. Root-to-child handoff uses explicit prepare, freeze, activate and
+  newer-fence abort transitions; child projections cannot author or rewind root
+  state, and no transition exposes two writers.
 - A typed engine-neutral `AuthoritativeMetadataKernel` boundary separates
   semantic commands and results from the initial `rusqlite` implementation.
   The reusable conformance vector runs against fresh implementations and proves
@@ -71,9 +75,9 @@ public file access; those remain later roadmap stages.
 | Gate | Executable evidence |
 | --- | --- |
 | First vertical proof | One-node bootstrap; two users; nested groups; multi-user/group-owned volume, folder and file; scheduled activated permission; restart; exact result resolution and replay |
-| Transaction crash safety | Deterministic interruption after command rows, operation receipt, audit event and applied-position update; every interruption rolls back to revision zero and the same entry then commits cleanly |
+| Transaction crash safety | Deterministic interruption after command rows, operation receipt, audit event and applied-position update; every boundary retains the exact old state and the same entry then commits cleanly |
 | Replay and hostile state | Exact replay preserves the original revision/result; conflicting reuse, stale position/revision, transitive cycles, malformed identifiers, digest drift and changed backup bytes fail closed |
-| Migration and integrity | Three immutable authoritative migrations and one local migration; reopen, wrong identity, newer/drifted history, strict constraints, `quick_check` and foreign-key vectors |
+| Migration and integrity | Thirty-eight immutable authoritative migrations and one local migration; reopen, wrong identity, newer/drifted history, strict constraints, `quick_check` and foreign-key vectors |
 | IAM and ownership | Shared user/group namespace, bounded exact closure, scheduled grants, grant/group self-activation and non-empty multiple user/group owner sets |
 | Atomic owner replacement | Empty, duplicate, missing and inactive owners plus missing objects fail without revision movement; a valid user/group replacement survives restart, exact replay and invariant verification while preserving the old immutable set |
 | Descriptive tags | Create/attach/detach covers principal and object targets, exact replay, conflicting reuse, duplicate/missing-edge rejection, name bounds, audit rows and proof that a tagged user gains no authority |
@@ -81,9 +85,14 @@ public file access; those remain later roadmap stages.
 | Backup and restore | Exact position/revision/schema/identity manifest, SHA-256 byte verification, active-voter admission and never-overwrite staged restore |
 | Bounded indexed reads | Validated page limits, seek cursors, explicit `LIMIT + 1`, named namespace index and membership primary-index query-plan assertions |
 | Replaceable engine seam | Reusable `AuthoritativeMetadataKernel` conformance vector passes twice against fresh SQLite implementations |
+| Federation authority | Relationship, grant, principal, succession and quarantine lifecycles are typed, signed, idempotent, restart-safe and retain exact immutable history and termination evidence |
+| Federation graph safety | Signed remote ancestry rejects governance and succession cycles without advancing state; reflected identities, stale epochs and substituted evidence fail closed |
+| Federation crash safety | Every relationship, grant, succession and quarantine command transition, plus complete approval/replacement/projection operations, rolls back exactly at injected command/apply boundaries |
+| Root delegation | Scope creation, begin, freeze, activate, newer-fence abort and child projection installation have exact rollback/restart evidence and preserve single-writer routing |
+| Federation backup and restore | Complete relationship, grant, projected-principal, succession, quarantine and root-route histories survive verified backup/restore and reject changed bytes |
 | Complete local gate | `npm run check` runs generation drift, strict Rust/web lint, all tests and protocol/API compatibility locally with no GitHub Actions |
 
 ## Feedback-loop observation
 
-The complete local gate passed after re-audit in 11.48 seconds. Its lanes remain
-independently scheduled across four resource-approved workers.
+The complete local gate passed after the federation retrofit in 80.23 seconds.
+Its lanes remain independently scheduled across four resource-approved workers.
