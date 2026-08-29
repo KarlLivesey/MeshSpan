@@ -242,6 +242,19 @@ copy-on-write filesystem service. This document records executable evidence only
   records remain informational and never substitute for operation-time source,
   membership, policy and session evaluation. Migration digest, paging,
   revocation, expiry and stale-cursor behaviour are executable.
+- The first true adapter-facing surface now covers existing-file open, bounded
+  read, private write and flush. Its inputs contain no branch ID, principal,
+  authorisation revision, gateway claim, content digest, retention sequence,
+  manifest format, SQL or provider path. `BoundFilesystemAdapter` binds the
+  daemon's local branch and publication policy, reloads the exact live handle
+  identity/fence context and hashes untrusted write bytes itself. An external
+  integration proof drives two independent in-process gateway translators
+  through this trait: a missing credential fails before admission, incompatible
+  sharing fails exactly, a second gateway sees only published bytes, a gateway
+  substitution cannot write another gateway's handle, committed flush survives
+  a complete filesystem-store restart, and the failed gateway's later
+  uncommitted private write remains invisible. The proof compiles against public
+  crate exports, so it cannot reach SQL or hidden provider-location state.
 
 ## Closure gates
 
@@ -482,6 +495,10 @@ copy-on-write filesystem service. This document records executable evidence only
    Their operation-time-authorised filesystem composition remains part of gate
    7 so no connector can treat a repository read as access authority.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
+   The semantic existing-file open/read/write/flush contract and two-gateway
+   restart proof are complete. Creation, remaining namespace/handle operations,
+   authorised administration views and the two-isolated-node service-level
+   reconciliation proof remain open.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
 suite passes together.

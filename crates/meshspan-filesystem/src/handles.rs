@@ -436,6 +436,16 @@ pub(crate) fn resolve_open_object(
     resolve_file(connection, request).map(|resolved| resolved.map(|file| file.object))
 }
 
+pub(crate) fn resolve_path_object(
+    connection: &Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    path: &NamespacePath,
+) -> Result<Option<ObjectId>, HandleError> {
+    resolve_file_path(connection, branch_id, volume_id, path)
+        .map(|resolved| resolved.map(|file| file.object))
+}
+
 pub(crate) fn authority_target(
     connection: &Connection,
     handle: HandleId,
@@ -559,6 +569,20 @@ fn resolve_file(
     connection: &Connection,
     request: &OpenHandleRequest,
 ) -> Result<Option<ResolvedFile>, HandleError> {
+    resolve_file_path(
+        connection,
+        request.branch_id,
+        request.volume_id,
+        &request.path,
+    )
+}
+
+fn resolve_file_path(
+    connection: &Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    path: &NamespacePath,
+) -> Result<Option<ResolvedFile>, HandleError> {
     type StoredHead = (Vec<u8>, Vec<u8>, Vec<u8>);
     let head: Option<StoredHead> = connection
         .query_row(
@@ -567,8 +591,8 @@ fn resolve_file(
              JOIN namespace_commits c USING(namespace_commit_id)
              WHERE h.branch_id = ?1 AND h.volume_id = ?2",
             params![
-                request.branch_id.as_bytes().as_slice(),
-                request.volume_id.as_bytes().as_slice()
+                branch_id.as_bytes().as_slice(),
+                volume_id.as_bytes().as_slice()
             ],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -579,9 +603,9 @@ fn resolve_file(
     let namespace_commit_id = identifier(&commit, NamespaceCommitId::from_bytes)?;
     let mut object_id = identifier(&root_object, ObjectId::from_bytes)?;
     let mut revision_id = identifier(&root_revision, ObjectRevisionId::from_bytes)?;
-    for (index, component) in request.path.components().iter().enumerate() {
+    for (index, component) in path.components().iter().enumerate() {
         let revision = load_revision(connection, revision_id)?;
-        if revision.volume_id != request.volume_id
+        if revision.volume_id != volume_id
             || revision.object_id != object_id
             || revision.kind != DirectoryEntryKind::Directory
         {
@@ -595,8 +619,14 @@ fn resolve_file(
         let Some(entry) = entry else {
             return Ok(None);
         };
-        if index + 1 == request.path.components().len() {
-            return resolve_leaf(connection, request, namespace_commit_id, &entry);
+        if index + 1 == path.components().len() {
+            return resolve_leaf(
+                connection,
+                branch_id,
+                volume_id,
+                namespace_commit_id,
+                &entry,
+            );
         }
         if entry.kind() != DirectoryEntryKind::Directory {
             return Ok(None);
@@ -609,7 +639,8 @@ fn resolve_file(
 
 fn resolve_leaf(
     connection: &Connection,
-    request: &OpenHandleRequest,
+    branch_id: BranchId,
+    volume_id: VolumeId,
     namespace_commit_id: NamespaceCommitId,
     entry: &DirectoryEntry,
 ) -> Result<Option<ResolvedFile>, HandleError> {
@@ -618,7 +649,7 @@ fn resolve_leaf(
     }
     let revision = load_revision(connection, entry.object_revision_id())?;
     let version_id = revision.file_version_id.ok_or(HandleError::Corrupt)?;
-    if revision.volume_id != request.volume_id
+    if revision.volume_id != volume_id
         || revision.object_id != entry.object_id()
         || revision.kind != DirectoryEntryKind::File
     {
@@ -629,7 +660,7 @@ fn resolve_leaf(
             "SELECT volume_id, current_version_id FROM branch_files
              WHERE branch_id = ?1 AND object_id = ?2",
             params![
-                request.branch_id.as_bytes().as_slice(),
+                branch_id.as_bytes().as_slice(),
                 entry.object_id().as_bytes().as_slice()
             ],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -638,7 +669,7 @@ fn resolve_leaf(
     let Some((volume, current)) = stored_head else {
         return Err(HandleError::Corrupt);
     };
-    if volume.as_slice() != request.volume_id.as_bytes()
+    if volume.as_slice() != volume_id.as_bytes()
         || current.as_deref() != Some(version_id.as_bytes().as_slice())
     {
         return Err(HandleError::Corrupt);
