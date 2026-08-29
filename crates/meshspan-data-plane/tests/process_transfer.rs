@@ -176,14 +176,12 @@ async fn run_storage_process(config: ChildConfig) -> Result<(), Box<dyn Error>> 
         incarnation: 1,
         certificate_fingerprint: certificate_fingerprint(&client_certificate),
     }])?;
-    assert_eq!(
-        registry.authenticate_connection(&connection)?.node_id(),
-        client_node
-    );
+    let peer = registry.authenticate_connection(&connection)?;
+    assert_eq!(peer.node_id(), client_node);
     for _ in 0..4 {
         let stream = tokio::time::timeout(WAIT_LIMIT, accept_stream(&connection)).await??;
         router
-            .serve_stream(stream, wire_limits()?, UnixMicros::new(20))
+            .serve_stream(stream, peer, wire_limits()?, UnixMicros::new(20))
             .await?;
     }
     let _peer_close = tokio::time::timeout(WAIT_LIMIT, connection.closed()).await;

@@ -367,15 +367,19 @@ copy-on-write filesystem service. This document records executable evidence only
    provider IO. Sealed inventory now binds every target generation to its exact
    owning storage node. The worker rejects another reporter before IO, the
    metadata state machine repeats the check against authenticated identity and
-   migrated ownerless inventories fail closed. The cleanup worker's
-   asynchronous connection-selection adapter
-   remains outstanding. The underlying authenticated QUIC lifecycle is implemented:
-   distinct bounded delete and reclaim messages carry canonical versioned
-   authority, return exact durable receipts, preserve replayed time/byte
-   accounting and reject forged removal permits. A real Quinn/mTLS test drives
-   put, get, forged deletion, tombstone replay and reclamation replay against the
-   real folder provider. Connection selection and asynchronous cleanup-worker
-   dispatch remain to be composed before this item closes.
+   migrated ownerless inventories fail closed. The asynchronous cleanup bridge
+   resolves only that owner through a replaceable connection source, rejects a
+   returned certificate peer other than the inventory owner before opening a
+   stream, creates a bounded request deadline and returns the exact completion
+   command. Non-provider work does not resolve a connection. Distinct bounded
+   delete and reclaim messages carry canonical versioned authority, return exact durable receipts,
+   preserve replayed time/byte accounting and reject forged removal permits.
+   The server and multi-target router also require the authenticated peer and
+   reject sender-node or incarnation impersonation in every request header. A
+   real Quinn/mTLS test drives the worker through tombstone and reclamation
+   against the real folder provider and verifies exact reporter identity and
+   released-byte accounting; the full data-plane proof additionally drives put,
+   get, forged sender/write/removal, tombstone replay and reclamation replay.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

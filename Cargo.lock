@@ -886,6 +886,7 @@ dependencies = [
  "ed25519-dalek",
  "meshspan-consensus",
  "meshspan-contracts",
+ "meshspan-data-plane",
  "meshspan-domain",
  "meshspan-filesystem",
  "meshspan-metadata",
