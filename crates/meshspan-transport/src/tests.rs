@@ -17,7 +17,7 @@ use meshspan_protocol::v1::{
 };
 use meshspan_protocol::{
     ValidatedFederationEnvelope, WireLimits, decode_federation_frame, encode_federation_frame,
-    federation_hello_signing_payload,
+    federation_hello_signing_payload, federation_welcome_signing_payload,
 };
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
@@ -28,11 +28,12 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 use super::identity::certificate_fingerprint;
 use super::{
-    FederationPeerBinding, FederationPeerRegistry, FederationReplayGuard, NegotiationConfig,
-    NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportError, TransportLimits,
-    accept_stream, client_endpoint, connect, open_stream, receive_control, receive_data_control,
-    receive_data_frame, receive_federation, send_control, send_data_control, send_data_frame,
-    send_federation, server_endpoint,
+    AuthenticatedFederationHello, FederationHelloExpectation, FederationNegotiationConfig,
+    FederationPeerBinding, FederationPeerRegistry, FederationReplayGuard, FederationWelcomeNonces,
+    NegotiationConfig, NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportError,
+    TransportLimits, accept_stream, client_endpoint, connect, open_stream, receive_control,
+    receive_data_control, receive_data_frame, receive_federation, send_control, send_data_control,
+    send_data_frame, send_federation, server_endpoint,
 };
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -317,9 +318,10 @@ async fn federation_envelope_round_trips_on_its_own_bounded_stream() -> Result<(
         connect(&client, server_address, CERTIFICATE_NAME),
         server_connection
     )?;
-    let signing_key = SigningKey::from_bytes(&[42; 32]);
-    let envelope = federation_hello(&certificates.client_certificate, &signing_key);
-    let (mut send, _receive) = open_stream(&client_connection, StreamKind::Federation).await?;
+    let client_signing_key = SigningKey::from_bytes(&[42; 32]);
+    let envelope = federation_hello(&certificates.client_certificate, &client_signing_key);
+    let expectation = FederationHelloExpectation::from_outgoing(&envelope, limits.wire)?;
+    let (mut send, mut receive) = open_stream(&client_connection, StreamKind::Federation).await?;
     let mut accepted = accept_stream(&server_connection).await?;
     assert_eq!(accepted.kind, StreamKind::Federation);
     send_federation(&mut send, &envelope, limits.wire).await?;
@@ -335,7 +337,7 @@ async fn federation_envelope_round_trips_on_its_own_bounded_stream() -> Result<(
         authority_epoch: 1,
         identity_generation: 1,
         certificate_fingerprint: certificate_fingerprint(&certificates.client_certificate),
-        verifying_key: signing_key.verifying_key().to_bytes(),
+        verifying_key: client_signing_key.verifying_key().to_bytes(),
         valid_from: UnixMicros::new(1),
         valid_until: UnixMicros::new(3_000_000),
     }])?;
@@ -361,13 +363,93 @@ async fn federation_envelope_round_trips_on_its_own_bounded_stream() -> Result<(
         &registry,
         &server_connection,
         &envelope,
-        &signing_key,
+        &client_signing_key,
         limits.wire,
     )?;
+    prove_federation_welcome(
+        &authenticated,
+        &expectation,
+        &mut accepted.send,
+        &mut receive,
+        &client_connection,
+        &certificates,
+        limits.wire,
+    )
+    .await?;
     client_connection.close(0_u32.into(), b"test complete");
     server_connection.close(0_u32.into(), b"test complete");
     client.wait_idle().await;
     server.wait_idle().await;
+    Ok(())
+}
+
+async fn prove_federation_welcome(
+    authenticated: &AuthenticatedFederationHello,
+    expectation: &FederationHelloExpectation,
+    send: &mut quinn::SendStream,
+    receive: &mut quinn::RecvStream,
+    connection: &quinn::Connection,
+    certificates: &Certificates,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    let signing_key = SigningKey::from_bytes(&[43; 32]);
+    let welcome_limits = WireLimits::new(32 * 1_024, 16 * 1_024, 128, 2_048)?;
+    let welcome = authenticated.signed_welcome(
+        &FederationNegotiationConfig::new(
+            vec![version(1, 0), version(1, 2)],
+            4,
+            9,
+            welcome_limits,
+            64,
+        )?,
+        FederationWelcomeNonces::new([21; 32], [22; 32])?,
+        &signing_key,
+    )?;
+    send_federation(send, &welcome, welcome_limits).await?;
+    let received_welcome = receive_federation(receive, limits).await?;
+    let relationship_id = authenticated.relationship_id();
+    let client_registry = FederationPeerRegistry::new([FederationPeerBinding {
+        relationship_id,
+        local_mesh_id: authenticated.remote_mesh_id(),
+        remote_mesh_id: authenticated.local_mesh_id(),
+        authority_epoch: 1,
+        identity_generation: 4,
+        certificate_fingerprint: certificate_fingerprint(&certificates.server_certificate),
+        verifying_key: signing_key.verifying_key().to_bytes(),
+        valid_from: UnixMicros::new(1),
+        valid_until: UnixMicros::new(3_000_000),
+    }])?;
+    let mut welcome_replay = FederationReplayGuard::new(8, DurationMicros::new(1_000_000))?;
+    let session = client_registry.authenticate_welcome(
+        connection,
+        &received_welcome,
+        expectation,
+        UnixMicros::new(1_500_000),
+        &mut welcome_replay,
+    )?;
+    assert_eq!(session.version, version(1, 2));
+    assert_eq!(session.remote_authority_revision, 9);
+    assert_eq!(session.maximum_control_bytes, 32 * 1_024);
+    assert_eq!(session.maximum_data_frame_bytes, 16 * 1_024);
+    assert_eq!(session.maximum_streams, 64);
+    assert!(matches!(
+        client_registry.authenticate_welcome(
+            connection,
+            &received_welcome,
+            expectation,
+            UnixMicros::new(1_500_001),
+            &mut welcome_replay,
+        ),
+        Err(TransportError::ReplayedFederationMessage)
+    ));
+    prove_hostile_federation_welcomes(
+        &client_registry,
+        connection,
+        expectation,
+        &welcome,
+        &signing_key,
+        limits,
+    )?;
     Ok(())
 }
 
@@ -437,6 +519,74 @@ fn prove_hostile_federation_hellos(
             &mut one_entry,
         ),
         Err(TransportError::FederationReplayCapacity)
+    ));
+    Ok(())
+}
+
+fn prove_hostile_federation_welcomes(
+    registry: &FederationPeerRegistry,
+    connection: &quinn::Connection,
+    expectation: &FederationHelloExpectation,
+    original: &FederationEnvelope,
+    signing_key: &SigningKey,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    let now = UnixMicros::new(1_500_000);
+    let mut replay = FederationReplayGuard::new(8, DurationMicros::new(1_000_000))?;
+    let mut variants = Vec::new();
+
+    let mut wrong_challenge = original.clone();
+    welcome_mut(&mut wrong_challenge).request_challenge_nonce = vec![31; 32];
+    variants.push(welcome_variant(wrong_challenge, signing_key, 31));
+
+    let mut wrong_generation = original.clone();
+    welcome_mut(&mut wrong_generation).identity_generation = 5;
+    variants.push(welcome_variant(wrong_generation, signing_key, 32));
+
+    let mut excessive_limit = original.clone();
+    welcome_mut(&mut excessive_limit).maximum_control_bytes = 64 * 1_024 + 1;
+    variants.push(welcome_variant(excessive_limit, signing_key, 33));
+
+    let mut unsupported_version = original.clone();
+    let unsupported = version(1, 9);
+    let Some(header) = unsupported_version.header.as_mut() else {
+        unreachable!("fixture header")
+    };
+    header.version = Some(unsupported);
+    welcome_mut(&mut unsupported_version).selected_version = Some(unsupported);
+    variants.push(welcome_variant(unsupported_version, signing_key, 34));
+
+    let mut mismatched_header_version = original.clone();
+    let Some(header) = mismatched_header_version.header.as_mut() else {
+        unreachable!("fixture header")
+    };
+    header.version = Some(version(1, 0));
+    variants.push(welcome_variant(mismatched_header_version, signing_key, 36));
+
+    for variant in variants {
+        assert!(matches!(
+            registry.authenticate_welcome(
+                connection,
+                &validated_federation(&variant, limits)?,
+                expectation,
+                now,
+                &mut replay,
+            ),
+            Err(TransportError::UntrustedFederationPeer)
+        ));
+    }
+
+    let mut bad_signature = welcome_variant(original.clone(), signing_key, 35);
+    welcome_mut(&mut bad_signature).signature[0] ^= 1;
+    assert!(matches!(
+        registry.authenticate_welcome(
+            connection,
+            &validated_federation(&bad_signature, limits)?,
+            expectation,
+            now,
+            &mut replay,
+        ),
+        Err(TransportError::UntrustedFederationPeer)
     ));
     Ok(())
 }
@@ -551,7 +701,7 @@ fn federation_hello(
             replay_nonce: vec![7; 32],
         }),
         message: Some(FederationMessage::Hello(FederationHello {
-            versions: vec![version(1, 0)],
+            versions: vec![version(1, 0), version(1, 2)],
             identity_generation: 1,
             public_identity_chain: certificate.as_ref().to_vec(),
             challenge_nonce: vec![9; 32],
@@ -615,6 +765,36 @@ fn validated_federation(
     limits: WireLimits,
 ) -> Result<ValidatedFederationEnvelope, meshspan_protocol::WireContractError> {
     decode_federation_frame(&encode_federation_frame(envelope, limits)?, limits)
+}
+
+fn welcome_variant(
+    mut envelope: FederationEnvelope,
+    signing_key: &SigningKey,
+    nonce: u8,
+) -> FederationEnvelope {
+    let Some(header) = envelope.header.as_mut() else {
+        unreachable!("fixture header")
+    };
+    header.replay_nonce = vec![nonce; 32];
+    let Some(header) = envelope.header.as_ref() else {
+        unreachable!("fixture header")
+    };
+    let Some(FederationMessage::Welcome(welcome)) = envelope.message.as_ref() else {
+        unreachable!("fixture welcome")
+    };
+    let signature = signing_key
+        .sign(&federation_welcome_signing_payload(header, welcome))
+        .to_bytes()
+        .to_vec();
+    welcome_mut(&mut envelope).signature = signature;
+    envelope
+}
+
+fn welcome_mut(envelope: &mut FederationEnvelope) -> &mut meshspan_protocol::v1::FederationWelcome {
+    let Some(FederationMessage::Welcome(welcome)) = envelope.message.as_mut() else {
+        unreachable!("fixture welcome")
+    };
+    welcome
 }
 
 const fn version(major: u32, minor: u32) -> ProtocolVersion {

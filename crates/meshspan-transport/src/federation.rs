@@ -89,13 +89,7 @@ impl FederationPeerRegistry {
         now: UnixMicros,
         replay: &mut FederationReplayGuard,
     ) -> Result<AuthenticatedFederationHello, TransportError> {
-        let fingerprint = connection_certificate_fingerprint(connection)
-            .map_err(|_| TransportError::UntrustedFederationPeer)?;
-        let binding = self
-            .by_fingerprint
-            .get(&fingerprint)
-            .copied()
-            .ok_or(TransportError::UntrustedFederationPeer)?;
+        let (binding, fingerprint) = self.connection_binding(connection, now)?;
         let envelope = envelope.as_inner();
         let header = envelope
             .header
@@ -117,6 +111,24 @@ impl FederationPeerRegistry {
             header: header.clone(),
             hello: hello.clone(),
         })
+    }
+
+    pub(crate) fn connection_binding(
+        &self,
+        connection: &quinn::Connection,
+        now: UnixMicros,
+    ) -> Result<(FederationPeerBinding, [u8; 32]), TransportError> {
+        let fingerprint = connection_certificate_fingerprint(connection)
+            .map_err(|_| TransportError::UntrustedFederationPeer)?;
+        let binding = self
+            .by_fingerprint
+            .get(&fingerprint)
+            .copied()
+            .ok_or(TransportError::UntrustedFederationPeer)?;
+        if now < binding.valid_from || now >= binding.valid_until {
+            return Err(TransportError::UntrustedFederationPeer);
+        }
+        Ok((binding, fingerprint))
     }
 }
 
@@ -148,7 +160,7 @@ impl FederationReplayGuard {
         })
     }
 
-    fn check(
+    pub(crate) fn check(
         &mut self,
         relationship_id: FederationRelationshipId,
         header: &FederationHeader,
@@ -172,7 +184,7 @@ impl FederationReplayGuard {
         Ok(())
     }
 
-    fn record(
+    pub(crate) fn record(
         &mut self,
         relationship_id: FederationRelationshipId,
         header: &FederationHeader,
@@ -210,6 +222,12 @@ impl AuthenticatedFederationHello {
         self.binding.remote_mesh_id
     }
 
+    /// Returns the receiving autonomous swarm.
+    #[must_use]
+    pub const fn local_mesh_id(&self) -> MeshId {
+        self.binding.local_mesh_id
+    }
+
     /// Returns the validated request header for response correlation.
     #[must_use]
     pub const fn header(&self) -> &FederationHeader {
@@ -220,6 +238,10 @@ impl AuthenticatedFederationHello {
     #[must_use]
     pub const fn hello(&self) -> &FederationHello {
         &self.hello
+    }
+
+    pub(crate) const fn binding(&self) -> FederationPeerBinding {
+        self.binding
     }
 }
 
