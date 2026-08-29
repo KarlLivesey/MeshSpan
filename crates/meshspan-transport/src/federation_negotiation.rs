@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use meshspan_domain::{FederationRelationshipId, MeshId, UnixMicros};
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
@@ -16,14 +16,14 @@ use meshspan_protocol::{
 };
 
 use crate::{
-    AuthenticatedFederationHello, FederationPeerRegistry, FederationReplayGuard, TransportError,
+    AuthenticatedFederationHello, FederationLocalIdentity, FederationPeerRegistry,
+    FederationReplayGuard, TransportError,
 };
 
 /// Local identity, authority revision and resource limits used to answer one valid hello.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationNegotiationConfig {
     versions: Vec<ProtocolVersion>,
-    identity_generation: u64,
     authority_revision: u64,
     wire_limits: WireLimits,
     maximum_streams: u32,
@@ -37,7 +37,6 @@ impl FederationNegotiationConfig {
     /// Rejects duplicate/zero versions, zero revisions or zero streams.
     pub fn new(
         versions: Vec<ProtocolVersion>,
-        identity_generation: u64,
         authority_revision: u64,
         wire_limits: WireLimits,
         maximum_streams: u32,
@@ -49,7 +48,6 @@ impl FederationNegotiationConfig {
         if versions.is_empty()
             || distinct.len() != versions.len()
             || versions.iter().any(|version| version.major == 0)
-            || identity_generation == 0
             || authority_revision == 0
             || maximum_streams == 0
         {
@@ -57,11 +55,16 @@ impl FederationNegotiationConfig {
         }
         Ok(Self {
             versions,
-            identity_generation,
             authority_revision,
             wire_limits,
             maximum_streams,
         })
+    }
+
+    /// Returns the local hard receive/send bounds used for negotiation framing.
+    #[must_use]
+    pub const fn wire_limits(&self) -> WireLimits {
+        self.wire_limits
     }
 }
 
@@ -168,6 +171,46 @@ pub struct AuthenticatedFederationSession {
     pub maximum_streams: u32,
 }
 
+/// Responder-side mutually authenticated session after validating and answering one hello.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedFederationSession {
+    /// Exact approved relationship.
+    pub relationship_id: FederationRelationshipId,
+    /// Certificate-authenticated autonomous peer.
+    pub remote_mesh_id: MeshId,
+    /// Selected exact protocol version.
+    pub version: ProtocolVersion,
+    /// Peer identity generation authenticated by its signed hello.
+    pub remote_identity_generation: u64,
+    /// Negotiated maximum control payload bytes.
+    pub maximum_control_bytes: u64,
+    /// Negotiated maximum bulk-frame bytes.
+    pub maximum_data_frame_bytes: u64,
+    /// Negotiated maximum concurrent streams.
+    pub maximum_streams: u32,
+}
+
+/// Signed welcome envelope paired with the responder's authenticated session proof.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutboundFederationWelcome {
+    envelope: FederationEnvelope,
+    session: AcceptedFederationSession,
+}
+
+impl OutboundFederationWelcome {
+    /// Returns the signed welcome wire envelope.
+    #[must_use]
+    pub const fn envelope(&self) -> &FederationEnvelope {
+        &self.envelope
+    }
+
+    /// Returns the responder-side authenticated session parameters.
+    #[must_use]
+    pub const fn session(&self) -> AcceptedFederationSession {
+        self.session
+    }
+}
+
 impl AuthenticatedFederationHello {
     /// Builds a signed welcome bound to the authenticated request challenge and lower limits.
     ///
@@ -178,8 +221,8 @@ impl AuthenticatedFederationHello {
         &self,
         config: &FederationNegotiationConfig,
         nonces: FederationWelcomeNonces,
-        signing_key: &SigningKey,
-    ) -> Result<FederationEnvelope, TransportError> {
+        local_identity: &FederationLocalIdentity<'_>,
+    ) -> Result<OutboundFederationWelcome, TransportError> {
         let request_challenge: [u8; 32] = exact(&self.hello().challenge_nonce)?;
         if nonces.challenge == request_challenge {
             return Err(TransportError::InvalidConfiguration);
@@ -187,6 +230,14 @@ impl AuthenticatedFederationHello {
         let selected = highest_common_version(&self.hello().versions, &config.versions)
             .ok_or(TransportError::UnsupportedProtocol)?;
         let binding = self.binding();
+        let local_binding = local_identity.binding();
+        if local_binding.relationship_id != binding.relationship_id
+            || local_binding.local_mesh_id != binding.local_mesh_id
+            || local_binding.remote_mesh_id != binding.remote_mesh_id
+            || local_binding.authority_epoch != binding.authority_epoch
+        {
+            return Err(TransportError::InvalidConfiguration);
+        }
         let request = self.header();
         let header = FederationHeader {
             version: Some(selected),
@@ -202,7 +253,7 @@ impl AuthenticatedFederationHello {
         };
         let mut welcome = FederationWelcome {
             selected_version: Some(selected),
-            identity_generation: config.identity_generation,
+            identity_generation: local_binding.identity_generation,
             request_challenge_nonce: request_challenge.to_vec(),
             responder_challenge_nonce: nonces.challenge.to_vec(),
             authority_revision: config.authority_revision,
@@ -217,16 +268,26 @@ impl AuthenticatedFederationHello {
             maximum_streams: self.hello().maximum_streams.min(config.maximum_streams),
             signature: vec![0; 64],
         };
-        welcome.signature = signing_key
+        welcome.signature = local_identity
+            .signing_key()
             .sign(&federation_welcome_signing_payload(&header, &welcome))
             .to_bytes()
             .to_vec();
+        let session = AcceptedFederationSession {
+            relationship_id: binding.relationship_id,
+            remote_mesh_id: binding.remote_mesh_id,
+            version: selected,
+            remote_identity_generation: binding.identity_generation,
+            maximum_control_bytes: welcome.maximum_control_bytes,
+            maximum_data_frame_bytes: welcome.maximum_data_frame_bytes,
+            maximum_streams: welcome.maximum_streams,
+        };
         let envelope = FederationEnvelope {
             header: Some(header),
             message: Some(Message::Welcome(welcome)),
         };
         encode_federation_frame(&envelope, config.wire_limits)?;
-        Ok(envelope)
+        Ok(OutboundFederationWelcome { envelope, session })
     }
 }
 

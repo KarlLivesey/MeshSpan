@@ -38,6 +38,49 @@ pub struct FederationLocalIdentityBinding {
     pub valid_until: UnixMicros,
 }
 
+/// Current metadata identity proven to match the daemon's exact certificate and private key.
+pub struct FederationLocalIdentity<'a> {
+    binding: FederationLocalIdentityBinding,
+    certificate_der: &'a [u8],
+    signing_key: &'a SigningKey,
+}
+
+impl<'a> FederationLocalIdentity<'a> {
+    /// Binds private process material to one current authoritative public identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects reflected swarms, invalid authority/lifetime, substituted certificate bytes or a
+    /// private signing key whose public half does not equal committed metadata.
+    pub fn authenticate(
+        binding: FederationLocalIdentityBinding,
+        certificate_der: &'a [u8],
+        signing_key: &'a SigningKey,
+        now: UnixMicros,
+    ) -> Result<Self, TransportError> {
+        validate_local_identity(binding, certificate_der, signing_key, now)?;
+        Ok(Self {
+            binding,
+            certificate_der,
+            signing_key,
+        })
+    }
+
+    /// Returns the exact committed local identity binding.
+    #[must_use]
+    pub const fn binding(&self) -> FederationLocalIdentityBinding {
+        self.binding
+    }
+
+    pub(crate) const fn certificate_der(&self) -> &[u8] {
+        self.certificate_der
+    }
+
+    pub(crate) const fn signing_key(&self) -> &SigningKey {
+        self.signing_key
+    }
+}
+
 /// Bounded protocol and resource offer carried by an outbound hello.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationHelloConfig {
@@ -89,6 +132,12 @@ impl FederationHelloConfig {
             .max_by_key(|version| (version.major, version.minor))
             .copied()
             .ok_or(TransportError::InvalidConfiguration)
+    }
+
+    /// Returns the local hard receive/send bounds used for negotiation framing.
+    #[must_use]
+    pub const fn wire_limits(&self) -> WireLimits {
+        self.wire_limits
     }
 }
 
@@ -172,36 +221,31 @@ impl OutboundFederationHello {
 /// Rejects stale/inconsistent authority, a substituted certificate or signing key, a deadline
 /// outside the local identity lifetime, or an envelope exceeding its declared bounds.
 pub fn signed_federation_hello(
-    identity: FederationLocalIdentityBinding,
+    identity: &FederationLocalIdentity<'_>,
     config: &FederationHelloConfig,
     context: FederationHelloContext,
-    certificate_der: &[u8],
-    signing_key: &SigningKey,
     now: UnixMicros,
 ) -> Result<OutboundFederationHello, TransportError> {
-    validate_local_identity(
-        identity,
-        certificate_der,
-        signing_key,
-        context.deadline,
-        now,
-    )?;
+    let binding = identity.binding();
+    if context.deadline <= now || context.deadline > binding.valid_until {
+        return Err(TransportError::InvalidConfiguration);
+    }
     let header = FederationHeader {
         version: Some(config.envelope_version()?),
-        relationship_id: identity.relationship_id.as_bytes().to_vec(),
-        sender_mesh_id: identity.local_mesh_id.as_bytes().to_vec(),
-        recipient_mesh_id: identity.remote_mesh_id.as_bytes().to_vec(),
+        relationship_id: binding.relationship_id.as_bytes().to_vec(),
+        sender_mesh_id: binding.local_mesh_id.as_bytes().to_vec(),
+        recipient_mesh_id: binding.remote_mesh_id.as_bytes().to_vec(),
         request_id: context.request_id.to_vec(),
         operation_id: context.operation_id.to_vec(),
-        authority_epoch: identity.authority_epoch,
+        authority_epoch: binding.authority_epoch,
         deadline_unix_micros: context.deadline.get(),
         trace_id: context.trace_id.to_vec(),
         replay_nonce: context.replay_nonce.to_vec(),
     };
     let mut hello = FederationHello {
         versions: config.versions.clone(),
-        identity_generation: identity.identity_generation,
-        public_identity_chain: certificate_der.to_vec(),
+        identity_generation: binding.identity_generation,
+        public_identity_chain: identity.certificate_der().to_vec(),
         challenge_nonce: context.challenge_nonce.to_vec(),
         feature_bits: config.feature_bits.clone(),
         maximum_control_bytes: usize_to_u64(config.wire_limits.maximum_control_bytes())?,
@@ -209,7 +253,8 @@ pub fn signed_federation_hello(
         maximum_streams: config.maximum_streams,
         signature: vec![0; 64],
     };
-    hello.signature = signing_key
+    hello.signature = identity
+        .signing_key()
         .sign(&federation_hello_signing_payload(&header, &hello))
         .to_bytes()
         .to_vec();
@@ -229,7 +274,6 @@ fn validate_local_identity(
     identity: FederationLocalIdentityBinding,
     certificate_der: &[u8],
     signing_key: &SigningKey,
-    deadline: UnixMicros,
     now: UnixMicros,
 ) -> Result<(), TransportError> {
     let fingerprint: [u8; 32] = Sha256::digest(certificate_der).into();
@@ -242,9 +286,7 @@ fn validate_local_identity(
         || signing_key.verifying_key().to_bytes() != identity.verifying_key
         || identity.valid_until <= identity.valid_from
         || now < identity.valid_from
-        || now >= identity.valid_until
-        || deadline <= now
-        || deadline > identity.valid_until;
+        || now >= identity.valid_until;
     if invalid {
         Err(TransportError::InvalidConfiguration)
     } else {
@@ -265,8 +307,8 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        FederationHelloConfig, FederationHelloContext, FederationLocalIdentityBinding,
-        signed_federation_hello,
+        FederationHelloConfig, FederationHelloContext, FederationLocalIdentity,
+        FederationLocalIdentityBinding, signed_federation_hello,
     };
     use crate::TransportError;
 
@@ -276,16 +318,16 @@ mod tests {
         let certificate = b"exact federation certificate";
         let signing_key = SigningKey::from_bytes(&[7; 32]);
         let identity = identity(certificate, &signing_key)?;
-        let config = config()?;
-        let context = context()?;
-        let outbound = signed_federation_hello(
+        let authenticated = FederationLocalIdentity::authenticate(
             identity,
-            &config,
-            context,
             certificate,
             &signing_key,
             UnixMicros::new(20),
         )?;
+        let config = config()?;
+        let context = context()?;
+        let outbound =
+            signed_federation_hello(&authenticated, &config, context, UnixMicros::new(20))?;
         let header = outbound
             .envelope()
             .header
@@ -297,26 +339,20 @@ mod tests {
 
         let other_key = SigningKey::from_bytes(&[8; 32]);
         for result in [
-            signed_federation_hello(
+            FederationLocalIdentity::authenticate(
                 identity,
-                &config,
-                context,
                 b"substituted certificate",
                 &signing_key,
                 UnixMicros::new(20),
             ),
-            signed_federation_hello(
+            FederationLocalIdentity::authenticate(
                 identity,
-                &config,
-                context,
                 certificate,
                 &other_key,
                 UnixMicros::new(20),
             ),
-            signed_federation_hello(
+            FederationLocalIdentity::authenticate(
                 identity,
-                &config,
-                context,
                 certificate,
                 &signing_key,
                 UnixMicros::new(100),
@@ -324,6 +360,18 @@ mod tests {
         ] {
             assert!(matches!(result, Err(TransportError::InvalidConfiguration)));
         }
+        let late_context = FederationHelloContext::new(
+            [6; 16],
+            [7; 16],
+            [8; 16],
+            UnixMicros::new(101),
+            [9; 32],
+            [10; 32],
+        )?;
+        assert!(matches!(
+            signed_federation_hello(&authenticated, &config, late_context, UnixMicros::new(20),),
+            Err(TransportError::InvalidConfiguration)
+        ));
         Ok(())
     }
 

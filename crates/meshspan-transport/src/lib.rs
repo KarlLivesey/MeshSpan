@@ -31,10 +31,10 @@ pub use federation::{
     FederationReplayGuard,
 };
 pub use federation_hello::{
-    FederationHelloConfig, FederationHelloContext, FederationLocalIdentityBinding,
-    OutboundFederationHello, signed_federation_hello,
+    FederationHelloConfig, FederationHelloContext, FederationLocalIdentity,
+    FederationLocalIdentityBinding, OutboundFederationHello, signed_federation_hello,
 };
 pub use federation_negotiation::{
-    AuthenticatedFederationSession, FederationHelloExpectation, FederationNegotiationConfig,
-    FederationWelcomeNonces,
+    AcceptedFederationSession, AuthenticatedFederationSession, FederationHelloExpectation,
+    FederationNegotiationConfig, FederationWelcomeNonces, OutboundFederationWelcome,
 };
