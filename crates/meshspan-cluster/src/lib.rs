@@ -13,7 +13,11 @@ mod federation_authority_exchange;
 mod federation_authority_page_source;
 mod federation_authority_receiver;
 mod federation_authority_sync;
+mod federation_branch_authority;
+mod federation_branch_exchange;
+mod federation_branch_page_source;
 mod federation_grant_authority;
+mod federation_resource_wire;
 mod federation_session;
 mod filesystem_authority;
 mod filesystem_convergence;
@@ -76,9 +80,23 @@ pub use federation_authority_receiver::{
 pub use federation_authority_sync::{
     FederationAuthoritySyncError, FederationAuthoritySyncOutcome, FederationAuthoritySyncRequest,
 };
+pub use federation_branch_authority::{
+    FederationBranchAuthoritySource, MetadataFederationBranchAuthority,
+};
+pub use federation_branch_exchange::{
+    FederationBranchFetchRequest, FederationBranchPageServeRequest, FederationBranchPageServices,
+    ServedFederationBranchPage,
+};
+pub use federation_branch_page_source::{
+    FederationBranchPageQuery, FederationBranchPageRecords, FederationBranchPageSource,
+    FederationBranchPageSourceError,
+};
 pub use federation_grant_authority::{
     EffectiveFederationGrantAuthority, EffectiveFederationGrantAuthorityError,
     effective_federation_grant_authority,
+};
+pub use federation_resource_wire::{
+    FederationResourceWireError, version_federation_resource_scope,
 };
 pub use federation_session::{
     FederationAcceptRequest, FederationAuthoritySource, FederationDialRequest,

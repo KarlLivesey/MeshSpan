@@ -186,7 +186,7 @@ pub struct FederationAcceptRequest {
 }
 
 pub(crate) fn load_authority(
-    source: &impl FederationAuthoritySource,
+    source: &(impl FederationAuthoritySource + ?Sized),
     relationship_id: FederationRelationshipId,
     now: UnixMicros,
 ) -> Result<FederationConnectionAuthority, FederationSessionError> {
@@ -222,6 +222,15 @@ pub enum FederationSessionError {
     /// The bounded page source rejected or could not produce an exact stable-revision page.
     #[error("federation authority page could not be produced")]
     AuthorityPage(#[from] crate::FederationAuthorityPageSourceError),
+    /// Current bilateral grant authority could not be established safely.
+    #[error("federation branch authority could not be established")]
+    BranchAuthority(#[from] crate::EffectiveFederationGrantAuthorityError),
+    /// The bounded history source rejected or could not produce an exact page.
+    #[error("federation branch page could not be produced")]
+    BranchPage(#[from] crate::FederationBranchPageSourceError),
+    /// The signed resource scope was not the exact canonical typed form.
+    #[error("federation resource scope is invalid")]
+    ResourceScope(#[from] crate::FederationResourceWireError),
     /// Quinn, framing, identity or signature validation failed.
     #[error("federation transport negotiation failed")]
     Transport(#[from] TransportError),
