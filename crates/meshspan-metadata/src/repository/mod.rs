@@ -95,7 +95,8 @@ pub use federation_grant_evidence::{
 pub use federation_principal::FederatedPrincipalProjectionRecord;
 pub use federation_quarantine::{FederationQuarantineRecord, FederationQuarantineState};
 pub use federation_query::{
-    FederationRelationshipRecord, FederationRelationshipState, FederationTrustIdentityRecord,
+    FederationRelationshipRecord, FederationRelationshipState, FederationTransportAuthority,
+    FederationTrustIdentityRecord,
 };
 pub use federation_succession::{FederationSuccessionRecord, FederationSuccessionState};
 pub use kernel::{
@@ -241,6 +242,18 @@ impl AuthoritativeRepository {
         owner: crate::FederationIdentityOwner,
     ) -> Result<Option<FederationTrustIdentityRecord>, RepositoryError> {
         federation_query::active_identity(&self.database, relationship_id, owner)
+    }
+
+    /// Returns complete current transport authority only for an active or restricted relationship.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if relationship history or either current identity is malformed or incomplete.
+    pub fn federation_transport_authority(
+        &self,
+        relationship_id: meshspan_domain::FederationRelationshipId,
+    ) -> Result<Option<FederationTransportAuthority>, RepositoryError> {
+        federation_query::transport_authority(&self.database, relationship_id)
     }
 
     /// Returns one currently usable, independently revalidated federation grant.

@@ -206,6 +206,11 @@ fn relationship_lifecycle_is_fenced_audited_replayable_and_restart_safe()
     bootstrap(&mut repository, fixture.ids)?;
     let relationship_id = FederationRelationshipId::from_bytes([20; 16])?;
     prepare_active_relationship(&mut repository, fixture.ids, relationship_id)?;
+    let active_authority = repository
+        .federation_transport_authority(relationship_id)?
+        .ok_or("active transport authority missing")?;
+    assert_eq!(active_authority.relationship.authority_epoch, 1);
+    assert_eq!(active_authority.remote_identity.identity.generation, 1);
     let (retirement_context, retirement, receipt) =
         advance_relationship_to_retired(&mut repository, fixture.ids, relationship_id)?;
     assert_eq!(receipt.entity.kind, EntityKind::FederationRelationship);
@@ -375,6 +380,11 @@ fn prepare_active_relationship(
             governance_direction: FederationGovernanceDirection::None,
         }),
     )?;
+    assert!(
+        repository
+            .federation_transport_authority(relationship_id)?
+            .is_none()
+    );
     apply(
         repository,
         3,
@@ -435,6 +445,11 @@ fn advance_relationship_to_retired(
             identity: identity(2, 36, 37),
         }),
     )?;
+    let rotated_authority = repository
+        .federation_transport_authority(relationship_id)?
+        .ok_or("rotated transport authority missing")?;
+    assert_eq!(rotated_authority.relationship.authority_epoch, 1);
+    assert_eq!(rotated_authority.remote_identity.identity.generation, 2);
     apply(
         repository,
         5,
@@ -446,6 +461,11 @@ fn advance_relationship_to_retired(
             reason: "Peer-requested maintenance restriction".to_owned(),
         }),
     )?;
+    let restricted_authority = repository
+        .federation_transport_authority(relationship_id)?
+        .ok_or("restricted transport authority missing")?;
+    assert_eq!(restricted_authority.relationship.authority_epoch, 2);
+    assert_eq!(restricted_authority.remote_identity.identity.generation, 2);
     apply(
         repository,
         6,
@@ -457,6 +477,14 @@ fn advance_relationship_to_retired(
             reason: "Mutual recovery proof accepted".to_owned(),
         }),
     )?;
+    assert_eq!(
+        repository
+            .federation_transport_authority(relationship_id)?
+            .ok_or("recovered transport authority missing")?
+            .relationship
+            .authority_epoch,
+        3
+    );
     apply(
         repository,
         7,
@@ -468,6 +496,11 @@ fn advance_relationship_to_retired(
             reason: "Relationship ended by both swarms".to_owned(),
         }),
     )?;
+    assert!(
+        repository
+            .federation_transport_authority(relationship_id)?
+            .is_none()
+    );
     let retirement_context = context(44, ids.administrator, 45, 8, 7)?;
     let retirement =
         AuthoritativeCommand::RetireFederationRelationship(RetireFederationRelationship {
