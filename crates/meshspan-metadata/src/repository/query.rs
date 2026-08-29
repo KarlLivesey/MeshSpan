@@ -211,7 +211,7 @@ pub(super) fn direct_group_members(
     let lower = after.map_or([0; 16], |cursor| cursor.0.as_bytes());
     let mut statement = database.connection().prepare(
         "SELECT member_principal_id FROM group_memberships
-         WHERE containing_group_id = ?1 AND member_principal_id > ?2
+         WHERE containing_group_id = ?1 AND state = 1 AND member_principal_id > ?2
          ORDER BY member_principal_id LIMIT ?3",
     )?;
     let rows = statement.query_map(

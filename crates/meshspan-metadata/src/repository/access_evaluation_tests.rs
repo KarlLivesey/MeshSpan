@@ -1,12 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use meshspan_contracts::BoundedItems;
-use meshspan_domain::{
-    ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, DurationMicros, GrantId,
-    GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId,
-    Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
-};
-
 use super::{AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository, LogPosition};
 use crate::{
     ActivateGrant, AddGroupMember, AuthoritativeCommand, BootstrapMesh, CommandContext,
@@ -14,17 +7,23 @@ use crate::{
     GrantPermission, IssueAuthenticationSession, NamespaceObjectKind, PartitionDatabase,
     PermissionScope, RecordName, SetObjectGrantInheritance,
 };
+use meshspan_contracts::BoundedItems;
+use meshspan_domain::{
+    ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, DurationMicros, GrantId,
+    GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId,
+    Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
+};
 
-struct Fixture {
-    repository: AuthoritativeRepository,
-    administrator: PrincipalId,
-    user: PrincipalId,
-    second_user: PrincipalId,
+pub(super) struct Fixture {
+    pub(super) repository: AuthoritativeRepository,
+    pub(super) administrator: PrincipalId,
+    pub(super) user: PrincipalId,
+    pub(super) second_user: PrincipalId,
     gateway: NodeId,
     volume: VolumeId,
     folder: ObjectId,
     file: ObjectId,
-    next_revision: u64,
+    pub(super) next_revision: u64,
 }
 
 #[test]
@@ -247,13 +246,18 @@ fn folder_boundary_stops_higher_grants_but_keeps_grants_scoped_at_the_folder()
     Ok(())
 }
 
-fn build_fixture(activation_required: bool) -> Result<Fixture, Box<dyn std::error::Error>> {
+pub(super) fn build_fixture(
+    activation_required: bool,
+) -> Result<Fixture, Box<dyn std::error::Error>> {
+    build_fixture_at(std::path::Path::new(":memory:"), activation_required)
+}
+
+pub(super) fn build_fixture_at(
+    file_path: &std::path::Path,
+    activation_required: bool,
+) -> Result<Fixture, Box<dyn std::error::Error>> {
     let partition = PartitionId::from_bytes([1; 16])?;
-    let database = PartitionDatabase::open(
-        std::path::Path::new(":memory:"),
-        partition,
-        UnixMicros::new(1),
-    )?;
+    let database = PartitionDatabase::open(file_path, partition, UnixMicros::new(1))?;
     let administrator = PrincipalId::from_bytes([2; 16])?;
     let user = PrincipalId::from_bytes([3; 16])?;
     let second_user = PrincipalId::from_bytes([4; 16])?;
@@ -274,6 +278,37 @@ fn build_fixture(activation_required: bool) -> Result<Fixture, Box<dyn std::erro
     create_namespace(&mut fixture)?;
     create_grant(&mut fixture, activation_required)?;
     Ok(fixture)
+}
+
+pub(super) fn reopen_fixture(
+    fixture: Fixture,
+    file_path: &std::path::Path,
+) -> Result<Fixture, Box<dyn std::error::Error>> {
+    let Fixture {
+        repository,
+        administrator,
+        user,
+        second_user,
+        gateway,
+        volume,
+        folder,
+        file,
+        next_revision,
+    } = fixture;
+    drop(repository.into_database());
+    let partition = PartitionId::from_bytes([1; 16])?;
+    let database = PartitionDatabase::open(file_path, partition, UnixMicros::new(300))?;
+    Ok(Fixture {
+        repository: AuthoritativeRepository::new(database),
+        administrator,
+        user,
+        second_user,
+        gateway,
+        volume,
+        folder,
+        file,
+        next_revision,
+    })
 }
 
 fn bootstrap(
@@ -344,7 +379,7 @@ fn create_identities(fixture: &mut Fixture) -> Result<(), Box<dyn std::error::Er
     add_member(fixture, outer, inner.principal_id(), 850, 106)
 }
 
-fn add_member(
+pub(super) fn add_member(
     fixture: &mut Fixture,
     group: GroupId,
     member: PrincipalId,
@@ -452,7 +487,7 @@ fn create_grant(
     )
 }
 
-fn issue_session(
+pub(super) fn issue_session(
     fixture: &mut Fixture,
     principal: PrincipalId,
     session_id: SessionId,
@@ -472,7 +507,7 @@ fn issue_session(
     )
 }
 
-fn request(
+pub(super) fn request(
     fixture: &Fixture,
     token_digest: [u8; 32],
     requested_rights: Rights,
@@ -490,7 +525,7 @@ fn request(
     }
 }
 
-fn apply(
+pub(super) fn apply(
     fixture: &mut Fixture,
     actor: PrincipalId,
     now: i64,

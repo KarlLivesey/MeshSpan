@@ -98,7 +98,7 @@ pub(super) fn check_invariants(
     collect(
         database,
         "SELECT gm.containing_group_id FROM group_memberships gm
-         WHERE NOT EXISTS(
+         WHERE gm.state = 1 AND NOT EXISTS(
              SELECT 1 FROM group_closure gc
              WHERE gc.containing_group_id = gm.containing_group_id
                AND gc.member_principal_id = gm.member_principal_id

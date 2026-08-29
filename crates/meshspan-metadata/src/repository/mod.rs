@@ -640,6 +640,8 @@ pub enum RepositoryError {
 #[cfg(test)]
 mod access_evaluation_tests;
 #[cfg(test)]
+mod access_revocation_tests;
+#[cfg(test)]
 mod cleanup_attestation_tests;
 #[cfg(test)]
 mod cleanup_completion_tests;

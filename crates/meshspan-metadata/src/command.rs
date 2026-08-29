@@ -42,6 +42,8 @@ pub enum AuthoritativeCommand {
     CreateGroup(CreateGroup),
     /// Adds one direct user/group membership and rebuilds exact closure rows.
     AddGroupMember(AddGroupMember),
+    /// Removes one exact direct membership while retaining audit evidence.
+    RemoveGroupMember(RemoveGroupMember),
     /// Creates a bounded self-service activation policy.
     CreateActivationPolicy(CreateActivationPolicy),
     /// Creates a volume root with one non-empty multi-principal owner set.
@@ -96,10 +98,14 @@ pub enum AuthoritativeCommand {
     DetachTag(DetachTag),
     /// Creates an allow-only global, volume or object permission grant.
     GrantPermission(GrantPermission),
+    /// Revokes one exact permission grant immediately.
+    RevokePermissionGrant(RevokePermissionGrant),
     /// Activates one pre-authorised grant for the requesting user.
     ActivateGrant(ActivateGrant),
     /// Activates one pre-authorised group for the requesting user.
     ActivateGroup(ActivateGroup),
+    /// Revokes one exact current access activation.
+    RevokeAccessActivation(RevokeAccessActivation),
     /// Issues one bounded authentication session after an accepted authentication ceremony.
     IssueAuthenticationSession(IssueAuthenticationSession),
     /// Revokes one exact authentication session immediately.
@@ -150,6 +156,7 @@ impl AuthoritativeCommand {
             Self::CreateUser(value) => value.update_digest(digest),
             Self::CreateGroup(value) => value.update_digest(digest),
             Self::AddGroupMember(value) => value.update_digest(digest),
+            Self::RemoveGroupMember(value) => value.update_digest(digest),
             Self::CreateActivationPolicy(value) => value.update_digest(digest),
             Self::CreateVolume(value) => value.update_digest(digest),
             Self::CommitConvergedVolumeHead(value) => value.update_digest(digest),
@@ -177,8 +184,10 @@ impl AuthoritativeCommand {
             Self::AttachTag(value) => value.update_digest(digest),
             Self::DetachTag(value) => value.update_digest(digest),
             Self::GrantPermission(value) => value.update_digest(digest),
+            Self::RevokePermissionGrant(value) => value.update_digest(digest),
             Self::ActivateGrant(value) => value.update_digest(digest),
             Self::ActivateGroup(value) => value.update_digest(digest),
+            Self::RevokeAccessActivation(value) => value.update_digest(digest),
             Self::IssueAuthenticationSession(value) => value.update_digest(digest),
             Self::RevokeAuthenticationSession(value) => value.update_digest(digest),
             Self::CreateComponent(value) => value.update_digest(digest),
@@ -255,6 +264,17 @@ pub struct AddGroupMember {
     pub valid_until: Option<UnixMicros>,
     /// Whether the user must explicitly activate this membership source.
     pub activation_required: bool,
+}
+
+/// Audited removal of one exact active direct group edge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoveGroupMember {
+    /// Containing group of the exact edge.
+    pub containing_group_id: GroupId,
+    /// Direct user or group member being removed.
+    pub member_principal_id: PrincipalId,
+    /// Non-blank bounded human audit reason.
+    pub reason: String,
 }
 
 /// Persisted self-service activation limits.
@@ -830,6 +850,15 @@ pub struct GrantPermission {
     pub activation_policy_id: Option<ActivationPolicyId>,
 }
 
+/// Audited revocation of one exact active allow grant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevokePermissionGrant {
+    /// Exact active grant to revoke.
+    pub grant_id: GrantId,
+    /// Non-blank bounded human audit reason.
+    pub reason: String,
+}
+
 /// One user's time-bounded activation of a pre-authorised grant.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivateGrant {
@@ -874,6 +903,17 @@ pub struct ActivateGroup {
     pub assurance: AssuranceLevel,
     /// Digest binding the authentication ceremony/session.
     pub authentication_digest: [u8; 32],
+}
+
+/// Audited revocation of one exact activation owned by one exact user.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevokeAccessActivation {
+    /// Exact current activation to revoke.
+    pub activation_id: ActivationId,
+    /// Expected owning user, preventing confused-deputy revocation.
+    pub principal_id: PrincipalId,
+    /// Non-blank bounded human audit reason.
+    pub reason: String,
 }
 
 /// Accepted authentication ceremony converted into a mesh-wide bounded session.
@@ -1178,6 +1218,15 @@ digest_simple_record!(AddGroupMember, b"add-group-member", |value, digest| {
     digest.optional_instant(value.valid_until);
     digest.boolean(value.activation_required);
 });
+digest_simple_record!(
+    RemoveGroupMember,
+    b"remove-group-member",
+    |value, digest| {
+        digest.identifier(value.containing_group_id.as_bytes());
+        digest.identifier(value.member_principal_id.as_bytes());
+        digest.bytes(value.reason.as_bytes());
+    }
+);
 digest_simple_record!(
     CreateActivationPolicy,
     b"activation-policy",
@@ -1535,6 +1584,14 @@ digest_simple_record!(GrantPermission, b"grant-permission", |value, digest| {
     digest.optional_instant(value.valid_until);
     digest.optional_identifier(value.activation_policy_id.map(ActivationPolicyId::as_bytes));
 });
+digest_simple_record!(
+    RevokePermissionGrant,
+    b"revoke-permission-grant",
+    |value, digest| {
+        digest.identifier(value.grant_id.as_bytes());
+        digest.bytes(value.reason.as_bytes());
+    }
+);
 digest_simple_record!(ActivateGrant, b"activate-grant", |value, digest| {
     digest.identifier(value.activation_id.as_bytes());
     digest.identifier(value.principal_id.as_bytes());
@@ -1557,6 +1614,15 @@ digest_simple_record!(ActivateGroup, b"activate-group", |value, digest| {
     digest.byte(assurance_code(value.assurance));
     digest.bytes(&value.authentication_digest);
 });
+digest_simple_record!(
+    RevokeAccessActivation,
+    b"revoke-access-activation",
+    |value, digest| {
+        digest.identifier(value.activation_id.as_bytes());
+        digest.identifier(value.principal_id.as_bytes());
+        digest.bytes(value.reason.as_bytes());
+    }
+);
 digest_simple_record!(
     IssueAuthenticationSession,
     b"issue-authentication-session",

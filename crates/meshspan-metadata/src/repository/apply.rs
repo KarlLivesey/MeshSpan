@@ -280,10 +280,18 @@ fn authorise(
             Err(RepositoryError::InvalidCommand)
         };
     }
-    if let AuthoritativeCommand::RevokeAuthenticationSession(value) = command
-        && context.actor_principal_id == value.principal_id
-    {
-        return Ok(());
+    match command {
+        AuthoritativeCommand::RevokeAuthenticationSession(value)
+            if context.actor_principal_id == value.principal_id =>
+        {
+            return Ok(());
+        }
+        AuthoritativeCommand::RevokeAccessActivation(value)
+            if context.actor_principal_id == value.principal_id =>
+        {
+            return Ok(());
+        }
+        _ => {}
     }
     require_system_administrator(
         transaction,
@@ -417,10 +425,13 @@ fn is_identity_command(command: &AuthoritativeCommand) -> bool {
         AuthoritativeCommand::CreateUser(_)
             | AuthoritativeCommand::CreateGroup(_)
             | AuthoritativeCommand::AddGroupMember(_)
+            | AuthoritativeCommand::RemoveGroupMember(_)
             | AuthoritativeCommand::CreateActivationPolicy(_)
             | AuthoritativeCommand::GrantPermission(_)
+            | AuthoritativeCommand::RevokePermissionGrant(_)
             | AuthoritativeCommand::ActivateGrant(_)
             | AuthoritativeCommand::ActivateGroup(_)
+            | AuthoritativeCommand::RevokeAccessActivation(_)
             | AuthoritativeCommand::IssueAuthenticationSession(_)
             | AuthoritativeCommand::RevokeAuthenticationSession(_)
     )
@@ -442,17 +453,26 @@ fn execute_identity_command(
         AuthoritativeCommand::AddGroupMember(value) => {
             identity::add_group_member(transaction, context, *value, revision)
         }
+        AuthoritativeCommand::RemoveGroupMember(value) => {
+            identity::remove_group_member(transaction, context, value, revision)
+        }
         AuthoritativeCommand::CreateActivationPolicy(value) => {
             identity::create_activation_policy(transaction, value, revision)
         }
         AuthoritativeCommand::GrantPermission(value) => {
             identity::grant_permission(transaction, context, *value, revision)
         }
+        AuthoritativeCommand::RevokePermissionGrant(value) => {
+            identity::revoke_permission_grant(transaction, context, value, revision)
+        }
         AuthoritativeCommand::ActivateGrant(value) => {
             identity::activate_grant(transaction, context, value, revision)
         }
         AuthoritativeCommand::ActivateGroup(value) => {
             identity::activate_group(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::RevokeAccessActivation(value) => {
+            identity::revoke_access_activation(transaction, context, value, revision)
         }
         AuthoritativeCommand::IssueAuthenticationSession(value) => {
             session::issue(transaction, context, *value, revision)
@@ -744,6 +764,9 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::IssueAuthenticationSession(_) => 45,
         AuthoritativeCommand::RevokeAuthenticationSession(_) => 46,
         AuthoritativeCommand::SetObjectGrantInheritance(_) => 47,
+        AuthoritativeCommand::RemoveGroupMember(_) => 48,
+        AuthoritativeCommand::RevokePermissionGrant(_) => 49,
+        AuthoritativeCommand::RevokeAccessActivation(_) => 50,
     }
 }
 
