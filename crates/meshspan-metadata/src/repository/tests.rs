@@ -590,7 +590,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
 
     verify_vertical_queries(&repository, &ids)?;
 
-    let activation_context = context(32, ids.user, 52, 112, Some(12))?;
+    let activation_context = context(32, ids.user, 52, 113, Some(13))?;
     let activation_command = AuthoritativeCommand::ActivateGrant(ActivateGrant {
         activation_id: ActivationId::from_bytes([33; 16])?,
         principal_id: ids.user,
@@ -603,15 +603,15 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
         authentication_digest: [34; 32],
     });
     let replay = repository.apply_committed(
-        LogPosition { index: 14, term: 1 },
+        LogPosition { index: 15, term: 1 },
         activation_context,
         &activation_command,
     )?;
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
-    assert_eq!(replay.committed_position.index, 13);
-    assert_eq!(replay.applied_position.index, 14);
-    assert_eq!(replay.committed_revision, Revision::new(13));
-    assert_eq!(repository.current_revision()?, Revision::new(13));
+    assert_eq!(replay.committed_position.index, 14);
+    assert_eq!(replay.applied_position.index, 15);
+    assert_eq!(replay.committed_revision, Revision::new(14));
+    assert_eq!(repository.current_revision()?, Revision::new(14));
     drop(repository);
 
     let reopened = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(200))?;
@@ -621,8 +621,8 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
         .ok_or("committed operation was not resolved")?;
     assert_eq!(resolved.result_digest, replay.result_digest);
     assert_eq!(resolved.entity, replay.entity);
-    assert_eq!(resolved.committed_position.index, 13);
-    assert_eq!(resolved.applied_position.index, 14);
+    assert_eq!(resolved.committed_position.index, 14);
+    assert_eq!(resolved.applied_position.index, 15);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
         24
@@ -1408,7 +1408,8 @@ fn activation_required_group_is_self_activated_with_bounded_evidence()
             activation_required: true,
         }),
     )?;
-    let activation_context = context(125, ids.user, 126, 105, Some(5))?;
+    issue_group_activation_test_session(&mut repository, &ids)?;
+    let activation_context = context(125, ids.user, 126, 105, Some(6))?;
     let activation = AuthoritativeCommand::ActivateGroup(ActivateGroup {
         activation_id: ActivationId::from_bytes([127; 16])?,
         principal_id: ids.user,
@@ -1421,11 +1422,11 @@ fn activation_required_group_is_self_activated_with_bounded_evidence()
         authentication_digest: [128; 32],
     });
     let receipt = repository.apply_committed(
-        LogPosition { index: 6, term: 1 },
+        LogPosition { index: 7, term: 1 },
         activation_context,
         &activation,
     )?;
-    assert_eq!(receipt.committed_revision, Revision::new(6));
+    assert_eq!(receipt.committed_revision, Revision::new(7));
     drop(repository);
     let reopened = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(200))?;
     assert!(
@@ -1433,6 +1434,25 @@ fn activation_required_group_is_self_activated_with_bounded_evidence()
             .resolve_operation(activation_context.operation_id)?
             .is_some()
     );
+    Ok(())
+}
+
+fn issue_group_activation_test_session(
+    repository: &mut AuthoritativeRepository,
+    ids: &FixtureIds,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        6,
+        context(129, ids.user, 130, 105, Some(5))?,
+        &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+            session_id: SessionId::from_bytes([131; 16])?,
+            principal_id: ids.user,
+            token_digest: [128; 32],
+            assurance: AssuranceLevel::RecentStepUp,
+            expires_at: UnixMicros::new(2_000),
+        }),
+    )?;
     Ok(())
 }
 
@@ -1875,7 +1895,19 @@ fn create_and_activate_grant(
     apply(
         repository,
         13,
-        context(32, ids.user, 52, 112, Some(12))?,
+        context(36, ids.user, 53, 112, Some(12))?,
+        &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+            session_id: SessionId::from_bytes([37; 16])?,
+            principal_id: ids.user,
+            token_digest: [34; 32],
+            assurance: AssuranceLevel::MultiFactor,
+            expires_at: UnixMicros::new(10_000),
+        }),
+    )?;
+    apply(
+        repository,
+        14,
+        context(32, ids.user, 52, 113, Some(13))?,
         &activation,
     )?;
     Ok(grant_id)

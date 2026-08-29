@@ -95,12 +95,17 @@ pub(super) fn add_group_member(
     )?;
     require_active_principal(transaction, command.member_principal_id)?;
     let group = command.containing_group_id.as_bytes();
-    let group_exists: i64 = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM groups WHERE principal_id = ?1)",
-        [group.as_slice()],
-        |row| row.get(0),
-    )?;
-    if group_exists != 1 {
+    let group_policy: Option<Option<Vec<u8>>> = transaction
+        .query_row(
+            "SELECT activation_policy_id FROM groups WHERE principal_id = ?1",
+            [group.as_slice()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(group_policy) = group_policy else {
+        return Err(RepositoryError::InvalidCommand);
+    };
+    if command.activation_required && group_policy.is_none() {
         return Err(RepositoryError::InvalidCommand);
     }
     let member = command.member_principal_id.as_bytes();
@@ -227,6 +232,14 @@ pub(super) fn activate_grant(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     require_user(transaction, command.principal_id)?;
+    validate_activation_session(
+        transaction,
+        command.principal_id,
+        command.authentication_digest,
+        command.assurance,
+        command.session_expires_at,
+        context.occurred_at,
+    )?;
     let grant_id = command.grant_id.as_bytes();
     let grant = transaction
         .query_row(
@@ -314,6 +327,14 @@ pub(super) fn activate_group(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     require_user(transaction, command.principal_id)?;
+    validate_activation_session(
+        transaction,
+        command.principal_id,
+        command.authentication_digest,
+        command.assurance,
+        command.session_expires_at,
+        context.occurred_at,
+    )?;
     let group_id = command.group_id.as_bytes();
     let group = transaction
         .query_row(
@@ -484,6 +505,40 @@ fn require_user(
         |row| row.get(0),
     )?;
     if exists == 1 {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
+}
+
+fn validate_activation_session(
+    transaction: &Transaction<'_>,
+    principal: PrincipalId,
+    authentication_digest: [u8; 32],
+    assurance: AssuranceLevel,
+    expires_at: meshspan_domain::UnixMicros,
+    now: meshspan_domain::UnixMicros,
+) -> Result<(), RepositoryError> {
+    let principal = principal.as_bytes();
+    let identity_revision = read_identity_revision(transaction)?;
+    let valid: i64 = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM authentication_sessions
+            WHERE token_digest = ?1 AND user_principal_id = ?2 AND assurance = ?3
+              AND identity_revision = ?4 AND issued_at <= ?5 AND expires_at = ?6
+              AND expires_at > ?5 AND revoked_at IS NULL
+         )",
+        params![
+            authentication_digest.as_slice(),
+            principal.as_slice(),
+            assurance_code(assurance),
+            to_i64(identity_revision.get())?,
+            now.get(),
+            expires_at.get(),
+        ],
+        |row| row.get(0),
+    )?;
+    if valid == 1 {
         Ok(())
     } else {
         Err(RepositoryError::InvalidCommand)

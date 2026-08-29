@@ -2,6 +2,7 @@
 
 //! Atomic authoritative command application and exact operation resolution.
 
+mod access_evaluation;
 mod apply;
 mod backup;
 mod bootstrap;
@@ -38,6 +39,7 @@ use thiserror::Error;
 
 use crate::{MetadataStoreError, PartitionDatabase};
 
+pub use access_evaluation::{AccessCapability, AccessDecision, AccessDenial, AccessRequest};
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -207,6 +209,19 @@ impl AuthoritativeRepository {
         operation_id: OperationId,
     ) -> Result<Option<CommandReceipt>, RepositoryError> {
         receipt::resolve_operation(&self.database, operation_id)
+    }
+
+    /// Evaluates one exact connector-neutral namespace operation against committed authority.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if persisted identities, graph edges, grants or revisions are malformed or
+    /// exceed their explicit evaluation bounds.
+    pub fn evaluate_access(
+        &self,
+        request: AccessRequest,
+    ) -> Result<AccessDecision, RepositoryError> {
+        access_evaluation::evaluate(&self.database, request)
     }
 
     /// Reads one exact user or group principal.
@@ -622,6 +637,8 @@ pub enum RepositoryError {
     InjectedFault,
 }
 
+#[cfg(test)]
+mod access_evaluation_tests;
 #[cfg(test)]
 mod cleanup_attestation_tests;
 #[cfg(test)]

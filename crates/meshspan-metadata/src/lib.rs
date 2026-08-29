@@ -30,11 +30,12 @@ pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
 pub use repository::{
-    ApplyDisposition, AuthoritativeMembership, AuthoritativeMetadataKernel,
-    AuthoritativeRepository, CommandReceipt, ConsensusStoreError, ConvergedVolumeHead, EntityKind,
-    EntityReference, GroupMemberCursor, InvariantFinding, InvariantKind, InvariantReport,
-    LogPosition, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, NamespaceCursor, NamespaceRecord, Page,
-    PageLimit, PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
+    AccessCapability, AccessDecision, AccessDenial, AccessRequest, ApplyDisposition,
+    AuthoritativeMembership, AuthoritativeMetadataKernel, AuthoritativeRepository, CommandReceipt,
+    ConsensusStoreError, ConvergedVolumeHead, EntityKind, EntityReference, GroupMemberCursor,
+    InvariantFinding, InvariantKind, InvariantReport, LogPosition,
+    MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, NamespaceCursor, NamespaceRecord, Page, PageLimit,
+    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
     PreservedVote, PrincipalKind, PrincipalRecord, RepositoryConformanceCheck,
     RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
     RetainedNamespaceRoot, RetainedNamespaceRootCursor, RetainedNamespaceRootPage,
