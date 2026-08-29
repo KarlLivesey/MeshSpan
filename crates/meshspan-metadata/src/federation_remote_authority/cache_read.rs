@@ -69,6 +69,14 @@ pub(super) fn load_exact_grant(
     }))
 }
 
+pub(super) fn load_revision(
+    database: &LocalDatabase,
+    relationship_id: FederationRelationshipId,
+) -> Result<Revision, FederationRemoteAuthorityCacheError> {
+    Ok(load_relationship(database, relationship_id)?
+        .map_or(Revision::ZERO, |cached| cached.authority_revision))
+}
+
 fn load_relationship(
     database: &LocalDatabase,
     relationship_id: FederationRelationshipId,

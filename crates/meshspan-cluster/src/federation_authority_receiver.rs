@@ -44,6 +44,12 @@ impl FederationAuthorityImportLimits {
             })
         }
     }
+
+    /// Returns the maximum complete page count admitted by this import.
+    #[must_use]
+    pub const fn maximum_pages(self) -> usize {
+        self.pages
+    }
 }
 
 /// Terminal result of one complete remote authority fetch.
