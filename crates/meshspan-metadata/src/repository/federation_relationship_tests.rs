@@ -76,6 +76,109 @@ fn every_apply_boundary_rolls_back_complete_relationship_approval()
     Ok(())
 }
 
+#[test]
+fn every_relationship_transition_rolls_back_its_command_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    bootstrap(&mut repository, fixture.ids)?;
+    let relationship_id = FederationRelationshipId::from_bytes([110; 16])?;
+    let transitions = [
+        AuthoritativeCommand::ProposeFederationRelationship(ProposeFederationRelationship {
+            relationship_id,
+            remote_mesh_id: MeshId::from_bytes([111; 16])?,
+            remote_name: RecordName::new("Lifecycle peer")?,
+            kind: FederationRelationshipKind::Horizontal,
+            governance_direction: FederationGovernanceDirection::None,
+        }),
+        AuthoritativeCommand::ApproveFederationRelationship(ApproveFederationRelationship {
+            relationship_id,
+            expected_authority_epoch: 1,
+            local_identity: identity(1, 112, 113),
+            remote_identity: identity(1, 114, 115),
+            governance_proof: None,
+        }),
+        AuthoritativeCommand::RotateFederationTrustIdentity(RotateFederationTrustIdentity {
+            relationship_id,
+            expected_authority_epoch: 1,
+            owner: FederationIdentityOwner::Remote,
+            identity: identity(2, 116, 117),
+        }),
+        AuthoritativeCommand::RestrictFederationRelationship(RestrictFederationRelationship {
+            relationship_id,
+            expected_authority_epoch: 1,
+            authority_epoch: 2,
+            reason: "Atomic restriction".to_owned(),
+        }),
+        AuthoritativeCommand::RecoverFederationRelationship(RecoverFederationRelationship {
+            relationship_id,
+            expected_authority_epoch: 2,
+            authority_epoch: 3,
+            reason: "Atomic recovery".to_owned(),
+        }),
+        AuthoritativeCommand::RevokeFederationRelationship(RevokeFederationRelationship {
+            relationship_id,
+            expected_authority_epoch: 3,
+            authority_epoch: 4,
+            reason: "Atomic revocation".to_owned(),
+        }),
+        AuthoritativeCommand::RetireFederationRelationship(RetireFederationRelationship {
+            relationship_id,
+            expected_authority_epoch: 4,
+            authority_epoch: 5,
+            reason: "Atomic retirement".to_owned(),
+        }),
+    ];
+    for (offset, command) in transitions.iter().enumerate() {
+        let index = u64::try_from(offset)?.saturating_add(2);
+        let seed = 120_u8.saturating_add(u8::try_from(offset)?);
+        let command_context = context(
+            seed,
+            fixture.ids.administrator,
+            seed.saturating_add(8),
+            i64::try_from(index)?,
+            index - 1,
+        )?;
+        apply_relationship_after_rollback(
+            &mut repository,
+            LogPosition { index, term: 1 },
+            command_context,
+            command,
+            relationship_id,
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_relationship_after_rollback(
+    repository: &mut AuthoritativeRepository,
+    position: LogPosition,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    relationship_id: FederationRelationshipId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let before = repository.federation_relationship(relationship_id)?;
+    let revision = repository.current_revision()?;
+    assert!(matches!(
+        repository.apply_committed_with_fault(
+            position,
+            context,
+            command,
+            ApplyFaultPoint::AfterCommand,
+        ),
+        Err(RepositoryError::InjectedFault)
+    ));
+    assert_eq!(repository.current_revision()?, revision);
+    assert_eq!(repository.federation_relationship(relationship_id)?, before);
+    assert!(
+        repository
+            .resolve_operation(context.operation_id)?
+            .is_none()
+    );
+    repository.apply_committed(position, context, command)?;
+    Ok(())
+}
+
 const fn all_apply_faults() -> [ApplyFaultPoint; 4] {
     [
         ApplyFaultPoint::AfterCommand,

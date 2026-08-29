@@ -64,6 +64,91 @@ fn every_apply_boundary_rolls_back_complete_grant_replacement()
     Ok(())
 }
 
+#[test]
+fn every_grant_transition_rolls_back_its_command_rows() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare_relationship(&mut repository, fixture.ids)?;
+    let first_id = FederationGrantId::from_bytes([120; 16])?;
+    let first = AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
+        grant: grant(fixture.ids, first_id, storage_policy(50, false)?)?,
+        restrictions: restrictions(fixture.ids, 100, 50)?,
+    });
+    apply_grant_after_rollback(
+        &mut repository,
+        LogPosition { index: 4, term: 1 },
+        context(121, fixture.ids.administrator, 122, 4, 3)?,
+        &first,
+        &[first_id],
+    )?;
+
+    let second_id = FederationGrantId::from_bytes([123; 16])?;
+    let replacement = AuthoritativeCommand::ReplaceFederationGrant(ReplaceFederationGrant {
+        predecessor_grant_id: first_id,
+        grant: grant(fixture.ids, second_id, storage_policy(40, false)?)?,
+        restrictions: restrictions(fixture.ids, 80, 40)?,
+        restricts_authority: true,
+        reason: "Atomic replacement".to_owned(),
+    });
+    apply_grant_after_rollback(
+        &mut repository,
+        LogPosition { index: 5, term: 1 },
+        context(124, fixture.ids.administrator, 125, 5, 4)?,
+        &replacement,
+        &[first_id, second_id],
+    )?;
+
+    let revocation = AuthoritativeCommand::RevokeFederationGrant(RevokeFederationGrant {
+        grant_id: second_id,
+        expected_authority_epoch: 1,
+        reason: "Atomic revocation".to_owned(),
+    });
+    apply_grant_after_rollback(
+        &mut repository,
+        LogPosition { index: 6, term: 1 },
+        context(126, fixture.ids.administrator, 127, 6, 5)?,
+        &revocation,
+        &[first_id, second_id],
+    )?;
+    Ok(())
+}
+
+fn apply_grant_after_rollback(
+    repository: &mut AuthoritativeRepository,
+    position: LogPosition,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    grant_ids: &[FederationGrantId],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let before = grant_ids
+        .iter()
+        .map(|grant_id| repository.federation_grant(*grant_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let revision = repository.current_revision()?;
+    assert!(matches!(
+        repository.apply_committed_with_fault(
+            position,
+            context,
+            command,
+            ApplyFaultPoint::AfterCommand,
+        ),
+        Err(RepositoryError::InjectedFault)
+    ));
+    let after = grant_ids
+        .iter()
+        .map(|grant_id| repository.federation_grant(*grant_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(after, before);
+    assert_eq!(repository.current_revision()?, revision);
+    assert!(
+        repository
+            .resolve_operation(context.operation_id)?
+            .is_none()
+    );
+    repository.apply_committed(position, context, command)?;
+    Ok(())
+}
+
 const fn all_apply_faults() -> [ApplyFaultPoint; 4] {
     [
         ApplyFaultPoint::AfterCommand,

@@ -348,6 +348,17 @@ impl AuthoritativeRepository {
         apply::apply_committed(&mut self.database, position, context, command)
     }
 
+    #[cfg(test)]
+    fn apply_committed_with_fault(
+        &mut self,
+        position: LogPosition,
+        context: crate::CommandContext,
+        command: &crate::AuthoritativeCommand,
+        fault: apply::ApplyFaultPoint,
+    ) -> Result<CommandReceipt, RepositoryError> {
+        apply::apply_committed_with_fault(&mut self.database, position, context, command, fault)
+    }
+
     /// Resolves the exact durable result stored for an operation, if present.
     ///
     /// # Errors
