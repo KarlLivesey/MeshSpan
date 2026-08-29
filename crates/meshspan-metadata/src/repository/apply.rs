@@ -10,8 +10,9 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, identity, namespace, retention, routing, session,
-    snapshot_schedule, tags, user_snapshot, version_cleanup, volume_head,
+    cleanup_reclamation, cluster, component, federation_relationship, identity, namespace,
+    retention, routing, session, snapshot_schedule, tags, user_snapshot, version_cleanup,
+    volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -339,6 +340,9 @@ fn execute(
     }
     if is_identity_command(command) {
         return execute_identity_command(transaction, context, command, revision);
+    }
+    if federation_relationship::is_command(command) {
+        return federation_relationship::execute(transaction, context, command, revision);
     }
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
@@ -772,6 +776,13 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RevokePermissionGrant(_) => 49,
         AuthoritativeCommand::RevokeAccessActivation(_) => 50,
         AuthoritativeCommand::ChangePrincipalState(_) => 51,
+        AuthoritativeCommand::ProposeFederationRelationship(_) => 52,
+        AuthoritativeCommand::ApproveFederationRelationship(_) => 53,
+        AuthoritativeCommand::RotateFederationTrustIdentity(_) => 54,
+        AuthoritativeCommand::RestrictFederationRelationship(_) => 55,
+        AuthoritativeCommand::RecoverFederationRelationship(_) => 56,
+        AuthoritativeCommand::RevokeFederationRelationship(_) => 57,
+        AuthoritativeCommand::RetireFederationRelationship(_) => 58,
     }
 }
 

@@ -80,6 +80,10 @@ pub enum EntityKind {
     CleanupAttestationKey = 22,
     /// Mesh-wide authentication session.
     AuthenticationSession = 23,
+    /// Autonomous swarm federation relationship.
+    FederationRelationship = 24,
+    /// One side's rotating public federation identity.
+    FederationTrustIdentity = 25,
 }
 
 impl EntityKind {
@@ -108,6 +112,8 @@ impl EntityKind {
             21 => Ok(Self::VersionCleanup),
             22 => Ok(Self::CleanupAttestationKey),
             23 => Ok(Self::AuthenticationSession),
+            24 => Ok(Self::FederationRelationship),
+            25 => Ok(Self::FederationTrustIdentity),
             _ => Err(RepositoryError::CorruptState),
         }
     }
