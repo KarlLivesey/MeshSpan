@@ -230,14 +230,16 @@ mod tests {
     use rusqlite::params;
     use tempfile::tempdir;
 
-    use super::{LocalDatabase, MetadataStoreError, PartitionDatabase};
+    use super::{LocalDatabase, MetadataStoreError, PartitionDatabase, open_connection};
     use crate::migration::{
-        local_migration_digest, partition_access_revocation_migration_digest,
+        local_migration_digest, migrate_partition, migrate_partition_through,
+        partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
         partition_component_rollout_migration_digest, partition_migration_digest,
-        partition_namespace_inheritance_migration_digest, partition_roles_migration_digest,
+        partition_namespace_inheritance_migration_digest,
+        partition_principal_lifecycle_migration_digest, partition_roles_migration_digest,
         partition_routing_migration_digest, partition_snapshot_expiry_migration_digest,
         partition_snapshot_restores_migration_digest,
         partition_snapshot_retention_selection_migration_digest,
@@ -265,13 +267,58 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 26);
+        assert_eq!(database.check_integrity()?.schema_version, 27);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
             PartitionDatabase::open(&file_path, second, UnixMicros::new(11)),
             Err(MetadataStoreError::IdentityMismatch)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn principal_lifecycle_migration_backfills_existing_principals()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory
+            .path()
+            .join("principal-lifecycle-migration.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 26, 10)?;
+        let principal = [44_u8; 16];
+        connection.execute(
+            "INSERT INTO principals(
+                principal_id, principal_kind, display_name, canonical_name, state,
+                created_at, retired_at, revision
+             ) VALUES (?1, 1, 'Existing user', 'existing user', 1, 20, NULL, 7)",
+            [principal.as_slice()],
+        )?;
+
+        migrate_partition(&mut connection, 30)?;
+        let event: (i64, Option<i64>, i64, Option<String>, Vec<u8>, i64, i64) = connection
+            .query_row(
+                "SELECT event_kind, prior_state, resulting_state, reason,
+                        changed_by, changed_at, revision
+                 FROM principal_lifecycle_events WHERE principal_id = ?1",
+                [principal.as_slice()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )?;
+        assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            27
+        );
         Ok(())
     }
 
@@ -521,6 +568,10 @@ mod tests {
                 0x7d, 0x31, 0x3f, 0x3f,
             ]
         );
+    }
+
+    #[test]
+    fn access_migration_digests_are_committed_compatibility_values() {
         assert_eq!(
             partition_namespace_inheritance_migration_digest(),
             [
@@ -535,6 +586,14 @@ mod tests {
                 0x09, 0x3f, 0xe5, 0xa1, 0x24, 0xb8, 0xdc, 0x67, 0xe4, 0xe4, 0x1d, 0xb6, 0x94, 0x6f,
                 0x70, 0xc5, 0xbe, 0xc3, 0xca, 0xc3, 0x33, 0x8d, 0x41, 0x4c, 0xc3, 0xe2, 0x4d, 0x79,
                 0x40, 0x32, 0x6f, 0x87,
+            ]
+        );
+        assert_eq!(
+            partition_principal_lifecycle_migration_digest(),
+            [
+                0x38, 0x5a, 0x07, 0x96, 0xd7, 0xf3, 0x06, 0xe6, 0x15, 0x30, 0x32, 0xe6, 0x56, 0x49,
+                0xca, 0x04, 0xc1, 0x9b, 0xdb, 0xaa, 0x08, 0x98, 0x8c, 0x0d, 0xfd, 0xb7, 0x4d, 0x2f,
+                0x97, 0x17, 0x1b, 0x8f,
             ]
         );
     }

@@ -2,6 +2,8 @@
 
 //! Mesh bootstrap, identity, nested group and permission mutations.
 
+mod principal_lifecycle;
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use meshspan_domain::{
@@ -18,6 +20,8 @@ use crate::{
     CreateGroup, CreateUser, GrantInheritance, GrantPermission, PermissionScope, RemoveGroupMember,
     RevokeAccessActivation, RevokePermissionGrant,
 };
+
+pub(super) use principal_lifecycle::change_principal_state;
 
 type ValidatedScope = (u8, Option<[u8; 16]>, Option<[u8; 16]>);
 
@@ -178,7 +182,7 @@ pub(super) fn remove_group_member(
     command: &RemoveGroupMember,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
-    validate_revocation_reason(&command.reason)?;
+    validate_audit_reason(&command.reason)?;
     let group = command.containing_group_id.as_bytes();
     let member = command.member_principal_id.as_bytes();
     let actor = context.actor_principal_id.as_bytes();
@@ -340,7 +344,7 @@ pub(super) fn revoke_permission_grant(
     command: &RevokePermissionGrant,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
-    validate_revocation_reason(&command.reason)?;
+    validate_audit_reason(&command.reason)?;
     let grant = command.grant_id.as_bytes();
     let actor = context.actor_principal_id.as_bytes();
     let updated = transaction.execute(
@@ -550,7 +554,7 @@ pub(super) fn revoke_access_activation(
     command: &RevokeAccessActivation,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
-    validate_revocation_reason(&command.reason)?;
+    validate_audit_reason(&command.reason)?;
     let activation = command.activation_id.as_bytes();
     let principal = command.principal_id.as_bytes();
     let actor = context.actor_principal_id.as_bytes();
@@ -578,7 +582,7 @@ pub(super) fn revoke_access_activation(
     })
 }
 
-fn validate_revocation_reason(reason: &str) -> Result<(), RepositoryError> {
+fn validate_audit_reason(reason: &str) -> Result<(), RepositoryError> {
     let valid = !reason.trim().is_empty()
         && reason.len() <= MAXIMUM_REVOCATION_REASON_BYTES
         && !reason.chars().any(char::is_control);
@@ -613,7 +617,7 @@ pub(super) fn insert_principal(
             to_i64(revision.get())?
         ],
     )?;
-    Ok(())
+    principal_lifecycle::record_principal_created(transaction, principal_id, context, revision)
 }
 
 fn validate_scope(

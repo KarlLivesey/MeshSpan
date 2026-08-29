@@ -652,6 +652,8 @@ mod cleanup_permit_tests;
 #[cfg(test)]
 mod cleanup_reclamation_tests;
 #[cfg(test)]
+mod principal_lifecycle_tests;
+#[cfg(test)]
 mod retention_tests;
 #[cfg(test)]
 mod snapshot_schedule_tests;

@@ -183,6 +183,22 @@ copy-on-write filesystem service. This document records executable evidence only
   publishes the replacement and verifies `heZZoworld`. Substituted manifests,
   changed retries, corrupt plans, incomplete ranges, stale fences and missing
   content fail closed.
+- The replicated metadata kernel now evaluates one connector-neutral access
+  request against an authoritative digest-only session, active principal,
+  exact gateway incarnation, namespace object/ancestor chain, nested groups,
+  multiple owners, scoped allow grants, inheritance boundaries, time windows
+  and activation evidence. An administrator role contributes no file rights.
+  Membership removal, permission-grant revocation and activation revocation are
+  audited state-machine transitions that immediately advance the identity
+  fence; membership add/remove history remains append-only across intentional
+  re-addition. Principal lifecycle is likewise explicit and append-only:
+  suspension is reversible, retirement is terminal, the last active system
+  administrator cannot be disabled, and any object that would lose its final
+  active owner must receive its exact replacement owner set in the same
+  transaction. Restart, exact replay, incomplete/contradictory schema evidence,
+  every injected apply boundary and the complete access loss/restoration path
+  are executable. Operation-time capability enforcement in the filesystem
+  service and adapter conformance remain open.
 
 ## Closure gates
 
@@ -410,6 +426,10 @@ copy-on-write filesystem service. This document records executable evidence only
    The public branch-local rename transaction and its end-to-end durable replay
    proof remain open.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
+   The authoritative evaluator, session fencing, revocation and principal
+   lifecycle transitions are implemented and tested. Filesystem operation-time
+   capability validation, administration queries and the complete rights-vector
+   suite remain open.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
