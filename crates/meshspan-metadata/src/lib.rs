@@ -4,6 +4,8 @@
 
 mod command;
 mod database;
+#[cfg(test)]
+mod federation_schema_tests;
 mod migration;
 mod name;
 mod repository;
