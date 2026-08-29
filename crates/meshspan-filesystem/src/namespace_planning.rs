@@ -2,6 +2,10 @@
 
 //! Restart-safe daemon planning for semantic connector namespace mutations.
 
+#[path = "namespace_planning/rename.rs"]
+pub(crate) mod rename;
+#[path = "namespace_planning/resolution.rs"]
+mod resolution;
 #[path = "namespace_planning/unlink.rs"]
 pub(crate) mod unlink;
 
@@ -11,23 +15,9 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::{
-    AdapterCreateDirectoryRequest, DirectoryEntryKind, DirectoryPublication,
-    DirectoryRevisionTransition, HandleError, NamespacePublicationPath,
+    AdapterCreateDirectoryRequest, DirectoryPublication, DirectoryRevisionTransition, HandleError,
+    NamespacePublicationPath,
 };
-
-#[derive(Clone)]
-struct CurrentDirectoryPath {
-    namespace_commit: NamespaceCommitId,
-    root_object: ObjectId,
-    parent_object: ObjectId,
-    ancestors: Vec<CurrentAncestor>,
-}
-
-#[derive(Clone, Copy)]
-struct CurrentAncestor {
-    object: ObjectId,
-    revision: ObjectRevisionId,
-}
 
 struct StoredPlan {
     request_digest: Vec<u8>,
@@ -99,72 +89,20 @@ fn resolve_current(
     connection: &Connection,
     branch_id: BranchId,
     request: &AdapterCreateDirectoryRequest,
-) -> Result<CurrentDirectoryPath, HandleError> {
-    type StoredHead = (Vec<u8>, Vec<u8>, Vec<u8>);
-    let stored: Option<StoredHead> = connection
-        .query_row(
-            "SELECT h.namespace_commit_id, c.root_object_id, c.root_object_revision_id
-             FROM branch_namespace_heads h JOIN namespace_commits c USING(namespace_commit_id)
-             WHERE h.branch_id = ?1 AND h.volume_id = ?2",
-            params![
-                branch_id.as_bytes().as_slice(),
-                request.volume_id.as_bytes().as_slice()
-            ],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    let Some((commit, root_object, root_revision)) = stored else {
-        return Err(HandleError::NotFound);
-    };
-    let namespace_commit = identifier(&commit, NamespaceCommitId::from_bytes)?;
-    let root_object = identifier(&root_object, ObjectId::from_bytes)?;
-    let root_revision = identifier(&root_revision, ObjectRevisionId::from_bytes)?;
-    let mut selected_object = root_object;
-    let mut selected_revision = root_revision;
-    let mut ancestors = Vec::with_capacity(request.path.components().len().saturating_sub(1));
-    for (index, component) in request.path.components().iter().enumerate() {
-        let revision = crate::handles::load_revision(connection, selected_revision)?;
-        if revision.volume_id != request.volume_id
-            || revision.object_id != selected_object
-            || revision.kind != DirectoryEntryKind::Directory
-        {
-            return Err(HandleError::Corrupt);
-        }
-        let entry = crate::handles::lookup_entry(
-            connection,
-            revision.directory_root.ok_or(HandleError::Corrupt)?,
-            component,
-        )?;
-        if index + 1 == request.path.components().len() {
-            if entry.is_some() {
-                return Err(HandleError::AlreadyExists);
-            }
-            return Ok(CurrentDirectoryPath {
-                namespace_commit,
-                root_object,
-                parent_object: selected_object,
-                ancestors,
-            });
-        }
-        let entry = entry.ok_or(HandleError::NotFound)?;
-        if entry.kind() != DirectoryEntryKind::Directory {
-            return Err(HandleError::NotFound);
-        }
-        ancestors.push(CurrentAncestor {
-            object: entry.object_id(),
-            revision: entry.object_revision_id(),
-        });
-        selected_object = entry.object_id();
-        selected_revision = entry.object_revision_id();
+) -> Result<resolution::ResolvedNamespacePath, HandleError> {
+    let current = resolution::resolve(connection, branch_id, request.volume_id, &request.path)?;
+    if current.leaf.is_some() {
+        Err(HandleError::AlreadyExists)
+    } else {
+        Ok(current)
     }
-    Err(HandleError::InvalidInput)
 }
 
 fn build_plan(
     branch_id: BranchId,
     request: &AdapterCreateDirectoryRequest,
     created_by: PrincipalId,
-    current: &CurrentDirectoryPath,
+    current: &resolution::ResolvedNamespacePath,
 ) -> Result<DirectoryPublication, HandleError> {
     let ancestors = current
         .ancestors
@@ -394,6 +332,8 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM namespace_snapshot_restore_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM namespace_rename_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM adapter_unlink_plans WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM adapter_rename_plans WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)",
@@ -528,8 +468,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        AdapterUnlinkRequest, FilePublication, ManifestPublication, NamespaceLimits, NamespacePath,
-        NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
+        AdapterRenameRequest, AdapterUnlinkRequest, FilePublication, ManifestPublication,
+        NamespaceLimits, NamespacePath, NamespacePublicationPath, RootFilePublication,
+        VersionPublicationStore,
     };
 
     #[test]
@@ -644,6 +585,128 @@ mod tests {
             Err(HandleError::Corrupt)
         ));
         Ok(())
+    }
+
+    #[test]
+    fn rename_plan_uses_the_intermediate_shared_ancestor_and_rejects_cycles()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let state = tempdir()?;
+        let seed = seed_publication()?;
+        let mut store = VersionPublicationStore::open(state.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&seed)?;
+        create_path(
+            &mut store,
+            seed.file.branch_id,
+            seed.file.created_by,
+            50,
+            ["a"],
+        )?;
+        create_path(
+            &mut store,
+            seed.file.branch_id,
+            seed.file.created_by,
+            51,
+            ["a", "b"],
+        )?;
+        create_path(
+            &mut store,
+            seed.file.branch_id,
+            seed.file.created_by,
+            52,
+            ["a", "c"],
+        )?;
+
+        let request = rename_request(53, ["a", "b"], ["a", "c", "moved"])?;
+        let targets = store.adapter_rename_targets(seed.file.branch_id, &request)?;
+        let plan = store.prepare_adapter_rename(
+            seed.file.branch_id,
+            &request,
+            seed.file.created_by,
+            targets,
+        )?;
+        assert_eq!(plan.source.ancestors().len(), 1);
+        assert_eq!(plan.target.ancestors().len(), 2);
+        assert_eq!(
+            plan.target.ancestors()[0].expected_revision_id(),
+            plan.source.ancestors()[0].new_revision_id()
+        );
+        store.rename_namespace(&plan)?;
+
+        let case_change = rename_request(54, ["a", "c", "moved"], ["a", "c", "MOVED"])?;
+        let targets = store.adapter_rename_targets(seed.file.branch_id, &case_change)?;
+        let case_plan = store.prepare_adapter_rename(
+            seed.file.branch_id,
+            &case_change,
+            seed.file.created_by,
+            targets,
+        )?;
+        assert_eq!(
+            case_plan.target_entry_generation,
+            case_plan.expected_source_entry_generation
+        );
+        store.rename_namespace(&case_plan)?;
+
+        let cycle = rename_request(55, ["a", "c"], ["a", "c", "MOVED", "inside"])?;
+        assert!(matches!(
+            store.adapter_rename_targets(seed.file.branch_id, &cycle),
+            Err(HandleError::InvalidInput)
+        ));
+        drop(store);
+
+        let mut reopened = VersionPublicationStore::open(state.path(), UnixMicros::new(70))?;
+        assert_eq!(
+            reopened.prepare_adapter_rename(
+                seed.file.branch_id,
+                &case_change,
+                seed.file.created_by,
+                targets,
+            )?,
+            case_plan
+        );
+        reopened.test_connection().execute(
+            "UPDATE adapter_rename_plans SET target_parent_object_id = ?1
+             WHERE operation_id = ?2",
+            params![&[99_u8; 16], case_change.operation_id.as_bytes().as_slice()],
+        )?;
+        assert!(matches!(
+            reopened.adapter_rename_targets(seed.file.branch_id, &case_change),
+            Err(HandleError::Corrupt)
+        ));
+        Ok(())
+    }
+
+    fn create_path<const N: usize>(
+        store: &mut VersionPublicationStore,
+        branch_id: BranchId,
+        principal_id: PrincipalId,
+        operation: u8,
+        components: [&str; N],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let request = AdapterCreateDirectoryRequest {
+            operation_id: OperationId::from_bytes([operation; 16])?,
+            volume_id: VolumeId::from_bytes([12; 16])?,
+            path: NamespacePath::from_components(components, NamespaceLimits::PORTABLE)?,
+            observed_at: UnixMicros::new(i64::from(operation)),
+        };
+        let parent = store.adapter_directory_parent(branch_id, &request)?;
+        let plan = store.prepare_adapter_directory(branch_id, &request, principal_id, parent)?;
+        store.create_directory(&plan)?;
+        Ok(())
+    }
+
+    fn rename_request<const S: usize, const T: usize>(
+        operation: u8,
+        source: [&str; S],
+        target: [&str; T],
+    ) -> Result<AdapterRenameRequest, Box<dyn std::error::Error>> {
+        Ok(AdapterRenameRequest {
+            operation_id: OperationId::from_bytes([operation; 16])?,
+            volume_id: VolumeId::from_bytes([12; 16])?,
+            source: NamespacePath::from_components(source, NamespaceLimits::PORTABLE)?,
+            target: NamespacePath::from_components(target, NamespaceLimits::PORTABLE)?,
+            requesting_handle_id: None,
+            observed_at: UnixMicros::new(i64::from(operation)),
+        })
     }
 
     fn request<const N: usize>(

@@ -27,7 +27,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 28] = [
+const MIGRATIONS: [Migration; 29] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -140,8 +140,12 @@ const MIGRATIONS: [Migration; 28] = [
         version: 28,
         sql: include_str!("../schema/branch/028_adapter_unlink_plans.sql"),
     },
+    Migration {
+        version: 29,
+        sql: include_str!("../schema/branch/029_adapter_rename_plans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 28;
+const SCHEMA_VERSION: u32 = 29;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -858,6 +862,30 @@ impl VersionPublicationStore {
         publication: &NamespaceRenamePublication,
     ) -> Result<NamespaceRenameReceipt, crate::HandleError> {
         namespace::rename_namespace(&mut self.connection, publication, None)
+    }
+
+    pub(crate) fn adapter_rename_targets(
+        &self,
+        branch_id: BranchId,
+        request: &crate::AdapterRenameRequest,
+    ) -> Result<crate::namespace_planning::rename::RenameTargets, crate::HandleError> {
+        crate::namespace_planning::rename::targets(&self.connection, branch_id, request)
+    }
+
+    pub(crate) fn prepare_adapter_rename(
+        &mut self,
+        branch_id: BranchId,
+        request: &crate::AdapterRenameRequest,
+        created_by: PrincipalId,
+        expected_targets: crate::namespace_planning::rename::RenameTargets,
+    ) -> Result<NamespaceRenamePublication, crate::HandleError> {
+        crate::namespace_planning::rename::prepare(
+            &mut self.connection,
+            branch_id,
+            request,
+            created_by,
+            expected_targets,
+        )
     }
 
     /// Atomically removes one exact file name or empty directory from the logical namespace.

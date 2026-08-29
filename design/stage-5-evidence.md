@@ -281,6 +281,16 @@ copy-on-write filesystem service. This document records executable evidence only
   identities fail closed. The external proof removes an empty directory through
   a second gateway and replays the result after later namespace work and a full
   restart.
+- Semantic same-volume rename/move now resolves distinct source-object and
+  destination-parent authority targets before requesting `RENAME` and
+  `CREATE_CHILD`. Its durable planner models the intermediate root produced by
+  source removal: a shared destination ancestor consumes the source path's new
+  immutable revision rather than the stale original. Focused proofs cover a
+  nested `a/b` to `a/c/moved` directory move, preservation of the name
+  incarnation for a leaf display-case change, pre-plan descendant-cycle
+  rejection, restart replay, changed requests and corrupted plans. The external
+  two-gateway proof renames, queries and then unlinks the moved directory before
+  replaying both operations after later commits and a complete restart.
 
 ## Closure gates
 
@@ -522,10 +532,9 @@ copy-on-write filesystem service. This document records executable evidence only
    7 so no connector can treat a repository read as access authority.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
    The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
-   contract, semantic directory creation/unlink and two-gateway restart proof
-   are complete. Semantic file creation, rename, authorised administration
-   views and the two-isolated-node service-level reconciliation proof remain
-   open.
+   contract, semantic directory creation/rename/unlink and two-gateway restart
+   proof are complete. Semantic file creation, authorised administration views
+   and the two-isolated-node service-level reconciliation proof remain open.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
 suite passes together.

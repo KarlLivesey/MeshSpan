@@ -13,16 +13,16 @@ use meshspan_domain::{
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
     AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
-    AdapterReadFileRequest, AdapterStatRequest, AdapterUnlinkRequest, AdapterUnlockRequest,
-    AdapterWriteFileRequest, AuthorisedFilesystemError, AuthorisedFilesystemService,
-    BoundFilesystemAdapter, ByteRange, ContentPublicationError, ContentPublicationRequest,
-    ContentReadError, ContentReadRequest, DurableContentPublisher, DurableContentReader,
-    FilePublication, FilesystemAccessAuthority, FilesystemAccessContext, FilesystemAdapterPolicy,
-    FilesystemAuthorityGrant, FilesystemAuthorityRequest, FilesystemCommitService,
-    FilesystemFileAdapter, FilesystemHandleReadReceipt, HandleAccess, HandleError, HandleIoError,
-    HandleShare, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
-    OpenHandleReceipt, PublicationDisposition, PublishedContentReference, RangeLockKind,
-    RootFilePublication, VersionPublicationStore,
+    AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest, AdapterUnlinkRequest,
+    AdapterUnlockRequest, AdapterWriteFileRequest, AuthorisedFilesystemError,
+    AuthorisedFilesystemService, BoundFilesystemAdapter, ByteRange, ContentPublicationError,
+    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentPublisher,
+    DurableContentReader, FilePublication, FilesystemAccessAuthority, FilesystemAccessContext,
+    FilesystemAdapterPolicy, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
+    FilesystemCommitService, FilesystemFileAdapter, FilesystemHandleReadReceipt, HandleAccess,
+    HandleError, HandleIoError, HandleShare, ManifestPublication, NamespaceLimits, NamespacePath,
+    NamespacePublicationPath, OpenHandleReceipt, PublicationDisposition, PublishedContentReference,
+    RangeLockKind, RootFilePublication, VersionPublicationStore,
 };
 use tempfile::tempdir;
 
@@ -54,7 +54,8 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
 
     assert_namespace_queries(&gateway_b, &service)?;
     let directory_request = create_directory(&gateway_a, &mut service, publication.file.volume_id)?;
-    let unlink_request = unlink_directory(&gateway_b, &mut service, &directory_request)?;
+    let rename_request = rename_directory(&gateway_b, &mut service, &directory_request)?;
+    let unlink_request = unlink_directory(&gateway_a, &mut service, &rename_request)?;
 
     let rejected = open_request(35, 36, false, true, 9, 80)?;
     let missing_credential = InProcessAdapter::new(gateway_b.node_id, [0; 32]);
@@ -99,6 +100,7 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
         FilesystemAdapterPolicy::new(true, 1, 1)?,
     );
     assert_directory_replay(&gateway_b, &mut restarted, &directory_request)?;
+    assert_rename_replay(&gateway_a, &mut restarted, &rename_request)?;
     assert_unlink_replay(&gateway_a, &mut restarted, &unlink_request)?;
     let failover_reader = open_request(32, 33, false, true, 100, 180)?;
     gateway_b.open(&mut restarted, &failover_reader, None)?;
@@ -116,14 +118,14 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
 fn unlink_directory(
     gateway: &InProcessAdapter,
     service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
-    directory: &AdapterCreateDirectoryRequest,
+    rename: &AdapterRenameRequest,
 ) -> Result<AdapterUnlinkRequest, Box<dyn std::error::Error>> {
     let request = AdapterUnlinkRequest {
         operation_id: OperationId::from_bytes([55; 16])?,
-        volume_id: directory.volume_id,
-        path: directory.path.clone(),
+        volume_id: rename.volume_id,
+        path: rename.target.clone(),
         requesting_handle_id: None,
-        observed_at: UnixMicros::new(9),
+        observed_at: UnixMicros::new(10),
     };
     let removed = gateway.unlink(service, &request)?;
     assert_eq!(removed.disposition, PublicationDisposition::Applied);
@@ -132,6 +134,57 @@ fn unlink_directory(
         meshspan_filesystem::DirectoryEntryKind::Directory
     );
     Ok(request)
+}
+
+fn rename_directory(
+    gateway: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    directory: &AdapterCreateDirectoryRequest,
+) -> Result<AdapterRenameRequest, Box<dyn std::error::Error>> {
+    let request = AdapterRenameRequest {
+        operation_id: OperationId::from_bytes([56; 16])?,
+        volume_id: directory.volume_id,
+        source: directory.path.clone(),
+        target: NamespacePath::from_components(["Stored"], NamespaceLimits::PORTABLE)?,
+        requesting_handle_id: None,
+        observed_at: UnixMicros::new(9),
+    };
+    let renamed = gateway.rename(service, &request)?;
+    assert_eq!(renamed.disposition, PublicationDisposition::Applied);
+    assert_eq!(
+        gateway
+            .stat(
+                service,
+                &AdapterStatRequest {
+                    volume_id: request.volume_id,
+                    path: request.target.clone(),
+                    observed_at: request.observed_at,
+                },
+            )?
+            .object_id,
+        renamed.object_id
+    );
+    Ok(request)
+}
+
+fn assert_rename_replay(
+    gateway: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    request: &AdapterRenameRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let replayed = gateway.rename(service, request)?;
+    assert_eq!(replayed.disposition, PublicationDisposition::Replayed);
+    let conflicting = AdapterRenameRequest {
+        target: NamespacePath::from_components(["Different"], NamespaceLimits::PORTABLE)?,
+        ..request.clone()
+    };
+    assert!(matches!(
+        gateway.rename(service, &conflicting),
+        Err(AuthorisedFilesystemError::Handle(
+            HandleError::OperationConflict
+        ))
+    ));
+    Ok(())
 }
 
 fn assert_unlink_replay(
@@ -440,6 +493,14 @@ impl InProcessAdapter {
         request: &AdapterUnlinkRequest,
     ) -> Result<meshspan_filesystem::NamespaceUnlinkReceipt, S::Error> {
         service.unlink(self.context(request.observed_at), request)
+    }
+
+    fn rename<S: FilesystemFileAdapter>(
+        self,
+        service: &mut S,
+        request: &AdapterRenameRequest,
+    ) -> Result<meshspan_filesystem::NamespaceRenameReceipt, S::Error> {
+        service.rename(self.context(request.observed_at), request)
     }
 
     fn close<S: FilesystemFileAdapter>(

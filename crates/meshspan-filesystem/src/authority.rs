@@ -10,9 +10,9 @@ use thiserror::Error;
 use crate::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
     AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
-    AdapterReadFileRequest, AdapterStatRequest, AdapterUnlinkRequest, AdapterUnlockRequest,
-    AdapterWriteFileRequest, DirectoryPublication, DurableContentPublisher, DurableContentReader,
-    FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
+    AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest, AdapterUnlinkRequest,
+    AdapterUnlockRequest, AdapterWriteFileRequest, DirectoryPublication, DurableContentPublisher,
+    DurableContentReader, FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
     FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
     FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleOpenRequest,
     FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
@@ -696,6 +696,39 @@ where
             .prepare_adapter_unlink(branch_id, request, grant.principal_id, target)
             .map_err(AuthorisedFilesystemError::Handle)?;
         self.unlink_namespace(context, &publication)
+    }
+
+    pub(crate) fn adapter_rename(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: &AdapterRenameRequest,
+    ) -> Result<NamespaceRenameReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let targets = self
+            .filesystem
+            .adapter_rename_targets(branch_id, request)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        let source = self.authorise(
+            context,
+            request.volume_id,
+            targets.source_object,
+            Rights::RENAME,
+        )?;
+        let destination = self.authorise(
+            context,
+            request.volume_id,
+            targets.target_parent_object,
+            Rights::CREATE_CHILD,
+        )?;
+        if source.principal_id != destination.principal_id {
+            return Err(AuthorisedFilesystemError::InvalidGrant);
+        }
+        let publication = self
+            .filesystem
+            .prepare_adapter_rename(branch_id, request, source.principal_id, targets)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        self.rename_namespace(context, &publication)
     }
 
     pub(crate) fn adapter_close(
