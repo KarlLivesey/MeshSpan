@@ -8,10 +8,82 @@ use meshspan_domain::{
 };
 use tempfile::tempdir;
 
+use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
     ApplyDisposition, AuthoritativeRepository, CommandReceipt, EntityKind,
     FederationRelationshipState, LogPosition, RepositoryError,
 };
+
+#[test]
+fn every_apply_boundary_rolls_back_complete_relationship_approval()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    bootstrap(&mut repository, fixture.ids)?;
+    let relationship_id = FederationRelationshipId::from_bytes([86; 16])?;
+    apply(
+        &mut repository,
+        2,
+        context(87, fixture.ids.administrator, 88, 2, 1)?,
+        &AuthoritativeCommand::ProposeFederationRelationship(ProposeFederationRelationship {
+            relationship_id,
+            remote_mesh_id: MeshId::from_bytes([89; 16])?,
+            remote_name: RecordName::new("Atomic peer")?,
+            kind: FederationRelationshipKind::Horizontal,
+            governance_direction: FederationGovernanceDirection::None,
+        }),
+    )?;
+    let command =
+        AuthoritativeCommand::ApproveFederationRelationship(ApproveFederationRelationship {
+            relationship_id,
+            expected_authority_epoch: 1,
+            local_identity: identity(1, 90, 91),
+            remote_identity: identity(1, 92, 93),
+            governance_proof: None,
+        });
+    let mut database = repository.into_database();
+    for (offset, fault) in all_apply_faults().into_iter().enumerate() {
+        let seed = 94_u8.saturating_add(u8::try_from(offset)?);
+        assert!(matches!(
+            apply_committed_with_fault(
+                &mut database,
+                LogPosition { index: 3, term: 1 },
+                context(
+                    seed,
+                    fixture.ids.administrator,
+                    seed.saturating_add(4),
+                    3,
+                    2
+                )?,
+                &command,
+                fault,
+            ),
+            Err(RepositoryError::InjectedFault)
+        ));
+        let retained: (i64, i64, i64) = database.connection().query_row(
+            "SELECT state,
+                    (SELECT count(*) FROM federation_trust_identities
+                     WHERE relationship_id = ?1),
+                    (SELECT count(*) FROM federation_relationship_events
+                     WHERE relationship_id = ?1)
+             FROM federation_relationships WHERE relationship_id = ?1",
+            [relationship_id.as_bytes().as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(retained, (1, 0, 1));
+        assert_eq!(read_current_revision(&database)?, Revision::new(2));
+    }
+    Ok(())
+}
+
+const fn all_apply_faults() -> [ApplyFaultPoint; 4] {
+    [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterOperation,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ]
+}
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
     FederationGovernanceDirection, FederationGovernanceEdge, FederationGovernanceProof,
