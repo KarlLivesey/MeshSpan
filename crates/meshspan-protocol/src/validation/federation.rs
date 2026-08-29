@@ -162,6 +162,7 @@ fn unique_identifiers(values: &[Vec<u8>]) -> Result<(), WireContractError> {
 fn branch_page(value: &FederatedBranchPage, limits: WireLimits) -> Result<(), WireContractError> {
     valid_identifier(&value.grant_id)?;
     validate_payload(value.resource_scope.as_ref(), limits)?;
+    valid_digest(&value.export_token)?;
     validate_payloads(&value.branch_commits, limits, true)?;
     valid_digests(&value.immutable_object_digests, limits, true)?;
     valid_optional_bytes(&value.next_cursor, limits.maximum_control_bytes())?;

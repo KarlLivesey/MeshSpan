@@ -33,6 +33,8 @@ pub struct FederationBranchPageQuery {
 /// Canonical branch commit records and referenced immutable object identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationBranchPageRecords {
+    /// Stable source-side export identity used to fetch advertised immutable bodies.
+    pub export_token: [u8; 32],
     /// Independently versioned immutable history records.
     pub branch_commits: Vec<VersionedPayload>,
     /// Content identities whose bytes travel separately over bounded data streams.

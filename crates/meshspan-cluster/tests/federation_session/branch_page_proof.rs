@@ -76,6 +76,7 @@ async fn prove_filesystem_backed_exchange(
     );
     let (page, served) = tokio::try_join!(fetch, serve)?;
     assert_eq!(page.branch_commits().len(), 1);
+    assert_eq!(page.export_token().len(), 32);
     assert!(page.immutable_object_digests().is_empty());
     assert!(!page.next_cursor().is_empty());
     NamespaceHistoryCommitRecord::from_canonical_bytes(
@@ -366,6 +367,7 @@ impl FederationBranchPageSource for RecordingHistorySource {
                 canonical_bytes: b"canonical-history-record".to_vec(),
             };
             Ok(FederationBranchPageRecords {
+                export_token: [8; 32],
                 branch_commits: if self.excessive {
                     vec![commit.clone(), commit]
                 } else {

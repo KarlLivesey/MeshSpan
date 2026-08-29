@@ -76,6 +76,7 @@ fn load_page(
         })
         .map_err(|error| map_publication_error(&error))?;
     Ok(FederationBranchPageRecords {
+        export_token: page.export_token,
         branch_commits: page
             .commits
             .into_iter()

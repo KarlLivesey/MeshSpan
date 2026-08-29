@@ -272,6 +272,7 @@ fn response_page(
     FederatedBranchPage {
         grant_id: request.grant_id.clone(),
         resource_scope: request.resource_scope.clone(),
+        export_token: records.export_token.to_vec(),
         branch_commits: records.branch_commits,
         immutable_object_digests: records
             .immutable_object_digests
