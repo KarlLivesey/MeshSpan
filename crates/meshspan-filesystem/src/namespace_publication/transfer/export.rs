@@ -81,32 +81,38 @@ fn collect_commits(
         if visited.len() > limits.maximum_commits {
             return Err(PublicationError::InvalidInput);
         }
-        let commit = load_reconciliation_commit(connection, commit_id)?
-            .ok_or(PublicationError::InvalidInput)?;
-        let ReconciliationCommitPayload::Mutation { intent_digest } = commit.payload else {
-            return Err(PublicationError::InvalidInput);
-        };
-        if commit.volume_id != volume_id || commit.parents.len() > 1 {
-            return Err(PublicationError::InvalidInput);
-        }
-        let intent = load_branch_intent(connection, commit_id)?.ok_or(PublicationError::Corrupt)?;
-        if intent.digest() != intent_digest {
-            return Err(PublicationError::Corrupt);
-        }
-        let (created_by, created_at, commit_digest) = load_commit_origin(connection, commit_id)?;
-        pending.extend(commit.parents.iter().copied());
-        commits.insert(
-            commit_id,
-            TransferredMutationCommit {
-                commit,
-                created_by,
-                created_at,
-                commit_digest,
-                intent,
-            },
-        );
+        let record = load_commit_record(connection, volume_id, commit_id)?;
+        pending.extend(record.commit.parents.iter().copied());
+        commits.insert(commit_id, record);
     }
     Ok(commits.into_values().collect())
+}
+
+pub(in crate::publication) fn load_commit_record(
+    connection: &Connection,
+    volume_id: VolumeId,
+    commit_id: NamespaceCommitId,
+) -> Result<TransferredMutationCommit, PublicationError> {
+    let commit =
+        load_reconciliation_commit(connection, commit_id)?.ok_or(PublicationError::InvalidInput)?;
+    let ReconciliationCommitPayload::Mutation { intent_digest } = commit.payload else {
+        return Err(PublicationError::InvalidInput);
+    };
+    if commit.volume_id != volume_id || commit.parents.len() > 1 {
+        return Err(PublicationError::InvalidInput);
+    }
+    let intent = load_branch_intent(connection, commit_id)?.ok_or(PublicationError::Corrupt)?;
+    if intent.digest() != intent_digest {
+        return Err(PublicationError::Corrupt);
+    }
+    let (created_by, created_at, commit_digest) = load_commit_origin(connection, commit_id)?;
+    Ok(TransferredMutationCommit {
+        commit,
+        created_by,
+        created_at,
+        commit_digest,
+        intent,
+    })
 }
 
 fn load_commit_origin(

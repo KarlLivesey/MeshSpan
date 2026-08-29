@@ -7,7 +7,7 @@ mod namespace;
 
 pub use namespace::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
-    NamespaceHistoryRecordError,
+    NamespaceHistoryPage, NamespaceHistoryPageRequest, NamespaceHistoryRecordError,
 };
 
 use std::collections::BTreeSet;
@@ -32,7 +32,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 32] = [
+const MIGRATIONS: [Migration; 33] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -161,8 +161,12 @@ const MIGRATIONS: [Migration; 32] = [
         version: 32,
         sql: include_str!("../schema/branch/032_imported_namespace_commit_evidence.sql"),
     },
+    Migration {
+        version: 33,
+        sql: include_str!("../schema/branch/033_namespace_history_exports.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 32;
+const SCHEMA_VERSION: u32 = 33;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -874,6 +878,22 @@ impl VersionPublicationStore {
             known_commits,
             limits,
         )
+    }
+
+    /// Advances or resumes one durable, exact, cursor-paged namespace-history export.
+    ///
+    /// The first page incrementally materialises only enough graph identities for that page.
+    /// Issued cursors survive restart and cannot be used with a different scope, head or known set.
+    ///
+    /// # Errors
+    ///
+    /// Rejects forged or skipped cursors, expired sessions, unknown history, corruption and
+    /// excessive request bounds without returning a partial page.
+    pub fn namespace_history_page(
+        &mut self,
+        request: NamespaceHistoryPageRequest,
+    ) -> Result<NamespaceHistoryPage, PublicationError> {
+        namespace::namespace_history_page(&mut self.connection, request)
     }
 
     /// Transactionally imports one immutable disconnected-history bundle.

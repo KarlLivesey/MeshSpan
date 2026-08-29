@@ -26,6 +26,36 @@ pub(super) struct HistoryObjects {
     pub object_revisions: Vec<ObjectRevisionInsert>,
 }
 
+pub(in crate::publication) struct CommitReferences {
+    pub revisions: BTreeSet<ObjectRevisionId>,
+    pub versions: BTreeSet<FileVersionId>,
+}
+
+pub(in crate::publication) fn commit_references(
+    record: &TransferredMutationCommit,
+) -> CommitReferences {
+    let mut revisions = BTreeSet::from([record.commit.root_object_revision_id]);
+    let mut versions = BTreeSet::new();
+    let intent = &record.intent;
+    revisions.insert(intent.object_revision_id);
+    revisions.extend(intent.prior_object_revision_id);
+    add_transitions(&mut revisions, &intent.ancestors);
+    match intent.mutation {
+        BranchMutation::File { version_id } | BranchMutation::DeleteFile { version_id } => {
+            versions.insert(version_id);
+        }
+        BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => {}
+    }
+    if let Some(rename) = &intent.rename {
+        revisions.insert(rename.intermediate_root_object_revision_id);
+        add_transitions(&mut revisions, &rename.source_ancestors);
+    }
+    CommitReferences {
+        revisions,
+        versions,
+    }
+}
+
 pub(super) fn collect(
     connection: &Connection,
     volume_id: VolumeId,
@@ -72,36 +102,9 @@ impl<'a> GraphCollector<'a> {
 
     fn seed_commits(&mut self, commits: &[TransferredMutationCommit]) {
         for record in commits {
-            self.pending_revisions
-                .insert(record.commit.root_object_revision_id);
-            self.seed_intent(record);
-        }
-    }
-
-    fn seed_intent(&mut self, record: &TransferredMutationCommit) {
-        let intent = &record.intent;
-        self.pending_revisions.insert(intent.object_revision_id);
-        self.pending_revisions
-            .extend(intent.prior_object_revision_id);
-        self.seed_transitions(&intent.ancestors);
-        match intent.mutation {
-            BranchMutation::File { version_id } | BranchMutation::DeleteFile { version_id } => {
-                self.pending_versions.insert(version_id);
-            }
-            BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => {}
-        }
-        if let Some(rename) = &intent.rename {
-            self.pending_revisions
-                .insert(rename.intermediate_root_object_revision_id);
-            self.seed_transitions(&rename.source_ancestors);
-        }
-    }
-
-    fn seed_transitions(&mut self, transitions: &[crate::DirectoryRevisionTransition]) {
-        for transition in transitions {
-            self.pending_revisions
-                .insert(transition.expected_revision_id());
-            self.pending_revisions.insert(transition.new_revision_id());
+            let references = commit_references(record);
+            self.pending_revisions.extend(references.revisions);
+            self.pending_versions.extend(references.versions);
         }
     }
 
@@ -205,7 +208,17 @@ impl<'a> GraphCollector<'a> {
     }
 }
 
-fn load_file_version(
+fn add_transitions(
+    revisions: &mut BTreeSet<ObjectRevisionId>,
+    transitions: &[crate::DirectoryRevisionTransition],
+) {
+    for transition in transitions {
+        revisions.insert(transition.expected_revision_id());
+        revisions.insert(transition.new_revision_id());
+    }
+}
+
+pub(in crate::publication) fn load_file_version(
     connection: &Connection,
     version_id: FileVersionId,
 ) -> Result<TransferredFileVersion, PublicationError> {
@@ -260,7 +273,7 @@ fn load_file_version(
     })
 }
 
-fn load_manifest(
+pub(in crate::publication) fn load_manifest(
     connection: &Connection,
     manifest_id: ContentManifestId,
 ) -> Result<ManifestPublication, PublicationError> {

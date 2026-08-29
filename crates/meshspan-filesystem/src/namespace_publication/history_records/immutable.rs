@@ -88,7 +88,7 @@ impl NamespaceHistoryImmutableRecord {
         self.digest
     }
 
-    pub(super) fn directory(
+    pub(in crate::publication) fn directory(
         record: &DirectoryNodeRecord,
     ) -> Result<Self, NamespaceHistoryRecordError> {
         let mut bytes = header(NamespaceHistoryImmutableKind::DirectoryNode);
@@ -97,7 +97,7 @@ impl NamespaceHistoryImmutableRecord {
         checked_record(NamespaceHistoryImmutableKind::DirectoryNode, bytes)
     }
 
-    pub(super) fn manifest(
+    pub(in crate::publication) fn manifest(
         record: ManifestPublication,
     ) -> Result<Self, NamespaceHistoryRecordError> {
         validate_manifest(record)?;
@@ -110,7 +110,7 @@ impl NamespaceHistoryImmutableRecord {
         checked_record(NamespaceHistoryImmutableKind::Manifest, bytes)
     }
 
-    pub(super) fn file_version(
+    pub(in crate::publication) fn file_version(
         record: TransferredFileVersion,
     ) -> Result<Self, NamespaceHistoryRecordError> {
         validate_file_version(record)?;
@@ -129,7 +129,7 @@ impl NamespaceHistoryImmutableRecord {
         checked_record(NamespaceHistoryImmutableKind::FileVersion, bytes)
     }
 
-    pub(super) fn object_revision(
+    pub(in crate::publication) fn object_revision(
         record: ObjectRevisionInsert,
     ) -> Result<Self, NamespaceHistoryRecordError> {
         validate_revision_shape(record)?;
