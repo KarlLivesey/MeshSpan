@@ -298,6 +298,36 @@ impl DirectoryTrie {
         })
     }
 
+    /// Removes one exact canonical-name incarnation and path-copies only its hash path.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an absent/stale entry and every malformed selected immutable node.
+    pub fn remove(
+        &mut self,
+        name: &NamespaceComponent,
+        expected_revision: ObjectRevisionId,
+    ) -> Result<DirectoryMutation, DirectoryTrieError> {
+        let previous = self.lookup(name)?.ok_or(DirectoryTrieError::StaleEntry)?;
+        if previous.object_revision_id() != expected_revision {
+            return Err(DirectoryTrieError::StaleEntry);
+        }
+        let previous_root = self.root;
+        let key_hash = name_hash(name.canonical());
+        let mut created = Vec::new();
+        let new_root = self
+            .remove_node(self.root, 0, key_hash, name, &mut created)?
+            .ok_or(DirectoryTrieError::Corrupt)?;
+        self.root = new_root;
+        Ok(DirectoryMutation {
+            previous_root,
+            new_root,
+            previous_entry: Some(previous),
+            created_node_count: created.len(),
+            created_nodes: created,
+        })
+    }
+
     /// Verifies the complete graph reachable from the current root.
     ///
     /// # Errors
@@ -358,6 +388,61 @@ impl DirectoryTrie {
         };
         internal.children.insert(slot, child);
         self.store_node(DirectoryNode::Internal(internal), created)
+    }
+
+    fn remove_node(
+        &mut self,
+        selected: DirectoryNodeDigest,
+        depth: usize,
+        key_hash: [u8; 32],
+        name: &NamespaceComponent,
+        created: &mut Vec<DirectoryNodeDigest>,
+    ) -> Result<Option<DirectoryNodeDigest>, DirectoryTrieError> {
+        if depth == HASH_NIBBLES {
+            let DirectoryNode::Leaf(mut leaf) = self.load_verified(selected)?.clone() else {
+                return Err(DirectoryTrieError::Corrupt);
+            };
+            if leaf.key_hash != key_hash {
+                return Err(DirectoryTrieError::Corrupt);
+            }
+            let index = leaf
+                .entries
+                .binary_search_by(|entry| entry.name.canonical().cmp(name.canonical()))
+                .map_err(|_| DirectoryTrieError::StaleEntry)?;
+            leaf.entries.remove(index);
+            return if leaf.entries.is_empty() {
+                Ok(None)
+            } else {
+                self.store_node(DirectoryNode::Leaf(leaf), created)
+                    .map(Some)
+            };
+        }
+        let DirectoryNode::Internal(mut internal) = self.load_verified(selected)?.clone() else {
+            return Err(DirectoryTrieError::Corrupt);
+        };
+        if usize::from(internal.depth) != depth {
+            return Err(DirectoryTrieError::Corrupt);
+        }
+        let slot = nibble(&key_hash, depth);
+        let child = internal
+            .children
+            .get(&slot)
+            .copied()
+            .ok_or(DirectoryTrieError::StaleEntry)?;
+        match self.remove_node(child, depth + 1, key_hash, name, created)? {
+            Some(next) => {
+                internal.children.insert(slot, next);
+            }
+            None => {
+                internal.children.remove(&slot);
+            }
+        }
+        if depth != 0 && internal.children.is_empty() {
+            Ok(None)
+        } else {
+            self.store_node(DirectoryNode::Internal(internal), created)
+                .map(Some)
+        }
     }
 
     fn build_path(

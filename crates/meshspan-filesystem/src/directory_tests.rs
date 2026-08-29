@@ -73,6 +73,30 @@ fn separate_keys_share_unchanged_nodes_and_rebuild_exactly()
 }
 
 #[test]
+fn removal_prunes_only_the_selected_path_and_retains_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut trie = DirectoryTrie::empty();
+    let first = entry("alpha", 14, 15)?;
+    let second = entry("beta", 16, 17)?;
+    trie.upsert(first.clone(), None)?;
+    trie.upsert(second.clone(), None)?;
+    let old_root = trie.root();
+
+    assert_eq!(
+        trie.remove(first.name(), ObjectRevisionId::from_bytes([99; 16])?),
+        Err(DirectoryTrieError::StaleEntry)
+    );
+    let removed = trie.remove(first.name(), first.object_revision_id())?;
+    assert_eq!(removed.previous_entry, Some(first.clone()));
+    assert!(removed.created_node_count <= 65);
+    assert_eq!(trie.lookup(first.name())?, None);
+    assert_eq!(trie.lookup(second.name())?, Some(second));
+    assert_eq!(trie.lookup_at(old_root, first.name())?, Some(first));
+    trie.verify()?;
+    Ok(())
+}
+
+#[test]
 fn digest_mismatch_in_untrusted_records_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
     let trie = DirectoryTrie::empty();
     let mut records: Vec<_> = trie.records().collect();
