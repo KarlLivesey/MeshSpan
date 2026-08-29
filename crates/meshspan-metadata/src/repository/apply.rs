@@ -10,9 +10,9 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, federation_grant, federation_relationship, identity,
-    namespace, retention, routing, session, snapshot_schedule, tags, user_snapshot,
-    version_cleanup, volume_head,
+    cleanup_reclamation, cluster, component, federation_grant, federation_principal,
+    federation_relationship, identity, namespace, retention, routing, session, snapshot_schedule,
+    tags, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -346,6 +346,9 @@ fn execute(
     }
     if federation_grant::is_command(command) {
         return federation_grant::execute(transaction, context, command, revision);
+    }
+    if federation_principal::is_command(command) {
+        return federation_principal::execute(transaction, context, command, revision);
     }
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
@@ -789,6 +792,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::IssueFederationGrant(_) => 59,
         AuthoritativeCommand::ReplaceFederationGrant(_) => 60,
         AuthoritativeCommand::RevokeFederationGrant(_) => 61,
+        AuthoritativeCommand::UpsertFederatedPrincipalProjection(_) => 62,
     }
 }
 

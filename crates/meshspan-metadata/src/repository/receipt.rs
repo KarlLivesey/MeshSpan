@@ -86,6 +86,8 @@ pub enum EntityKind {
     FederationTrustIdentity = 25,
     /// Effective immutable federation authority grant.
     FederationGrant = 26,
+    /// Signed home-swarm principal projection.
+    FederatedPrincipalProjection = 27,
 }
 
 impl EntityKind {
@@ -117,6 +119,7 @@ impl EntityKind {
             24 => Ok(Self::FederationRelationship),
             25 => Ok(Self::FederationTrustIdentity),
             26 => Ok(Self::FederationGrant),
+            27 => Ok(Self::FederatedPrincipalProjection),
             _ => Err(RepositoryError::CorruptState),
         }
     }

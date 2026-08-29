@@ -15,6 +15,7 @@ use meshspan_domain::{
 use sha2::{Digest, Sha256};
 
 use crate::RecordName;
+use crate::UpsertFederatedPrincipalProjection;
 use crate::{
     ApproveFederationRelationship, ProposeFederationRelationship, RecoverFederationRelationship,
     RestrictFederationRelationship, RetireFederationRelationship, RevokeFederationRelationship,
@@ -162,6 +163,8 @@ pub enum AuthoritativeCommand {
     ReplaceFederationGrant(ReplaceFederationGrant),
     /// Revokes one live federation grant while retaining its evidence.
     RevokeFederationGrant(RevokeFederationGrant),
+    /// Advances one signed home-swarm principal projection.
+    UpsertFederatedPrincipalProjection(UpsertFederatedPrincipalProjection),
 }
 
 impl AuthoritativeCommand {
@@ -241,6 +244,7 @@ impl AuthoritativeCommand {
             Self::IssueFederationGrant(value) => value.update_digest(digest),
             Self::ReplaceFederationGrant(value) => value.update_digest(digest),
             Self::RevokeFederationGrant(value) => value.update_digest(digest),
+            Self::UpsertFederatedPrincipalProjection(value) => value.update_digest(digest),
         }
     }
 }
