@@ -39,7 +39,10 @@ use crate::{
 };
 
 use digest::{directory_request as directory_request_digest, file_request as request_digest};
-pub use history_records::{NamespaceHistoryCommitRecord, NamespaceHistoryRecordError};
+pub use history_records::{
+    NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
+    NamespaceHistoryRecordError,
+};
 use repository::{
     ObjectRevisionInsert, advance_namespace_head, load_commit, load_object_revision,
     persist_commit, persist_directory_intent, persist_directory_operation,

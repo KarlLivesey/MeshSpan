@@ -6,11 +6,14 @@
 mod decode;
 #[path = "history_records/encode.rs"]
 mod encode;
+#[path = "history_records/immutable.rs"]
+mod immutable;
 
 use thiserror::Error;
 
 use self::decode::decode_commit;
 use self::encode::encode_commit;
+pub use self::immutable::{NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord};
 use super::transfer::TransferredMutationCommit;
 use crate::NamespaceHistoryBundle;
 
@@ -89,6 +92,30 @@ impl NamespaceHistoryBundle {
             .iter()
             .map(NamespaceHistoryCommitRecord::from_commit)
             .collect()
+    }
+
+    /// Encodes every referenced immutable body as one independently content-addressed record.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid object shape or any canonical body exceeding its fixed allocation bound.
+    pub fn immutable_records(
+        &self,
+    ) -> Result<Vec<NamespaceHistoryImmutableRecord>, NamespaceHistoryRecordError> {
+        let mut records = Vec::with_capacity(self.immutable_record_count());
+        for node in &self.directory_nodes {
+            records.push(NamespaceHistoryImmutableRecord::directory(node)?);
+        }
+        for manifest in &self.manifests {
+            records.push(NamespaceHistoryImmutableRecord::manifest(*manifest)?);
+        }
+        for version in &self.file_versions {
+            records.push(NamespaceHistoryImmutableRecord::file_version(*version)?);
+        }
+        for revision in &self.object_revisions {
+            records.push(NamespaceHistoryImmutableRecord::object_revision(*revision)?);
+        }
+        Ok(records)
     }
 }
 
