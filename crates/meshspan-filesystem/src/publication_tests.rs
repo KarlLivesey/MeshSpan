@@ -135,6 +135,7 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "namespace_reconciliation_operations",
         "namespace_snapshot_restore_operations",
         "namespace_rename_operations",
+        "namespace_commit_deletions",
         "file_version_history",
         "open_handles",
         "pending_object_deletes",

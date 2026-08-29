@@ -440,14 +440,16 @@ fn load_selected_entry(
 
 const fn mutation_kind(mutation: BranchMutation) -> DirectoryEntryKind {
     match mutation {
-        BranchMutation::File { .. } => DirectoryEntryKind::File,
-        BranchMutation::CreateDirectory => DirectoryEntryKind::Directory,
+        BranchMutation::File { .. } | BranchMutation::DeleteFile { .. } => DirectoryEntryKind::File,
+        BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => {
+            DirectoryEntryKind::Directory
+        }
     }
 }
 
 const fn kind_code(mutation: BranchMutation) -> u8 {
     match mutation {
-        BranchMutation::File { .. } => 2,
-        BranchMutation::CreateDirectory => 1,
+        BranchMutation::File { .. } | BranchMutation::DeleteFile { .. } => 2,
+        BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => 1,
     }
 }

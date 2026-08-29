@@ -32,6 +32,13 @@ pub enum BranchMutation {
     },
     /// Create one new empty directory object.
     CreateDirectory,
+    /// Remove one exact file-object revision and its selected immutable version.
+    DeleteFile {
+        /// Immutable version selected by the removed file-object revision.
+        version_id: FileVersionId,
+    },
+    /// Remove one exact empty directory-object revision.
+    DeleteDirectory,
 }
 
 /// Source-side half of one atomic same-volume rename or move.
@@ -85,7 +92,7 @@ pub struct BranchMutationIntent {
     pub ancestors: Vec<crate::DirectoryRevisionTransition>,
     /// Stable object selected by the leaf entry.
     pub object_id: ObjectId,
-    /// Immutable leaf-object revision produced by the source commit.
+    /// Immutable leaf-object revision produced, selected or removed by the source commit.
     pub object_revision_id: ObjectRevisionId,
     /// Exact prior object revision observed by the source branch, if any.
     pub prior_object_revision_id: Option<ObjectRevisionId>,
@@ -102,7 +109,12 @@ impl BranchMutationIntent {
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
         let mut digest = blake3::Hasher::new();
-        if self.rename.is_some() {
+        if matches!(
+            self.mutation,
+            BranchMutation::DeleteFile { .. } | BranchMutation::DeleteDirectory
+        ) {
+            digest.update(b"meshspan.filesystem.branch-mutation-intent.v4\0");
+        } else if self.rename.is_some() {
             digest.update(b"meshspan.filesystem.branch-mutation-intent.v3\0");
         } else {
             // Preserve every already-persisted ordinary mutation digest across the migration.
@@ -126,6 +138,13 @@ impl BranchMutationIntent {
             }
             BranchMutation::CreateDirectory => {
                 digest.update(&[2]);
+            }
+            BranchMutation::DeleteFile { version_id } => {
+                digest.update(&[3]);
+                digest.update(&version_id.as_bytes());
+            }
+            BranchMutation::DeleteDirectory => {
+                digest.update(&[4]);
             }
         }
         if let Some(rename) = &self.rename {
