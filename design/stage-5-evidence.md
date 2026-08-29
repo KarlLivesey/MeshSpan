@@ -255,6 +255,14 @@ copy-on-write filesystem service. This document records executable evidence only
   a complete filesystem-store restart, and the failed gateway's later
   uncommitted private write remains invisible. The proof compiles against public
   crate exports, so it cannot reach SQL or hidden provider-location state.
+- The same semantic surface now includes immutable stat, bounded directory
+  paging, clean or dirty close, same-gateway renewal, explicit cross-gateway
+  lease takeover, and leased shared/exclusive byte-range lock/unlock. Connector
+  requests still cannot name a principal, authorisation revision, gateway or
+  branch. Lease takeover persists the freshly committed identity revision rather
+  than replaying the old handle revision. The external two-gateway proof queries
+  the namespace, acquires/releases an exclusive lock, transfers a live read
+  handle to the second gateway with a new fence and closes it under that fence.
 
 ## Closure gates
 
@@ -495,10 +503,10 @@ copy-on-write filesystem service. This document records executable evidence only
    Their operation-time-authorised filesystem composition remains part of gate
    7 so no connector can treat a repository read as access authority.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
-   The semantic existing-file open/read/write/flush contract and two-gateway
-   restart proof are complete. Creation, remaining namespace/handle operations,
-   authorised administration views and the two-isolated-node service-level
-   reconciliation proof remain open.
+   The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
+   contract and two-gateway restart proof are complete. Creation, namespace
+   mutations, authorised administration views and the two-isolated-node
+   service-level reconciliation proof remain open.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
 suite passes together.

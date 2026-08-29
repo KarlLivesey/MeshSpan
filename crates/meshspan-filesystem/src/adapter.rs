@@ -3,13 +3,15 @@
 //! Semantic connector boundary for logical file-handle operations.
 
 use meshspan_contracts::BoundedBytes;
-use meshspan_domain::{BranchId, HandleId, OperationId, UnixMicros, VolumeId};
+use meshspan_domain::{BranchId, HandleId, LockId, OperationId, UnixMicros, VolumeId};
 
 use crate::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, DurableContentPublisher,
     DurableContentReader, FilesystemAccessAuthority, FilesystemAccessContext,
-    FilesystemHandleFlushRequest, FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt,
-    HandleAccess, HandleShare, NamespacePath, NamespacePublicationReceipt, OpenHandleReceipt,
+    FilesystemHandleCloseReceipt, FilesystemHandleFlushRequest, FilesystemHandleReadReceipt,
+    FilesystemHandleWriteReceipt, HandleAccess, HandleLeaseReceipt, HandleShare, LockRangeReceipt,
+    NamespaceListPage, NamespaceObjectStat, NamespacePath, NamespacePublicationReceipt,
+    OpenHandleReceipt, RangeLockKind, UnlockRangeReceipt,
 };
 
 /// Daemon-owned publication policy that access connectors cannot override.
@@ -133,6 +135,100 @@ pub struct AdapterFlushFileRequest {
     pub observed_at: UnixMicros,
 }
 
+/// Semantic immutable-attribute query supplied by an access connector.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterStatRequest {
+    /// Logical volume selected by the authenticated request.
+    pub volume_id: VolumeId,
+    /// Canonical bounded logical path.
+    pub path: NamespacePath,
+    /// Authoritative query instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Semantic bounded directory query supplied by an access connector.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterListRequest {
+    /// Logical volume selected by the authenticated request.
+    pub volume_id: VolumeId,
+    /// Directory path, or `None` for the volume root.
+    pub directory_path: Option<NamespacePath>,
+    /// Exact prior-page continuation returned by the service.
+    pub cursor: Option<crate::DirectoryListCursor>,
+    /// Positive result bound no greater than the compiled service limit.
+    pub maximum_results: u16,
+    /// Authoritative query instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Semantic close, optionally including the exact dirty checkpoint to publish first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterCloseFileRequest {
+    /// Stable idempotency identity for final handle release.
+    pub operation_id: OperationId,
+    /// Opaque open handle returned by this service.
+    pub handle_id: HandleId,
+    /// Exact current handle fence.
+    pub handle_fence: u64,
+    /// Required publication barrier for a dirty handle, otherwise absent.
+    pub flush: Option<AdapterFlushFileRequest>,
+    /// Authoritative close instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Semantic lease renewal or explicit gateway transfer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterLeaseRequest {
+    /// Stable idempotency identity.
+    pub operation_id: OperationId,
+    /// Opaque open handle returned by this service.
+    pub handle_id: HandleId,
+    /// Exact current handle fence.
+    pub expected_fence: u64,
+    /// Whether this gateway explicitly takes ownership and advances the fence.
+    pub takeover: bool,
+    /// Exclusive new lease deadline.
+    pub lease_expires_at: UnixMicros,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Semantic leased byte-range lock acquisition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterLockRequest {
+    /// Stable idempotency identity.
+    pub operation_id: OperationId,
+    /// Stable connector-owned lock identity.
+    pub lock_id: LockId,
+    /// Opaque open handle returned by this service.
+    pub handle_id: HandleId,
+    /// Exact current handle fence.
+    pub handle_fence: u64,
+    /// Validated non-empty half-open range.
+    pub range: crate::ByteRange,
+    /// Shared or exclusive compatibility class.
+    pub kind: RangeLockKind,
+    /// Exclusive lock deadline no later than the handle lease.
+    pub lease_expires_at: UnixMicros,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Semantic exact byte-range lock release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterUnlockRequest {
+    /// Stable idempotency identity.
+    pub operation_id: OperationId,
+    /// Stable lock identity returned by acquisition.
+    pub lock_id: LockId,
+    /// Opaque owning handle.
+    pub handle_id: HandleId,
+    /// Exact current handle fence.
+    pub handle_fence: u64,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
 /// File-handle service consumed by embedded or replaceable access connectors.
 ///
 /// The connector supplies semantic logical operations only. Branch selection, principal identity,
@@ -185,6 +281,72 @@ pub trait FilesystemFileAdapter {
         context: FilesystemAccessContext,
         request: AdapterFlushFileRequest,
     ) -> Result<NamespacePublicationReceipt, Self::Error>;
+
+    /// Reads verified immutable attributes for one logical path.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, namespace, cursor or integrity failure.
+    fn stat(
+        &self,
+        context: FilesystemAccessContext,
+        request: &AdapterStatRequest,
+    ) -> Result<NamespaceObjectStat, Self::Error>;
+
+    /// Enumerates one bounded verified directory page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, namespace, cursor or integrity failure.
+    fn list(
+        &self,
+        context: FilesystemAccessContext,
+        request: &AdapterListRequest,
+    ) -> Result<NamespaceListPage, Self::Error>;
+
+    /// Flushes when required and then releases one exact live handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, fence, publication or durability failure.
+    fn close_file(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterCloseFileRequest,
+    ) -> Result<FilesystemHandleCloseReceipt, Self::Error>;
+
+    /// Renews or explicitly transfers one live handle lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, gateway, fence or durability failure.
+    fn renew_lease(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterLeaseRequest,
+    ) -> Result<HandleLeaseReceipt, Self::Error>;
+
+    /// Acquires one leased byte-range lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, overlap, fence or durability failure.
+    fn lock_range(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterLockRequest,
+    ) -> Result<LockRangeReceipt, Self::Error>;
+
+    /// Releases one exact byte-range lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, identity, fence or durability failure.
+    fn unlock_range(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterUnlockRequest,
+    ) -> Result<UnlockRangeReceipt, Self::Error>;
 }
 
 /// Daemon composition binding semantic connector operations to one local branch and policy.
@@ -255,6 +417,56 @@ where
     ) -> Result<NamespacePublicationReceipt, Self::Error> {
         self.filesystem.adapter_flush(context, request, self.policy)
     }
+
+    fn stat(
+        &self,
+        context: FilesystemAccessContext,
+        request: &AdapterStatRequest,
+    ) -> Result<NamespaceObjectStat, Self::Error> {
+        self.filesystem
+            .adapter_stat(self.branch_id, context, request)
+    }
+
+    fn list(
+        &self,
+        context: FilesystemAccessContext,
+        request: &AdapterListRequest,
+    ) -> Result<NamespaceListPage, Self::Error> {
+        self.filesystem
+            .adapter_list(self.branch_id, context, request)
+    }
+
+    fn close_file(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterCloseFileRequest,
+    ) -> Result<FilesystemHandleCloseReceipt, Self::Error> {
+        self.filesystem.adapter_close(context, request, self.policy)
+    }
+
+    fn renew_lease(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterLeaseRequest,
+    ) -> Result<HandleLeaseReceipt, Self::Error> {
+        self.filesystem.adapter_renew_lease(context, request)
+    }
+
+    fn lock_range(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterLockRequest,
+    ) -> Result<LockRangeReceipt, Self::Error> {
+        self.filesystem.adapter_lock(context, request)
+    }
+
+    fn unlock_range(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterUnlockRequest,
+    ) -> Result<UnlockRangeReceipt, Self::Error> {
+        self.filesystem.adapter_unlock(context, request)
+    }
 }
 
 pub(crate) fn prepared_flush(
@@ -262,6 +474,7 @@ pub(crate) fn prepared_flush(
     target: crate::HandleAuthorityTarget,
     context: FilesystemAccessContext,
     policy: FilesystemAdapterPolicy,
+    content_authorization_revision: meshspan_domain::Revision,
 ) -> FilesystemHandleFlushRequest {
     FilesystemHandleFlushRequest {
         operation_id: request.operation_id,
@@ -276,7 +489,7 @@ pub(crate) fn prepared_flush(
         retain_superseded_history: policy.retain_superseded_history,
         retention_policy_sequence: policy.retention_policy_sequence,
         manifest_format_version: policy.manifest_format_version,
-        content_authorization_revision: target.authorization_revision,
+        content_authorization_revision,
         content_deadline: request.content_deadline,
         observed_at: request.observed_at,
     }

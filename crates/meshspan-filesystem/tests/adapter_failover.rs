@@ -6,19 +6,22 @@ use std::{cell::RefCell, collections::BTreeMap, io::Write, rc::Rc};
 
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
-    AssuranceLevel, BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId,
-    NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
+    AssuranceLevel, BranchId, ContentManifestId, FileVersionId, HandleId, LockId,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
+    UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    AdapterFlushFileRequest, AdapterOpenFileRequest, AdapterReadFileRequest,
-    AdapterWriteFileRequest, AuthorisedFilesystemError, AuthorisedFilesystemService,
-    BoundFilesystemAdapter, ContentPublicationError, ContentPublicationRequest, ContentReadError,
-    ContentReadRequest, DurableContentPublisher, DurableContentReader, FilePublication,
-    FilesystemAccessAuthority, FilesystemAccessContext, FilesystemAdapterPolicy,
-    FilesystemAuthorityGrant, FilesystemAuthorityRequest, FilesystemCommitService,
-    FilesystemFileAdapter, FilesystemHandleReadReceipt, HandleAccess, HandleError, HandleIoError,
-    HandleShare, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
-    OpenHandleReceipt, PublishedContentReference, RootFilePublication, VersionPublicationStore,
+    AdapterCloseFileRequest, AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest,
+    AdapterLockRequest, AdapterOpenFileRequest, AdapterReadFileRequest, AdapterStatRequest,
+    AdapterUnlockRequest, AdapterWriteFileRequest, AuthorisedFilesystemError,
+    AuthorisedFilesystemService, BoundFilesystemAdapter, ByteRange, ContentPublicationError,
+    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentPublisher,
+    DurableContentReader, FilePublication, FilesystemAccessAuthority, FilesystemAccessContext,
+    FilesystemAdapterPolicy, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
+    FilesystemCommitService, FilesystemFileAdapter, FilesystemHandleReadReceipt, HandleAccess,
+    HandleError, HandleIoError, HandleShare, ManifestPublication, NamespaceLimits, NamespacePath,
+    NamespacePublicationPath, OpenHandleReceipt, PublishedContentReference, RangeLockKind,
+    RootFilePublication, VersionPublicationStore,
 };
 use tempfile::tempdir;
 
@@ -48,6 +51,8 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
         FilesystemAdapterPolicy::new(true, 1, 1)?,
     );
 
+    assert_namespace_queries(&gateway_b, &service)?;
+
     let rejected = open_request(35, 36, false, true, 9, 80)?;
     let missing_credential = InProcessAdapter::new(gateway_b.node_id, [0; 32]);
     assert!(matches!(
@@ -61,6 +66,7 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
     open_writer(&gateway_a, &mut service, &writer)?;
     assert_conflicting_open(&gateway_b, &mut service, &conflict);
     gateway_b.open(&mut service, &reader, None)?;
+    assert_handle_controls(&gateway_a, &gateway_b, &mut service, &writer)?;
 
     write_private(&gateway_a, &mut service, &writer, 27, 2, b"ZZ", 25)?;
     assert_read(&gateway_a, &mut service, &writer, 28, b"inZZial", 30)?;
@@ -111,6 +117,97 @@ where
     S: FilesystemFileAdapter,
 {
     adapter.open(service, request, Some(1_024))
+}
+
+fn assert_namespace_queries(
+    adapter: &InProcessAdapter,
+    service: &BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let stat = adapter.stat(
+        service,
+        &AdapterStatRequest {
+            volume_id: VolumeId::from_bytes([12; 16])?,
+            path: NamespacePath::from_components(["report"], NamespaceLimits::PORTABLE)?,
+            observed_at: UnixMicros::new(8),
+        },
+    )?;
+    assert_eq!(stat.object_id, ObjectId::from_bytes([13; 16])?);
+    assert_eq!(stat.logical_length, Some(7));
+    let page = adapter.list(
+        service,
+        &AdapterListRequest {
+            volume_id: VolumeId::from_bytes([12; 16])?,
+            directory_path: None,
+            cursor: None,
+            maximum_results: 1,
+            observed_at: UnixMicros::new(8),
+        },
+    )?;
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].object_id, stat.object_id);
+    assert!(page.next_cursor.is_none());
+    Ok(())
+}
+
+fn assert_handle_controls(
+    gateway_a: &InProcessAdapter,
+    gateway_b: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    writer: &AdapterOpenFileRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let lock_id = LockId::from_bytes([38; 16])?;
+    let lock = gateway_a.lock(
+        service,
+        AdapterLockRequest {
+            operation_id: OperationId::from_bytes([37; 16])?,
+            lock_id,
+            handle_id: writer.handle_id,
+            handle_fence: 1,
+            range: ByteRange::new(2, 2)?,
+            kind: RangeLockKind::Exclusive,
+            lease_expires_at: UnixMicros::new(70),
+            observed_at: UnixMicros::new(20),
+        },
+    )?;
+    assert_eq!(lock.lock_id, lock_id);
+    gateway_a.unlock(
+        service,
+        AdapterUnlockRequest {
+            operation_id: OperationId::from_bytes([39; 16])?,
+            lock_id,
+            handle_id: writer.handle_id,
+            handle_fence: 1,
+            observed_at: UnixMicros::new(21),
+        },
+    )?;
+
+    let transferable = open_request(50, 51, false, true, 15, 80)?;
+    gateway_a.open(service, &transferable, None)?;
+    let lease = gateway_b.renew(
+        service,
+        AdapterLeaseRequest {
+            operation_id: OperationId::from_bytes([52; 16])?,
+            handle_id: transferable.handle_id,
+            expected_fence: 1,
+            takeover: true,
+            lease_expires_at: UnixMicros::new(90),
+            observed_at: UnixMicros::new(22),
+        },
+    )?;
+    assert_eq!(lease.handle_fence, 2);
+    assert_eq!(lease.gateway_node_id, gateway_b.node_id);
+    let closed = gateway_b.close(
+        service,
+        AdapterCloseFileRequest {
+            operation_id: OperationId::from_bytes([53; 16])?,
+            handle_id: transferable.handle_id,
+            handle_fence: 2,
+            flush: None,
+            observed_at: UnixMicros::new(23),
+        },
+    )?;
+    assert_eq!(closed.close.handle_fence, 2);
+    Ok(())
 }
 
 fn assert_conflicting_open(
@@ -216,6 +313,54 @@ impl InProcessAdapter {
         request: AdapterFlushFileRequest,
     ) -> Result<meshspan_filesystem::NamespacePublicationReceipt, S::Error> {
         service.flush_file(self.context(request.observed_at), request)
+    }
+
+    fn stat<S: FilesystemFileAdapter>(
+        self,
+        service: &S,
+        request: &AdapterStatRequest,
+    ) -> Result<meshspan_filesystem::NamespaceObjectStat, S::Error> {
+        service.stat(self.context(request.observed_at), request)
+    }
+
+    fn list<S: FilesystemFileAdapter>(
+        self,
+        service: &S,
+        request: &AdapterListRequest,
+    ) -> Result<meshspan_filesystem::NamespaceListPage, S::Error> {
+        service.list(self.context(request.observed_at), request)
+    }
+
+    fn close<S: FilesystemFileAdapter>(
+        self,
+        service: &mut S,
+        request: AdapterCloseFileRequest,
+    ) -> Result<meshspan_filesystem::FilesystemHandleCloseReceipt, S::Error> {
+        service.close_file(self.context(request.observed_at), request)
+    }
+
+    fn renew<S: FilesystemFileAdapter>(
+        self,
+        service: &mut S,
+        request: AdapterLeaseRequest,
+    ) -> Result<meshspan_filesystem::HandleLeaseReceipt, S::Error> {
+        service.renew_lease(self.context(request.observed_at), request)
+    }
+
+    fn lock<S: FilesystemFileAdapter>(
+        self,
+        service: &mut S,
+        request: AdapterLockRequest,
+    ) -> Result<meshspan_filesystem::LockRangeReceipt, S::Error> {
+        service.lock_range(self.context(request.observed_at), request)
+    }
+
+    fn unlock<S: FilesystemFileAdapter>(
+        self,
+        service: &mut S,
+        request: AdapterUnlockRequest,
+    ) -> Result<meshspan_filesystem::UnlockRangeReceipt, S::Error> {
+        service.unlock_range(self.context(request.observed_at), request)
     }
 
     const fn context(self, now: UnixMicros) -> FilesystemAccessContext {

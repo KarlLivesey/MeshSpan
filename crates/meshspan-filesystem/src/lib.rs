@@ -26,9 +26,10 @@ mod staging;
 mod version_retention;
 
 pub use adapter::{
-    AdapterFlushFileRequest, AdapterOpenFileRequest, AdapterReadFileRequest,
-    AdapterWriteFileRequest, BoundFilesystemAdapter, FilesystemAdapterConfigurationError,
-    FilesystemAdapterPolicy, FilesystemFileAdapter,
+    AdapterCloseFileRequest, AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest,
+    AdapterLockRequest, AdapterOpenFileRequest, AdapterReadFileRequest, AdapterStatRequest,
+    AdapterUnlockRequest, AdapterWriteFileRequest, BoundFilesystemAdapter,
+    FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemFileAdapter,
 };
 pub use authority::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, FilesystemAccessAuthority,
