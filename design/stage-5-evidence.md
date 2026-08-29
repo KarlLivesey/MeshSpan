@@ -272,6 +272,15 @@ copy-on-write filesystem service. This document records executable evidence only
   proof creates and queries a directory, advances the namespace independently,
   restarts the complete filesystem store, replays the original result and
   rejects changed input under the same operation identity.
+- Semantic unlink similarly accepts only an operation identity, logical path,
+  optional live handle and authoritative instant. The daemon resolves the exact
+  stable object before requesting `DELETE`, freezes its revision, kind, file
+  version, name generation and complete ancestor lineage in a durable plan, and
+  then uses the atomic logical-unlink transaction. File and directory plans are
+  independently verified on reload; changed requests and tampered target
+  identities fail closed. The external proof removes an empty directory through
+  a second gateway and replays the result after later namespace work and a full
+  restart.
 
 ## Closure gates
 
@@ -513,8 +522,8 @@ copy-on-write filesystem service. This document records executable evidence only
    7 so no connector can treat a repository read as access authority.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
    The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
-   contract, semantic directory creation and two-gateway restart proof are
-   complete. Semantic file creation, rename/unlink, authorised administration
+   contract, semantic directory creation/unlink and two-gateway restart proof
+   are complete. Semantic file creation, rename, authorised administration
    views and the two-isolated-node service-level reconciliation proof remain
    open.
 

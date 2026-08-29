@@ -743,6 +743,25 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         self.publications.unlink_namespace(publication)
     }
 
+    pub(crate) fn adapter_unlink_target(
+        &self,
+        branch_id: BranchId,
+        request: &crate::AdapterUnlinkRequest,
+    ) -> Result<ObjectId, crate::HandleError> {
+        self.publications.adapter_unlink_target(branch_id, request)
+    }
+
+    pub(crate) fn prepare_adapter_unlink(
+        &mut self,
+        branch_id: BranchId,
+        request: &crate::AdapterUnlinkRequest,
+        created_by: PrincipalId,
+        expected_object: ObjectId,
+    ) -> Result<crate::NamespaceUnlinkPublication, crate::HandleError> {
+        self.publications
+            .prepare_adapter_unlink(branch_id, request, created_by, expected_object)
+    }
+
     /// Commits one exact stage as durable content and then atomically advances the namespace head.
     ///
     /// Content publication is independently idempotent and precedes namespace visibility. A crash

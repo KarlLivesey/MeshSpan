@@ -10,14 +10,14 @@ use thiserror::Error;
 use crate::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
     AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
-    AdapterReadFileRequest, AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest,
-    DirectoryPublication, DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy,
-    FilesystemCommitError, FilesystemCommitService, FilesystemHandleCloseReceipt,
-    FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest,
-    FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleReadReceipt,
-    FilesystemHandleReadRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
-    HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt, HandleLeaseRequest,
-    HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
+    AdapterReadFileRequest, AdapterStatRequest, AdapterUnlinkRequest, AdapterUnlockRequest,
+    AdapterWriteFileRequest, DirectoryPublication, DurableContentPublisher, DurableContentReader,
+    FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
+    FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
+    FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleOpenRequest,
+    FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
+    FilesystemHandleWriteRequest, HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt,
+    HandleLeaseRequest, HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
     NamespacePublicationReceipt, NamespaceQueryError, NamespaceRenamePublication,
     NamespaceRenameReceipt, NamespaceStatRequest, NamespaceUnlinkPublication,
     NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, StageWrite,
@@ -677,6 +677,25 @@ where
             .prepare_adapter_directory(branch_id, request, grant.principal_id, parent)
             .map_err(AuthorisedFilesystemError::Handle)?;
         self.create_directory(context, &publication)
+    }
+
+    pub(crate) fn adapter_unlink(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: &AdapterUnlinkRequest,
+    ) -> Result<NamespaceUnlinkReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let target = self
+            .filesystem
+            .adapter_unlink_target(branch_id, request)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        let grant = self.authorise(context, request.volume_id, target, Rights::DELETE)?;
+        let publication = self
+            .filesystem
+            .prepare_adapter_unlink(branch_id, request, grant.principal_id, target)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        self.unlink_namespace(context, &publication)
     }
 
     pub(crate) fn adapter_close(
