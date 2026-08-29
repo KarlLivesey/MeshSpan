@@ -672,6 +672,16 @@ pub(super) fn load_replay_base(
             &intent.path,
             &mut entries,
         )?;
+        if let Some(rename) = &intent.rename {
+            load_replay_path(
+                connection,
+                converged.volume_id,
+                converged.root_object_id,
+                converged.root_object_revision_id,
+                &rename.source_path,
+                &mut entries,
+            )?;
+        }
     }
     Ok(NamespaceReplayBase {
         root_object_revision_id: Some(converged.root_object_revision_id),
@@ -704,11 +714,27 @@ fn load_replay_path(
         selected_path.push(entry.name().clone());
         let selected = crate::NamespacePath::from_stored_components(selected_path.clone())
             .map_err(|_| PublicationError::Corrupt)?;
+        let selected_revision = load_object_revision(connection, entry.object_revision_id())?;
+        if selected_revision.volume_id != volume_id
+            || selected_revision.object_id != entry.object_id()
+            || (selected_revision.kind == 1) != (entry.kind() == DirectoryEntryKind::Directory)
+        {
+            return Err(PublicationError::Corrupt);
+        }
+        let file_version_id = match entry.kind() {
+            DirectoryEntryKind::Directory if selected_revision.file_version_id.is_none() => None,
+            DirectoryEntryKind::File => selected_revision
+                .file_version_id
+                .ok_or(PublicationError::Corrupt)
+                .map(Some)?,
+            DirectoryEntryKind::Directory => return Err(PublicationError::Corrupt),
+        };
         let replay_entry = NamespaceReplayEntry {
             path: selected,
             object_id: entry.object_id(),
             object_revision_id: entry.object_revision_id(),
             kind: entry.kind(),
+            file_version_id,
             entry_generation: entry.generation(),
         };
         let key = replay_entry
@@ -817,11 +843,45 @@ fn mutate_namespace_path(
         .len()
         .checked_sub(1)
         .ok_or(PublicationError::Corrupt)?;
-    let (mut child_root, mut created_nodes) = mutate_entry(
+    let (child_root, created_nodes) = mutate_entry(
         &mut directories[last].editor,
         leaf_entry,
         expected_leaf_revision_id,
     )?;
+    propagate_directory_change(directories, path, child_root, created_nodes)
+}
+
+fn remove_namespace_path(
+    mut directories: Vec<LoadedDirectory>,
+    path: &NamespacePublicationPath,
+    expected_leaf_revision_id: ObjectRevisionId,
+) -> Result<DirectoryPathMutation, PublicationError> {
+    let last = directories
+        .len()
+        .checked_sub(1)
+        .ok_or(PublicationError::Corrupt)?;
+    let leaf_name = path.leaf_name().ok_or(PublicationError::InvalidInput)?;
+    let mutation = directories[last]
+        .editor
+        .remove(leaf_name, expected_leaf_revision_id)?;
+    let created_nodes = mutation
+        .created_nodes
+        .iter()
+        .map(|digest| directories[last].editor.record(*digest))
+        .collect::<Result<Vec<_>, _>>()?;
+    propagate_directory_change(directories, path, mutation.new_root, created_nodes)
+}
+
+fn propagate_directory_change(
+    mut directories: Vec<LoadedDirectory>,
+    path: &NamespacePublicationPath,
+    mut child_root: DirectoryNodeDigest,
+    mut created_nodes: Vec<DirectoryNodeRecord>,
+) -> Result<DirectoryPathMutation, PublicationError> {
+    let last = directories
+        .len()
+        .checked_sub(1)
+        .ok_or(PublicationError::Corrupt)?;
     let mut results = Vec::with_capacity(directories.len());
     results.push(directory_result(&directories[last], child_root));
 

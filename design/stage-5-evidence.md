@@ -400,10 +400,15 @@ copy-on-write filesystem service. This document records executable evidence only
    rename intent now binds the source path and lineage, preserved entry
    generation, destination path and lineage, and the intermediate root between
    removal and insertion. Existing one-path intent digests remain byte-for-byte
-   compatible across branch-schema migration v23. Disconnected two-path replay
-   and the atomic namespace transaction remain open; until that replay exists,
-   injected rename rows are rejected instead of being degraded to an unsafe
-   destination-only upsert.
+   compatible across branch-schema migration v23. Deterministic replay now binds
+   source removal and destination insertion in one digest-covered action, carries
+   a concurrent content edit to the selected destination, recovers destination
+   collisions, materialises a competing file rename as a distinct logical copy,
+   rejects directory cycles, and produces the same plan for every delivery order.
+   The reconciliation SQL applier performs the removal and insertion inside its
+   existing all-or-nothing transaction, using the explicit intermediate root.
+   The public branch-local rename transaction and its end-to-end durable replay
+   proof remain open.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 

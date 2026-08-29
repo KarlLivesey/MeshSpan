@@ -87,9 +87,9 @@ pub use reachability::{
 pub use reconciliation::{
     BranchMutation, BranchMutationIntent, BranchRenameIntent, NamespaceReplayAction,
     NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEntry, NamespaceReplayPlan,
-    PreparedNamespaceReconciliation, ReconciliationCommit, ReconciliationCommitPayload,
-    ReconciliationError, ReconciliationFrontier, ReconciliationLimits, ReconciliationPlan,
-    ReconciliationStoreError, plan_namespace_replay, plan_reconciliation,
+    NamespaceReplayRemoval, PreparedNamespaceReconciliation, ReconciliationCommit,
+    ReconciliationCommitPayload, ReconciliationError, ReconciliationFrontier, ReconciliationLimits,
+    ReconciliationPlan, ReconciliationStoreError, plan_namespace_replay, plan_reconciliation,
 };
 pub use stage_store::{
     CompletedStage, DurableStageStore, StageCompletionRequest, StageLeaseReceipt,

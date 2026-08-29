@@ -15,7 +15,7 @@ mod replay;
 
 pub use replay::{
     NamespaceReplayAction, NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEntry,
-    NamespaceReplayPlan, plan_namespace_replay,
+    NamespaceReplayPlan, NamespaceReplayRemoval, plan_namespace_replay,
 };
 
 const MAXIMUM_COMMITS: usize = 65_536;

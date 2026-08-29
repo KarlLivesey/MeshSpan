@@ -15,7 +15,7 @@ pub(super) fn replay_digest(
     final_root: Option<ObjectRevisionId>,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.namespace-replay-plan.v1\0");
+    digest.update(b"meshspan.filesystem.namespace-replay-plan.v2\0");
     digest.update(&causal_digest);
     update_optional_revision(&mut digest, base.root_object_revision_id);
     let mut entries = base.entries.iter().collect::<Vec<_>>();
@@ -26,6 +26,10 @@ pub(super) fn replay_digest(
         digest.update(&entry.object_id.as_bytes());
         digest.update(&entry.object_revision_id.as_bytes());
         digest.update(&[kind_code(entry.kind)]);
+        update_optional_identifier(
+            &mut digest,
+            entry.file_version_id.map(FileVersionId::as_bytes),
+        );
         digest.update(&entry.entry_generation.to_be_bytes());
     }
     update_count(&mut digest, actions.len());
@@ -38,6 +42,22 @@ pub(super) fn replay_digest(
 
 fn update_action(digest: &mut blake3::Hasher, action: &NamespaceReplayAction) {
     digest.update(&action.commit_id.as_bytes());
+    if let Some(removal) = &action.source_removal {
+        digest.update(&[1]);
+        update_path(digest, &removal.path);
+        digest.update(&removal.object_id.as_bytes());
+        digest.update(&removal.object_revision_id.as_bytes());
+        digest.update(&removal.entry_generation.to_be_bytes());
+        update_optional_revision(digest, Some(removal.intermediate_root_object_revision_id));
+        update_count(digest, removal.ancestors.len());
+        for ancestor in &removal.ancestors {
+            digest.update(&ancestor.object_id().as_bytes());
+            digest.update(&ancestor.expected_revision_id().as_bytes());
+            digest.update(&ancestor.new_revision_id().as_bytes());
+        }
+    } else {
+        digest.update(&[0]);
+    }
     update_path(digest, &action.source_path);
     update_path(digest, &action.target_path);
     digest.update(&action.source_object_id.as_bytes());
