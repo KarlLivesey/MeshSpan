@@ -264,6 +264,12 @@ impl ReplayState {
         if let Some(rename) = &intent.rename {
             return self.apply_rename(plan_digest, commit, intent, rename, commits);
         }
+        if matches!(
+            intent.mutation,
+            BranchMutation::DeleteFile { .. } | BranchMutation::DeleteDirectory
+        ) {
+            return Err(ReconciliationError::InvalidInput);
+        }
         let source_path = intent.path.clone();
         let selection = self.select_leaf(plan_digest, commit, intent)?;
         let LeafSelection::Change {
@@ -403,24 +409,13 @@ impl ReplayState {
             .entries
             .get(&path_key(&path))
             .map(|entry| entry.revision_id);
-        let (file_version_id, publication_operation_id) = match intent.mutation {
-            BranchMutation::CreateDirectory => (None, None),
-            BranchMutation::File { version_id } if object_id == intent.object_id => {
-                (Some(version_id), None)
-            }
-            BranchMutation::File { version_id } => (
-                Some(derived_file_version(
-                    plan_digest,
-                    commit.commit_id,
-                    version_id,
-                )?),
-                Some(derived_operation(
-                    plan_digest,
-                    commit.commit_id,
-                    commit.operation_id,
-                )?),
-            ),
-        };
+        let (file_version_id, publication_operation_id) = replay_leaf_content_identity(
+            plan_digest,
+            commit,
+            intent.mutation,
+            intent.object_id,
+            object_id,
+        )?;
         let generation =
             if disposition == NamespaceReplayDisposition::Recovered && path != intent.path {
                 1
@@ -624,6 +619,36 @@ impl ReplayState {
     }
 }
 
+fn replay_leaf_content_identity(
+    plan_digest: [u8; 32],
+    commit: &ReconciliationCommit,
+    mutation: BranchMutation,
+    source_object_id: ObjectId,
+    target_object_id: ObjectId,
+) -> Result<(Option<FileVersionId>, Option<OperationId>), ReconciliationError> {
+    match mutation {
+        BranchMutation::CreateDirectory => Ok((None, None)),
+        BranchMutation::File { version_id } if target_object_id == source_object_id => {
+            Ok((Some(version_id), None))
+        }
+        BranchMutation::File { version_id } => Ok((
+            Some(derived_file_version(
+                plan_digest,
+                commit.commit_id,
+                version_id,
+            )?),
+            Some(derived_operation(
+                plan_digest,
+                commit.commit_id,
+                commit.operation_id,
+            )?),
+        )),
+        BranchMutation::DeleteFile { .. } | BranchMutation::DeleteDirectory => {
+            Err(ReconciliationError::InvalidInput)
+        }
+    }
+}
+
 fn index_commits(
     commits: &[ReconciliationCommit],
 ) -> Result<BTreeMap<NamespaceCommitId, &ReconciliationCommit>, ReconciliationError> {
@@ -691,6 +716,13 @@ fn validate_intent(
             return Err(ReconciliationError::InvalidLineage);
         }
     }
+    if matches!(
+        intent.mutation,
+        BranchMutation::DeleteFile { .. } | BranchMutation::DeleteDirectory
+    ) && intent.rename.is_some()
+    {
+        return Err(ReconciliationError::InvalidInput);
+    }
     if let Some(rename) = &intent.rename {
         if rename.source_entry_generation == 0
             || rename.source_ancestors.len().checked_add(1)
@@ -745,8 +777,10 @@ fn direct_application(
 
 fn mutation_kind(mutation: BranchMutation) -> DirectoryEntryKind {
     match mutation {
-        BranchMutation::File { .. } => DirectoryEntryKind::File,
-        BranchMutation::CreateDirectory => DirectoryEntryKind::Directory,
+        BranchMutation::File { .. } | BranchMutation::DeleteFile { .. } => DirectoryEntryKind::File,
+        BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => {
+            DirectoryEntryKind::Directory
+        }
     }
 }
 
@@ -768,8 +802,10 @@ fn already_applied(
         target_entry_generation: intent.entry_generation,
         target_prior_object_revision_id: Some(intent.object_revision_id),
         target_file_version_id: match intent.mutation {
-            BranchMutation::File { version_id } => Some(version_id),
-            BranchMutation::CreateDirectory => None,
+            BranchMutation::File { version_id } | BranchMutation::DeleteFile { version_id } => {
+                Some(version_id)
+            }
+            BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => None,
         },
         target_publication_operation_id: None,
         target_ancestors: Vec::new(),

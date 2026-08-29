@@ -84,6 +84,13 @@ fn update_action(digest: &mut blake3::Hasher, action: &NamespaceReplayAction) {
         BranchMutation::CreateDirectory => {
             digest.update(&[2]);
         }
+        BranchMutation::DeleteFile { version_id } => {
+            digest.update(&[3]);
+            digest.update(&version_id.as_bytes());
+        }
+        BranchMutation::DeleteDirectory => {
+            digest.update(&[4]);
+        }
     }
     digest.update(&[disposition_code(action.disposition)]);
     update_optional_revision(digest, action.target_root_object_revision_id);

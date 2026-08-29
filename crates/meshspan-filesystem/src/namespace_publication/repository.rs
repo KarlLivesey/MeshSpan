@@ -2,6 +2,8 @@
 
 //! Durable namespace commit, object-revision, head and operation-receipt repository.
 
+#[path = "repository/deletion_intent.rs"]
+mod deletion_intent;
 #[path = "repository/rename_intent.rs"]
 mod rename_intent;
 #[path = "repository/rename_operation.rs"]
@@ -413,9 +415,12 @@ pub(in crate::publication) fn persist_branch_intent(
     intent: &BranchMutationIntent,
 ) -> Result<(), PublicationError> {
     rename_intent::validate_shape(intent)?;
+    deletion_intent::validate_shape(intent)?;
     let (kind, version_id) = match intent.mutation {
-        BranchMutation::File { version_id } => (1_u8, Some(version_id.as_bytes())),
-        BranchMutation::CreateDirectory => (2, None),
+        BranchMutation::File { version_id } | BranchMutation::DeleteFile { version_id } => {
+            (1_u8, Some(version_id.as_bytes()))
+        }
+        BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => (2, None),
     };
     let prior = intent
         .prior_object_revision_id
@@ -472,6 +477,7 @@ pub(in crate::publication) fn persist_branch_intent(
     if let Some(rename) = &intent.rename {
         rename_intent::persist(transaction, intent.commit_id, rename)?;
     }
+    deletion_intent::persist(transaction, intent)?;
     Ok(())
 }
 
@@ -549,9 +555,12 @@ fn decode_branch_intent(
         return Err(PublicationError::Corrupt);
     }
     let version = decode_optional(stored.4.as_deref(), FileVersionId::from_bytes)?;
-    let mutation = match (stored.0, version) {
-        (1, Some(version_id)) => BranchMutation::File { version_id },
-        (2, None) => BranchMutation::CreateDirectory,
+    let deleted = deletion_intent::exists(connection, commit_id)?;
+    let mutation = match (stored.0, version, deleted) {
+        (1, Some(version_id), false) => BranchMutation::File { version_id },
+        (2, None, false) => BranchMutation::CreateDirectory,
+        (1, Some(version_id), true) => BranchMutation::DeleteFile { version_id },
+        (2, None, true) => BranchMutation::DeleteDirectory,
         _ => return Err(PublicationError::Corrupt),
     };
     let rename = rename_intent::load(connection, commit_id)?;
@@ -623,10 +632,11 @@ fn validate_loaded_intent(
     intent: &BranchMutationIntent,
 ) -> Result<(), PublicationError> {
     rename_intent::validate_shape(intent).map_err(|_| PublicationError::Corrupt)?;
+    deletion_intent::validate_shape(intent).map_err(|_| PublicationError::Corrupt)?;
     let commit = load_commit(connection, intent.commit_id)?;
     let revision = load_object_revision(connection, intent.object_revision_id)?;
     let valid_kind = match intent.mutation {
-        BranchMutation::File { version_id } => {
+        BranchMutation::File { version_id } | BranchMutation::DeleteFile { version_id } => {
             revision.kind == 2
                 && revision.directory_root.is_none()
                 && revision.file_version_id == Some(version_id)
@@ -636,6 +646,11 @@ fn validate_loaded_intent(
                 && revision.directory_root.is_some()
                 && revision.file_version_id.is_none()
                 && (intent.rename.is_some() || intent.prior_object_revision_id.is_none())
+        }
+        BranchMutation::DeleteDirectory => {
+            revision.kind == 1
+                && revision.directory_root.is_some()
+                && revision.file_version_id.is_none()
         }
     };
     if commit.volume_id != revision.volume_id
@@ -651,6 +666,7 @@ fn validate_loaded_intent(
     if let Some(rename) = &intent.rename {
         rename_intent::validate_loaded(connection, &commit, rename)?;
     }
+    deletion_intent::validate_loaded(connection, &commit, intent)?;
     Ok(())
 }
 

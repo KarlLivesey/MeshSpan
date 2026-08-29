@@ -126,8 +126,10 @@ fn concurrent_file_loser_and_its_later_edit_follow_one_recovered_copy()
     assert_ne!(
         recovered.target_file_version_id,
         match recovered.mutation {
-            BranchMutation::File { version_id } => Some(version_id),
-            BranchMutation::CreateDirectory => None,
+            BranchMutation::File { version_id } | BranchMutation::DeleteFile { version_id } => {
+                Some(version_id)
+            }
+            BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => None,
         }
     );
     assert!(recovered.target_publication_operation_id.is_some());
@@ -430,6 +432,28 @@ fn rename_intent_digest_binds_both_paths_generation_and_intermediate_root()
         .ok_or("missing rename")?
         .intermediate_root_object_revision_id = revision(71)?;
     assert_ne!(digest, changed_intermediate.digest());
+    Ok(())
+}
+
+#[test]
+fn deletion_intent_digest_is_distinct_and_binds_the_removed_version()
+-> Result<(), Box<dyn std::error::Error>> {
+    let ordinary = file_intent(2, &["report"], 51, Some(61), 62)?;
+    let mut deletion = ordinary.clone();
+    deletion.mutation = BranchMutation::DeleteFile {
+        version_id: version(62)?,
+    };
+    let digest = deletion.digest();
+    assert_ne!(digest, ordinary.digest());
+
+    deletion.mutation = BranchMutation::DeleteFile {
+        version_id: version(63)?,
+    };
+    assert_ne!(digest, deletion.digest());
+
+    let mut directory_delete = directory_intent(2, &["folder"], 52, 64)?;
+    directory_delete.mutation = BranchMutation::DeleteDirectory;
+    assert_ne!(digest, directory_delete.digest());
     Ok(())
 }
 
