@@ -104,8 +104,10 @@ Status: **draft for review**.
   retain valid authority, their consensus-write quorum and required data.
 - **CLU-022** Every authoritative record MUST belong to exactly one metadata partition at a time;
   only that partition's committed log may mutate it.
-- **CLU-023** A one-node/small mesh MAY begin with one metadata partition, but it MUST use the same
-  partition identity, routing and record model required to split online as the mesh grows.
+- **CLU-023** Every new swarm MUST begin with one root control metadata partition and one Raft
+  group owning all authoritative scopes. That root group MUST remain the ultimate authority for
+  swarm identity, node enrolment, federation trust and the partition-delegation directory after
+  other groups are created.
 - **CLU-024** Gateways MUST cache a signed, revisioned partition-routing table and contact the
   partition owning an operation directly; ordinary local-partition IO MUST NOT require a live
   campus-wide catalogue transaction.
@@ -132,6 +134,14 @@ Status: **draft for review**.
   necessary old/new cross-intersections and admits no unsynchronised voter.
 - **CLU-034** Ordinary administration MUST express desired failure survival and locality rather
   than election, read or write quorum arithmetic; MeshSpan MUST compile and explain the plan.
+- **CLU-035** The root control partition MUST be able to delegate an exact operation family and
+  scope/key range to another Raft group through a revisioned, epoch-fenced ownership transition.
+  After activation, ordinary operations in that scope MUST route directly to the delegated group
+  and MUST NOT append through the root group.
+- **CLU-036** A delegated Raft group MAY own identity, authentication, namespace, configuration,
+  audit or other metadata families and MAY later be subdivided without changing public identities.
+  No split may activate unless enough eligible swarm members and resources exist for its proved
+  quorum plan; insufficient membership or load MUST leave the scope on its current safe group.
 
 ## Federation between autonomous swarms
 
@@ -649,6 +659,13 @@ Status: **draft for review**.
 - **SCL-012** Federated sharing MUST keep consensus work local to each swarm. Canonical merge and ACL
   authority for a shared scope MAY load its owning swarm, so large deployments MUST be able to
   distribute owned volumes or explicit subtree scopes without changing user-visible access.
+- **SCL-013** The metadata model MUST scale online from one all-purpose root Raft group to many
+  delegated groups without a format conversion. Adding nodes MUST NOT add every node as a root
+  voter, make delegated operations append through the root, or require broadcasts to discover the
+  owning group.
+- **SCL-014** Partition routing and delegation MUST support bounded hierarchical lookup and cached
+  signed routes so growth from tens to thousands of nodes increases independent groups and workers
+  rather than the synchronous fan-out of an ordinary operation.
 
 ## Verification and release
 
@@ -835,6 +852,9 @@ Status: **draft for review**.
 - **DEF-002** Native direct-shard clients and peer-assisted verified caches are deferred; caches MUST
   never count toward durability.
 - **DEF-004** Whole-device management and native Windows hosting are not part of the initial MUP.
-- **DEF-005** Automatic creation, split, merge and rebalancing of volume/subtree metadata Raft
-  groups is a future optimisation. Current partition/routing contracts MUST avoid requiring every
-  namespace mutation to pass through a parent log and MUST leave this optimisation possible.
+- **DEF-005** Automatically deciding when and how to create, split, merge and rebalance delegated
+  metadata Raft groups is a future optimisation. The root/delegation model and safe manual/test
+  transition are foundational, but production heuristics MUST wait for measured load, measured
+  per-group resource capacity, eligible membership, fault-domain placement and migration-cost
+  evidence. They MUST NOT use node count or a fixed operation rate as a hardware-independent split
+  trigger.

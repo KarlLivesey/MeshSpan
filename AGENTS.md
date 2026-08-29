@@ -47,6 +47,11 @@ decision explicitly.
 - Authority is per metadata partition; every mutable aggregate has exactly one
   converged owner. Outage branches never become a second control-plane authority
   and reconcile into that owner's head without discarding acknowledged content.
+- Every swarm begins with one permanent root control Raft owning all scopes. It
+  may epoch-fence and delegate exact operation families/key ranges to directly
+  routed Raft groups, but remains authority for swarm identity, node enrolment,
+  federation trust and the delegation directory. Delegated mutations do not
+  append through the root log.
 - Federation never creates consensus across swarms. Every shared scope retains
   one owning swarm; peers may commit only inside signed delegations and exchange
   bounded immutable history asynchronously. Governance is acyclic, horizontal
