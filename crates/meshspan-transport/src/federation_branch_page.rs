@@ -164,6 +164,12 @@ impl AuthenticatedFederationBranchPage {
         &self.page.immutable_object_digests
     }
 
+    /// Returns the signed source-side export identity needed to fetch advertised bodies.
+    #[must_use]
+    pub fn export_token(&self) -> &[u8] {
+        &self.page.export_token
+    }
+
     /// Returns the opaque signed continuation, empty only at the end.
     #[must_use]
     pub fn next_cursor(&self) -> &[u8] {

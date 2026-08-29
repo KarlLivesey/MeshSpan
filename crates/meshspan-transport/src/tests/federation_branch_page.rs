@@ -95,6 +95,7 @@ pub(super) async fn prove_federation_branch_page(
     assert_eq!(page.grant_id(), &[55; 16]);
     assert_eq!(page.branch_commits().len(), 1);
     assert_eq!(page.immutable_object_digests(), &[vec![59; 32]]);
+    assert_eq!(page.export_token(), &[61; 32]);
     assert_eq!(page.next_cursor(), &[60; 16]);
     assert!(matches!(
         proof.registry.authenticate_branch_page(
@@ -183,6 +184,9 @@ fn prove_hostile_branch_pages(
     let mut corrupt_commit = original.clone();
     branch_page_mut(&mut corrupt_commit).branch_commits[0].canonical_bytes[0] ^= 1;
     variants.push(corrupt_commit);
+    let mut wrong_export = original.clone();
+    branch_page_mut(&mut wrong_export).export_token[0] ^= 1;
+    variants.push(wrong_export);
     let mut bad_signature = original.clone();
     branch_page_mut(&mut bad_signature).signature[0] ^= 1;
     variants.push(bad_signature);
@@ -305,6 +309,7 @@ fn branch_page(grant_id: Vec<u8>, scope: VersionedPayload) -> FederatedBranchPag
         next_cursor: vec![60; 16],
         page_digest: Vec::new(),
         signature: Vec::new(),
+        export_token: vec![61; 32],
     }
 }
 

@@ -297,6 +297,7 @@ mod tests {
             next_cursor: vec![12],
             page_digest: vec![13; 32],
             signature: vec![14; 64],
+            export_token: vec![15; 32],
         };
         let digest = federation_branch_page_digest_payload(&page);
         let signature = federation_branch_page_signing_payload(&header, &page);
@@ -313,6 +314,9 @@ mod tests {
             signature
         );
         page.immutable_object_digests[0][0] ^= 1;
+        assert_ne!(federation_branch_page_digest_payload(&page), digest);
+        page.immutable_object_digests[0][0] ^= 1;
+        page.export_token[0] ^= 1;
         assert_ne!(federation_branch_page_digest_payload(&page), digest);
     }
 }

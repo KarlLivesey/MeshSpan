@@ -76,6 +76,7 @@ message FederatedBranchPage {
   bytes next_cursor = 5;
   bytes page_digest = 6;
   bytes signature = 7;
+  bytes export_token = 8;
 }
 
 message ProposeFederatedBranch {
