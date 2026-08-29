@@ -4,6 +4,7 @@
 //! independent protocol streams.
 
 mod federation;
+mod federation_authority_page;
 mod federation_hello;
 mod federation_negotiation;
 mod identity;
@@ -29,6 +30,11 @@ mod tests;
 pub use federation::{
     AuthenticatedFederationHello, FederationPeerBinding, FederationPeerRegistry,
     FederationReplayGuard,
+};
+pub use federation_authority_page::{
+    AuthenticatedFederationAuthorityPage, FederationAuthorityPageContext,
+    FederationAuthorityPageExpectation, OutboundFederationAuthorityPage,
+    signed_federation_authority_page,
 };
 pub use federation_hello::{
     FederationHelloConfig, FederationHelloContext, FederationLocalIdentity,

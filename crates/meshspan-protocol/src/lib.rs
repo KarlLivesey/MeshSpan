@@ -7,6 +7,7 @@ mod framing;
 mod validation;
 
 pub use federation_signing::{
+    federation_authority_page_digest_payload, federation_authority_page_signing_payload,
     federation_hello_signing_payload, federation_welcome_signing_payload,
 };
 pub use framing::{
