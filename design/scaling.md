@@ -6,6 +6,25 @@ MeshSpan scales by adding independent data, gateway, worker and metadata
 partitions without making small installations pay for a distributed catalogue on
 every operation. One node is the smallest topology of the same model.
 
+## Scaling through federation
+
+One swarm can span many sites, cells and metadata partitions. Federation provides
+an additional scale-out boundary when placing all organisational membership and
+authority inside one consensus system is no longer desirable. Several autonomous
+shop swarms may share with a head-office swarm, or peer swarms may share directly,
+without any operation entering a federation-wide Raft group.
+
+Consensus load remains local: an accepting swarm durably records its own work and
+cross-swarm branches and receipts propagate asynchronously. The owning swarm of a
+shared scope still performs its canonical merge and ACL work. Very large
+deployments therefore distribute ownership across volumes or explicit subtree
+boundaries rather than sending every namespace through one nominal owner.
+
+Federation is not forced at an arbitrary node count. Operators choose one larger
+swarm or several federated swarms according to administrative, failure, latency
+and load boundaries. Both use the same filesystem and sharing semantics. See
+[`federation.md`](federation.md).
+
 ## Availability cells
 
 An availability cell is a locality expected to retain internal connectivity
@@ -41,6 +60,18 @@ The first practical split is one namespace partition per large volume or
 availability cell. Subtree partitioning is permitted later behind explicit
 mount/ownership boundaries; arbitrary per-file sharding would make rename,
 listing and permissions needlessly expensive.
+
+This is a hierarchy of routing and ownership, not nested commit confirmation.
+The catalogue tells gateways which independent Raft group owns a scope, but that
+group commits its ordinary operations without appending through a parent log.
+Automatic volume-level partition creation and measured subtree split/merge are
+future optimisations. MeshSpan may eventually recommend and, where policy permits,
+perform a subtree split after sustained measured load; it must not create a
+consensus group for every ordinary folder by default.
+
+The exact load signals, hysteresis, minimum partition size, split/merge cost model
+and automatic-action policy remain open design item O-008. Those details require
+measurement and deterministic safety proofs rather than an invented threshold.
 
 ## Building disconnection
 

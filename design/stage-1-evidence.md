@@ -1,6 +1,10 @@
 # Stage 1 completion evidence
 
-Status: complete on 2026-08-28.
+Status: original scope complete on 2026-08-28; Stage 1 reopened for federation.
+
+The missing federation domain/contracts and new closure gates are recorded in
+[`federation.md`](federation.md) and [`roadmap.md`](roadmap.md). This document does
+not claim that retrofit is implemented.
 
 Stage 1 establishes executable contracts and a fast proof loop. It does not
 claim a metadata database, networked cluster, storage provider or public file

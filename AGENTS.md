@@ -47,6 +47,11 @@ decision explicitly.
 - Authority is per metadata partition; every mutable aggregate has exactly one
   converged owner. Outage branches never become a second control-plane authority
   and reconcile into that owner's head without discarding acknowledged content.
+- Federation never creates consensus across swarms. Every shared scope retains
+  one owning swarm; peers may commit only inside signed delegations and exchange
+  bounded immutable history asynchronously. Governance is acyclic, horizontal
+  sharing may form a graph, and effective authority is every applicable side's
+  intersection.
 - Eventual convergence is the normal availability-first write policy. Strong
   publication waits only for predicates and zones explicitly marked required;
   eventual zones create debt and never hold its barrier.

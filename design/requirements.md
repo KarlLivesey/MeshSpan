@@ -44,6 +44,13 @@ Status: **draft for review**.
   none may create a second configuration or recovery authority.
 - **SIM-007** Ordinary churn MUST NOT require recovery commands. Any manual action request MUST name
   a missing physical resource, user intent or security decision with a stable diagnostic reason.
+- **SIM-008** Ordinary federation setup MUST present resource sharing as selecting a volume, folder
+  or file, selecting another swarm and choosing `view`, `edit` or `manage`; storage sharing MUST
+  ask only for capacity and whether it may serve ordinary reads. Detailed rights and placement
+  controls MUST remain optional advanced settings.
+- **SIM-009** Federation internals including trust chains, delegation leases, remote branches,
+  cryptographic keys, receipts and reconciliation MUST be automatic and MUST NOT become routine
+  user or administrator choices.
 
 ## Hosts, nodes and membership
 
@@ -125,6 +132,80 @@ Status: **draft for review**.
   necessary old/new cross-intersections and admits no unsynchronised voter.
 - **CLU-034** Ordinary administration MUST express desired failure survival and locality rather
   than election, read or write quorum arithmetic; MeshSpan MUST compile and explain the plan.
+
+## Federation between autonomous swarms
+
+- **FED-001** Independently administered swarms MUST be able to federate without joining voter
+  sets, metadata partitions, user databases, encryption roots or consensus authorities.
+- **FED-002** Federation MUST support horizontal peer relationships, hierarchical governance and
+  deployments combining both forms.
+- **FED-003** A subordinate swarm MUST have at most one immediate governing parent. Governance
+  relationships MAY have multiple levels but MUST be acyclic. Horizontal data and storage
+  relationships MAY be bidirectional or cyclic.
+- **FED-004** A governing swarm MAY impose mandatory limits and policy ceilings. A subordinate
+  MUST be able to commit ordinary decisions locally without upstream confirmation when they remain
+  inside its durable delegation, but MUST NOT expand delegated authority.
+- **FED-005** Every side of a federation relationship MAY impose restrictions. Effective authority,
+  capacity and operation limits MUST be the intersection of the owning swarm's grant, every
+  governing ceiling, the consuming swarm's local policy and the acting principal's active rights.
+- **FED-006** Connecting swarms MUST require explicit administrator approval on both sides using
+  short-lived, bounded connection material and verified swarm identities.
+- **FED-007** Every swarm and remote principal MUST have a globally qualified identity. A remote
+  user MUST authenticate with its home swarm; raw credentials, factors and sessions MUST NOT be
+  copied into another swarm.
+- **FED-008** Federation grants MUST target a volume, folder subtree, individual file or bounded
+  storage capacity and MUST express explicit view, edit, manage and manage-sharing rights over the
+  applicable resource kind.
+- **FED-009** The ordinary UI MUST lead with the `view`, `edit` and `manage` presets. Resharing MUST
+  require an explicit manage-sharing right, and advanced rights MUST NOT silently broaden a preset.
+- **FED-010** Every shared volume, folder or file MUST retain exactly one owning swarm responsible
+  for its ACL policy and canonical converged history, independently of data placement and the swarm
+  that accepted an offline edit.
+- **FED-011** An edit grant MUST allow authorised users from another swarm to create and modify data.
+  A disconnected swarm with a valid signed offline delegation MUST be able to commit a durable
+  local branch without synchronous confirmation from the owner or a governing swarm.
+- **FED-012** Federated multi-writer reconciliation MUST authenticate provenance, validate the exact
+  identity and delegation history, exchange bounded missing causal pages and referenced immutable
+  records, and deterministically preserve every admissible acknowledged version.
+- **FED-013** Federated write outcomes MUST distinguish durability on the accepting swarm,
+  acceptance into the owning swarm's canonical history and satisfaction of the requested federated
+  protection/availability policy.
+- **FED-014** Federation grants MUST have an explicit offline-validity policy. Connected swarms
+  SHOULD renew automatically; ordinary setup MUST supply a safe default while advanced controls
+  MAY choose shorter, longer or indefinite offline access.
+- **FED-015** Known revocation MUST stop access immediately. Work accepted while disconnected under
+  an apparently valid grant but proven inadmissible after reconciliation MUST remain absent from
+  the shared namespace and MUST be retained as bounded, audited quarantine until authorised
+  recovery or expiry; it MUST NOT be silently published or destroyed.
+- **FED-016** Remote capacity MUST be selectable by placement policy as one or more independent
+  swarm locations. Placement MUST choose eligible partners automatically and MAY spread a required
+  count across a larger partner set.
+- **FED-017** Each remote-storage relationship MUST state whether its verified shards count towards
+  protection and whether it may serve ordinary reads. Protection-only capacity MUST NOT be reported
+  as immediate availability.
+- **FED-018** Storage-only swarms MUST receive only encrypted shards, integrity metadata and bounded
+  lifecycle capabilities. They MUST NOT receive volume decryption keys, filenames or user metadata.
+- **FED-019** Readable federation sharing MAY deliver scoped, revocable decryption material only to
+  authorised gateways. Storage donation MUST remain independent of readable data sharing.
+- **FED-020** Every remote shard put, get, scrub, repair, retirement and reclamation MUST use an
+  exact bounded capability and signed replay-safe receipt. Location, a relationship or mTLS identity
+  alone MUST NOT authorise data access or deletion.
+- **FED-021** Bilateral capacity and policy restrictions MUST be enforced at admission and placement.
+  If one side offers 100 GB and the other permits 50 GB, no operation may rely on more than 50 GB.
+- **FED-022** Loss of contact MUST NOT authorise ownership takeover. Recovery of a permanently lost
+  owning swarm MUST require either its offline recovery material or an explicitly pre-authorised
+  successor and MUST create a signed, audited transition that fences the former authority.
+- **FED-023** Moving shared data outside its granted scope MUST require authority over both source
+  and destination scopes and MUST NOT implicitly expand federation access.
+- **FED-024** Relationship removal MUST revoke known access but MUST NOT claim remote bytes erased.
+  Encrypted replicas MUST follow the agreed retention and receipt-backed cleanup lifecycle.
+- **FED-025** Federation records, messages, signatures, delegation chains and remote data MUST be
+  treated as hostile at every boundary and independently checked for identity, authority, scope,
+  epoch, time, bounds, integrity and exact replay.
+- **FED-026** Federation MUST be an intentional scale-out boundary: ordinary operations in one
+  swarm MUST NOT require consensus, voter contact or a synchronous catalogue transaction in any
+  other swarm. Large deployments MUST be able to distribute ownership by volume or explicit
+  subtree across swarms while retaining the same sharing semantics.
 
 ## Storage targets and fault groups
 
@@ -563,6 +644,11 @@ Status: **draft for review**.
   and configured budgets rather than a small hard-coded product ceiling.
 - **SCL-010** Request routing and metadata storage MUST support adding partitions without changing
   public filesystem semantics or requiring a scan of all metadata partitions.
+- **SCL-011** MeshSpan MUST support both scale-up within one swarm and scale-out through federation;
+  it MUST NOT impose an arbitrary node-count threshold that forces conversion to federation.
+- **SCL-012** Federated sharing MUST keep consensus work local to each swarm. Canonical merge and ACL
+  authority for a shared scope MAY load its owning swarm, so large deployments MUST be able to
+  distribute owned volumes or explicit subtree scopes without changing user-visible access.
 
 ## Verification and release
 
@@ -749,3 +835,6 @@ Status: **draft for review**.
 - **DEF-002** Native direct-shard clients and peer-assisted verified caches are deferred; caches MUST
   never count toward durability.
 - **DEF-004** Whole-device management and native Windows hosting are not part of the initial MUP.
+- **DEF-005** Automatic creation, split, merge and rebalancing of volume/subtree metadata Raft
+  groups is a future optimisation. Current partition/routing contracts MUST avoid requiring every
+  namespace mutation to pass through a parent log and MUST leave this optimisation possible.

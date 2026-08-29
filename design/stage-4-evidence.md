@@ -1,10 +1,17 @@
 # Stage 4 implementation evidence
 
-Status: complete, 2026-08-28.
+Status: original local-provider scope complete on 2026-08-28; Stage 4 reopened for
+federated partner capacity.
 
 Stage 4 turns registered existing folders into private immutable-shard providers.
 This document records executable evidence only; accepted design prose is not an
 implementation claim.
+
+The existing evidence does not implement the accepted federation contract. Stage
+4 still needs capability-scoped partner-swarm capacity, bilateral quota
+intersection, separate protection/ordinary-read classification, encrypted remote
+shard lifecycle receipts, reconnect/revocation handling and real cross-swarm
+provider tests. See [`federation.md`](federation.md).
 
 ## Delivered foundation
 
@@ -103,6 +110,7 @@ implementation claim.
    `ENOSPC`, short/partial writes, lost flush results, corruption, path/media
    replacement, stale incarnation and three-process remote transfer.
 
-Every Stage 4 gate is checked. The complete local suite, including the six-target
-three-process proof, passes together; its warm four-worker run completes in
-6.74 seconds.
+Every original Stage 4 gate is checked. The complete local suite, including the
+six-target three-process proof, passes together; its warm four-worker run completed
+in 6.74 seconds. Stage 4 remains reopened until the federation gates in the roadmap
+have executable evidence.

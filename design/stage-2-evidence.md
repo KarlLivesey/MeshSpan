@@ -1,6 +1,11 @@
 # Stage 2 completion evidence
 
-Status: complete after executable re-audit on 2026-08-28.
+Status: original scope complete after executable re-audit on 2026-08-28; Stage 2
+reopened for federation metadata.
+
+The missing federation records/transitions and new closure gates are recorded in
+[`federation.md`](federation.md) and [`roadmap.md`](roadmap.md). This document does
+not claim that retrofit is implemented.
 
 The authoritative correction and all closure gates are recorded in
 [stage-1-3-audit.md](stage-1-3-audit.md).
