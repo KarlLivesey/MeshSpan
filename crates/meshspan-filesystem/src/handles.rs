@@ -276,6 +276,25 @@ pub struct OpenHandleReceipt {
     pub result_digest: [u8; 32],
 }
 
+/// Exact live handle target exposed to the connector-neutral authority boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HandleAuthorityTarget {
+    /// Volume containing the opened object.
+    pub volume_id: VolumeId,
+    /// Stable opened object identity.
+    pub object_id: ObjectId,
+    /// Principal that owns the handle.
+    pub principal_id: PrincipalId,
+    /// Gateway currently holding the handle fence.
+    pub gateway_node_id: NodeId,
+    /// Authority revision recorded when the handle was opened or renewed.
+    pub authorization_revision: Revision,
+    /// Operations originally admitted for the handle.
+    pub desired_access: HandleAccess,
+    /// Exclusive handle lease deadline.
+    pub lease_expires_at: UnixMicros,
+}
+
 /// Stable failures from handle admission and durable state.
 #[derive(Debug, Error)]
 pub enum HandleError {
@@ -373,6 +392,14 @@ pub(crate) fn open_existing(
     connection: &mut Connection,
     request: &OpenHandleRequest,
 ) -> Result<OpenHandleReceipt, HandleError> {
+    open_existing_at(connection, request, None)
+}
+
+pub(crate) fn open_existing_at(
+    connection: &mut Connection,
+    request: &OpenHandleRequest,
+    expected_object_id: Option<ObjectId>,
+) -> Result<OpenHandleReceipt, HandleError> {
     validate_open(request)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(receipt) = resolve_open_request(&transaction, request)? {
@@ -384,6 +411,9 @@ pub(crate) fn open_existing(
     let Some(resolved) = resolve_file(&transaction, request)? else {
         return absent_disposition(request.create_disposition);
     };
+    if expected_object_id.is_some_and(|expected| expected != resolved.object) {
+        return Err(HandleError::StaleHandle);
+    }
     if request.create_disposition == CreateDisposition::CreateNew {
         return Err(HandleError::AlreadyExists);
     }
@@ -393,6 +423,22 @@ pub(crate) fn open_existing(
     let receipt = persist_open(&transaction, request, request_digest, resolved)?;
     transaction.commit()?;
     Ok(receipt)
+}
+
+pub(crate) fn resolve_open_object(
+    connection: &Connection,
+    request: &OpenHandleRequest,
+) -> Result<Option<ObjectId>, HandleError> {
+    validate_open(request)?;
+    resolve_file(connection, request).map(|resolved| resolved.map(|file| file.object))
+}
+
+pub(crate) fn authority_target(
+    connection: &Connection,
+    handle: HandleId,
+    observed_at: UnixMicros,
+) -> Result<HandleAuthorityTarget, HandleError> {
+    state::authority_target(connection, handle, observed_at)
 }
 
 pub(crate) fn resolve_open_request(

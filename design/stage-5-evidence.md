@@ -197,8 +197,22 @@ copy-on-write filesystem service. This document records executable evidence only
   active owner must receive its exact replacement owner set in the same
   transaction. Restart, exact replay, incomplete/contradictory schema evidence,
   every injected apply boundary and the complete access loss/restoration path
-  are executable. Operation-time capability enforcement in the filesystem
-  service and adapter conformance remain open.
+  are executable.
+- The logical filesystem now exposes one replaceable operation-time authority
+  contract rather than accepting a connector's claimed revision as proof. Its
+  composed service resolves an existing path or live handle to a stable logical
+  object, requests the exact protocol-neutral right set, rejects mismatched,
+  expired, zero-revision or zero-evidence grants, and repeats the expected-object
+  comparison inside final open admission. The same boundary fronts open,
+  create-or-open, write, flush, dirty close, lease renewal/takeover, directory
+  creation, rename and unlink. A focused durable proof opens a real branch file,
+  revokes authority before a write, verifies that neither the handle admission
+  nor private stage advanced, then restores authority and applies the untouched
+  write at checkpoint sequence one. The cluster adapter drives the real
+  replicated metadata evaluator: an owner session receives an exact bounded
+  grant and immediate committed session revocation becomes a typed denial.
+  Connector conformance and the remaining read/query operation families remain
+  open.
 
 ## Closure gates
 
@@ -410,7 +424,10 @@ copy-on-write filesystem service. This document records executable evidence only
    work, publishes it before releasing authority, recovers a crash between flush
    and close, and leaves the handle live on incomplete content. Overwrite opens
    journal truncation as a replayable mutation, including empty close without a
-   later write. Rename/move and final namespace unlink remain open.
+   later write. Same-volume rename/move and final namespace unlink are atomic
+   durable branch transactions. Both bind stable object/revision/generation
+   evidence, update affected handle or pending-delete state in the same
+   transaction, survive restart replay and roll back at every injected phase.
    The immutable directory trie now has a bounded exact-removal primitive with
    stale-revision rejection and historical-root preservation; persisted two-path
    rename intent now binds the source path and lineage, preserved entry
@@ -423,13 +440,14 @@ copy-on-write filesystem service. This document records executable evidence only
    rejects directory cycles, and produces the same plan for every delivery order.
    The reconciliation SQL applier performs the removal and insertion inside its
    existing all-or-nothing transaction, using the explicit intermediate root.
-   The public branch-local rename transaction and its end-to-end durable replay
-   proof remain open.
+   The public branch-local rename and unlink transactions and their end-to-end
+   durable replay proofs are complete.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
    The authoritative evaluator, session fencing, revocation and principal
-   lifecycle transitions are implemented and tested. Filesystem operation-time
-   capability validation, administration queries and the complete rights-vector
-   suite remain open.
+   lifecycle transitions are implemented and tested. Operation-time capability
+   validation now fronts the implemented mutating handle and namespace service
+   families through one metadata adapter. Read/query enforcement,
+   administration queries and the complete rights-vector suite remain open.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 
 Stage 5 remains incomplete until every gate is checked and the complete local

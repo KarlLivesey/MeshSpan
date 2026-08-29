@@ -141,6 +141,24 @@ pub(crate) fn open(
     publications: &mut VersionPublicationStore,
     request: &FilesystemHandleOpenRequest,
 ) -> Result<OpenHandleReceipt, HandleIoError> {
+    open_with_target(stages, publications, request, None)
+}
+
+pub(crate) fn open_at(
+    stages: &mut DurableStageStore,
+    publications: &mut VersionPublicationStore,
+    request: &FilesystemHandleOpenRequest,
+    expected_object_id: meshspan_domain::ObjectId,
+) -> Result<OpenHandleReceipt, HandleIoError> {
+    open_with_target(stages, publications, request, Some(expected_object_id))
+}
+
+fn open_with_target(
+    stages: &mut DurableStageStore,
+    publications: &mut VersionPublicationStore,
+    request: &FilesystemHandleOpenRequest,
+    expected_object_id: Option<meshspan_domain::ObjectId>,
+) -> Result<OpenHandleReceipt, HandleIoError> {
     let replay = publications
         .resolve_open_handle(request.handle.operation_id)?
         .is_some();
@@ -148,9 +166,11 @@ pub(crate) fn open(
         publications.preflight_open_handle(&request.handle)?;
     }
     prepare_stage(stages, request, true)?;
-    publications
-        .open_handle(&request.handle)
-        .map_err(Into::into)
+    match expected_object_id {
+        Some(object_id) => publications.open_handle_at(&request.handle, object_id),
+        None => publications.open_handle(&request.handle),
+    }
+    .map_err(Into::into)
 }
 
 pub(crate) fn prepare_stage(

@@ -1,0 +1,271 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+use std::{cell::Cell, rc::Rc};
+
+use meshspan_contracts::BoundedBytes;
+use meshspan_domain::{
+    AssuranceLevel, BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId,
+    NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
+};
+use tempfile::tempdir;
+
+use super::*;
+use crate::{
+    ContentPublicationError, ContentPublicationRequest, CreateDisposition, DurableContentPublisher,
+    FilePublication, FilesystemHandleOpenRequest, FilesystemHandleWriteRequest, HandleShare,
+    ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
+    OpenHandleRequest, PublicationDisposition, RootFilePublication, StageWrite, StageWriteOutcome,
+    VersionPublicationStore,
+};
+
+#[test]
+fn open_authorises_the_resolved_object_and_binds_the_returned_principal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let allowed = Rc::new(Cell::new(true));
+    let authority = TestAuthority::new(Rc::clone(&allowed), PrincipalId::from_bytes([18; 16])?);
+    let service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+    let mut service = AuthorisedFilesystemService::new(service, authority);
+    let open = writable_open()?;
+
+    let receipt = service.open_handle(
+        context(open.opened_at)?,
+        &FilesystemHandleOpenRequest {
+            handle: open.clone(),
+            maximum_stage_bytes: Some(1_024),
+        },
+    )?;
+
+    assert_eq!(receipt.object_id, ObjectId::from_bytes([13; 16])?);
+    assert_eq!(receipt.disposition, PublicationDisposition::Applied);
+    let (_, authority) = service.into_parts();
+    let observed = authority
+        .last_request
+        .get()
+        .ok_or_else(|| std::io::Error::other("authority did not record the request"))?;
+    assert_eq!(observed.object_id, receipt.object_id);
+    assert_eq!(observed.volume_id, open.volume_id);
+    assert_eq!(
+        observed.requested_rights,
+        Rights::READ_DATA.union(Rights::WRITE_DATA)
+    );
+    Ok(())
+}
+
+#[test]
+fn revoked_write_never_reaches_the_stage_and_restored_authority_can_resume()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let allowed = Rc::new(Cell::new(true));
+    let authority = TestAuthority::new(Rc::clone(&allowed), PrincipalId::from_bytes([18; 16])?);
+    let service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+    let mut service = AuthorisedFilesystemService::new(service, authority);
+    let open = writable_open()?;
+    service.open_handle(
+        context(open.opened_at)?,
+        &FilesystemHandleOpenRequest {
+            handle: open.clone(),
+            maximum_stage_bytes: Some(1_024),
+        },
+    )?;
+    let write = write_request(&open)?;
+
+    allowed.set(false);
+    assert!(matches!(
+        service.write_handle(context(write.observed_at)?, &write),
+        Err(AuthorisedFilesystemError::Authority(TestAuthorityError))
+    ));
+
+    allowed.set(true);
+    let receipt = service.write_handle(context(write.observed_at)?, &write)?;
+    assert_eq!(
+        receipt.admission.disposition,
+        PublicationDisposition::Applied
+    );
+    assert_eq!(receipt.stage_outcome, StageWriteOutcome::Applied);
+    assert_eq!(receipt.checkpoint.sequence, 1);
+    assert_eq!(receipt.checkpoint.logical_extent, 4);
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RecordedRequest {
+    volume_id: VolumeId,
+    object_id: ObjectId,
+    requested_rights: Rights,
+}
+
+struct TestAuthority {
+    allowed: Rc<Cell<bool>>,
+    principal_id: PrincipalId,
+    last_request: Cell<Option<RecordedRequest>>,
+}
+
+impl TestAuthority {
+    fn new(allowed: Rc<Cell<bool>>, principal_id: PrincipalId) -> Self {
+        Self {
+            allowed,
+            principal_id,
+            last_request: Cell::new(None),
+        }
+    }
+}
+
+impl FilesystemAccessAuthority for TestAuthority {
+    type Error = TestAuthorityError;
+
+    fn authorise(
+        &self,
+        request: FilesystemAuthorityRequest,
+    ) -> Result<FilesystemAuthorityGrant, Self::Error> {
+        self.last_request.set(Some(RecordedRequest {
+            volume_id: request.volume_id,
+            object_id: request.object_id,
+            requested_rights: request.requested_rights,
+        }));
+        if !self.allowed.get() {
+            return Err(TestAuthorityError);
+        }
+        Ok(FilesystemAuthorityGrant {
+            principal_id: self.principal_id,
+            gateway_node_id: request.context.gateway_node_id,
+            gateway_incarnation: request.context.gateway_incarnation,
+            volume_id: request.volume_id,
+            object_id: request.object_id,
+            requested_rights: request.requested_rights,
+            identity_revision: Revision::new(1),
+            namespace_revision: Revision::new(1),
+            object_revision: Revision::new(1),
+            gateway_revision: Revision::new(1),
+            expires_at: UnixMicros::new(90),
+            evidence_digest: [7; 32],
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("test authority denied the operation")]
+struct TestAuthorityError;
+
+fn context(now: UnixMicros) -> Result<FilesystemAccessContext, Box<dyn std::error::Error>> {
+    Ok(FilesystemAccessContext {
+        token_digest: [9; 32],
+        required_assurance: AssuranceLevel::SingleFactor,
+        gateway_node_id: NodeId::from_bytes([19; 16])?,
+        gateway_incarnation: 1,
+        now,
+    })
+}
+
+fn writable_open() -> Result<OpenHandleRequest, Box<dyn std::error::Error>> {
+    Ok(OpenHandleRequest {
+        operation_id: OperationId::from_bytes([20; 16])?,
+        handle_id: HandleId::from_bytes([21; 16])?,
+        branch_id: BranchId::from_bytes([11; 16])?,
+        volume_id: VolumeId::from_bytes([12; 16])?,
+        path: NamespacePath::from_components(["report"], NamespaceLimits::PORTABLE)?,
+        principal_id: PrincipalId::from_bytes([18; 16])?,
+        authorization_revision: Revision::new(1),
+        gateway_node_id: NodeId::from_bytes([19; 16])?,
+        desired_access: HandleAccess::new(true, true, false)?,
+        share_access: HandleShare::new(true, true, false),
+        create_disposition: CreateDisposition::OpenExisting,
+        delete_on_close: false,
+        lease_expires_at: UnixMicros::new(80),
+        opened_at: UnixMicros::new(10),
+    })
+}
+
+fn write_request(
+    open: &OpenHandleRequest,
+) -> Result<FilesystemHandleWriteRequest, Box<dyn std::error::Error>> {
+    Ok(FilesystemHandleWriteRequest {
+        handle_id: open.handle_id,
+        principal_id: open.principal_id,
+        authorization_revision: open.authorization_revision,
+        gateway_node_id: open.gateway_node_id,
+        write: StageWrite {
+            operation_id: OperationId::from_bytes([22; 16])?,
+            stage_fence: 1,
+            offset: 0,
+            bytes: BoundedBytes::copy_from(b"safe", 4)?,
+            digest: blake3::hash(b"safe").into(),
+        },
+        observed_at: UnixMicros::new(25),
+    })
+}
+
+fn seed_file(state: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = VersionPublicationStore::open(state, UnixMicros::new(1))?;
+    store.publish_root_file(&publication()?)?;
+    Ok(())
+}
+
+fn publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
+    Ok(RootFilePublication {
+        file: FilePublication {
+            operation_id: OperationId::from_bytes([1; 16])?,
+            branch_id: BranchId::from_bytes([11; 16])?,
+            volume_id: VolumeId::from_bytes([12; 16])?,
+            object_id: ObjectId::from_bytes([13; 16])?,
+            expected_current_version_id: None,
+            version_id: FileVersionId::from_bytes([14; 16])?,
+            parent_version_id: None,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
+            manifest: ManifestPublication {
+                manifest_id: ContentManifestId::from_bytes([15; 16])?,
+                format_version: 1,
+                logical_length: 7,
+                content_digest: blake3::hash(b"initial").into(),
+                root_digest: [17; 32],
+            },
+            created_by: PrincipalId::from_bytes([18; 16])?,
+            created_at: UnixMicros::new(1),
+        },
+        root_object_id: ObjectId::from_bytes([2; 16])?,
+        expected_namespace_commit_id: None,
+        expected_file_object_revision_id: None,
+        file_object_revision_id: ObjectRevisionId::from_bytes([3; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([4; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([5; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["Report"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        entry_generation: 1,
+    })
+}
+
+struct UnusedPublisher;
+
+impl DurableContentPublisher for UnusedPublisher {
+    type Sink = Vec<u8>;
+
+    fn resolve(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Option<ManifestPublication>, ContentPublicationError> {
+        Err(ContentPublicationError::Unavailable)
+    }
+
+    fn begin(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Self::Sink, ContentPublicationError> {
+        Err(ContentPublicationError::Unavailable)
+    }
+
+    fn finish(
+        &mut self,
+        _request: ContentPublicationRequest,
+        _sink: Self::Sink,
+        _completed: crate::CompletedStage,
+    ) -> Result<ManifestPublication, ContentPublicationError> {
+        Err(ContentPublicationError::Unavailable)
+    }
+}

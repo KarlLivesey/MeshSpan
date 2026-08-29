@@ -2,6 +2,7 @@
 
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
+mod authority;
 mod cleanup_cancellation;
 mod cleanup_fence;
 mod cleanup_retirement;
@@ -22,6 +23,10 @@ mod stage_store;
 mod staging;
 mod version_retention;
 
+pub use authority::{
+    AuthorisedFilesystemError, AuthorisedFilesystemService, FilesystemAccessAuthority,
+    FilesystemAccessContext, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
+};
 pub use cleanup_cancellation::{
     VersionCleanupCancellationAuthority, VersionCleanupCancellationError,
     VersionCleanupCancellationReceipt,
@@ -63,9 +68,9 @@ pub use handle_io::{
 };
 pub use handles::{
     ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,
-    HandleAccess, HandleError, HandleLeaseReceipt, HandleLeaseRequest, HandleShare,
-    HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest, LockRangeReceipt, LockRangeRequest,
-    OpenHandleReceipt, OpenHandleRequest, RangeLockKind, ReadyNamespaceDelete,
+    HandleAccess, HandleAuthorityTarget, HandleError, HandleLeaseReceipt, HandleLeaseRequest,
+    HandleShare, HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest, LockRangeReceipt,
+    LockRangeRequest, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, ReadyNamespaceDelete,
     ReadyNamespaceDeletePage, UnlockRangeReceipt, UnlockRangeRequest,
 };
 pub use name::{

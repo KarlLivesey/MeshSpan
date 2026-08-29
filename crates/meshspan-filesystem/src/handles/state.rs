@@ -8,7 +8,10 @@ use meshspan_domain::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{HandleAccess, HandleError, HandleShare, identifier, validate_open_lineage};
+use super::{
+    HandleAccess, HandleAuthorityTarget, HandleError, HandleShare, identifier,
+    validate_open_lineage,
+};
 
 pub(super) struct ActiveHandle {
     pub handle: HandleId,
@@ -97,6 +100,23 @@ pub(crate) fn uses_private_stage(
     let desired = desired.ok_or(HandleError::StaleHandle)?;
     let access = HandleAccess::from_bits(u8::try_from(desired).map_err(|_| HandleError::Corrupt)?)?;
     Ok(access.writes())
+}
+
+pub(crate) fn authority_target(
+    connection: &Connection,
+    handle: HandleId,
+    observed_at: UnixMicros,
+) -> Result<HandleAuthorityTarget, HandleError> {
+    let active = load_active(connection, handle, observed_at)?;
+    Ok(HandleAuthorityTarget {
+        volume_id: active.volume,
+        object_id: active.object,
+        principal_id: active.principal,
+        gateway_node_id: active.gateway,
+        authorization_revision: active.authorization_revision,
+        desired_access: active.desired_access,
+        lease_expires_at: active.lease_expires_at,
+    })
 }
 
 fn decode(
