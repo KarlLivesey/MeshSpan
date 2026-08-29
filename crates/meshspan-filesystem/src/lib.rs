@@ -2,6 +2,7 @@
 
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
+mod cleanup_cancellation;
 mod cleanup_fence;
 mod cleanup_retirement;
 mod commit_service;
@@ -21,6 +22,10 @@ mod stage_store;
 mod staging;
 mod version_retention;
 
+pub use cleanup_cancellation::{
+    VersionCleanupCancellationAuthority, VersionCleanupCancellationError,
+    VersionCleanupCancellationReceipt,
+};
 pub use cleanup_retirement::{
     VersionCleanupRetirementAuthority, VersionCleanupRetirementError,
     VersionCleanupRetirementReceipt,

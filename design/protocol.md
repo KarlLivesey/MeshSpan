@@ -297,6 +297,13 @@ still-active local fence. The resulting retired-root record is permanent and
 independently rejects later publication, reconciliation, restore and scan
 admission even if the temporary fence row is damaged.
 
+A cancelled intent instead becomes `VersionCleanupCancellationAuthority` for
+each gateway's exact local scan operation and common subject. Applying it
+atomically records the replicated cancellation operation/revision and releases
+only that temporary fence. It does not require an attestation to have reached
+the metadata quorum, which lets a lagging gateway recover after cancellation.
+An already retired root can never pass this transition.
+
 Before acting, the storage node sends `ValidateRemoval` to the current metadata
 authority unless the permit itself is a verifiable, unexpired capability from
 the current epoch. Implementations must fail closed when authority is unknown.

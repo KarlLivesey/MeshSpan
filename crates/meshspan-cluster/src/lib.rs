@@ -17,8 +17,9 @@ mod convergence_tests;
 mod handoff_tests;
 
 pub use cleanup::{
-    CleanupAttestationError, CleanupCompletionError, CleanupPermitError, CleanupReclamationError,
-    CleanupRetirementAuthorityError, version_cleanup_attestation, version_cleanup_proposal,
+    CleanupAttestationError, CleanupCancellationAuthorityError, CleanupCompletionError,
+    CleanupPermitError, CleanupReclamationError, CleanupRetirementAuthorityError,
+    version_cleanup_attestation, version_cleanup_cancellation_authority, version_cleanup_proposal,
     version_cleanup_reclamation, version_cleanup_removal_permit,
     version_cleanup_retirement_authority, version_cleanup_tombstone_completion,
 };

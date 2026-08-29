@@ -1129,9 +1129,14 @@ fn validate_fence_for_state(
     scan: &StoredScan,
 ) -> Result<(), VersionReachabilityError> {
     if scan.state == STATE_REACHABLE {
-        crate::cleanup_fence::require_released(connection, scan.fence_identity())
-    } else {
-        crate::cleanup_fence::require_active(connection, scan.fence_identity())
+        return crate::cleanup_fence::require_released(connection, scan.fence_identity());
+    }
+    match crate::cleanup_fence::require_active(connection, scan.fence_identity()) {
+        Ok(()) => Ok(()),
+        Err(VersionReachabilityError::Stale) if scan.state == STATE_UNREACHABLE => {
+            crate::cleanup_cancellation::require_released_scan(connection, scan.fence_identity())
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -1147,7 +1152,8 @@ pub(crate) fn reject_operation_collision(
           OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM handle_flush_plans WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM version_reachability_scans WHERE operation_id = ?1)
-          OR EXISTS(SELECT 1 FROM retired_manifest_roots WHERE retirement_operation_id = ?1)",
+          OR EXISTS(SELECT 1 FROM retired_manifest_roots WHERE retirement_operation_id = ?1)
+          OR EXISTS(SELECT 1 FROM cancelled_cleanup_releases WHERE release_operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;

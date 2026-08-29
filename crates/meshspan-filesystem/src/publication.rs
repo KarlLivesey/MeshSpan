@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 21] = [
+const MIGRATIONS: [Migration; 22] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -110,8 +110,12 @@ const MIGRATIONS: [Migration; 21] = [
         version: 21,
         sql: include_str!("../schema/branch/021_retired_manifest_roots.sql"),
     },
+    Migration {
+        version: 22,
+        sql: include_str!("../schema/branch/022_cancelled_cleanup_releases.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 21;
+const SCHEMA_VERSION: u32 = 22;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -900,6 +904,23 @@ impl VersionPublicationStore {
         authority: crate::VersionCleanupRetirementAuthority,
     ) -> Result<crate::VersionCleanupRetirementReceipt, crate::VersionCleanupRetirementError> {
         crate::cleanup_fence::retire_completed(&mut self.connection, authority)
+    }
+
+    /// Releases one temporary local fence after exact replicated cancellation authority.
+    ///
+    /// Exact retries return the original receipt. Completed retirement is permanent and cannot
+    /// be weakened through this transition.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or conflicting authority, a missing/released/retired/substituted scan,
+    /// corrupt durable state and SQLite failure.
+    pub fn release_cancelled_version_cleanup(
+        &mut self,
+        authority: crate::VersionCleanupCancellationAuthority,
+    ) -> Result<crate::VersionCleanupCancellationReceipt, crate::VersionCleanupCancellationError>
+    {
+        crate::cleanup_cancellation::release(&mut self.connection, authority)
     }
 
     /// Resolves an atomic namespace publication outcome after a lost response.
