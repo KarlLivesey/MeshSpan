@@ -27,7 +27,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 31] = [
+const MIGRATIONS: [Migration; 32] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -152,8 +152,12 @@ const MIGRATIONS: [Migration; 31] = [
         version: 31,
         sql: include_str!("../schema/branch/031_adapter_file_create_dispositions.sql"),
     },
+    Migration {
+        version: 32,
+        sql: include_str!("../schema/branch/032_imported_namespace_commit_evidence.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 31;
+const SCHEMA_VERSION: u32 = 32;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -723,6 +727,80 @@ pub struct BranchFileHead {
     pub sequence: u64,
 }
 
+/// Hard bounds applied to one disconnected-history exchange.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespaceHistoryLimits {
+    /// Maximum distinct branch heads accepted in one request.
+    pub maximum_heads: usize,
+    /// Maximum mutation commits carried by one bundle.
+    pub maximum_commits: usize,
+    /// Maximum combined directory nodes, manifests, versions and object revisions.
+    pub maximum_immutable_records: usize,
+}
+
+impl NamespaceHistoryLimits {
+    /// Conservative default for one in-memory exchange batch.
+    pub const DEFAULT: Self = Self {
+        maximum_heads: 64,
+        maximum_commits: 4_096,
+        maximum_immutable_records: 65_536,
+    };
+}
+
+/// Opaque, validated mutation history ready for transport encoding.
+///
+/// Mutable branch heads, handles, sessions and local operation receipts are deliberately absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespaceHistoryBundle {
+    volume_id: VolumeId,
+    heads: Vec<NamespaceCommitId>,
+    commits: Vec<namespace::transfer::TransferredMutationCommit>,
+    directory_nodes: Vec<DirectoryNodeRecord>,
+    manifests: Vec<ManifestPublication>,
+    file_versions: Vec<namespace::transfer::TransferredFileVersion>,
+    object_revisions: Vec<namespace::repository::ObjectRevisionInsert>,
+}
+
+impl NamespaceHistoryBundle {
+    /// Volume whose immutable history is carried by this bundle.
+    #[must_use]
+    pub const fn volume_id(&self) -> VolumeId {
+        self.volume_id
+    }
+
+    /// Exact source heads whose causal history was requested.
+    #[must_use]
+    pub fn heads(&self) -> &[NamespaceCommitId] {
+        &self.heads
+    }
+
+    /// Number of mutation commits carried by the bundle.
+    #[must_use]
+    pub const fn commit_count(&self) -> usize {
+        self.commits.len()
+    }
+
+    /// Number of immutable namespace and file records carried by the bundle.
+    #[must_use]
+    pub fn immutable_record_count(&self) -> usize {
+        self.directory_nodes.len()
+            + self.manifests.len()
+            + self.file_versions.len()
+            + self.object_revisions.len()
+    }
+}
+
+/// Durable result of importing one disconnected-history bundle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespaceHistoryImport {
+    /// Commits which were absent and became durable in this transaction.
+    pub imported_commits: usize,
+    /// Commits supplied, including exact idempotent retries.
+    pub supplied_commits: usize,
+    /// Immutable records checked or inserted with the commit set.
+    pub immutable_records: usize,
+}
+
 /// Whether a publication created state or resolved an exact durable retry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PublicationDisposition {
@@ -750,6 +828,47 @@ impl VersionPublicationStore {
         migrate(&mut connection, opened_at)?;
         verify_database(&connection)?;
         Ok(Self { connection })
+    }
+
+    /// Exports the bounded mutation closure missing after the caller's known commits.
+    ///
+    /// The result contains immutable records only and is safe to encode into the private
+    /// `FetchBranchCommits`/`FetchImmutableObjects` protocol messages.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown heads, non-mutation history, mixed volumes, corruption or exceeded bounds.
+    pub fn export_namespace_history(
+        &self,
+        volume_id: VolumeId,
+        heads: &[NamespaceCommitId],
+        known_commits: &[NamespaceCommitId],
+        limits: NamespaceHistoryLimits,
+    ) -> Result<NamespaceHistoryBundle, PublicationError> {
+        namespace::transfer::export_history(
+            &self.connection,
+            volume_id,
+            heads,
+            known_commits,
+            limits,
+        )
+    }
+
+    /// Transactionally imports one immutable disconnected-history bundle.
+    ///
+    /// Exact retries are idempotent. Identity reuse, malformed graphs, missing parents and changed
+    /// records fail closed without importing a partial bundle or changing any local branch head.
+    ///
+    /// # Errors
+    ///
+    /// Rejects hostile input, record collisions, incomplete causal state, corruption or SQLite
+    /// failure.
+    pub fn import_namespace_history(
+        &mut self,
+        bundle: &NamespaceHistoryBundle,
+        limits: NamespaceHistoryLimits,
+    ) -> Result<NamespaceHistoryImport, PublicationError> {
+        namespace::transfer::import_history(&mut self.connection, bundle, limits)
     }
 
     /// Persists one bounded path-copy node set before a later namespace-head transaction.

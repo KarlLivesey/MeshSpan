@@ -93,7 +93,8 @@ pub use namespace_query::{
 };
 pub use publication::{
     BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,
-    DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespacePublicationPath,
+    DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespaceHistoryBundle,
+    NamespaceHistoryImport, NamespaceHistoryLimits, NamespacePublicationPath,
     NamespacePublicationReceipt, NamespaceReconciliationApplication,
     NamespaceReconciliationReceipt, NamespaceRenamePublication, NamespaceRenameReceipt,
     NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,

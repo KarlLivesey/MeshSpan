@@ -271,6 +271,14 @@ pub(in crate::publication) fn load_reconciliation_commit(
             },
         }));
     }
+    let intent_digest = load_branch_intent(connection, commit.commit_id)?
+        .ok_or(PublicationError::Corrupt)?
+        .digest();
+    if load_imported_commit_evidence(connection, commit.commit_id)
+        .is_some_and(|(_, imported_intent_digest)| imported_intent_digest != intent_digest)
+    {
+        return Err(PublicationError::Corrupt);
+    }
     Ok(Some(crate::ReconciliationCommit {
         commit_id: commit.commit_id,
         branch_id: commit.branch_id,
@@ -280,11 +288,7 @@ pub(in crate::publication) fn load_reconciliation_commit(
         parents,
         operation_id: commit.operation_id,
         request_digest,
-        payload: ReconciliationCommitPayload::Mutation {
-            intent_digest: load_branch_intent(connection, commit.commit_id)?
-                .ok_or(PublicationError::Corrupt)?
-                .digest(),
-        },
+        payload: ReconciliationCommitPayload::Mutation { intent_digest },
     }))
 }
 
@@ -729,8 +733,33 @@ fn load_commit_request_digest(
         (None, None, None, None, Some(receipt)) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
+        (None, None, None, None, None) => load_imported_commit_evidence(connection, commit_id)
+            .map(|evidence| evidence.0)
+            .ok_or(PublicationError::Corrupt),
         _ => Err(PublicationError::Corrupt),
     }
+}
+
+fn load_imported_commit_evidence(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+) -> Option<([u8; 32], [u8; 32])> {
+    let stored: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = connection
+        .query_row(
+            "SELECT request_digest, intent_digest, evidence_digest
+             FROM imported_namespace_commit_evidence WHERE namespace_commit_id = ?1",
+            [commit_id.as_bytes().as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .ok()?;
+    let (request, intent, evidence) = stored?;
+    let request_digest = copy_array(&request).ok()?;
+    let intent_digest = copy_array(&intent).ok()?;
+    let evidence_digest = copy_array(&evidence).ok()?;
+    (super::transfer::imported_evidence_digest(commit_id, request_digest, intent_digest)
+        == evidence_digest)
+        .then_some((request_digest, intent_digest))
 }
 
 fn load_single_parent(
@@ -765,17 +794,17 @@ fn load_parents(
     Ok(parents)
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct ObjectRevisionInsert {
-    pub(super) revision_id: ObjectRevisionId,
-    pub(super) volume_id: VolumeId,
-    pub(super) object_id: ObjectId,
-    pub(super) kind: u8,
-    pub(super) prior_revision_id: Option<ObjectRevisionId>,
-    pub(super) directory_root: Option<DirectoryNodeDigest>,
-    pub(super) file_version_id: Option<FileVersionId>,
-    pub(super) created_by: meshspan_domain::PrincipalId,
-    pub(super) created_at: meshspan_domain::UnixMicros,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::publication) struct ObjectRevisionInsert {
+    pub(in crate::publication) revision_id: ObjectRevisionId,
+    pub(in crate::publication) volume_id: VolumeId,
+    pub(in crate::publication) object_id: ObjectId,
+    pub(in crate::publication) kind: u8,
+    pub(in crate::publication) prior_revision_id: Option<ObjectRevisionId>,
+    pub(in crate::publication) directory_root: Option<DirectoryNodeDigest>,
+    pub(in crate::publication) file_version_id: Option<FileVersionId>,
+    pub(in crate::publication) created_by: meshspan_domain::PrincipalId,
+    pub(in crate::publication) created_at: meshspan_domain::UnixMicros,
 }
 
 pub(super) fn persist_object_revision(
@@ -972,6 +1001,10 @@ pub(super) fn persist_stored_commit(
         )?;
     }
     Ok(())
+}
+
+pub(super) fn stored_commit_digest(commit: &StoredCommit, request_digest: [u8; 32]) -> [u8; 32] {
+    commit_digest_fields(commit, request_digest)
 }
 
 pub(super) fn advance_namespace_head(

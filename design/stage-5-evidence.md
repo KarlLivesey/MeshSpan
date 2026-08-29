@@ -563,8 +563,16 @@ copy-on-write filesystem service. This document records executable evidence only
    The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
    contract, every creation-capable file disposition, semantic directory
    creation/rename/unlink, authorised access-administration views and two-gateway
-   restart proof are complete. The two-isolated-node service-level reconciliation
-   proof remains open.
+   restart proof are complete. Branch schema v32 and the bounded namespace-history
+   exchange now let separately restarted stores transfer mutation commits and every
+   referenced immutable directory/version record without copying mutable heads,
+   handles, sessions or local operation receipts. Imports are one idempotent
+   transaction, verify canonical commit and intent evidence, reject bounds,
+   corruption and identity collisions, and feed the existing deterministic planner.
+   The store-level proof has two independently writable databases exchange both
+   branches and produce the same recovered merge after restart. Binding that exchange
+   to the private service messages and proving the complete service composition remains
+   open.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
 suite passes together.
