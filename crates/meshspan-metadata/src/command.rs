@@ -23,6 +23,10 @@ use crate::{
     RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
 use crate::{IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant};
+use crate::{
+    ResolveFederatedMutationQuarantine, RetainFederatedMutationQuarantine,
+    SurfaceFederatedMutationQuarantine,
+};
 
 /// Context applied identically to every state-machine command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -174,6 +178,12 @@ pub enum AuthoritativeCommand {
     ActivateFederationSuccessor(ActivateFederationSuccessor),
     /// Cancels a dormant successor designation before activation.
     RevokeFederationSuccessorDesignation(RevokeFederationSuccessorDesignation),
+    /// Retains one signed, authoritatively reclassified disconnected mutation invisibly.
+    RetainFederatedMutationQuarantine(RetainFederatedMutationQuarantine),
+    /// Makes retained quarantine visible to authorised recovery administration.
+    SurfaceFederatedMutationQuarantine(SurfaceFederatedMutationQuarantine),
+    /// Records an authorised recovery or discard choice for surfaced quarantine.
+    ResolveFederatedMutationQuarantine(ResolveFederatedMutationQuarantine),
 }
 
 impl AuthoritativeCommand {
@@ -258,6 +268,9 @@ impl AuthoritativeCommand {
             Self::AcceptFederationSuccessor(value) => value.update_digest(digest),
             Self::ActivateFederationSuccessor(value) => value.update_digest(digest),
             Self::RevokeFederationSuccessorDesignation(value) => value.update_digest(digest),
+            Self::RetainFederatedMutationQuarantine(value) => value.update_digest(digest),
+            Self::SurfaceFederatedMutationQuarantine(value) => value.update_digest(digest),
+            Self::ResolveFederatedMutationQuarantine(value) => value.update_digest(digest),
         }
     }
 }

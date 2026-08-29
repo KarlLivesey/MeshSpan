@@ -7,6 +7,7 @@ mod database;
 mod federation_command;
 mod federation_grant_command;
 mod federation_principal_command;
+mod federation_quarantine_command;
 #[cfg(test)]
 mod federation_schema_tests;
 mod federation_succession_command;
@@ -46,6 +47,10 @@ pub use federation_grant_command::{
 pub use federation_principal_command::{
     FederatedPrincipalKind, FederatedPrincipalState, UpsertFederatedPrincipalProjection,
 };
+pub use federation_quarantine_command::{
+    FederationQuarantineResolution, ResolveFederatedMutationQuarantine,
+    RetainFederatedMutationQuarantine, SurfaceFederatedMutationQuarantine,
+};
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,
     FederationSuccessionEdge, RevokeFederationSuccessorDesignation,
@@ -57,10 +62,11 @@ pub use repository::{
     AccessRequest, ApplyDisposition, AuthoritativeMembership, AuthoritativeMetadataKernel,
     AuthoritativeRepository, CommandReceipt, ConsensusStoreError, ConvergedVolumeHead, EntityKind,
     EntityReference, FederatedPrincipalProjectionRecord, FederationGrantRecord,
-    FederationRelationshipRecord, FederationRelationshipState, FederationSuccessionRecord,
-    FederationSuccessionState, FederationTrustIdentityRecord, GroupMemberCursor, InvariantFinding,
-    InvariantKind, InvariantReport, LogPosition, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME,
-    NamespaceCursor, NamespaceRecord, ObjectOwnerCursor, ObjectOwnerRecord, Page, PageLimit,
+    FederationQuarantineRecord, FederationQuarantineState, FederationRelationshipRecord,
+    FederationRelationshipState, FederationSuccessionRecord, FederationSuccessionState,
+    FederationTrustIdentityRecord, GroupMemberCursor, InvariantFinding, InvariantKind,
+    InvariantReport, LogPosition, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, NamespaceCursor,
+    NamespaceRecord, ObjectOwnerCursor, ObjectOwnerRecord, Page, PageLimit,
     PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
     PermissionGrantRecord, PreservedVote, PrincipalKind, PrincipalRecord,
     RepositoryConformanceCheck, RepositoryConformanceReport, RepositoryConformanceVector,

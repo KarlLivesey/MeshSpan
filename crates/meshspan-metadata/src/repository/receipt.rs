@@ -90,6 +90,8 @@ pub enum EntityKind {
     FederatedPrincipalProjection = 27,
     /// Two-sided pre-authorised recovery succession.
     FederationSuccession = 28,
+    /// Signed invisible federated mutation quarantine.
+    FederationQuarantine = 29,
 }
 
 impl EntityKind {
@@ -123,6 +125,7 @@ impl EntityKind {
             26 => Ok(Self::FederationGrant),
             27 => Ok(Self::FederatedPrincipalProjection),
             28 => Ok(Self::FederationSuccession),
+            29 => Ok(Self::FederationQuarantine),
             _ => Err(RepositoryError::CorruptState),
         }
     }
