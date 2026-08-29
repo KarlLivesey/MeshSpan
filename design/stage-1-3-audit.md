@@ -1,6 +1,6 @@
 # Stage 1–3 implementation audit
 
-Status: Stage 1 federation retrofit complete on 2026-08-29; Stages 2–3 remain reopened.
+Status: federation retrofits through Stage 2 complete on 2026-08-29; Stage 3 remains reopened.
 
 This audit checks roadmap claims against production code and behavioural tests.
 Schemas, message shapes, design prose and unused helpers are not implementation
@@ -10,9 +10,8 @@ passes locally.
 The accepted autonomous-swarm federation contract adds work which this evidence
 never claimed to prove. Stage 1's previously missing federation-qualified
 identities, rights, restriction/delegation transitions and contract fixtures now
-pass. Stage 2 still lacks durable
-relationship, governance, grant, quota, recovery and quarantine commands. Stage 3
-lacks mutually approved swarm authentication and bounded signed federation
+pass. Stage 2's authoritative federation records, transitions and evidence now
+pass. Stage 3 lacks mutually approved swarm authentication and bounded signed federation
 exchange over Quinn. See [`federation.md`](federation.md) and the reopened gates in
 [`roadmap.md`](roadmap.md).
 
@@ -39,9 +38,13 @@ creates users, nested groups, multi-principal-owned namespace records and an
 activated time-bounded grant, then returns the exact receipt after restart.
 Migration, crash, integrity, backup/restore and bounded-query tests also pass.
 
-The two behaviours reopened by this audit now have typed authoritative commands
-and exact executable evidence. The complete combined Stage 2 gate passed in
-11.48 seconds with four workers.
+The original audit repairs and federation retrofit have typed authoritative
+commands and executable evidence. Relationships, identities, signed governance
+ancestry, bilateral grants, projected principals, succession, quarantine and
+permanent-root scope routing retain exact history and survive restart and
+verified backup/restore. Every federation lifecycle command and compound apply
+boundary has deterministic old-or-new crash evidence. The complete local gate
+passed in 80.23 seconds with four workers.
 
 ### Stage 2 closure gates
 
@@ -51,6 +54,16 @@ and exact executable evidence. The complete combined Stage 2 gate passed in
    proves exact replay, conflicting reuse and restart recovery.
 3. [x] The complete Stage 2 vertical, crash-boundary, migration, integrity,
    backup/restore and indexed-query suites pass together.
+4. [x] Authoritative relationship, identity, governance, bilateral-grant,
+   remote-principal, succession and quarantine transitions are signed,
+   idempotent, indexed and fail closed on stale or substituted evidence.
+5. [x] Direct and transitive governance and succession cycles are rejected
+   atomically, including signed three-swarm ancestry.
+6. [x] Every federation command transition and compound apply boundary retains
+   the exact old state after injected failure and then commits cleanly.
+7. [x] Verified backup/restore retains complete federation histories and the
+   permanent root delegation directory; create, handoff, abort and child-route
+   projection transitions preserve a single writer.
 
 ## Stage 3 repairs already merged
 
@@ -98,7 +111,7 @@ test selection.
 6. [x] Re-run multi-way partition, stale-incarnation, corrupt-snapshot, saturated
    bulk-stream and complete local gates with exact expected outcomes.
 
-The original Stages 1–3 closure gates remain proved, and Stage 1's federation
-retrofit is now closed. Stages 2–3 remain reopened until their roadmap federation
+The original Stages 1–3 closure gates remain proved, and the federation retrofits
+through Stage 2 are now closed. Stage 3 remains reopened until its roadmap federation
 evidence passes. `npm run check:stage3-adversarial` also prevents an exact test
 filter from silently succeeding with zero tests.

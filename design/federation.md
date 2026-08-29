@@ -1,6 +1,6 @@
 # Federation between autonomous swarms
 
-Status: **accepted contract; Stage 1 foundation complete, Stages 2–5 pending**.
+Status: **accepted contract; foundations through Stage 2 complete, Stages 3–5 pending**.
 
 Federation lets independently administered MeshSpan swarms share selected data,
 write authority and storage without combining their consensus groups or user
@@ -153,7 +153,7 @@ relationship's removal is not itself proof that physical bytes were erased.
 | --- | --- | --- |
 | 0 | Lock federation terminology, authority, simple presets, failure semantics and record/message contracts. | Complete: logical records, canonical encodings, message catalogue and cross-document threat/flow review are locked. |
 | 1 | Add federation-qualified IDs, rights, restrictions, receipts and versioned replaceable contracts. | Complete: domain transitions, hostile vectors, canonical Protobuf fixture and deterministic graph/policy tests pass. |
-| 2 | Persist relationships, trust roots, governance, grants, quotas, recovery succession, quarantine and exact outcomes. | Migrations, typed commands, indexes, atomic receipts, backup/restore and crash-boundary proofs. |
+| 2 | Persist relationships, trust roots, governance, grants, quotas, recovery succession, quarantine and exact outcomes. | Complete: migrations, typed commands, indexes, atomic receipts, exact historical reads, backup/restore and command/apply crash-boundary proofs pass. |
 | 3 | Authenticate swarms and carry bounded federation control/data streams over Quinn without joining consensus groups. | Mutual connection flow, identity rotation, routing, paging, replay/fencing and real partition/reconnect process tests. |
 | 4 | Treat partner capacity as a capability-scoped remote provider with placement and availability classifications. | Encrypted cross-swarm shard IO, bilateral quota enforcement, signed lifecycle receipts and returning/revoked-provider tests. |
 | 5 | Authorise remote principals and reconcile signed multi-writer branches into the owning swarm. | External-user permission vectors, offline delegation/revocation/quarantine, non-empty multi-swarm edit/heal proof and the reopened local-history corrections listed in the roadmap. |

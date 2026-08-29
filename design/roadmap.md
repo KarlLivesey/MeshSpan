@@ -101,8 +101,9 @@ FED-022, FED-025, CLU-035, CLU-036, SCL-013, SCL-014.
 
 **Depends on:** Stage 1.
 
-**Status:** reopened for federation. The original metadata-kernel evidence remains valid; the
-records and transitions below are missing.
+**Status:** complete. The original metadata kernel and federation retrofit pass their migration,
+integrity, transaction-boundary, restart, backup/restore and bounded-query evidence. See
+[`stage-2-evidence.md`](stage-2-evidence.md).
 
 Build:
 
