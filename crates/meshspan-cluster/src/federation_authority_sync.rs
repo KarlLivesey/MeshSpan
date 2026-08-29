@@ -6,7 +6,7 @@ use meshspan_domain::{FederationRelationshipId, Revision, UnixMicros};
 use meshspan_metadata::{
     FederationRemoteAuthorityCacheDisposition, FederationRemoteAuthorityCacheError, LocalDatabase,
 };
-use meshspan_transport::{FederationAuthorityContext, FederationReplayGuard};
+use meshspan_transport::{FederationExchangeContext, FederationReplayGuard};
 use thiserror::Error;
 
 use crate::federation_session::load_authority;
@@ -22,7 +22,7 @@ const MAXIMUM_SYNC_CONTEXTS: usize = 4_096;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationAuthoritySyncRequest {
     relationship_id: FederationRelationshipId,
-    page_contexts: Vec<FederationAuthorityContext>,
+    page_contexts: Vec<FederationExchangeContext>,
     page_limit: u32,
     import_limits: FederationAuthorityImportLimits,
     now: UnixMicros,
@@ -36,7 +36,7 @@ impl FederationAuthoritySyncRequest {
     /// Rejects empty or excessive context sets and a zero page size.
     pub fn new(
         relationship_id: FederationRelationshipId,
-        page_contexts: Vec<FederationAuthorityContext>,
+        page_contexts: Vec<FederationExchangeContext>,
         page_limit: u32,
         import_limits: FederationAuthorityImportLimits,
         now: UnixMicros,

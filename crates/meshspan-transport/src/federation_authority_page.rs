@@ -21,9 +21,9 @@ use crate::{
     FederationReplayGuard, TransportError,
 };
 
-/// Correlation, deadline and one side's anti-replay value for an authority exchange.
+/// Correlation, deadline and one side's anti-replay value for one federation exchange.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FederationAuthorityContext {
+pub struct FederationExchangeContext {
     /// Negotiated exact protocol version.
     pub version: ProtocolVersion,
     /// Request correlation identity shared by both sides.
@@ -106,11 +106,11 @@ impl AuthenticatedFederationAuthorityFetch {
     pub fn response_context(
         &self,
         replay_nonce: [u8; 32],
-    ) -> Result<FederationAuthorityContext, TransportError> {
+    ) -> Result<FederationExchangeContext, TransportError> {
         if replay_nonce == exact::<32>(&self.header.replay_nonce)? {
             return Err(TransportError::InvalidConfiguration);
         }
-        FederationAuthorityContext::new(
+        FederationExchangeContext::new(
             self.header
                 .version
                 .ok_or(TransportError::InvalidConfiguration)?,
@@ -130,7 +130,7 @@ impl AuthenticatedFederationAuthorityFetch {
 /// Rejects stale deadlines, invalid page bounds or an envelope exceeding wire limits.
 pub fn signed_federation_authority_fetch(
     identity: &FederationLocalIdentity<'_>,
-    context: FederationAuthorityContext,
+    context: FederationExchangeContext,
     after_revision: u64,
     cursor: Vec<u8>,
     limit: u32,
@@ -141,7 +141,7 @@ pub fn signed_federation_authority_fetch(
     if context.deadline <= now || context.deadline > binding.valid_until {
         return Err(TransportError::InvalidConfiguration);
     }
-    let header = authority_header(binding, context);
+    let header = federation_header(binding, context);
     let mut request = FetchFederationAuthority {
         after_revision,
         cursor,
@@ -166,7 +166,7 @@ pub fn signed_federation_authority_fetch(
     })
 }
 
-impl FederationAuthorityContext {
+impl FederationExchangeContext {
     /// Constructs a complete request or response context.
     ///
     /// # Errors
@@ -205,7 +205,7 @@ impl FederationAuthorityContext {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FederationAuthorityPageExpectation {
     local_identity: FederationLocalIdentityBinding,
-    request_context: FederationAuthorityContext,
+    request_context: FederationExchangeContext,
     minimum_authority_revision: u64,
 }
 
@@ -214,7 +214,7 @@ impl FederationAuthorityPageExpectation {
     #[must_use]
     pub const fn new(
         local_identity: FederationLocalIdentityBinding,
-        request_context: FederationAuthorityContext,
+        request_context: FederationExchangeContext,
         minimum_authority_revision: u64,
     ) -> Self {
         Self {
@@ -272,7 +272,7 @@ impl AuthenticatedFederationAuthorityPage {
 /// Rejects stale deadlines, zero revisions or any page exceeding the declared wire bounds.
 pub fn signed_federation_authority_page(
     identity: &FederationLocalIdentity<'_>,
-    context: FederationAuthorityContext,
+    context: FederationExchangeContext,
     authority_revision: u64,
     records: Vec<VersionedPayload>,
     next_cursor: Vec<u8>,
@@ -284,7 +284,7 @@ pub fn signed_federation_authority_page(
     {
         return Err(TransportError::InvalidConfiguration);
     }
-    let header = authority_header(binding, context);
+    let header = federation_header(binding, context);
     let mut page = FederationAuthorityPage {
         authority_revision,
         records,
@@ -306,9 +306,9 @@ pub fn signed_federation_authority_page(
     Ok(OutboundFederationAuthorityPage { envelope })
 }
 
-fn authority_header(
+pub(crate) fn federation_header(
     binding: FederationLocalIdentityBinding,
-    context: FederationAuthorityContext,
+    context: FederationExchangeContext,
 ) -> FederationHeader {
     FederationHeader {
         version: Some(context.version),
@@ -484,7 +484,7 @@ fn authority_page_digest(page: &FederationAuthorityPage) -> [u8; 32] {
     Sha256::digest(federation_authority_page_digest_payload(page)).into()
 }
 
-fn exact<const SIZE: usize>(value: &[u8]) -> Result<[u8; SIZE], TransportError> {
+pub(crate) fn exact<const SIZE: usize>(value: &[u8]) -> Result<[u8; SIZE], TransportError> {
     value
         .try_into()
         .map_err(|_| TransportError::UntrustedFederationPeer)

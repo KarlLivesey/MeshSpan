@@ -5,6 +5,7 @@
 
 mod federation;
 mod federation_authority_page;
+mod federation_branch_page;
 mod federation_hello;
 mod federation_negotiation;
 mod identity;
@@ -33,9 +34,14 @@ pub use federation::{
 };
 pub use federation_authority_page::{
     AuthenticatedFederationAuthorityFetch, AuthenticatedFederationAuthorityPage,
-    FederationAuthorityContext, FederationAuthorityPageExpectation,
+    FederationAuthorityPageExpectation, FederationExchangeContext,
     OutboundFederationAuthorityFetch, OutboundFederationAuthorityPage,
     signed_federation_authority_fetch, signed_federation_authority_page,
+};
+pub use federation_branch_page::{
+    AuthenticatedFederationBranchFetch, AuthenticatedFederationBranchPage,
+    FederationBranchPageExpectation, OutboundFederationBranchFetch, OutboundFederationBranchPage,
+    signed_federation_branch_fetch, signed_federation_branch_page,
 };
 pub use federation_hello::{
     FederationHelloConfig, FederationHelloContext, FederationLocalIdentity,

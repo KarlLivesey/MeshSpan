@@ -22,7 +22,7 @@ use meshspan_metadata::{
     IssueFederationGrant, LocalDatabase,
 };
 use meshspan_protocol::v1::ProtocolVersion;
-use meshspan_transport::{FederationAuthorityContext, FederationReplayGuard};
+use meshspan_transport::{FederationExchangeContext, FederationReplayGuard};
 use tempfile::tempdir;
 
 use super::{NOW, SessionProof, prove_admitted_session, replay_guard};
@@ -226,7 +226,7 @@ fn sync_request(
     let contexts = (0..page_count)
         .map(|index| {
             let offset = u8::try_from(index).unwrap_or(u8::MAX).saturating_mul(5);
-            FederationAuthorityContext::new(
+            FederationExchangeContext::new(
                 ProtocolVersion { major: 1, minor: 1 },
                 [seed.saturating_add(offset); 16],
                 [seed.saturating_add(offset).saturating_add(1); 16],
@@ -260,7 +260,7 @@ async fn exchange_authority_page(
         proof.client_authority,
         FederationAuthorityFetchRequest {
             relationship_id: proof.relationship_id,
-            context: FederationAuthorityContext::new(
+            context: FederationExchangeContext::new(
                 ProtocolVersion { major: 1, minor: 1 },
                 [seed; 16],
                 [seed.saturating_add(1); 16],
