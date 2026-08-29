@@ -7,7 +7,7 @@ use meshspan_metadata::{
     AuthoritativeRepository, FederationIdentityOwner, FederationRelationshipState,
     FederationTransportAuthority, FederationTrustIdentity, RepositoryError,
 };
-use meshspan_transport::FederationPeerBinding;
+use meshspan_transport::{FederationLocalIdentityBinding, FederationPeerBinding};
 use thiserror::Error;
 
 /// Complete local/remote authority required to configure one federation connection.
@@ -16,7 +16,7 @@ pub struct FederationConnectionAuthority {
     /// Remote certificate and signing identity accepted by transport.
     pub peer: FederationPeerBinding,
     /// Local public identity whose private material remains outside replicated metadata.
-    pub local_identity: FederationTrustIdentity,
+    pub local_identity: FederationLocalIdentityBinding,
 }
 
 /// Loads one relationship only when authoritative metadata currently admits transport use.
@@ -70,7 +70,17 @@ fn connection_authority(
             valid_from: remote.identity.valid_from,
             valid_until: remote.identity.valid_until,
         },
-        local_identity: local.identity,
+        local_identity: FederationLocalIdentityBinding {
+            relationship_id: relationship.relationship_id,
+            local_mesh_id: relationship.local_mesh_id,
+            remote_mesh_id: relationship.remote_mesh_id,
+            authority_epoch: relationship.authority_epoch,
+            identity_generation: local.identity.generation,
+            certificate_fingerprint: local.identity.certificate_fingerprint,
+            verifying_key: local.identity.verifying_key,
+            valid_from: local.identity.valid_from,
+            valid_until: local.identity.valid_until,
+        },
     })
 }
 
@@ -114,6 +124,15 @@ mod tests {
             active.relationship.relationship_id
         );
         assert_eq!(admitted.peer.identity_generation, 2);
+        assert_eq!(admitted.local_identity.identity_generation, 1);
+        assert_eq!(
+            admitted.local_identity.local_mesh_id,
+            active.relationship.local_mesh_id
+        );
+        assert_eq!(
+            admitted.local_identity.remote_mesh_id,
+            active.relationship.remote_mesh_id
+        );
 
         let restricted = authority(FederationRelationshipState::Restricted)?;
         assert!(connection_authority(&restricted, UnixMicros::new(50)).is_ok());
