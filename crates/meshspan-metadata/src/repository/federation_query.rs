@@ -64,6 +64,17 @@ pub struct FederationTrustIdentityRecord {
     pub revision: Revision,
 }
 
+/// Complete active relationship authority needed to construct one federation transport binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederationTransportAuthority {
+    /// Independently evidence-verified active or restricted relationship.
+    pub relationship: FederationRelationshipRecord,
+    /// Current identity which this swarm presents.
+    pub local_identity: FederationTrustIdentityRecord,
+    /// Current identity which the remote swarm presents.
+    pub remote_identity: FederationTrustIdentityRecord,
+}
+
 pub(super) fn relationship(
     database: &PartitionDatabase,
     relationship_id: FederationRelationshipId,
@@ -166,6 +177,32 @@ pub(super) fn active_identity(
             })
         })
         .transpose()
+}
+
+pub(super) fn transport_authority(
+    database: &PartitionDatabase,
+    relationship_id: FederationRelationshipId,
+) -> Result<Option<FederationTransportAuthority>, RepositoryError> {
+    let Some(relationship) = relationship(database, relationship_id)? else {
+        return Ok(None);
+    };
+    if !matches!(
+        relationship.state,
+        FederationRelationshipState::Active | FederationRelationshipState::Restricted
+    ) {
+        return Ok(None);
+    }
+    let local_identity =
+        active_identity(database, relationship_id, FederationIdentityOwner::Local)?
+            .ok_or(RepositoryError::CorruptState)?;
+    let remote_identity =
+        active_identity(database, relationship_id, FederationIdentityOwner::Remote)?
+            .ok_or(RepositoryError::CorruptState)?;
+    Ok(Some(FederationTransportAuthority {
+        relationship,
+        local_identity,
+        remote_identity,
+    }))
 }
 
 fn parse_kind(value: i64) -> Result<FederationRelationshipKind, RepositoryError> {
