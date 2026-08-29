@@ -736,11 +736,25 @@ impl VersionPublicationStore {
     ///
     /// Rejects stale/expired fences, principal/gateway substitution, conflicting retries,
     /// corrupt state and persistence failure.
-    pub fn close_handle(
+    pub(crate) fn close_handle(
         &mut self,
         request: crate::CloseHandleRequest,
     ) -> Result<crate::CloseHandleReceipt, crate::HandleError> {
         crate::handles::close(&mut self.connection, request)
+    }
+
+    pub(crate) fn resolve_close_request(
+        &self,
+        request: crate::CloseHandleRequest,
+    ) -> Result<Option<crate::CloseHandleReceipt>, crate::HandleError> {
+        crate::handles::resolve_close_request(&self.connection, request)
+    }
+
+    pub(crate) fn handle_committed_stage_sequence(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+    ) -> Result<u64, crate::HandleError> {
+        crate::handles::committed_stage_sequence(&self.connection, handle_id)
     }
 
     /// Acquires one fenced, leased byte-range lock on a live file handle.

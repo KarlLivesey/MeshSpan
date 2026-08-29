@@ -104,6 +104,24 @@ pub struct FilesystemHandleFlushRequest {
     pub observed_at: UnixMicros,
 }
 
+/// One close request with the exact flush plan required when private changes are dirty.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilesystemHandleCloseRequest {
+    /// Final fenced handle transition.
+    pub close: crate::CloseHandleRequest,
+    /// Required for dirty writable stages and absent for clean/read-only handles.
+    pub flush: Option<FilesystemHandleFlushRequest>,
+}
+
+/// Durable result of flushing when required and then closing the handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilesystemHandleCloseReceipt {
+    /// Namespace publication produced by a dirty close.
+    pub flush: Option<crate::NamespacePublicationReceipt>,
+    /// Final handle release and delete-on-close readiness.
+    pub close: crate::CloseHandleReceipt,
+}
+
 /// Stable failures from handle/stage composition.
 #[derive(Debug, Error)]
 pub enum HandleIoError {
@@ -129,7 +147,7 @@ pub(crate) fn open(
     if !replay {
         publications.preflight_open_handle(&request.handle)?;
     }
-    prepare_stage(stages, request)?;
+    prepare_stage(stages, request, true)?;
     publications
         .open_handle(&request.handle)
         .map_err(Into::into)
@@ -138,18 +156,30 @@ pub(crate) fn open(
 pub(crate) fn prepare_stage(
     stages: &mut DurableStageStore,
     request: &FilesystemHandleOpenRequest,
+    existing_file: bool,
 ) -> Result<(), HandleIoError> {
     match (
         request.handle.desired_access.writes(),
         request.maximum_stage_bytes,
     ) {
-        (true, Some(maximum_bytes)) => stages.register(StageRegistration {
-            stage_id: stage_id(request.handle.handle_id)?,
-            stage_fence: 1,
-            maximum_bytes,
-            created_at: request.handle.opened_at,
-            expires_at: request.handle.lease_expires_at,
-        })?,
+        (true, Some(maximum_bytes)) => {
+            let stage_id = stage_id(request.handle.handle_id)?;
+            stages.register(StageRegistration {
+                stage_id,
+                stage_fence: 1,
+                maximum_bytes,
+                created_at: request.handle.opened_at,
+                expires_at: request.handle.lease_expires_at,
+            })?;
+            if existing_file && request.handle.create_disposition.truncates_existing() {
+                stages.initialise_truncation(
+                    stage_id,
+                    request.handle.operation_id,
+                    1,
+                    request.handle.opened_at,
+                )?;
+            }
+        }
         (false, None) => {}
         (true, None) | (false, Some(_)) => return Err(HandleIoError::InvalidInput),
     }
