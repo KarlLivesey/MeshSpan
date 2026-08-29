@@ -194,6 +194,7 @@ fn prepare_relationship(
             expected_authority_epoch: 1,
             local_identity: identity(1, 12, 13),
             remote_identity: identity(1, 14, 15),
+            governance_proof: None,
         }),
     )
     .map_err(Into::into)
@@ -287,10 +288,11 @@ impl Fixture {
 }
 
 fn identity(generation: u64, fingerprint: u8, key: u8) -> FederationTrustIdentity {
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[key; 32]);
     FederationTrustIdentity {
         generation,
         certificate_fingerprint: [fingerprint; 32],
-        verifying_key: [key; 32],
+        verifying_key: signing_key.verifying_key().to_bytes(),
         valid_from: UnixMicros::new(1),
         valid_until: UnixMicros::new(100),
     }

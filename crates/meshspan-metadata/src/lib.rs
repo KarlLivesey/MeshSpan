@@ -33,10 +33,10 @@ pub use command::{
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use federation_command::{
-    ApproveFederationRelationship, FederationGovernanceDirection, FederationIdentityOwner,
-    FederationTrustIdentity, ProposeFederationRelationship, RecoverFederationRelationship,
-    RestrictFederationRelationship, RetireFederationRelationship, RevokeFederationRelationship,
-    RotateFederationTrustIdentity,
+    ApproveFederationRelationship, FederationGovernanceDirection, FederationGovernanceEdge,
+    FederationGovernanceProof, FederationIdentityOwner, FederationTrustIdentity,
+    ProposeFederationRelationship, RecoverFederationRelationship, RestrictFederationRelationship,
+    RetireFederationRelationship, RevokeFederationRelationship, RotateFederationTrustIdentity,
 };
 pub use federation_grant_command::{
     FederationGrantRestriction, IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant,
