@@ -36,6 +36,7 @@ fn terminal_page_atomically_exposes_the_complete_snapshot() -> Result<(), Box<dy
     let FederationAuthorityUpdate::Snapshot(snapshot) = receiver.finish()? else {
         return Err("changed import returned unchanged".into());
     };
+    assert_eq!(snapshot.after_revision, Revision::ZERO);
     assert_eq!(snapshot.authority_revision, Revision::new(5));
     assert_eq!(snapshot.grants.len(), 1);
     assert_eq!(snapshot.grants[0].grant.grant_id(), grant_id(20)?);

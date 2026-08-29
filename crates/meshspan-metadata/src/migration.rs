@@ -11,7 +11,7 @@ use thiserror::Error;
 const MAXIMUM_MIGRATIONS: usize = 256;
 
 pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 39;
-pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
+pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 2;
 
 const PARTITION_MIGRATIONS: [Migration; 39] = [
     Migration {
@@ -172,10 +172,16 @@ const PARTITION_MIGRATIONS: [Migration; 39] = [
     },
 ];
 
-const LOCAL_MIGRATIONS: [Migration; 1] = [Migration {
-    version: LOCAL_SCHEMA_VERSION,
-    sql: include_str!("../schema/local/001_initial.sql"),
-}];
+const LOCAL_MIGRATIONS: [Migration; 2] = [
+    Migration {
+        version: 1,
+        sql: include_str!("../schema/local/001_initial.sql"),
+    },
+    Migration {
+        version: LOCAL_SCHEMA_VERSION,
+        sql: include_str!("../schema/local/002_federation_authority_cache.sql"),
+    },
+];
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -553,4 +559,9 @@ pub(crate) fn partition_federation_grant_paging_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn local_migration_digest() -> [u8; 32] {
     migration_digest(LOCAL_MIGRATIONS[0].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn local_federation_authority_cache_migration_digest() -> [u8; 32] {
+    migration_digest(LOCAL_MIGRATIONS[1].sql)
 }

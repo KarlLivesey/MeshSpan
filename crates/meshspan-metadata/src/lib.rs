@@ -8,6 +8,7 @@ mod federation_command;
 mod federation_grant_command;
 mod federation_principal_command;
 mod federation_quarantine_command;
+mod federation_remote_authority;
 #[cfg(test)]
 mod federation_schema_tests;
 mod federation_succession_command;
@@ -51,6 +52,10 @@ pub use federation_principal_command::{
 pub use federation_quarantine_command::{
     FederationQuarantineResolution, ResolveFederatedMutationQuarantine,
     RetainFederatedMutationQuarantine, SurfaceFederatedMutationQuarantine,
+};
+pub use federation_remote_authority::{
+    CachedFederationRemoteAuthority, FederationRemoteAuthorityCacheDisposition,
+    FederationRemoteAuthorityCacheError, FederationRemoteAuthoritySnapshot,
 };
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,

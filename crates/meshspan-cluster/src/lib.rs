@@ -69,7 +69,7 @@ pub use federation_authority_page_source::{
 };
 pub use federation_authority_receiver::{
     FederationAuthorityImportError, FederationAuthorityImportLimits, FederationAuthorityUpdate,
-    FederationRemoteAuthoritySnapshot, FederationRemoteAuthoritySnapshotReceiver,
+    FederationRemoteAuthoritySnapshotReceiver,
 };
 pub use federation_session::{
     FederationAcceptRequest, FederationAuthoritySource, FederationDialRequest,
@@ -79,6 +79,7 @@ pub use filesystem_authority::{MetadataFilesystemAuthority, MetadataFilesystemAu
 pub use filesystem_convergence::{
     FilesystemConvergenceError, FilesystemConvergenceService, PreparedHistoryReconciliation,
 };
+pub use meshspan_metadata::FederationRemoteAuthoritySnapshot;
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
 pub use retention::version_retention_selection_policy;
 pub use status::{

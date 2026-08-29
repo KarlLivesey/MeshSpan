@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 
 use meshspan_domain::{FederationGrantId, Revision};
 use meshspan_metadata::{
-    FederationGovernanceDirection, FederationGrantRecord, FederationTransportAuthority,
+    FederationGovernanceDirection, FederationGrantRecord, FederationRemoteAuthoritySnapshot,
+    FederationTransportAuthority,
 };
 use meshspan_protocol::v1::VersionedPayload;
 use meshspan_transport::AuthenticatedFederationAuthorityPage;
@@ -43,17 +44,6 @@ impl FederationAuthorityImportLimits {
             })
         }
     }
-}
-
-/// Complete authenticated remote authority, invisible until its terminal page is accepted.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FederationRemoteAuthoritySnapshot {
-    /// Peer committed revision shared by every accepted page.
-    pub authority_revision: Revision,
-    /// Current mirrored relationship and both active trust identities.
-    pub relationship: FederationTransportAuthority,
-    /// Complete stable ordered grant delta after the requested revision floor.
-    pub grants: Vec<FederationGrantRecord>,
 }
 
 /// Terminal result of one complete remote authority fetch.
@@ -199,6 +189,7 @@ impl FederationRemoteAuthoritySnapshotReceiver {
             .ok_or(FederationAuthorityImportError::Invalid)?;
         Ok(FederationAuthorityUpdate::Snapshot(Box::new(
             FederationRemoteAuthoritySnapshot {
+                after_revision: self.after_revision,
                 authority_revision,
                 relationship,
                 grants: self.grants,
