@@ -5,9 +5,10 @@
 use std::error::Error;
 
 use meshspan_cluster::{
-    FederationAuthorityFetchRequest, FederationAuthorityPageQuery,
+    FederationAuthorityFetchRequest, FederationAuthorityImportLimits, FederationAuthorityPageQuery,
     FederationAuthorityPageServeRequest, FederationAuthorityPageSource,
-    FederationAuthorityPageSourceError,
+    FederationAuthorityPageSourceError, FederationAuthorityUpdate,
+    FederationRemoteAuthoritySnapshotReceiver, federation_connection_authority,
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
@@ -15,17 +16,14 @@ use meshspan_domain::{
     FederationRelationshipId, FederationResourceScope, MeshId, PrincipalId, Revision,
     StorageFederationPolicy, StorageParticipation, UnixMicros,
 };
-use meshspan_metadata::{
-    AuthoritativeCommand, FederationGrantRecord, FederationGrantRestriction,
-    FederationTransportAuthority, IssueFederationGrant,
-};
+use meshspan_metadata::{AuthoritativeCommand, FederationGrantRestriction, IssueFederationGrant};
 use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_transport::{FederationAuthorityContext, FederationReplayGuard};
 
 use super::{NOW, SessionProof, prove_admitted_session, replay_guard};
 
 struct CompleteAuthorityStream {
-    records: Vec<meshspan_protocol::v1::VersionedPayload>,
+    update: FederationAuthorityUpdate,
     first_cursor: Vec<u8>,
 }
 
@@ -60,10 +58,13 @@ pub(super) async fn prove_initial_authority(
     )
     .await?;
     assert_eq!(page.authority_revision(), 3);
-    let snapshot =
-        FederationTransportAuthority::from_canonical_bytes(&page.records()[0].canonical_bytes)?;
-    assert_eq!(snapshot.relationship.authority_epoch, 1);
-    assert_eq!(snapshot.remote_identity.identity.generation, 1);
+    let mut receiver = receiver(proof, Revision::ZERO)?;
+    receiver.accept_page(&[], &page)?;
+    let FederationAuthorityUpdate::Snapshot(snapshot) = receiver.finish()? else {
+        return Err("initial authority snapshot was not returned".into());
+    };
+    assert_eq!(snapshot.relationship.relationship.authority_epoch, 1);
+    assert_eq!(snapshot.relationship.local_identity.identity.generation, 1);
     assert!(page.next_cursor().is_empty());
     Ok(())
 }
@@ -74,15 +75,13 @@ pub(super) async fn prove_rotated_authority(
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     prove_admitted_session(proof).await?;
     let stream = exchange_complete_authority(proof, 3).await?;
-    let snapshot =
-        FederationTransportAuthority::from_canonical_bytes(&stream.records[0].canonical_bytes)?;
-    assert_eq!(snapshot.remote_identity.identity.generation, 2);
-    let received_grants = stream.records[1..]
-        .iter()
-        .map(|record| FederationGrantRecord::from_canonical_bytes(&record.canonical_bytes))
-        .collect::<Result<Vec<_>, _>>()?;
+    let FederationAuthorityUpdate::Snapshot(snapshot) = stream.update else {
+        return Err("rotated authority snapshot was not returned".into());
+    };
+    assert_eq!(snapshot.relationship.remote_identity.identity.generation, 2);
     assert_eq!(
-        received_grants
+        snapshot
+            .grants
             .iter()
             .map(|record| record.grant.grant_id())
             .collect::<Vec<_>>(),
@@ -148,13 +147,14 @@ async fn exchange_complete_authority(
     let mut server_replay = replay_guard()?;
     let mut cursor = Vec::new();
     let mut first_cursor = Vec::new();
-    let mut records = Vec::new();
+    let mut receiver = receiver(proof, Revision::new(after_revision))?;
     for sequence in 0..4 {
+        let requested_cursor = cursor;
         let page = exchange_authority_page(
             proof,
             AuthorityPageRequest {
                 after_revision,
-                cursor,
+                cursor: requested_cursor.clone(),
                 sequence,
             },
             &mut client_replay,
@@ -162,19 +162,33 @@ async fn exchange_complete_authority(
         )
         .await?;
         assert_eq!(page.authority_revision(), 6);
-        records.extend_from_slice(page.records());
-        cursor = page.next_cursor().to_vec();
+        receiver.accept_page(&requested_cursor, &page)?;
+        cursor = receiver.next_cursor().map_or_else(Vec::new, <[u8]>::to_vec);
         if sequence == 0 {
             first_cursor.clone_from(&cursor);
         }
         if cursor.is_empty() {
             return Ok(CompleteAuthorityStream {
-                records,
+                update: receiver.finish()?,
                 first_cursor,
             });
         }
     }
     Err("authority stream did not terminate within its exact expected bound".into())
+}
+
+fn receiver(
+    proof: &SessionProof<'_>,
+    after_revision: Revision,
+) -> Result<FederationRemoteAuthoritySnapshotReceiver, Box<dyn Error>> {
+    let authority =
+        federation_connection_authority(proof.client_authority, proof.relationship_id, NOW)?
+            .ok_or("local federation authority missing")?;
+    Ok(FederationRemoteAuthoritySnapshotReceiver::new(
+        authority,
+        after_revision,
+        FederationAuthorityImportLimits::new(4, 4, 1_048_576)?,
+    ))
 }
 
 fn prove_authority_cursor_fails_closed(

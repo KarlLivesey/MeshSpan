@@ -2,10 +2,11 @@
 
 //! Composition from authoritative relationship metadata into transport-only peer bindings.
 
-use meshspan_domain::{FederationRelationshipId, Revision, UnixMicros};
+use meshspan_domain::{FederationRelationshipId, FederationRelationshipKind, Revision, UnixMicros};
 use meshspan_metadata::{
-    AuthoritativeRepository, FederationIdentityOwner, FederationRelationshipState,
-    FederationTransportAuthority, FederationTrustIdentity, RepositoryError,
+    AuthoritativeRepository, FederationGovernanceDirection, FederationIdentityOwner,
+    FederationRelationshipState, FederationTransportAuthority, FederationTrustIdentity,
+    RepositoryError,
 };
 use meshspan_transport::{FederationLocalIdentityBinding, FederationPeerBinding};
 use thiserror::Error;
@@ -15,6 +16,10 @@ use thiserror::Error;
 pub struct FederationConnectionAuthority {
     /// Exact committed partition revision producing both identities and the relationship fence.
     pub authority_revision: Revision,
+    /// Horizontal or hierarchical relationship expected from both perspectives.
+    pub relationship_kind: FederationRelationshipKind,
+    /// Hierarchical direction from this local swarm's perspective.
+    pub governance_direction: FederationGovernanceDirection,
     /// Remote certificate and signing identity accepted by transport.
     pub peer: FederationPeerBinding,
     /// Local public identity whose private material remains outside replicated metadata.
@@ -62,6 +67,8 @@ fn connection_authority(
     }
     Ok(FederationConnectionAuthority {
         authority_revision: authority.authority_revision,
+        relationship_kind: relationship.kind,
+        governance_direction: relationship.governance_direction,
         peer: FederationPeerBinding {
             relationship_id: relationship.relationship_id,
             local_mesh_id: relationship.local_mesh_id,
