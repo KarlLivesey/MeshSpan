@@ -113,6 +113,7 @@ pub(super) struct Target {
     object_revision: Revision,
     owner_set_id: [u8; 16],
     is_root: bool,
+    inherits_volume_grants: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -127,6 +128,7 @@ pub(super) struct GrantEvaluation<'a> {
     request: AccessRequest,
     principal_id: PrincipalId,
     target_is_root: bool,
+    inherits_volume_grants: bool,
     ancestors: &'a BTreeSet<ObjectId>,
     subjects: &'a BTreeMap<PrincipalId, Option<UnixMicros>>,
     activations: &'a BTreeMap<GrantId, UnixMicros>,
@@ -179,6 +181,7 @@ pub(super) fn evaluate(
             request,
             principal_id: session.principal_id,
             target_is_root: target.is_root,
+            inherits_volume_grants: target.inherits_volume_grants,
             ancestors: &ancestors,
             subjects: &effective_subjects,
             activations: &grant_activations,

@@ -2,14 +2,14 @@
 
 //! Owner and allow-grant contributions to a namespace access decision.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use meshspan_domain::{GrantId, ObjectId, PrincipalId, Rights, UnixMicros};
+use meshspan_domain::{GrantId, PrincipalId, Rights, UnixMicros};
 use rusqlite::params;
 
 use super::authority::{parse_grant, parse_object, parse_principal, to_i64};
 use super::subjects::earliest;
-use super::{AccessRequest, GrantEvaluation, RightLifetime, Session};
+use super::{GrantEvaluation, RightLifetime, Session};
 use crate::PartitionDatabase;
 use crate::repository::RepositoryError;
 
@@ -136,9 +136,7 @@ pub(super) fn apply_grants(
             continue;
         };
         if !grant_applies(
-            evaluation.request,
-            evaluation.target_is_root,
-            evaluation.ancestors,
+            evaluation,
             scope,
             volume.as_deref(),
             object.as_deref(),
@@ -171,9 +169,7 @@ pub(super) fn apply_grants(
 }
 
 fn grant_applies(
-    request: AccessRequest,
-    target_is_root: bool,
-    ancestors: &BTreeSet<ObjectId>,
+    evaluation: GrantEvaluation<'_>,
     scope: i64,
     volume: Option<&[u8]>,
     object: Option<&[u8]>,
@@ -185,14 +181,20 @@ fn grant_applies(
     let exact = inheritance != 2;
     let descendants = inheritance != 1;
     match scope {
-        1 if volume.is_none() && object.is_none() => Ok(descendants),
-        2 if volume == Some(request.volume_id.as_bytes().as_slice()) && object.is_none() => {
-            Ok((target_is_root && exact) || (!target_is_root && descendants))
+        1 if volume.is_none() && object.is_none() => {
+            Ok(evaluation.inherits_volume_grants && descendants)
         }
-        3 if volume == Some(request.volume_id.as_bytes().as_slice()) => {
+        2 if volume == Some(evaluation.request.volume_id.as_bytes().as_slice())
+            && object.is_none() =>
+        {
+            Ok(evaluation.inherits_volume_grants
+                && ((evaluation.target_is_root && exact)
+                    || (!evaluation.target_is_root && descendants)))
+        }
+        3 if volume == Some(evaluation.request.volume_id.as_bytes().as_slice()) => {
             let scoped = parse_object(object.ok_or(RepositoryError::CorruptState)?)?;
-            Ok((scoped == request.object_id && exact)
-                || (ancestors.contains(&scoped) && descendants))
+            Ok((scoped == evaluation.request.object_id && exact)
+                || (evaluation.ancestors.contains(&scoped) && descendants))
         }
         _ => Err(RepositoryError::CorruptState),
     }

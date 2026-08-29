@@ -86,6 +86,8 @@ pub enum AuthoritativeCommand {
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
     ReplaceObjectOwners(ReplaceObjectOwners),
+    /// Enables or removes one folder's parent-grant inheritance boundary.
+    SetObjectGrantInheritance(SetObjectGrantInheritance),
     /// Creates one descriptive tag with no authority semantics.
     CreateTag(CreateTag),
     /// Attaches one descriptive tag to a principal or logical object.
@@ -170,6 +172,7 @@ impl AuthoritativeCommand {
             Self::ConfirmVersionCleanupReclamation(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
+            Self::SetObjectGrantInheritance(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
             Self::AttachTag(value) => value.update_digest(digest),
             Self::DetachTag(value) => value.update_digest(digest),
@@ -732,6 +735,15 @@ pub struct ReplaceObjectOwners {
     pub owner_set_id: OwnerSetId,
     /// Complete non-empty set of active user/group owners after replacement.
     pub owners: BoundedItems<PrincipalId>,
+}
+
+/// Explicit allow-only inheritance boundary on one folder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetObjectGrantInheritance {
+    /// Existing active folder, including a volume root.
+    pub object_id: ObjectId,
+    /// Whether grants from parent objects, the volume and global scope stop here.
+    pub stop_parent_grants: bool,
 }
 
 /// One descriptive tag definition.
@@ -1487,6 +1499,14 @@ digest_simple_record!(
         digest.identifier(value.object_id.as_bytes());
         digest.identifier(value.owner_set_id.as_bytes());
         digest.principals(&value.owners);
+    }
+);
+digest_simple_record!(
+    SetObjectGrantInheritance,
+    b"set-object-grant-inheritance",
+    |value, digest| {
+        digest.identifier(value.object_id.as_bytes());
+        digest.boolean(value.stop_parent_grants);
     }
 );
 digest_simple_record!(CreateTag, b"create-tag", |value, digest| {

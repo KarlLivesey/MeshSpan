@@ -23,8 +23,8 @@ pub use command::{
     RemoveVolumeSnapshotRoot, ReplaceObjectOwners, RepositoryCommandError,
     RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode,
     RevokeAuthenticationSession, RouteAttestation, RunSnapshotSchedule,
-    SealVersionCleanupInventory, SnapshotExpiryReason, TagTarget, VersionCleanupAttestation,
-    VersionCleanupItemPlacement,
+    SealVersionCleanupInventory, SetObjectGrantInheritance, SnapshotExpiryReason, TagTarget,
+    VersionCleanupAttestation, VersionCleanupItemPlacement,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;

@@ -15,7 +15,7 @@ use crate::repository::RepositoryError;
 
 const MAXIMUM_ANCESTORS: usize = 1_024;
 
-type TargetRow = (Vec<u8>, Option<Vec<u8>>, Vec<u8>, i64);
+type TargetRow = (Vec<u8>, Option<Vec<u8>>, Vec<u8>, i64, i64);
 
 pub(super) fn load_session(
     database: &PartitionDatabase,
@@ -92,35 +92,53 @@ pub(super) fn load_target_and_ancestors(
     let row: Option<TargetRow> = database
         .connection()
         .query_row(
-            "SELECT volume_id, parent_object_id, owner_set_id, revision
+            "SELECT volume_id, parent_object_id, owner_set_id, revision,
+                    stop_parent_grant_inheritance
              FROM namespace_objects WHERE object_id = ?1 AND state = 1",
             [object.as_slice()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((volume, parent, owners, revision)) = row else {
+    let Some((volume, parent, owners, revision, stop_parent)) = row else {
         return Ok(None);
     };
     if volume.as_slice() != expected_volume {
         return Ok(None);
     }
+    let target_stops_inheritance = parse_boolean(stop_parent)?;
     let target = Target {
         object_revision: parse_revision(revision)?,
         owner_set_id: parse_identifier(&owners)?,
         is_root: parent.is_none(),
+        inherits_volume_grants: !target_stops_inheritance,
     };
     let Some(parent) = parent else {
         return Ok(Some((target, ancestors)));
     };
+    if target_stops_inheritance {
+        return Ok(Some((target, ancestors)));
+    }
     let mut parent_id = parse_object(&parent)?;
     ancestors.insert(parent_id);
-    load_remaining_ancestors(
+    let inherits_volume_grants = load_remaining_ancestors(
         database,
         expected_volume,
         &mut ancestors,
         &mut visited,
         &mut parent_id,
     )?;
+    let target = Target {
+        inherits_volume_grants,
+        ..target
+    };
     Ok(Some((target, ancestors)))
 }
 
@@ -130,28 +148,40 @@ fn load_remaining_ancestors(
     ancestors: &mut BTreeSet<ObjectId>,
     visited: &mut BTreeSet<ObjectId>,
     current: &mut ObjectId,
-) -> Result<(), RepositoryError> {
+) -> Result<bool, RepositoryError> {
     for _ in 0..MAXIMUM_ANCESTORS {
         if !visited.insert(*current) {
             return Err(RepositoryError::CorruptState);
         }
         let object = current.as_bytes();
-        let row: (Vec<u8>, Option<Vec<u8>>) = database.connection().query_row(
-            "SELECT volume_id, parent_object_id FROM namespace_objects
+        let row: (Vec<u8>, Option<Vec<u8>>, i64) = database.connection().query_row(
+            "SELECT volume_id, parent_object_id, stop_parent_grant_inheritance
+             FROM namespace_objects
              WHERE object_id = ?1 AND state = 1",
             [object.as_slice()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         if row.0.as_slice() != expected_volume {
             return Err(RepositoryError::CorruptState);
         }
+        if parse_boolean(row.2)? {
+            return Ok(false);
+        }
         let Some(parent) = row.1 else {
-            return Ok(());
+            return Ok(true);
         };
         *current = parse_object(&parent)?;
         ancestors.insert(*current);
     }
     Err(RepositoryError::CapacityExceeded)
+}
+
+fn parse_boolean(value: i64) -> Result<bool, RepositoryError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(RepositoryError::CorruptState),
+    }
 }
 
 pub(super) fn parse_identifier(bytes: &[u8]) -> Result<[u8; 16], RepositoryError> {
