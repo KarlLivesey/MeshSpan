@@ -133,12 +133,23 @@ pub(super) fn status(
         [session_id.as_slice()],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
+    let next_missing: Option<Vec<u8>> = connection
+        .query_row(
+            "SELECT record_digest FROM namespace_history_import_records
+             WHERE session_id = ?1 AND record_kind = 2 AND canonical_bytes IS NULL
+             ORDER BY record_ordinal LIMIT 1",
+            [session_id.as_slice()],
+            |row| row.get(0),
+        )
+        .optional()?;
     Ok(NamespaceHistoryReceiveStatus {
+        export_token: session.export_token,
         next_cursor: session.current_cursor,
         terminal: session.terminal,
         commits: usize_value(commits)?,
         immutable_records: usize_value(immutable)?,
         missing_immutable_records: usize_value(missing)?,
+        next_missing_immutable_record: next_missing.as_deref().map(copy_array).transpose()?,
         completed: session.completion.is_some(),
     })
 }

@@ -148,7 +148,7 @@ fn validate_authority(
     }
 }
 
-fn volume_scope(
+pub(crate) fn volume_scope(
     resource: FederationResourceScope,
 ) -> Result<VolumeId, FederationBranchPageSourceError> {
     match resource {
@@ -181,7 +181,7 @@ fn export_expiry(
     }
 }
 
-fn authority_binding(
+pub(crate) fn authority_binding(
     authority: EffectiveFederationGrantAuthority,
     resource: FederationResourceScope,
 ) -> [u8; 32] {

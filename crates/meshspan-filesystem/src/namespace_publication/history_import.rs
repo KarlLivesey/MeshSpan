@@ -49,6 +49,8 @@ pub struct NamespaceHistoryReceiveRequest {
 /// Durable progress of one receiver-side history transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceHistoryReceiveStatus {
+    /// Stable source export identity once the first page has been accepted.
+    pub export_token: Option<[u8; 32]>,
     /// Exact cursor which must be used for the next source request.
     pub next_cursor: Vec<u8>,
     /// Whether the source has supplied its terminal page.
@@ -59,6 +61,8 @@ pub struct NamespaceHistoryReceiveStatus {
     pub immutable_records: usize,
     /// Number of advertised immutable bodies not yet received.
     pub missing_immutable_records: usize,
+    /// Oldest advertised body still required, allowing exact restart without replaying pages.
+    pub next_missing_immutable_record: Option<[u8; 32]>,
     /// Whether the entire history was already atomically imported.
     pub completed: bool,
 }

@@ -28,6 +28,7 @@ use meshspan_protocol::v1::{ProtocolVersion, VersionedPayload};
 use meshspan_transport::FederationExchangeContext;
 use tempfile::tempdir;
 
+use super::history_sync_proof::prove_restart_resumable_filesystem_sync;
 use super::{NOW, SessionProof, replay_guard};
 
 pub(super) async fn prove_branch_page_service(
@@ -36,6 +37,7 @@ pub(super) async fn prove_branch_page_service(
     let fixture = BranchFixture::new(proof)?;
     prove_authorised_exchange(proof, &fixture).await?;
     prove_filesystem_backed_exchange(proof, &fixture).await?;
+    prove_restart_resumable_filesystem_sync(proof, &fixture).await?;
     prove_denied_exchange_skips_source(proof, &fixture).await?;
     prove_excessive_source_page_fails_closed(proof, &fixture).await
 }
@@ -260,10 +262,10 @@ async fn prove_excessive_source_page_fails_closed(
 }
 
 #[derive(Clone, Copy)]
-struct BranchFixture {
-    authority: EffectiveFederationGrantAuthority,
-    grant_id: FederationGrantId,
-    resource: FederationResourceScope,
+pub(super) struct BranchFixture {
+    pub(super) authority: EffectiveFederationGrantAuthority,
+    pub(super) grant_id: FederationGrantId,
+    pub(super) resource: FederationResourceScope,
     relationship_id: FederationRelationshipId,
 }
 
@@ -348,12 +350,12 @@ impl BranchFixture {
     }
 }
 
-struct StaticBranchAuthority {
+pub(super) struct StaticBranchAuthority {
     authority: Option<EffectiveFederationGrantAuthority>,
 }
 
 impl StaticBranchAuthority {
-    const fn admit(authority: EffectiveFederationGrantAuthority) -> Self {
+    pub(super) const fn admit(authority: EffectiveFederationGrantAuthority) -> Self {
         Self {
             authority: Some(authority),
         }
@@ -456,7 +458,7 @@ impl FederationBranchPageSource for RecordingHistorySource {
     }
 }
 
-fn publication() -> Result<RootFilePublication, Box<dyn Error>> {
+pub(super) fn publication() -> Result<RootFilePublication, Box<dyn Error>> {
     Ok(RootFilePublication {
         file: FilePublication {
             operation_id: OperationId::from_bytes([140; 16])?,
