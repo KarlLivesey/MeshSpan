@@ -8,8 +8,8 @@ use crate::v1::{
     FederatedBranchPage, FederatedBranchResult, FederatedStorageCapability,
     FederatedStorageInventoryPage, FederatedStorageReceipt, FederationAuthorityPage,
     FederationEnvelope, FederationHeader, FederationHello, FederationWelcome,
-    FetchFederatedBranchPage, FetchFederatedStorageInventory, OperationOutcome,
-    ProposeFederatedBranch, RemoteShardAction, RequestFederatedStorageCapability,
+    FetchFederatedBranchPage, FetchFederatedStorageInventory, FetchFederationAuthority,
+    OperationOutcome, ProposeFederatedBranch, RemoteShardAction, RequestFederatedStorageCapability,
 };
 
 use super::{
@@ -35,21 +35,27 @@ pub(super) fn envelope(
     {
         Message::Hello(value) => hello(value, limits),
         Message::Welcome(value) => welcome(value, limits),
-        Message::FetchAuthority(value) => {
-            valid_optional_bytes(&value.cursor, limits.maximum_control_bytes())?;
-            valid_page_limit(value.limit, limits)
-        }
+        Message::FetchAuthority(value) => fetch_authority(value, limits),
         Message::AuthorityPage(value) => authority_page(value, limits),
         Message::FetchBranchPage(value) => fetch_branch_page(value, limits),
         Message::BranchPage(value) => branch_page(value, limits),
         Message::ProposeBranch(value) => propose_branch(value, limits),
         Message::BranchResult(value) => branch_result(value, limits),
-        Message::RequestStorageCapability(value) => request_storage_capability(value),
+        Message::RequestStorageCapability(value) => request_storage_capability(value, limits),
         Message::StorageCapability(value) => storage_capability(value, limits),
         Message::StorageReceipt(value) => storage_receipt(value, limits),
         Message::FetchStorageInventory(value) => fetch_storage_inventory(value, limits),
         Message::StorageInventoryPage(value) => storage_inventory_page(value, limits),
     }
+}
+
+fn fetch_authority(
+    value: &FetchFederationAuthority,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    valid_optional_bytes(&value.cursor, limits.maximum_control_bytes())?;
+    valid_page_limit(value.limit, limits)?;
+    valid_signature(&value.signature, limits)
 }
 
 fn header(value: &FederationHeader) -> Result<(), WireContractError> {
@@ -135,7 +141,8 @@ fn fetch_branch_page(
     validate_payload(value.resource_scope.as_ref(), limits)?;
     valid_digests(&value.causal_frontier, limits, true)?;
     valid_optional_bytes(&value.cursor, limits.maximum_control_bytes())?;
-    valid_page_limit(value.limit, limits)
+    valid_page_limit(value.limit, limits)?;
+    valid_signature(&value.signature, limits)
 }
 
 fn branch_page(value: &FederatedBranchPage, limits: WireLimits) -> Result<(), WireContractError> {
@@ -225,6 +232,7 @@ fn validate_branch_result_shape(value: &FederatedBranchResult) -> Result<(), Wir
 
 fn request_storage_capability(
     value: &RequestFederatedStorageCapability,
+    limits: WireLimits,
 ) -> Result<(), WireContractError> {
     storage_subject(
         &value.grant_id,
@@ -234,7 +242,8 @@ fn request_storage_capability(
         value.action,
         value.maximum_bytes,
     )?;
-    valid_digest(&value.scope_digest)
+    valid_digest(&value.scope_digest)?;
+    valid_signature(&value.signature, limits)
 }
 
 fn storage_capability(
@@ -285,7 +294,8 @@ fn fetch_storage_inventory(
     valid_identifier(&value.target_id)?;
     nonzero(value.target_generation)?;
     valid_optional_bytes(&value.cursor, limits.maximum_control_bytes())?;
-    valid_page_limit(value.limit, limits)
+    valid_page_limit(value.limit, limits)?;
+    valid_signature(&value.signature, limits)
 }
 
 fn storage_inventory_page(

@@ -7,8 +7,10 @@ mod framing;
 mod validation;
 
 pub use federation_signing::{
-    federation_authority_page_digest_payload, federation_authority_page_signing_payload,
-    federation_hello_signing_payload, federation_welcome_signing_payload,
+    federation_authority_fetch_signing_payload, federation_authority_page_digest_payload,
+    federation_authority_page_signing_payload, federation_branch_fetch_signing_payload,
+    federation_hello_signing_payload, federation_storage_capability_request_signing_payload,
+    federation_storage_inventory_fetch_signing_payload, federation_welcome_signing_payload,
 };
 pub use framing::{
     ValidatedControlEnvelope, ValidatedDataControlEnvelope, ValidatedDataFrame,

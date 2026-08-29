@@ -47,6 +47,7 @@ message FetchFederationAuthority {
   uint64 after_revision = 1;
   bytes cursor = 2;
   uint32 limit = 3;
+  bytes signature = 4;
 }
 
 message FederationAuthorityPage {
@@ -63,6 +64,7 @@ message FetchFederatedBranchPage {
   repeated bytes causal_frontier = 3;
   bytes cursor = 4;
   uint32 limit = 5;
+  bytes signature = 6;
 }
 
 message FederatedBranchPage {
@@ -112,6 +114,7 @@ message RequestFederatedStorageCapability {
   RemoteShardAction action = 5;
   uint64 maximum_bytes = 6;
   bytes scope_digest = 7;
+  bytes signature = 8;
 }
 
 message FederatedStorageCapability {
@@ -146,6 +149,7 @@ message FetchFederatedStorageInventory {
   uint64 target_generation = 3;
   bytes cursor = 4;
   uint32 limit = 5;
+  bytes signature = 6;
 }
 
 message FederatedStorageInventoryPage {

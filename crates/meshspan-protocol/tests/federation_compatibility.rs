@@ -5,9 +5,10 @@
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
     ErrorCode, FederatedBranchResult, FederatedStorageCapability, FederationAuthorityPage,
-    FederationEnvelope, FederationHeader, FederationHello, ProposeFederatedBranch, ProtocolVersion,
-    RemoteShardAction, RequestFederatedStorageCapability, ShardIdentity, VersionedPayload,
-    WireError,
+    FederationEnvelope, FederationHeader, FederationHello, FetchFederatedBranchPage,
+    FetchFederatedStorageInventory, FetchFederationAuthority, ProposeFederatedBranch,
+    ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability, ShardIdentity,
+    VersionedPayload, WireError,
 };
 use meshspan_protocol::{
     WireContractError, WireLimits, decode_federation_frame, encode_federation_frame,
@@ -156,6 +157,51 @@ fn federation_pages_obey_negotiated_item_bounds() -> Result<(), Box<dyn std::err
 }
 
 #[test]
+fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
+    let requests = [
+        Message::FetchAuthority(FetchFederationAuthority {
+            after_revision: 0,
+            cursor: Vec::new(),
+            limit: 1,
+            signature: Vec::new(),
+        }),
+        Message::FetchBranchPage(FetchFederatedBranchPage {
+            grant_id: vec![1; 16],
+            resource_scope: Some(payload()),
+            causal_frontier: Vec::new(),
+            cursor: Vec::new(),
+            limit: 1,
+            signature: Vec::new(),
+        }),
+        Message::RequestStorageCapability(RequestFederatedStorageCapability {
+            grant_id: vec![1; 16],
+            target_id: vec![2; 16],
+            target_generation: 1,
+            shard: Some(shard()),
+            action: RemoteShardAction::Get.into(),
+            maximum_bytes: 1,
+            scope_digest: vec![3; 32],
+            signature: Vec::new(),
+        }),
+        Message::FetchStorageInventory(FetchFederatedStorageInventory {
+            grant_id: vec![1; 16],
+            target_id: vec![2; 16],
+            target_generation: 1,
+            cursor: Vec::new(),
+            limit: 1,
+            signature: Vec::new(),
+        }),
+    ];
+    for request in requests {
+        assert_eq!(
+            encode_federation_frame(&federation_envelope(request), limits()?),
+            Err(WireContractError::InvalidMessage)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn branch_exchange_binds_grant_scope_heads_and_signature() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut proposal = ProposeFederatedBranch {
@@ -194,6 +240,7 @@ fn storage_capability_is_exactly_bound_and_bounded() -> Result<(), Box<dyn std::
         action: RemoteShardAction::Put.into(),
         maximum_bytes: 1_024,
         scope_digest: vec![32; 32],
+        signature: vec![33; 64],
     };
     assert!(
         encode_federation_frame(

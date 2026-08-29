@@ -28,16 +28,15 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 use super::identity::certificate_fingerprint;
 use super::{
-    AuthenticatedFederationHello, FederationAuthorityPageContext,
-    FederationAuthorityPageExpectation, FederationHelloConfig, FederationHelloContext,
-    FederationHelloExpectation, FederationLocalIdentity, FederationLocalIdentityBinding,
-    FederationNegotiationConfig, FederationPeerBinding, FederationPeerRegistry,
-    FederationReplayGuard, FederationWelcomeNonces, NegotiationConfig, NodeCredentials,
-    OutboundFederationHello, PeerBinding, PeerRegistry, StreamKind, TransportError,
-    TransportLimits, accept_stream, client_endpoint, connect, open_stream, receive_control,
-    receive_data_control, receive_data_frame, receive_federation, send_control, send_data_control,
-    send_data_frame, send_federation, server_endpoint, signed_federation_authority_page,
-    signed_federation_hello,
+    AuthenticatedFederationHello, FederationAuthorityContext, FederationAuthorityPageExpectation,
+    FederationHelloConfig, FederationHelloContext, FederationHelloExpectation,
+    FederationLocalIdentity, FederationLocalIdentityBinding, FederationNegotiationConfig,
+    FederationPeerBinding, FederationPeerRegistry, FederationReplayGuard, FederationWelcomeNonces,
+    NegotiationConfig, NodeCredentials, OutboundFederationHello, PeerBinding, PeerRegistry,
+    StreamKind, TransportError, TransportLimits, accept_stream, client_endpoint, connect,
+    open_stream, receive_control, receive_data_control, receive_data_frame, receive_federation,
+    send_control, send_data_control, send_data_frame, send_federation, server_endpoint,
+    signed_federation_authority_fetch, signed_federation_authority_page, signed_federation_hello,
 };
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -392,6 +391,90 @@ async fn federation_envelope_round_trips_on_its_own_bounded_stream() -> Result<(
     Ok(())
 }
 
+fn prove_signed_authority_fetch(
+    registry: &FederationPeerRegistry,
+    connection: &quinn::Connection,
+    certificate: &CertificateDer<'_>,
+    signing_key: &SigningKey,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    let local_identity = FederationLocalIdentity::authenticate(
+        FederationLocalIdentityBinding {
+            relationship_id: FederationRelationshipId::from_bytes([1; 16])?,
+            local_mesh_id: MeshId::from_bytes([2; 16])?,
+            remote_mesh_id: MeshId::from_bytes([3; 16])?,
+            authority_epoch: 1,
+            identity_generation: 1,
+            certificate_fingerprint: certificate_fingerprint(certificate),
+            verifying_key: signing_key.verifying_key().to_bytes(),
+            valid_from: UnixMicros::new(1),
+            valid_until: UnixMicros::new(3_000_000),
+        },
+        certificate.as_ref(),
+        signing_key,
+        UnixMicros::new(1_500_000),
+    )?;
+    let context = FederationAuthorityContext::new(
+        version(1, 2),
+        [41; 16],
+        [42; 16],
+        [43; 16],
+        UnixMicros::new(2_000_000),
+        [44; 32],
+    )?;
+    let outbound = signed_federation_authority_fetch(
+        &local_identity,
+        context,
+        8,
+        vec![45; 96],
+        2,
+        limits,
+        UnixMicros::new(1_500_000),
+    )?;
+    let validated = validated_federation(outbound.envelope(), limits)?;
+    let mut replay = FederationReplayGuard::new(8, DurationMicros::new(1_000_000))?;
+    let authenticated = registry.authenticate_authority_fetch(
+        connection,
+        &validated,
+        UnixMicros::new(1_500_000),
+        &mut replay,
+    )?;
+    assert_eq!(authenticated.after_revision(), 8);
+    assert_eq!(authenticated.cursor(), &[45; 96]);
+    assert_eq!(authenticated.limit(), 2);
+    assert_eq!(
+        authenticated.response_context([46; 32])?.request_id,
+        [41; 16]
+    );
+    assert!(matches!(
+        registry.authenticate_authority_fetch(
+            connection,
+            &validated,
+            UnixMicros::new(1_500_001),
+            &mut replay,
+        ),
+        Err(TransportError::ReplayedFederationMessage)
+    ));
+
+    let mut tampered = outbound.envelope().clone();
+    let Some(FederationMessage::FetchAuthority(fetch)) = tampered.message.as_mut() else {
+        unreachable!("fixture authority fetch")
+    };
+    fetch.cursor[0] ^= 1;
+    let tampered = validated_federation(&tampered, limits)?;
+    let mut fresh_replay = FederationReplayGuard::new(8, DurationMicros::new(1_000_000))?;
+    assert!(matches!(
+        registry.authenticate_authority_fetch(
+            connection,
+            &tampered,
+            UnixMicros::new(1_500_000),
+            &mut fresh_replay,
+        ),
+        Err(TransportError::UntrustedFederationPeer)
+    ));
+    Ok(())
+}
+
 fn outbound_federation_hello(
     certificate: &CertificateDer<'_>,
     signing_key: &SigningKey,
@@ -536,17 +619,25 @@ struct AuthorityPageProof<'a> {
 async fn prove_federation_authority_page(
     proof: &mut AuthorityPageProof<'_>,
 ) -> Result<(), Box<dyn Error>> {
-    let context = FederationAuthorityPageContext::new(
+    let request_context = FederationAuthorityContext::new(
         version(1, 2),
         [31; 16],
         [32; 16],
         [33; 16],
         UnixMicros::new(2_000_000),
+        [30; 32],
+    )?;
+    let response_context = FederationAuthorityContext::new(
+        request_context.version,
+        request_context.request_id,
+        request_context.operation_id,
+        request_context.trace_id,
+        request_context.deadline,
         [34; 32],
     )?;
     let outbound = signed_federation_authority_page(
         proof.server_identity,
-        context,
+        response_context,
         9,
         vec![VersionedPayload {
             format_version: 1,
@@ -572,7 +663,7 @@ async fn prove_federation_authority_page(
             valid_from: UnixMicros::new(1),
             valid_until: UnixMicros::new(3_000_000),
         },
-        context,
+        request_context,
         9,
     );
     let mut replay = FederationReplayGuard::new(8, DurationMicros::new(1_000_000))?;
@@ -684,6 +775,11 @@ fn prove_hostile_federation_hellos(
         ),
         Err(TransportError::FederationReplayCapacity)
     ));
+    let Some(FederationMessage::Hello(hello)) = original.message.as_ref() else {
+        unreachable!("fixture hello")
+    };
+    let certificate = CertificateDer::from(hello.public_identity_chain.clone());
+    prove_signed_authority_fetch(registry, connection, &certificate, signing_key, limits)?;
     Ok(())
 }
 

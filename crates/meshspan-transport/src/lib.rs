@@ -32,9 +32,10 @@ pub use federation::{
     FederationReplayGuard,
 };
 pub use federation_authority_page::{
-    AuthenticatedFederationAuthorityPage, FederationAuthorityPageContext,
-    FederationAuthorityPageExpectation, OutboundFederationAuthorityPage,
-    signed_federation_authority_page,
+    AuthenticatedFederationAuthorityFetch, AuthenticatedFederationAuthorityPage,
+    FederationAuthorityContext, FederationAuthorityPageExpectation,
+    OutboundFederationAuthorityFetch, OutboundFederationAuthorityPage,
+    signed_federation_authority_fetch, signed_federation_authority_page,
 };
 pub use federation_hello::{
     FederationHelloConfig, FederationHelloContext, FederationLocalIdentity,
