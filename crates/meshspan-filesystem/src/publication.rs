@@ -7,7 +7,8 @@ mod namespace;
 
 pub use namespace::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
-    NamespaceHistoryPage, NamespaceHistoryPageRequest, NamespaceHistoryRecordError,
+    NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
+    NamespaceHistoryRecordError,
 };
 
 use std::collections::BTreeSet;
@@ -32,7 +33,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 33] = [
+const MIGRATIONS: [Migration; 34] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -165,8 +166,12 @@ const MIGRATIONS: [Migration; 33] = [
         version: 33,
         sql: include_str!("../schema/branch/033_namespace_history_exports.sql"),
     },
+    Migration {
+        version: 34,
+        sql: include_str!("../schema/branch/034_history_export_scope_binding.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 33;
+const SCHEMA_VERSION: u32 = 34;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -894,6 +899,18 @@ impl VersionPublicationStore {
         request: NamespaceHistoryPageRequest,
     ) -> Result<NamespaceHistoryPage, PublicationError> {
         namespace::namespace_history_page(&mut self.connection, request)
+    }
+
+    /// Loads one immutable body only when a live authority-bound export advertised its digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown or expired exports, changed authority, unadvertised digests and corruption.
+    pub fn namespace_history_object(
+        &self,
+        request: NamespaceHistoryObjectRequest,
+    ) -> Result<NamespaceHistoryImmutableRecord, PublicationError> {
+        namespace::namespace_history_object(&self.connection, request)
     }
 
     /// Transactionally imports one immutable disconnected-history bundle.

@@ -41,7 +41,9 @@ use crate::{
 };
 
 use digest::{directory_request as directory_request_digest, file_request as request_digest};
-pub use history_export::{NamespaceHistoryPage, NamespaceHistoryPageRequest};
+pub use history_export::{
+    NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
+};
 pub use history_records::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
     NamespaceHistoryRecordError,
@@ -62,6 +64,13 @@ pub(super) fn namespace_history_page(
     request: NamespaceHistoryPageRequest,
 ) -> Result<NamespaceHistoryPage, PublicationError> {
     history_export::page(connection, request)
+}
+
+pub(super) fn namespace_history_object(
+    connection: &Connection,
+    request: NamespaceHistoryObjectRequest,
+) -> Result<NamespaceHistoryImmutableRecord, PublicationError> {
+    history_export::history_object(connection, request)
 }
 
 pub(super) fn prepare_snapshot_restore(
