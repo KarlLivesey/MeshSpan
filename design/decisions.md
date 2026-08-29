@@ -77,7 +77,7 @@ Status: **draft for review**.
 | D-069 | Federation recovery never uses timeout alone. Ownership transfer requires offline recovery material or an explicitly pre-authorised successor and fences the former authority with signed durable evidence. |
 | D-070 | The normal federation UI is connect swarm, select file/folder/volume, choose view/edit/manage, or offer capacity and choose whether it serves ordinary reads. Cryptographic and reconciliation machinery remains hidden. |
 | D-071 | Federation is an intentional scale-out boundary that keeps consensus local to each swarm. It has no fixed node-count trigger; large deployments distribute owned volumes or explicit subtrees because a shared scope's canonical merge/ACL load still belongs to its owner. |
-| D-072 | Within one swarm, catalogue, identity/configuration and volume or explicit-subtree metadata partitions may use independent Raft groups. Routing is hierarchical but commit confirmation is not: an owning group does not append every mutation through a parent group. Automatic partition creation/split/merge is a future optimisation whose exact policy remains open. |
+| D-072 | Every swarm starts with one permanent root control Raft owning all authoritative scopes. The root retains swarm identity, node enrolment, federation trust and partition delegation, but may epoch-fence and delegate an operation family plus scope/key range to another Raft group when eligible membership and measured load justify it. Delegated operations bypass the root log. Automatic split/merge heuristics remain future work. |
 
 ## Open decisions
 
@@ -91,4 +91,4 @@ Concrete recommendations and proof gates for every item are in
 | O-004 | What chunk size and erasure geometries meet the first performance and repair targets? |
 | O-006 | What measurable latency, throughput, recovery-time and scale targets gate MUP? |
 | O-007 | Which native archive and container platforms are mandatory for the first release? |
-| O-008 | Which measured load, size and locality signals safely trigger, defer or reverse an automatic namespace-subtree partition split? |
+| O-008 | Which capacity-normalised load, size, locality, headroom and migration-cost signals safely trigger, defer or reverse an automatic metadata partition split? |

@@ -69,12 +69,15 @@ Build:
 - Rust-authored OpenAPI generation, server request/response validation and the
   deterministic committed TypeScript/Fetch/Zod generation harness;
 - one local scheduler that runs independent Rust, web, schema/protocol and
-  integration lanes concurrently with resource-aware worker limits.
+  integration lanes concurrently with resource-aware worker limits;
 - globally qualified swarm/principal identities, relationship and governance
   graph types, bilateral policy intersections, federation rights, offline grants,
   recovery transitions, quarantine outcomes and federated durability states;
 - versioned contracts and canonical fixtures for swarm authentication, remote
-  branch paging, remote storage capabilities and signed receipts.
+  branch paging, remote storage capabilities and signed receipts;
+- typed root/delegated partition identities, operation-family and key-range
+  scopes, routing epochs and safe split/merge/handoff transition contracts which
+  do not assume one swarm always has one log.
 
 Exit evidence:
 
@@ -83,14 +86,14 @@ Exit evidence:
 - transition tables prove normal, replay, conflict and hostile-input cases;
 - public API fixtures prove Rust, OpenAPI and generated Zod accept/reject parity;
 - clean checkout can run the fast suite with one documented command;
-- suite duration is measured and budgeted before more tests accumulate.
+- suite duration is measured and budgeted before more tests accumulate;
 - transition and hostile-input vectors prove governance-cycle rejection,
   restriction intersection, bounded delegation, revocation/quarantine and exact
   federation outcome semantics.
 
 Requirements: SYS-002, SYS-004, SYS-006, SYS-009, PER-002, SCL-007, TST-001, REL-001,
 REL-002, DEV-001–006, EXT-001–005, FED-001–005, FED-007–009, FED-013–015,
-FED-022, FED-025.
+FED-022, FED-025, CLU-035, CLU-036, SCL-013, SCL-014.
 
 ## Stage 2 — authoritative metadata kernel
 
@@ -109,12 +112,15 @@ Build:
   assignments and desired-versus-observed rollout state;
 - backup/snapshot representation at an exact state revision;
 - engine conformance harness, initially against SQLite and optionally Turso as a
-  non-production compatibility lane.
+  non-production compatibility lane;
 - authoritative federation relationships, rotating trust identities, governance
   edges, resource grants, delegated ceilings, bilateral quotas, offline validity,
   remote-principal projections, successor designations and quarantine records;
 - typed idempotent commands and receipts for connect/approve, renew, restrict,
-  revoke, recover, transfer ownership and retire a relationship.
+  revoke, recover, transfer ownership and retire a relationship;
+- a root-owned partition/delegation directory with immutable epochs, scoped
+  snapshot/catch-up positions and old/frozen/new ownership states that cannot
+  admit two authoritative groups for one record.
 
 First vertical proof:
 
@@ -128,13 +134,14 @@ Exit evidence:
 
 - crash at every transaction boundary yields either the old or new valid state;
 - migration, integrity, backup/restore and constraint vectors pass;
-- no request-path query is unbounded or lacks its intended index.
+- no request-path query is unbounded or lacks its intended index;
 - migration, crash and backup/restore proofs cover every federation transition;
   no transaction spans a remote call or treats another swarm's database as local
   atomic state.
 
 Requirements: IAM-001–014, ACL-001–008, PER-001–005, SCL-002, SCL-003,
-CFG-001–008, EXT-002–004, EXT-007, FED-003–015, FED-021–025.
+CFG-001–008, EXT-002–004, EXT-007, FED-003–015, FED-021–025, CLU-035, CLU-036,
+SCL-013, SCL-014.
 
 ## Stage 3 — one-to-many cluster kernel
 
@@ -154,12 +161,15 @@ Build:
 - real partition IDs, signed routing epochs and an initial single-partition
   deployment that can create and hand off a second namespace partition;
 - bounded branch-head comparison and immutable commit/object transfer messages,
-  before filesystem merge behaviour is added in Stage 5.
+  before filesystem merge behaviour is added in Stage 5;
 - mutually approved swarm connection over Quinn/mTLS, federation identity
   rotation/recovery, signed delegation and restriction propagation, bounded
   cursor-based remote branch/object transfer and remote-storage routing;
 - strict separation between federation sessions and within-swarm membership,
-  routing, voters and consensus authority.
+  routing, voters and consensus authority;
+- one permanent root control group which initially owns every authoritative
+  scope, plus a typed epoch-fenced delegation boundary through which operation
+  families and key ranges can later move to directly routed Raft groups.
 
 First vertical proof:
 
@@ -167,7 +177,7 @@ First vertical proof:
 - enrol nodes using a join grant;
 - commit metadata through any node via leader routing;
 - kill the leader, elect another, resolve a lost reply by operation ID and catch
-  the old leader up after return.
+  the old leader up after return;
 - move one test scope to a second metadata partition with no dual-writer window.
 
 Exit evidence:
@@ -176,13 +186,17 @@ Exit evidence:
   retaining its compiled consensus-write quorum advances the converged/control
   head;
 - stale processes, replayed messages and corrupt snapshots fail closed;
-- control traffic remains responsive during a saturated synthetic data stream.
+- control traffic remains responsive during a saturated synthetic data stream;
 - real autonomous processes connect, rotate identity, disconnect, renew/revoke,
   reject replay/stale epochs, resume bounded pages and never admit a peer as a
-  voter or local principal merely because it is federated.
+  voter or local principal merely because it is federated;
+- the root safely delegates one test scope to a proved child group, rejects the
+  split without enough eligible members, admits no dual writer and leaves
+  delegated operations independent of the root log.
 
 Requirements: CLU-001–027, OPS-003, TST-003, SCL-005, SCL-006, SCL-010,
-FED-001–007, FED-011–015, FED-020, FED-022, FED-025, FED-026, SCL-011, SCL-012.
+CLU-035, CLU-036, FED-001–007, FED-011–015, FED-020, FED-022, FED-025, FED-026,
+SCL-011–014.
 
 ## Stage 4 — folder storage and safe shard lifecycle
 
@@ -243,7 +257,7 @@ Build:
 - authoritative opens, share modes, locks, rename, delete-on-close and flush;
 - complete permission evaluation over nested groups, multiple owners,
   inheritance and time windows;
-- sessions, capabilities, audit events and adapter-facing filesystem API.
+- sessions, capabilities, audit events and adapter-facing filesystem API;
 - lazily materialised existing-file state on a forked writable branch so offline
   branches can edit existing content, not only create new names;
 - referenced-record-only, cursor-paged history exchange with concrete signed
@@ -251,7 +265,9 @@ Build:
 - remote-principal authorisation, signed offline delegation, deterministic
   cross-swarm multi-writer reconciliation and revocation quarantine;
 - fail-closed cross-record import validation binding commits, identities,
-  delegations, versions, manifests and content evidence.
+  delegations, versions, manifests and content evidence;
+- filesystem routing by stable scope/partition epoch, including stale-route retry
+  and explicit subtree ownership boundaries without exposing partitions to users.
 
 First vertical proof:
 
@@ -260,7 +276,7 @@ First vertical proof:
 - committed flush survives gateway loss and is visible through the other
   adapter; uncommitted staged content is never visible;
 - two isolated nodes both write through the filesystem service, restart, heal
-  and automatically converge with every acknowledged version preserved.
+  and automatically converge with every acknowledged version preserved;
 - two autonomous swarms accept non-empty edits from home-authenticated users while
   disconnected, restart, exchange paged signed history over real Quinn, reconcile
   into the owner and read every admissible version's exact bytes;

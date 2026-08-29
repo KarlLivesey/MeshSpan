@@ -51,14 +51,13 @@ system. Ordinary operations contact only the accepting swarm's local authorities
 they never synchronously enter every related swarm's log. Signed branches,
 receipts and policy updates cross federation links asynchronously.
 
-There is no fixed size at which a user must federate. A single swarm may grow by
-adding independently routed volume or explicit-subtree metadata Raft groups and
-cells, while a larger organisation may distribute ownership among several swarms.
-A routing/catalogue group does not confirm every namespace mutation. A heavily
-shared scope still creates merge and ACL work for its owning swarm, so federation
-does not make that authority free. Scale is obtained by assigning different
-volumes or explicit subtree ownership to different partitions or swarms, then
-sharing them through one consistent user model.
+There is no fixed size at which a user must federate. A swarm starts with one root
+control Raft owning every scope and may later delegate loaded operation families,
+volumes or explicit subtrees to independently routed groups when it has enough
+eligible members. The root retains swarm-wide authority but does not confirm
+delegated mutations. A larger organisation may additionally distribute ownership
+among several swarms. A heavily shared scope still creates merge and ACL work for
+its owning swarm, so federation does not make that authority free.
 
 ## Identity, trust and restrictions
 

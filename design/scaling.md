@@ -52,26 +52,59 @@ Namespace partitions
   volume/subtree namespace, handles, manifests and lifecycle authority
 ```
 
-Small meshes may co-locate all scopes in one partition and voter set. The IDs and
-routing records still exist, so growth is an online ownership movement rather
-than a database-format conversion.
+Every swarm starts with one root control partition and one Raft group owning all
+authoritative scopes. The root remains permanently responsible for swarm
+identity, node enrolment, federation trust and the delegation directory. Typed
+scope and routing records exist from the start, so later growth is an online
+ownership movement rather than a database-format conversion.
 
 The first practical split is one namespace partition per large volume or
 availability cell. Subtree partitioning is permitted later behind explicit
 mount/ownership boundaries; arbitrary per-file sharding would make rename,
 listing and permissions needlessly expensive.
 
-This is a hierarchy of routing and ownership, not nested commit confirmation.
-The catalogue tells gateways which independent Raft group owns a scope, but that
-group commits its ordinary operations without appending through a parent log.
-Automatic volume-level partition creation and measured subtree split/merge are
-future optimisations. MeshSpan may eventually recommend and, where policy permits,
-perform a subtree split after sustained measured load; it must not create a
-consensus group for every ordinary folder by default.
+This is a hierarchy of delegated routing and ownership, not nested commit
+confirmation. Initially every route resolves to the root group. When enough
+eligible swarm members and measured load justify a split, the root may create a
+new group, seed it as learners, fence the exact scope, commit a newer ownership
+epoch and activate its direct route. That group commits ordinary operations
+without appending through the root log and may later be subdivided using the same
+contract.
 
-The exact load signals, hysteresis, minimum partition size, split/merge cost model
-and automatic-action policy remain open design item O-008. Those details require
-measurement and deterministic safety proofs rather than an invented threshold.
+Delegation may separate identity/authentication, namespace, configuration, audit
+or other metadata families. Identity ranges should use stable IDs or hashes rather
+than mutable username letters; a separately partitionable canonical-login index
+can route a login to its stable principal owner.
+
+Automatically choosing creation, split, merge and rebalance points is a future
+optimisation. MeshSpan must not split merely because it can, create a consensus
+group for every ordinary folder, or weaken quorum placement to satisfy load.
+
+The exact eligible-member threshold, load signals, hysteresis, minimum partition
+size, split/merge cost model and automatic-action policy remain open design item
+O-008. Those details require measurement and deterministic safety proofs rather
+than an invented threshold.
+
+An illustrative growth path is:
+
+| Scale | Possible shape |
+| ---: | --- |
+| 1 node | One root Raft owns every authoritative scope. |
+| 10 nodes | The root retains low-rate swarm control; a loaded volume or identity family may move to a separate group. |
+| 100 nodes | Several volume, identity/authentication and work families may have independent groups and worker placement. |
+| 1,000 nodes | Cached hierarchical routing and many delegated groups prevent ordinary operations from broadcasting or entering the root log. |
+| 10,000 nodes | Ownership is spread across many groups and may additionally be spread across federated swarms according to administrative and failure boundaries. |
+
+These numbers are examples, not split triggers, supported maxima or product
+tiers. The same records and handoff contract apply throughout. Root voter count
+remains a small proved plan rather than growing with storage membership.
+
+Split pressure is capacity-relative. Ten small low-memory nodes may need several
+groups earlier than a few high-core servers, while sufficiently powerful machines
+may never justify a split for their workload. A future optimiser must use sustained
+CPU, memory, storage latency, queueing and consensus tail-latency headroom together
+with safe voter placement and estimated migration cost. Neither node count nor one
+fixed requests-per-second threshold is a valid hardware-independent trigger.
 
 ## Building disconnection
 
