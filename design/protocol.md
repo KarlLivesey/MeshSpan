@@ -131,8 +131,9 @@ swarms. Its bounded Protobuf catalogue is:
   recovery-root-chained identity generations and a signed two-nonce challenge;
 - `FetchFederationAuthority` / `FederationAuthorityPage` for revisioned,
   cursor-paged relationship, governance, grant, revocation and recovery records;
-- `FetchFederatedBranchPage` / `FederatedBranchPage` for bounded missing causal
-  commits and referenced immutable-object digests;
+- `FetchFederatedBranchPage` names exact namespace head IDs and already-held
+  commit IDs; `FederatedBranchPage` returns bounded missing causal commits and
+  referenced immutable-object digests;
 - `ProposeFederatedBranch` / `FederatedBranchResult` for signed grant-use
   evidence and an outcome which separately represents accepting-swarm
   durability, owner-history acceptance, protection satisfaction or quarantine;

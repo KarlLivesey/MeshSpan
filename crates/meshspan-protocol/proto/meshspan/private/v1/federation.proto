@@ -61,10 +61,11 @@ message FederationAuthorityPage {
 message FetchFederatedBranchPage {
   bytes grant_id = 1;
   VersionedPayload resource_scope = 2;
-  repeated bytes causal_frontier = 3;
-  bytes cursor = 4;
-  uint32 limit = 5;
-  bytes signature = 6;
+  repeated bytes requested_head_ids = 3;
+  repeated bytes known_commit_ids = 4;
+  bytes cursor = 5;
+  uint32 limit = 6;
+  bytes signature = 7;
 }
 
 message FederatedBranchPage {

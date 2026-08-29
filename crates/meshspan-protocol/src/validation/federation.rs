@@ -2,6 +2,8 @@
 
 //! Cross-swarm federation envelope and message validation.
 
+use std::collections::BTreeSet;
+
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::federation_envelope::Message;
 use crate::v1::{
@@ -13,9 +15,9 @@ use crate::v1::{
 };
 
 use super::{
-    valid_count, valid_digest, valid_digests, valid_identifier, valid_nonempty_bytes,
-    valid_optional_bytes, valid_page_limit, validate_operation_result, validate_payload,
-    validate_payloads, validate_shard,
+    valid_count, valid_digest, valid_digests, valid_identifier, valid_identifiers,
+    valid_nonempty_bytes, valid_optional_bytes, valid_page_limit, validate_operation_result,
+    validate_payload, validate_payloads, validate_shard,
 };
 
 pub(super) fn envelope(
@@ -139,10 +141,22 @@ fn fetch_branch_page(
 ) -> Result<(), WireContractError> {
     valid_identifier(&value.grant_id)?;
     validate_payload(value.resource_scope.as_ref(), limits)?;
-    valid_digests(&value.causal_frontier, limits, true)?;
+    valid_identifiers(&value.requested_head_ids, limits, false)?;
+    valid_identifiers(&value.known_commit_ids, limits, true)?;
+    unique_identifiers(&value.requested_head_ids)?;
+    unique_identifiers(&value.known_commit_ids)?;
     valid_optional_bytes(&value.cursor, limits.maximum_control_bytes())?;
     valid_page_limit(value.limit, limits)?;
     valid_signature(&value.signature, limits)
+}
+
+fn unique_identifiers(values: &[Vec<u8>]) -> Result<(), WireContractError> {
+    let unique = values.iter().map(Vec::as_slice).collect::<BTreeSet<_>>();
+    if unique.len() == values.len() {
+        Ok(())
+    } else {
+        Err(WireContractError::InvalidMessage)
+    }
 }
 
 fn branch_page(value: &FederatedBranchPage, limits: WireLimits) -> Result<(), WireContractError> {
