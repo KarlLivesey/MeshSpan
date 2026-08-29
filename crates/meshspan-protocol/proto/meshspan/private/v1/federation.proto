@@ -1,0 +1,178 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+syntax = "proto3";
+
+package meshspan.private.v1;
+
+import "meshspan/private/v1/common.proto";
+
+message FederationHeader {
+  ProtocolVersion version = 1;
+  bytes relationship_id = 2;
+  bytes sender_mesh_id = 3;
+  bytes recipient_mesh_id = 4;
+  bytes request_id = 5;
+  bytes operation_id = 6;
+  uint64 authority_epoch = 7;
+  sint64 deadline_unix_micros = 8;
+  bytes trace_id = 9;
+  bytes replay_nonce = 10;
+}
+
+message FederationHello {
+  repeated ProtocolVersion versions = 1;
+  uint64 identity_generation = 2;
+  bytes public_identity_chain = 3;
+  bytes challenge_nonce = 4;
+  repeated uint32 feature_bits = 5;
+  uint64 maximum_control_bytes = 6;
+  uint64 maximum_data_frame_bytes = 7;
+  uint32 maximum_streams = 8;
+  bytes signature = 9;
+}
+
+message FederationWelcome {
+  ProtocolVersion selected_version = 1;
+  uint64 identity_generation = 2;
+  bytes request_challenge_nonce = 3;
+  bytes responder_challenge_nonce = 4;
+  uint64 authority_revision = 5;
+  uint64 maximum_control_bytes = 6;
+  uint64 maximum_data_frame_bytes = 7;
+  uint32 maximum_streams = 8;
+  bytes signature = 9;
+}
+
+message FetchFederationAuthority {
+  uint64 after_revision = 1;
+  bytes cursor = 2;
+  uint32 limit = 3;
+}
+
+message FederationAuthorityPage {
+  uint64 authority_revision = 1;
+  repeated VersionedPayload records = 2;
+  bytes next_cursor = 3;
+  bytes page_digest = 4;
+  bytes signature = 5;
+}
+
+message FetchFederatedBranchPage {
+  bytes grant_id = 1;
+  VersionedPayload resource_scope = 2;
+  repeated bytes causal_frontier = 3;
+  bytes cursor = 4;
+  uint32 limit = 5;
+}
+
+message FederatedBranchPage {
+  bytes grant_id = 1;
+  VersionedPayload resource_scope = 2;
+  repeated VersionedPayload branch_commits = 3;
+  repeated bytes immutable_object_digests = 4;
+  bytes next_cursor = 5;
+  bytes page_digest = 6;
+  bytes signature = 7;
+}
+
+message ProposeFederatedBranch {
+  bytes grant_id = 1;
+  VersionedPayload resource_scope = 2;
+  VersionedPayload grant_use_evidence = 3;
+  repeated bytes branch_head_digests = 4;
+  bytes expected_owner_head_digest = 5;
+  bytes signature = 6;
+}
+
+message FederatedBranchResult {
+  OperationResult result = 1;
+  VersionedPayload accepting_swarm_receipt = 2;
+  optional uint64 owner_history_revision = 3;
+  optional VersionedPayload protection_receipt = 4;
+  optional bytes quarantine_id = 5;
+  repeated bytes alternative_head_digests = 6;
+  bytes signature = 7;
+}
+
+enum RemoteShardAction {
+  REMOTE_SHARD_ACTION_UNSPECIFIED = 0;
+  REMOTE_SHARD_ACTION_PUT = 1;
+  REMOTE_SHARD_ACTION_GET = 2;
+  REMOTE_SHARD_ACTION_SCRUB = 3;
+  REMOTE_SHARD_ACTION_REPAIR = 4;
+  REMOTE_SHARD_ACTION_RETIRE = 5;
+  REMOTE_SHARD_ACTION_RECLAIM = 6;
+}
+
+message RequestFederatedStorageCapability {
+  bytes grant_id = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  RemoteShardAction action = 5;
+  uint64 maximum_bytes = 6;
+  bytes scope_digest = 7;
+}
+
+message FederatedStorageCapability {
+  bytes grant_id = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  RemoteShardAction action = 5;
+  uint64 maximum_bytes = 6;
+  sint64 valid_until_unix_micros = 7;
+  bytes capability_nonce = 8;
+  bytes canonical_capability = 9;
+  bytes signature = 10;
+}
+
+message FederatedStorageReceipt {
+  bytes grant_id = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  RemoteShardAction action = 5;
+  uint64 affected_bytes = 6;
+  sint64 completed_at_unix_micros = 7;
+  bytes capability_digest = 8;
+  bytes result_digest = 9;
+  bytes signature = 10;
+}
+
+message FetchFederatedStorageInventory {
+  bytes grant_id = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  bytes cursor = 4;
+  uint32 limit = 5;
+}
+
+message FederatedStorageInventoryPage {
+  bytes grant_id = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  repeated VersionedPayload records = 4;
+  bytes next_cursor = 5;
+  bytes page_digest = 6;
+  bytes signature = 7;
+}
+
+message FederationEnvelope {
+  FederationHeader header = 1;
+  oneof message {
+    FederationHello hello = 10;
+    FederationWelcome welcome = 11;
+    FetchFederationAuthority fetch_authority = 20;
+    FederationAuthorityPage authority_page = 21;
+    FetchFederatedBranchPage fetch_branch_page = 30;
+    FederatedBranchPage branch_page = 31;
+    ProposeFederatedBranch propose_branch = 32;
+    FederatedBranchResult branch_result = 33;
+    RequestFederatedStorageCapability request_storage_capability = 40;
+    FederatedStorageCapability storage_capability = 41;
+    FederatedStorageReceipt storage_receipt = 42;
+    FetchFederatedStorageInventory fetch_storage_inventory = 43;
+    FederatedStorageInventoryPage storage_inventory_page = 44;
+  }
+}

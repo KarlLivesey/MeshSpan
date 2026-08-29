@@ -2,20 +2,21 @@
 
 //! Metadata, routing, presence, branch, work and certificate message validation.
 
+mod routing;
+
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::control_envelope::Message;
 use crate::v1::metadata_command::Command;
 use crate::v1::metadata_query::Query;
 use crate::v1::{
-    AbortScopeHandoff, AcknowledgeCertificateInstall, ActivateScope, BeginScopeHandoff,
-    BranchInclusionResult, ClaimWork, CompleteWork, ComponentLifecycleState, FetchBranchCommits,
-    FetchCertificateEnvelope, FetchIdentityProjection, FetchImmutableObjects, FreezeScope,
-    IdentityProjection, InventoryBatch, InventoryBegin, InventoryFinish, MetadataChangeBatch,
-    MetadataCommand, MetadataPage, MetadataQuery, MetadataWatch, ProposeBranchInclusion,
-    PublishCertificateBundle, PublishComponentObservation, PublishComponentSupport,
-    PublishConvergenceReceipt, PublishIsolationDelegation, PublishPresence, PublishTargetStatus,
-    QueryConsistency, RenewWork, ReportWorkProgress, RevokeCertificateEnvelope, RoutingDelta,
-    ScopeRoute, ScrubObservation, WorkLease,
+    AcknowledgeCertificateInstall, BranchInclusionResult, ClaimWork, CompleteWork,
+    ComponentLifecycleState, FetchBranchCommits, FetchCertificateEnvelope, FetchIdentityProjection,
+    FetchImmutableObjects, IdentityProjection, InventoryBatch, InventoryBegin, InventoryFinish,
+    MetadataChangeBatch, MetadataCommand, MetadataPage, MetadataQuery, MetadataWatch,
+    ProposeBranchInclusion, PublishCertificateBundle, PublishComponentObservation,
+    PublishComponentSupport, PublishConvergenceReceipt, PublishIsolationDelegation,
+    PublishPresence, PublishTargetStatus, QueryConsistency, RenewWork, ReportWorkProgress,
+    RevokeCertificateEnvelope, ScrubObservation, WorkLease,
 };
 
 use super::{
@@ -36,17 +37,17 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         Message::MetadataWatch(value) => metadata_watch(value, limits),
         Message::MetadataChangeBatch(value) => metadata_changes(value, limits),
         Message::ResolveScopeRoute(value) => valid_identifier(&value.scope_id),
-        Message::ScopeRoute(value) => scope_route(value, limits),
+        Message::ScopeRoute(value) => routing::scope_route(value, limits),
         Message::FetchRoutingDelta(value) => {
             valid_optional_bytes(&value.cursor, limits.maximum_control_bytes())?;
             valid_page_limit(value.limit, limits)
         }
-        Message::RoutingDelta(value) => routing_delta(value, limits),
+        Message::RoutingDelta(value) => routing::routing_delta(value, limits),
         Message::RoutingSnapshotRequired(value) => nonzero(value.current_routing_epoch),
-        Message::BeginScopeHandoff(value) => begin_handoff(value),
-        Message::FreezeScope(value) => freeze_scope(value),
-        Message::ActivateScope(value) => activate_scope(value),
-        Message::AbortScopeHandoff(value) => abort_handoff(value),
+        Message::BeginScopeHandoff(value) => routing::begin_handoff(value),
+        Message::FreezeScope(value) => routing::freeze_scope(value),
+        Message::ActivateScope(value) => routing::activate_scope(value),
+        Message::AbortScopeHandoff(value) => routing::abort_handoff(value),
         Message::FetchIdentityProjection(value) => fetch_identity(value, limits),
         Message::IdentityProjection(value) => identity_projection(value, limits),
         Message::PublishPresence(value) => presence(value, limits),
@@ -170,82 +171,6 @@ fn metadata_changes(
         return Err(WireContractError::InvalidMessage);
     }
     validate_payloads(&value.changes, limits, value.snapshot_required)
-}
-
-fn scope_route(value: &ScopeRoute, limits: WireLimits) -> Result<(), WireContractError> {
-    valid_identifier(&value.scope_id)?;
-    valid_identifier(&value.partition_id)?;
-    valid_identifier(&value.owner_node_id)?;
-    nonzero(value.routing_epoch)?;
-    valid_nonempty_bytes(&value.signature, limits.maximum_control_bytes())
-}
-
-fn routing_delta(value: &RoutingDelta, limits: WireLimits) -> Result<(), WireContractError> {
-    nonzero(value.routing_epoch)?;
-    valid_count(value.routes.len(), limits, true)?;
-    for route in &value.routes {
-        scope_route(route, limits)?;
-        if route.routing_epoch != value.routing_epoch {
-            return Err(WireContractError::InvalidMessage);
-        }
-    }
-    valid_optional_bytes(&value.next_cursor, limits.maximum_control_bytes())
-}
-
-fn begin_handoff(value: &BeginScopeHandoff) -> Result<(), WireContractError> {
-    scope_transfer(
-        &value.scope_id,
-        &value.source_partition_id,
-        &value.destination_partition_id,
-        value.routing_epoch,
-    )
-}
-
-fn freeze_scope(value: &FreezeScope) -> Result<(), WireContractError> {
-    scope_transfer(
-        &value.scope_id,
-        &value.source_partition_id,
-        &value.destination_partition_id,
-        value.routing_epoch,
-    )?;
-    nonzero(value.frozen_revision)?;
-    valid_digest(&value.snapshot_digest)
-}
-
-fn activate_scope(value: &ActivateScope) -> Result<(), WireContractError> {
-    scope_transfer(
-        &value.scope_id,
-        &value.source_partition_id,
-        &value.destination_partition_id,
-        value.routing_epoch,
-    )?;
-    nonzero(value.frozen_revision)?;
-    valid_digest(&value.snapshot_digest)
-}
-
-fn abort_handoff(value: &AbortScopeHandoff) -> Result<(), WireContractError> {
-    scope_transfer(
-        &value.scope_id,
-        &value.source_partition_id,
-        &value.destination_partition_id,
-        value.routing_epoch,
-    )?;
-    nonzero(u64::from(value.reason_code))
-}
-
-fn scope_transfer(
-    scope_id: &[u8],
-    source: &[u8],
-    destination: &[u8],
-    routing_epoch: u64,
-) -> Result<(), WireContractError> {
-    valid_identifier(scope_id)?;
-    valid_identifier(source)?;
-    valid_identifier(destination)?;
-    if source == destination {
-        return Err(WireContractError::InvalidMessage);
-    }
-    nonzero(routing_epoch)
 }
 
 fn fetch_identity(

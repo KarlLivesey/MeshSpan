@@ -1,6 +1,6 @@
 # Federation between autonomous swarms
 
-Status: **accepted design contract; implementation not started**.
+Status: **accepted contract; Stage 1 foundation complete, Stages 2–5 pending**.
 
 Federation lets independently administered MeshSpan swarms share selected data,
 write authority and storage without combining their consensus groups or user
@@ -149,10 +149,10 @@ relationship's removal is not itself proof that physical bytes were erased.
 
 ## Stage retrofit map
 
-| Stage | Required addition | Missing implementation evidence |
+| Stage | Required addition | Implementation evidence |
 | --- | --- | --- |
-| 0 | Lock federation terminology, authority, simple presets, failure semantics and record/message contracts. | Logical records, canonical encodings, complete message catalogue and cross-document threat/flow review. |
-| 1 | Add federation-qualified IDs, rights, restrictions, receipts and versioned replaceable contracts. | Domain transition tables, hostile-input vectors, canonical Protobuf/OpenAPI fixtures and deterministic graph/policy tests. |
+| 0 | Lock federation terminology, authority, simple presets, failure semantics and record/message contracts. | Complete: logical records, canonical encodings, message catalogue and cross-document threat/flow review are locked. |
+| 1 | Add federation-qualified IDs, rights, restrictions, receipts and versioned replaceable contracts. | Complete: domain transitions, hostile vectors, canonical Protobuf fixture and deterministic graph/policy tests pass. |
 | 2 | Persist relationships, trust roots, governance, grants, quotas, recovery succession, quarantine and exact outcomes. | Migrations, typed commands, indexes, atomic receipts, backup/restore and crash-boundary proofs. |
 | 3 | Authenticate swarms and carry bounded federation control/data streams over Quinn without joining consensus groups. | Mutual connection flow, identity rotation, routing, paging, replay/fencing and real partition/reconnect process tests. |
 | 4 | Treat partner capacity as a capability-scoped remote provider with placement and availability classifications. | Encrypted cross-swarm shard IO, bilateral quota enforcement, signed lifecycle receipts and returning/revoked-provider tests. |

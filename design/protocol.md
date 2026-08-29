@@ -18,6 +18,10 @@ does not expose the database layout.
 - Private node traffic uses QUIC implemented with Quinn.
 - Every established peer connection uses mutual TLS and binds the certificate to
   one mesh ID and node ID.
+- Cross-swarm federation uses a separate mutually authenticated connection and
+  envelope which binds both autonomous swarm identities and one approved
+  relationship. A same-swarm node certificate or request header cannot be
+  reinterpreted as federation authority.
 - Protobuf is the canonical control-message encoding. Bulk shard bytes use
   framed QUIC streams rather than embedding large payloads in Protobuf.
 - Consensus, control and data use independent streams with bounded queues so a
@@ -45,6 +49,12 @@ Every request carries, directly or through connection context:
 
 Credentials, raw private keys, password material and database queries are never
 placed in this envelope.
+
+Federation traffic uses a separate `FederationHeader` containing relationship,
+sender-swarm and recipient-swarm IDs, request and operation IDs, authority epoch,
+deadline, trace ID and a 32-byte replay nonce. Both swarm IDs must differ. The
+authenticated certificate, signed message and header identity must agree before
+any state or expensive operation is consulted.
 
 ## 3. Outcomes and errors
 
@@ -112,6 +122,33 @@ output. Every receiver independently recompiles the plan, rejects trailing or
 excessive bytes, checks the one-member set difference and verifies evidence
 against its own committed history before changing the active membership.
 
+## 5a. Federation messages
+
+Federation never uses the node-control envelope and never joins consensus across
+swarms. Its bounded Protobuf catalogue is:
+
+- `FederationHello` / `FederationWelcome` for version/limit negotiation,
+  recovery-root-chained identity generations and a signed two-nonce challenge;
+- `FetchFederationAuthority` / `FederationAuthorityPage` for revisioned,
+  cursor-paged relationship, governance, grant, revocation and recovery records;
+- `FetchFederatedBranchPage` / `FederatedBranchPage` for bounded missing causal
+  commits and referenced immutable-object digests;
+- `ProposeFederatedBranch` / `FederatedBranchResult` for signed grant-use
+  evidence and an outcome which separately represents accepting-swarm
+  durability, owner-history acceptance, protection satisfaction or quarantine;
+- `RequestFederatedStorageCapability` / `FederatedStorageCapability` for an
+  exact grant, target generation, shard, action, byte ceiling, expiry and nonce;
+- `FederatedStorageReceipt` for the exact capability/result digests, affected
+  bytes, completion instant and provider signature; and
+- `FetchFederatedStorageInventory` / `FederatedStorageInventoryPage` for bounded
+  reconciliation of remotely retained encrypted shards.
+
+Actual shard bytes continue to use the existing independently bounded data
+frames. `PutShard`, `GetShard`, scrub, repair, retirement and reclamation accept
+the exact federated capability; the federation envelope does not grow a second
+bulk-data protocol. Signatures are verified over canonical, domain-separated
+bytes in addition to structural Protobuf validation and mTLS identity binding.
+
 ## 6. Metadata commands and queries
 
 `MetadataCommand` contains a closed, versioned `oneof`; it is not raw SQL, a KV
@@ -161,6 +198,13 @@ Routing/control message families are:
 - `FetchRoutingDelta` / `RoutingDelta` / `RoutingSnapshotRequired`;
 - `BeginScopeHandoff`, `FreezeScope`, `ActivateScope`, `AbortScopeHandoff`; and
 - `FetchIdentityProjection` / `IdentityProjection`, each signed and revisioned.
+
+A `ScopeRoute` binds its permanent root partition, current owner partition,
+ownership/routing epochs, operation family and exact key range. A
+`BeginScopeHandoff` additionally binds eligible-member count, planned voter
+count, independently compiled quorum-plan digest, capacity-normalised load
+evidence digest and measurement instant. The destination is never activated from
+source/destination IDs alone.
 
 An identity projection is a bounded committed read model for cell isolation, not
 a second writable identity database.

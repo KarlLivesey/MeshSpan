@@ -17,9 +17,9 @@ executable evidence passes.
 
 ## Stage 0 — lock the contracts
 
-**Status:** reopened for the accepted federation contract. Existing contracts remain useful, but
-Stages 1–5 cannot close again until the federation records/messages and the Stage 5 audit gaps are
-locked and proved. See [`federation.md`](federation.md).
+**Status:** complete. The accepted federation records, messages, authority boundaries and staged
+retrofit gates are locked without weakening the original contracts. See
+[`federation.md`](federation.md).
 
 **Purpose:** agree what will be built before implementation starts.
 
@@ -51,8 +51,8 @@ No production implementation is claimed in this stage.
 
 **Depends on:** Stage 0.
 
-**Status:** reopened for federation. The original foundation evidence remains valid; the missing
-federation domain and contract evidence below is not implemented.
+**Status:** complete. The federation domain, canonical wire contracts, hostile vectors and
+root/delegated routing contracts pass with the original foundation evidence.
 
 Build:
 

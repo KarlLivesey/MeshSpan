@@ -6,9 +6,10 @@ mod framing;
 mod validation;
 
 pub use framing::{
-    ValidatedControlEnvelope, ValidatedDataControlEnvelope, ValidatedDataFrame, WireContractError,
-    WireLimits, decode_control_frame, decode_data_control_frame, decode_data_frame,
-    encode_control_frame, encode_data_control_frame, encode_data_frame,
+    ValidatedControlEnvelope, ValidatedDataControlEnvelope, ValidatedDataFrame,
+    ValidatedFederationEnvelope, WireContractError, WireLimits, decode_control_frame,
+    decode_data_control_frame, decode_data_frame, decode_federation_frame, encode_control_frame,
+    encode_data_control_frame, encode_data_frame, encode_federation_frame,
 };
 
 /// Generated version-one private wire messages.

@@ -1,10 +1,6 @@
 # Stage 1 completion evidence
 
-Status: original scope complete on 2026-08-28; Stage 1 reopened for federation.
-
-The missing federation domain/contracts and new closure gates are recorded in
-[`federation.md`](federation.md) and [`roadmap.md`](roadmap.md). This document does
-not claim that retrofit is implemented.
+Status: complete on 2026-08-29, including the federation retrofit.
 
 Stage 1 establishes executable contracts and a fast proof loop. It does not
 claim a metadata database, networked cluster, storage provider or public file
@@ -15,7 +11,9 @@ service; those remain later roadmap stages.
 - `meshspan-domain` owns canonical typed identities, overflow-safe revisions and
   time values, operation replay/conflict classification, lifecycle transitions,
   nested-group and activation decisions, multiple owners, overlapping fault
-  groups and exact protection proofs.
+  groups and exact protection proofs. It now also owns federation-qualified
+  principals, typed namespace/storage restrictions, governance invariants,
+  offline grant admission/quarantine and permanent-root delegation transitions.
 - `meshspan-contracts` owns versioned, allocation-bounded interfaces and typed
   deterministic conformance entry points for storage, access connectors,
   administration clients, persistence, consensus, coding, placement,
@@ -23,7 +21,10 @@ service; those remain later roadmap stages.
 - `meshspan-protocol` generates the closed private message catalogue with Prost
   and a vendored `protoc`. Length framing rejects excess before decode; generated
   values must not be treated as trusted input until wrapped by family-specific
-  semantic validation. Bulk data frames have an independent limit.
+  semantic validation. Bulk data frames have an independent limit. Cross-swarm
+  traffic uses a distinct hostile-by-default envelope with both swarm IDs,
+  relationship/epoch/replay binding, bounded authority/branch/inventory pages,
+  exact storage capabilities and signed receipt shapes.
 - `meshspan-api-contract` remains the single Rust source for OpenAPI and server
   request/response validation. Committed OpenAPI generates strict TypeScript,
   native Fetch and Zod 4 artefacts and parity fixtures.
@@ -39,16 +40,22 @@ service; those remain later roadmap stages.
 | Web format, strict type, lint and unit behaviour | Independent Prettier, ESLint, TypeScript and Vitest lanes |
 | Normal/replay/conflict/hostile transitions | Lifecycle, operation receipt, IAM/topology, API decoder and wire-frame vectors |
 | Rust/OpenAPI/Zod parity | Committed request/response fixtures plus deterministic generation-drift check |
-| Protobuf compatibility | Committed canonical v1.0 bytes, unknown-minor-field, malformed frame and shard-authority vectors |
+| Protobuf compatibility | Committed canonical node/federation v1.0 bytes, unknown-minor-field, malformed frame, root-delegation and shard-authority vectors |
+| Federation authority behaviour | Governance-cycle, bilateral restriction, grant expiry/revocation/quarantine, durability-state and capacity-binding vectors |
 | Clean-checkout entry point | `npm run check` after the documented frozen pnpm install |
 | Resource-aware concurrency | Tested scheduler bounded by CPU, memory and optional `MESHSPAN_CHECK_WORKERS` override |
 
 ## Measured feedback loop
 
-On the Stage 1 development workstation after a warm build:
+The original Stage 1 warm baseline was:
 
 - four resource-approved workers: 3.4 seconds;
 - forced single worker: 6.0 seconds.
+
+After adding the substantive Stage 2–5 suites and the Stage 1 federation
+retrofit, `npm run check` passed on 2026-08-29 in 91.56 seconds with four workers.
+The slowest independent lane was storage/data-plane/filesystem at 67.86 seconds;
+all lanes remained inside the current budgets.
 
 Every run prints each lane duration, total elapsed time and selected worker
 count. The targets in [`verification.md`](verification.md) remain regression

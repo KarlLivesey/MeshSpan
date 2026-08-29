@@ -1,6 +1,6 @@
 # Stage 1–3 implementation audit
 
-Status: original scope complete on 2026-08-28; Stages 1–3 reopened for federation.
+Status: Stage 1 federation retrofit complete on 2026-08-29; Stages 2–3 remain reopened.
 
 This audit checks roadmap claims against production code and behavioural tests.
 Schemas, message shapes, design prose and unused helpers are not implementation
@@ -8,8 +8,9 @@ evidence. A reopened stage returns to complete only when every closure gate belo
 passes locally.
 
 The accepted autonomous-swarm federation contract adds work which this evidence
-never claimed to prove. Stage 1 lacks federation-qualified identities, rights,
-restriction/delegation transitions and contract fixtures. Stage 2 lacks durable
+never claimed to prove. Stage 1's previously missing federation-qualified
+identities, rights, restriction/delegation transitions and contract fixtures now
+pass. Stage 2 still lacks durable
 relationship, governance, grant, quota, recovery and quarantine commands. Stage 3
 lacks mutually approved swarm authentication and bounded signed federation
 exchange over Quinn. See [`federation.md`](federation.md) and the reopened gates in
@@ -23,6 +24,13 @@ replaceable contract conformance; deterministic test seams; Protobuf validation;
 Rust-authored OpenAPI plus generated TypeScript/Fetch/Zod parity; and the bounded
 parallel scheduler. `npm run check` re-proved the complete gate in 10.00 seconds
 with four workers after the first Stage 3 audit repair.
+
+The federation retrofit adds typed relationship/governance policy, offline
+grant/quarantine and permanent-root delegation state machines plus a distinct
+bounded cross-swarm Protobuf envelope. Canonical bytes and hostile vectors cover
+swarm identity/replay binding, branch paging, exact durability states, remote
+storage capabilities and capacity-relative handoff evidence. `npm run check`
+passed the combined current repository in 91.56 seconds with four workers.
 
 ## Stage 2 findings
 
@@ -90,7 +98,7 @@ test selection.
 6. [x] Re-run multi-way partition, stale-incarnation, corrupt-snapshot, saturated
    bulk-stream and complete local gates with exact expected outcomes.
 
-The original Stages 1–3 closure gates remain proved. They do not close the new
-federation retrofit; those stages remain reopened until the roadmap's federation
+The original Stages 1–3 closure gates remain proved, and Stage 1's federation
+retrofit is now closed. Stages 2–3 remain reopened until their roadmap federation
 evidence passes. `npm run check:stage3-adversarial` also prevents an exact test
 filter from silently succeeding with zero tests.

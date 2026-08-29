@@ -6,12 +6,13 @@ mod connection;
 mod consensus;
 mod control;
 mod data;
+mod federation;
 
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::control_envelope::Message;
 use crate::v1::{
-    ControlEnvelope, DataControlEnvelope, DataFrame, ErrorCode, LogPosition, OperationOutcome,
-    OperationResult, RequestHeader, ShardIdentity, VersionedPayload, WireError,
+    ControlEnvelope, DataControlEnvelope, DataFrame, ErrorCode, FederationEnvelope, LogPosition,
+    OperationOutcome, OperationResult, RequestHeader, ShardIdentity, VersionedPayload, WireError,
 };
 
 const IDENTIFIER_BYTES: usize = 16;
@@ -56,6 +57,13 @@ pub(crate) fn validate_data_control_envelope(
             .ok_or(WireContractError::InvalidMessage)?,
         limits,
     )
+}
+
+pub(crate) fn validate_federation_envelope(
+    envelope: &FederationEnvelope,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    federation::envelope(envelope, limits)
 }
 
 fn message_requires_header(message: &Message) -> bool {
