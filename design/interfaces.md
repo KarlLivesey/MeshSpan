@@ -330,13 +330,16 @@ evaluator; no access adapter calculates effective rights.
 `FilesystemFileAdapter` is the first semantic connector surface over that
 authority boundary. An existing-file open supplies only an operation/handle
 identity, logical volume/path, access/share intent, stage bound and lease times.
-Read, write and flush then supply only their handle fence and semantic range or
-checkpoint intent. The daemon-bound `BoundFilesystemAdapter` owns the local
+Read, write, flush, close, lease transfer and byte-range locking then supply
+only their handle fence and semantic range, checkpoint or lifetime intent.
+Immutable stat and directory paging similarly accept a logical path and bounded
+cursor rather than a branch or database key. The daemon-bound
+`BoundFilesystemAdapter` owns the local
 branch, version-retention sequence and manifest format; it obtains the principal,
 authorisation revision and gateway from committed authority/handle state and
 derives the write digest itself. Those internal values therefore cannot be
 forged or accidentally invented by an SMB or HTTPS translator. The remaining
-create, namespace, lock, administration and snapshot families must adopt the
+create, namespace mutation, administration and snapshot families must adopt the
 same semantic boundary before the Stage 5 adapter contract is complete.
 
 A live handle read pins its current private-stage sequence. The service reads
