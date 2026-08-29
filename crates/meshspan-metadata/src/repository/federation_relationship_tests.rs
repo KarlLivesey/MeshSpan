@@ -44,7 +44,130 @@ fn relationship_lifecycle_is_fenced_audited_replayable_and_restart_safe()
     )?;
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
     assert_eq!(replay.result_digest, receipt.result_digest);
+    assert_eq!(
+        repository
+            .federation_relationship(relationship_id)?
+            .ok_or("retired relationship missing")?
+            .state,
+        FederationRelationshipState::Retired
+    );
     verify_lifecycle(&repository.into_database(), relationship_id)
+}
+
+#[test]
+fn relationship_read_rejects_missing_events_identities_and_substituted_governance()
+-> Result<(), Box<dyn std::error::Error>> {
+    reject_missing_relationship_event()?;
+    reject_missing_trust_identity()?;
+    reject_substituted_governance_edge()
+}
+
+fn reject_missing_relationship_event() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    bootstrap(&mut repository, fixture.ids)?;
+    let relationship_id = FederationRelationshipId::from_bytes([80; 16])?;
+    prepare_active_relationship(&mut repository, fixture.ids, relationship_id)?;
+    let database = repository.into_database();
+    let id = relationship_id.as_bytes();
+    assert!(
+        database
+            .connection()
+            .execute(
+                "DELETE FROM federation_relationship_events WHERE relationship_id = ?1",
+                [id.as_slice()],
+            )
+            .is_err()
+    );
+    database.connection().execute_batch(
+        "DROP TRIGGER federation_relationship_events_reject_delete;
+         DELETE FROM federation_relationship_events WHERE event_kind = 1;",
+    )?;
+    assert_corrupt_relationship(database, relationship_id);
+    Ok(())
+}
+
+fn reject_missing_trust_identity() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    bootstrap(&mut repository, fixture.ids)?;
+    let relationship_id = FederationRelationshipId::from_bytes([81; 16])?;
+    prepare_active_relationship(&mut repository, fixture.ids, relationship_id)?;
+    let database = repository.into_database();
+    let id = relationship_id.as_bytes();
+    assert!(
+        database
+            .connection()
+            .execute(
+                "DELETE FROM federation_trust_identities
+                 WHERE relationship_id = ?1 AND identity_owner = 2",
+                [id.as_slice()],
+            )
+            .is_err()
+    );
+    database.connection().execute_batch(
+        "DROP TRIGGER federation_trust_identities_reject_delete;
+         DELETE FROM federation_trust_identities WHERE identity_owner = 2;",
+    )?;
+    assert_corrupt_relationship(database, relationship_id);
+    Ok(())
+}
+
+fn reject_substituted_governance_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    bootstrap(&mut repository, fixture.ids)?;
+    let relationship_id = FederationRelationshipId::from_bytes([82; 16])?;
+    let remote_mesh = MeshId::from_bytes([83; 16])?;
+    let remote_key = SigningKey::from_bytes(&[84; 32]);
+    propose_governance(
+        &mut repository,
+        fixture.ids,
+        2,
+        relationship_id,
+        remote_mesh,
+        FederationGovernanceDirection::LocalGovernsRemote,
+    )?;
+    approve_governance(
+        &mut repository,
+        fixture.ids,
+        3,
+        relationship_id,
+        MeshId::from_bytes([5; 16])?,
+        remote_mesh,
+        FederationGovernanceDirection::LocalGovernsRemote,
+        Vec::new(),
+        &remote_key,
+    )?;
+    assert_eq!(
+        repository
+            .federation_relationship(relationship_id)?
+            .ok_or("approved governance relationship missing")?
+            .state,
+        FederationRelationshipState::Active
+    );
+    let database = repository.into_database();
+    database.connection().execute(
+        "UPDATE federation_governance_edges SET parent_mesh_id = ?1
+         WHERE relationship_id = ?2",
+        rusqlite::params![
+            MeshId::from_bytes([85; 16])?.as_bytes().as_slice(),
+            relationship_id.as_bytes().as_slice(),
+        ],
+    )?;
+    assert_corrupt_relationship(database, relationship_id);
+    Ok(())
+}
+
+fn assert_corrupt_relationship(
+    database: PartitionDatabase,
+    relationship_id: FederationRelationshipId,
+) {
+    let repository = AuthoritativeRepository::new(database);
+    assert!(matches!(
+        repository.federation_relationship(relationship_id),
+        Err(RepositoryError::CorruptState)
+    ));
 }
 
 fn prepare_active_relationship(

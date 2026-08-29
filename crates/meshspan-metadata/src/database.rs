@@ -245,6 +245,7 @@ mod tests {
         partition_federation_ownership_succession_migration_digest,
         partition_federation_principal_history_migration_digest,
         partition_federation_quarantine_proof_migration_digest,
+        partition_federation_relationship_evidence_guard_migration_digest,
         partition_federation_relationship_history_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
         partition_principal_lifecycle_migration_digest, partition_roles_migration_digest,
@@ -275,7 +276,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 36);
+        assert_eq!(database.check_integrity()?.schema_version, 37);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -325,7 +326,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            36
+            37
         );
         Ok(())
     }
@@ -612,6 +613,10 @@ mod tests {
                 0xf2, 0x74, 0x34, 0x5a,
             ]
         );
+    }
+
+    #[test]
+    fn federation_migration_digests_are_committed_compatibility_values() {
         assert_eq!(
             partition_federation_authority_migration_digest(),
             [
@@ -674,6 +679,14 @@ mod tests {
                 0x07, 0x63, 0xbe, 0xe3, 0x61, 0xfa, 0xfe, 0x32, 0xd6, 0xfd, 0x89, 0xb3, 0x14, 0x16,
                 0x14, 0xb0, 0xdd, 0x51, 0x42, 0x12, 0x49, 0x73, 0x40, 0x70, 0x72, 0x32, 0xcc, 0x63,
                 0x62, 0x38, 0xa4, 0xd1,
+            ]
+        );
+        assert_eq!(
+            partition_federation_relationship_evidence_guard_migration_digest(),
+            [
+                0x5b, 0x47, 0x8b, 0xf9, 0x48, 0x78, 0xcf, 0x50, 0x3a, 0x3d, 0x88, 0x65, 0x20, 0x5c,
+                0xde, 0xd2, 0xe7, 0x6b, 0x0a, 0xe8, 0x49, 0x83, 0x60, 0xb2, 0x60, 0xbc, 0xdf, 0x8e,
+                0x0b, 0xc3, 0x69, 0x9d,
             ]
         );
     }

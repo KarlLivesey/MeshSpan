@@ -29,6 +29,7 @@ mod federation_quarantine_tests;
 mod federation_quarantine_transition;
 mod federation_query;
 mod federation_relationship;
+mod federation_relationship_evidence;
 #[cfg(test)]
 mod federation_relationship_tests;
 mod federation_succession;
