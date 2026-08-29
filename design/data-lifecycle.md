@@ -136,7 +136,13 @@ tombstones and cleanup when it returns.
    The owning content catalogue validates the complete committed manifest once,
    then enumerates its exact durable shard placements through bounded keyset
    pages while held under an immutable borrow. Enumeration never allocates or
-   rescans the complete placement set for each page.
+   rescans the complete placement set for each page. Replicated inventory
+   admission accepts only non-empty bounded contiguous pages under the proved
+   manifest root. It reserves a distinct provider operation identity for every
+   item and chains an ordered digest. No item is permit-eligible until the exact
+   declared count and final digest are sealed atomically. Authorisation is the
+   point of no return: later policy changes cannot revive the unreachable
+   manifest after physical work may have begun.
 5. Immediately before deletion, the worker obtains a short-lived
    `RemovalPermit` from the current owning metadata-partition leader. The permit binds:
    `mesh_id`, target, object, version, shard, generation, catalogue revision,

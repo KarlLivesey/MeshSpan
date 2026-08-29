@@ -169,6 +169,7 @@ fn changed_roots_or_policy_invalidate_complete_attestations()
             cleanup_id,
             scan_request_digest,
             subject_digest,
+            manifest_root_digest: _,
         } = proposal(&directory.path().join("stale.sqlite3"))?;
         register_key(&mut repository, administrator, 5, 1, SIGNING_KEY)?;
         repository.apply_committed(
@@ -333,7 +334,40 @@ fn every_apply_fault_rolls_back_terminal_authority() -> Result<(), Box<dyn std::
     Ok(())
 }
 
-fn authorise(cleanup_operation_id: OperationId, subject: [u8; 32]) -> AuthoritativeCommand {
+pub(super) fn authorised_proposal(
+    file_path: &std::path::Path,
+) -> Result<ProposalFixture, Box<dyn std::error::Error>> {
+    let mut fixture = proposal(file_path)?;
+    register_key(
+        &mut fixture.repository,
+        fixture.administrator,
+        5,
+        1,
+        SIGNING_KEY,
+    )?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 6, term: 1 },
+        context(120, fixture.administrator, 121, 106, Some(5))?,
+        &signed_attestation(
+            fixture.cleanup_id,
+            Revision::new(4),
+            fixture.scan_request_digest,
+            fixture.subject_digest,
+            122,
+        )?,
+    )?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        context(123, fixture.administrator, 124, 107, Some(6))?,
+        &authorise(fixture.cleanup_id, fixture.subject_digest),
+    )?;
+    Ok(fixture)
+}
+
+pub(super) fn authorise(
+    cleanup_operation_id: OperationId,
+    subject: [u8; 32],
+) -> AuthoritativeCommand {
     AuthoritativeCommand::AuthoriseVersionCleanup(AuthoriseVersionCleanup {
         cleanup_operation_id,
         cleanup_revision: Revision::new(4),
