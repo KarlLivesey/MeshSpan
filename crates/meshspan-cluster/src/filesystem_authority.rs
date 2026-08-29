@@ -1,0 +1,218 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Adapter from replicated metadata access decisions to the logical filesystem contract.
+
+use meshspan_filesystem::{
+    FilesystemAccessAuthority, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
+};
+use meshspan_metadata::{
+    AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository, RepositoryError,
+};
+use thiserror::Error;
+
+/// Borrowed committed metadata authority shared by every connector composition.
+pub struct MetadataFilesystemAuthority<'a> {
+    repository: &'a AuthoritativeRepository,
+}
+
+impl<'a> MetadataFilesystemAuthority<'a> {
+    /// Wraps the exact replicated metadata projection used for operation-time decisions.
+    #[must_use]
+    pub const fn new(repository: &'a AuthoritativeRepository) -> Self {
+        Self { repository }
+    }
+}
+
+impl FilesystemAccessAuthority for MetadataFilesystemAuthority<'_> {
+    type Error = MetadataFilesystemAuthorityError;
+
+    fn authorise(
+        &self,
+        request: FilesystemAuthorityRequest,
+    ) -> Result<FilesystemAuthorityGrant, Self::Error> {
+        let decision = self.repository.evaluate_access(AccessRequest {
+            token_digest: request.context.token_digest,
+            required_assurance: request.context.required_assurance,
+            gateway_node_id: request.context.gateway_node_id,
+            gateway_incarnation: request.context.gateway_incarnation,
+            volume_id: request.volume_id,
+            object_id: request.object_id,
+            requested_rights: request.requested_rights,
+            now: request.context.now,
+        })?;
+        match decision {
+            AccessDecision::Granted(capability) => Ok(FilesystemAuthorityGrant {
+                principal_id: capability.principal_id,
+                gateway_node_id: capability.gateway_node_id,
+                gateway_incarnation: capability.gateway_incarnation,
+                volume_id: capability.volume_id,
+                object_id: capability.object_id,
+                requested_rights: capability.requested_rights,
+                identity_revision: capability.identity_revision,
+                namespace_revision: capability.namespace_revision,
+                object_revision: capability.object_revision,
+                gateway_revision: capability.gateway_revision,
+                expires_at: capability.expires_at,
+                evidence_digest: capability.capability_digest,
+            }),
+            AccessDecision::Denied(denial) => Err(MetadataFilesystemAuthorityError::Denied(denial)),
+        }
+    }
+}
+
+/// Stable distinction between an intentional denial and unavailable/corrupt committed authority.
+#[derive(Debug, Error)]
+pub enum MetadataFilesystemAuthorityError {
+    /// The current committed identity, gateway, object or grants deny the operation.
+    #[error("committed metadata denied filesystem access: {0:?}")]
+    Denied(AccessDenial),
+    /// The committed metadata projection could not be evaluated safely.
+    #[error("committed metadata access evaluation failed")]
+    Repository(#[from] RepositoryError),
+}
+
+#[cfg(test)]
+mod tests {
+    use meshspan_contracts::BoundedItems;
+    use meshspan_domain::{
+        AssuranceLevel, AuditEventId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
+        PartitionId, PrincipalId, Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
+    };
+    use meshspan_filesystem::{FilesystemAccessContext, FilesystemAuthorityRequest};
+    use meshspan_metadata::{
+        AuthoritativeCommand, BootstrapMesh, CommandContext, CreateUser, CreateVolume,
+        IssueAuthenticationSession, LogPosition, PartitionDatabase, RecordName,
+        RevokeAuthenticationSession,
+    };
+
+    use super::*;
+
+    #[test]
+    fn adapter_returns_current_metadata_capability_and_observes_session_revocation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let partition_id = PartitionId::from_bytes([1; 16])?;
+        let administrator_id = PrincipalId::from_bytes([2; 16])?;
+        let user_id = PrincipalId::from_bytes([3; 16])?;
+        let gateway_node_id = NodeId::from_bytes([4; 16])?;
+        let volume_id = VolumeId::from_bytes([5; 16])?;
+        let root_object_id = ObjectId::from_bytes([6; 16])?;
+        let session_id = SessionId::from_bytes([7; 16])?;
+        let token_digest = [8; 32];
+        let database = PartitionDatabase::open(
+            std::path::Path::new(":memory:"),
+            partition_id,
+            UnixMicros::new(1),
+        )?;
+        let mut repository = AuthoritativeRepository::new(database);
+        apply(
+            &mut repository,
+            1,
+            administrator_id,
+            &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+                mesh_id: MeshId::from_bytes([9; 16])?,
+                mesh_name: RecordName::new("Authority proof")?,
+                administrator_id,
+                administrator_name: RecordName::new("Administrator")?,
+                administrator_role_id: RoleId::from_bytes([10; 16])?,
+                host_id: HostId::from_bytes([11; 16])?,
+                host_name: RecordName::new("Host")?,
+                node_id: gateway_node_id,
+                node_name: RecordName::new("Gateway")?,
+                partition_name: RecordName::new(&partition_id.to_string())?,
+            }),
+        )?;
+        apply(
+            &mut repository,
+            2,
+            administrator_id,
+            &AuthoritativeCommand::CreateUser(CreateUser {
+                principal_id: user_id,
+                name: RecordName::new("User")?,
+            }),
+        )?;
+        apply(
+            &mut repository,
+            3,
+            administrator_id,
+            &AuthoritativeCommand::CreateVolume(CreateVolume {
+                volume_id,
+                name: RecordName::new("Volume")?,
+                root_object_id,
+                owner_set_id: OwnerSetId::from_bytes([12; 16])?,
+                owners: BoundedItems::new(vec![user_id], 1_024)?,
+            }),
+        )?;
+        apply(
+            &mut repository,
+            4,
+            user_id,
+            &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+                session_id,
+                principal_id: user_id,
+                token_digest,
+                assurance: AssuranceLevel::MultiFactor,
+                expires_at: UnixMicros::new(500),
+            }),
+        )?;
+
+        let request = FilesystemAuthorityRequest {
+            context: FilesystemAccessContext {
+                token_digest,
+                required_assurance: AssuranceLevel::SingleFactor,
+                gateway_node_id,
+                gateway_incarnation: 1,
+                now: UnixMicros::new(200),
+            },
+            volume_id,
+            object_id: root_object_id,
+            requested_rights: Rights::READ_DATA,
+        };
+        let grant = MetadataFilesystemAuthority::new(&repository).authorise(request)?;
+        assert_eq!(grant.principal_id, user_id);
+        assert_eq!(grant.object_id, root_object_id);
+        assert_eq!(grant.requested_rights, Rights::READ_DATA);
+        assert_ne!(grant.evidence_digest, [0; 32]);
+
+        apply(
+            &mut repository,
+            5,
+            user_id,
+            &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
+                session_id,
+                principal_id: user_id,
+            }),
+        )?;
+        assert!(matches!(
+            MetadataFilesystemAuthority::new(&repository).authorise(request),
+            Err(MetadataFilesystemAuthorityError::Denied(
+                AccessDenial::SessionUnavailable
+            ))
+        ));
+        Ok(())
+    }
+
+    fn apply(
+        repository: &mut AuthoritativeRepository,
+        revision: u64,
+        actor_principal_id: PrincipalId,
+        command: &AuthoritativeCommand,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let operation_byte = u8::try_from(revision)?;
+        let audit_byte = u8::try_from(revision + 20)?;
+        repository.apply_committed(
+            LogPosition {
+                index: revision,
+                term: 1,
+            },
+            CommandContext {
+                operation_id: OperationId::from_bytes([operation_byte; 16])?,
+                actor_principal_id,
+                audit_event_id: AuditEventId::from_bytes([audit_byte; 16])?,
+                occurred_at: UnixMicros::new(i64::try_from(revision + 100)?),
+                expected_revision: Some(Revision::new(revision - 1)),
+            },
+            command,
+        )?;
+        Ok(())
+    }
+}

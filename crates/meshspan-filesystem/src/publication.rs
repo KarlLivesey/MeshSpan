@@ -907,6 +907,21 @@ impl VersionPublicationStore {
         crate::handles::open_existing(&mut self.connection, request)
     }
 
+    pub(crate) fn open_handle_at(
+        &mut self,
+        request: &crate::OpenHandleRequest,
+        expected_object_id: ObjectId,
+    ) -> Result<crate::OpenHandleReceipt, crate::HandleError> {
+        crate::handles::open_existing_at(&mut self.connection, request, Some(expected_object_id))
+    }
+
+    pub(crate) fn resolve_open_object(
+        &self,
+        request: &crate::OpenHandleRequest,
+    ) -> Result<Option<ObjectId>, crate::HandleError> {
+        crate::handles::resolve_open_object(&self.connection, request)
+    }
+
     /// Validates a prospective open without reserving a handle or changing durable state.
     ///
     /// The final open repeats every check transactionally. This preflight exists so a composed
@@ -1029,6 +1044,14 @@ impl VersionPublicationStore {
         handle_id: meshspan_domain::HandleId,
     ) -> Result<bool, crate::HandleError> {
         crate::handles::uses_private_stage(&self.connection, handle_id)
+    }
+
+    pub(crate) fn handle_authority_target(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::HandleAuthorityTarget, crate::HandleError> {
+        crate::handles::authority_target(&self.connection, handle_id, observed_at)
     }
 
     #[cfg(test)]

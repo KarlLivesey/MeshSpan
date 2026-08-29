@@ -317,6 +317,16 @@ It returns protocol-neutral records and typed outcomes including branch scope,
 acknowledgement evidence and debt. It alone coordinates metadata, branches,
 placement, coding and remote shard work for access adapters.
 
+The implemented operation-time boundary is `FilesystemAccessAuthority`. An
+adapter supplies only a digest of its session secret plus assurance, gateway
+identity/incarnation and authoritative time. The filesystem resolves a path or
+live handle to one stable logical object before asking for rights; the returned
+grant must bind that exact request, current revisions, expiry and evidence
+digest. Existing-file open repeats the expected-object check in its final SQLite
+transaction. Provider locations and connector-specific credentials never cross
+this boundary. The cluster adapter translates it to the replicated metadata
+evaluator; no access adapter calculates effective rights.
+
 ## Access adapter
 
 **Owns:** one public protocol's negotiation, authentication mapping, request

@@ -216,6 +216,49 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         crate::handle_io::open(&mut self.stages, &mut self.publications, request)
     }
 
+    pub(crate) fn resolve_open_object(
+        &self,
+        request: &crate::OpenHandleRequest,
+    ) -> Result<Option<ObjectId>, crate::HandleError> {
+        self.publications.resolve_open_object(request)
+    }
+
+    pub(crate) fn open_handle_at(
+        &mut self,
+        request: &FilesystemHandleOpenRequest,
+        expected_object_id: ObjectId,
+    ) -> Result<crate::OpenHandleReceipt, crate::HandleIoError> {
+        crate::handle_io::open_at(
+            &mut self.stages,
+            &mut self.publications,
+            request,
+            expected_object_id,
+        )
+    }
+
+    pub(crate) fn handle_authority_target(
+        &self,
+        handle_id: meshspan_domain::HandleId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::HandleAuthorityTarget, crate::HandleError> {
+        self.publications
+            .handle_authority_target(handle_id, observed_at)
+    }
+
+    pub(crate) fn lock_range(
+        &mut self,
+        request: crate::LockRangeRequest,
+    ) -> Result<crate::LockRangeReceipt, crate::HandleError> {
+        self.publications.lock_range(request)
+    }
+
+    pub(crate) fn unlock_range(
+        &mut self,
+        request: crate::UnlockRangeRequest,
+    ) -> Result<crate::UnlockRangeReceipt, crate::HandleError> {
+        self.publications.unlock_range(request)
+    }
+
     /// Atomically opens an existing file or creates its empty first version and reserves a handle.
     ///
     /// Durable empty content is prepared before the final transaction. Namespace visibility and
@@ -230,6 +273,15 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
     pub fn open_or_create_handle(
         &mut self,
         request: &FilesystemHandleCreateRequest,
+    ) -> Result<FilesystemHandleCreateReceipt, FilesystemCommitError> {
+        let expected = self.resolve_open_object(&request.open.handle)?;
+        self.open_or_create_handle_at(request, expected)
+    }
+
+    pub(crate) fn open_or_create_handle_at(
+        &mut self,
+        request: &FilesystemHandleCreateRequest,
+        expected_object_id: Option<ObjectId>,
     ) -> Result<FilesystemHandleCreateReceipt, FilesystemCommitError> {
         validate_handle_creation(request)?;
         if let Some(handle) = self
@@ -248,15 +300,24 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .preflight_open_handle(&request.open.handle)
         {
             Ok(()) => {
-                let handle =
-                    crate::handle_io::open(&mut self.stages, &mut self.publications, &request.open)
-                        .map_err(map_handle_io)?;
+                let expected_object_id =
+                    expected_object_id.ok_or(crate::HandleError::StaleHandle)?;
+                let handle = crate::handle_io::open_at(
+                    &mut self.stages,
+                    &mut self.publications,
+                    &request.open,
+                    expected_object_id,
+                )
+                .map_err(map_handle_io)?;
                 Ok(FilesystemHandleCreateReceipt {
                     handle,
                     creation: None,
                 })
             }
             Err(crate::HandleError::CreationRequired) => {
+                if expected_object_id.is_some() {
+                    return Err(crate::HandleError::StaleHandle.into());
+                }
                 crate::handle_io::prepare_stage(&mut self.stages, &request.open, false)
                     .map_err(map_handle_io)?;
                 let manifest = self.publish_empty_creation_content(&request.initial_file)?;
@@ -486,6 +547,20 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         self.publications
             .create_directory(publication)
             .map_err(Into::into)
+    }
+
+    pub(crate) fn rename_namespace(
+        &mut self,
+        publication: &crate::NamespaceRenamePublication,
+    ) -> Result<crate::NamespaceRenameReceipt, crate::HandleError> {
+        self.publications.rename_namespace(publication)
+    }
+
+    pub(crate) fn unlink_namespace(
+        &mut self,
+        publication: &crate::NamespaceUnlinkPublication,
+    ) -> Result<crate::NamespaceUnlinkReceipt, crate::HandleError> {
+        self.publications.unlink_namespace(publication)
     }
 
     /// Commits one exact stage as durable content and then atomically advances the namespace head.
