@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 20] = [
+const MIGRATIONS: [Migration; 21] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -106,8 +106,12 @@ const MIGRATIONS: [Migration; 20] = [
         version: 20,
         sql: include_str!("../schema/branch/020_reachability_root_set_digest.sql"),
     },
+    Migration {
+        version: 21,
+        sql: include_str!("../schema/branch/021_retired_manifest_roots.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 20;
+const SCHEMA_VERSION: u32 = 21;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -879,6 +883,23 @@ impl VersionPublicationStore {
             maximum_work,
             observed_at,
         )
+    }
+
+    /// Permanently retires the exact manifest root selected by one completed cleanup.
+    ///
+    /// Exact retries return the original receipt. The unreachable scan's local fence remains
+    /// active permanently; a separate retirement record preserves exclusion even if that fence
+    /// state is later damaged.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or conflicting authority, a missing/released/substituted local scan,
+    /// corrupt durable state and SQLite failure.
+    pub fn retire_completed_version_cleanup(
+        &mut self,
+        authority: crate::VersionCleanupRetirementAuthority,
+    ) -> Result<crate::VersionCleanupRetirementReceipt, crate::VersionCleanupRetirementError> {
+        crate::cleanup_fence::retire_completed(&mut self.connection, authority)
     }
 
     /// Resolves an atomic namespace publication outcome after a lost response.

@@ -3,7 +3,7 @@
 //! Signed, incarnation-fenced coverage for version-cleanup proposals.
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use meshspan_domain::{OperationId, Revision};
+use meshspan_domain::{NodeId, OperationId, Revision};
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
@@ -28,6 +28,27 @@ pub struct VersionCleanupAttestationProgress {
     pub required: u64,
     /// Number of exact participants carrying verified signed attestations.
     pub attested: u64,
+}
+
+/// One independently signature-verified participant scan used for local root retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VersionCleanupParticipant {
+    /// Replicated cleanup proposal identity.
+    pub cleanup_operation_id: OperationId,
+    /// Exact participating gateway node.
+    pub node_id: NodeId,
+    /// Snapshotted process incarnation.
+    pub node_incarnation: u64,
+    /// Exact local durable scan whose fence remains active.
+    pub scan_operation_id: OperationId,
+    /// Common operation-independent cleanup subject.
+    pub reachability_subject_digest: [u8; 32],
+    /// Digest of the participant's unchanged local roots.
+    pub local_roots_digest: [u8; 32],
+    /// Signed terminal unreachable result digest.
+    pub scan_result_digest: [u8; 32],
+    /// Replicated revision that committed this attestation.
+    pub revision: Revision,
 }
 
 impl VersionCleanupAttestationProgress {
@@ -182,6 +203,76 @@ pub(super) fn progress(
         cleanup_operation_id,
         required,
         attested,
+    }))
+}
+
+pub(super) fn participant(
+    database: &PartitionDatabase,
+    cleanup_operation_id: OperationId,
+    node_id: NodeId,
+) -> Result<Option<VersionCleanupParticipant>, RepositoryError> {
+    let stored = database
+        .connection()
+        .query_row(
+            "SELECT i.revision, i.reachability_subject_digest,
+                    p.node_incarnation, p.key_generation, p.scan_operation_id,
+                    p.scan_request_digest, p.reachability_subject_digest,
+                    p.local_roots_digest, p.scan_result_digest, p.signature,
+                    keys.verifying_key, p.revision
+             FROM version_cleanup_intents i
+             JOIN version_cleanup_participants p
+               ON p.cleanup_operation_id = i.cleanup_operation_id
+             JOIN cleanup_attestation_keys keys
+               ON keys.node_id = p.node_id AND keys.generation = p.key_generation
+             WHERE i.cleanup_operation_id = ?1 AND p.node_id = ?2 AND p.state = ?3",
+            params![
+                cleanup_operation_id.as_bytes().as_slice(),
+                node_id.as_bytes().as_slice(),
+                PARTICIPANT_ATTESTED,
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    StoredCompleteAttestation {
+                        node_id: node_id.as_bytes().to_vec(),
+                        node_incarnation: row.get(2)?,
+                        key_generation: row.get(3)?,
+                        scan_operation_id: row.get(4)?,
+                        scan_request_digest: row.get(5)?,
+                        subject_digest: row.get(6)?,
+                        local_roots_digest: row.get(7)?,
+                        scan_result_digest: row.get(8)?,
+                        signature: row.get(9)?,
+                        verifying_key: row.get(10)?,
+                    },
+                    row.get::<_, i64>(11)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((cleanup_revision, subject_digest, stored, revision)) = stored else {
+        return Ok(None);
+    };
+    let cleanup_revision = Revision::new(positive(cleanup_revision)?);
+    let subject_digest = array(&subject_digest)?;
+    validate_stored_attestation(
+        cleanup_operation_id,
+        cleanup_revision,
+        subject_digest,
+        &stored,
+    )
+    .map_err(|_| RepositoryError::CorruptState)?;
+    Ok(Some(VersionCleanupParticipant {
+        cleanup_operation_id,
+        node_id,
+        node_incarnation: positive(stored.node_incarnation)?,
+        scan_operation_id: OperationId::from_bytes(array(&stored.scan_operation_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        reachability_subject_digest: subject_digest,
+        local_roots_digest: array(&stored.local_roots_digest)?,
+        scan_result_digest: array(&stored.scan_result_digest)?,
+        revision: Revision::new(positive(revision)?),
     }))
 }
 

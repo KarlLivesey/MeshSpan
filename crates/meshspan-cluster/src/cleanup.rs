@@ -8,11 +8,13 @@ use meshspan_contracts::{
     tombstone_receipt_digest,
 };
 use meshspan_domain::{DurationMicros, MeshId, NodeId, OperationId, Revision, UnixMicros};
-use meshspan_filesystem::VersionUnreachableProof;
+use meshspan_filesystem::{VersionCleanupRetirementAuthority, VersionUnreachableProof};
 use meshspan_metadata::{
     AttestVersionCleanup, AuthoritativeCommand, CompleteVersionCleanupItem,
     IssueVersionCleanupPermit, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, ProposeVersionCleanup,
-    VersionCleanupAttestation, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
+    VersionCleanupAttestation, VersionCleanupCompletion, VersionCleanupIntent,
+    VersionCleanupParticipant, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
+    VersionCleanupState,
 };
 
 /// Stable local construction failures before a cleanup attestation enters consensus.
@@ -37,6 +39,14 @@ pub enum CleanupCompletionError {
     /// The receipt, seal or authenticated reporter does not match exact committed authority.
     #[error("cleanup tombstone completion authority is invalid")]
     InvalidAuthority,
+}
+
+/// Stable rejection before replicated completion becomes local permanent retirement authority.
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+pub enum CleanupRetirementAuthorityError {
+    /// Intent, participant and terminal completion do not form one exact completed cleanup.
+    #[error("cleanup retirement authority is inconsistent")]
+    Inconsistent,
 }
 
 /// Converts one terminal unreachable proof without dropping or inventing proposal fields.
@@ -194,6 +204,52 @@ pub fn version_cleanup_tombstone_completion(
     ))
 }
 
+/// Joins replicated intent, signed local participant and terminal completion without weakening
+/// any identity before permanent gateway application.
+///
+/// # Errors
+///
+/// Rejects non-authorised intent state, cross-cleanup substitution, subject mismatch, incomplete
+/// ordering or a local application time before replicated completion.
+pub fn version_cleanup_retirement_authority(
+    retirement_operation_id: OperationId,
+    intent: VersionCleanupIntent,
+    participant: VersionCleanupParticipant,
+    completion: VersionCleanupCompletion,
+    retired_at: UnixMicros,
+) -> Result<VersionCleanupRetirementAuthority, CleanupRetirementAuthorityError> {
+    let Some(authorisation_revision) = intent.terminal_revision else {
+        return Err(CleanupRetirementAuthorityError::Inconsistent);
+    };
+    let Some(authorised_at) = intent.authorised_at else {
+        return Err(CleanupRetirementAuthorityError::Inconsistent);
+    };
+    if intent.state != VersionCleanupState::Authorised
+        || participant.cleanup_operation_id != intent.cleanup_operation_id
+        || participant.reachability_subject_digest != intent.reachability_subject_digest
+        || completion.cleanup_operation_id != intent.cleanup_operation_id
+        || completion.completed_item_count == 0
+        || completion.completion_digest == [0; 32]
+        || completion.revision <= authorisation_revision
+        || completion.completed_at < authorised_at
+        || retired_at < completion.completed_at
+    {
+        return Err(CleanupRetirementAuthorityError::Inconsistent);
+    }
+    Ok(VersionCleanupRetirementAuthority {
+        retirement_operation_id,
+        cleanup_operation_id: intent.cleanup_operation_id,
+        source_scan_operation_id: participant.scan_operation_id,
+        reachability_subject_digest: intent.reachability_subject_digest,
+        completed_item_count: completion.completed_item_count,
+        completion_digest: completion.completion_digest,
+        completion_operation_id: completion.completion_operation_id,
+        completion_revision: completion.revision,
+        completed_at: completion.completed_at,
+        retired_at,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
@@ -208,13 +264,13 @@ mod tests {
     use meshspan_filesystem::VersionUnreachableProof;
     use meshspan_metadata::{
         AuthoritativeCommand, VersionCleanupItem, VersionCleanupPermitAttempt,
-        VersionCleanupPermitAuthority,
+        VersionCleanupPermitAuthority, VersionCleanupState,
     };
 
     use super::{
-        CleanupCompletionError, CleanupPermitError, version_cleanup_attestation,
-        version_cleanup_proposal, version_cleanup_removal_permit,
-        version_cleanup_tombstone_completion,
+        CleanupCompletionError, CleanupPermitError, CleanupRetirementAuthorityError,
+        version_cleanup_attestation, version_cleanup_proposal, version_cleanup_removal_permit,
+        version_cleanup_retirement_authority, version_cleanup_tombstone_completion,
     };
 
     #[test]
@@ -397,6 +453,82 @@ mod tests {
                 6,
             ),
             Err(CleanupCompletionError::InvalidAuthority)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_completion_joins_each_signed_participant_into_local_retirement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cleanup_operation_id = OperationId::from_bytes([40; 16])?;
+        let subject_digest = [41; 32];
+        let intent = meshspan_metadata::VersionCleanupIntent {
+            cleanup_operation_id,
+            volume_id: VolumeId::from_bytes([42; 16])?,
+            version_id: FileVersionId::from_bytes([43; 16])?,
+            manifest_id: ContentManifestId::from_bytes([44; 16])?,
+            manifest_root_digest: [45; 32],
+            source_scan_operation_id: OperationId::from_bytes([46; 16])?,
+            scan_request_digest: [47; 32],
+            reachability_subject_digest: subject_digest,
+            retention_policy_sequence: 1,
+            reachability_revision: Revision::new(2),
+            retained_root_count: 1,
+            retained_root_digest: [48; 32],
+            retained_root_set_digest: [49; 32],
+            local_roots_digest: [50; 32],
+            proof_result_digest: [51; 32],
+            required_attestation_count: 2,
+            proposed_at: UnixMicros::new(100),
+            revision: Revision::new(3),
+            state: VersionCleanupState::Authorised,
+            terminal_operation_id: Some(OperationId::from_bytes([52; 16])?),
+            terminal_revision: Some(Revision::new(4)),
+            authorised_at: Some(UnixMicros::new(110)),
+            cancelled_at: None,
+        };
+        let participant = meshspan_metadata::VersionCleanupParticipant {
+            cleanup_operation_id,
+            node_id: NodeId::from_bytes([53; 16])?,
+            node_incarnation: 1,
+            scan_operation_id: OperationId::from_bytes([54; 16])?,
+            reachability_subject_digest: subject_digest,
+            local_roots_digest: [55; 32],
+            scan_result_digest: [56; 32],
+            revision: Revision::new(3),
+        };
+        let completion = meshspan_metadata::VersionCleanupCompletion {
+            cleanup_operation_id,
+            completed_item_count: 6,
+            completion_digest: [57; 32],
+            completion_operation_id: OperationId::from_bytes([58; 16])?,
+            completed_at: UnixMicros::new(120),
+            revision: Revision::new(5),
+        };
+        let authority = version_cleanup_retirement_authority(
+            OperationId::from_bytes([59; 16])?,
+            intent,
+            participant,
+            completion,
+            UnixMicros::new(121),
+        )?;
+        assert_eq!(
+            authority.source_scan_operation_id,
+            participant.scan_operation_id
+        );
+        assert_eq!(authority.completion_digest, completion.completion_digest);
+
+        let mut substituted = participant;
+        substituted.reachability_subject_digest[0] ^= 1;
+        assert_eq!(
+            version_cleanup_retirement_authority(
+                OperationId::from_bytes([59; 16])?,
+                intent,
+                substituted,
+                completion,
+                UnixMicros::new(121),
+            ),
+            Err(CleanupRetirementAuthorityError::Inconsistent)
         );
         Ok(())
     }
