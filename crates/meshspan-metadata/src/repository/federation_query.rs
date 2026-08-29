@@ -97,7 +97,7 @@ pub(super) fn relationship(
         if row.6.is_empty() || row.6.len() > 256 {
             return Err(RepositoryError::CorruptState);
         }
-        Ok(FederationRelationshipRecord {
+        let record = FederationRelationshipRecord {
             relationship_id,
             local_mesh_id: parse_mesh(&row.0)?,
             remote_mesh_id: parse_mesh(&row.1)?,
@@ -107,7 +107,9 @@ pub(super) fn relationship(
             authority_epoch: positive(row.5)?,
             remote_display_name: row.6,
             revision: Revision::new(positive(row.7)?),
-        })
+        };
+        super::federation_relationship_evidence::verify(database, &record)?;
+        Ok(record)
     })
     .transpose()
 }

@@ -2,7 +2,7 @@
 
 //! Atomic relationship lifecycle, governance validation and public identity rotation.
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use meshspan_domain::{
     FederationGraph, FederationRelationshipId, FederationRelationshipKind, MeshId, Revision,
 };
@@ -511,7 +511,7 @@ fn validate_governance_proof(
     let verifying_key = VerifyingKey::from_bytes(&command.remote_identity.verifying_key)
         .map_err(|_| RepositoryError::InvalidCommand)?;
     verifying_key
-        .verify(&payload, &Signature::from_bytes(&proof.signature))
+        .verify_strict(&payload, &Signature::from_bytes(&proof.signature))
         .map_err(|_| RepositoryError::InvalidCommand)
 }
 
