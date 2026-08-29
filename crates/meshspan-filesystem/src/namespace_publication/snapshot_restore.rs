@@ -290,6 +290,7 @@ fn reject_operation_collision(
     let collision: i64 = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM namespace_publication_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM directory_publication_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM namespace_rename_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM namespace_reconciliation_operations WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),

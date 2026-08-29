@@ -695,7 +695,7 @@ fn validate_intent(
         if rename.source_entry_generation == 0
             || rename.source_ancestors.len().checked_add(1)
                 != Some(rename.source_path.components().len())
-            || path_key(&rename.source_path) == path_key(&intent.path)
+            || rename.source_path == intent.path
             || rename.intermediate_root_object_revision_id == commit.root_object_revision_id
         {
             return Err(ReconciliationError::InvalidInput);

@@ -10,8 +10,8 @@ use std::fs;
 use std::path::Path;
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    OperationId, PrincipalId, SnapshotId, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId, ObjectId,
+    ObjectRevisionId, OperationId, PrincipalId, SnapshotId, UnixMicros, VolumeId,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
@@ -25,7 +25,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 23] = [
+const MIGRATIONS: [Migration; 24] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -118,8 +118,12 @@ const MIGRATIONS: [Migration; 23] = [
         version: 23,
         sql: include_str!("../schema/branch/023_namespace_commit_renames.sql"),
     },
+    Migration {
+        version: 24,
+        sql: include_str!("../schema/branch/024_namespace_rename_operations.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 23;
+const SCHEMA_VERSION: u32 = 24;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -331,6 +335,45 @@ pub struct DirectoryPublication {
     pub created_at: UnixMicros,
 }
 
+/// One atomic same-volume namespace rename or move.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespaceRenamePublication {
+    /// Idempotency identity for the complete two-path transaction.
+    pub operation_id: OperationId,
+    /// Writable local/cell branch receiving the rename.
+    pub branch_id: BranchId,
+    /// Volume containing both paths.
+    pub volume_id: VolumeId,
+    /// Stable volume-root directory identity.
+    pub root_object_id: ObjectId,
+    /// Exact namespace commit required before source removal.
+    pub expected_namespace_commit_id: NamespaceCommitId,
+    /// Stable object required at the source path.
+    pub expected_object_id: ObjectId,
+    /// Exact immutable object revision required at the source path.
+    pub expected_object_revision_id: ObjectRevisionId,
+    /// Stable source-name incarnation required before removal.
+    pub expected_source_entry_generation: u64,
+    /// Source path and exact directory transitions producing the intermediate root.
+    pub source: NamespacePublicationPath,
+    /// Root revision after source removal and before destination insertion.
+    pub intermediate_root_object_revision_id: ObjectRevisionId,
+    /// Destination path and exact directory transitions starting at the intermediate root.
+    pub target: NamespacePublicationPath,
+    /// Stable destination-name incarnation installed by the rename.
+    pub target_entry_generation: u64,
+    /// Final root revision selected by the new namespace commit.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// New immutable namespace commit that becomes current.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Optional active file handle presenting delete access for SMB-style rename semantics.
+    pub requesting_handle_id: Option<HandleId>,
+    /// Principal responsible for the rename.
+    pub created_by: PrincipalId,
+    /// Authoritative rename instant.
+    pub created_at: UnixMicros,
+}
+
 /// Current immutable namespace commit selected by one branch/volume pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BranchNamespaceHead {
@@ -374,6 +417,27 @@ pub struct DirectoryPublicationReceipt {
     pub request_digest: [u8; 32],
     /// Newly created immutable directory revision.
     pub directory_object_revision_id: ObjectRevisionId,
+    /// Namespace commit made current.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Resulting volume branch-head sequence.
+    pub head_sequence: u64,
+    /// Digest binding the exact durable result.
+    pub result_digest: [u8; 32],
+}
+
+/// Durable result of one atomic same-volume rename and namespace-head transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespaceRenameReceipt {
+    /// Whether this call applied or replayed the exact operation.
+    pub disposition: PublicationDisposition,
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Digest of both paths, every revision and the exact expected source.
+    pub request_digest: [u8; 32],
+    /// Stable object moved by the operation.
+    pub object_id: ObjectId,
+    /// Immutable object revision retained by the move.
+    pub object_revision_id: ObjectRevisionId,
     /// Namespace commit made current.
     pub namespace_commit_id: NamespaceCommitId,
     /// Resulting volume branch-head sequence.
@@ -655,6 +719,24 @@ impl VersionPublicationStore {
         publication: &DirectoryPublication,
     ) -> Result<DirectoryPublicationReceipt, PublicationError> {
         namespace::create_directory(&mut self.connection, publication, None)
+    }
+
+    /// Atomically renames or moves one existing object within a volume branch.
+    ///
+    /// The source removal, destination insertion, namespace commit, live-handle path relocation
+    /// and idempotency receipt are one SQLite transaction. A requesting handle, when supplied,
+    /// must carry delete access; every other live handle must share delete access.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale source or branch state, an occupied destination, directory cycles, sharing
+    /// conflicts, unfinished flushes, identity reuse, corruption and persistence failure. Exact
+    /// retries return the original immutable receipt.
+    pub fn rename_namespace(
+        &mut self,
+        publication: &NamespaceRenamePublication,
+    ) -> Result<NamespaceRenameReceipt, crate::HandleError> {
+        namespace::rename_namespace(&mut self.connection, publication, None)
     }
 
     /// Loads the exact current namespace commit for one branch and volume.
@@ -986,6 +1068,18 @@ impl VersionPublicationStore {
             operation_id,
             PublicationDisposition::Replayed,
         )
+    }
+
+    /// Resolves an atomic namespace-rename outcome after a lost response.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, incomplete or digest-inconsistent durable records and SQLite failure.
+    pub fn resolve_namespace_rename(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<NamespaceRenameReceipt>, PublicationError> {
+        namespace::load_rename(&self.connection, operation_id)
     }
 
     /// Prepares a whole-volume restore commit without exposing it as the local branch head.

@@ -56,7 +56,7 @@ impl ReplayState {
             return Err(ReconciliationError::InvalidLineage);
         }
         let intended_target = self.effective_path(intent)?;
-        if path_key(&source.path) == path_key(&intended_target)
+        if source.path == intended_target
             && source.revision_id == intent.object_revision_id
             && source.generation == intent.entry_generation
         {

@@ -6,6 +6,8 @@
 mod digest;
 #[path = "namespace_publication/reconciliation_apply.rs"]
 mod reconciliation_apply;
+#[path = "namespace_publication/rename.rs"]
+mod rename;
 #[path = "namespace_publication/repository.rs"]
 mod repository;
 #[path = "namespace_publication/snapshot_restore.rs"]
@@ -32,11 +34,10 @@ use crate::{
 
 use digest::{directory_request as directory_request_digest, file_request as request_digest};
 use repository::{
-    ObjectRevisionInsert, advance_namespace_head, load_commit,
-    load_file_operation_raw as load_operation_raw, load_object_revision, persist_commit,
-    persist_directory_intent, persist_directory_operation, persist_directory_path_revisions,
-    persist_file_intent, persist_file_operation as persist_namespace_operation,
-    persist_object_revision,
+    ObjectRevisionInsert, advance_namespace_head, load_commit, load_object_revision,
+    persist_commit, persist_directory_intent, persist_directory_operation,
+    persist_directory_path_revisions, persist_file_intent,
+    persist_file_operation as persist_namespace_operation, persist_object_revision,
 };
 pub(super) use repository::{
     load_branch_intent, load_directory_operation, load_file_operation as load_operation, load_head,
@@ -209,15 +210,7 @@ fn publish_inner(
     validate(publication)?;
     let request_digest = request_digest(publication);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if load_directory_operation(
-        &transaction,
-        publication.file.operation_id,
-        PublicationDisposition::Replayed,
-    )?
-    .is_some()
-    {
-        return Err(PublicationError::OperationConflict.into());
-    }
+    reject_file_operation_collision(&transaction, publication.file.operation_id)?;
     if let Some(receipt) = load_operation(
         &transaction,
         publication.file.operation_id,
@@ -295,15 +288,7 @@ pub(super) fn create_directory(
     validate_directory_publication(publication)?;
     let request_digest = directory_request_digest(publication);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if load_operation_raw(
-        &transaction,
-        publication.operation_id,
-        PublicationDisposition::Replayed,
-    )?
-    .is_some()
-    {
-        return Err(PublicationError::OperationConflict);
-    }
+    reject_directory_operation_collision(&transaction, publication.operation_id)?;
     if let Some(receipt) = load_directory_operation(
         &transaction,
         publication.operation_id,
@@ -378,6 +363,83 @@ pub(super) fn create_directory(
     Ok(receipt)
 }
 
+fn reject_file_operation_collision(
+    transaction: &Transaction<'_>,
+    operation_id: OperationId,
+) -> Result<(), PublicationError> {
+    reject_operation_receipts(transaction, operation_id, PublicationOperationKind::File)
+}
+
+fn reject_directory_operation_collision(
+    transaction: &Transaction<'_>,
+    operation_id: OperationId,
+) -> Result<(), PublicationError> {
+    reject_operation_receipts(
+        transaction,
+        operation_id,
+        PublicationOperationKind::Directory,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum PublicationOperationKind {
+    File,
+    Directory,
+}
+
+fn reject_operation_receipts(
+    transaction: &Transaction<'_>,
+    operation_id: OperationId,
+    allowed: PublicationOperationKind,
+) -> Result<(), PublicationError> {
+    let collisions: (i64, i64, i64, i64, i64) = transaction.query_row(
+        "SELECT
+            EXISTS(SELECT 1 FROM namespace_publication_operations WHERE operation_id = ?1),
+            EXISTS(SELECT 1 FROM directory_publication_operations WHERE operation_id = ?1),
+            EXISTS(SELECT 1 FROM namespace_rename_operations WHERE operation_id = ?1),
+            EXISTS(
+                SELECT 1 FROM namespace_snapshot_restore_operations WHERE operation_id = ?1
+            ),
+            EXISTS(SELECT 1 FROM namespace_reconciliation_operations WHERE operation_id = ?1)",
+        [operation_id.as_bytes().as_slice()],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    let collision = match allowed {
+        PublicationOperationKind::File => collisions.1 + collisions.2 + collisions.3 + collisions.4,
+        PublicationOperationKind::Directory => {
+            collisions.0 + collisions.2 + collisions.3 + collisions.4
+        }
+    };
+    if collision == 0 {
+        Ok(())
+    } else {
+        Err(PublicationError::OperationConflict)
+    }
+}
+
+pub(super) fn rename_namespace(
+    connection: &mut Connection,
+    publication: &super::NamespaceRenamePublication,
+    fault: Option<NamespaceFaultPoint>,
+) -> Result<super::NamespaceRenameReceipt, crate::HandleError> {
+    rename::apply(connection, publication, fault)
+}
+
+pub(super) fn load_rename(
+    connection: &Connection,
+    operation_id: OperationId,
+) -> Result<Option<super::NamespaceRenameReceipt>, PublicationError> {
+    rename::resolve(connection, operation_id)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NamespaceFaultPoint {
     DirectoryNodes,
@@ -386,6 +448,11 @@ pub(super) enum NamespaceFaultPoint {
     NamespaceCommit,
     Heads,
     Operation,
+    RenameSource,
+    RenameTarget,
+    RenameCommit,
+    RenameHandles,
+    RenameOperation,
     ReconciliationLeaf,
     ReconciliationDirectories,
     ReconciliationCommit,
@@ -606,7 +673,7 @@ fn load_existing_base(
 }
 
 fn load_directory(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     revision_id: ObjectRevisionId,
     object_id: ObjectId,
     new_revision_id: ObjectRevisionId,
@@ -628,6 +695,55 @@ fn load_directory(
         prior_revision_id: Some(revision_id),
         new_revision_id,
     })
+}
+
+fn load_path_directories(
+    transaction: &Connection,
+    volume_id: VolumeId,
+    root_object_id: ObjectId,
+    current_root: ObjectRevisionId,
+    next_root: ObjectRevisionId,
+    path: &NamespacePublicationPath,
+) -> Result<Vec<LoadedDirectory>, PublicationError> {
+    let components = path.path().components();
+    let first = components.first().ok_or(PublicationError::InvalidInput)?;
+    let mut directories = vec![load_directory(
+        transaction,
+        current_root,
+        root_object_id,
+        next_root,
+        volume_id,
+        first,
+    )?];
+    for (index, transition) in path.ancestors().iter().enumerate() {
+        let parent_name = components
+            .get(index)
+            .ok_or(PublicationError::InvalidInput)?;
+        let next_name = components
+            .get(index + 1)
+            .ok_or(PublicationError::InvalidInput)?;
+        let entry = directories
+            .last()
+            .ok_or(PublicationError::Corrupt)?
+            .editor
+            .lookup(parent_name)?
+            .ok_or(PublicationError::StaleHead)?;
+        if entry.kind() != DirectoryEntryKind::Directory
+            || entry.object_id() != transition.object_id()
+            || entry.object_revision_id() != transition.expected_revision_id()
+        {
+            return Err(PublicationError::StaleHead);
+        }
+        directories.push(load_directory(
+            transaction,
+            transition.expected_revision_id(),
+            transition.object_id(),
+            transition.new_revision_id(),
+            volume_id,
+            next_name,
+        )?);
+    }
+    Ok(directories)
 }
 
 fn load_path_editor(
