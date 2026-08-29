@@ -54,8 +54,9 @@ pub use federation_quarantine_command::{
     RetainFederatedMutationQuarantine, SurfaceFederatedMutationQuarantine,
 };
 pub use federation_remote_authority::{
-    CachedFederationRemoteAuthority, FederationRemoteAuthorityCacheDisposition,
-    FederationRemoteAuthorityCacheError, FederationRemoteAuthoritySnapshot,
+    CachedFederationGrantAuthority, CachedFederationRemoteAuthority,
+    FederationRemoteAuthorityCacheDisposition, FederationRemoteAuthorityCacheError,
+    FederationRemoteAuthoritySnapshot,
 };
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,

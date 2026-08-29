@@ -2,6 +2,8 @@
 
 //! Atomic daemon-local cache for authenticated remote authority observations.
 
+mod cache_read;
+
 use meshspan_domain::{FederationGrantId, FederationRelationshipId, Revision, UnixMicros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
@@ -32,6 +34,19 @@ pub struct CachedFederationRemoteAuthority {
     /// Latest observed record for every grant seen in the current authority epoch.
     pub grants: Vec<FederationGrantRecord>,
     /// Local authoritative mesh time at which the last update became durable.
+    pub observed_at: UnixMicros,
+}
+
+/// One exact remote grant joined to the authenticated relationship observation which carries it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CachedFederationGrantAuthority {
+    /// Latest fully installed peer authority revision.
+    pub authority_revision: Revision,
+    /// Current mirrored relationship and both active trust identities.
+    pub relationship: FederationTransportAuthority,
+    /// Exact current remote record for the requested grant.
+    pub grant: FederationGrantRecord,
+    /// Local authoritative mesh time at which the containing update became durable.
     pub observed_at: UnixMicros,
 }
 
@@ -72,7 +87,23 @@ impl LocalDatabase {
         &self,
         relationship_id: FederationRelationshipId,
     ) -> Result<Option<CachedFederationRemoteAuthority>, FederationRemoteAuthorityCacheError> {
-        load(self, relationship_id)
+        cache_read::load(self, relationship_id)
+    }
+
+    /// Loads one exact grant through the indexed relationship/grant key and verifies its evidence.
+    ///
+    /// This read is suitable for an access path: it never scans or allocates the relationship's
+    /// complete grant catalogue. The result remains an observation, not authority by itself.
+    ///
+    /// # Errors
+    ///
+    /// Rejects digest, identifier, revision or canonical-record corruption.
+    pub fn remote_federation_grant_authority(
+        &self,
+        relationship_id: FederationRelationshipId,
+        grant_id: FederationGrantId,
+    ) -> Result<Option<CachedFederationGrantAuthority>, FederationRemoteAuthorityCacheError> {
+        cache_read::load_exact_grant(self, relationship_id, grant_id)
     }
 }
 
@@ -88,16 +119,6 @@ struct EncodedGrant {
     revision: Revision,
     bytes: Vec<u8>,
     digest: [u8; 32],
-}
-
-struct StoredRelationshipRow {
-    local_mesh_id: Vec<u8>,
-    remote_mesh_id: Vec<u8>,
-    authority_epoch: i64,
-    authority_revision: i64,
-    relationship_bytes: Vec<u8>,
-    relationship_digest: Vec<u8>,
-    observed_at: i64,
 }
 
 fn install(
@@ -330,129 +351,10 @@ fn persist_grants(
     Ok(())
 }
 
-fn load(
-    database: &LocalDatabase,
-    relationship_id: FederationRelationshipId,
-) -> Result<Option<CachedFederationRemoteAuthority>, FederationRemoteAuthorityCacheError> {
-    let row = database
-        .connection()
-        .query_row(
-            "SELECT local_mesh_id, remote_mesh_id, authority_epoch,
-                    remote_authority_revision, relationship_bytes,
-                    relationship_digest, observed_at
-             FROM local_federation_authority_snapshots WHERE relationship_id = ?1",
-            [relationship_id.as_bytes().as_slice()],
-            |row| {
-                Ok(StoredRelationshipRow {
-                    local_mesh_id: row.get(0)?,
-                    remote_mesh_id: row.get(1)?,
-                    authority_epoch: row.get(2)?,
-                    authority_revision: row.get(3)?,
-                    relationship_bytes: row.get(4)?,
-                    relationship_digest: row.get(5)?,
-                    observed_at: row.get(6)?,
-                })
-            },
-        )
-        .optional()?;
-    row.map(|row| {
-        let authority_revision = Revision::new(positive(row.authority_revision)?);
-        if Sha256::digest(&row.relationship_bytes).as_slice() != row.relationship_digest {
-            return Err(FederationRemoteAuthorityCacheError::Corrupt);
-        }
-        let relationship =
-            FederationTransportAuthority::from_canonical_bytes(&row.relationship_bytes)
-                .map_err(|_| FederationRemoteAuthorityCacheError::Corrupt)?;
-        validate_stored_relationship(relationship_id, authority_revision, &relationship, &row)?;
-        let grants = load_grants(database, &relationship, authority_revision)?;
-        Ok(CachedFederationRemoteAuthority {
-            authority_revision,
-            relationship,
-            grants,
-            observed_at: UnixMicros::new(row.observed_at),
-        })
-    })
-    .transpose()
-}
-
-fn validate_stored_relationship(
-    relationship_id: FederationRelationshipId,
-    authority_revision: Revision,
-    authority: &FederationTransportAuthority,
-    row: &StoredRelationshipRow,
-) -> Result<(), FederationRemoteAuthorityCacheError> {
-    let relationship = &authority.relationship;
-    if authority.authority_revision != authority_revision
-        || relationship.relationship_id != relationship_id
-        || relationship.local_mesh_id.as_bytes().as_slice() != row.local_mesh_id
-        || relationship.remote_mesh_id.as_bytes().as_slice() != row.remote_mesh_id
-        || relationship.authority_epoch != positive(row.authority_epoch)?
-    {
-        Err(FederationRemoteAuthorityCacheError::Corrupt)
-    } else {
-        Ok(())
-    }
-}
-
-fn load_grants(
-    database: &LocalDatabase,
-    authority: &FederationTransportAuthority,
-    authority_revision: Revision,
-) -> Result<Vec<FederationGrantRecord>, FederationRemoteAuthorityCacheError> {
-    let relationship = &authority.relationship;
-    let relationship_id = relationship.relationship_id;
-    let parties = [relationship.local_mesh_id, relationship.remote_mesh_id];
-    let mut statement = database.connection().prepare(
-        "SELECT grant_id, record_revision, record_bytes, record_digest
-         FROM local_federation_authority_grants WHERE relationship_id = ?1
-         ORDER BY record_revision, grant_id",
-    )?;
-    let rows = statement.query_map([relationship_id.as_bytes().as_slice()], |row| {
-        Ok((
-            row.get::<_, Vec<u8>>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, Vec<u8>>(2)?,
-            row.get::<_, Vec<u8>>(3)?,
-        ))
-    })?;
-    let mut grants = Vec::new();
-    for row in rows {
-        let row = row?;
-        if Sha256::digest(&row.2).as_slice() != row.3 {
-            return Err(FederationRemoteAuthorityCacheError::Corrupt);
-        }
-        let record = FederationGrantRecord::from_canonical_bytes(&row.2)
-            .map_err(|_| FederationRemoteAuthorityCacheError::Corrupt)?;
-        let grant_id = parse_grant(&row.0)?;
-        let revision = Revision::new(positive(row.1)?);
-        if record.grant.grant_id() != grant_id
-            || record.grant.relationship_id() != relationship_id
-            || record.grant.authority_epoch() != relationship.authority_epoch
-            || !parties.contains(&record.grant.subject().home_mesh_id())
-            || !parties.contains(&record.grant.resource().authority_mesh_id())
-            || record.revision != revision
-            || revision > authority_revision
-        {
-            return Err(FederationRemoteAuthorityCacheError::Corrupt);
-        }
-        grants.push(record);
-    }
-    Ok(grants)
-}
-
 fn length(value: usize) -> Result<[u8; 8], FederationRemoteAuthorityCacheError> {
     Ok(u64::try_from(value)
         .map_err(|_| FederationRemoteAuthorityCacheError::Invalid)?
         .to_be_bytes())
-}
-
-fn parse_grant(value: &[u8]) -> Result<FederationGrantId, FederationRemoteAuthorityCacheError> {
-    FederationGrantId::from_bytes(
-        value
-            .try_into()
-            .map_err(|_| FederationRemoteAuthorityCacheError::Corrupt)?,
-    )
-    .map_err(|_| FederationRemoteAuthorityCacheError::Corrupt)
 }
 
 fn positive(value: i64) -> Result<u64, FederationRemoteAuthorityCacheError> {
