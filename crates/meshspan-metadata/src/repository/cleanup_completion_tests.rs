@@ -160,6 +160,9 @@ fn substituted_receipt_attempt_seal_or_reporter_fails_closed()
     let mut stale_reporter = valid;
     stale_reporter.reporter_incarnation = 2;
     commands.push(stale_reporter);
+    let mut wrong_storage_node = valid;
+    wrong_storage_node.reporter_node_id = NodeId::from_bytes([14; 16])?;
+    commands.push(wrong_storage_node);
     for command in commands {
         assert!(
             repository

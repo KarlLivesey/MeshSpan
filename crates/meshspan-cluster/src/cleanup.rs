@@ -800,6 +800,7 @@ mod tests {
                 },
                 target_id: TargetId::from_bytes([27; 16])?,
                 target_generation: 28,
+                storage_node_id: NodeId::from_bytes([31; 16])?,
                 revision: Revision::new(29),
             },
             issue_revision: Revision::new(30),

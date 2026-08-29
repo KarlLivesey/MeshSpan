@@ -255,11 +255,13 @@ identifier.
 
 `AppendVersionCleanupItems` carries one non-empty bounded contiguous page. Each
 item binds a distinct reserved removal operation ID, exact manifest-root shard
-identity, target and target generation. The receiver rejects gaps, overlap,
-duplicates, a different manifest root and changed total count while extending a
-canonical rolling digest. `SealVersionCleanupInventory` succeeds only when the
-declared count is complete and that final digest matches. Building inventory
-pages cannot produce removal permits.
+identity, target, target generation and owning storage node. The receiver
+rejects gaps, overlap, duplicates, a different manifest root and changed total
+count while extending a canonical rolling digest. `SealVersionCleanupInventory`
+succeeds only when the declared count is complete and that final digest matches.
+Building inventory pages cannot produce removal permits. Inventories migrated
+from an older schema without an owner fail closed rather than accepting a
+reporter inferred from message claims.
 
 `IssueVersionCleanupPermit` records one exact attempt for one sealed inventory
 item before provider work starts. It binds the sealed-inventory revision, item
@@ -276,8 +278,9 @@ recovery reuse the exact committed capability.
 same receipt. The recipient identity comes from mTLS rather than payload claims.
 A durable result is converted to `CompleteVersionCleanupItem` only if its
 receipt exactly matches a committed attempt and its canonical tombstone digest
-recomputes. The metadata state machine repeats those checks, validates the
-reporter's current incarnation and creates a terminal ordered summary only
+recomputes. The metadata state machine repeats those checks, requires the mTLS
+reporter to be the exact storage node recorded in the sealed inventory,
+validates its current incarnation and creates a terminal ordered summary only
 after every sealed item has one completion.
 
 `ReclaimShardRequest` carries that exact versioned tombstone receipt to the same

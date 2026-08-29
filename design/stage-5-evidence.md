@@ -364,7 +364,11 @@ copy-on-write filesystem service. This document records executable evidence only
    proof drops and reopens the provider after both a lost tombstone command and
    a lost reclamation command, recovering byte-identical commands without
    duplicate capacity accounting. Substituted dispatch authority fails before
-   provider IO. The cleanup worker's asynchronous connection-selection adapter
+   provider IO. Sealed inventory now binds every target generation to its exact
+   owning storage node. The worker rejects another reporter before IO, the
+   metadata state machine repeats the check against authenticated identity and
+   migrated ownerless inventories fail closed. The cleanup worker's
+   asynchronous connection-selection adapter
    remains outstanding. The underlying authenticated QUIC lifecycle is implemented:
    distinct bounded delete and reclaim messages carry canonical versioned
    authority, return exact durable receipts, preserve replayed time/byte
