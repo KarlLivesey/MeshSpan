@@ -63,6 +63,7 @@ pub use repository::{
     AccessRequest, ApplyDisposition, AuthoritativeMembership, AuthoritativeMetadataKernel,
     AuthoritativeRepository, CommandReceipt, ConsensusStoreError, ConvergedVolumeHead, EntityKind,
     EntityReference, FederatedPrincipalProjectionRecord, FederationGrantRecord,
+    FederationGrantState, FederationGrantTermination, FederationGrantTerminationKind,
     FederationQuarantineRecord, FederationQuarantineState, FederationRelationshipRecord,
     FederationRelationshipState, FederationSuccessionRecord, FederationSuccessionState,
     FederationTrustIdentityRecord, GroupMemberCursor, InvariantFinding, InvariantKind,

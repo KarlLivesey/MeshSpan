@@ -18,6 +18,7 @@ mod consensus;
 #[cfg(test)]
 mod federation_backup_test_support;
 mod federation_grant;
+mod federation_grant_evidence;
 #[cfg(test)]
 mod federation_grant_tests;
 mod federation_principal;
@@ -87,7 +88,10 @@ pub use cleanup_permit::{
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
-pub use federation_grant::FederationGrantRecord;
+pub use federation_grant_evidence::{
+    FederationGrantRecord, FederationGrantState, FederationGrantTermination,
+    FederationGrantTerminationKind,
+};
 pub use federation_principal::FederatedPrincipalProjectionRecord;
 pub use federation_quarantine::{FederationQuarantineRecord, FederationQuarantineState};
 pub use federation_query::{
@@ -251,7 +255,19 @@ impl AuthoritativeRepository {
         &self,
         grant_id: meshspan_domain::FederationGrantId,
     ) -> Result<Option<FederationGrantRecord>, RepositoryError> {
-        federation_grant::active_grant(&self.database, grant_id)
+        federation_grant_evidence::active_grant(&self.database, grant_id)
+    }
+
+    /// Returns one grant with its complete retained termination and succession evidence.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed policy, bilateral restrictions, lifecycle or lineage.
+    pub fn federation_grant(
+        &self,
+        grant_id: meshspan_domain::FederationGrantId,
+    ) -> Result<Option<FederationGrantRecord>, RepositoryError> {
+        federation_grant_evidence::grant(&self.database, grant_id)
     }
 
     /// Returns one current, signed home-swarm principal projection.

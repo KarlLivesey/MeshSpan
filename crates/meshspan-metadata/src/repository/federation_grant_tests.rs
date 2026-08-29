@@ -9,7 +9,10 @@ use meshspan_domain::{
 };
 use tempfile::tempdir;
 
-use super::{AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
+use super::{
+    AuthoritativeRepository, EntityKind, FederationGrantState, FederationGrantTerminationKind,
+    LogPosition, RepositoryError,
+};
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
     FederationGovernanceDirection, FederationGrantRestriction, FederationTrustIdentity,
@@ -93,7 +96,156 @@ fn bilateral_grant_intersection_replacement_and_revocation_survive_restart()
         91,
     )?;
     assert!(restored.active_federation_grant(second_id)?.is_none());
+    let first_record = restored
+        .federation_grant(first_id)?
+        .ok_or("restored predecessor grant missing")?;
+    assert_eq!(first_record.state, FederationGrantState::Revoked);
+    assert_eq!(first_record.successor_grant_id, Some(second_id));
+    let first_termination = first_record.termination.ok_or("termination missing")?;
+    assert_eq!(
+        first_termination.kind,
+        FederationGrantTerminationKind::Restricted
+    );
+    assert_eq!(
+        first_termination.reason.as_deref(),
+        Some("Partner reduced its storage ceiling")
+    );
+    let second_record = restored
+        .federation_grant(second_id)?
+        .ok_or("restored revoked grant missing")?;
+    assert_eq!(second_record.predecessor_grant_id, Some(first_id));
+    assert_eq!(
+        second_record
+            .termination
+            .ok_or("direct revocation evidence missing")?
+            .reason
+            .as_deref(),
+        Some("Storage agreement ended")
+    );
     verify_history(&restored.into_database(), first_id, second_id)
+}
+
+#[test]
+fn grant_reads_reject_missing_restrictions_terminations_and_substituted_lineage()
+-> Result<(), Box<dyn std::error::Error>> {
+    reject_missing_restriction()?;
+    reject_missing_termination()?;
+    reject_substituted_succession_reason()
+}
+
+fn reject_missing_restriction() -> Result<(), Box<dyn std::error::Error>> {
+    let (repository, grant_id, ids) = repository_with_active_grant(80)?;
+    let database = repository.into_database();
+    assert!(
+        database
+            .connection()
+            .execute(
+                "DELETE FROM federation_grant_restrictions WHERE grant_id = ?1",
+                [grant_id.as_bytes().as_slice()],
+            )
+            .is_err()
+    );
+    database
+        .connection()
+        .execute_batch("DROP TRIGGER federation_grant_restrictions_reject_delete;")?;
+    database.connection().execute(
+        "DELETE FROM federation_grant_restrictions
+         WHERE grant_id = ?1 AND imposing_mesh_id = ?2",
+        rusqlite::params![
+            grant_id.as_bytes().as_slice(),
+            ids.remote_mesh.as_bytes().as_slice(),
+        ],
+    )?;
+    assert_corrupt_grant(database, grant_id);
+    Ok(())
+}
+
+fn reject_missing_termination() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut repository, grant_id, ids) = repository_with_active_grant(81)?;
+    apply(
+        &mut repository,
+        5,
+        context(90, ids.administrator, 91, 5, 4)?,
+        &AuthoritativeCommand::RevokeFederationGrant(RevokeFederationGrant {
+            grant_id,
+            expected_authority_epoch: 1,
+            reason: "Evidence removal test".to_owned(),
+        }),
+    )?;
+    let database = repository.into_database();
+    assert!(
+        database
+            .connection()
+            .execute(
+                "DELETE FROM federation_grant_terminations WHERE grant_id = ?1",
+                [grant_id.as_bytes().as_slice()],
+            )
+            .is_err()
+    );
+    database.connection().execute_batch(
+        "DROP TRIGGER federation_grant_terminations_reject_delete;
+         DELETE FROM federation_grant_terminations;",
+    )?;
+    assert_corrupt_grant(database, grant_id);
+    Ok(())
+}
+
+fn reject_substituted_succession_reason() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut repository, first_id, ids) = repository_with_active_grant(84)?;
+    let second_id = FederationGrantId::from_bytes([85; 16])?;
+    apply(
+        &mut repository,
+        5,
+        context(86, ids.administrator, 87, 5, 4)?,
+        &AuthoritativeCommand::ReplaceFederationGrant(ReplaceFederationGrant {
+            predecessor_grant_id: first_id,
+            grant: grant(ids, second_id, storage_policy(40, false)?)?,
+            restrictions: restrictions(ids, 80, 40)?,
+            restricts_authority: true,
+            reason: "Original exact reason".to_owned(),
+        }),
+    )?;
+    let database = repository.into_database();
+    database.connection().execute_batch(
+        "DROP TRIGGER federation_grant_successions_reject_update;
+         UPDATE federation_grant_successions SET reason = 'Substituted reason';",
+    )?;
+    assert_corrupt_grant(database, first_id);
+    Ok(())
+}
+
+fn repository_with_active_grant(
+    grant_seed: u8,
+) -> Result<(AuthoritativeRepository, FederationGrantId, FixtureIds), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let ids = fixture.ids;
+    let mut repository = fixture.repository;
+    prepare_relationship(&mut repository, ids)?;
+    let grant_id = FederationGrantId::from_bytes([grant_seed; 16])?;
+    apply(
+        &mut repository,
+        4,
+        context(
+            grant_seed.saturating_add(1),
+            ids.administrator,
+            grant_seed.saturating_add(2),
+            4,
+            3,
+        )?,
+        &AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
+            grant: grant(ids, grant_id, storage_policy(50, false)?)?,
+            restrictions: restrictions(ids, 100, 50)?,
+        }),
+    )?;
+    Ok((repository, grant_id, ids))
+}
+
+fn assert_corrupt_grant(database: PartitionDatabase, grant_id: FederationGrantId) {
+    let repository = AuthoritativeRepository::new(database);
+    assert!(matches!(
+        repository.federation_grant(grant_id),
+        Err(RepositoryError::CorruptState)
+    ));
 }
 
 fn reject_broadening_restriction(

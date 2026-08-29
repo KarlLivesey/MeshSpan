@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 37;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 38;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
 
-const PARTITION_MIGRATIONS: [Migration; 37] = [
+const PARTITION_MIGRATIONS: [Migration; 38] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -159,8 +159,12 @@ const PARTITION_MIGRATIONS: [Migration; 37] = [
         sql: include_str!("../schema/partition/036_root_delegation_directory.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 37,
         sql: include_str!("../schema/partition/037_federation_relationship_evidence_guards.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/038_federation_grant_evidence.sql"),
     },
 ];
 
@@ -530,6 +534,11 @@ pub(crate) fn partition_root_delegation_directory_migration_digest() -> [u8; 32]
 #[cfg(test)]
 pub(crate) fn partition_federation_relationship_evidence_guard_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[36].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_federation_grant_evidence_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[37].sql)
 }
 
 #[cfg(test)]
