@@ -18,7 +18,8 @@ use crate::{
     BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
     DirectoryTrie, DirectoryTrieError, NamespaceComponent, NamespaceLimits, NamespacePath,
     NamespaceReplayDisposition, ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource,
-    ReconciliationFrontier, ReconciliationLimits, VersionCleanupRetirementAuthority,
+    ReconciliationFrontier, ReconciliationLimits, VersionCleanupCancellationAuthority,
+    VersionCleanupCancellationError, VersionCleanupRetirementAuthority,
     VersionCleanupRetirementError, VersionReachabilityError, VersionReachabilityScanRequest,
     VersionReachabilityState, VersionReclaimMode, VersionRetentionCandidate,
     VersionRetentionCandidateReason, VersionRetentionError, VersionRetentionPageLimit,
@@ -141,6 +142,8 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "version_reachability_roots",
         "version_reachability_work",
         "version_cleanup_reference_fences",
+        "retired_manifest_roots",
+        "cancelled_cleanup_releases",
     ] {
         assert_table_exists(&store.connection, table)?;
     }
@@ -488,6 +491,13 @@ fn completed_cleanup_permanently_retires_the_exact_manifest_root()
         first.file.manifest.root_digest
     );
     assert_eq!(store.retire_completed_version_cleanup(authority)?, receipt);
+    assert!(matches!(
+        store.release_cancelled_version_cleanup(cancellation_authority(
+            proof.operation_id,
+            proof.subject_digest,
+        )?),
+        Err(VersionCleanupCancellationError::Conflict)
+    ));
     drop(store);
 
     let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(130))?;
@@ -572,6 +582,126 @@ fn cleanup_retirement_rejects_invalid_replay_and_persisted_corruption()
     assert!(matches!(
         store.retire_completed_version_cleanup(authority),
         Err(VersionCleanupRetirementError::Corrupt)
+    ));
+    Ok(())
+}
+
+#[test]
+fn cancelled_cleanup_release_is_atomic_replayable_and_restart_safe()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
+    let request = reachability_request(candidate, policy, &roots, 163)?;
+    store.begin_version_reachability_scan(&request)?;
+    store.append_version_reachability_roots(&ReachabilityRootPage {
+        operation_id: request.operation_id,
+        start_ordinal: 0,
+        roots,
+    })?;
+    let progress =
+        store.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
+    let progress = finish_reachability_scan(&mut store, request.operation_id, progress, 64)?;
+    let proof = progress.proof.ok_or("missing unreachable proof")?;
+    let authority = cancellation_authority(proof.operation_id, proof.subject_digest)?;
+    let mut wrong_subject = authority;
+    wrong_subject.reachability_subject_digest[0] ^= 1;
+    assert!(matches!(
+        store.release_cancelled_version_cleanup(wrong_subject),
+        Err(VersionCleanupCancellationError::Stale)
+    ));
+    assert!(matches!(
+        crate::cleanup_cancellation::release_with_fault(&mut store.connection, authority),
+        Err(VersionCleanupCancellationError::InjectedFault)
+    ));
+    let release_count: i64 = store.connection.query_row(
+        "SELECT count(*) FROM cancelled_cleanup_releases",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(release_count, 0);
+
+    let receipt = store.release_cancelled_version_cleanup(authority)?;
+    assert_eq!(receipt.manifest_id, first.file.manifest.manifest_id);
+    assert_eq!(store.release_cancelled_version_cleanup(authority)?, receipt);
+    assert_eq!(
+        store.advance_version_reachability_scan(request.operation_id, 1, UnixMicros::new(130))?,
+        progress
+    );
+    let mut republished = following_root_publication(&second, 203, 204, 205, 206, 207)?;
+    republished.file.manifest = first.file.manifest;
+    republished.file.manifest.manifest_id = ContentManifestId::from_bytes([208; 16])?;
+    assert_eq!(
+        store.publish_root_file(&republished)?.disposition,
+        PublicationDisposition::Applied
+    );
+    drop(store);
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(140))?;
+    assert_eq!(
+        reopened.release_cancelled_version_cleanup(authority)?,
+        receipt
+    );
+    Ok(())
+}
+
+#[test]
+fn cancelled_cleanup_release_rejects_conflict_retirement_and_corruption()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
+    let request = reachability_request(candidate, policy, &roots, 162)?;
+    store.begin_version_reachability_scan(&request)?;
+    store.append_version_reachability_roots(&ReachabilityRootPage {
+        operation_id: request.operation_id,
+        start_ordinal: 0,
+        roots,
+    })?;
+    let progress =
+        store.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
+    let progress = finish_reachability_scan(&mut store, request.operation_id, progress, 64)?;
+    let proof = progress.proof.ok_or("missing unreachable proof")?;
+    let authority = cancellation_authority(proof.operation_id, proof.subject_digest)?;
+    store.release_cancelled_version_cleanup(authority)?;
+    assert!(matches!(
+        store.retire_completed_version_cleanup(retirement_authority(
+            proof.operation_id,
+            proof.subject_digest,
+        )?),
+        Err(VersionCleanupRetirementError::Stale | VersionCleanupRetirementError::Conflict)
+    ));
+    let mut conflicting = authority;
+    conflicting.cancellation_revision = Revision::new(32);
+    assert!(matches!(
+        store.release_cancelled_version_cleanup(conflicting),
+        Err(VersionCleanupCancellationError::Conflict)
+    ));
+    let mut duplicate = authority;
+    duplicate.release_operation_id = OperationId::from_bytes([249; 16])?;
+    assert!(matches!(
+        store.release_cancelled_version_cleanup(duplicate),
+        Err(VersionCleanupCancellationError::Conflict)
+    ));
+    store.connection.execute(
+        "UPDATE cancelled_cleanup_releases SET release_digest = ?1",
+        [[9_u8; 32].as_slice()],
+    )?;
+    assert!(matches!(
+        store.release_cancelled_version_cleanup(authority),
+        Err(VersionCleanupCancellationError::Corrupt)
     ));
     Ok(())
 }
@@ -830,6 +960,22 @@ fn retirement_authority(
         completion_revision: Revision::new(30),
         completed_at: UnixMicros::new(125),
         retired_at: UnixMicros::new(126),
+    })
+}
+
+fn cancellation_authority(
+    source_scan_operation_id: OperationId,
+    reachability_subject_digest: [u8; 32],
+) -> Result<VersionCleanupCancellationAuthority, Box<dyn std::error::Error>> {
+    Ok(VersionCleanupCancellationAuthority {
+        release_operation_id: OperationId::from_bytes([246; 16])?,
+        cleanup_operation_id: OperationId::from_bytes([247; 16])?,
+        source_scan_operation_id,
+        reachability_subject_digest,
+        cancellation_operation_id: OperationId::from_bytes([248; 16])?,
+        cancellation_revision: Revision::new(31),
+        cancelled_at: UnixMicros::new(125),
+        released_at: UnixMicros::new(126),
     })
 }
 

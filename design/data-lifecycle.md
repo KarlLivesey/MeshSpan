@@ -173,6 +173,12 @@ tombstones and cleanup when it returns.
    temporary fence; a completed unreachable proof never does. The separate
    retired-root record preserves exclusion even if temporary fence state is
    later damaged, and exact application retries return the original receipt.
+   Replicated cancellation becomes a distinct digest-bound local release
+   authority. Its transaction records the exact cleanup, cancellation revision,
+   local scan and subject before changing the temporary fence to released.
+   Exact replay returns the original receipt; interruption changes neither
+   record, and an existing permanent retirement makes cancellation release
+   impossible.
 9. Physical unlink is a later, separately acknowledged transition. The provider
    returns one immutable `ReclamationReceipt` containing the exact tombstone,
    original unlink instant, released byte count and canonical digest. Replay

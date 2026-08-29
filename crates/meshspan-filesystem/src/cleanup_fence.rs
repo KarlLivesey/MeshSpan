@@ -559,9 +559,17 @@ impl ReferenceFenceIdentity {
             released_at: None,
         }
     }
+
+    pub(crate) const fn is_active(self) -> bool {
+        self.state == FENCE_ACTIVE && self.released_at.is_none()
+    }
+
+    pub(crate) fn is_released_at(self, released_at: UnixMicros) -> bool {
+        self.state == FENCE_RELEASED && self.released_at == Some(released_at.get())
+    }
 }
 
-fn load(
+pub(crate) fn load(
     connection: &Connection,
     operation_id: OperationId,
 ) -> Result<Option<ReferenceFenceIdentity>, VersionReachabilityError> {

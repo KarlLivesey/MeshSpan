@@ -8,7 +8,9 @@ use meshspan_contracts::{
     reclamation_receipt_digest, removal_permit_mac, tombstone_receipt_digest,
 };
 use meshspan_domain::{DurationMicros, MeshId, NodeId, OperationId, Revision, UnixMicros};
-use meshspan_filesystem::{VersionCleanupRetirementAuthority, VersionUnreachableProof};
+use meshspan_filesystem::{
+    VersionCleanupCancellationAuthority, VersionCleanupRetirementAuthority, VersionUnreachableProof,
+};
 use meshspan_metadata::{
     AttestVersionCleanup, AuthoritativeCommand, CompleteVersionCleanupItem,
     ConfirmVersionCleanupReclamation, IssueVersionCleanupPermit,
@@ -55,6 +57,14 @@ pub enum CleanupReclamationError {
 pub enum CleanupRetirementAuthorityError {
     /// Intent, participant and terminal completion do not form one exact completed cleanup.
     #[error("cleanup retirement authority is inconsistent")]
+    Inconsistent,
+}
+
+/// Stable rejection before replicated cancellation becomes local fence-release authority.
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+pub enum CleanupCancellationAuthorityError {
+    /// Intent and local scan identity do not form one exact cancelled cleanup.
+    #[error("cleanup cancellation authority is inconsistent")]
     Inconsistent,
 }
 
@@ -297,6 +307,54 @@ pub fn version_cleanup_retirement_authority(
     })
 }
 
+/// Converts one replicated cancellation into exact local temporary-fence release authority.
+///
+/// The local store independently joins the supplied scan identity and common subject to its
+/// durable active fence, so a gateway can recover even if it never submitted an attestation.
+///
+/// # Errors
+///
+/// Rejects a non-cancelled or partial terminal intent, identity reuse and invalid time ordering.
+pub fn version_cleanup_cancellation_authority(
+    release_operation_id: OperationId,
+    source_scan_operation_id: OperationId,
+    intent: VersionCleanupIntent,
+    released_at: UnixMicros,
+) -> Result<VersionCleanupCancellationAuthority, CleanupCancellationAuthorityError> {
+    let Some(cancellation_operation_id) = intent.terminal_operation_id else {
+        return Err(CleanupCancellationAuthorityError::Inconsistent);
+    };
+    let Some(cancellation_revision) = intent.terminal_revision else {
+        return Err(CleanupCancellationAuthorityError::Inconsistent);
+    };
+    let Some(cancelled_at) = intent.cancelled_at else {
+        return Err(CleanupCancellationAuthorityError::Inconsistent);
+    };
+    if intent.state != VersionCleanupState::Cancelled
+        || intent.authorised_at.is_some()
+        || intent.reachability_subject_digest == [0; 32]
+        || released_at < cancelled_at
+        || release_operation_id == intent.cleanup_operation_id
+        || release_operation_id == source_scan_operation_id
+        || release_operation_id == cancellation_operation_id
+        || intent.cleanup_operation_id == source_scan_operation_id
+        || intent.cleanup_operation_id == cancellation_operation_id
+        || source_scan_operation_id == cancellation_operation_id
+    {
+        return Err(CleanupCancellationAuthorityError::Inconsistent);
+    }
+    Ok(VersionCleanupCancellationAuthority {
+        release_operation_id,
+        cleanup_operation_id: intent.cleanup_operation_id,
+        source_scan_operation_id,
+        reachability_subject_digest: intent.reachability_subject_digest,
+        cancellation_operation_id,
+        cancellation_revision,
+        cancelled_at,
+        released_at,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
@@ -315,8 +373,9 @@ mod tests {
     };
 
     use super::{
-        CleanupCompletionError, CleanupPermitError, CleanupReclamationError,
-        CleanupRetirementAuthorityError, version_cleanup_attestation, version_cleanup_proposal,
+        CleanupCancellationAuthorityError, CleanupCompletionError, CleanupPermitError,
+        CleanupReclamationError, CleanupRetirementAuthorityError, version_cleanup_attestation,
+        version_cleanup_cancellation_authority, version_cleanup_proposal,
         version_cleanup_reclamation, version_cleanup_removal_permit,
         version_cleanup_retirement_authority, version_cleanup_tombstone_completion,
     };
@@ -635,6 +694,74 @@ mod tests {
                 UnixMicros::new(121),
             ),
             Err(CleanupRetirementAuthorityError::Inconsistent)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_creates_only_exact_local_fence_release_authority()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cleanup_operation_id = OperationId::from_bytes([60; 16])?;
+        let cancellation_operation_id = OperationId::from_bytes([61; 16])?;
+        let intent = meshspan_metadata::VersionCleanupIntent {
+            cleanup_operation_id,
+            volume_id: VolumeId::from_bytes([62; 16])?,
+            version_id: FileVersionId::from_bytes([63; 16])?,
+            manifest_id: ContentManifestId::from_bytes([64; 16])?,
+            manifest_root_digest: [65; 32],
+            source_scan_operation_id: OperationId::from_bytes([66; 16])?,
+            scan_request_digest: [67; 32],
+            reachability_subject_digest: [68; 32],
+            retention_policy_sequence: 1,
+            reachability_revision: Revision::new(2),
+            retained_root_count: 1,
+            retained_root_digest: [69; 32],
+            retained_root_set_digest: [70; 32],
+            local_roots_digest: [71; 32],
+            proof_result_digest: [72; 32],
+            required_attestation_count: 2,
+            proposed_at: UnixMicros::new(100),
+            revision: Revision::new(3),
+            state: VersionCleanupState::Cancelled,
+            terminal_operation_id: Some(cancellation_operation_id),
+            terminal_revision: Some(Revision::new(4)),
+            authorised_at: None,
+            cancelled_at: Some(UnixMicros::new(110)),
+        };
+        let local_scan = OperationId::from_bytes([73; 16])?;
+        let authority = version_cleanup_cancellation_authority(
+            OperationId::from_bytes([74; 16])?,
+            local_scan,
+            intent,
+            UnixMicros::new(111),
+        )?;
+        assert_eq!(authority.source_scan_operation_id, local_scan);
+        assert_eq!(
+            authority.cancellation_operation_id,
+            cancellation_operation_id
+        );
+
+        let mut authorised = intent;
+        authorised.state = VersionCleanupState::Authorised;
+        authorised.authorised_at = Some(UnixMicros::new(110));
+        authorised.cancelled_at = None;
+        assert_eq!(
+            version_cleanup_cancellation_authority(
+                OperationId::from_bytes([74; 16])?,
+                local_scan,
+                authorised,
+                UnixMicros::new(111),
+            ),
+            Err(CleanupCancellationAuthorityError::Inconsistent)
+        );
+        assert_eq!(
+            version_cleanup_cancellation_authority(
+                OperationId::from_bytes([74; 16])?,
+                local_scan,
+                intent,
+                UnixMicros::new(109),
+            ),
+            Err(CleanupCancellationAuthorityError::Inconsistent)
         );
         Ok(())
     }

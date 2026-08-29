@@ -1171,6 +1171,16 @@ retired_manifest_roots(
   retirement_digest UNIQUE
 )
 
+cancelled_cleanup_releases(
+  release_operation_id PK, request_digest UNIQUE,
+  cleanup_operation_id UNIQUE,
+  source_scan_operation_id UNIQUE -> version_cleanup_reference_fences,
+  volume_id, version_id, manifest_id, manifest_root_digest,
+  reachability_subject_digest, cancellation_operation_id UNIQUE,
+  cancellation_revision, cancelled_at, released_at,
+  release_digest UNIQUE
+)
+
 cleanup_completions(
   cleanup_id, item_index, target_id, target_generation,
   result_kind, provider_tombstone_digest, completed_at,
@@ -1223,6 +1233,11 @@ retirement only from the matching authorised intent, its own signature-verified
 participant row and the terminal completion. The active scan fence is retained,
 while a separate digest-bound retired-root row makes the exclusion permanent
 and independently restart-safe.
+Cancelled proposals use a separate local release record. It binds the exact
+replicated terminal cancellation, local scan, common subject and release time in
+the same transaction that changes the temporary fence. A permanent retirement,
+different terminal identity, already released fence or changed subject fails
+closed; cancellation can never remove a retired-root record.
 Physical byte accounting is deliberately separate. Each item reclamation must
 bind the exact earlier tombstone completion, a positive released-byte count and
 the canonical provider reclamation digest, and it must be reported by the same
