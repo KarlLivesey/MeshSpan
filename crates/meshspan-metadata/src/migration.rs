@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 25;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 26;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
 
-const PARTITION_MIGRATIONS: [Migration; 25] = [
+const PARTITION_MIGRATIONS: [Migration; 26] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -111,8 +111,12 @@ const PARTITION_MIGRATIONS: [Migration; 25] = [
         sql: include_str!("../schema/partition/024_cleanup_target_ownership.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 25,
         sql: include_str!("../schema/partition/025_namespace_inheritance_boundaries.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/026_access_revocation_evidence.sql"),
     },
 ];
 
@@ -410,6 +414,11 @@ pub(crate) fn partition_cleanup_target_ownership_migration_digest() -> [u8; 32] 
 #[cfg(test)]
 pub(crate) fn partition_namespace_inheritance_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[24].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_access_revocation_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[25].sql)
 }
 
 #[cfg(test)]

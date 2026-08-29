@@ -15,7 +15,8 @@ use super::group_closure;
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{
     ActivateGrant, ActivateGroup, AddGroupMember, CommandContext, CreateActivationPolicy,
-    CreateGroup, CreateUser, GrantInheritance, GrantPermission, PermissionScope,
+    CreateGroup, CreateUser, GrantInheritance, GrantPermission, PermissionScope, RemoveGroupMember,
+    RevokeAccessActivation, RevokePermissionGrant,
 };
 
 type ValidatedScope = (u8, Option<[u8; 16]>, Option<[u8; 16]>);
@@ -24,6 +25,16 @@ const PRINCIPAL_USER: u8 = 1;
 const PRINCIPAL_GROUP: u8 = 2;
 const ACTIVE_STATE: u8 = 1;
 const MAXIMUM_MEMBERSHIP_EDGES: usize = 65_536;
+const MAXIMUM_REVOCATION_REASON_BYTES: usize = 512;
+
+struct MembershipEvent<'a> {
+    containing_group_id: GroupId,
+    member_principal_id: PrincipalId,
+    event_kind: u8,
+    reason: Option<&'a str>,
+    context: CommandContext,
+    revision: Revision,
+}
 
 pub(super) fn create_user(
     transaction: &Transaction<'_>,
@@ -110,11 +121,24 @@ pub(super) fn add_group_member(
     }
     let member = command.member_principal_id.as_bytes();
     let actor = context.actor_principal_id.as_bytes();
-    transaction.execute(
+    let updated = transaction.execute(
         "INSERT INTO group_memberships(
             containing_group_id, member_principal_id, valid_from, valid_until,
-            activation_required, created_by, created_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            activation_required, created_by, created_at, revision, state,
+            removed_at, removed_by, removal_reason
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, NULL, NULL, NULL)
+         ON CONFLICT(containing_group_id, member_principal_id) DO UPDATE SET
+            valid_from = excluded.valid_from,
+            valid_until = excluded.valid_until,
+            activation_required = excluded.activation_required,
+            created_by = excluded.created_by,
+            created_at = excluded.created_at,
+            revision = excluded.revision,
+            state = 1,
+            removed_at = NULL,
+            removed_by = NULL,
+            removal_reason = NULL
+         WHERE group_memberships.state = 2",
         params![
             group.as_slice(),
             member.as_slice(),
@@ -126,12 +150,97 @@ pub(super) fn add_group_member(
             to_i64(revision.get())?
         ],
     )?;
+    if updated != 1 {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    insert_membership_event(
+        transaction,
+        &MembershipEvent {
+            containing_group_id: command.containing_group_id,
+            member_principal_id: command.member_principal_id,
+            event_kind: 1,
+            reason: None,
+            context,
+            revision,
+        },
+    )?;
     group_closure::rebuild(transaction, revision)?;
     update_identity_revision(transaction, revision)?;
     Ok(EntityReference {
         kind: EntityKind::GroupMembership,
         id: group,
     })
+}
+
+pub(super) fn remove_group_member(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &RemoveGroupMember,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    validate_revocation_reason(&command.reason)?;
+    let group = command.containing_group_id.as_bytes();
+    let member = command.member_principal_id.as_bytes();
+    let actor = context.actor_principal_id.as_bytes();
+    let updated = transaction.execute(
+        "UPDATE group_memberships
+         SET state = 2, removed_at = ?1, removed_by = ?2, removal_reason = ?3, revision = ?4
+         WHERE containing_group_id = ?5 AND member_principal_id = ?6
+           AND state = 1 AND created_at <= ?1",
+        params![
+            context.occurred_at.get(),
+            actor.as_slice(),
+            command.reason.as_str(),
+            to_i64(revision.get())?,
+            group.as_slice(),
+            member.as_slice(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    insert_membership_event(
+        transaction,
+        &MembershipEvent {
+            containing_group_id: command.containing_group_id,
+            member_principal_id: command.member_principal_id,
+            event_kind: 2,
+            reason: Some(&command.reason),
+            context,
+            revision,
+        },
+    )?;
+    group_closure::rebuild(transaction, revision)?;
+    update_identity_revision(transaction, revision)?;
+    Ok(EntityReference {
+        kind: EntityKind::GroupMembership,
+        id: group,
+    })
+}
+
+fn insert_membership_event(
+    transaction: &Transaction<'_>,
+    event: &MembershipEvent<'_>,
+) -> Result<(), RepositoryError> {
+    let group = event.containing_group_id.as_bytes();
+    let member = event.member_principal_id.as_bytes();
+    let actor = event.context.actor_principal_id.as_bytes();
+    transaction.execute(
+        "INSERT INTO group_membership_events(
+            containing_group_id, member_principal_id, event_kind, reason,
+            actor_principal_id, occurred_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            group.as_slice(),
+            member.as_slice(),
+            event.event_kind,
+            event.reason,
+            actor.as_slice(),
+            event.context.occurred_at.get(),
+            to_i64(event.revision.get())?,
+        ],
+    )?;
+    Ok(())
 }
 
 pub(super) fn create_activation_policy(
@@ -218,6 +327,37 @@ pub(super) fn grant_permission(
             to_i64(revision.get())?
         ],
     )?;
+    update_identity_revision(transaction, revision)?;
+    Ok(EntityReference {
+        kind: EntityKind::PermissionGrant,
+        id: grant,
+    })
+}
+
+pub(super) fn revoke_permission_grant(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &RevokePermissionGrant,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    validate_revocation_reason(&command.reason)?;
+    let grant = command.grant_id.as_bytes();
+    let actor = context.actor_principal_id.as_bytes();
+    let updated = transaction.execute(
+        "UPDATE permission_grants
+         SET state = 2, revoked_at = ?1, revoked_by = ?2, revocation_reason = ?3, revision = ?4
+         WHERE grant_id = ?5 AND state = 1 AND created_at <= ?1",
+        params![
+            context.occurred_at.get(),
+            actor.as_slice(),
+            command.reason.as_str(),
+            to_i64(revision.get())?,
+            grant.as_slice(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err(RepositoryError::InvalidCommand);
+    }
     update_identity_revision(transaction, revision)?;
     Ok(EntityReference {
         kind: EntityKind::PermissionGrant,
@@ -402,6 +542,51 @@ pub(super) fn activate_group(
         kind: EntityKind::AccessActivation,
         id: activation_id,
     })
+}
+
+pub(super) fn revoke_access_activation(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &RevokeAccessActivation,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    validate_revocation_reason(&command.reason)?;
+    let activation = command.activation_id.as_bytes();
+    let principal = command.principal_id.as_bytes();
+    let actor = context.actor_principal_id.as_bytes();
+    let updated = transaction.execute(
+        "UPDATE access_activations
+         SET revoked_at = ?1, revoked_by = ?2, revocation_reason = ?3, revision = ?4
+         WHERE activation_id = ?5 AND principal_id = ?6
+           AND revoked_at IS NULL AND activated_at <= ?1",
+        params![
+            context.occurred_at.get(),
+            actor.as_slice(),
+            command.reason.as_str(),
+            to_i64(revision.get())?,
+            activation.as_slice(),
+            principal.as_slice(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    update_identity_revision(transaction, revision)?;
+    Ok(EntityReference {
+        kind: EntityKind::AccessActivation,
+        id: activation,
+    })
+}
+
+fn validate_revocation_reason(reason: &str) -> Result<(), RepositoryError> {
+    let valid = !reason.trim().is_empty()
+        && reason.len() <= MAXIMUM_REVOCATION_REASON_BYTES
+        && !reason.chars().any(char::is_control);
+    if valid {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
 }
 
 pub(super) fn insert_principal(
@@ -605,7 +790,7 @@ fn active_group_path(
         "SELECT gm.containing_group_id, gm.member_principal_id
          FROM group_memberships gm
          JOIN groups g ON g.principal_id = gm.containing_group_id
-         WHERE gm.activation_required = 0 AND g.activation_policy_id IS NULL
+         WHERE gm.state = 1 AND gm.activation_required = 0 AND g.activation_policy_id IS NULL
            AND (gm.valid_from IS NULL OR gm.valid_from <= ?1)
            AND (gm.valid_until IS NULL OR gm.valid_until > ?1)
          ORDER BY gm.containing_group_id, gm.member_principal_id LIMIT ?2",
@@ -660,7 +845,7 @@ fn active_structural_group_path(
     let mut statement = transaction.prepare(
         "SELECT containing_group_id, member_principal_id
          FROM group_memberships
-         WHERE (valid_from IS NULL OR valid_from <= ?1)
+         WHERE state = 1 AND (valid_from IS NULL OR valid_from <= ?1)
            AND (valid_until IS NULL OR valid_until > ?1)
          ORDER BY containing_group_id, member_principal_id LIMIT ?2",
     )?;

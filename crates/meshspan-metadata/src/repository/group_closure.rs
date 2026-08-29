@@ -74,7 +74,8 @@ fn load_graph(
     let mut count = 0_usize;
     let mut membership_statement = transaction.prepare(
         "SELECT containing_group_id, member_principal_id
-         FROM group_memberships ORDER BY containing_group_id, member_principal_id LIMIT ?1",
+         FROM group_memberships WHERE state = 1
+         ORDER BY containing_group_id, member_principal_id LIMIT ?1",
     )?;
     let limit = to_i64(
         u64::try_from(MAXIMUM_MEMBERSHIPS + 1).map_err(|_| RepositoryError::CapacityExceeded)?,

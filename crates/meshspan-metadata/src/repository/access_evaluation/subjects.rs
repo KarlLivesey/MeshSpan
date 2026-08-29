@@ -112,7 +112,8 @@ fn load_active_memberships(
          FROM group_memberships gm
          JOIN groups g ON g.principal_id = gm.containing_group_id
          JOIN principals p ON p.principal_id = g.principal_id
-         WHERE p.state = 1 AND (gm.valid_from IS NULL OR gm.valid_from <= ?1)
+         WHERE gm.state = 1 AND p.state = 1
+           AND (gm.valid_from IS NULL OR gm.valid_from <= ?1)
            AND (gm.valid_until IS NULL OR gm.valid_until > ?1)
            AND (gm.member_principal_id = ?2 OR gm.member_principal_id IN (
                 SELECT containing_group_id FROM group_closure WHERE member_principal_id = ?2
