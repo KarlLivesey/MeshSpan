@@ -21,6 +21,7 @@ use crate::{
 fn bilateral_grant_intersection_replacement_and_revocation_survive_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::open()?;
+    let backup_directory = fixture.directory.path().to_path_buf();
     let file_path = fixture.file_path.clone();
     let mut repository = fixture.repository;
     prepare_relationship(&mut repository, fixture.ids)?;
@@ -86,7 +87,13 @@ fn bilateral_grant_intersection_replacement_and_revocation_survive_restart()
         }),
     )?;
     assert!(repository.active_federation_grant(second_id)?.is_none());
-    verify_history(&repository.into_database(), first_id, second_id)
+    let restored = super::federation_backup_test_support::backup_and_restore(
+        &repository,
+        &backup_directory,
+        91,
+    )?;
+    assert!(restored.active_federation_grant(second_id)?.is_none());
+    verify_history(&restored.into_database(), first_id, second_id)
 }
 
 fn reject_broadening_restriction(
@@ -260,7 +267,7 @@ struct FixtureIds {
 }
 
 struct Fixture {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     file_path: std::path::PathBuf,
     repository: AuthoritativeRepository,
     ids: FixtureIds,
@@ -279,7 +286,7 @@ impl Fixture {
         };
         let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(0))?;
         Ok(Self {
-            _directory: directory,
+            directory,
             file_path,
             repository: AuthoritativeRepository::new(database),
             ids,

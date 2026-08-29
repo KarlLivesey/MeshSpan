@@ -19,6 +19,7 @@ use crate::{
 fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dyn std::error::Error>>
 {
     let fixture = Fixture::open()?;
+    let backup_directory = fixture.directory.path().to_path_buf();
     let file_path = fixture.file_path.clone();
     let mut repository = fixture.repository;
     prepare_relationship(&mut repository, fixture.ids, &fixture.remote_key)?;
@@ -73,7 +74,22 @@ fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dy
     assert_eq!(record.identity_revision, 2);
     assert_eq!(record.authority_epoch, 1);
     assert_eq!(record.display_name, "Remote user");
-    let database = repository.into_database();
+    let restored = super::federation_backup_test_support::backup_and_restore(
+        &repository,
+        &backup_directory,
+        92,
+    )?;
+    assert_eq!(
+        restored
+            .federated_principal_projection(
+                fixture.ids.relationship,
+                FederatedPrincipal::new(fixture.ids.remote_mesh, principal_id),
+            )?
+            .ok_or("projection missing after restore")?
+            .identity_revision,
+        2
+    );
+    let database = restored.into_database();
     verify_history_count(&database, fixture.ids, principal_id, 2)?;
     database.connection().execute(
         "UPDATE federation_principal_projections SET display_name = 'Tampered user'
@@ -291,7 +307,7 @@ struct FixtureIds {
 }
 
 struct Fixture {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     file_path: std::path::PathBuf,
     repository: AuthoritativeRepository,
     ids: FixtureIds,
@@ -311,7 +327,7 @@ impl Fixture {
         };
         let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(0))?;
         Ok(Self {
-            _directory: directory,
+            directory,
             file_path,
             repository: AuthoritativeRepository::new(database),
             ids,

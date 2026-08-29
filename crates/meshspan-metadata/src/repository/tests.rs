@@ -967,7 +967,7 @@ fn bootstrap_snapshot_repository(
 fn signed_scope_handoff_persists_without_a_dual_writer_window()
 -> Result<(), Box<dyn std::error::Error>> {
     let RoutingProofFixture {
-        _directory,
+        _directory: directory,
         mut repository,
         source,
         destination,
@@ -1058,7 +1058,7 @@ fn signed_scope_handoff_persists_without_a_dual_writer_window()
             attestation: attestation(&signing_key, signer_node, &active),
         }),
     )?;
-    verify_persisted_route(repository, scope_id, destination)?;
+    verify_persisted_route(&repository, directory.path(), scope_id, destination)?;
     Ok(())
 }
 
@@ -1493,7 +1493,8 @@ fn reject_bad_route_signature(
 }
 
 fn verify_persisted_route(
-    repository: AuthoritativeRepository,
+    repository: &AuthoritativeRepository,
+    backup_directory: &Path,
     scope_id: ScopeId,
     destination: PartitionId,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1508,7 +1509,19 @@ fn verify_persisted_route(
     );
     assert_eq!(root_route.route().source_partition(), destination);
     assert!(root_route.pending_admission().is_none());
-    let database = repository.into_database();
+    let restored = super::federation_backup_test_support::backup_and_restore(
+        repository,
+        backup_directory,
+        95,
+    )?;
+    assert_eq!(
+        restored
+            .root_delegated_route(scope_id)?
+            .route()
+            .source_partition(),
+        destination
+    );
+    let database = restored.into_database();
     let scope = scope_id.as_bytes();
     let (owner, ownership_epoch, handoff_state): (Vec<u8>, i64, i64) =
         database.connection().query_row(
