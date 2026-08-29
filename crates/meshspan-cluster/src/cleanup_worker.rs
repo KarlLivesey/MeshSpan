@@ -258,7 +258,7 @@ pub fn execute_cleanup_work<D: CleanupProviderDispatch>(
     }
 }
 
-fn validate_reporter(
+pub(crate) fn validate_reporter(
     item: VersionCleanupItem,
     reporter_node_id: NodeId,
 ) -> Result<(), CleanupWorkerError> {
@@ -269,7 +269,7 @@ fn validate_reporter(
     }
 }
 
-fn validate_item_authority(
+pub(crate) fn validate_item_authority(
     cleanup_operation_id: OperationId,
     item: VersionCleanupItem,
     authority: VersionCleanupPermitAuthority,
@@ -281,7 +281,7 @@ fn validate_item_authority(
     }
 }
 
-fn validate_attempt(
+pub(crate) fn validate_attempt(
     cleanup_operation_id: OperationId,
     item: VersionCleanupItem,
     attempt: VersionCleanupPermitAttempt,
@@ -299,7 +299,7 @@ fn validate_attempt(
     }
 }
 
-fn validate_completion(
+pub(crate) fn validate_completion(
     cleanup_operation_id: OperationId,
     item: VersionCleanupItem,
     completion: VersionCleanupItemCompletion,
@@ -317,7 +317,7 @@ fn validate_completion(
     }
 }
 
-fn validate_reclamation(
+pub(crate) fn validate_reclamation(
     cleanup_operation_id: OperationId,
     item: VersionCleanupItem,
     reclamation: &VersionCleanupItemReclamation,

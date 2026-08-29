@@ -16,8 +16,8 @@ use meshspan_protocol::v1::{
     PutShardReady, PutShardResult,
 };
 use meshspan_transport::{
-    AcceptedStream, StreamKind, receive_data_control, receive_data_frame, send_data_control,
-    send_data_frame,
+    AcceptedStream, AuthenticatedPeer, StreamKind, receive_data_control, receive_data_frame,
+    send_data_control, send_data_frame,
 };
 
 use crate::DataPlaneError;
@@ -73,6 +73,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
     pub async fn serve_stream(
         &mut self,
         mut stream: AcceptedStream,
+        peer: AuthenticatedPeer,
         limits: WireLimits,
         observed_at: UnixMicros,
     ) -> Result<(), DataPlaneError> {
@@ -84,6 +85,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             .into_inner();
         self.serve_message(
             stream,
+            peer,
             limits,
             observed_at,
             first.message.ok_or(DataPlaneError::InvalidMessage)?,
@@ -98,10 +100,12 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
     pub(crate) async fn serve_message(
         &mut self,
         mut stream: AcceptedStream,
+        peer: AuthenticatedPeer,
         limits: WireLimits,
         observed_at: UnixMicros,
         message: Message,
     ) -> Result<(), DataPlaneError> {
+        validate_authenticated_sender(&message, peer)?;
         match message {
             Message::PutShardBegin(begin) => {
                 self.serve_put(&mut stream, limits, observed_at, begin)
@@ -303,6 +307,27 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         } else {
             Err(ContractError::Unauthorized)
         }
+    }
+}
+
+fn validate_authenticated_sender(
+    message: &Message,
+    peer: AuthenticatedPeer,
+) -> Result<(), DataPlaneError> {
+    let header = match message {
+        Message::PutShardBegin(value) => value.header.as_ref(),
+        Message::GetShardRequest(value) => value.header.as_ref(),
+        Message::DeleteShardRequest(value) => value.header.as_ref(),
+        Message::ReclaimShardRequest(value) => value.header.as_ref(),
+        _ => return Err(DataPlaneError::InvalidMessage),
+    }
+    .ok_or(DataPlaneError::InvalidMessage)?;
+    if header.sender_node_id.as_slice() == peer.node_id().as_bytes()
+        && header.sender_incarnation == peer.incarnation()
+    {
+        Ok(())
+    } else {
+        Err(DataPlaneError::InvalidMessage)
     }
 }
 

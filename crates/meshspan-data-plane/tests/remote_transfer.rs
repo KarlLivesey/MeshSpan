@@ -78,7 +78,7 @@ async fn real_mtls_stream_proves_exact_remote_shard_lifecycle() -> Result<(), Bo
     };
     let (client_connection, server_connection) =
         tokio::try_join!(connect(&client, address, CERTIFICATE_NAME), incoming)?;
-    authenticate(
+    let client_peer = authenticate(
         &server_connection,
         client_node,
         &certificates.client_certificate,
@@ -91,7 +91,7 @@ async fn real_mtls_stream_proves_exact_remote_shard_lifecycle() -> Result<(), Bo
 
     let mut service = fixture.service()?;
     tokio::try_join!(
-        serve_lifecycle(&server_connection, &mut service, limits),
+        serve_lifecycle(&server_connection, &mut service, client_peer, limits),
         prove_client_lifecycle(&client_connection, &fixture, client_node, limits),
     )?;
     client_connection.close(0_u32.into(), b"test complete");
@@ -104,13 +104,19 @@ async fn real_mtls_stream_proves_exact_remote_shard_lifecycle() -> Result<(), Bo
 async fn serve_lifecycle(
     connection: &quinn::Connection,
     service: &mut RemoteShardService<FolderShardStore>,
+    peer: meshspan_transport::AuthenticatedPeer,
     limits: WireLimits,
 ) -> Result<(), Box<dyn Error>> {
-    for index in 0..8 {
+    for index in 0..9 {
         let stream = accept_stream(connection).await?;
-        service
-            .serve_stream(stream, limits, UnixMicros::new(20 + index))
-            .await?;
+        let result = service
+            .serve_stream(stream, peer, limits, UnixMicros::new(20 + index))
+            .await;
+        if index == 0 {
+            assert!(matches!(result, Err(DataPlaneError::InvalidMessage)));
+        } else {
+            result?;
+        }
     }
     Ok(())
 }
@@ -125,6 +131,7 @@ async fn prove_client_lifecycle(
     let write = fixture.write_permit(payload.len())?;
     let read = fixture.read_permit()?;
     let removal = fixture.removal_permit()?;
+    reject_sender_impersonation(connection, fixture, write, &payload, limits).await?;
     reject_forged_write(connection, fixture, client_node, write, &payload, limits).await?;
     prove_put_and_get(
         connection,
@@ -168,6 +175,31 @@ async fn prove_client_lifecycle(
     .await?;
     assert_eq!(replayed_reclamation, reclamation);
     assert_eq!(reclamation.reclaimed_bytes, payload.len() as u64);
+    Ok(())
+}
+
+async fn reject_sender_impersonation(
+    connection: &quinn::Connection,
+    fixture: &Fixture,
+    write: ShardWritePermit,
+    payload: &BoundedBytes,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    assert!(
+        put_shard(
+            connection,
+            request_header(
+                fixture.mesh,
+                NodeId::from_bytes([99; 16])?,
+                write.operation_id
+            )?,
+            write,
+            payload,
+            limits,
+        )
+        .await
+        .is_err()
+    );
     Ok(())
 }
 
@@ -431,7 +463,7 @@ fn authenticate(
     connection: &quinn::Connection,
     node_id: NodeId,
     certificate: &CertificateDer<'static>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<meshspan_transport::AuthenticatedPeer, Box<dyn Error>> {
     let registry = PeerRegistry::new([PeerBinding {
         node_id,
         incarnation: 1,
@@ -439,7 +471,7 @@ fn authenticate(
     }])?;
     let authenticated = registry.authenticate_connection(connection)?;
     assert_eq!(authenticated.node_id(), node_id);
-    Ok(())
+    Ok(authenticated)
 }
 
 fn request_header(

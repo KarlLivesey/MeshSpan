@@ -275,7 +275,8 @@ recovery reuse the exact committed capability.
 `DeleteShardRequest` carries the exact shard identity and a quorum-issued
 `RemovalPermit`. `DeleteShardResult` contains either the exact durable
 `TombstoneReceipt` or a typed rejection; retrying the same operation returns the
-same receipt. The recipient identity comes from mTLS rather than payload claims.
+same receipt. The sender identity and incarnation come from mTLS and must match
+the request header rather than trusting payload claims.
 A durable result is converted to `CompleteVersionCleanupItem` only if its
 receipt exactly matches a committed attempt and its canonical tombstone digest
 recomputes. The metadata state machine repeats those checks, requires the mTLS

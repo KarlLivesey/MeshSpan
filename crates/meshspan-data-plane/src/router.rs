@@ -8,7 +8,7 @@ use meshspan_contracts::StorageProvider;
 use meshspan_domain::{TargetId, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::data_control_envelope::Message;
-use meshspan_transport::{AcceptedStream, StreamKind, receive_data_control};
+use meshspan_transport::{AcceptedStream, AuthenticatedPeer, StreamKind, receive_data_control};
 
 use crate::{DataPlaneError, RemoteShardService};
 
@@ -52,6 +52,7 @@ impl<Provider: StorageProvider> RemoteShardRouter<Provider> {
     pub async fn serve_stream(
         &mut self,
         mut stream: AcceptedStream,
+        peer: AuthenticatedPeer,
         limits: WireLimits,
         observed_at: UnixMicros,
     ) -> Result<(), DataPlaneError> {
@@ -68,7 +69,7 @@ impl<Provider: StorageProvider> RemoteShardRouter<Provider> {
             .get_mut(&route)
             .ok_or(DataPlaneError::InvalidMessage)?;
         service
-            .serve_message(stream, limits, observed_at, message)
+            .serve_message(stream, peer, limits, observed_at, message)
             .await
     }
 

@@ -3,6 +3,7 @@
 //! Runtime composition boundary for deterministic consensus, metadata persistence and QUIC.
 
 mod cleanup;
+mod cleanup_network;
 mod cleanup_worker;
 mod convergence;
 mod driver;
@@ -23,6 +24,11 @@ pub use cleanup::{
     version_cleanup_attestation, version_cleanup_cancellation_authority, version_cleanup_proposal,
     version_cleanup_reclamation, version_cleanup_removal_permit,
     version_cleanup_retirement_authority, version_cleanup_tombstone_completion,
+};
+pub use cleanup_network::{
+    CleanupConnectionSource, CleanupNetworkContext, CleanupNetworkError,
+    MAXIMUM_CLEANUP_REQUEST_TIMEOUT, dispatch_cleanup_work_over_quic,
+    execute_cleanup_work_over_quic,
 };
 pub use cleanup_worker::{
     CleanupProviderDispatch, CleanupWorkAction, CleanupWorkCatalogue, CleanupWorkEntry,

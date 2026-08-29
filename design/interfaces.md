@@ -224,6 +224,16 @@ calling a provider. It converts provider receipts/errors to protocol records but
 does not invent receipts, retry mutations under a new operation ID or interpret
 namespace permissions.
 
+Every request header's sender node and incarnation must equal the certificate-
+authenticated peer passed by the connection owner. A payload claim cannot
+substitute another enrolled node. Cleanup dispatch additionally requires that
+peer to equal the sealed inventory's storage-node owner before opening a stream.
+Its request deadline is the earlier of a bounded configured timeout and the
+removal permit expiry. `CleanupConnectionSource` is the replaceable routing and
+pool boundary: non-provider work bypasses it, while tombstone and reclamation
+resolve only the inventory-bound node and independently verify the returned
+certificate peer.
+
 Put, get, tombstone and reclamation each use a distinct bounded data stream.
 Tombstone accepts only a canonical current removal permit; physical reclamation
 accepts only the exact earlier durable tombstone receipt. Both client and server
