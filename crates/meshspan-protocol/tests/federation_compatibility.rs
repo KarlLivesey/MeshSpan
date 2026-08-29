@@ -168,7 +168,8 @@ fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::
         Message::FetchBranchPage(FetchFederatedBranchPage {
             grant_id: vec![1; 16],
             resource_scope: Some(payload()),
-            causal_frontier: Vec::new(),
+            requested_head_ids: vec![vec![2; 16]],
+            known_commit_ids: Vec::new(),
             cursor: Vec::new(),
             limit: 1,
             signature: Vec::new(),
@@ -199,6 +200,42 @@ fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::
         );
     }
     Ok(())
+}
+
+#[test]
+fn branch_fetch_requires_unique_commit_identities() -> Result<(), Box<dyn std::error::Error>> {
+    let valid = FetchFederatedBranchPage {
+        grant_id: vec![1; 16],
+        resource_scope: Some(payload()),
+        requested_head_ids: vec![vec![2; 16]],
+        known_commit_ids: vec![vec![3; 16]],
+        cursor: Vec::new(),
+        limit: 1,
+        signature: vec![4; 64],
+    };
+    assert!(
+        encode_federation_frame(
+            &federation_envelope(Message::FetchBranchPage(valid.clone())),
+            limits()?
+        )
+        .is_ok()
+    );
+
+    let mut missing_head = valid.clone();
+    missing_head.requested_head_ids.clear();
+    assert_invalid_branch_fetch(missing_head)?;
+
+    let mut digest_instead_of_id = valid.clone();
+    digest_instead_of_id.requested_head_ids = vec![vec![2; 32]];
+    assert_invalid_branch_fetch(digest_instead_of_id)?;
+
+    let mut duplicate_head = valid.clone();
+    duplicate_head.requested_head_ids.push(vec![2; 16]);
+    assert_invalid_branch_fetch(duplicate_head)?;
+
+    let mut duplicate_known = valid;
+    duplicate_known.known_commit_ids.push(vec![3; 16]);
+    assert_invalid_branch_fetch(duplicate_known)
 }
 
 #[test]
@@ -348,6 +385,19 @@ fn shard() -> ShardIdentity {
 
 fn limits() -> Result<WireLimits, WireContractError> {
     WireLimits::new(4 * 1_024 * 1_024, 1_024 * 1_024, 4_096, 4_096)
+}
+
+fn assert_invalid_branch_fetch(
+    request: FetchFederatedBranchPage,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        encode_federation_frame(
+            &federation_envelope(Message::FetchBranchPage(request)),
+            limits()?
+        ),
+        Err(WireContractError::InvalidMessage)
+    );
+    Ok(())
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {

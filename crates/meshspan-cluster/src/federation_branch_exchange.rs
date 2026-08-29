@@ -3,7 +3,8 @@
 //! Bilaterally authorised signed branch-page exchange over dedicated Quinn streams.
 
 use meshspan_domain::{
-    FederationGrantId, FederationRelationshipId, FederationResourceScope, UnixMicros,
+    FederationGrantId, FederationRelationshipId, FederationResourceScope, NamespaceCommitId,
+    UnixMicros,
 };
 use meshspan_protocol::v1::{FederatedBranchPage, FetchFederatedBranchPage};
 use meshspan_transport::{
@@ -32,8 +33,10 @@ pub struct FederationBranchFetchRequest {
     pub grant_id: FederationGrantId,
     /// Exact typed resource which must equal the grant resource.
     pub resource: FederationResourceScope,
-    /// Bounded content identities already held by the requester.
-    pub causal_frontier: Vec<[u8; 32]>,
+    /// Exact source heads whose missing causal history is requested.
+    pub requested_heads: Vec<NamespaceCommitId>,
+    /// Bounded commit identities already held by the requester.
+    pub known_commits: Vec<NamespaceCommitId>,
     /// Opaque signed continuation from the previous page.
     pub cursor: Vec<u8>,
     /// Positive maximum combined record count.
@@ -234,7 +237,8 @@ fn admitted_query(
     Ok(FederationBranchPageQuery {
         authority,
         resource,
-        causal_frontier: parse_digests(&request.causal_frontier)?,
+        requested_heads: parse_commit_ids(&request.requested_head_ids)?,
+        known_commits: parse_commit_ids(&request.known_commit_ids)?,
         cursor: request.cursor.clone(),
         limit: request.limit,
     })
@@ -244,10 +248,15 @@ fn fetch_wire_request(request: &FederationBranchFetchRequest) -> FetchFederatedB
     FetchFederatedBranchPage {
         grant_id: request.grant_id.as_bytes().to_vec(),
         resource_scope: Some(version_federation_resource_scope(request.resource)),
-        causal_frontier: request
-            .causal_frontier
+        requested_head_ids: request
+            .requested_heads
             .iter()
-            .map(|digest| digest.to_vec())
+            .map(|commit_id| commit_id.as_bytes().to_vec())
+            .collect(),
+        known_commit_ids: request
+            .known_commits
+            .iter()
+            .map(|commit_id| commit_id.as_bytes().to_vec())
             .collect(),
         cursor: request.cursor.clone(),
         limit: request.limit,
@@ -315,13 +324,15 @@ fn parse_grant_id(bytes: &[u8]) -> Result<FederationGrantId, FederationSessionEr
     FederationGrantId::from_bytes(exact).map_err(|_| FederationSessionError::InvalidEnvelope)
 }
 
-fn parse_digests(values: &[Vec<u8>]) -> Result<Vec<[u8; 32]>, FederationSessionError> {
+fn parse_commit_ids(values: &[Vec<u8>]) -> Result<Vec<NamespaceCommitId>, FederationSessionError> {
     values
         .iter()
         .map(|value| {
-            value
+            let exact = value
                 .as_slice()
                 .try_into()
+                .map_err(|_| FederationSessionError::InvalidEnvelope)?;
+            NamespaceCommitId::from_bytes(exact)
                 .map_err(|_| FederationSessionError::InvalidEnvelope)
         })
         .collect()

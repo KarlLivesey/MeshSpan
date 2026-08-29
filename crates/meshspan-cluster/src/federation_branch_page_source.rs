@@ -2,7 +2,7 @@
 
 //! Narrow, bounded source boundary for already-authorised federated history pages.
 
-use meshspan_domain::{FederationResourceScope, Rights};
+use meshspan_domain::{FederationResourceScope, NamespaceCommitId, Rights};
 use meshspan_protocol::v1::VersionedPayload;
 use thiserror::Error;
 
@@ -15,8 +15,10 @@ pub struct FederationBranchPageQuery {
     pub authority: EffectiveFederationGrantAuthority,
     /// Exact typed resource selected by both the request and grant.
     pub resource: FederationResourceScope,
-    /// Bounded content identities the requester already holds.
-    pub causal_frontier: Vec<[u8; 32]>,
+    /// Exact source heads whose missing causal history is requested.
+    pub requested_heads: Vec<NamespaceCommitId>,
+    /// Bounded commit identities the requester already holds.
+    pub known_commits: Vec<NamespaceCommitId>,
     /// Opaque continuation previously returned by this source.
     pub cursor: Vec<u8>,
     /// Positive maximum combined commit/object records requested for this page.

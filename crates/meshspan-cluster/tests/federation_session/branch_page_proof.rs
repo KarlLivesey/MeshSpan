@@ -14,8 +14,8 @@ use meshspan_cluster::{
 };
 use meshspan_domain::{
     FederatedPrincipal, FederationAccess, FederationGrant, FederationGrantId, FederationPolicy,
-    FederationPreset, FederationRelationshipId, FederationResourceScope, NamespaceFederationPolicy,
-    PrincipalId, Revision, UnixMicros, VolumeId,
+    FederationPreset, FederationRelationshipId, FederationResourceScope, NamespaceCommitId,
+    NamespaceFederationPolicy, PrincipalId, Revision, UnixMicros, VolumeId,
 };
 use meshspan_protocol::v1::{ProtocolVersion, VersionedPayload};
 use meshspan_transport::FederationExchangeContext;
@@ -194,12 +194,13 @@ impl BranchFixture {
         })
     }
 
-    fn request(self, seed: u8) -> Result<FederationBranchFetchRequest, FederationSessionError> {
+    fn request(self, seed: u8) -> Result<FederationBranchFetchRequest, Box<dyn Error>> {
         Ok(FederationBranchFetchRequest {
             relationship_id: self.relationship_id,
             grant_id: self.grant_id,
             resource: self.resource,
-            causal_frontier: vec![[11; 32]],
+            requested_heads: vec![NamespaceCommitId::from_bytes([11; 16])?],
+            known_commits: vec![NamespaceCommitId::from_bytes([12; 16])?],
             cursor: vec![12; 16],
             limit: 2,
             context: FederationExchangeContext::new(
@@ -291,7 +292,16 @@ impl FederationBranchPageSource for RecordingHistorySource {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if query.authority != self.expected_authority
             || query.resource != self.expected_resource
-            || query.causal_frontier != vec![[11; 32]]
+            || query.requested_heads
+                != vec![
+                    NamespaceCommitId::from_bytes([11; 16])
+                        .map_err(|_| FederationBranchPageSourceError::InvalidQuery)?,
+                ]
+            || query.known_commits
+                != vec![
+                    NamespaceCommitId::from_bytes([12; 16])
+                        .map_err(|_| FederationBranchPageSourceError::InvalidQuery)?,
+                ]
             || query.cursor != vec![12; 16]
             || query.limit != 2
         {

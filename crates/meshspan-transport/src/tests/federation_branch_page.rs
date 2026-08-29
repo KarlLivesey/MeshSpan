@@ -53,7 +53,11 @@ pub(super) fn prove_signed_branch_fetch(
         identity.binding().local_mesh_id
     );
     assert_eq!(authenticated.request().grant_id, vec![65; 16]);
-    assert_eq!(authenticated.request().causal_frontier, vec![vec![66; 32]]);
+    assert_eq!(
+        authenticated.request().requested_head_ids,
+        vec![vec![66; 16]]
+    );
+    assert_eq!(authenticated.request().known_commit_ids, vec![vec![67; 16]]);
     assert_eq!(
         authenticated.response_context([68; 32])?.request_id,
         [61; 16]
@@ -220,21 +224,22 @@ fn prove_tampered_fetch_is_rejected(
     original: &FederationEnvelope,
     limits: WireLimits,
 ) -> Result<(), Box<dyn Error>> {
-    let mut tampered = original.clone();
-    let Some(FederationMessage::FetchBranchPage(fetch)) = tampered.message.as_mut() else {
-        unreachable!("fixture branch fetch")
-    };
-    fetch.causal_frontier[0][0] ^= 1;
-    let mut replay = federation_replay()?;
-    assert!(matches!(
-        registry.authenticate_branch_fetch(
-            connection,
-            &validated_federation(&tampered, limits)?,
-            UnixMicros::new(1_500_000),
-            &mut replay,
-        ),
-        Err(TransportError::UntrustedFederationPeer)
-    ));
+    let mut wrong_head = original.clone();
+    branch_fetch_mut(&mut wrong_head).requested_head_ids[0][0] ^= 1;
+    let mut wrong_known = original.clone();
+    branch_fetch_mut(&mut wrong_known).known_commit_ids[0][0] ^= 1;
+    for tampered in [wrong_head, wrong_known] {
+        let mut replay = federation_replay()?;
+        assert!(matches!(
+            registry.authenticate_branch_fetch(
+                connection,
+                &validated_federation(&tampered, limits)?,
+                UnixMicros::new(1_500_000),
+                &mut replay,
+            ),
+            Err(TransportError::UntrustedFederationPeer)
+        ));
+    }
     Ok(())
 }
 
@@ -280,8 +285,9 @@ fn branch_fetch(grant_id: Vec<u8>, canonical_scope: Vec<u8>) -> FetchFederatedBr
     FetchFederatedBranchPage {
         grant_id,
         resource_scope: Some(resource_scope(canonical_scope)),
-        causal_frontier: vec![vec![66; 32]],
-        cursor: vec![67; 16],
+        requested_head_ids: vec![vec![66; 16]],
+        known_commit_ids: vec![vec![67; 16]],
+        cursor: vec![68; 16],
         limit: 2,
         signature: Vec::new(),
     }
@@ -318,6 +324,13 @@ fn branch_page_mut(envelope: &mut FederationEnvelope) -> &mut FederatedBranchPag
         unreachable!("fixture branch page")
     };
     page
+}
+
+fn branch_fetch_mut(envelope: &mut FederationEnvelope) -> &mut FetchFederatedBranchPage {
+    let Some(FederationMessage::FetchBranchPage(fetch)) = envelope.message.as_mut() else {
+        unreachable!("fixture branch fetch")
+    };
+    fetch
 }
 
 fn branch_page_resource_mut(envelope: &mut FederationEnvelope) -> &mut VersionedPayload {
