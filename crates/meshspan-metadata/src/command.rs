@@ -2,13 +2,13 @@
 
 //! Typed authoritative state-machine commands and canonical request digests.
 
-use meshspan_contracts::BoundedItems;
+use meshspan_contracts::{BoundedItems, ShardIdentity};
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
     ContentManifestId, DurationMicros, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
     JoinGrantId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId,
     OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId, SnapshotId,
-    SnapshotScheduleId, TagId, UnixMicros, VolumeId,
+    SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -70,6 +70,10 @@ pub enum AuthoritativeCommand {
     AuthoriseVersionCleanup(AuthoriseVersionCleanup),
     /// Terminates one pending cleanup proposal without authorising deletion.
     CancelVersionCleanup(CancelVersionCleanup),
+    /// Appends one bounded contiguous page to an authorised cleanup inventory.
+    AppendVersionCleanupItems(AppendVersionCleanupItems),
+    /// Seals one complete cleanup inventory before any removal permit can exist.
+    SealVersionCleanupInventory(SealVersionCleanupInventory),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
@@ -147,6 +151,8 @@ impl AuthoritativeCommand {
             Self::AttestVersionCleanup(value) => value.update_digest(digest),
             Self::AuthoriseVersionCleanup(value) => value.update_digest(digest),
             Self::CancelVersionCleanup(value) => value.update_digest(digest),
+            Self::AppendVersionCleanupItems(value) => value.update_digest(digest),
+            Self::SealVersionCleanupInventory(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
@@ -574,6 +580,51 @@ pub struct CancelVersionCleanup {
     pub cleanup_revision: Revision,
     /// Operation-independent subject being abandoned.
     pub reachability_subject_digest: [u8; 32],
+}
+
+/// One exact physical shard placement belonging to an unreachable manifest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VersionCleanupItemPlacement {
+    /// Stable per-item provider mutation identity used by every permit retry.
+    pub removal_operation_id: OperationId,
+    /// Exact immutable shard generation.
+    pub shard: ShardIdentity,
+    /// Exact registered folder target holding the shard.
+    pub target_id: TargetId,
+    /// Exact target generation fenced by the placement receipt.
+    pub target_generation: u64,
+}
+
+/// One bounded contiguous page of exact physical cleanup items.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendVersionCleanupItems {
+    /// Authorised cleanup proposal receiving the inventory.
+    pub cleanup_operation_id: OperationId,
+    /// Revision that created the proposal.
+    pub cleanup_revision: Revision,
+    /// Exact terminal revision that granted cleanup authority.
+    pub authorisation_revision: Revision,
+    /// Immutable total number of items expected across all pages.
+    pub expected_item_count: u64,
+    /// Zero-based index of the first item in this page.
+    pub start_index: u64,
+    /// Non-empty bounded placements in ascending contiguous item order.
+    pub items: BoundedItems<VersionCleanupItemPlacement>,
+}
+
+/// Exact complete inventory digest admitted as permit-issuance authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealVersionCleanupInventory {
+    /// Authorised cleanup proposal whose inventory becomes immutable.
+    pub cleanup_operation_id: OperationId,
+    /// Revision that created the proposal.
+    pub cleanup_revision: Revision,
+    /// Exact terminal revision that granted cleanup authority.
+    pub authorisation_revision: Revision,
+    /// Immutable expected item count.
+    pub expected_item_count: u64,
+    /// Rolling digest after the final ordered item.
+    pub inventory_digest: [u8; 32],
 }
 
 /// Namespace object kind stored as a closed integer contract.
@@ -1199,6 +1250,38 @@ digest_simple_record!(
         digest.identifier(value.cleanup_operation_id.as_bytes());
         digest.unsigned(value.cleanup_revision.get());
         digest.bytes(&value.reachability_subject_digest);
+    }
+);
+digest_simple_record!(
+    AppendVersionCleanupItems,
+    b"append-version-cleanup-items",
+    |value, digest| {
+        digest.identifier(value.cleanup_operation_id.as_bytes());
+        digest.unsigned(value.cleanup_revision.get());
+        digest.unsigned(value.authorisation_revision.get());
+        digest.unsigned(value.expected_item_count);
+        digest.unsigned(value.start_index);
+        digest.unsigned(u64::try_from(value.items.len()).unwrap_or(u64::MAX));
+        for item in value.items.as_slice() {
+            digest.identifier(item.removal_operation_id.as_bytes());
+            digest.bytes(&item.shard.manifest_digest);
+            digest.unsigned(item.shard.stripe_index);
+            digest.unsigned(u64::from(item.shard.shard_index));
+            digest.unsigned(u64::from(item.shard.generation));
+            digest.identifier(item.target_id.as_bytes());
+            digest.unsigned(item.target_generation);
+        }
+    }
+);
+digest_simple_record!(
+    SealVersionCleanupInventory,
+    b"seal-version-cleanup-inventory",
+    |value, digest| {
+        digest.identifier(value.cleanup_operation_id.as_bytes());
+        digest.unsigned(value.cleanup_revision.get());
+        digest.unsigned(value.authorisation_revision.get());
+        digest.unsigned(value.expected_item_count);
+        digest.bytes(&value.inventory_digest);
     }
 );
 digest_simple_record!(CreateVolume, b"create-volume", |value, digest| {

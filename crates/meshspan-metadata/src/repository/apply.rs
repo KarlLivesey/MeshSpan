@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
-    cleanup_attestation, cluster, component, identity, namespace, retention, routing,
-    snapshot_schedule, tags, user_snapshot, version_cleanup, volume_head,
+    cleanup_attestation, cleanup_inventory, cluster, component, identity, namespace, retention,
+    routing, snapshot_schedule, tags, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -106,6 +106,9 @@ fn apply_committed_inner(
         receipt.disposition = ApplyDisposition::Replayed;
         transaction.commit()?;
         return Ok(receipt);
+    }
+    if cleanup_inventory::is_reserved_operation(&transaction, context.operation_id)? {
+        return Err(RepositoryError::OperationConflict);
     }
 
     if context
@@ -209,6 +212,13 @@ fn validate_transition(state: AppliedState, next: LogPosition) -> Result<(), Rep
         return Err(RepositoryError::InvalidLogPosition);
     }
     Ok(())
+}
+
+pub(super) fn operation_exists(
+    transaction: &Transaction<'_>,
+    operation_id: OperationId,
+) -> Result<bool, RepositoryError> {
+    Ok(load_operation(transaction, operation_id)?.is_some())
 }
 
 fn load_operation(
@@ -417,6 +427,8 @@ fn is_cleanup_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::AttestVersionCleanup(_)
             | AuthoritativeCommand::AuthoriseVersionCleanup(_)
             | AuthoritativeCommand::CancelVersionCleanup(_)
+            | AuthoritativeCommand::AppendVersionCleanupItems(_)
+            | AuthoritativeCommand::SealVersionCleanupInventory(_)
     )
 }
 
@@ -441,6 +453,12 @@ fn execute_cleanup_command(
         }
         AuthoritativeCommand::CancelVersionCleanup(value) => {
             version_cleanup::cancel(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::AppendVersionCleanupItems(value) => {
+            cleanup_inventory::append(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::SealVersionCleanupInventory(value) => {
+            cleanup_inventory::seal(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -661,6 +679,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::AttestVersionCleanup(_) => 37,
         AuthoritativeCommand::AuthoriseVersionCleanup(_) => 38,
         AuthoritativeCommand::CancelVersionCleanup(_) => 39,
+        AuthoritativeCommand::AppendVersionCleanupItems(_) => 40,
+        AuthoritativeCommand::SealVersionCleanupInventory(_) => 41,
     }
 }
 

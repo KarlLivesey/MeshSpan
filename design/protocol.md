@@ -253,6 +253,14 @@ scan digests and stored Ed25519 signatures before it creates deletion authority.
 creating that authority. Neither command accepts a provider location or shard
 identifier.
 
+`AppendVersionCleanupItems` carries one non-empty bounded contiguous page. Each
+item binds a distinct reserved removal operation ID, exact manifest-root shard
+identity, target and target generation. The receiver rejects gaps, overlap,
+duplicates, a different manifest root and changed total count while extending a
+canonical rolling digest. `SealVersionCleanupInventory` succeeds only when the
+declared count is complete and that final digest matches. Building inventory
+pages cannot produce removal permits.
+
 `DeleteShardRequest` carries the exact shard identity and a quorum-issued
 `RemovalPermit`. `DeleteShardResult` reports `removed`, `already_absent`,
 `identity_mismatch`, `permit_expired`, `stale_epoch` or a typed local failure.

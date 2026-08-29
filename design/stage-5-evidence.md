@@ -313,8 +313,15 @@ copy-on-write filesystem service. This document records executable evidence only
    borrow-scoped shard inventory only after independently revalidating the
    complete committed manifest once, then exposes exact provider receipts in
    bounded keyset pages without repeating that whole-layout scan. Missing receipt
-   state and invalid bounds fail closed. Replicated cleanup-item sealing, permit
-   issue and provider completion remain outstanding.
+   state and invalid bounds fail closed. Replicated inventories now accept only
+   non-empty bounded contiguous pages of exact placements under the authorised
+   manifest root. Every item has a globally reserved provider operation ID; an
+   ordered rolling digest and immutable expected count must seal before bounded
+   worker pagination becomes available. Tests cover gaps, changed totals, wrong
+   roots, duplicate/reused operation authority, premature and post-seal
+   mutations, restart/replay, missing or substituted rows, relational partial
+   state and every injected transaction boundary. Short-lived permit issue and
+   provider completion remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

@@ -26,6 +26,7 @@ pub(super) struct ProposalFixture {
     pub(super) cleanup_id: OperationId,
     pub(super) scan_request_digest: [u8; 32],
     pub(super) subject_digest: [u8; 32],
+    pub(super) manifest_root_digest: [u8; 32],
 }
 
 #[test]
@@ -41,6 +42,7 @@ fn exact_node_attestation_is_replayable_complete_and_restart_safe()
         cleanup_id,
         scan_request_digest: _,
         subject_digest,
+        manifest_root_digest: _,
     } = proposal(&file_path)?;
     register_key(&mut repository, administrator, 5, 1, SIGNING_KEY)?;
 
@@ -345,6 +347,7 @@ pub(super) fn proposal(
         cleanup_id: command_context.operation_id,
         scan_request_digest: proposal.scan_request_digest,
         subject_digest: proposal.reachability_subject_digest,
+        manifest_root_digest: proposal.manifest_root_digest,
     })
 }
 

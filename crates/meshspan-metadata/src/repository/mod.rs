@@ -6,6 +6,7 @@ mod apply;
 mod backup;
 mod bootstrap;
 mod cleanup_attestation;
+mod cleanup_inventory;
 mod cluster;
 mod component;
 mod consensus;
@@ -35,6 +36,10 @@ use crate::{MetadataStoreError, PartitionDatabase};
 
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::VersionCleanupAttestationProgress;
+pub use cleanup_inventory::{
+    VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
+    VersionCleanupItemCursor,
+};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
@@ -341,6 +346,32 @@ impl AuthoritativeRepository {
         cleanup_attestation::progress(&self.database, operation_id)
     }
 
+    /// Returns one independently validated physical cleanup-inventory summary.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed counts, digests or partial terminal state.
+    pub fn version_cleanup_inventory(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<VersionCleanupInventory>, RepositoryError> {
+        cleanup_inventory::load(&self.database, operation_id)
+    }
+
+    /// Returns one bounded keyset page from a sealed physical cleanup inventory.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsealed inventories, foreign cursors, malformed bounds and corrupt rows.
+    pub fn version_cleanup_items(
+        &self,
+        operation_id: OperationId,
+        after: Option<&VersionCleanupItemCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<VersionCleanupItem, VersionCleanupItemCursor>, RepositoryError> {
+        cleanup_inventory::page(&self.database, operation_id, after, limit)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -494,6 +525,8 @@ pub enum RepositoryError {
 
 #[cfg(test)]
 mod cleanup_attestation_tests;
+#[cfg(test)]
+mod cleanup_inventory_tests;
 #[cfg(test)]
 mod retention_tests;
 #[cfg(test)]

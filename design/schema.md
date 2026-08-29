@@ -1097,6 +1097,23 @@ cleanup_items(
   PK(cleanup_id, item_index)
 )
 
+version_cleanup_inventories(
+  cleanup_operation_id PK -> version_cleanup_intents,
+  cleanup_revision, authorisation_revision,
+  expected_item_count, item_count, rolling_digest,
+  state, created_at, created_revision, last_append_revision,
+  seal_operation_id NULL -> operations, sealed_at NULL, sealed_revision NULL
+)
+
+version_cleanup_items(
+  cleanup_operation_id -> version_cleanup_inventories, item_index,
+  removal_operation_id UNIQUE, manifest_digest,
+  stripe_index, shard_index, shard_generation,
+  target_id, target_generation,
+  append_operation_id -> operations, revision,
+  PK(cleanup_operation_id, item_index)
+)
+
 cleanup_completions(
   cleanup_id, item_index, target_id, target_generation,
   result_kind, provider_tombstone_digest, completed_at,
@@ -1131,6 +1148,10 @@ subject. A proposal has one terminal transition: `authorised` records its exact
 terminal operation, revision and instant only after full current revalidation;
 `cancelled` records a distinct operation, revision and instant and grants no
 deletion authority. The database rejects mixed or partial terminal state.
+Physical items are appended in bounded contiguous pages and remain unusable
+until one exact count and rolling digest are sealed. Removal operation IDs are
+reserved across the metadata operation namespace so a later unrelated command
+cannot reuse provider idempotency authority.
 
 ## 20. Repair, scrub and drain
 
