@@ -397,7 +397,13 @@ copy-on-write filesystem service. This document records executable evidence only
    later write. Rename/move and final namespace unlink remain open.
    The immutable directory trie now has a bounded exact-removal primitive with
    stale-revision rejection and historical-root preservation; persisted two-path
-   rename intent and its atomic namespace transaction remain open.
+   rename intent now binds the source path and lineage, preserved entry
+   generation, destination path and lineage, and the intermediate root between
+   removal and insertion. Existing one-path intent digests remain byte-for-byte
+   compatible across branch-schema migration v23. Disconnected two-path replay
+   and the atomic namespace transaction remain open; until that replay exists,
+   injected rename rows are rejected instead of being degraded to an unsafe
+   destination-only upsert.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 

@@ -85,8 +85,8 @@ pub use reachability::{
     reachability_subject_digest,
 };
 pub use reconciliation::{
-    BranchMutation, BranchMutationIntent, NamespaceReplayAction, NamespaceReplayBase,
-    NamespaceReplayDisposition, NamespaceReplayEntry, NamespaceReplayPlan,
+    BranchMutation, BranchMutationIntent, BranchRenameIntent, NamespaceReplayAction,
+    NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEntry, NamespaceReplayPlan,
     PreparedNamespaceReconciliation, ReconciliationCommit, ReconciliationCommitPayload,
     ReconciliationError, ReconciliationFrontier, ReconciliationLimits, ReconciliationPlan,
     ReconciliationStoreError, plan_namespace_replay, plan_reconciliation,

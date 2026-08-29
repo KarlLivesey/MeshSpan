@@ -2,6 +2,9 @@
 
 //! Durable namespace commit, object-revision, head and operation-receipt repository.
 
+#[path = "repository/rename_intent.rs"]
+mod rename_intent;
+
 use meshspan_domain::{
     BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
 };
@@ -378,6 +381,7 @@ pub(super) fn persist_file_intent(
             mutation: BranchMutation::File {
                 version_id: publication.file.version_id,
             },
+            rename: None,
         },
     )
 }
@@ -397,14 +401,16 @@ pub(super) fn persist_directory_intent(
             prior_object_revision_id: None,
             entry_generation: publication.entry_generation,
             mutation: BranchMutation::CreateDirectory,
+            rename: None,
         },
     )
 }
 
-fn persist_branch_intent(
+pub(in crate::publication) fn persist_branch_intent(
     transaction: &Transaction<'_>,
     intent: &BranchMutationIntent,
 ) -> Result<(), PublicationError> {
+    rename_intent::validate_shape(intent)?;
     let (kind, version_id) = match intent.mutation {
         BranchMutation::File { version_id } => (1_u8, Some(version_id.as_bytes())),
         BranchMutation::CreateDirectory => (2, None),
@@ -460,6 +466,9 @@ fn persist_branch_intent(
                 ancestor.new_revision_id().as_bytes().as_slice(),
             ],
         )?;
+    }
+    if let Some(rename) = &intent.rename {
+        rename_intent::persist(transaction, intent.commit_id, rename)?;
     }
     Ok(())
 }
@@ -543,6 +552,7 @@ fn decode_branch_intent(
         (2, None) => BranchMutation::CreateDirectory,
         _ => return Err(PublicationError::Corrupt),
     };
+    let rename = rename_intent::load(connection, commit_id)?;
     let intent = BranchMutationIntent {
         commit_id,
         path: NamespacePath::from_stored_components(components)
@@ -556,6 +566,7 @@ fn decode_branch_intent(
         )?,
         entry_generation: from_i64(stored.5)?,
         mutation,
+        rename,
     };
     validate_loaded_intent(connection, &intent)?;
     if copy_array(&stored.7)? == intent.digest() {
@@ -609,6 +620,7 @@ fn validate_loaded_intent(
     connection: &Connection,
     intent: &BranchMutationIntent,
 ) -> Result<(), PublicationError> {
+    rename_intent::validate_shape(intent).map_err(|_| PublicationError::Corrupt)?;
     let commit = load_commit(connection, intent.commit_id)?;
     let revision = load_object_revision(connection, intent.object_revision_id)?;
     let valid_kind = match intent.mutation {
@@ -632,22 +644,34 @@ fn validate_loaded_intent(
         return Err(PublicationError::Corrupt);
     }
     for ancestor in &intent.ancestors {
-        let prior = load_object_revision(connection, ancestor.expected_revision_id())?;
-        let resulting = load_object_revision(connection, ancestor.new_revision_id())?;
-        if prior.volume_id != commit.volume_id
-            || resulting.volume_id != commit.volume_id
-            || prior.object_id != ancestor.object_id()
-            || resulting.object_id != ancestor.object_id()
-            || prior.kind != 1
-            || resulting.kind != 1
-            || prior.directory_root.is_none()
-            || resulting.directory_root.is_none()
-            || prior.file_version_id.is_some()
-            || resulting.file_version_id.is_some()
-            || resulting.prior_revision_id != Some(ancestor.expected_revision_id())
-        {
-            return Err(PublicationError::Corrupt);
-        }
+        validate_directory_transition(connection, commit.volume_id, *ancestor)?;
+    }
+    if let Some(rename) = &intent.rename {
+        rename_intent::validate_loaded(connection, &commit, rename)?;
+    }
+    Ok(())
+}
+
+pub(super) fn validate_directory_transition(
+    connection: &Connection,
+    volume_id: VolumeId,
+    ancestor: crate::DirectoryRevisionTransition,
+) -> Result<(), PublicationError> {
+    let prior = load_object_revision(connection, ancestor.expected_revision_id())?;
+    let resulting = load_object_revision(connection, ancestor.new_revision_id())?;
+    if prior.volume_id != volume_id
+        || resulting.volume_id != volume_id
+        || prior.object_id != ancestor.object_id()
+        || resulting.object_id != ancestor.object_id()
+        || prior.kind != 1
+        || resulting.kind != 1
+        || prior.directory_root.is_none()
+        || resulting.directory_root.is_none()
+        || prior.file_version_id.is_some()
+        || resulting.file_version_id.is_some()
+        || resulting.prior_revision_id != Some(ancestor.expected_revision_id())
+    {
+        return Err(PublicationError::Corrupt);
     }
     Ok(())
 }
