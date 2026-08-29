@@ -8,18 +8,24 @@ use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use meshspan_cluster::{
-    FederationAcceptRequest, FederationAuthorityError, FederationAuthoritySource,
-    FederationConnectionAuthority, FederationDialRequest, FederationSessionError,
+    FederationAcceptRequest, FederationDialRequest, FederationSessionError,
     FederationSessionRuntime,
 };
-use meshspan_domain::{DurationMicros, FederationRelationshipId, MeshId, UnixMicros};
+use meshspan_domain::{
+    AuditEventId, DurationMicros, FederationRelationshipId, FederationRelationshipKind, HostId,
+    MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId, UnixMicros,
+};
+use meshspan_metadata::{
+    ApproveFederationRelationship, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
+    CommandContext, FederationGovernanceDirection, FederationTrustIdentity, LogPosition,
+    PartitionDatabase, ProposeFederationRelationship, RecordName, RevokeFederationRelationship,
+};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_transport::{
-    FederationHelloConfig, FederationHelloContext, FederationLocalIdentityBinding,
-    FederationNegotiationConfig, FederationPeerBinding, FederationReplayGuard,
-    FederationWelcomeNonces, NodeCredentials, TransportError, TransportLimits, client_endpoint,
-    connect, server_endpoint,
+    FederationHelloConfig, FederationHelloContext, FederationNegotiationConfig,
+    FederationReplayGuard, FederationWelcomeNonces, NodeCredentials, TransportError,
+    TransportLimits, client_endpoint, connect, server_endpoint,
 };
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
@@ -65,26 +71,30 @@ async fn current_metadata_authority_admits_then_revokes_a_real_federation_sessio
     let server_mesh = MeshId::from_bytes([3; 16])?;
     let client_key = SigningKey::from_bytes(&[4; 32]);
     let server_key = SigningKey::from_bytes(&[5; 32]);
-    let client_connection_authority = connection_authority(
+    let client_authority = MetadataAuthority::active(
+        AuthorityIdentity {
+            seed: 20,
+            local_certificate: &certificates.client,
+            local_key: &client_key,
+            remote_certificate: &certificates.server,
+            remote_key: &server_key,
+        },
         relationship_id,
         client_mesh,
         server_mesh,
-        &certificates.client,
-        &client_key,
-        &certificates.server,
-        &server_key,
-    );
-    let client_authority = StaticAuthority::active(&client_connection_authority);
-    let server_connection_authority = connection_authority(
+    )?;
+    let mut server_authority = MetadataAuthority::active(
+        AuthorityIdentity {
+            seed: 40,
+            local_certificate: &certificates.server,
+            local_key: &server_key,
+            remote_certificate: &certificates.client,
+            remote_key: &client_key,
+        },
         relationship_id,
         server_mesh,
         client_mesh,
-        &certificates.server,
-        &server_key,
-        &certificates.client,
-        &client_key,
-    );
-    let mut server_authority = StaticAuthority::active(&server_connection_authority);
+    )?;
     let client_runtime = runtime(&certificates.client, &client_key, limits.wire, 11)?;
     let server_runtime = runtime(&certificates.server, &server_key, limits.wire, 22)?;
 
@@ -94,23 +104,23 @@ async fn current_metadata_authority_admits_then_revokes_a_real_federation_sessio
             server_runtime: &server_runtime,
             client_connection: &client_connection,
             server_connection: &server_connection,
-            client_authority: &client_authority,
-            server_authority: &server_authority,
+            client_authority: client_authority.repository(),
+            server_authority: server_authority.repository(),
             relationship_id,
             server_mesh,
             client_mesh,
         };
         prove_admitted_session(&proof).await?;
     }
-    server_authority.revoke();
+    server_authority.revoke(60)?;
     {
         let proof = SessionProof {
             client_runtime: &client_runtime,
             server_runtime: &server_runtime,
             client_connection: &client_connection,
             server_connection: &server_connection,
-            client_authority: &client_authority,
-            server_authority: &server_authority,
+            client_authority: client_authority.repository(),
+            server_authority: server_authority.repository(),
             relationship_id,
             server_mesh,
             client_mesh,
@@ -130,8 +140,8 @@ struct SessionProof<'a> {
     server_runtime: &'a FederationSessionRuntime<'a>,
     client_connection: &'a quinn::Connection,
     server_connection: &'a quinn::Connection,
-    client_authority: &'a StaticAuthority,
-    server_authority: &'a StaticAuthority,
+    client_authority: &'a AuthoritativeRepository,
+    server_authority: &'a AuthoritativeRepository,
     relationship_id: FederationRelationshipId,
     server_mesh: MeshId,
     client_mesh: MeshId,
@@ -199,69 +209,172 @@ async fn prove_revoked_session_fails_closed(
     Ok(())
 }
 
-struct StaticAuthority {
-    value: Option<FederationConnectionAuthority>,
-}
-
-impl StaticAuthority {
-    const fn active(value: &FederationConnectionAuthority) -> Self {
-        Self {
-            value: Some(*value),
-        }
-    }
-
-    fn revoke(&mut self) {
-        self.value = None;
-    }
-}
-
-impl FederationAuthoritySource for StaticAuthority {
-    fn connection_authority(
-        &self,
-        relationship_id: FederationRelationshipId,
-        _now: UnixMicros,
-    ) -> Result<Option<FederationConnectionAuthority>, FederationAuthorityError> {
-        Ok(self
-            .value
-            .filter(|authority| authority.peer.relationship_id == relationship_id))
-    }
-}
-
-fn connection_authority(
+struct MetadataAuthority {
+    _directory: tempfile::TempDir,
+    repository: AuthoritativeRepository,
+    administrator_id: PrincipalId,
     relationship_id: FederationRelationshipId,
-    local_mesh_id: MeshId,
-    remote_mesh_id: MeshId,
-    local_certificate: &CertificateDer<'_>,
-    local_key: &SigningKey,
-    remote_certificate: &CertificateDer<'_>,
-    remote_key: &SigningKey,
-) -> FederationConnectionAuthority {
-    FederationConnectionAuthority {
-        peer: FederationPeerBinding {
-            relationship_id,
+}
+
+impl MetadataAuthority {
+    fn active(
+        identity: AuthorityIdentity<'_>,
+        relationship_id: FederationRelationshipId,
+        local_mesh_id: MeshId,
+        remote_mesh_id: MeshId,
+    ) -> Result<Self, Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let partition_id = PartitionId::from_bytes([identity.seed; 16])?;
+        let administrator_id = PrincipalId::from_bytes([identity.seed.saturating_add(1); 16])?;
+        let database = PartitionDatabase::open(
+            &directory.path().join("partition.sqlite3"),
+            partition_id,
+            UnixMicros::new(0),
+        )?;
+        let mut repository = AuthoritativeRepository::new(database);
+        apply_bootstrap(
+            &mut repository,
+            identity.seed,
+            administrator_id,
             local_mesh_id,
-            remote_mesh_id,
-            authority_epoch: 1,
-            identity_generation: 1,
-            certificate_fingerprint: meshspan_transport::certificate_fingerprint(
-                remote_certificate,
-            ),
-            verifying_key: remote_key.verifying_key().to_bytes(),
-            valid_from: UnixMicros::new(1),
-            valid_until: UnixMicros::new(3_000_000),
-        },
-        local_identity: FederationLocalIdentityBinding {
+        )?;
+        apply_relationship(
+            &mut repository,
+            identity,
+            administrator_id,
             relationship_id,
-            local_mesh_id,
             remote_mesh_id,
-            authority_epoch: 1,
-            identity_generation: 1,
-            certificate_fingerprint: meshspan_transport::certificate_fingerprint(local_certificate),
-            verifying_key: local_key.verifying_key().to_bytes(),
-            valid_from: UnixMicros::new(1),
-            valid_until: UnixMicros::new(3_000_000),
-        },
+        )?;
+        Ok(Self {
+            _directory: directory,
+            repository,
+            administrator_id,
+            relationship_id,
+        })
     }
+
+    const fn repository(&self) -> &AuthoritativeRepository {
+        &self.repository
+    }
+
+    fn revoke(&mut self, seed: u8) -> Result<(), Box<dyn Error>> {
+        apply(
+            &mut self.repository,
+            4,
+            context(seed, self.administrator_id, 4, 3)?,
+            &AuthoritativeCommand::RevokeFederationRelationship(RevokeFederationRelationship {
+                relationship_id: self.relationship_id,
+                expected_authority_epoch: 1,
+                authority_epoch: 2,
+                reason: "Proof revocation".to_owned(),
+            }),
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AuthorityIdentity<'a> {
+    seed: u8,
+    local_certificate: &'a CertificateDer<'a>,
+    local_key: &'a SigningKey,
+    remote_certificate: &'a CertificateDer<'a>,
+    remote_key: &'a SigningKey,
+}
+
+fn apply_bootstrap(
+    repository: &mut AuthoritativeRepository,
+    seed: u8,
+    administrator_id: PrincipalId,
+    mesh_id: MeshId,
+) -> Result<(), Box<dyn Error>> {
+    apply(
+        repository,
+        1,
+        context(seed.saturating_add(2), administrator_id, 1, 0)?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id,
+            mesh_name: RecordName::new("Local swarm")?,
+            administrator_id,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([seed.saturating_add(3); 16])?,
+            host_id: HostId::from_bytes([seed.saturating_add(4); 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: NodeId::from_bytes([seed.saturating_add(5); 16])?,
+            node_name: RecordName::new("Node")?,
+            partition_name: RecordName::new("Root authority")?,
+        }),
+    )
+}
+
+fn apply_relationship(
+    repository: &mut AuthoritativeRepository,
+    identity: AuthorityIdentity<'_>,
+    administrator_id: PrincipalId,
+    relationship_id: FederationRelationshipId,
+    remote_mesh_id: MeshId,
+) -> Result<(), Box<dyn Error>> {
+    apply(
+        repository,
+        2,
+        context(identity.seed.saturating_add(6), administrator_id, 2, 1)?,
+        &AuthoritativeCommand::ProposeFederationRelationship(ProposeFederationRelationship {
+            relationship_id,
+            remote_mesh_id,
+            remote_name: RecordName::new("Remote swarm")?,
+            kind: FederationRelationshipKind::Horizontal,
+            governance_direction: FederationGovernanceDirection::None,
+        }),
+    )?;
+    apply(
+        repository,
+        3,
+        context(identity.seed.saturating_add(7), administrator_id, 3, 2)?,
+        &AuthoritativeCommand::ApproveFederationRelationship(ApproveFederationRelationship {
+            relationship_id,
+            expected_authority_epoch: 1,
+            local_identity: trust_identity(identity.local_certificate, identity.local_key),
+            remote_identity: trust_identity(identity.remote_certificate, identity.remote_key),
+            governance_proof: None,
+        }),
+    )
+}
+
+fn trust_identity(
+    certificate: &CertificateDer<'_>,
+    signing_key: &SigningKey,
+) -> FederationTrustIdentity {
+    FederationTrustIdentity {
+        generation: 1,
+        certificate_fingerprint: meshspan_transport::certificate_fingerprint(certificate),
+        verifying_key: signing_key.verifying_key().to_bytes(),
+        valid_from: UnixMicros::new(1),
+        valid_until: UnixMicros::new(3_000_000),
+    }
+}
+
+fn apply(
+    repository: &mut AuthoritativeRepository,
+    index: u64,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<(), Box<dyn Error>> {
+    repository.apply_committed(LogPosition { index, term: 1 }, context, command)?;
+    Ok(())
+}
+
+fn context(
+    seed: u8,
+    actor: PrincipalId,
+    revision: u64,
+    expected_revision: u64,
+) -> Result<CommandContext, Box<dyn Error>> {
+    Ok(CommandContext {
+        operation_id: OperationId::from_bytes([seed; 16])?,
+        actor_principal_id: actor,
+        audit_event_id: AuditEventId::from_bytes([seed.saturating_add(1); 16])?,
+        occurred_at: UnixMicros::new(i64::try_from(revision)?),
+        expected_revision: Some(Revision::new(expected_revision)),
+    })
 }
 
 fn runtime<'a>(
