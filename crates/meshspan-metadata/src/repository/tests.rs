@@ -9,9 +9,10 @@ use ed25519_dalek::{Signer, SigningKey};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, ComponentInstanceId,
-    DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId,
-    ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights,
-    RoleId, ScopeId, ScopeRoute, SessionId, SnapshotId, TagId, UnixMicros, VolumeId,
+    DelegatedMetadataScope, DelegationAdmission, DurationMicros, GrantId, GroupId, HandoffEvidence,
+    HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NodeId, ObjectId,
+    OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights, RoleId,
+    RootDelegatedRoute, ScopeId, SessionId, SnapshotId, TagId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -27,10 +28,10 @@ use crate::{
     AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext, ConfigureComponent,
     ConsumeJoinGrant, CreateActivationPolicy, CreateComponent, CreateGroup,
     CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
-    DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueAuthenticationSession,
-    IssueJoinGrant, JoinRoles, NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName,
-    RegisterRoutingSigner, ReplaceObjectOwners, RevokeAuthenticationSession, RouteAttestation,
-    TagTarget,
+    DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, InstallScopeRouteProjection,
+    IssueAuthenticationSession, IssueJoinGrant, JoinRoles, NamespaceObjectKind, PartitionDatabase,
+    PermissionScope, RecordName, RegisterRoutingSigner, ReplaceObjectOwners,
+    RevokeAuthenticationSession, RouteAttestation, TagTarget,
 };
 
 struct FixtureIds {
@@ -625,7 +626,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 15);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        35
+        36
     );
     Ok(())
 }
@@ -965,51 +966,43 @@ fn bootstrap_snapshot_repository(
 #[test]
 fn signed_scope_handoff_persists_without_a_dual_writer_window()
 -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempdir()?;
-    let file_path = directory.path().join("routing.sqlite3");
-    let source = PartitionId::from_bytes([121; 16])?;
-    let destination = PartitionId::from_bytes([122; 16])?;
-    let scope_id = ScopeId::from_bytes([123; 16])?;
-    let administrator = PrincipalId::from_bytes([124; 16])?;
-    let signer_node = NodeId::from_bytes([125; 16])?;
-    let signing_key = SigningKey::from_bytes(&[126; 32]);
-    let database = PartitionDatabase::open(&file_path, source, UnixMicros::new(1))?;
-    let mut repository = AuthoritativeRepository::new(database);
-    bootstrap_routing_repository(&mut repository, administrator, signer_node)?;
-    apply(
-        &mut repository,
-        2,
-        context(131, administrator, 141, 11, Some(1))?,
-        &AuthoritativeCommand::RegisterRoutingSigner(RegisterRoutingSigner {
-            node_id: signer_node,
-            generation: 1,
-            verifying_key: signing_key.verifying_key().to_bytes(),
-        }),
-    )?;
-    apply(
-        &mut repository,
-        3,
-        context(132, administrator, 142, 12, Some(2))?,
-        &AuthoritativeCommand::CreateMetadataPartition(CreateMetadataPartition {
-            partition_id: destination,
-            name: RecordName::new("Namespace two")?,
-            partition_kind: 2,
-        }),
-    )?;
+    let RoutingProofFixture {
+        _directory,
+        mut repository,
+        source,
+        destination,
+        scope_id,
+        administrator,
+        signer_node,
+        signing_key,
+    } = RoutingProofFixture::open()?;
 
-    let mut expected = ScopeRoute::new(scope_id, source, 1, 1)?;
+    let scope = DelegatedMetadataScope::new(
+        scope_id,
+        MetadataOperationFamily::Namespace,
+        MetadataKeyRange::All,
+    )?;
+    let mut expected = RootDelegatedRoute::new(source, scope, 1, 1)?;
     apply_route(
         &mut repository,
         4,
         administrator,
         &AuthoritativeCommand::CreateScopeRoute(CreateScopeRoute {
-            scope_id,
-            partition_id: source,
+            root_partition_id: source,
+            scope,
             routing_epoch: 1,
             attestation: attestation(&signing_key, signer_node, &expected),
         }),
     )?;
-    expected.begin_handoff(destination, 2)?;
+    reject_overlapping_root_scope(
+        &mut repository,
+        administrator,
+        signer_node,
+        &signing_key,
+        source,
+    )?;
+    let admission = delegation_admission()?;
+    expected.begin_delegation(destination, 2, admission)?;
     apply_route(
         &mut repository,
         5,
@@ -1018,6 +1011,7 @@ fn signed_scope_handoff_persists_without_a_dual_writer_window()
             scope_id,
             destination_partition_id: destination,
             routing_epoch: 2,
+            admission,
             attestation: attestation(&signing_key, signer_node, &expected),
         }),
     )?;
@@ -1065,6 +1059,356 @@ fn signed_scope_handoff_persists_without_a_dual_writer_window()
         }),
     )?;
     verify_persisted_route(repository, scope_id, destination)?;
+    Ok(())
+}
+
+#[test]
+fn child_route_projection_cannot_author_or_rewind_root_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let ProjectionProofFixture {
+        _directory: _keep_directory_alive,
+        mut root_repository,
+        mut child_repository,
+        destination,
+        scope_id,
+        administrator,
+        signer_node,
+        signing_key,
+        mut route,
+    } = ProjectionProofFixture::open()?;
+    let admission = delegation_admission()?;
+    route.begin_delegation(destination, 2, admission)?;
+    let begin = AuthoritativeCommand::BeginScopeHandoff(BeginScopeHandoff {
+        scope_id,
+        destination_partition_id: destination,
+        routing_epoch: 2,
+        admission,
+        attestation: attestation(&signing_key, signer_node, &route),
+    });
+    apply_route(&mut root_repository, 5, administrator, &begin)?;
+    apply_projection(
+        &mut child_repository,
+        5,
+        administrator,
+        signer_node,
+        &signing_key,
+        &route,
+    )?;
+    assert_invalid_without_advancing(&mut child_repository, 6, administrator, &begin)?;
+
+    let evidence = HandoffEvidence {
+        frozen_revision: Revision::new(5),
+        snapshot_digest: [166; 32],
+    };
+    route.freeze(2, evidence)?;
+    apply_route(
+        &mut root_repository,
+        6,
+        administrator,
+        &AuthoritativeCommand::FreezeScopeHandoff(FreezeScopeHandoff {
+            scope_id,
+            routing_epoch: 2,
+            evidence,
+            attestation: attestation(&signing_key, signer_node, &route),
+        }),
+    )?;
+    apply_projection(
+        &mut child_repository,
+        6,
+        administrator,
+        signer_node,
+        &signing_key,
+        &route,
+    )?;
+
+    let stale = route;
+    route.activate(destination, 2, evidence)?;
+    apply_route(
+        &mut root_repository,
+        7,
+        administrator,
+        &AuthoritativeCommand::ActivateScopeHandoff(ActivateScopeHandoff {
+            scope_id,
+            destination_partition_id: destination,
+            routing_epoch: 2,
+            evidence,
+            attestation: attestation(&signing_key, signer_node, &route),
+        }),
+    )?;
+    apply_projection(
+        &mut child_repository,
+        7,
+        administrator,
+        signer_node,
+        &signing_key,
+        &route,
+    )?;
+    let stale_projection = projection_command(signer_node, &signing_key, &stale);
+    assert_invalid_without_advancing(&mut child_repository, 8, administrator, &stale_projection)?;
+    assert_eq!(
+        child_repository
+            .root_delegated_route(scope_id)?
+            .route()
+            .source_partition(),
+        destination
+    );
+    Ok(())
+}
+
+struct RoutingProofFixture {
+    _directory: tempfile::TempDir,
+    repository: AuthoritativeRepository,
+    source: PartitionId,
+    destination: PartitionId,
+    scope_id: ScopeId,
+    administrator: PrincipalId,
+    signer_node: NodeId,
+    signing_key: SigningKey,
+}
+
+impl RoutingProofFixture {
+    fn open() -> Result<Self, Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let source = PartitionId::from_bytes([121; 16])?;
+        let destination = PartitionId::from_bytes([122; 16])?;
+        let scope_id = ScopeId::from_bytes([123; 16])?;
+        let administrator = PrincipalId::from_bytes([124; 16])?;
+        let signer_node = NodeId::from_bytes([125; 16])?;
+        let signing_key = SigningKey::from_bytes(&[126; 32]);
+        let database = PartitionDatabase::open(
+            &directory.path().join("routing.sqlite3"),
+            source,
+            UnixMicros::new(1),
+        )?;
+        let mut repository = AuthoritativeRepository::new(database);
+        bootstrap_routing_repository(&mut repository, administrator, signer_node)?;
+        apply(
+            &mut repository,
+            2,
+            context(131, administrator, 141, 11, Some(1))?,
+            &AuthoritativeCommand::RegisterRoutingSigner(RegisterRoutingSigner {
+                node_id: signer_node,
+                generation: 1,
+                verifying_key: signing_key.verifying_key().to_bytes(),
+            }),
+        )?;
+        apply(
+            &mut repository,
+            3,
+            context(132, administrator, 142, 12, Some(2))?,
+            &AuthoritativeCommand::CreateMetadataPartition(CreateMetadataPartition {
+                partition_id: destination,
+                name: RecordName::new("Namespace two")?,
+                partition_kind: 2,
+            }),
+        )?;
+        Ok(Self {
+            _directory: directory,
+            repository,
+            source,
+            destination,
+            scope_id,
+            administrator,
+            signer_node,
+            signing_key,
+        })
+    }
+}
+
+struct ProjectionProofFixture {
+    _directory: tempfile::TempDir,
+    root_repository: AuthoritativeRepository,
+    child_repository: AuthoritativeRepository,
+    destination: PartitionId,
+    scope_id: ScopeId,
+    administrator: PrincipalId,
+    signer_node: NodeId,
+    signing_key: SigningKey,
+    route: RootDelegatedRoute,
+}
+
+impl ProjectionProofFixture {
+    fn open() -> Result<Self, Box<dyn std::error::Error>> {
+        let RoutingProofFixture {
+            _directory: directory,
+            mut repository,
+            source,
+            destination,
+            scope_id,
+            administrator,
+            signer_node,
+            signing_key,
+        } = RoutingProofFixture::open()?;
+        let scope = DelegatedMetadataScope::new(
+            scope_id,
+            MetadataOperationFamily::Namespace,
+            MetadataKeyRange::All,
+        )?;
+        let route = RootDelegatedRoute::new(source, scope, 1, 1)?;
+        apply_route(
+            &mut repository,
+            4,
+            administrator,
+            &create_root_route(source, scope, signer_node, &signing_key, &route),
+        )?;
+        let mut child_repository = prepare_projection_repository(
+            &directory.path().join("projection.sqlite3"),
+            source,
+            destination,
+            administrator,
+            signer_node,
+            &signing_key,
+        )?;
+        apply_projection(
+            &mut child_repository,
+            4,
+            administrator,
+            signer_node,
+            &signing_key,
+            &route,
+        )?;
+        Ok(Self {
+            _directory: directory,
+            root_repository: repository,
+            child_repository,
+            destination,
+            scope_id,
+            administrator,
+            signer_node,
+            signing_key,
+            route,
+        })
+    }
+}
+
+fn create_root_route(
+    root_partition_id: PartitionId,
+    scope: DelegatedMetadataScope,
+    signer_node: NodeId,
+    signing_key: &SigningKey,
+    route: &RootDelegatedRoute,
+) -> AuthoritativeCommand {
+    AuthoritativeCommand::CreateScopeRoute(CreateScopeRoute {
+        root_partition_id,
+        scope,
+        routing_epoch: route.route().routing_epoch(),
+        attestation: attestation(signing_key, signer_node, route),
+    })
+}
+
+fn prepare_projection_repository(
+    file_path: &Path,
+    root_partition_id: PartitionId,
+    local_partition_id: PartitionId,
+    administrator: PrincipalId,
+    signer_node: NodeId,
+    signing_key: &SigningKey,
+) -> Result<AuthoritativeRepository, Box<dyn std::error::Error>> {
+    let database = PartitionDatabase::open(file_path, local_partition_id, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap_routing_repository(&mut repository, administrator, signer_node)?;
+    apply(
+        &mut repository,
+        2,
+        context(167, administrator, 168, 11, Some(1))?,
+        &AuthoritativeCommand::RegisterRoutingSigner(RegisterRoutingSigner {
+            node_id: signer_node,
+            generation: 1,
+            verifying_key: signing_key.verifying_key().to_bytes(),
+        }),
+    )?;
+    apply(
+        &mut repository,
+        3,
+        context(169, administrator, 170, 12, Some(2))?,
+        &AuthoritativeCommand::CreateMetadataPartition(CreateMetadataPartition {
+            partition_id: root_partition_id,
+            name: RecordName::new("Permanent root projection")?,
+            partition_kind: 1,
+        }),
+    )?;
+    Ok(repository)
+}
+
+fn apply_projection(
+    repository: &mut AuthoritativeRepository,
+    index: u8,
+    administrator: PrincipalId,
+    signer_node: NodeId,
+    signing_key: &SigningKey,
+    route: &RootDelegatedRoute,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply_route(
+        repository,
+        index,
+        administrator,
+        &projection_command(signer_node, signing_key, route),
+    )
+}
+
+fn projection_command(
+    signer_node: NodeId,
+    signing_key: &SigningKey,
+    route: &RootDelegatedRoute,
+) -> AuthoritativeCommand {
+    AuthoritativeCommand::InstallScopeRouteProjection(InstallScopeRouteProjection {
+        route: *route,
+        attestation: attestation(signing_key, signer_node, route),
+    })
+}
+
+fn assert_invalid_without_advancing(
+    repository: &mut AuthoritativeRepository,
+    index: u8,
+    administrator: PrincipalId,
+    command: &AuthoritativeCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let revision = repository.current_revision()?;
+    let rejected = repository.apply_committed(
+        LogPosition {
+            index: u64::from(index),
+            term: 1,
+        },
+        context(
+            index.wrapping_add(171),
+            administrator,
+            index.wrapping_add(181),
+            i64::from(index) + 20,
+            Some(revision.get()),
+        )?,
+        command,
+    );
+    assert!(matches!(rejected, Err(RepositoryError::InvalidCommand)));
+    assert_eq!(repository.current_revision()?, revision);
+    Ok(())
+}
+
+fn reject_overlapping_root_scope(
+    repository: &mut AuthoritativeRepository,
+    administrator: PrincipalId,
+    signer_node: NodeId,
+    signing_key: &SigningKey,
+    root_partition_id: PartitionId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let scope = DelegatedMetadataScope::new(
+        ScopeId::from_bytes([163; 16])?,
+        MetadataOperationFamily::Namespace,
+        MetadataKeyRange::bounded([0; 16], [128; 16])?,
+    )?;
+    let route = RootDelegatedRoute::new(root_partition_id, scope, 1, 1)?;
+    let revision = repository.current_revision()?;
+    let rejected = repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(164, administrator, 165, 13, Some(revision.get()))?,
+        &AuthoritativeCommand::CreateScopeRoute(CreateScopeRoute {
+            root_partition_id,
+            scope,
+            routing_epoch: 1,
+            attestation: attestation(signing_key, signer_node, &route),
+        }),
+    );
+    assert!(matches!(rejected, Err(RepositoryError::InvalidCommand)));
+    assert_eq!(repository.current_revision()?, revision);
     Ok(())
 }
 
@@ -1126,7 +1470,7 @@ fn reject_bad_route_signature(
     scope_id: ScopeId,
     destination: PartitionId,
     evidence: HandoffEvidence,
-    active: &ScopeRoute,
+    active: &RootDelegatedRoute,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut invalid_attestation = attestation(signing_key, signer_node, active);
     invalid_attestation.signature[0] ^= 1;
@@ -1153,6 +1497,17 @@ fn verify_persisted_route(
     scope_id: ScopeId,
     destination: PartitionId,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let root_route = repository.root_delegated_route(scope_id)?;
+    assert_eq!(
+        root_route.root_partition_id(),
+        PartitionId::from_bytes([121; 16])?
+    );
+    assert_eq!(
+        root_route.scope().family(),
+        MetadataOperationFamily::Namespace
+    );
+    assert_eq!(root_route.route().source_partition(), destination);
+    assert!(root_route.pending_admission().is_none());
     let database = repository.into_database();
     let scope = scope_id.as_bytes();
     let (owner, ownership_epoch, handoff_state): (Vec<u8>, i64, i64) =
@@ -1169,19 +1524,45 @@ fn verify_persisted_route(
     )?;
     assert_eq!(owner.as_slice(), destination.as_bytes());
     assert_eq!((ownership_epoch, handoff_state, history), (2, 1, 4));
+    assert!(
+        database
+            .connection()
+            .execute(
+                "UPDATE partition_routes SET route_payload = zeroblob(length(route_payload))
+                 WHERE scope_id = ?1",
+                [scope.as_slice()],
+            )
+            .is_err()
+    );
+    database.connection().execute_batch(
+        "DROP TRIGGER partition_routes_reject_update;
+         DROP TRIGGER partition_routes_reject_delete;
+         UPDATE partition_routes SET route_payload = zeroblob(length(route_payload))
+         WHERE transition_sequence = 3;
+         DELETE FROM partition_routes WHERE routing_epoch = 1;",
+    )?;
+    let repository = AuthoritativeRepository::new(database);
+    assert!(matches!(
+        repository.root_delegated_route(scope_id),
+        Err(RepositoryError::CorruptState)
+    ));
     Ok(())
 }
 
 fn attestation(
     signing_key: &SigningKey,
     signer_node_id: NodeId,
-    route: &ScopeRoute,
+    route: &RootDelegatedRoute,
 ) -> RouteAttestation {
     RouteAttestation {
         signer_node_id,
         signer_generation: 1,
         signature: signing_key.sign(&route.signing_payload()).to_bytes(),
     }
+}
+
+fn delegation_admission() -> Result<DelegationAdmission, meshspan_domain::DelegationError> {
+    DelegationAdmission::new(3, 3, [161; 32], [162; 32], UnixMicros::new(12))
 }
 
 #[test]

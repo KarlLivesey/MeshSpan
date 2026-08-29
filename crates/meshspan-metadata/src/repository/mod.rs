@@ -48,6 +48,8 @@ mod quorum_plan;
 mod reachability;
 mod receipt;
 mod retention;
+mod root_delegation;
+mod root_delegation_evidence;
 mod routing;
 mod session;
 mod session_access;
@@ -195,6 +197,18 @@ impl AuthoritativeRepository {
     /// Fails closed when the route is absent or its durable representation is corrupt.
     pub fn scope_route(&self, scope_id: ScopeId) -> Result<ScopeRoute, RepositoryError> {
         routing::load_scope(self.database.connection(), scope_id)
+    }
+
+    /// Returns one root-owned delegation-directory entry with exact pending admission evidence.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when scope identity, family/range, route or handoff evidence is inconsistent.
+    pub fn root_delegated_route(
+        &self,
+        scope_id: ScopeId,
+    ) -> Result<meshspan_domain::RootDelegatedRoute, RepositoryError> {
+        root_delegation_evidence::load_root_route(self.database.connection(), scope_id)
     }
 
     /// Returns one validated federation relationship projection, if it exists.

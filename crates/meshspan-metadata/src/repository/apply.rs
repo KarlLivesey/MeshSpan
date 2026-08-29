@@ -12,8 +12,8 @@ use super::{
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
     cleanup_reclamation, cluster, component, federation_grant, federation_principal,
     federation_quarantine, federation_relationship, federation_succession, identity, namespace,
-    retention, routing, session, snapshot_schedule, tags, user_snapshot, version_cleanup,
-    volume_head,
+    retention, root_delegation, routing, session, snapshot_schedule, tags, user_snapshot,
+    version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -357,6 +357,9 @@ fn execute(
     if federation_quarantine::is_command(command) {
         return federation_quarantine::execute(transaction, context, command, revision);
     }
+    if is_routing_command(command) {
+        return execute_routing_command(transaction, partition_id, context, command, revision);
+    }
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
             bootstrap::bootstrap(transaction, partition_id, context, value, revision)
@@ -411,27 +414,84 @@ fn execute(
         AuthoritativeCommand::ConsumeJoinGrant(value) => {
             cluster::consume_join_grant(transaction, partition_id, context, value, revision)
         }
+        _ => Err(RepositoryError::InvalidCommand),
+    }
+}
+
+fn is_routing_command(command: &AuthoritativeCommand) -> bool {
+    matches!(
+        command,
+        AuthoritativeCommand::RegisterRoutingSigner(_)
+            | AuthoritativeCommand::CreateMetadataPartition(_)
+            | AuthoritativeCommand::CreateScopeRoute(_)
+            | AuthoritativeCommand::InstallScopeRouteProjection(_)
+            | AuthoritativeCommand::BeginScopeHandoff(_)
+            | AuthoritativeCommand::FreezeScopeHandoff(_)
+            | AuthoritativeCommand::ActivateScopeHandoff(_)
+            | AuthoritativeCommand::AbortScopeHandoff(_)
+    )
+}
+
+fn execute_routing_command(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    let repository_partition_id = meshspan_domain::PartitionId::from_bytes(partition_id)
+        .map_err(|_| RepositoryError::CorruptState)?;
+    match command {
         AuthoritativeCommand::RegisterRoutingSigner(value) => {
             routing::register_signer(transaction, context, *value, revision)
         }
         AuthoritativeCommand::CreateMetadataPartition(value) => {
             routing::create_partition(transaction, context, value, revision)
         }
-        AuthoritativeCommand::CreateScopeRoute(value) => {
-            routing::create_scope(transaction, context, *value, revision)
+        AuthoritativeCommand::CreateScopeRoute(value) => root_delegation::create_scope(
+            transaction,
+            repository_partition_id,
+            context,
+            *value,
+            revision,
+        ),
+        AuthoritativeCommand::InstallScopeRouteProjection(value) => {
+            root_delegation::install_projection(
+                transaction,
+                repository_partition_id,
+                context,
+                value,
+                revision,
+            )
         }
-        AuthoritativeCommand::BeginScopeHandoff(value) => {
-            routing::begin_handoff(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::FreezeScopeHandoff(value) => {
-            routing::freeze_handoff(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::ActivateScopeHandoff(value) => {
-            routing::activate_handoff(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::AbortScopeHandoff(value) => {
-            routing::abort_handoff(transaction, context, *value, revision)
-        }
+        AuthoritativeCommand::BeginScopeHandoff(value) => root_delegation::begin_handoff(
+            transaction,
+            repository_partition_id,
+            context,
+            *value,
+            revision,
+        ),
+        AuthoritativeCommand::FreezeScopeHandoff(value) => root_delegation::freeze_handoff(
+            transaction,
+            repository_partition_id,
+            context,
+            *value,
+            revision,
+        ),
+        AuthoritativeCommand::ActivateScopeHandoff(value) => root_delegation::activate_handoff(
+            transaction,
+            repository_partition_id,
+            context,
+            *value,
+            revision,
+        ),
+        AuthoritativeCommand::AbortScopeHandoff(value) => root_delegation::abort_handoff(
+            transaction,
+            repository_partition_id,
+            context,
+            *value,
+            revision,
+        ),
         _ => Err(RepositoryError::InvalidCommand),
     }
 }
@@ -756,6 +816,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RegisterRoutingSigner(_) => 16,
         AuthoritativeCommand::CreateMetadataPartition(_) => 17,
         AuthoritativeCommand::CreateScopeRoute(_) => 18,
+        AuthoritativeCommand::InstallScopeRouteProjection(_) => 70,
         AuthoritativeCommand::BeginScopeHandoff(_) => 19,
         AuthoritativeCommand::FreezeScopeHandoff(_) => 20,
         AuthoritativeCommand::ActivateScopeHandoff(_) => 21,

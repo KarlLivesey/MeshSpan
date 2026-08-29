@@ -7,8 +7,9 @@ use meshspan_contracts::{
 };
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
-    ContentManifestId, DurationMicros, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
-    JoinGrantId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId,
+    ContentManifestId, DelegatedMetadataScope, DelegationAdmission, DurationMicros, FileVersionId,
+    GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange,
+    MetadataOperationFamily, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId,
     OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId, SessionId, SnapshotId,
     SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
@@ -140,6 +141,8 @@ pub enum AuthoritativeCommand {
     CreateMetadataPartition(CreateMetadataPartition),
     /// Creates one initially active scope route.
     CreateScopeRoute(CreateScopeRoute),
+    /// Installs a signed monotonic root-route projection at a non-root group.
+    InstallScopeRouteProjection(InstallScopeRouteProjection),
     /// Begins destination catch-up while the source remains sole writer.
     BeginScopeHandoff(BeginScopeHandoff),
     /// Fences source writes at an exact state image.
@@ -249,6 +252,7 @@ impl AuthoritativeCommand {
             Self::RegisterRoutingSigner(value) => value.update_digest(digest),
             Self::CreateMetadataPartition(value) => value.update_digest(digest),
             Self::CreateScopeRoute(value) => value.update_digest(digest),
+            Self::InstallScopeRouteProjection(value) => value.update_digest(digest),
             Self::BeginScopeHandoff(value) => value.update_digest(digest),
             Self::FreezeScopeHandoff(value) => value.update_digest(digest),
             Self::ActivateScopeHandoff(value) => value.update_digest(digest),
@@ -1206,10 +1210,10 @@ pub struct CreateMetadataPartition {
 /// First active owner of a newly routed scope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateScopeRoute {
-    /// Stable routed scope.
-    pub scope_id: ScopeId,
-    /// Existing owner partition.
-    pub partition_id: PartitionId,
+    /// Permanent root group owning the delegation directory and initial route.
+    pub root_partition_id: PartitionId,
+    /// Exact delegatable operation-family/key-range scope.
+    pub scope: DelegatedMetadataScope,
     /// Initial positive route epoch.
     pub routing_epoch: u64,
     /// Signature over the resulting active route.
@@ -1225,7 +1229,18 @@ pub struct BeginScopeHandoff {
     pub destination_partition_id: PartitionId,
     /// New route epoch.
     pub routing_epoch: u64,
+    /// Capacity-relative membership and load evidence for the destination group.
+    pub admission: DelegationAdmission,
     /// Signature over the resulting preparing route.
+    pub attestation: RouteAttestation,
+}
+
+/// Installs one root-attested route projection into a non-root metadata group.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstallScopeRouteProjection {
+    /// Exact root-owned route state; a child cannot construct or broaden it.
+    pub route: meshspan_domain::RootDelegatedRoute,
+    /// Root routing-key signature over `route.signing_payload()`.
     pub attestation: RouteAttestation,
 }
 
@@ -1818,11 +1833,19 @@ digest_simple_record!(
     }
 );
 digest_simple_record!(CreateScopeRoute, b"create-scope-route", |value, digest| {
-    digest.identifier(value.scope_id.as_bytes());
-    digest.identifier(value.partition_id.as_bytes());
+    digest.identifier(value.root_partition_id.as_bytes());
+    digest_delegated_scope(digest, value.scope);
     digest.unsigned(value.routing_epoch);
     digest.attestation(value.attestation);
 });
+digest_simple_record!(
+    InstallScopeRouteProjection,
+    b"install-scope-route-projection",
+    |value, digest| {
+        digest.bytes(&value.route.signing_payload());
+        digest.attestation(value.attestation);
+    }
+);
 digest_simple_record!(
     BeginScopeHandoff,
     b"begin-scope-handoff",
@@ -1830,9 +1853,43 @@ digest_simple_record!(
         digest.identifier(value.scope_id.as_bytes());
         digest.identifier(value.destination_partition_id.as_bytes());
         digest.unsigned(value.routing_epoch);
+        digest_delegation_admission(digest, value.admission);
         digest.attestation(value.attestation);
     }
 );
+
+fn digest_delegated_scope(digest: &mut CanonicalDigest, scope: DelegatedMetadataScope) {
+    digest.identifier(scope.scope_id().as_bytes());
+    digest.byte(match scope.family() {
+        MetadataOperationFamily::RootControl => 1,
+        MetadataOperationFamily::Identity => 2,
+        MetadataOperationFamily::Authentication => 3,
+        MetadataOperationFamily::Namespace => 4,
+        MetadataOperationFamily::Configuration => 5,
+        MetadataOperationFamily::Audit => 6,
+        MetadataOperationFamily::StorageCatalogue => 7,
+        MetadataOperationFamily::Work => 8,
+    });
+    match scope.key_range() {
+        MetadataKeyRange::All => digest.byte(1),
+        MetadataKeyRange::Bounded {
+            start_inclusive,
+            end_exclusive,
+        } => {
+            digest.byte(2);
+            digest.bytes(&start_inclusive);
+            digest.bytes(&end_exclusive);
+        }
+    }
+}
+
+fn digest_delegation_admission(digest: &mut CanonicalDigest, admission: DelegationAdmission) {
+    digest.unsigned(u64::from(admission.eligible_member_count()));
+    digest.byte(admission.planned_voter_count());
+    digest.bytes(&admission.quorum_plan_digest());
+    digest.bytes(&admission.load_evidence_digest());
+    digest.signed(admission.measured_at().get());
+}
 digest_simple_record!(
     FreezeScopeHandoff,
     b"freeze-scope-handoff",

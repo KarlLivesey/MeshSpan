@@ -85,6 +85,39 @@ fn signing_payload_binds_capacity_relative_admission() -> Result<(), Box<dyn std
     Ok(())
 }
 
+#[test]
+fn durable_restore_rejects_scope_or_admission_substitution()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = partition(30)?;
+    let child = partition(31)?;
+    let first_scope = DelegatedMetadataScope::new(
+        ScopeId::from_bytes([32; 16])?,
+        MetadataOperationFamily::Work,
+        MetadataKeyRange::All,
+    )?;
+    let other_scope = DelegatedMetadataScope::new(
+        ScopeId::from_bytes([33; 16])?,
+        MetadataOperationFamily::Work,
+        MetadataKeyRange::All,
+    )?;
+    let active = ScopeRoute::new(first_scope.scope_id(), root, 1, 1)?;
+    assert_eq!(
+        RootDelegatedRoute::restore(root, other_scope, active, None),
+        Err(DelegationError::InvalidRestoredState)
+    );
+
+    let mut preparing = active;
+    preparing.begin_handoff(child, 2)?;
+    assert_eq!(
+        RootDelegatedRoute::restore(root, first_scope, preparing, None),
+        Err(DelegationError::InvalidRestoredState)
+    );
+    assert!(
+        RootDelegatedRoute::restore(root, first_scope, preparing, Some(admission(3, 3)?)).is_ok()
+    );
+    Ok(())
+}
+
 fn admission(
     eligible_member_count: u32,
     planned_voter_count: u8,

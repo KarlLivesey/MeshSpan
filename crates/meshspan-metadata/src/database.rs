@@ -248,8 +248,8 @@ mod tests {
         partition_federation_relationship_history_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
         partition_principal_lifecycle_migration_digest, partition_roles_migration_digest,
-        partition_routing_migration_digest, partition_snapshot_expiry_migration_digest,
-        partition_snapshot_restores_migration_digest,
+        partition_root_delegation_directory_migration_digest, partition_routing_migration_digest,
+        partition_snapshot_expiry_migration_digest, partition_snapshot_restores_migration_digest,
         partition_snapshot_retention_selection_migration_digest,
         partition_snapshot_root_removals_migration_digest,
         partition_snapshot_schedules_migration_digest,
@@ -275,7 +275,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 35);
+        assert_eq!(database.check_integrity()?.schema_version, 36);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            35
+            36
         );
         Ok(())
     }
@@ -666,6 +666,14 @@ mod tests {
                 0x15, 0xe6, 0xd6, 0x0c, 0x27, 0xe7, 0x28, 0xb2, 0x2b, 0x28, 0x77, 0x41, 0x6e, 0x39,
                 0xeb, 0x59, 0x5a, 0x7b, 0x95, 0x88, 0xa5, 0x16, 0xc2, 0xee, 0xce, 0x8c, 0x76, 0x3c,
                 0x50, 0xd1, 0xc7, 0x9b,
+            ]
+        );
+        assert_eq!(
+            partition_root_delegation_directory_migration_digest(),
+            [
+                0x07, 0x63, 0xbe, 0xe3, 0x61, 0xfa, 0xfe, 0x32, 0xd6, 0xfd, 0x89, 0xb3, 0x14, 0x16,
+                0x14, 0xb0, 0xdd, 0x51, 0x42, 0x12, 0x49, 0x73, 0x40, 0x70, 0x72, 0x32, 0xcc, 0x63,
+                0x62, 0x38, 0xa4, 0xd1,
             ]
         );
     }

@@ -10,14 +10,16 @@ use meshspan_consensus::{
     flat_plan,
 };
 use meshspan_domain::{
-    AuditEventId, GroupId, HandoffEvidence, HostId, MeshId, NodeId, OperationId, PartitionId,
-    PrincipalId, QuorumPlanId, Revision, RoleId, ScopeId, ScopeRoute, UnixMicros,
+    AuditEventId, DelegatedMetadataScope, DelegationAdmission, GroupId, HandoffEvidence, HostId,
+    MeshId, MetadataKeyRange, MetadataOperationFamily, NodeId, OperationId, PartitionId,
+    PrincipalId, QuorumPlanId, Revision, RoleId, RootDelegatedRoute, ScopeId, ScopeRoute,
+    UnixMicros,
 };
 use meshspan_metadata::{
     ActivateScopeHandoff, AuthoritativeCommand, AuthoritativeRepository, BeginScopeHandoff,
     BootstrapMesh, CommandContext, CreateGroup, CreateMetadataPartition, CreateScopeRoute,
-    FreezeScopeHandoff, LogPosition as MetadataLogPosition, PartitionDatabase, RecordName,
-    RegisterRoutingSigner, RouteAttestation,
+    FreezeScopeHandoff, InstallScopeRouteProjection, LogPosition as MetadataLogPosition,
+    PartitionDatabase, RecordName, RegisterRoutingSigner, RouteAttestation,
 };
 
 use crate::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};
@@ -54,17 +56,16 @@ fn independent_authorities_never_accept_the_same_scoped_mutation()
     )?;
 
     let preparing = preparing_route(scope_id, source_id, destination_id)?;
-    destination.commit(begin_handoff(scope_id, destination_id, preparing)?)?;
-    assert_exact_writers(&mut source, &mut destination, scope_id, 1, 1)?;
-    assert_exact_writers(&mut source, &mut destination, scope_id, 2, 0)?;
-    source.commit(begin_handoff(scope_id, destination_id, preparing)?)?;
+    source.commit(begin_handoff(scope_id, destination_id, &preparing)?)?;
+    assert_exact_writers(&mut source, &mut destination, scope_id, 2, 1)?;
+    destination.commit(install_projection(&preparing)?)?;
     assert_exact_writers(&mut source, &mut destination, scope_id, 2, 1)?;
 
     let evidence = handoff_evidence();
     let frozen = frozen_route(scope_id, source_id, destination_id, evidence)?;
-    destination.commit(freeze_handoff(scope_id, evidence, frozen)?)?;
-    assert_exact_writers(&mut source, &mut destination, scope_id, 2, 1)?;
-    source.commit(freeze_handoff(scope_id, evidence, frozen)?)?;
+    source.commit(freeze_handoff(scope_id, evidence, &frozen)?)?;
+    assert_exact_writers(&mut source, &mut destination, scope_id, 2, 0)?;
+    destination.commit(install_projection(&frozen)?)?;
     assert_exact_writers(&mut source, &mut destination, scope_id, 2, 0)?;
 
     let active_destination =
@@ -73,15 +74,10 @@ fn independent_authorities_never_accept_the_same_scoped_mutation()
         scope_id,
         destination_id,
         evidence,
-        active_destination,
+        &active_destination,
     )?)?;
     assert_exact_writers(&mut source, &mut destination, scope_id, 2, 0)?;
-    destination.commit(activate_handoff(
-        scope_id,
-        destination_id,
-        evidence,
-        active_destination,
-    )?)?;
+    destination.commit(install_projection(&active_destination)?)?;
     assert_exact_writers(&mut source, &mut destination, scope_id, 2, 1)?;
 
     assert_eq!(source.route(scope_id)?.source_partition(), destination_id);
@@ -272,13 +268,22 @@ fn initialise_catalogue(
             partition_kind: 2,
         },
     ))?;
-    let route = ScopeRoute::new(scope_id, partition(31)?, 1, ROUTING_EPOCH_INITIAL)?;
-    authority.commit(AuthoritativeCommand::CreateScopeRoute(CreateScopeRoute {
-        scope_id,
-        partition_id: partition(31)?,
-        routing_epoch: ROUTING_EPOCH_INITIAL,
-        attestation: attest(route)?,
-    }))?;
+    let route = RootDelegatedRoute::new(
+        partition(31)?,
+        delegated_scope(scope_id)?,
+        1,
+        ROUTING_EPOCH_INITIAL,
+    )?;
+    if local_partition == partition(31)? {
+        authority.commit(AuthoritativeCommand::CreateScopeRoute(CreateScopeRoute {
+            root_partition_id: partition(31)?,
+            scope: delegated_scope(scope_id)?,
+            routing_epoch: ROUTING_EPOCH_INITIAL,
+            attestation: attest(&route)?,
+        }))?;
+    } else {
+        authority.commit(install_projection(&route)?)?;
+    }
     Ok(())
 }
 
@@ -299,20 +304,32 @@ fn assert_exact_writers(
 fn begin_handoff(
     scope_id: ScopeId,
     destination: PartitionId,
-    route: ScopeRoute,
+    route: &RootDelegatedRoute,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     Ok(AuthoritativeCommand::BeginScopeHandoff(BeginScopeHandoff {
         scope_id,
         destination_partition_id: destination,
         routing_epoch: ROUTING_EPOCH_HANDOFF,
+        admission: delegation_admission()?,
         attestation: attest(route)?,
     }))
+}
+
+fn install_projection(
+    route: &RootDelegatedRoute,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    Ok(AuthoritativeCommand::InstallScopeRouteProjection(
+        InstallScopeRouteProjection {
+            route: *route,
+            attestation: attest(route)?,
+        },
+    ))
 }
 
 fn freeze_handoff(
     scope_id: ScopeId,
     evidence: HandoffEvidence,
-    route: ScopeRoute,
+    route: &RootDelegatedRoute,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     Ok(AuthoritativeCommand::FreezeScopeHandoff(
         FreezeScopeHandoff {
@@ -328,7 +345,7 @@ fn activate_handoff(
     scope_id: ScopeId,
     destination: PartitionId,
     evidence: HandoffEvidence,
-    route: ScopeRoute,
+    route: &RootDelegatedRoute,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     Ok(AuthoritativeCommand::ActivateScopeHandoff(
         ActivateScopeHandoff {
@@ -345,9 +362,9 @@ fn preparing_route(
     scope_id: ScopeId,
     source: PartitionId,
     destination: PartitionId,
-) -> Result<ScopeRoute, Box<dyn std::error::Error>> {
-    let mut route = ScopeRoute::new(scope_id, source, 1, 1)?;
-    route.begin_handoff(destination, 2)?;
+) -> Result<RootDelegatedRoute, Box<dyn std::error::Error>> {
+    let mut route = RootDelegatedRoute::new(source, delegated_scope(scope_id)?, 1, 1)?;
+    route.begin_delegation(destination, 2, delegation_admission()?)?;
     Ok(route)
 }
 
@@ -356,7 +373,7 @@ fn frozen_route(
     source: PartitionId,
     destination: PartitionId,
     evidence: HandoffEvidence,
-) -> Result<ScopeRoute, Box<dyn std::error::Error>> {
+) -> Result<RootDelegatedRoute, Box<dyn std::error::Error>> {
     let mut route = preparing_route(scope_id, source, destination)?;
     route.freeze(2, evidence)?;
     Ok(route)
@@ -367,18 +384,34 @@ fn active_destination_route(
     source: PartitionId,
     destination: PartitionId,
     evidence: HandoffEvidence,
-) -> Result<ScopeRoute, Box<dyn std::error::Error>> {
+) -> Result<RootDelegatedRoute, Box<dyn std::error::Error>> {
     let mut route = frozen_route(scope_id, source, destination, evidence)?;
     route.activate(destination, 2, evidence)?;
     Ok(route)
 }
 
-fn attest(route: ScopeRoute) -> Result<RouteAttestation, meshspan_domain::IdentifierError> {
+fn attest(
+    route: &RootDelegatedRoute,
+) -> Result<RouteAttestation, meshspan_domain::IdentifierError> {
     Ok(RouteAttestation {
         signer_node_id: node_id()?,
         signer_generation: 1,
         signature: signing_key().sign(&route.signing_payload()).to_bytes(),
     })
+}
+
+fn delegated_scope(
+    scope_id: ScopeId,
+) -> Result<DelegatedMetadataScope, meshspan_domain::DelegationError> {
+    DelegatedMetadataScope::new(
+        scope_id,
+        MetadataOperationFamily::Namespace,
+        MetadataKeyRange::All,
+    )
+}
+
+fn delegation_admission() -> Result<DelegationAdmission, meshspan_domain::DelegationError> {
+    DelegationAdmission::new(3, 3, [81; 32], [82; 32], UnixMicros::new(5))
 }
 
 const fn handoff_evidence() -> HandoffEvidence {

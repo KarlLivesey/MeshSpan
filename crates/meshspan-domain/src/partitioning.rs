@@ -248,6 +248,36 @@ impl RootDelegatedRoute {
         })
     }
 
+    /// Restores one exact durable directory entry after independently checking its shape.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a route for another scope, a root-control scope, or admission evidence whose
+    /// presence does not exactly match an in-progress handoff.
+    pub const fn restore(
+        root_partition_id: PartitionId,
+        scope: DelegatedMetadataScope,
+        route: ScopeRoute,
+        pending_admission: Option<DelegationAdmission>,
+    ) -> Result<Self, DelegationError> {
+        if matches!(scope.family(), MetadataOperationFamily::RootControl) {
+            return Err(DelegationError::RootControlCannotMove);
+        }
+        if !same_identifier(scope.scope_id().as_bytes(), route.scope_id().as_bytes()) {
+            return Err(DelegationError::InvalidRestoredState);
+        }
+        let handoff_in_progress = !matches!(route.state(), crate::RouteState::Active);
+        if handoff_in_progress != pending_admission.is_some() {
+            return Err(DelegationError::InvalidRestoredState);
+        }
+        Ok(Self {
+            root_partition_id,
+            scope,
+            route,
+            pending_admission,
+        })
+    }
+
     /// Begins learner catch-up at an admitted destination group.
     ///
     /// # Errors
@@ -372,9 +402,23 @@ pub enum DelegationError {
     /// Quorum-plan or capacity-normalised load evidence is absent.
     #[error("metadata delegation admission evidence is missing")]
     MissingAdmissionEvidence,
+    /// Persisted scope, route and admission records do not describe one valid directory state.
+    #[error("metadata delegation durable state is inconsistent")]
+    InvalidRestoredState,
     /// The underlying sole-owner route rejected a stale or unsafe transition.
     #[error("metadata delegation route transition failed")]
     Route(#[from] RouteError),
+}
+
+const fn same_identifier(left: [u8; 16], right: [u8; 16]) -> bool {
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
 }
 
 const fn less_than(left: [u8; 16], right: [u8; 16]) -> bool {

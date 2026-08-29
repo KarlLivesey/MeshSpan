@@ -7,8 +7,9 @@ use std::collections::BTreeMap;
 use ed25519_dalek::{Signer, SigningKey};
 use meshspan_consensus::LogEntry;
 use meshspan_domain::{
-    AuditEventId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId, PartitionId,
-    PrincipalId, Revision, RoleId, ScopeId, ScopeRoute, UnixMicros,
+    AuditEventId, DelegatedMetadataScope, DelegationAdmission, GroupId, HandoffEvidence, HostId,
+    JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NodeId, PartitionId,
+    PrincipalId, Revision, RoleId, RootDelegatedRoute, ScopeId, UnixMicros,
 };
 use meshspan_metadata::{
     ActivateScopeHandoff, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext,
@@ -161,8 +162,8 @@ fn create_second_partition() -> Result<AuthoritativeCommand, NodeRuntimeError> {
 fn create_scope_route() -> Result<AuthoritativeCommand, NodeRuntimeError> {
     let route = initial_route()?;
     Ok(AuthoritativeCommand::CreateScopeRoute(CreateScopeRoute {
-        scope_id: proof_scope()?,
-        partition_id: source_partition()?,
+        root_partition_id: source_partition()?,
+        scope: proof_delegated_scope()?,
         routing_epoch: 1,
         attestation: attest(&route)?,
     }))
@@ -171,12 +172,13 @@ fn create_scope_route() -> Result<AuthoritativeCommand, NodeRuntimeError> {
 fn begin_scope_handoff() -> Result<AuthoritativeCommand, NodeRuntimeError> {
     let mut route = initial_route()?;
     route
-        .begin_handoff(destination_partition()?, 2)
+        .begin_delegation(destination_partition()?, 2, delegation_admission()?)
         .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
     Ok(AuthoritativeCommand::BeginScopeHandoff(BeginScopeHandoff {
         scope_id: proof_scope()?,
         destination_partition_id: destination_partition()?,
         routing_epoch: 2,
+        admission: delegation_admission()?,
         attestation: attest(&route)?,
     }))
 }
@@ -216,20 +218,20 @@ fn activate_scope_handoff() -> Result<AuthoritativeCommand, NodeRuntimeError> {
     ))
 }
 
-fn initial_route() -> Result<ScopeRoute, NodeRuntimeError> {
-    ScopeRoute::new(proof_scope()?, source_partition()?, 1, 1)
+fn initial_route() -> Result<RootDelegatedRoute, NodeRuntimeError> {
+    RootDelegatedRoute::new(source_partition()?, proof_delegated_scope()?, 1, 1)
         .map_err(|_| NodeRuntimeError::InvalidConfiguration)
 }
 
-fn preparing_route() -> Result<ScopeRoute, NodeRuntimeError> {
+fn preparing_route() -> Result<RootDelegatedRoute, NodeRuntimeError> {
     let mut route = initial_route()?;
     route
-        .begin_handoff(destination_partition()?, 2)
+        .begin_delegation(destination_partition()?, 2, delegation_admission()?)
         .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
     Ok(route)
 }
 
-fn attest(route: &ScopeRoute) -> Result<RouteAttestation, NodeRuntimeError> {
+fn attest(route: &RootDelegatedRoute) -> Result<RouteAttestation, NodeRuntimeError> {
     let signature = routing_signing_key()
         .sign(&route.signing_payload())
         .to_bytes();
@@ -238,6 +240,20 @@ fn attest(route: &ScopeRoute) -> Result<RouteAttestation, NodeRuntimeError> {
         signer_generation: 1,
         signature,
     })
+}
+
+fn proof_delegated_scope() -> Result<DelegatedMetadataScope, NodeRuntimeError> {
+    DelegatedMetadataScope::new(
+        proof_scope()?,
+        MetadataOperationFamily::Namespace,
+        MetadataKeyRange::All,
+    )
+    .map_err(|_| NodeRuntimeError::InvalidConfiguration)
+}
+
+fn delegation_admission() -> Result<DelegationAdmission, NodeRuntimeError> {
+    DelegationAdmission::new(3, 3, [79; 32], [80; 32], UnixMicros::new(8))
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)
 }
 
 fn routing_signing_key() -> SigningKey {

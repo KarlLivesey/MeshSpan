@@ -5,15 +5,10 @@
 use ed25519_dalek::{Signature, VerifyingKey};
 use meshspan_domain::{HandoffEvidence, PartitionId, Revision, RouteState, ScopeId, ScopeRoute};
 use rusqlite::{OptionalExtension, Transaction, params};
-use sha2::{Digest, Sha256};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError};
-use crate::{
-    AbortScopeHandoff, ActivateScopeHandoff, BeginScopeHandoff, CommandContext,
-    CreateMetadataPartition, CreateScopeRoute, FreezeScopeHandoff, RegisterRoutingSigner,
-    RouteAttestation,
-};
+use crate::{CommandContext, CreateMetadataPartition, RegisterRoutingSigner, RouteAttestation};
 
 const ROUTING_KEY_ACTIVE: i64 = 1;
 const ROUTE_ACTIVE: i64 = 1;
@@ -104,114 +99,6 @@ pub(super) fn create_partition(
     })
 }
 
-pub(super) fn create_scope(
-    transaction: &Transaction<'_>,
-    context: CommandContext,
-    command: CreateScopeRoute,
-    revision: Revision,
-) -> Result<EntityReference, RepositoryError> {
-    let route = ScopeRoute::new(
-        command.scope_id,
-        command.partition_id,
-        1,
-        command.routing_epoch,
-    )
-    .map_err(|_| RepositoryError::InvalidCommand)?;
-    verify_attestation(transaction, &route, command.attestation)?;
-    persist_new_scope(transaction, route, revision)?;
-    persist_route_history(transaction, context, route, command.attestation)?;
-    Ok(route_reference(route))
-}
-
-pub(super) fn begin_handoff(
-    transaction: &Transaction<'_>,
-    context: CommandContext,
-    command: BeginScopeHandoff,
-    revision: Revision,
-) -> Result<EntityReference, RepositoryError> {
-    transition_route(
-        transaction,
-        context,
-        command.scope_id,
-        command.attestation,
-        revision,
-        |route| route.begin_handoff(command.destination_partition_id, command.routing_epoch),
-    )
-}
-
-pub(super) fn freeze_handoff(
-    transaction: &Transaction<'_>,
-    context: CommandContext,
-    command: FreezeScopeHandoff,
-    revision: Revision,
-) -> Result<EntityReference, RepositoryError> {
-    transition_route(
-        transaction,
-        context,
-        command.scope_id,
-        command.attestation,
-        revision,
-        |route| route.freeze(command.routing_epoch, command.evidence),
-    )
-}
-
-pub(super) fn activate_handoff(
-    transaction: &Transaction<'_>,
-    context: CommandContext,
-    command: ActivateScopeHandoff,
-    revision: Revision,
-) -> Result<EntityReference, RepositoryError> {
-    transition_route(
-        transaction,
-        context,
-        command.scope_id,
-        command.attestation,
-        revision,
-        |route| {
-            route.activate(
-                command.destination_partition_id,
-                command.routing_epoch,
-                command.evidence,
-            )
-        },
-    )
-}
-
-pub(super) fn abort_handoff(
-    transaction: &Transaction<'_>,
-    context: CommandContext,
-    command: AbortScopeHandoff,
-    revision: Revision,
-) -> Result<EntityReference, RepositoryError> {
-    if command.reason_code == 0 {
-        return Err(RepositoryError::InvalidCommand);
-    }
-    transition_route(
-        transaction,
-        context,
-        command.scope_id,
-        command.attestation,
-        revision,
-        |route| route.abort(command.routing_epoch),
-    )
-}
-
-fn transition_route(
-    transaction: &Transaction<'_>,
-    context: CommandContext,
-    scope_id: ScopeId,
-    attestation: RouteAttestation,
-    revision: Revision,
-    transition: impl FnOnce(&mut ScopeRoute) -> Result<(), meshspan_domain::RouteError>,
-) -> Result<EntityReference, RepositoryError> {
-    let mut route = load_scope(transaction, scope_id)?;
-    transition(&mut route).map_err(|_| RepositoryError::InvalidCommand)?;
-    verify_attestation(transaction, &route, attestation)?;
-    update_scope(transaction, route, revision)?;
-    persist_route_history(transaction, context, route, attestation)?;
-    Ok(route_reference(route))
-}
-
 pub(super) fn load_scope(
     transaction: &rusqlite::Connection,
     scope_id: ScopeId,
@@ -298,7 +185,7 @@ fn route_before_handoff(
     .map_err(|_| RepositoryError::CorruptState)
 }
 
-fn persist_new_scope(
+pub(super) fn persist_new_scope(
     transaction: &Transaction<'_>,
     route: ScopeRoute,
     revision: Revision,
@@ -321,7 +208,7 @@ fn persist_new_scope(
     Ok(())
 }
 
-fn update_scope(
+pub(super) fn update_scope(
     transaction: &Transaction<'_>,
     route: ScopeRoute,
     revision: Revision,
@@ -357,9 +244,17 @@ fn update_scope(
     }
 }
 
-fn verify_attestation(
+const fn route_state_code(state: RouteState) -> i64 {
+    match state {
+        RouteState::Active => ROUTE_ACTIVE,
+        RouteState::Preparing { .. } => ROUTE_PREPARING,
+        RouteState::Frozen { .. } => ROUTE_FROZEN,
+    }
+}
+
+pub(super) fn verify_attestation(
     transaction: &Transaction<'_>,
-    route: &ScopeRoute,
+    signing_payload: &[u8],
     attestation: RouteAttestation,
 ) -> Result<(), RepositoryError> {
     if attestation.signer_generation == 0 {
@@ -384,70 +279,13 @@ fn verify_attestation(
             .map_err(|_| RepositoryError::CorruptState)?;
     verifying_key
         .verify_strict(
-            &route.signing_payload(),
+            signing_payload,
             &Signature::from_bytes(&attestation.signature),
         )
         .map_err(|_| RepositoryError::InvalidCommand)
 }
 
-fn persist_route_history(
-    transaction: &Transaction<'_>,
-    context: CommandContext,
-    route: ScopeRoute,
-    attestation: RouteAttestation,
-) -> Result<(), RepositoryError> {
-    let payload = route.signing_payload();
-    let route_digest: [u8; 32] = Sha256::digest(&payload).into();
-    let scope = route.scope_id().as_bytes();
-    let owner = route.source_partition().as_bytes();
-    let signer = attestation.signer_node_id.as_bytes();
-    let transition_sequence: i64 = transaction.query_row(
-        "SELECT coalesce(max(transition_sequence), 0) + 1 FROM partition_routes
-         WHERE routing_epoch = ?1 AND scope_id = ?2",
-        params![to_i64(route.routing_epoch())?, scope.as_slice()],
-        |row| row.get(0),
-    )?;
-    if transition_sequence <= 0 {
-        return Err(RepositoryError::CapacityExceeded);
-    }
-    transaction.execute(
-        "INSERT INTO partition_routes(
-            routing_epoch, transition_sequence, scope_id, partition_id, ownership_epoch, route_payload,
-            route_digest, signer_node_id, signer_generation, signature, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![
-            to_i64(route.routing_epoch())?,
-            transition_sequence,
-            scope.as_slice(),
-            owner.as_slice(),
-            to_i64(route.ownership_epoch())?,
-            payload,
-            route_digest.as_slice(),
-            signer.as_slice(),
-            to_i64(attestation.signer_generation)?,
-            attestation.signature.as_slice(),
-            context.occurred_at.get()
-        ],
-    )?;
-    Ok(())
-}
-
-const fn route_state_code(state: RouteState) -> i64 {
-    match state {
-        RouteState::Active => ROUTE_ACTIVE,
-        RouteState::Preparing { .. } => ROUTE_PREPARING,
-        RouteState::Frozen { .. } => ROUTE_FROZEN,
-    }
-}
-
-fn route_reference(route: ScopeRoute) -> EntityReference {
-    EntityReference {
-        kind: EntityKind::ScopeRoute,
-        id: route.scope_id().as_bytes(),
-    }
-}
-
-fn partition_id(bytes: &[u8]) -> Result<PartitionId, RepositoryError> {
+pub(super) fn partition_id(bytes: &[u8]) -> Result<PartitionId, RepositoryError> {
     PartitionId::from_bytes(
         bytes
             .try_into()
@@ -456,11 +294,11 @@ fn partition_id(bytes: &[u8]) -> Result<PartitionId, RepositoryError> {
     .map_err(|_| RepositoryError::CorruptState)
 }
 
-fn digest(bytes: &[u8]) -> Result<[u8; 32], RepositoryError> {
+pub(super) fn digest(bytes: &[u8]) -> Result<[u8; 32], RepositoryError> {
     bytes.try_into().map_err(|_| RepositoryError::CorruptState)
 }
 
-fn positive_u64(value: i64) -> Result<u64, RepositoryError> {
+pub(super) fn positive_u64(value: i64) -> Result<u64, RepositoryError> {
     let value = u64::try_from(value).map_err(|_| RepositoryError::CorruptState)?;
     if value == 0 {
         Err(RepositoryError::CorruptState)
