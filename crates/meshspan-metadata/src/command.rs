@@ -15,6 +15,11 @@ use meshspan_domain::{
 use sha2::{Digest, Sha256};
 
 use crate::RecordName;
+use crate::{
+    ApproveFederationRelationship, ProposeFederationRelationship, RecoverFederationRelationship,
+    RestrictFederationRelationship, RetireFederationRelationship, RevokeFederationRelationship,
+    RotateFederationTrustIdentity,
+};
 
 /// Context applied identically to every state-machine command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,6 +141,20 @@ pub enum AuthoritativeCommand {
     ActivateScopeHandoff(ActivateScopeHandoff),
     /// Restores source authority under a newer route fence.
     AbortScopeHandoff(AbortScopeHandoff),
+    /// Starts a mutually approved relationship without granting authority yet.
+    ProposeFederationRelationship(ProposeFederationRelationship),
+    /// Atomically activates a proposal with both initial public trust identities.
+    ApproveFederationRelationship(ApproveFederationRelationship),
+    /// Rotates one side's public trust identity while retaining verification history.
+    RotateFederationTrustIdentity(RotateFederationTrustIdentity),
+    /// Narrows a live relationship under a newer authority fence.
+    RestrictFederationRelationship(RestrictFederationRelationship),
+    /// Restores a restricted relationship under a newer authority fence.
+    RecoverFederationRelationship(RecoverFederationRelationship),
+    /// Revokes a relationship and all older authority envelopes.
+    RevokeFederationRelationship(RevokeFederationRelationship),
+    /// Retires an already revoked relationship without deleting evidence.
+    RetireFederationRelationship(RetireFederationRelationship),
 }
 
 impl AuthoritativeCommand {
@@ -205,6 +224,13 @@ impl AuthoritativeCommand {
             Self::FreezeScopeHandoff(value) => value.update_digest(digest),
             Self::ActivateScopeHandoff(value) => value.update_digest(digest),
             Self::AbortScopeHandoff(value) => value.update_digest(digest),
+            Self::ProposeFederationRelationship(value) => value.update_digest(digest),
+            Self::ApproveFederationRelationship(value) => value.update_digest(digest),
+            Self::RotateFederationTrustIdentity(value) => value.update_digest(digest),
+            Self::RestrictFederationRelationship(value) => value.update_digest(digest),
+            Self::RecoverFederationRelationship(value) => value.update_digest(digest),
+            Self::RevokeFederationRelationship(value) => value.update_digest(digest),
+            Self::RetireFederationRelationship(value) => value.update_digest(digest),
         }
     }
 }
@@ -1807,7 +1833,7 @@ fn assurance_code(value: AssuranceLevel) -> u8 {
     }
 }
 
-struct CanonicalDigest(Sha256);
+pub(crate) struct CanonicalDigest(Sha256);
 
 impl CanonicalDigest {
     fn new(domain: &[u8]) -> Self {
@@ -1862,7 +1888,7 @@ impl CanonicalDigest {
         self.0.finalize().into()
     }
 
-    fn byte(&mut self, value: u8) {
+    pub(crate) fn byte(&mut self, value: u8) {
         self.0.update([value]);
     }
 
@@ -1870,26 +1896,34 @@ impl CanonicalDigest {
         self.byte(u8::from(value));
     }
 
-    fn unsigned(&mut self, value: u64) {
+    pub(crate) fn unsigned(&mut self, value: u64) {
         self.0.update(value.to_be_bytes());
     }
 
-    fn signed(&mut self, value: i64) {
+    pub(crate) fn signed(&mut self, value: i64) {
         self.0.update(value.to_be_bytes());
     }
 
-    fn identifier(&mut self, value: [u8; 16]) {
+    pub(crate) fn identifier(&mut self, value: [u8; 16]) {
         self.0.update(value);
     }
 
-    fn bytes(&mut self, value: &[u8]) {
+    pub(crate) fn bytes(&mut self, value: &[u8]) {
         self.unsigned(u64::try_from(value.len()).unwrap_or(u64::MAX));
         self.0.update(value);
     }
 
-    fn name(&mut self, value: &RecordName) {
+    pub(crate) fn name(&mut self, value: &RecordName) {
         self.bytes(value.display().as_bytes());
         self.bytes(value.canonical().as_bytes());
+    }
+
+    pub(crate) fn trust_identity(&mut self, value: crate::FederationTrustIdentity) {
+        self.unsigned(value.generation);
+        self.bytes(&value.certificate_fingerprint);
+        self.bytes(&value.verifying_key);
+        self.signed(value.valid_from.get());
+        self.signed(value.valid_until.get());
     }
 
     fn optional_name(&mut self, value: Option<&RecordName>) {

@@ -15,6 +15,10 @@ mod cleanup_reclamation;
 mod cluster;
 mod component;
 mod consensus;
+mod federation_query;
+mod federation_relationship;
+#[cfg(test)]
+mod federation_relationship_tests;
 mod group_closure;
 mod identity;
 mod kernel;
@@ -59,6 +63,9 @@ pub use cleanup_permit::{
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
+pub use federation_query::{
+    FederationRelationshipRecord, FederationRelationshipState, FederationTrustIdentityRecord,
+};
 pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, run_repository_conformance,
@@ -165,6 +172,31 @@ impl AuthoritativeRepository {
     /// Fails closed when the route is absent or its durable representation is corrupt.
     pub fn scope_route(&self, scope_id: ScopeId) -> Result<ScopeRoute, RepositoryError> {
         routing::load_scope(self.database.connection(), scope_id)
+    }
+
+    /// Returns one validated federation relationship projection, if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed identities, states, epochs or relationship shapes.
+    pub fn federation_relationship(
+        &self,
+        relationship_id: meshspan_domain::FederationRelationshipId,
+    ) -> Result<Option<FederationRelationshipRecord>, RepositoryError> {
+        federation_query::relationship(&self.database, relationship_id)
+    }
+
+    /// Returns the active public identity for one exact relationship side.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed or multiple active identities.
+    pub fn active_federation_trust_identity(
+        &self,
+        relationship_id: meshspan_domain::FederationRelationshipId,
+        owner: crate::FederationIdentityOwner,
+    ) -> Result<Option<FederationTrustIdentityRecord>, RepositoryError> {
+        federation_query::active_identity(&self.database, relationship_id, owner)
     }
 
     /// Loads and verifies the exact durable consensus state for one membership epoch.
