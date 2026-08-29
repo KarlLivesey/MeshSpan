@@ -64,7 +64,8 @@ pub use directory::{
 pub use handle_io::{
     FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
     FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleOpenRequest,
-    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleIoError,
+    FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
+    FilesystemHandleWriteRequest, HandleIoError, HandleReadError,
 };
 pub use handles::{
     ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,
@@ -101,8 +102,9 @@ pub use reconciliation::{
     plan_reconciliation,
 };
 pub use stage_store::{
-    CompletedStage, DurableStageStore, StageCompletionRequest, StageLeaseReceipt,
-    StageLeaseRequest, StageRegistration, StageStoreError,
+    CompletedStage, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, StageCompletionRequest,
+    StageLeaseReceipt, StageLeaseRequest, StageRangeReadRequest, StageRegistration,
+    StageStoreError,
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
 pub use version_retention::{

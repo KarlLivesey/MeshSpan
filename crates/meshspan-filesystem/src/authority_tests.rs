@@ -11,11 +11,12 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    ContentPublicationError, ContentPublicationRequest, CreateDisposition, DurableContentPublisher,
-    FilePublication, FilesystemHandleOpenRequest, FilesystemHandleWriteRequest, HandleShare,
-    ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
-    OpenHandleRequest, PublicationDisposition, RootFilePublication, StageWrite, StageWriteOutcome,
-    VersionPublicationStore,
+    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
+    CreateDisposition, DurableContentPublisher, DurableContentReader, FilePublication,
+    FilesystemHandleOpenRequest, FilesystemHandleReadRequest, FilesystemHandleWriteRequest,
+    HandleShare, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
+    OpenHandleRequest, PublicationDisposition, PublishedContentReference, RootFilePublication,
+    StageWrite, StageWriteOutcome, VersionPublicationStore,
 };
 
 #[test]
@@ -89,6 +90,73 @@ fn revoked_write_never_reaches_the_stage_and_restored_authority_can_resume()
     assert_eq!(receipt.stage_outcome, StageWriteOutcome::Applied);
     assert_eq!(receipt.checkpoint.sequence, 1);
     assert_eq!(receipt.checkpoint.logical_extent, 4);
+    Ok(())
+}
+
+#[test]
+fn writable_handle_reads_its_private_overlay_while_another_handle_reads_published_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let published = publication()?;
+    seed_publication(directory.path(), &published)?;
+    let allowed = Rc::new(Cell::new(true));
+    let authority = TestAuthority::new(Rc::clone(&allowed), PrincipalId::from_bytes([18; 16])?);
+    let content_source = SeedPublisher {
+        content: PublishedContentReference {
+            publication_operation_id: published.file.operation_id,
+            manifest: published.file.manifest,
+        },
+        bytes: b"initial".to_vec(),
+    };
+    let service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), content_source)?;
+    let mut service = AuthorisedFilesystemService::new(service, authority);
+    let writer = writable_open()?;
+    let mut reader = writer.clone();
+    reader.operation_id = OperationId::from_bytes([23; 16])?;
+    reader.handle_id = HandleId::from_bytes([24; 16])?;
+    reader.desired_access = HandleAccess::new(true, false, false)?;
+    service.open_handle(
+        context(writer.opened_at)?,
+        &FilesystemHandleOpenRequest {
+            handle: writer.clone(),
+            maximum_stage_bytes: Some(1_024),
+        },
+    )?;
+    service.open_handle(
+        context(reader.opened_at)?,
+        &FilesystemHandleOpenRequest {
+            handle: reader.clone(),
+            maximum_stage_bytes: None,
+        },
+    )?;
+    let mut write = write_request(&writer)?;
+    write.write.offset = 2;
+    write.write.bytes = BoundedBytes::copy_from(b"ZZ", 2)?;
+    write.write.digest = blake3::hash(b"ZZ").into();
+    service.write_handle(context(write.observed_at)?, &write)?;
+
+    let private = service.read_handle(
+        context(UnixMicros::new(30))?,
+        read_request(25, &writer, 0, 7)?,
+    )?;
+    assert_eq!(private.bytes.as_slice(), b"inZZial");
+    assert_eq!(private.checkpoint_sequence, 1);
+    let published = service.read_handle(
+        context(UnixMicros::new(30))?,
+        read_request(26, &reader, 0, 7)?,
+    )?;
+    assert_eq!(published.bytes.as_slice(), b"initial");
+    assert_eq!(published.checkpoint_sequence, 0);
+
+    allowed.set(false);
+    assert!(matches!(
+        service.read_handle(
+            context(UnixMicros::new(30))?,
+            read_request(27, &writer, 0, 7)?,
+        ),
+        Err(AuthorisedFilesystemError::Authority(TestAuthorityError))
+    ));
     Ok(())
 }
 
@@ -199,9 +267,36 @@ fn write_request(
     })
 }
 
+fn read_request(
+    operation: u8,
+    open: &OpenHandleRequest,
+    offset: u64,
+    length: u64,
+) -> Result<FilesystemHandleReadRequest, Box<dyn std::error::Error>> {
+    Ok(FilesystemHandleReadRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        handle_id: open.handle_id,
+        handle_fence: 1,
+        principal_id: open.principal_id,
+        authorization_revision: open.authorization_revision,
+        gateway_node_id: open.gateway_node_id,
+        offset,
+        length,
+        content_deadline: UnixMicros::new(70),
+        observed_at: UnixMicros::new(30),
+    })
+}
+
 fn seed_file(state: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    seed_publication(state, &publication()?)
+}
+
+fn seed_publication(
+    state: &std::path::Path,
+    publication: &RootFilePublication,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = VersionPublicationStore::open(state, UnixMicros::new(1))?;
-    store.publish_root_file(&publication()?)?;
+    store.publish_root_file(publication)?;
     Ok(())
 }
 
@@ -242,6 +337,62 @@ fn publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
 }
 
 struct UnusedPublisher;
+
+struct SeedPublisher {
+    content: PublishedContentReference,
+    bytes: Vec<u8>,
+}
+
+impl DurableContentReader for SeedPublisher {
+    fn stream_range(
+        &mut self,
+        request: ContentReadRequest,
+        destination: &mut dyn std::io::Write,
+    ) -> Result<(), ContentReadError> {
+        let end = request
+            .offset
+            .checked_add(request.length)
+            .ok_or(ContentReadError::InvalidInput)?;
+        if request.content != self.content
+            || end > self.content.manifest.logical_length
+            || request.observed_at >= request.deadline
+            || request.authorization_revision == Revision::ZERO
+        {
+            return Err(ContentReadError::InvalidInput);
+        }
+        let start = usize::try_from(request.offset).map_err(|_| ContentReadError::InvalidInput)?;
+        let end = usize::try_from(end).map_err(|_| ContentReadError::InvalidInput)?;
+        destination.write_all(&self.bytes[start..end])?;
+        Ok(())
+    }
+}
+
+impl DurableContentPublisher for SeedPublisher {
+    type Sink = Vec<u8>;
+
+    fn resolve(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Option<ManifestPublication>, ContentPublicationError> {
+        Err(ContentPublicationError::Unavailable)
+    }
+
+    fn begin(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Self::Sink, ContentPublicationError> {
+        Err(ContentPublicationError::Unavailable)
+    }
+
+    fn finish(
+        &mut self,
+        _request: ContentPublicationRequest,
+        _sink: Self::Sink,
+        _completed: crate::CompletedStage,
+    ) -> Result<ManifestPublication, ContentPublicationError> {
+        Err(ContentPublicationError::Unavailable)
+    }
+}
 
 impl DurableContentPublisher for UnusedPublisher {
     type Sink = Vec<u8>;

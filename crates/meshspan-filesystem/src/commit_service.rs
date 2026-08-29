@@ -373,6 +373,125 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         crate::handle_io::write(&mut self.stages, &mut self.publications, request)
     }
 
+    /// Reads one bounded range from the exact published version plus this handle's private stage.
+    ///
+    /// Read-only handles observe only their immutable opened version. Writable handles pin one
+    /// durable stage checkpoint and overlay its verified random writes in journal order; no other
+    /// handle can observe those private bytes before flush.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed bounds/deadlines, stale or non-readable handles, changed checkpoints,
+    /// corrupt private parts, unavailable/corrupt immutable content and provider IO failure.
+    pub fn read_handle(
+        &mut self,
+        request: crate::FilesystemHandleReadRequest,
+    ) -> Result<crate::FilesystemHandleReadReceipt, crate::HandleReadError>
+    where
+        P: crate::DurableContentReader,
+    {
+        validate_handle_read(request)?;
+        let plan = self.publications.prepare_handle_read(request)?;
+        if plan.uses_private_stage {
+            return self.read_private_handle(request, plan);
+        }
+        let content = plan.base.ok_or(crate::HandleError::Corrupt)?;
+        let bytes = self.read_immutable_range(request, content)?;
+        Ok(crate::FilesystemHandleReadReceipt {
+            opened_version_id: plan.opened_version_id,
+            checkpoint_sequence: 0,
+            bytes,
+        })
+    }
+
+    fn read_private_handle(
+        &mut self,
+        request: crate::FilesystemHandleReadRequest,
+        plan: crate::handles::HandleReadPlan,
+    ) -> Result<crate::FilesystemHandleReadReceipt, crate::HandleReadError>
+    where
+        P: crate::DurableContentReader,
+    {
+        let stage_id = crate::handle_io::stage_id(request.handle_id)
+            .map_err(|_| crate::HandleReadError::InvalidInput)?;
+        let checkpoint = self.stages.checkpoint(stage_id)?;
+        let base_length = plan
+            .base
+            .map_or(0, |content| content.manifest.logical_length);
+        let content = &mut self.content;
+        let bytes = self.stages.read_range_with_base(
+            crate::StageRangeReadRequest {
+                stage_id,
+                stage_fence: request.handle_fence,
+                expected_sequence: checkpoint.sequence,
+                offset: request.offset,
+                length: request.length,
+                observed_at: request.observed_at,
+            },
+            base_length,
+            |offset, length, destination| {
+                let base = plan.base.ok_or(crate::StageStoreError::Corrupt)?;
+                content
+                    .stream_range(
+                        crate::ContentReadRequest {
+                            operation_id: request.operation_id,
+                            content: base,
+                            offset,
+                            length,
+                            authorization_revision: request.authorization_revision,
+                            deadline: request.content_deadline,
+                            observed_at: request.observed_at,
+                        },
+                        destination,
+                    )
+                    .map_err(map_content_read_to_stage)
+            },
+        )?;
+        Ok(crate::FilesystemHandleReadReceipt {
+            opened_version_id: plan.opened_version_id,
+            checkpoint_sequence: checkpoint.sequence,
+            bytes,
+        })
+    }
+
+    fn read_immutable_range(
+        &mut self,
+        request: crate::FilesystemHandleReadRequest,
+        content: crate::PublishedContentReference,
+    ) -> Result<meshspan_contracts::BoundedBytes, crate::HandleReadError>
+    where
+        P: crate::DurableContentReader,
+    {
+        let available = content
+            .manifest
+            .logical_length
+            .saturating_sub(request.offset);
+        let length = request.length.min(available);
+        let size = usize::try_from(length).map_err(|_| crate::HandleReadError::InvalidInput)?;
+        let mut bytes = Vec::with_capacity(size);
+        if length != 0 {
+            self.content.stream_range(
+                crate::ContentReadRequest {
+                    operation_id: request.operation_id,
+                    content,
+                    offset: request.offset,
+                    length,
+                    authorization_revision: request.authorization_revision,
+                    deadline: request.content_deadline,
+                    observed_at: request.observed_at,
+                },
+                &mut bytes,
+            )?;
+        }
+        if bytes.len() != size {
+            return Err(crate::HandleReadError::Content(
+                crate::ContentReadError::Corrupt,
+            ));
+        }
+        meshspan_contracts::BoundedBytes::copy_from(&bytes, crate::MAXIMUM_STAGE_READ_BYTES)
+            .map_err(|_| crate::HandleReadError::InvalidInput)
+    }
+
     /// Renews a handle and its private stage, or transfers both under one higher fence.
     ///
     /// The stage transition is preflighted, then the authoritative handle transition is durable,
@@ -667,6 +786,23 @@ fn validate_request(request: &RootFileCommitRequest) -> Result<(), FilesystemCom
         || request.file_object_revision_id == request.root_object_revision_id
     {
         Err(FilesystemCommitError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_handle_read(
+    request: crate::FilesystemHandleReadRequest,
+) -> Result<(), crate::HandleReadError> {
+    let maximum = u64::try_from(crate::MAXIMUM_STAGE_READ_BYTES)
+        .map_err(|_| crate::HandleReadError::InvalidInput)?;
+    if request.handle_fence == 0
+        || request.authorization_revision == Revision::ZERO
+        || request.length > maximum
+        || request.offset.checked_add(request.length).is_none()
+        || request.content_deadline <= request.observed_at
+    {
+        Err(crate::HandleReadError::InvalidInput)
     } else {
         Ok(())
     }

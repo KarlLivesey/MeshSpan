@@ -10,6 +10,8 @@ mod lease;
 mod locks;
 #[path = "handles/path.rs"]
 mod path;
+#[path = "handles/read.rs"]
+mod read;
 #[path = "handles/rename.rs"]
 mod rename;
 #[path = "handles/state.rs"]
@@ -34,6 +36,7 @@ pub use locks::{
     UnlockRangeRequest,
 };
 pub(crate) use locks::{lock_range, unlock_range};
+pub(crate) use read::{HandleReadPlan, prepare_read};
 pub use rename::{ReadyNamespaceDelete, ReadyNamespaceDeletePage};
 pub(crate) use rename::{
     consume_unlink_authority, load_ready_deletes, prepare as prepare_rename, prepare_unlink,

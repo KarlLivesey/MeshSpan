@@ -211,7 +211,12 @@ copy-on-write filesystem service. This document records executable evidence only
   write at checkpoint sequence one. The cluster adapter drives the real
   replicated metadata evaluator: an owner session receives an exact bounded
   grant and immediate committed session revocation becomes a typed denial.
-  Connector conformance and the remaining read/query operation families remain
+  Handle reads now revalidate `READ_DATA`, pin one exact private checkpoint and
+  overlay its verified journal-ordered parts on the immutable opened version in
+  at most 8 MiB of memory. Another handle continues to read only published
+  bytes. Tests cover partial overlap, short EOF, zero-filled private extension,
+  excessive requests, forged part bytes and revocation before content IO.
+  Connector conformance and the remaining stat/enumeration/query families remain
   open.
 
 ## Closure gates
@@ -446,8 +451,9 @@ copy-on-write filesystem service. This document records executable evidence only
    The authoritative evaluator, session fencing, revocation and principal
    lifecycle transitions are implemented and tested. Operation-time capability
    validation now fronts the implemented mutating handle and namespace service
-   families through one metadata adapter. Read/query enforcement,
-   administration queries and the complete rights-vector suite remain open.
+   families plus bounded handle reads through one metadata adapter. Stat and
+   enumeration enforcement, administration queries and the complete
+   rights-vector suite remain open.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 
 Stage 5 remains incomplete until every gate is checked and the complete local

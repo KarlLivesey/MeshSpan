@@ -327,6 +327,12 @@ transaction. Provider locations and connector-specific credentials never cross
 this boundary. The cluster adapter translates it to the replicated metadata
 evaluator; no access adapter calculates effective rights.
 
+A live handle read pins its current private-stage sequence. The service reads
+only the requested immutable-base range, overlays every intersecting verified
+stage part in mutation order and returns a short result at logical EOF. One read
+is capped at 8 MiB and never allocates in proportion to file size. Unflushed
+bytes remain visible only through their owning handle.
+
 ## Access adapter
 
 **Owns:** one public protocol's negotiation, authentication mapping, request

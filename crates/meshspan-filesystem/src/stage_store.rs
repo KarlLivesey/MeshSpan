@@ -38,6 +38,8 @@ const STAGE_DIRECTORY: &str = "stages";
 const DATABASE_FILE: &str = "filesystem-stages.sqlite3";
 const COPY_BUFFER_BYTES: usize = 64 * 1_024;
 const COPY_BUFFER_BYTES_U64: u64 = 65_536;
+/// Maximum plaintext bytes returned by one private-stage range read.
+pub const MAXIMUM_STAGE_READ_BYTES: usize = 8 * 1_024 * 1_024;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -86,6 +88,23 @@ pub struct CompletedStage {
     pub logical_length: u64,
     /// BLAKE3 digest of the complete logical byte stream.
     pub content_digest: [u8; 32],
+}
+
+/// Exact live checkpoint range selected for a bounded read-your-writes view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageRangeReadRequest {
+    /// Private stage derived from the opened handle.
+    pub stage_id: StageId,
+    /// Exact current handle/stage fence.
+    pub stage_fence: u64,
+    /// Exact checkpoint sequence selected before provider IO.
+    pub expected_sequence: u64,
+    /// First logical byte requested.
+    pub offset: u64,
+    /// Maximum requested bytes; the result is shorter at logical EOF.
+    pub length: u64,
+    /// Authoritative read instant used for lease expiry.
+    pub observed_at: UnixMicros,
 }
 
 /// Exact idempotent private-stage lease transition.
@@ -518,6 +537,53 @@ impl DurableStageStore {
         self.stream_complete_inner(request, base_length, Some(&mut load_base), destination)
     }
 
+    /// Reads one bounded range from an exact live checkpoint over an immutable base version.
+    ///
+    /// The base callback receives only the intersecting immutable range. Every staged part is
+    /// independently length/digest verified before its overlapping bytes are applied in journal
+    /// order. Memory is bounded by [`MAXIMUM_STAGE_READ_BYTES`], never logical file size.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale fences/checkpoints, expired stages, excessive or overflowing ranges, short
+    /// base streams, corrupt parts and callback failure.
+    pub fn read_range_with_base(
+        &self,
+        request: StageRangeReadRequest,
+        base_length: u64,
+        mut load_base: impl FnMut(u64, u64, &mut dyn Write) -> Result<(), StageStoreError>,
+    ) -> Result<BoundedBytes, StageStoreError> {
+        validate_range_read(request)?;
+        let stage = load_stage(&self.connection, request.stage_id)?;
+        if stage.state != 1
+            || stage.fence != request.stage_fence
+            || stage.sequence != request.expected_sequence
+            || request.observed_at >= stage.expires_at
+        {
+            return Err(StageStoreError::Stale);
+        }
+        let logical_length = base_length.max(stage.logical_extent);
+        let available = logical_length.saturating_sub(request.offset);
+        let result_length = request.length.min(available);
+        let result_size =
+            usize::try_from(result_length).map_err(|_| StageStoreError::InvalidInput)?;
+        let mut result = vec![0_u8; result_size];
+        let base_available = base_length.saturating_sub(request.offset);
+        let base_read_length = result_length.min(base_available);
+        if base_read_length != 0 {
+            let mut destination = std::io::Cursor::new(result.as_mut_slice());
+            let mut exact = ExactPrefixWriter::new(&mut destination, base_read_length);
+            load_base(request.offset, base_read_length, &mut exact)?;
+            exact.finish()?;
+        }
+        let writes = load_stage_writes(&self.connection, request.stage_id)?;
+        for write in &writes {
+            apply_part_to_range(&self.stages, write, request.offset, &mut result)?;
+        }
+        BoundedBytes::copy_from(&result, MAXIMUM_STAGE_READ_BYTES)
+            .map_err(|_| StageStoreError::InvalidInput)
+    }
+
     fn stream_complete_inner(
         &mut self,
         request: StageCompletionRequest,
@@ -735,6 +801,19 @@ pub enum StageStoreError {
 
 fn validate_lease_request(request: StageLeaseRequest) -> Result<(), StageStoreError> {
     if request.expected_fence == 0 || request.lease_expires_at <= request.observed_at {
+        Err(StageStoreError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_range_read(request: StageRangeReadRequest) -> Result<(), StageStoreError> {
+    let maximum =
+        u64::try_from(MAXIMUM_STAGE_READ_BYTES).map_err(|_| StageStoreError::InvalidInput)?;
+    if request.stage_fence == 0
+        || request.length > maximum
+        || request.offset.checked_add(request.length).is_none()
+    {
         Err(StageStoreError::InvalidInput)
     } else {
         Ok(())
@@ -1138,6 +1217,42 @@ fn apply_part(
     Ok(())
 }
 
+fn apply_part_to_range(
+    root: &Dir,
+    stored: &StoredWrite,
+    range_offset: u64,
+    result: &mut [u8],
+) -> Result<(), StageStoreError> {
+    let directory = root.open_dir(stored.stage_id.to_string())?;
+    let mut file = directory.open(&stored.part_name)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    if bytes.len() != usize::try_from(stored.length).map_err(|_| StageStoreError::Corrupt)?
+        || blake3::hash(&bytes).as_bytes() != &stored.digest
+    {
+        return Err(StageStoreError::Corrupt);
+    }
+    let result_length = u64::try_from(result.len()).map_err(|_| StageStoreError::Corrupt)?;
+    let range_end = range_offset
+        .checked_add(result_length)
+        .ok_or(StageStoreError::Corrupt)?;
+    let write_end = stored.end()?;
+    let overlap_start = range_offset.max(stored.offset);
+    let overlap_end = range_end.min(write_end);
+    if overlap_start >= overlap_end {
+        return Ok(());
+    }
+    let source_start =
+        usize::try_from(overlap_start - stored.offset).map_err(|_| StageStoreError::Corrupt)?;
+    let destination_start =
+        usize::try_from(overlap_start - range_offset).map_err(|_| StageStoreError::Corrupt)?;
+    let length =
+        usize::try_from(overlap_end - overlap_start).map_err(|_| StageStoreError::Corrupt)?;
+    result[destination_start..destination_start + length]
+        .copy_from_slice(&bytes[source_start..source_start + length]);
+    Ok(())
+}
+
 fn apply_part_to_image(
     directory: &Dir,
     stored: &StoredWrite,
@@ -1303,9 +1418,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CompletedStage, DATABASE_FILE, DurableStageStore, MIGRATIONS, SCHEMA_VERSION,
-        StageCompletionRequest, StageLeaseRequest, StageRegistration, StageStoreError, configure,
-        install_part,
+        CompletedStage, DATABASE_FILE, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, MIGRATIONS,
+        SCHEMA_VERSION, STAGE_DIRECTORY, StageCompletionRequest, StageLeaseRequest,
+        StageRangeReadRequest, StageRegistration, StageStoreError, configure, install_part,
     };
     use crate::{StageWrite, StageWriteOutcome};
 
@@ -1714,6 +1829,114 @@ mod tests {
         assert_eq!(completed.logical_length, 0);
         assert_eq!(completed.content_digest, *blake3::hash(&[]).as_bytes());
         assert!(completed_bytes.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_range_read_overlays_one_checkpoint_and_returns_short_eof()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([91; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 1, 100))?;
+        store.write(stage_id, &write(92, 1, 2, b"ZZ")?, UnixMicros::new(2))?;
+        let base = b"initial";
+
+        let result = store.read_range_with_base(
+            StageRangeReadRequest {
+                stage_id,
+                stage_fence: 1,
+                expected_sequence: 1,
+                offset: 1,
+                length: 5,
+                observed_at: UnixMicros::new(3),
+            },
+            7,
+            |offset, length, destination| write_base_range(base, offset, length, destination),
+        )?;
+        assert_eq!(result.as_slice(), b"nZZia");
+
+        let eof = store.read_range_with_base(
+            StageRangeReadRequest {
+                stage_id,
+                stage_fence: 1,
+                expected_sequence: 1,
+                offset: 6,
+                length: 10,
+                observed_at: UnixMicros::new(3),
+            },
+            7,
+            |offset, length, destination| write_base_range(base, offset, length, destination),
+        )?;
+        assert_eq!(eof.as_slice(), b"l");
+
+        store.write(stage_id, &write(93, 1, 10, b"X")?, UnixMicros::new(4))?;
+        let extension = store.read_range_with_base(
+            StageRangeReadRequest {
+                stage_id,
+                stage_fence: 1,
+                expected_sequence: 2,
+                offset: 7,
+                length: 4,
+                observed_at: UnixMicros::new(5),
+            },
+            7,
+            |offset, length, destination| write_base_range(base, offset, length, destination),
+        )?;
+        assert_eq!(extension.as_slice(), &[0, 0, 0, b'X']);
+        let excessive = u64::try_from(MAXIMUM_STAGE_READ_BYTES)?.saturating_add(1);
+        assert!(matches!(
+            store.read_range_with_base(
+                StageRangeReadRequest {
+                    stage_id,
+                    stage_fence: 1,
+                    expected_sequence: 2,
+                    offset: 0,
+                    length: excessive,
+                    observed_at: UnixMicros::new(5),
+                },
+                7,
+                |_, _, _| Ok(()),
+            ),
+            Err(StageStoreError::InvalidInput)
+        ));
+        std::fs::write(
+            directory
+                .path()
+                .join(STAGE_DIRECTORY)
+                .join(stage_id.to_string())
+                .join(format!("{}.part", OperationId::from_bytes([92; 16])?)),
+            b"forged",
+        )?;
+        assert!(matches!(
+            store.read_range_with_base(
+                StageRangeReadRequest {
+                    stage_id,
+                    stage_fence: 1,
+                    expected_sequence: 2,
+                    offset: 0,
+                    length: 4,
+                    observed_at: UnixMicros::new(5),
+                },
+                7,
+                |offset, length, destination| {
+                    write_base_range(base, offset, length, destination)
+                },
+            ),
+            Err(StageStoreError::Corrupt)
+        ));
+        Ok(())
+    }
+
+    fn write_base_range(
+        base: &[u8],
+        offset: u64,
+        length: u64,
+        destination: &mut dyn Write,
+    ) -> Result<(), StageStoreError> {
+        let start = usize::try_from(offset).map_err(|_| StageStoreError::InvalidInput)?;
+        let end = usize::try_from(offset + length).map_err(|_| StageStoreError::InvalidInput)?;
+        destination.write_all(&base[start..end])?;
         Ok(())
     }
 

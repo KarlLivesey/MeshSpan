@@ -11,9 +11,10 @@ use crate::{
     DirectoryPublication, DurableContentPublisher, DurableContentReader, FilesystemCommitError,
     FilesystemCommitService, FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest,
     FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest, FilesystemHandleFlushRequest,
-    FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
-    HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt, HandleLeaseRequest,
-    LockRangeReceipt, LockRangeRequest, NamespacePublicationReceipt, NamespaceRenamePublication,
+    FilesystemHandleOpenRequest, FilesystemHandleReadReceipt, FilesystemHandleReadRequest,
+    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleAccess, HandleError,
+    HandleIoError, HandleLeaseReceipt, HandleLeaseRequest, HandleReadError, LockRangeReceipt,
+    LockRangeRequest, NamespacePublicationReceipt, NamespaceRenamePublication,
     NamespaceRenameReceipt, NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt,
     RangeLockKind, UnlockRangeReceipt, UnlockRangeRequest,
 };
@@ -211,6 +212,33 @@ where
         self.filesystem
             .write_handle(request)
             .map_err(AuthorisedFilesystemError::HandleIo)
+    }
+
+    /// Reads one bounded immutable/private-overlay range after revalidating current read access.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed context, denial, stale handles and content or stage verification failure.
+    pub fn read_handle(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: FilesystemHandleReadRequest,
+    ) -> Result<FilesystemHandleReadReceipt, AuthorisedFilesystemError<A::Error>>
+    where
+        P: DurableContentReader,
+    {
+        require_same_time(context, request.observed_at)?;
+        let target = self.handle_target(request.handle_id, context.now)?;
+        self.authorise_handle(context, target, Rights::READ_DATA)?;
+        validate_handle_caller(
+            target,
+            request.principal_id,
+            request.gateway_node_id,
+            request.authorization_revision,
+        )?;
+        self.filesystem
+            .read_handle(request)
+            .map_err(AuthorisedFilesystemError::Read)
     }
 
     /// Revalidates write permission before immutable content or a namespace head can advance.
@@ -632,6 +660,9 @@ pub enum AuthorisedFilesystemError<E> {
     /// Content or namespace publication rejected the operation.
     #[error("authorised filesystem commit failed")]
     Commit(#[source] FilesystemCommitError),
+    /// Verified handle read failed after authority admission.
+    #[error("authorised filesystem read failed")]
+    Read(#[source] HandleReadError),
 }
 
 #[cfg(test)]
