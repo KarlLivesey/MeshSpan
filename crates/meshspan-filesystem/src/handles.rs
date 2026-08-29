@@ -683,15 +683,15 @@ fn resolve_leaf(
 }
 
 #[derive(Clone, Copy)]
-struct StoredRevision {
-    volume_id: VolumeId,
-    object_id: ObjectId,
-    kind: DirectoryEntryKind,
-    directory_root: Option<DirectoryNodeDigest>,
-    file_version_id: Option<FileVersionId>,
+pub(crate) struct StoredRevision {
+    pub(crate) volume_id: VolumeId,
+    pub(crate) object_id: ObjectId,
+    pub(crate) kind: DirectoryEntryKind,
+    pub(crate) directory_root: Option<DirectoryNodeDigest>,
+    pub(crate) file_version_id: Option<FileVersionId>,
 }
 
-fn load_revision(
+pub(crate) fn load_revision(
     connection: &Connection,
     revision_id: ObjectRevisionId,
 ) -> Result<StoredRevision, HandleError> {
@@ -739,7 +739,7 @@ fn load_revision(
     })
 }
 
-fn lookup_entry(
+pub(crate) fn lookup_entry(
     connection: &Connection,
     root: DirectoryNodeDigest,
     name: &crate::NamespaceComponent,

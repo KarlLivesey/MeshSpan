@@ -8,15 +8,16 @@ use meshspan_domain::{
 use thiserror::Error;
 
 use crate::{
-    AdapterCloseFileRequest, AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest,
-    AdapterLockRequest, AdapterOpenFileRequest, AdapterReadFileRequest, AdapterStatRequest,
-    AdapterUnlockRequest, AdapterWriteFileRequest, DirectoryPublication, DurableContentPublisher,
-    DurableContentReader, FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
-    FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
-    FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleOpenRequest,
-    FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
-    FilesystemHandleWriteRequest, HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt,
-    HandleLeaseRequest, HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
+    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
+    AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
+    AdapterReadFileRequest, AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest,
+    DirectoryPublication, DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy,
+    FilesystemCommitError, FilesystemCommitService, FilesystemHandleCloseReceipt,
+    FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest,
+    FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleReadReceipt,
+    FilesystemHandleReadRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
+    HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt, HandleLeaseRequest,
+    HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
     NamespacePublicationReceipt, NamespaceQueryError, NamespaceRenamePublication,
     NamespaceRenameReceipt, NamespaceStatRequest, NamespaceUnlinkPublication,
     NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, StageWrite,
@@ -657,6 +658,25 @@ where
                 observed_at: request.observed_at,
             },
         )
+    }
+
+    pub(crate) fn adapter_create_directory(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: &AdapterCreateDirectoryRequest,
+    ) -> Result<crate::DirectoryPublicationReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let parent = self
+            .filesystem
+            .adapter_directory_parent(branch_id, request)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        let grant = self.authorise(context, request.volume_id, parent, Rights::CREATE_CHILD)?;
+        let publication = self
+            .filesystem
+            .prepare_adapter_directory(branch_id, request, grant.principal_id, parent)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        self.create_directory(context, &publication)
     }
 
     pub(crate) fn adapter_close(

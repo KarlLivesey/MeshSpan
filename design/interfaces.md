@@ -339,8 +339,11 @@ branch, version-retention sequence and manifest format; it obtains the principal
 authorisation revision and gateway from committed authority/handle state and
 derives the write digest itself. Those internal values therefore cannot be
 forged or accidentally invented by an SMB or HTTPS translator. The remaining
-create, namespace mutation, administration and snapshot families must adopt the
-same semantic boundary before the Stage 5 adapter contract is complete.
+file-create, rename/unlink, administration and snapshot families must adopt the
+same semantic boundary before the Stage 5 adapter contract is complete. Empty
+directory creation already uses this boundary: the daemon resolves the parent,
+derives every internal identity and persists the exact publication plan so a
+lost-response retry cannot silently rebase.
 
 A live handle read pins its current private-stage sequence. The service reads
 only the requested immutable-base range, overlays every intersecting verified

@@ -11,16 +11,17 @@ use meshspan_domain::{
     UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    AdapterCloseFileRequest, AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest,
-    AdapterLockRequest, AdapterOpenFileRequest, AdapterReadFileRequest, AdapterStatRequest,
-    AdapterUnlockRequest, AdapterWriteFileRequest, AuthorisedFilesystemError,
-    AuthorisedFilesystemService, BoundFilesystemAdapter, ByteRange, ContentPublicationError,
-    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentPublisher,
-    DurableContentReader, FilePublication, FilesystemAccessAuthority, FilesystemAccessContext,
-    FilesystemAdapterPolicy, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
-    FilesystemCommitService, FilesystemFileAdapter, FilesystemHandleReadReceipt, HandleAccess,
-    HandleError, HandleIoError, HandleShare, ManifestPublication, NamespaceLimits, NamespacePath,
-    NamespacePublicationPath, OpenHandleReceipt, PublishedContentReference, RangeLockKind,
+    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
+    AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
+    AdapterReadFileRequest, AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest,
+    AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter, ByteRange,
+    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
+    DurableContentPublisher, DurableContentReader, FilePublication, FilesystemAccessAuthority,
+    FilesystemAccessContext, FilesystemAdapterPolicy, FilesystemAuthorityGrant,
+    FilesystemAuthorityRequest, FilesystemCommitService, FilesystemFileAdapter,
+    FilesystemHandleReadReceipt, HandleAccess, HandleError, HandleIoError, HandleShare,
+    ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
+    OpenHandleReceipt, PublicationDisposition, PublishedContentReference, RangeLockKind,
     RootFilePublication, VersionPublicationStore,
 };
 use tempfile::tempdir;
@@ -52,6 +53,7 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
     );
 
     assert_namespace_queries(&gateway_b, &service)?;
+    let directory_request = create_directory(&gateway_a, &mut service, publication.file.volume_id)?;
 
     let rejected = open_request(35, 36, false, true, 9, 80)?;
     let missing_credential = InProcessAdapter::new(gateway_b.node_id, [0; 32]);
@@ -95,6 +97,7 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
         BranchId::from_bytes([11; 16])?,
         FilesystemAdapterPolicy::new(true, 1, 1)?,
     );
+    assert_directory_replay(&gateway_b, &mut restarted, &directory_request)?;
     let failover_reader = open_request(32, 33, false, true, 100, 180)?;
     gateway_b.open(&mut restarted, &failover_reader, None)?;
     assert_read(
@@ -105,6 +108,55 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
         b"inZZial",
         110,
     )?;
+    Ok(())
+}
+
+fn create_directory(
+    gateway: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    volume_id: VolumeId,
+) -> Result<AdapterCreateDirectoryRequest, Box<dyn std::error::Error>> {
+    let request = AdapterCreateDirectoryRequest {
+        operation_id: OperationId::from_bytes([54; 16])?,
+        volume_id,
+        path: NamespacePath::from_components(["Archive"], NamespaceLimits::PORTABLE)?,
+        observed_at: UnixMicros::new(8),
+    };
+    let created = gateway.create_directory(service, &request)?;
+    assert_eq!(created.disposition, PublicationDisposition::Applied);
+    assert_eq!(
+        gateway
+            .stat(
+                service,
+                &AdapterStatRequest {
+                    volume_id,
+                    path: request.path.clone(),
+                    observed_at: request.observed_at,
+                },
+            )?
+            .kind,
+        meshspan_filesystem::DirectoryEntryKind::Directory
+    );
+    Ok(request)
+}
+
+fn assert_directory_replay(
+    gateway: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    request: &AdapterCreateDirectoryRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let replayed = gateway.create_directory(service, request)?;
+    assert_eq!(replayed.disposition, PublicationDisposition::Replayed);
+    let conflicting = AdapterCreateDirectoryRequest {
+        path: NamespacePath::from_components(["Different"], NamespaceLimits::PORTABLE)?,
+        ..request.clone()
+    };
+    assert!(matches!(
+        gateway.create_directory(service, &conflicting),
+        Err(AuthorisedFilesystemError::Handle(
+            HandleError::OperationConflict
+        ))
+    ));
     Ok(())
 }
 
@@ -329,6 +381,14 @@ impl InProcessAdapter {
         request: &AdapterListRequest,
     ) -> Result<meshspan_filesystem::NamespaceListPage, S::Error> {
         service.list(self.context(request.observed_at), request)
+    }
+
+    fn create_directory<S: FilesystemFileAdapter>(
+        self,
+        service: &mut S,
+        request: &AdapterCreateDirectoryRequest,
+    ) -> Result<meshspan_filesystem::DirectoryPublicationReceipt, S::Error> {
+        service.create_directory(self.context(request.observed_at), request)
     }
 
     fn close<S: FilesystemFileAdapter>(
