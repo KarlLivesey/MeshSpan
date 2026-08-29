@@ -17,6 +17,7 @@ mod directory;
 mod handle_io;
 mod handles;
 mod name;
+mod namespace_planning;
 mod namespace_query;
 mod publication;
 mod reachability;
@@ -26,10 +27,11 @@ mod staging;
 mod version_retention;
 
 pub use adapter::{
-    AdapterCloseFileRequest, AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest,
-    AdapterLockRequest, AdapterOpenFileRequest, AdapterReadFileRequest, AdapterStatRequest,
-    AdapterUnlockRequest, AdapterWriteFileRequest, BoundFilesystemAdapter,
-    FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemFileAdapter,
+    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
+    AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
+    AdapterReadFileRequest, AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest,
+    BoundFilesystemAdapter, FilesystemAdapterConfigurationError, FilesystemAdapterPolicy,
+    FilesystemFileAdapter,
 };
 pub use authority::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, FilesystemAccessAuthority,

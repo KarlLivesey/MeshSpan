@@ -151,6 +151,8 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "version_cleanup_reference_fences",
         "retired_manifest_roots",
         "cancelled_cleanup_releases",
+        "adapter_directory_plans",
+        "adapter_directory_plan_ancestors",
     ] {
         assert_table_exists(&store.connection, table)?;
     }

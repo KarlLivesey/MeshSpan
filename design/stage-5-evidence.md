@@ -263,6 +263,15 @@ copy-on-write filesystem service. This document records executable evidence only
   than replaying the old handle revision. The external two-gateway proof queries
   the namespace, acquires/releases an exclusive lock, transfers a live read
   handle to the second gateway with a new fence and closes it under that fence.
+- Semantic empty-directory creation now accepts only an operation identity,
+  logical volume/path and authoritative instant. The daemon resolves and
+  authorises the exact current parent, derives every object, immutable revision
+  and namespace-commit identity, and durably records the exact path-copy plan
+  before publication. A retry after restart reloads and verifies that plan
+  rather than rebasing onto a later namespace head. The external two-gateway
+  proof creates and queries a directory, advances the namespace independently,
+  restarts the complete filesystem store, replays the original result and
+  rejects changed input under the same operation identity.
 
 ## Closure gates
 
@@ -504,9 +513,10 @@ copy-on-write filesystem service. This document records executable evidence only
    7 so no connector can treat a repository read as access authority.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
    The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
-   contract and two-gateway restart proof are complete. Creation, namespace
-   mutations, authorised administration views and the two-isolated-node
-   service-level reconciliation proof remain open.
+   contract, semantic directory creation and two-gateway restart proof are
+   complete. Semantic file creation, rename/unlink, authorised administration
+   views and the two-isolated-node service-level reconciliation proof remain
+   open.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
 suite passes together.

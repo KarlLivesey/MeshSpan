@@ -27,7 +27,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 26] = [
+const MIGRATIONS: [Migration; 27] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -132,8 +132,12 @@ const MIGRATIONS: [Migration; 26] = [
         version: 26,
         sql: include_str!("../schema/branch/026_namespace_unlink_operations.sql"),
     },
+    Migration {
+        version: 27,
+        sql: include_str!("../schema/branch/027_adapter_directory_plans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 26;
+const SCHEMA_VERSION: u32 = 27;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -808,6 +812,30 @@ impl VersionPublicationStore {
         publication: &DirectoryPublication,
     ) -> Result<DirectoryPublicationReceipt, PublicationError> {
         namespace::create_directory(&mut self.connection, publication, None)
+    }
+
+    pub(crate) fn adapter_directory_parent(
+        &self,
+        branch_id: BranchId,
+        request: &crate::AdapterCreateDirectoryRequest,
+    ) -> Result<ObjectId, crate::HandleError> {
+        crate::namespace_planning::directory_parent(&self.connection, branch_id, request)
+    }
+
+    pub(crate) fn prepare_adapter_directory(
+        &mut self,
+        branch_id: BranchId,
+        request: &crate::AdapterCreateDirectoryRequest,
+        created_by: PrincipalId,
+        expected_parent: ObjectId,
+    ) -> Result<DirectoryPublication, crate::HandleError> {
+        crate::namespace_planning::prepare_directory(
+            &mut self.connection,
+            branch_id,
+            request,
+            created_by,
+            expected_parent,
+        )
     }
 
     /// Atomically renames or moves one existing object within a volume branch.

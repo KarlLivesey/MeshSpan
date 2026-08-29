@@ -161,6 +161,19 @@ pub struct AdapterListRequest {
     pub observed_at: UnixMicros,
 }
 
+/// Semantic empty-directory creation supplied by an access connector.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterCreateDirectoryRequest {
+    /// Stable end-to-end idempotency identity.
+    pub operation_id: OperationId,
+    /// Logical volume selected by the authenticated request.
+    pub volume_id: VolumeId,
+    /// Canonical bounded logical path of the new directory.
+    pub path: NamespacePath,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
 /// Semantic close, optionally including the exact dirty checkpoint to publish first.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdapterCloseFileRequest {
@@ -304,6 +317,17 @@ pub trait FilesystemFileAdapter {
         request: &AdapterListRequest,
     ) -> Result<NamespaceListPage, Self::Error>;
 
+    /// Creates one empty logical directory beneath an authorised current parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, path, collision, stale-head or durability failure.
+    fn create_directory(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterCreateDirectoryRequest,
+    ) -> Result<crate::DirectoryPublicationReceipt, Self::Error>;
+
     /// Flushes when required and then releases one exact live handle.
     ///
     /// # Errors
@@ -434,6 +458,15 @@ where
     ) -> Result<NamespaceListPage, Self::Error> {
         self.filesystem
             .adapter_list(self.branch_id, context, request)
+    }
+
+    fn create_directory(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterCreateDirectoryRequest,
+    ) -> Result<crate::DirectoryPublicationReceipt, Self::Error> {
+        self.filesystem
+            .adapter_create_directory(self.branch_id, context, request)
     }
 
     fn close_file(
