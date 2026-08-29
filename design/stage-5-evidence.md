@@ -387,8 +387,11 @@ copy-on-write filesystem service. This document records executable evidence only
    stage takeover are also durable and tested. Handle-bound flush publication is
    durable and tested through the real encrypted folder provider, including
    bounded base-version overlay and lost-response recovery after complete
-   restart. Atomic create dispositions, implicit dirty close, rename/move and
-   final namespace unlink remain open.
+   restart. Creation-capable dispositions now publish an empty first version and
+   reserve the creator's handle in one final metadata transaction; exact restart
+   replay, existing-path open-or-create, hostile plan rejection and rollback when
+   handle admission fails are tested. Implicit dirty close, rename/move and final
+   namespace unlink remain open.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 

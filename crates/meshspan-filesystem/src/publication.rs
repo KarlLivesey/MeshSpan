@@ -632,6 +632,14 @@ impl VersionPublicationStore {
         namespace::publish(&mut self.connection, publication, None)
     }
 
+    pub(crate) fn publish_root_file_and_open(
+        &mut self,
+        publication: &RootFilePublication,
+        open: &crate::OpenHandleRequest,
+    ) -> Result<(NamespacePublicationReceipt, crate::OpenHandleReceipt), crate::HandleError> {
+        namespace::publish_and_open(&mut self.connection, publication, open)
+    }
+
     /// Atomically creates one empty directory and path-copies every selected ancestor.
     ///
     /// # Errors
@@ -700,6 +708,13 @@ impl VersionPublicationStore {
             operation_id,
             PublicationDisposition::Replayed,
         )
+    }
+
+    pub(crate) fn resolve_open_request(
+        &self,
+        request: &crate::OpenHandleRequest,
+    ) -> Result<Option<crate::OpenHandleReceipt>, crate::HandleError> {
+        crate::handles::resolve_open_request(&self.connection, request)
     }
 
     /// Extends a live handle lease or explicitly transfers it under a new fence.

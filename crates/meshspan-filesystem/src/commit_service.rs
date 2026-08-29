@@ -18,7 +18,8 @@ use crate::{
     VersionPublicationStore,
 };
 use crate::{
-    FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
+    FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest, FilesystemHandleOpenRequest,
+    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
 };
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
@@ -212,6 +213,85 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         request: &FilesystemHandleOpenRequest,
     ) -> Result<crate::OpenHandleReceipt, crate::HandleIoError> {
         crate::handle_io::open(&mut self.stages, &mut self.publications, request)
+    }
+
+    /// Atomically opens an existing file or creates its empty first version and reserves a handle.
+    ///
+    /// Durable empty content is prepared before the final transaction. Namespace visibility and
+    /// handle admission then commit together, so no observer can race into the newly created path
+    /// before the creator owns its requested share mode. Interrupted content work may leave only
+    /// unreachable immutable bytes; exact retry resolves the same content and metadata identities.
+    ///
+    /// # Errors
+    ///
+    /// Rejects non-creating dispositions, non-empty or mismatched creation plans, unsafe stage
+    /// policy, stale namespace bases, sharing conflicts, identity reuse and persistence failure.
+    pub fn open_or_create_handle(
+        &mut self,
+        request: &FilesystemHandleCreateRequest,
+    ) -> Result<FilesystemHandleCreateReceipt, FilesystemCommitError> {
+        validate_handle_creation(request)?;
+        if let Some(handle) = self
+            .publications
+            .resolve_open_request(&request.open.handle)?
+        {
+            let creation = self
+                .publications
+                .resolve_namespace_publication(request.initial_file.completion.operation_id)?;
+            validate_creation_replay(request, handle, creation)?;
+            return Ok(FilesystemHandleCreateReceipt { handle, creation });
+        }
+
+        match self
+            .publications
+            .preflight_open_handle(&request.open.handle)
+        {
+            Ok(()) => {
+                let handle =
+                    crate::handle_io::open(&mut self.stages, &mut self.publications, &request.open)
+                        .map_err(map_handle_io)?;
+                Ok(FilesystemHandleCreateReceipt {
+                    handle,
+                    creation: None,
+                })
+            }
+            Err(crate::HandleError::CreationRequired) => {
+                crate::handle_io::prepare_stage(&mut self.stages, &request.open)
+                    .map_err(map_handle_io)?;
+                let manifest = self.publish_empty_creation_content(&request.initial_file)?;
+                let publication = root_publication(&request.initial_file, manifest);
+                let (creation, handle) = self
+                    .publications
+                    .publish_root_file_and_open(&publication, &request.open.handle)?;
+                Ok(FilesystemHandleCreateReceipt {
+                    handle,
+                    creation: Some(creation),
+                })
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn publish_empty_creation_content(
+        &mut self,
+        request: &RootFileCommitRequest,
+    ) -> Result<ManifestPublication, FilesystemCommitError> {
+        let content_request = request.content_publication_request();
+        let manifest = if let Some(manifest) = self.content.resolve(content_request)? {
+            manifest
+        } else {
+            let sink = self.content.begin(content_request)?;
+            self.content.finish(
+                content_request,
+                sink,
+                CompletedStage {
+                    logical_length: 0,
+                    content_digest: *blake3::hash(&[]).as_bytes(),
+                },
+            )?
+        };
+        validate_manifest(content_request, manifest, None)?;
+        Ok(manifest)
     }
 
     /// Orders one range against live locks before durably writing immutable private-stage bytes.
@@ -449,6 +529,72 @@ fn validate_request(request: &RootFileCommitRequest) -> Result<(), FilesystemCom
         Err(FilesystemCommitError::InvalidInput)
     } else {
         Ok(())
+    }
+}
+
+fn validate_handle_creation(
+    request: &FilesystemHandleCreateRequest,
+) -> Result<(), FilesystemCommitError> {
+    validate_request(&request.initial_file)?;
+    let open = &request.open.handle;
+    let file = &request.initial_file;
+    let creates = matches!(
+        open.create_disposition,
+        crate::CreateDisposition::CreateNew
+            | crate::CreateDisposition::OpenOrCreate
+            | crate::CreateDisposition::OverwriteOrCreate
+    );
+    let stage_id = crate::handle_io::stage_id(open.handle_id).map_err(map_handle_io)?;
+    if !creates
+        || file.completion.operation_id == open.operation_id
+        || file.completion.stage_id != stage_id
+        || file.completion.stage_fence != 1
+        || file.completion.expected_sequence != 0
+        || file.completion.final_length != 0
+        || file.completion.sparse
+        || file.expected_current_version_id.is_some()
+        || file.expected_file_object_revision_id.is_some()
+        || file.branch_id != open.branch_id
+        || file.volume_id != open.volume_id
+        || file.path.path() != &open.path
+        || file.created_by != open.principal_id
+        || file.created_at != open.opened_at
+        || file.content_authorization_revision != open.authorization_revision
+    {
+        Err(FilesystemCommitError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_creation_replay(
+    request: &FilesystemHandleCreateRequest,
+    handle: crate::OpenHandleReceipt,
+    creation: Option<NamespacePublicationReceipt>,
+) -> Result<(), FilesystemCommitError> {
+    let handle_matches_creation = handle.object_id == request.initial_file.object_id
+        && handle.object_revision_id == request.initial_file.file_object_revision_id
+        && handle.opened_version_id == request.initial_file.version_id
+        && handle.namespace_commit_id == request.initial_file.namespace_commit_id;
+    match (handle_matches_creation, creation) {
+        (true, Some(creation))
+            if creation.operation_id == request.initial_file.completion.operation_id
+                && creation.file_version_id == request.initial_file.version_id
+                && creation.namespace_commit_id == request.initial_file.namespace_commit_id =>
+        {
+            Ok(())
+        }
+        (false, None) => Ok(()),
+        (true, None) => Err(crate::HandleError::Corrupt.into()),
+        (true | false, Some(_)) => Err(crate::HandleError::OperationConflict.into()),
+    }
+}
+
+fn map_handle_io(error: crate::HandleIoError) -> FilesystemCommitError {
+    match error {
+        crate::HandleIoError::InvalidInput => FilesystemCommitError::InvalidInput,
+        crate::HandleIoError::Handle(error) => FilesystemCommitError::Handle(error),
+        crate::HandleIoError::Stage(error) => FilesystemCommitError::Stage(error),
     }
 }
 

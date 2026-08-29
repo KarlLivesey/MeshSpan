@@ -57,8 +57,9 @@ pub use directory::{
     DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError,
 };
 pub use handle_io::{
-    FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt,
-    FilesystemHandleWriteRequest, HandleIoError,
+    FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest, FilesystemHandleFlushRequest,
+    FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
+    HandleIoError,
 };
 pub use handles::{
     ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,

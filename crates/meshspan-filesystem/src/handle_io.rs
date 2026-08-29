@@ -8,8 +8,8 @@ use thiserror::Error;
 use crate::{
     ByteRange, Checkpoint, DurableStageStore, HandleError, HandleLeaseReceipt, HandleLeaseRequest,
     HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest, OpenHandleReceipt, OpenHandleRequest,
-    StageLeaseRequest, StageRegistration, StageStoreError, StageWrite, StageWriteOutcome,
-    VersionPublicationStore,
+    RootFileCommitRequest, StageLeaseRequest, StageRegistration, StageStoreError, StageWrite,
+    StageWriteOutcome, VersionPublicationStore,
 };
 
 /// Complete open intent including the private-stage bound required by a writable handle.
@@ -21,6 +21,24 @@ pub struct FilesystemHandleOpenRequest {
     ///
     /// This must be present for writable handles and absent for read-only handles.
     pub maximum_stage_bytes: Option<u64>,
+}
+
+/// Complete caller-reserved identity set for an atomic create-or-open operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilesystemHandleCreateRequest {
+    /// Handle admission and private-stage policy used whether the file exists or is created.
+    pub open: FilesystemHandleOpenRequest,
+    /// Exact empty initial file and namespace mutation used only when the path is absent.
+    pub initial_file: RootFileCommitRequest,
+}
+
+/// Durable outcome of an atomic create-or-open operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilesystemHandleCreateReceipt {
+    /// Authoritative handle reservation.
+    pub handle: OpenHandleReceipt,
+    /// Namespace publication when this operation created the file; absent when it opened one.
+    pub creation: Option<crate::NamespacePublicationReceipt>,
 }
 
 /// One exact range write through a live authority-owned handle.
@@ -111,6 +129,16 @@ pub(crate) fn open(
     if !replay {
         publications.preflight_open_handle(&request.handle)?;
     }
+    prepare_stage(stages, request)?;
+    publications
+        .open_handle(&request.handle)
+        .map_err(Into::into)
+}
+
+pub(crate) fn prepare_stage(
+    stages: &mut DurableStageStore,
+    request: &FilesystemHandleOpenRequest,
+) -> Result<(), HandleIoError> {
     match (
         request.handle.desired_access.writes(),
         request.maximum_stage_bytes,
@@ -125,9 +153,7 @@ pub(crate) fn open(
         (false, None) => {}
         (true, None) | (false, Some(_)) => return Err(HandleIoError::InvalidInput),
     }
-    publications
-        .open_handle(&request.handle)
-        .map_err(Into::into)
+    Ok(())
 }
 
 pub(crate) fn write(
@@ -191,7 +217,7 @@ pub(crate) fn renew_lease(
     Ok(receipt)
 }
 
-fn stage_id(handle_id: HandleId) -> Result<StageId, HandleIoError> {
+pub(crate) fn stage_id(handle_id: HandleId) -> Result<StageId, HandleIoError> {
     StageId::from_bytes(handle_id.as_bytes()).map_err(|_| HandleIoError::InvalidInput)
 }
 

@@ -177,6 +177,35 @@ pub(super) fn publish(
     publication: &RootFilePublication,
     fault: Option<NamespaceFaultPoint>,
 ) -> Result<NamespacePublicationReceipt, PublicationError> {
+    publish_inner(connection, publication, None, fault)
+        .map(|result| result.0)
+        .map_err(|error| match error {
+            crate::HandleError::Namespace(error) => error,
+            _ => PublicationError::Corrupt,
+        })
+}
+
+pub(super) fn publish_and_open(
+    connection: &mut Connection,
+    publication: &RootFilePublication,
+    open: &crate::OpenHandleRequest,
+) -> Result<(NamespacePublicationReceipt, crate::OpenHandleReceipt), crate::HandleError> {
+    let (namespace, handle) = publish_inner(connection, publication, Some(open), None)?;
+    Ok((namespace, handle.ok_or(crate::HandleError::Corrupt)?))
+}
+
+fn publish_inner(
+    connection: &mut Connection,
+    publication: &RootFilePublication,
+    open: Option<&crate::OpenHandleRequest>,
+    fault: Option<NamespaceFaultPoint>,
+) -> Result<
+    (
+        NamespacePublicationReceipt,
+        Option<crate::OpenHandleReceipt>,
+    ),
+    crate::HandleError,
+> {
     validate(publication)?;
     let request_digest = request_digest(publication);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -187,7 +216,7 @@ pub(super) fn publish(
     )?
     .is_some()
     {
-        return Err(PublicationError::OperationConflict);
+        return Err(PublicationError::OperationConflict.into());
     }
     if let Some(receipt) = load_operation(
         &transaction,
@@ -195,9 +224,19 @@ pub(super) fn publish(
         PublicationDisposition::Replayed,
     )? {
         return if receipt.request_digest == request_digest {
-            Ok(receipt)
+            let handle = open
+                .map(|request| {
+                    crate::handles::load_open_receipt(
+                        &transaction,
+                        request.operation_id,
+                        PublicationDisposition::Replayed,
+                    )?
+                    .ok_or(crate::HandleError::Corrupt)
+                })
+                .transpose()?;
+            Ok((receipt, handle))
         } else {
-            Err(PublicationError::OperationConflict)
+            Err(PublicationError::OperationConflict.into())
         };
     }
 
@@ -227,11 +266,25 @@ pub(super) fn publish(
     let head_sequence = advance_namespace_head(&transaction, intent, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Heads)?;
     crate::handles::advance_flush_progress(&transaction, publication)?;
+    let handle = open
+        .map(|request| {
+            crate::handles::open_created(
+                &transaction,
+                request,
+                crate::handles::ResolvedFile::created(
+                    publication.namespace_commit_id,
+                    publication.file.object_id,
+                    publication.file_object_revision_id,
+                    publication.file.version_id,
+                ),
+            )
+        })
+        .transpose()?;
     let receipt =
         persist_namespace_operation(&transaction, publication, request_digest, head_sequence)?;
     inject(fault, NamespaceFaultPoint::Operation)?;
     transaction.commit()?;
-    Ok(receipt)
+    Ok((receipt, handle))
 }
 
 pub(super) fn create_directory(
