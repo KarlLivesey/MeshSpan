@@ -11,10 +11,11 @@ use tempfile::{TempDir, tempdir};
 use super::{
     DATABASE_FILE, DirectoryPublication, DirectoryRevisionTransition, FilePublication, MIGRATIONS,
     ManifestPublication, NamespaceHistoryLimits, NamespaceHistoryObjectRequest,
-    NamespaceHistoryPageRequest, NamespacePublicationPath, NamespacePublicationReceipt,
-    NamespaceReconciliationApplication, NamespaceReconciliationReceipt, PublicationDisposition,
-    PublicationError, PublicationPathError, RootFilePublication, SCHEMA_VERSION,
-    SnapshotRestorePublication, VersionPublicationStore, configure,
+    NamespaceHistoryPageRequest, NamespaceHistoryReceiveRequest, NamespacePublicationPath,
+    NamespacePublicationReceipt, NamespaceReconciliationApplication,
+    NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
+    RootFilePublication, SCHEMA_VERSION, SnapshotRestorePublication, VersionPublicationStore,
+    configure,
 };
 
 #[test]
@@ -377,6 +378,245 @@ fn history_pages_reject_unissued_substituted_and_expired_cursors()
         Err(PublicationError::InvalidInput)
     ));
     Ok(())
+}
+
+#[test]
+fn durable_history_receive_resumes_and_publishes_only_after_complete_validation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let request = history_receive_request(&fixture, [210; 32]);
+    let initial = fixture
+        .open_office()?
+        .begin_namespace_history_receive(&request)?;
+    assert_eq!(initial.next_cursor, Vec::<u8>::new());
+    assert!(!initial.terminal);
+
+    let advertised = receive_home_history_pages(&fixture, &request)?;
+
+    let mut receiver = fixture.open_office()?;
+    assert!(matches!(
+        receiver.complete_namespace_history_receive(request.session_id, UnixMicros::new(30)),
+        Err(PublicationError::InvalidInput)
+    ));
+    assert!(!commit_exists(
+        &receiver.connection,
+        fixture.home.namespace_commit_id
+    )?);
+    drop(receiver);
+
+    receive_home_history_objects(&fixture, &request, &advertised)?;
+
+    let mut receiver = fixture.open_office()?;
+    let completed =
+        receiver.complete_namespace_history_receive(request.session_id, UnixMicros::new(50))?;
+    assert_eq!(completed.disposition, PublicationDisposition::Applied);
+    assert_eq!(completed.import.imported_commits, 1);
+    assert!(commit_exists(
+        &receiver.connection,
+        fixture.home.namespace_commit_id
+    )?);
+    assert_eq!(
+        receiver.namespace_head(fixture.office.file.branch_id, fixture.office.file.volume_id)?,
+        Some(crate::BranchNamespaceHead {
+            branch_id: fixture.office.file.branch_id,
+            volume_id: fixture.office.file.volume_id,
+            namespace_commit_id: fixture.office.namespace_commit_id,
+            sequence: 2,
+        })
+    );
+    drop(receiver);
+
+    let replayed = fixture
+        .open_office()?
+        .complete_namespace_history_receive(request.session_id, UnixMicros::new(200))?;
+    assert_eq!(replayed.disposition, PublicationDisposition::Replayed);
+    assert_eq!(replayed.import, completed.import);
+    Ok(())
+}
+
+#[test]
+fn corrupt_durable_history_receive_imports_nothing_after_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let request = history_receive_request(&fixture, [211; 32]);
+    fixture
+        .open_office()?
+        .begin_namespace_history_receive(&request)?;
+    let advertised = receive_home_history_pages(&fixture, &request)?;
+    receive_home_history_objects(&fixture, &request, &advertised)?;
+
+    let receiver = fixture.open_office()?;
+    assert_eq!(
+        receiver.connection.execute(
+            "UPDATE namespace_history_import_records SET canonical_bytes = X'00'
+             WHERE session_id = ?1 AND record_kind = 2 AND record_ordinal = (
+                SELECT MIN(record_ordinal) FROM namespace_history_import_records
+                WHERE session_id = ?1 AND record_kind = 2
+             )",
+            [request.session_id.as_slice()],
+        )?,
+        1
+    );
+    drop(receiver);
+
+    let mut restarted = fixture.open_office()?;
+    assert!(matches!(
+        restarted.complete_namespace_history_receive(request.session_id, UnixMicros::new(50)),
+        Err(PublicationError::Corrupt)
+    ));
+    assert!(!commit_exists(
+        &restarted.connection,
+        fixture.home.namespace_commit_id
+    )?);
+    assert!(!file_version_exists(
+        &restarted.connection,
+        fixture.home.file.version_id
+    )?);
+    Ok(())
+}
+
+fn receive_home_history_pages(
+    fixture: &IsolatedHistoryFixture,
+    request: &NamespaceHistoryReceiveRequest,
+) -> Result<Vec<[u8; 32]>, Box<dyn std::error::Error>> {
+    let mut cursor = Vec::new();
+    let mut advertised = Vec::new();
+    let mut first_page = true;
+    loop {
+        let page = fixture
+            .open_home()?
+            .namespace_history_page(history_page_request(fixture, cursor.clone(), 2, 10))?;
+        let mut receiver = fixture.open_office()?;
+        if first_page {
+            assert!(matches!(
+                receiver.receive_namespace_history_page(
+                    request.session_id,
+                    &[1],
+                    &page,
+                    UnixMicros::new(20),
+                ),
+                Err(PublicationError::InvalidInput)
+            ));
+        }
+        let accepted = receiver.receive_namespace_history_page(
+            request.session_id,
+            &cursor,
+            &page,
+            UnixMicros::new(20),
+        )?;
+        if first_page {
+            assert_eq!(
+                receiver.receive_namespace_history_page(
+                    request.session_id,
+                    &cursor,
+                    &page,
+                    UnixMicros::new(21),
+                )?,
+                accepted
+            );
+            let mut substituted = page.clone();
+            substituted.next_cursor.push(0);
+            assert!(matches!(
+                receiver.receive_namespace_history_page(
+                    request.session_id,
+                    &cursor,
+                    &substituted,
+                    UnixMicros::new(21),
+                ),
+                Err(PublicationError::OperationConflict)
+            ));
+            first_page = false;
+        }
+        advertised.extend(page.immutable_object_digests.iter().copied());
+        cursor = accepted.next_cursor;
+        if accepted.terminal {
+            return Ok(advertised);
+        }
+    }
+}
+
+fn receive_home_history_objects(
+    fixture: &IsolatedHistoryFixture,
+    request: &NamespaceHistoryReceiveRequest,
+    advertised: &[[u8; 32]],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let export_token = history_export_token(fixture)?;
+    for (index, digest) in advertised.iter().copied().enumerate() {
+        let object =
+            fixture
+                .open_home()?
+                .namespace_history_object(NamespaceHistoryObjectRequest {
+                    scope_binding: request.scope_binding,
+                    export_token,
+                    object_digest: digest,
+                    now: UnixMicros::new(40),
+                })?;
+        let mut receiver = fixture.open_office()?;
+        let accepted = receiver.receive_namespace_history_object(
+            request.session_id,
+            &object,
+            UnixMicros::new(40),
+        )?;
+        assert_eq!(
+            accepted.missing_immutable_records,
+            advertised.len() - index - 1
+        );
+        if index == 0 {
+            assert_eq!(
+                receiver.receive_namespace_history_object(
+                    request.session_id,
+                    &object,
+                    UnixMicros::new(41),
+                )?,
+                accepted
+            );
+        }
+    }
+    Ok(())
+}
+
+fn history_receive_request(
+    fixture: &IsolatedHistoryFixture,
+    session_id: [u8; 32],
+) -> NamespaceHistoryReceiveRequest {
+    NamespaceHistoryReceiveRequest {
+        session_id,
+        scope_binding: [200; 32],
+        volume_id: fixture.first.file.volume_id,
+        requested_heads: vec![fixture.home.namespace_commit_id],
+        limits: NamespaceHistoryLimits::DEFAULT,
+        now: UnixMicros::new(10),
+        expires_at: UnixMicros::new(100),
+    }
+}
+
+fn history_export_token(fixture: &IsolatedHistoryFixture) -> Result<[u8; 32], PublicationError> {
+    Ok(fixture
+        .open_home()?
+        .namespace_history_page(history_page_request(fixture, Vec::new(), 2, 40))?
+        .export_token)
+}
+
+fn commit_exists(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+) -> Result<bool, rusqlite::Error> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM namespace_commits WHERE namespace_commit_id = ?1)",
+        [commit_id.as_bytes().as_slice()],
+        |row| row.get::<_, i64>(0),
+    )? != 0)
+}
+
+fn file_version_exists(
+    connection: &Connection,
+    version_id: FileVersionId,
+) -> Result<bool, rusqlite::Error> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM file_versions WHERE version_id = ?1)",
+        [version_id.as_bytes().as_slice()],
+        |row| row.get::<_, i64>(0),
+    )? != 0)
 }
 
 fn history_page_request(
