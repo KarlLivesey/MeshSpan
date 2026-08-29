@@ -8,10 +8,8 @@ use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use meshspan_cluster::{
-    FederationAcceptRequest, FederationAuthorityFetchRequest, FederationAuthorityPageQuery,
-    FederationAuthorityPageRecords, FederationAuthorityPageServeRequest,
-    FederationAuthorityPageSource, FederationAuthorityPageSourceError, FederationDialRequest,
-    FederationSessionError, FederationSessionRuntime,
+    FederationAcceptRequest, FederationAuthorityFetchRequest, FederationAuthorityPageServeRequest,
+    FederationDialRequest, FederationSessionError, FederationSessionRuntime,
 };
 use meshspan_domain::{
     AuditEventId, DurationMicros, FederationRelationshipId, FederationRelationshipKind, HostId,
@@ -20,11 +18,12 @@ use meshspan_domain::{
 use meshspan_metadata::{
     ApproveFederationRelationship, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
     CommandContext, FederationGovernanceDirection, FederationIdentityOwner,
-    FederationTrustIdentity, LogPosition, PartitionDatabase, ProposeFederationRelationship,
-    RecordName, RevokeFederationRelationship, RotateFederationTrustIdentity,
+    FederationTransportAuthority, FederationTrustIdentity, LogPosition, PartitionDatabase,
+    ProposeFederationRelationship, RecordName, RevokeFederationRelationship,
+    RotateFederationTrustIdentity,
 };
 use meshspan_protocol::WireLimits;
-use meshspan_protocol::v1::{ProtocolVersion, VersionedPayload};
+use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_transport::{
     FederationAuthorityContext, FederationHelloConfig, FederationHelloContext,
     FederationNegotiationConfig, FederationReplayGuard, FederationWelcomeNonces, NodeCredentials,
@@ -64,22 +63,20 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
     let client_runtime = runtime(&certificates.client, &client_key, limits.wire)?;
     let server_runtime = runtime(&certificates.server, &server_key, limits.wire)?;
     let initial_runtimes = SessionRuntimes::new(&client_runtime, &server_runtime);
-    let page_source = ProofAuthorityPages {
-        relationship_id: authorities.relationship_id,
-    };
     let initial_proof = authorities.proof(
         initial_runtimes,
         &initial_connections,
         SessionExpectation::new(6, 3, 1),
     );
     prove_admitted_session(&initial_proof).await?;
-    let initial_page = exchange_authority_page(&initial_proof, &page_source, 0, Vec::new()).await?;
+    let initial_page = exchange_authority_page(&initial_proof, 0).await?;
     assert_eq!(initial_page.authority_revision(), 3);
-    assert_eq!(
-        initial_page.records()[0].canonical_bytes,
-        b"relationship-active-epoch-1"
-    );
-    let continuation = initial_page.next_cursor().to_vec();
+    let initial_snapshot = FederationTransportAuthority::from_canonical_bytes(
+        &initial_page.records()[0].canonical_bytes,
+    )?;
+    assert_eq!(initial_snapshot.relationship.authority_epoch, 1);
+    assert_eq!(initial_snapshot.remote_identity.identity.generation, 1);
+    assert!(initial_page.next_cursor().is_empty());
 
     let rotated_client_key = SigningKey::from_bytes(&[10; 32]);
     authorities.rotate_remote(50, &certificates.rotated_client, &rotated_client_key)?;
@@ -109,12 +106,12 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
         SessionExpectation::new(14, 4, 2),
     );
     prove_admitted_session(&rotated_proof).await?;
-    let final_page = exchange_authority_page(&rotated_proof, &page_source, 3, continuation).await?;
+    let final_page = exchange_authority_page(&rotated_proof, 3).await?;
     assert_eq!(final_page.authority_revision(), 4);
-    assert_eq!(
-        final_page.records()[0].canonical_bytes,
-        b"remote-identity-generation-2"
-    );
+    let rotated_snapshot = FederationTransportAuthority::from_canonical_bytes(
+        &final_page.records()[0].canonical_bytes,
+    )?;
+    assert_eq!(rotated_snapshot.remote_identity.identity.generation, 2);
     assert!(final_page.next_cursor().is_empty());
     authorities.revoke(60)?;
     prove_revoked_session_fails_closed(&authorities.proof(
@@ -317,48 +314,9 @@ struct SessionProof<'a> {
     expected_remote_identity_generation: u64,
 }
 
-struct ProofAuthorityPages {
-    relationship_id: FederationRelationshipId,
-}
-
-impl FederationAuthorityPageSource for ProofAuthorityPages {
-    fn authority_page(
-        &self,
-        query: FederationAuthorityPageQuery,
-    ) -> Result<FederationAuthorityPageRecords, FederationAuthorityPageSourceError> {
-        if query.relationship_id != self.relationship_id || query.limit != 1 {
-            return Err(FederationAuthorityPageSourceError::InvalidQuery);
-        }
-        match (query.after_revision, query.cursor.as_slice()) {
-            (0, []) if query.authority_revision == Revision::new(3) => {
-                Ok(FederationAuthorityPageRecords {
-                    records: vec![authority_record(b"relationship-active-epoch-1")],
-                    next_cursor: vec![90; 96],
-                })
-            }
-            (3, cursor) if cursor == [90; 96] && query.authority_revision == Revision::new(4) => {
-                Ok(FederationAuthorityPageRecords {
-                    records: vec![authority_record(b"remote-identity-generation-2")],
-                    next_cursor: Vec::new(),
-                })
-            }
-            _ => Err(FederationAuthorityPageSourceError::InvalidQuery),
-        }
-    }
-}
-
-fn authority_record(bytes: &[u8]) -> VersionedPayload {
-    VersionedPayload {
-        format_version: 1,
-        canonical_bytes: bytes.to_vec(),
-    }
-}
-
 async fn exchange_authority_page(
     proof: &SessionProof<'_>,
-    source: &impl FederationAuthorityPageSource,
     after_revision: u64,
-    cursor: Vec<u8>,
 ) -> Result<meshspan_transport::AuthenticatedFederationAuthorityPage, Box<dyn Error>> {
     let seed = proof.session_seed.saturating_add(40);
     let mut client_replay = replay_guard()?;
@@ -377,7 +335,7 @@ async fn exchange_authority_page(
                 [seed.saturating_add(3); 32],
             )?,
             after_revision,
-            cursor,
+            cursor: Vec::new(),
             limit: 1,
             now: NOW,
         },
@@ -386,7 +344,7 @@ async fn exchange_authority_page(
     let serve = proof.server_runtime.serve_authority_page(
         proof.server_connection,
         proof.server_authority,
-        source,
+        proof.server_authority,
         FederationAuthorityPageServeRequest {
             response_replay_nonce: [seed.saturating_add(4); 32],
             now: NOW,

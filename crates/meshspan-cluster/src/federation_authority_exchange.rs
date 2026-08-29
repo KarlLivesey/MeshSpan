@@ -3,6 +3,7 @@
 //! Metadata-authorised signed authority fetch/page exchange over dedicated Quinn streams.
 
 use meshspan_domain::{FederationRelationshipId, Revision, UnixMicros};
+use meshspan_metadata::AuthoritativeRepository;
 use meshspan_protocol::v1::VersionedPayload;
 use meshspan_transport::{
     AuthenticatedFederationAuthorityPage, FederationAuthorityContext, FederationReplayGuard,
@@ -32,6 +33,8 @@ pub struct FederationAuthorityPageQuery {
 /// Canonical records and optional continuation returned by an authority source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationAuthorityPageRecords {
+    /// Exact stable source revision represented by this page.
+    pub authority_revision: Revision,
     /// Independently versioned canonical authority records.
     pub records: Vec<VersionedPayload>,
     /// Opaque continuation, empty only when this stable page is terminal.
@@ -63,6 +66,41 @@ pub enum FederationAuthorityPageSourceError {
     /// Persisted or generated authority evidence failed validation.
     #[error("federation authority page evidence is corrupt")]
     Corrupt,
+}
+
+impl FederationAuthorityPageSource for AuthoritativeRepository {
+    fn authority_page(
+        &self,
+        query: FederationAuthorityPageQuery,
+    ) -> Result<FederationAuthorityPageRecords, FederationAuthorityPageSourceError> {
+        if query.limit == 0 || !query.cursor.is_empty() {
+            return Err(FederationAuthorityPageSourceError::InvalidQuery);
+        }
+        let authority = self
+            .federation_transport_authority(query.relationship_id)
+            .map_err(|_| FederationAuthorityPageSourceError::Corrupt)?
+            .ok_or(FederationAuthorityPageSourceError::Unavailable)?;
+        if authority.authority_revision != query.authority_revision
+            || query.after_revision > authority.authority_revision.get()
+        {
+            return Err(FederationAuthorityPageSourceError::InvalidQuery);
+        }
+        let records = if query.after_revision == authority.authority_revision.get() {
+            Vec::new()
+        } else {
+            vec![VersionedPayload {
+                format_version: 1,
+                canonical_bytes: authority
+                    .canonical_bytes()
+                    .map_err(|_| FederationAuthorityPageSourceError::Corrupt)?,
+            }]
+        };
+        Ok(FederationAuthorityPageRecords {
+            authority_revision: authority.authority_revision,
+            records,
+            next_cursor: Vec::new(),
+        })
+    }
 }
 
 /// Complete client-side inputs for one signed authority page fetch.
@@ -181,11 +219,16 @@ impl FederationSessionRuntime<'_> {
             limit: fetch.limit(),
             authority_revision: current.authority_revision,
         })?;
-        validate_source_page(fetch.limit(), &page)?;
+        validate_source_page(
+            fetch.limit(),
+            fetch.after_revision(),
+            current.authority_revision,
+            &page,
+        )?;
         let response = signed_federation_authority_page(
             &local_identity,
             fetch.response_context(request.response_replay_nonce)?,
-            current.authority_revision.get(),
+            page.authority_revision.get(),
             page.records,
             page.next_cursor,
             self.negotiation_config.wire_limits(),
@@ -202,7 +245,7 @@ impl FederationSessionRuntime<'_> {
         stream.send.finish().map_err(TransportError::from)?;
         Ok(ServedFederationAuthorityPage {
             relationship_id,
-            authority_revision: current.authority_revision,
+            authority_revision: page.authority_revision,
             record_count,
             has_next_page,
         })
@@ -211,11 +254,17 @@ impl FederationSessionRuntime<'_> {
 
 fn validate_source_page(
     requested_limit: u32,
+    after_revision: u64,
+    current_authority_revision: Revision,
     page: &FederationAuthorityPageRecords,
 ) -> Result<(), FederationAuthorityPageSourceError> {
     let limit = usize::try_from(requested_limit)
         .map_err(|_| FederationAuthorityPageSourceError::InvalidQuery)?;
-    if page.records.len() > limit || (page.records.is_empty() && !page.next_cursor.is_empty()) {
+    if page.authority_revision.get() < after_revision
+        || page.authority_revision > current_authority_revision
+        || page.records.len() > limit
+        || (page.records.is_empty() && !page.next_cursor.is_empty())
+    {
         Err(FederationAuthorityPageSourceError::Corrupt)
     } else {
         Ok(())
