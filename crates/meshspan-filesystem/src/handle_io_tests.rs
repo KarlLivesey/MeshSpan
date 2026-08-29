@@ -11,12 +11,12 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
-    CreateDisposition, DurableContentPublisher, DurableContentReader, FilePublication,
-    FilesystemCommitError, FilesystemCommitService, FilesystemHandleCreateRequest, HandleAccess,
-    HandleShare, LockRangeRequest, ManifestPublication, NamespaceLimits, NamespacePath,
-    NamespacePublicationPath, PublicationDisposition, RangeLockKind, RootFileCommitRequest,
-    RootFilePublication, StageCompletionRequest, UnlockRangeRequest,
+    CloseHandleRequest, ContentPublicationError, ContentPublicationRequest, ContentReadError,
+    ContentReadRequest, CreateDisposition, DurableContentPublisher, DurableContentReader,
+    FilePublication, FilesystemCommitError, FilesystemCommitService, FilesystemHandleCreateRequest,
+    HandleAccess, HandleShare, LockRangeRequest, ManifestPublication, NamespaceLimits,
+    NamespacePath, NamespacePublicationPath, PublicationDisposition, RangeLockKind,
+    RootFileCommitRequest, RootFilePublication, StageCompletionRequest, UnlockRangeRequest,
 };
 
 #[test]
@@ -405,7 +405,7 @@ fn flush_plan_is_stable_across_restart_and_rejects_changed_retry()
         })?;
         service.write_handle(&handle_write(72, &open, 0, b"replacement")?)?;
     }
-    let request = flush_request(73, &open, 1, 11, 200)?;
+    let request = flush_request(73, &open, 2, 11, 200)?;
     let planned = {
         let mut publications = VersionPublicationStore::open(directory.path(), UnixMicros::new(3))?;
         publications.prepare_handle_flush(request)?
@@ -446,7 +446,7 @@ fn complete_handle_flush_publishes_and_advances_repeatable_progress()
         maximum_stage_bytes: Some(1_024),
     })?;
     service.write_handle(&handle_write(76, &open, 0, b"first")?)?;
-    let first = flush_request(77, &open, 1, 5, 200)?;
+    let first = flush_request(77, &open, 2, 5, 200)?;
     assert_eq!(
         service.flush_handle(first)?.disposition,
         PublicationDisposition::Applied
@@ -457,7 +457,7 @@ fn complete_handle_flush_publishes_and_advances_repeatable_progress()
     );
 
     service.write_handle(&handle_write(78, &open, 0, b"again")?)?;
-    let second = flush_request(79, &open, 2, 5, 210)?;
+    let second = flush_request(79, &open, 3, 5, 210)?;
     assert_eq!(
         service.flush_handle(second)?.disposition,
         PublicationDisposition::Applied
@@ -478,7 +478,7 @@ fn complete_handle_flush_publishes_and_advances_repeatable_progress()
         [open.handle_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;
-    assert_eq!(sequence, 2);
+    assert_eq!(sequence, 3);
     Ok(())
 }
 
@@ -506,6 +506,198 @@ fn incomplete_handle_flush_publishes_no_namespace_version() -> Result<(), Box<dy
         ))
     ));
     assert!(service.resolve(request.operation_id)?.is_none());
+    Ok(())
+}
+
+#[test]
+fn dirty_close_flushes_once_before_releasing_the_handle() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut open = writable_open(84, 85, 300)?;
+    open.create_disposition = CreateDisposition::OverwriteExisting;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    service.write_handle(&handle_write(86, &open, 0, b"done")?)?;
+    let request = FilesystemHandleCloseRequest {
+        close: close_request(88, &open, 1, 60)?,
+        flush: Some(flush_request(87, &open, 2, 4, 200)?),
+    };
+    let Some(flush_request) = request.flush else {
+        return Err(std::io::Error::other("test close has no flush").into());
+    };
+
+    let receipt = service.close_handle(request)?;
+    let Some(flush) = receipt.flush else {
+        return Err(std::io::Error::other("dirty close did not flush").into());
+    };
+    assert_eq!(flush.disposition, PublicationDisposition::Applied);
+    assert_eq!(receipt.close.disposition, PublicationDisposition::Applied);
+    assert_eq!(
+        service
+            .close_handle(request)?
+            .flush
+            .ok_or_else(|| std::io::Error::other("flush replay disappeared"))?
+            .disposition,
+        PublicationDisposition::Replayed
+    );
+    assert_eq!(
+        service
+            .into_content_publisher()
+            .bytes(&flush_request.operation_id),
+        Some(b"done".as_slice())
+    );
+    Ok(())
+}
+
+#[test]
+fn clean_read_only_close_performs_no_content_work() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut open = writable_open(103, 104, 300)?;
+    open.desired_access = HandleAccess::new(true, false, false)?;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: None,
+    })?;
+
+    let receipt = service.close_handle(FilesystemHandleCloseRequest {
+        close: close_request(105, &open, 1, 60)?,
+        flush: None,
+    })?;
+    assert!(receipt.flush.is_none());
+    assert_eq!(receipt.close.disposition, PublicationDisposition::Applied);
+    Ok(())
+}
+
+#[test]
+fn overwrite_close_without_writes_publishes_the_empty_truncation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut open = writable_open(89, 90, 300)?;
+    open.create_disposition = CreateDisposition::OverwriteExisting;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    let request = FilesystemHandleCloseRequest {
+        close: close_request(92, &open, 1, 60)?,
+        flush: Some(flush_request(91, &open, 1, 0, 200)?),
+    };
+    let Some(flush_request) = request.flush else {
+        return Err(std::io::Error::other("test close has no flush").into());
+    };
+
+    let receipt = service.close_handle(request)?;
+    assert!(receipt.flush.is_some());
+    assert_eq!(
+        service
+            .into_content_publisher()
+            .bytes(&flush_request.operation_id),
+        Some([].as_slice())
+    );
+    Ok(())
+}
+
+#[test]
+fn close_recovers_after_flush_commits_but_before_handle_release()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut open = writable_open(98, 99, 300)?;
+    open.create_disposition = CreateDisposition::OverwriteExisting;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    service.write_handle(&handle_write(100, &open, 0, b"safe")?)?;
+    let flush = flush_request(101, &open, 2, 4, 200)?;
+    assert_eq!(
+        service.flush_handle(flush)?.disposition,
+        PublicationDisposition::Applied
+    );
+
+    let receipt = service.close_handle(FilesystemHandleCloseRequest {
+        close: close_request(102, &open, 1, 60)?,
+        flush: Some(flush),
+    })?;
+    assert_eq!(receipt.close.disposition, PublicationDisposition::Applied);
+    assert_eq!(
+        receipt
+            .flush
+            .ok_or_else(|| std::io::Error::other("recovered close omitted flush receipt"))?
+            .disposition,
+        PublicationDisposition::Replayed
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_dirty_close_leaves_the_handle_live_and_unacknowledged()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut open = writable_open(93, 94, 300)?;
+    open.create_disposition = CreateDisposition::OverwriteExisting;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    service.write_handle(&handle_write(95, &open, 8, b"x")?)?;
+    let request = FilesystemHandleCloseRequest {
+        close: close_request(97, &open, 1, 60)?,
+        flush: Some(flush_request(96, &open, 2, 9, 200)?),
+    };
+
+    assert!(matches!(
+        service.close_handle(FilesystemHandleCloseRequest {
+            close: request.close,
+            flush: None,
+        }),
+        Err(FilesystemCommitError::InvalidInput)
+    ));
+    assert!(matches!(
+        service.close_handle(request),
+        Err(FilesystemCommitError::Stage(
+            crate::StageStoreError::Incomplete
+        ))
+    ));
+    drop(service);
+    let publications = VersionPublicationStore::open(directory.path(), UnixMicros::new(3))?;
+    assert!(publications.resolve_close_request(request.close)?.is_none());
+    assert!(
+        publications
+            .resolve_open_handle(open.operation_id)?
+            .is_some()
+    );
     Ok(())
 }
 
@@ -584,6 +776,22 @@ fn handle_write(
             digest: blake3::hash(bytes).into(),
         },
         observed_at: UnixMicros::new(25),
+    })
+}
+
+fn close_request(
+    operation: u8,
+    open: &OpenHandleRequest,
+    fence: u64,
+    observed_at: i64,
+) -> Result<CloseHandleRequest, Box<dyn std::error::Error>> {
+    Ok(CloseHandleRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        handle_id: open.handle_id,
+        expected_fence: fence,
+        principal_id: open.principal_id,
+        gateway_node_id: open.gateway_node_id,
+        observed_at: UnixMicros::new(observed_at),
     })
 }
 

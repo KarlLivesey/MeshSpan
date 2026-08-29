@@ -20,13 +20,13 @@ mod write;
 
 pub(crate) use flush::{
     advance_progress as advance_flush_progress, base_content as handle_base_content,
-    prepare as prepare_flush,
+    committed_stage_sequence, prepare as prepare_flush,
 };
 pub use lease::{
     CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, HandleLeaseReceipt,
     HandleLeaseRequest,
 };
-pub(crate) use lease::{close, renew};
+pub(crate) use lease::{close, renew, resolve_close_request};
 pub use locks::{
     ByteRange, LockRangeReceipt, LockRangeRequest, RangeLockKind, UnlockRangeReceipt,
     UnlockRangeRequest,
@@ -204,7 +204,7 @@ impl CreateDisposition {
         }
     }
 
-    const fn truncates_existing(self) -> bool {
+    pub(crate) const fn truncates_existing(self) -> bool {
         matches!(self, Self::OverwriteExisting | Self::OverwriteOrCreate)
     }
 }

@@ -18,8 +18,9 @@ use crate::{
     VersionPublicationStore,
 };
 use crate::{
-    FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest, FilesystemHandleOpenRequest,
-    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
+    FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
+    FilesystemHandleCreateRequest, FilesystemHandleOpenRequest, FilesystemHandleWriteReceipt,
+    FilesystemHandleWriteRequest,
 };
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
@@ -256,7 +257,7 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
                 })
             }
             Err(crate::HandleError::CreationRequired) => {
-                crate::handle_io::prepare_stage(&mut self.stages, &request.open)
+                crate::handle_io::prepare_stage(&mut self.stages, &request.open, false)
                     .map_err(map_handle_io)?;
                 let manifest = self.publish_empty_creation_content(&request.initial_file)?;
                 let publication = root_publication(&request.initial_file, manifest);
@@ -345,12 +346,76 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
     where
         P: crate::DurableContentReader,
     {
+        let plan = self.publications.prepare_handle_flush(request)?;
         if let Some(receipt) = self.resolve(request.operation_id)? {
             return Ok(receipt);
         }
-        let plan = self.publications.prepare_handle_flush(request)?;
         let base = self.publications.handle_base_content(request.handle_id)?;
         self.commit_handle_plan(&plan, base, request)
+    }
+
+    /// Flushes an exact dirty checkpoint when required, then releases the fenced handle.
+    ///
+    /// A failed or interrupted flush leaves the handle live. A crash after publication but before
+    /// close is recovered by replaying the same flush plan and then applying the close exactly
+    /// once; clean and read-only closes perform no content work.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing or unnecessary flush plans, stale checkpoints/fences, substituted
+    /// authority, incomplete content and every underlying durable-state failure.
+    pub fn close_handle(
+        &mut self,
+        request: FilesystemHandleCloseRequest,
+    ) -> Result<FilesystemHandleCloseReceipt, FilesystemCommitError>
+    where
+        P: crate::DurableContentReader,
+    {
+        validate_close_flush(request)?;
+        if let Some(close) = self.publications.resolve_close_request(request.close)? {
+            let flush = request
+                .flush
+                .map(|flush| self.flush_handle(flush))
+                .transpose()?;
+            return Ok(FilesystemHandleCloseReceipt { flush, close });
+        }
+
+        let uses_stage = self
+            .publications
+            .handle_uses_private_stage(request.close.handle_id)?;
+        let (checkpoint_sequence, committed_sequence) = if uses_stage {
+            let stage_id =
+                crate::handle_io::stage_id(request.close.handle_id).map_err(map_handle_io)?;
+            (
+                self.stages.checkpoint(stage_id)?.sequence,
+                self.publications
+                    .handle_committed_stage_sequence(request.close.handle_id)?,
+            )
+        } else {
+            (0, 0)
+        };
+        if checkpoint_sequence < committed_sequence {
+            return Err(crate::HandleError::Corrupt.into());
+        }
+        let dirty = checkpoint_sequence > committed_sequence;
+        let flush_already_published = request
+            .flush
+            .map(|flush| self.resolve(flush.operation_id))
+            .transpose()?
+            .flatten()
+            .is_some();
+        match (dirty, request.flush, flush_already_published) {
+            (true, None, _) | (false, Some(_), false) => {
+                return Err(FilesystemCommitError::InvalidInput);
+            }
+            _ => {}
+        }
+        let flush = request
+            .flush
+            .map(|flush| self.flush_handle(flush))
+            .transpose()?;
+        let close = self.publications.close_handle(request.close)?;
+        Ok(FilesystemHandleCloseReceipt { flush, close })
     }
 
     fn commit_handle_plan(
@@ -565,6 +630,22 @@ fn validate_handle_creation(
     } else {
         Ok(())
     }
+}
+
+fn validate_close_flush(
+    request: FilesystemHandleCloseRequest,
+) -> Result<(), FilesystemCommitError> {
+    if let Some(flush) = request.flush
+        && (flush.operation_id == request.close.operation_id
+            || flush.handle_id != request.close.handle_id
+            || flush.handle_fence != request.close.expected_fence
+            || flush.principal_id != request.close.principal_id
+            || flush.gateway_node_id != request.close.gateway_node_id
+            || flush.observed_at > request.close.observed_at)
+    {
+        return Err(FilesystemCommitError::InvalidInput);
+    }
+    Ok(())
 }
 
 fn validate_creation_replay(

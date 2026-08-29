@@ -204,6 +204,22 @@ pub(crate) fn base_content(
     }))
 }
 
+pub(crate) fn committed_stage_sequence(
+    connection: &Connection,
+    handle_id: HandleId,
+) -> Result<u64, HandleError> {
+    let stored: Option<i64> = connection
+        .query_row(
+            "SELECT committed_stage_sequence FROM handle_flush_progress WHERE handle_id = ?1",
+            [handle_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    stored.map_or(Ok(0), |sequence| {
+        u64::try_from(sequence).map_err(|_| HandleError::Corrupt)
+    })
+}
+
 pub(crate) fn advance_progress(
     transaction: &Transaction<'_>,
     publication: &RootFilePublication,

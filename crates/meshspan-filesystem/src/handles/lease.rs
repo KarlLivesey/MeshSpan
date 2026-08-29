@@ -184,15 +184,11 @@ pub(crate) fn close(
     request: CloseHandleRequest,
 ) -> Result<CloseHandleReceipt, HandleError> {
     validate_close(request)?;
-    let request_digest = close_request_digest(request);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(receipt) = load_close_receipt(
-        &transaction,
-        request.operation_id,
-        PublicationDisposition::Replayed,
-    )? {
-        return matching_close_replay(receipt, request, request_digest);
+    if let Some(receipt) = resolve_close_request(&transaction, request)? {
+        return Ok(receipt);
     }
+    let request_digest = close_request_digest(request);
     reject_operation_collision(&transaction, request.operation_id)?;
     expire_stale_handles(&transaction, request.observed_at)?;
     let handle = load_active(&transaction, request.handle_id, request.observed_at)?;
@@ -206,6 +202,21 @@ pub(crate) fn close(
     let receipt = persist_close_operation(&transaction, request, request_digest, outcome)?;
     transaction.commit()?;
     Ok(receipt)
+}
+
+pub(crate) fn resolve_close_request(
+    connection: &Connection,
+    request: CloseHandleRequest,
+) -> Result<Option<CloseHandleReceipt>, HandleError> {
+    validate_close(request)?;
+    let request_digest = close_request_digest(request);
+    load_close_receipt(
+        connection,
+        request.operation_id,
+        PublicationDisposition::Replayed,
+    )?
+    .map(|receipt| matching_close_replay(receipt, request, request_digest))
+    .transpose()
 }
 
 fn validate_lease(request: HandleLeaseRequest) -> Result<(), HandleError> {

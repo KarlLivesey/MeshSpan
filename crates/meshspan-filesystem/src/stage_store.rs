@@ -19,7 +19,7 @@ use crate::{Checkpoint, StageWrite, StageWriteOutcome};
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 type BaseLoader<'a> = dyn FnMut(&mut dyn Write) -> Result<(), StageStoreError> + 'a;
-const MIGRATIONS: [Migration; 2] = [
+const MIGRATIONS: [Migration; 3] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/stage/001_initial.sql"),
@@ -28,8 +28,12 @@ const MIGRATIONS: [Migration; 2] = [
         version: 2,
         sql: include_str!("../schema/stage/002_lease_operations.sql"),
     },
+    Migration {
+        version: 3,
+        sql: include_str!("../schema/stage/003_truncation_operations.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 const STAGE_DIRECTORY: &str = "stages";
 const DATABASE_FILE: &str = "filesystem-stages.sqlite3";
 const COPY_BUFFER_BYTES: usize = 64 * 1_024;
@@ -196,6 +200,101 @@ impl DurableStageStore {
         )?;
         transaction.commit()?;
         create_stage_directory(&self.stages, stage.stage_id)
+    }
+
+    pub(crate) fn initialise_truncation(
+        &mut self,
+        stage_id: StageId,
+        operation_id: OperationId,
+        stage_fence: u64,
+        observed_at: UnixMicros,
+    ) -> Result<StageWriteOutcome, StageStoreError> {
+        type Stored = (Vec<u8>, i64, i64, i64, Vec<u8>, Vec<u8>);
+        if stage_fence == 0 {
+            return Err(StageStoreError::InvalidInput);
+        }
+        let request_digest =
+            truncation_request_digest(operation_id, stage_id, stage_fence, observed_at);
+        let stored: Option<Stored> = self
+            .connection
+            .query_row(
+                "SELECT stage_id, stage_fence, mutation_sequence, applied_at,
+                        request_digest, receipt_digest
+                 FROM stage_truncation_operations WHERE operation_id = ?1",
+                [operation_id.as_bytes().as_slice()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some(stored) = stored {
+            let sequence = from_i64(stored.2)?;
+            let stored_request: [u8; 32] = stored
+                .4
+                .as_slice()
+                .try_into()
+                .map_err(|_| StageStoreError::Corrupt)?;
+            let stored_receipt: [u8; 32] = stored
+                .5
+                .as_slice()
+                .try_into()
+                .map_err(|_| StageStoreError::Corrupt)?;
+            let expected_receipt = truncation_receipt_digest(request_digest, sequence);
+            let fields_match = stored.0.as_slice() == stage_id.as_bytes()
+                && from_i64(stored.1)? == stage_fence
+                && stored.3 == observed_at.get()
+                && sequence == 1;
+            return match (
+                fields_match,
+                stored_request == request_digest,
+                stored_receipt == expected_receipt,
+            ) {
+                (true, true, true) => Ok(StageWriteOutcome::Replayed),
+                (true, _, _) | (false, true, _) => Err(StageStoreError::Corrupt),
+                (false, false, _) => Err(StageStoreError::OperationConflict),
+            };
+        }
+        reject_stage_operation_collision(&self.connection, operation_id)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "UPDATE stages SET mutation_sequence = 1, logical_extent = 0
+             WHERE stage_id = ?1 AND state = 1 AND stage_fence = ?2
+               AND mutation_sequence = 0 AND expires_at > ?3",
+            params![
+                stage_id.as_bytes().as_slice(),
+                to_i64(stage_fence)?,
+                observed_at.get()
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StageStoreError::Stale);
+        }
+        let receipt_digest = truncation_receipt_digest(request_digest, 1);
+        transaction.execute(
+            "INSERT INTO stage_truncation_operations(
+                operation_id, stage_id, stage_fence, mutation_sequence, applied_at,
+                request_digest, receipt_digest
+             ) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)",
+            params![
+                operation_id.as_bytes().as_slice(),
+                stage_id.as_bytes().as_slice(),
+                to_i64(stage_fence)?,
+                observed_at.get(),
+                request_digest.as_slice(),
+                receipt_digest.as_slice()
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(StageWriteOutcome::Applied)
     }
 
     /// Durably installs one immutable part before journalling its ordered acceptance.
@@ -648,7 +747,8 @@ fn reject_stage_operation_collision(
 ) -> Result<(), StageStoreError> {
     let collision: i64 = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM stage_writes WHERE operation_id = ?1)
-             OR EXISTS(SELECT 1 FROM stage_lease_operations WHERE operation_id = ?1)",
+             OR EXISTS(SELECT 1 FROM stage_lease_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM stage_truncation_operations WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;
@@ -657,6 +757,29 @@ fn reject_stage_operation_collision(
     } else {
         Err(StageStoreError::OperationConflict)
     }
+}
+
+fn truncation_request_digest(
+    operation_id: OperationId,
+    stage_id: StageId,
+    stage_fence: u64,
+    observed_at: UnixMicros,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.stage.initial-truncation.request.v1\0");
+    digest.update(&operation_id.as_bytes());
+    digest.update(&stage_id.as_bytes());
+    digest.update(&stage_fence.to_be_bytes());
+    digest.update(&observed_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+fn truncation_receipt_digest(request_digest: [u8; 32], sequence: u64) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.stage.initial-truncation.receipt.v1\0");
+    digest.update(&request_digest);
+    digest.update(&sequence.to_be_bytes());
+    digest.finalize().into()
 }
 
 fn load_lease_receipt(
@@ -1216,6 +1339,51 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(lease_table, 1);
+        let truncation_table: i64 = store.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_schema
+                WHERE type = 'table' AND name = 'stage_truncation_operations'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(truncation_table, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn initial_truncation_is_one_replayable_empty_mutation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([3; 16])?;
+        let operation_id = OperationId::from_bytes([4; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 1, 100))?;
+        assert_eq!(
+            store.initialise_truncation(stage_id, operation_id, 1, UnixMicros::new(2))?,
+            StageWriteOutcome::Applied
+        );
+        assert_eq!(store.checkpoint(stage_id)?.sequence, 1);
+        drop(store);
+
+        let mut reopened = DurableStageStore::open(directory.path(), UnixMicros::new(3))?;
+        assert_eq!(
+            reopened.initialise_truncation(stage_id, operation_id, 1, UnixMicros::new(2))?,
+            StageWriteOutcome::Replayed
+        );
+        assert!(matches!(
+            reopened.initialise_truncation(stage_id, operation_id, 1, UnixMicros::new(3)),
+            Err(StageStoreError::OperationConflict)
+        ));
+        reopened.connection.execute(
+            "UPDATE stage_truncation_operations SET receipt_digest = zeroblob(32)
+             WHERE operation_id = ?1",
+            [operation_id.as_bytes().as_slice()],
+        )?;
+        assert!(matches!(
+            reopened.initialise_truncation(stage_id, operation_id, 1, UnixMicros::new(2)),
+            Err(StageStoreError::Corrupt)
+        ));
         Ok(())
     }
 
