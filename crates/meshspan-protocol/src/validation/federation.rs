@@ -7,11 +7,12 @@ use std::collections::BTreeSet;
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::federation_envelope::Message;
 use crate::v1::{
-    FederatedBranchPage, FederatedBranchResult, FederatedStorageCapability,
-    FederatedStorageInventoryPage, FederatedStorageReceipt, FederationAuthorityPage,
-    FederationEnvelope, FederationHeader, FederationHello, FederationWelcome,
-    FetchFederatedBranchPage, FetchFederatedStorageInventory, FetchFederationAuthority,
-    OperationOutcome, ProposeFederatedBranch, RemoteShardAction, RequestFederatedStorageCapability,
+    FederatedBranchPage, FederatedBranchResult, FederatedHistoryObjectHeader,
+    FederatedStorageCapability, FederatedStorageInventoryPage, FederatedStorageReceipt,
+    FederationAuthorityPage, FederationEnvelope, FederationHeader, FederationHello,
+    FederationWelcome, FetchFederatedBranchPage, FetchFederatedHistoryObject,
+    FetchFederatedStorageInventory, FetchFederationAuthority, OperationOutcome,
+    ProposeFederatedBranch, RemoteShardAction, RequestFederatedStorageCapability,
 };
 
 use super::{
@@ -41,6 +42,8 @@ pub(super) fn envelope(
         Message::AuthorityPage(value) => authority_page(value, limits),
         Message::FetchBranchPage(value) => fetch_branch_page(value, limits),
         Message::BranchPage(value) => branch_page(value, limits),
+        Message::FetchHistoryObject(value) => fetch_history_object(value, limits),
+        Message::HistoryObjectHeader(value) => history_object_header(value, limits),
         Message::ProposeBranch(value) => propose_branch(value, limits),
         Message::BranchResult(value) => branch_result(value, limits),
         Message::RequestStorageCapability(value) => request_storage_capability(value, limits),
@@ -50,6 +53,8 @@ pub(super) fn envelope(
         Message::StorageInventoryPage(value) => storage_inventory_page(value, limits),
     }
 }
+
+const MAXIMUM_HISTORY_OBJECT_BYTES: u64 = 2 * 1_024 * 1_024;
 
 fn fetch_authority(
     value: &FetchFederationAuthority,
@@ -172,6 +177,39 @@ fn branch_page(value: &FederatedBranchPage, limits: WireLimits) -> Result<(), Wi
     )?;
     valid_digest(&value.page_digest)?;
     valid_signature(&value.signature, limits)
+}
+
+fn fetch_history_object(
+    value: &FetchFederatedHistoryObject,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    valid_identifier(&value.grant_id)?;
+    validate_payload(value.resource_scope.as_ref(), limits)?;
+    valid_digest(&value.export_token)?;
+    valid_digest(&value.object_digest)?;
+    valid_signature(&value.signature, limits)
+}
+
+fn history_object_header(
+    value: &FederatedHistoryObjectHeader,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    valid_identifier(&value.grant_id)?;
+    validate_payload(value.resource_scope.as_ref(), limits)?;
+    valid_digest(&value.export_token)?;
+    valid_digest(&value.object_digest)?;
+    valid_signature(&value.signature, limits)?;
+    let maximum_frame_bytes = usize::try_from(value.maximum_frame_bytes)
+        .map_err(|_| WireContractError::InvalidMessage)?;
+    if value.declared_length == 0
+        || value.declared_length > MAXIMUM_HISTORY_OBJECT_BYTES
+        || maximum_frame_bytes == 0
+        || maximum_frame_bytes > limits.maximum_data_frame_bytes()
+    {
+        Err(WireContractError::InvalidMessage)
+    } else {
+        Ok(())
+    }
 }
 
 fn propose_branch(

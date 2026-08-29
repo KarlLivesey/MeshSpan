@@ -4,11 +4,11 @@
 
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
-    ErrorCode, FederatedBranchResult, FederatedStorageCapability, FederationAuthorityPage,
-    FederationEnvelope, FederationHeader, FederationHello, FetchFederatedBranchPage,
-    FetchFederatedStorageInventory, FetchFederationAuthority, ProposeFederatedBranch,
-    ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability, ShardIdentity,
-    VersionedPayload, WireError,
+    ErrorCode, FederatedBranchResult, FederatedHistoryObjectHeader, FederatedStorageCapability,
+    FederationAuthorityPage, FederationEnvelope, FederationHeader, FederationHello,
+    FetchFederatedBranchPage, FetchFederatedHistoryObject, FetchFederatedStorageInventory,
+    FetchFederationAuthority, ProposeFederatedBranch, ProtocolVersion, RemoteShardAction,
+    RequestFederatedStorageCapability, ShardIdentity, VersionedPayload, WireError,
 };
 use meshspan_protocol::{
     WireContractError, WireLimits, decode_federation_frame, encode_federation_frame,
@@ -174,6 +174,13 @@ fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::
             limit: 1,
             signature: Vec::new(),
         }),
+        Message::FetchHistoryObject(FetchFederatedHistoryObject {
+            grant_id: vec![1; 16],
+            resource_scope: Some(payload()),
+            export_token: vec![2; 32],
+            object_digest: vec![3; 32],
+            signature: Vec::new(),
+        }),
         Message::RequestStorageCapability(RequestFederatedStorageCapability {
             grant_id: vec![1; 16],
             target_id: vec![2; 16],
@@ -196,6 +203,42 @@ fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::
     for request in requests {
         assert_eq!(
             encode_federation_frame(&federation_envelope(request), limits()?),
+            Err(WireContractError::InvalidMessage)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn history_object_header_enforces_total_and_frame_bounds() -> Result<(), Box<dyn std::error::Error>>
+{
+    let limits = limits()?;
+    let valid = FederatedHistoryObjectHeader {
+        grant_id: vec![1; 16],
+        resource_scope: Some(payload()),
+        export_token: vec![2; 32],
+        object_digest: vec![3; 32],
+        declared_length: 2 * 1_024 * 1_024,
+        maximum_frame_bytes: u64::try_from(limits.maximum_data_frame_bytes())?,
+        signature: vec![4; 64],
+    };
+    assert!(
+        encode_federation_frame(
+            &federation_envelope(Message::HistoryObjectHeader(valid.clone())),
+            limits
+        )
+        .is_ok()
+    );
+    let mut excessive_object = valid.clone();
+    excessive_object.declared_length += 1;
+    let mut excessive_frame = valid;
+    excessive_frame.maximum_frame_bytes += 1;
+    for invalid in [excessive_object, excessive_frame] {
+        assert_eq!(
+            encode_federation_frame(
+                &federation_envelope(Message::HistoryObjectHeader(invalid)),
+                limits
+            ),
             Err(WireContractError::InvalidMessage)
         );
     }

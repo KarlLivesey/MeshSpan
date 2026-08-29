@@ -5,9 +5,9 @@
 use prost::Message;
 
 use crate::v1::{
-    FederatedBranchPage, FederationAuthorityPage, FederationHeader, FederationHello,
-    FederationWelcome, FetchFederatedBranchPage, FetchFederatedStorageInventory,
-    FetchFederationAuthority, RequestFederatedStorageCapability,
+    FederatedBranchPage, FederatedHistoryObjectHeader, FederationAuthorityPage, FederationHeader,
+    FederationHello, FederationWelcome, FetchFederatedBranchPage, FetchFederatedHistoryObject,
+    FetchFederatedStorageInventory, FetchFederationAuthority, RequestFederatedStorageCapability,
 };
 
 const HELLO_DOMAIN: &[u8] = b"meshspan.federation.hello.v1\0";
@@ -18,6 +18,8 @@ const AUTHORITY_FETCH_DOMAIN: &[u8] = b"meshspan.federation.authority-fetch.v1\0
 const BRANCH_FETCH_DOMAIN: &[u8] = b"meshspan.federation.branch-fetch.v1\0";
 const BRANCH_PAGE_DOMAIN: &[u8] = b"meshspan.federation.branch-page.v1\0";
 const BRANCH_PAGE_DIGEST_DOMAIN: &[u8] = b"meshspan.federation.branch-page-digest.v1\0";
+const HISTORY_OBJECT_FETCH_DOMAIN: &[u8] = b"meshspan.federation.history-object-fetch.v1\0";
+const HISTORY_OBJECT_HEADER_DOMAIN: &[u8] = b"meshspan.federation.history-object-header.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DOMAIN: &[u8] =
     b"meshspan.federation.storage-capability-request.v1\0";
 const STORAGE_INVENTORY_FETCH_DOMAIN: &[u8] = b"meshspan.federation.storage-inventory-fetch.v1\0";
@@ -122,6 +124,28 @@ pub fn federation_branch_page_digest_payload(page: &FederatedBranchPage) -> Vec<
     payload.extend_from_slice(BRANCH_PAGE_DIGEST_DOMAIN);
     append_part(&mut payload, &encoded);
     payload
+}
+
+/// Returns the exact bytes signed by one immutable-history object requester.
+#[must_use]
+pub fn federation_history_object_fetch_signing_payload(
+    header: &FederationHeader,
+    request: &FetchFederatedHistoryObject,
+) -> Vec<u8> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    signing_payload(HISTORY_OBJECT_FETCH_DOMAIN, header, &unsigned)
+}
+
+/// Returns the exact bytes signed by one immutable-history object response header.
+#[must_use]
+pub fn federation_history_object_header_signing_payload(
+    header: &FederationHeader,
+    response: &FederatedHistoryObjectHeader,
+) -> Vec<u8> {
+    let mut unsigned = response.clone();
+    unsigned.signature.clear();
+    signing_payload(HISTORY_OBJECT_HEADER_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by a remote-storage capability requester.

@@ -7,6 +7,7 @@ mod federation;
 mod federation_authority_page;
 mod federation_branch_page;
 mod federation_hello;
+mod federation_history_object;
 mod federation_negotiation;
 mod identity;
 mod snapshot;
@@ -46,6 +47,12 @@ pub use federation_branch_page::{
 pub use federation_hello::{
     FederationHelloConfig, FederationHelloContext, FederationLocalIdentity,
     FederationLocalIdentityBinding, OutboundFederationHello, signed_federation_hello,
+};
+pub use federation_history_object::{
+    AuthenticatedFederationHistoryObjectFetch, AuthenticatedFederationHistoryObjectHeader,
+    FederationHistoryObjectExpectation, OutboundFederationHistoryObjectFetch,
+    OutboundFederationHistoryObjectHeader, signed_federation_history_object_fetch,
+    signed_federation_history_object_header,
 };
 pub use federation_negotiation::{
     AcceptedFederationSession, AuthenticatedFederationSession, FederationHelloExpectation,
