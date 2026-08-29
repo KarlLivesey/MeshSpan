@@ -241,6 +241,7 @@ mod tests {
         partition_component_rollout_migration_digest,
         partition_federation_authority_migration_digest,
         partition_federation_governance_proof_migration_digest,
+        partition_federation_grant_evidence_migration_digest,
         partition_federation_grant_history_migration_digest,
         partition_federation_ownership_succession_migration_digest,
         partition_federation_principal_history_migration_digest,
@@ -276,7 +277,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 37);
+        assert_eq!(database.check_integrity()?.schema_version, 38);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -326,8 +327,75 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            37
+            38
         );
+        Ok(())
+    }
+
+    #[test]
+    fn grant_evidence_migration_marks_discarded_legacy_reason_as_unknown()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("grant-evidence-migration.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 37, 10)?;
+        let local_mesh = [50_u8; 16];
+        let remote_mesh = [51_u8; 16];
+        let relationship = [52_u8; 16];
+        let grant = [53_u8; 16];
+        connection.execute(
+            "INSERT INTO meshes(
+                mesh_id, display_name, canonical_name, created_at,
+                configuration_revision, identity_revision, namespace_revision, revision
+             ) VALUES (?1, 'Local', 'local', 1, 1, 1, 1, 1)",
+            [local_mesh.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO federation_relationships(
+                relationship_id, local_mesh_id, remote_mesh_id, relationship_kind,
+                governance_direction, state, authority_epoch, remote_display_name,
+                proposed_at, approved_at, restricted_at, revoked_at, retired_at, revision
+             ) VALUES (?1, ?2, ?3, 1, 0, 2, 1, 'Remote', 1, 2, NULL, NULL, NULL, 2)",
+            params![
+                relationship.as_slice(),
+                local_mesh.as_slice(),
+                remote_mesh.as_slice(),
+            ],
+        )?;
+        connection.execute(
+            "INSERT INTO federation_grants(
+                grant_id, relationship_id, subject_home_mesh_id, subject_principal_id,
+                resource_kind, authority_mesh_id, volume_id, object_id, authority_epoch,
+                valid_from, valid_until, state, effective_policy_digest, issued_at,
+                revoked_at, revision
+             ) VALUES (?1, ?2, ?3, ?4, 4, ?5, NULL, NULL, 1, 1, NULL, 3, ?6, 3, 7, 7)",
+            params![
+                grant.as_slice(),
+                relationship.as_slice(),
+                local_mesh.as_slice(),
+                [54_u8; 16].as_slice(),
+                remote_mesh.as_slice(),
+                [55_u8; 32].as_slice(),
+            ],
+        )?;
+
+        migrate_partition(&mut connection, 20)?;
+        let termination: (i64, Option<String>, i64, i64) = connection.query_row(
+            "SELECT termination_kind, reason, terminated_at, revision
+             FROM federation_grant_terminations WHERE grant_id = ?1",
+            [grant.as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        assert_eq!(termination, (4, None, 7, 7));
+        let Err(rejected) = connection.execute(
+            "INSERT INTO federation_grant_terminations(
+                grant_id, termination_kind, reason, terminated_at, revision
+             ) VALUES (?1, 4, NULL, 8, 8)",
+            [[56_u8; 16].as_slice()],
+        ) else {
+            return Err("post-migration legacy evidence was accepted".into());
+        };
+        assert!(rejected.to_string().contains("migration-only"));
         Ok(())
     }
 
@@ -687,6 +755,14 @@ mod tests {
                 0x5b, 0x47, 0x8b, 0xf9, 0x48, 0x78, 0xcf, 0x50, 0x3a, 0x3d, 0x88, 0x65, 0x20, 0x5c,
                 0xde, 0xd2, 0xe7, 0x6b, 0x0a, 0xe8, 0x49, 0x83, 0x60, 0xb2, 0x60, 0xbc, 0xdf, 0x8e,
                 0x0b, 0xc3, 0x69, 0x9d,
+            ]
+        );
+        assert_eq!(
+            partition_federation_grant_evidence_migration_digest(),
+            [
+                0xd5, 0xdb, 0xdd, 0x4a, 0x61, 0x06, 0x6f, 0xca, 0x2a, 0x43, 0xa7, 0x05, 0xfc, 0x60,
+                0x83, 0xf0, 0xdb, 0x78, 0x3e, 0x7a, 0xb0, 0x1d, 0x5b, 0xd1, 0x91, 0xf9, 0xe0, 0x7d,
+                0x9f, 0x24, 0xad, 0x21,
             ]
         );
     }
