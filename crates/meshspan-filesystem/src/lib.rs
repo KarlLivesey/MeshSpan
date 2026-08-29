@@ -94,13 +94,13 @@ pub use namespace_query::{
 pub use publication::{
     BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,
     DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespaceHistoryBundle,
-    NamespaceHistoryImport, NamespaceHistoryLimits, NamespacePublicationPath,
-    NamespacePublicationReceipt, NamespaceReconciliationApplication,
-    NamespaceReconciliationReceipt, NamespaceRenamePublication, NamespaceRenameReceipt,
-    NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,
-    PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
-    SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedReconciliationHead,
-    VerifiedSnapshotRestoreHead, VersionPublicationStore,
+    NamespaceHistoryCommitRecord, NamespaceHistoryImport, NamespaceHistoryLimits,
+    NamespaceHistoryRecordError, NamespacePublicationPath, NamespacePublicationReceipt,
+    NamespaceReconciliationApplication, NamespaceReconciliationReceipt, NamespaceRenamePublication,
+    NamespaceRenameReceipt, NamespaceUnlinkAuthority, NamespaceUnlinkPublication,
+    NamespaceUnlinkReceipt, PublicationDisposition, PublicationError, PublicationPathError,
+    RootFilePublication, SnapshotRestorePublication, SnapshotRestoreReceipt,
+    VerifiedReconciliationHead, VerifiedSnapshotRestoreHead, VersionPublicationStore,
 };
 pub use reachability::{
     ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource, VersionReachabilityError,

@@ -4,6 +4,8 @@
 
 #[path = "namespace_publication/digest.rs"]
 mod digest;
+#[path = "namespace_publication/history_records.rs"]
+mod history_records;
 #[path = "namespace_publication/reconciliation_apply.rs"]
 mod reconciliation_apply;
 #[path = "namespace_publication/rename.rs"]
@@ -37,6 +39,7 @@ use crate::{
 };
 
 use digest::{directory_request as directory_request_digest, file_request as request_digest};
+pub use history_records::{NamespaceHistoryCommitRecord, NamespaceHistoryRecordError};
 use repository::{
     ObjectRevisionInsert, advance_namespace_head, load_commit, load_object_revision,
     persist_commit, persist_directory_intent, persist_directory_operation,

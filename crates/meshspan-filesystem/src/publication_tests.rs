@@ -137,6 +137,38 @@ fn history_exchange_bounds_and_commit_digests_fail_closed_atomically()
     Ok(())
 }
 
+#[test]
+fn history_commit_records_round_trip_and_reject_noncanonical_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let source = fixture.open_home()?;
+    let bundle = source.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[fixture.home.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+    let records = bundle.commit_records()?;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].decoded()?, bundle.commits[0]);
+    assert_eq!(
+        super::NamespaceHistoryCommitRecord::from_canonical_bytes(
+            records[0].canonical_bytes().to_vec(),
+        )?,
+        records[0]
+    );
+
+    let mut wrong_domain = records[0].canonical_bytes().to_vec();
+    wrong_domain[0] ^= 1;
+    assert!(super::NamespaceHistoryCommitRecord::from_canonical_bytes(wrong_domain).is_err());
+    let mut trailing = records[0].canonical_bytes().to_vec();
+    trailing.push(0);
+    assert!(super::NamespaceHistoryCommitRecord::from_canonical_bytes(trailing).is_err());
+    let truncated = records[0].canonical_bytes()[..records[0].canonical_bytes().len() - 1].to_vec();
+    assert!(super::NamespaceHistoryCommitRecord::from_canonical_bytes(truncated).is_err());
+    Ok(())
+}
+
 struct IsolatedHistoryFixture {
     home_directory: TempDir,
     office_directory: TempDir,
