@@ -27,6 +27,7 @@ use crate::{
 fn two_sided_succession_activates_fences_and_survives_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::open()?;
+    let backup_directory = fixture.directory.path().to_path_buf();
     let file_path = fixture.file_path.clone();
     let mut repository = fixture.repository;
     prepare_relationship(&mut repository, fixture.ids)?;
@@ -102,7 +103,19 @@ fn two_sided_succession_activates_fences_and_survives_restart()
             .succession_epoch,
         1
     );
-    let database = repository.into_database();
+    let restored = super::federation_backup_test_support::backup_and_restore(
+        &repository,
+        &backup_directory,
+        93,
+    )?;
+    assert_eq!(
+        restored
+            .active_federation_successor(fixture.ids.remote_mesh)?
+            .ok_or("active successor missing after restore")?
+            .succession_epoch,
+        1
+    );
+    let database = restored.into_database();
     verify_events(&database, fixture.ids.succession, &[1, 2, 3])?;
     database.connection().execute(
         "UPDATE federation_ownership_successions SET acceptance_signature = zeroblob(64)
@@ -441,7 +454,7 @@ struct FixtureIds {
 }
 
 struct Fixture {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     file_path: std::path::PathBuf,
     repository: AuthoritativeRepository,
     ids: FixtureIds,
@@ -461,7 +474,7 @@ impl Fixture {
         };
         let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(0))?;
         Ok(Self {
-            _directory: directory,
+            directory,
             file_path,
             repository: AuthoritativeRepository::new(database),
             ids,

@@ -99,7 +99,7 @@ fn signed_quarantine_lifecycle_is_atomic_and_restart_safe() -> Result<(), Box<dy
     )?;
 
     let Fixture {
-        _directory,
+        _directory: directory,
         file_path,
         repository,
         ids,
@@ -115,6 +115,18 @@ fn signed_quarantine_lifecycle_is_atomic_and_restart_safe() -> Result<(), Box<dy
     assert_eq!(
         recovered.resolution,
         Some(FederationQuarantineResolution::RestoreAsCopy)
+    );
+    let restored = super::federation_backup_test_support::backup_and_restore(
+        &repository,
+        directory.path(),
+        94,
+    )?;
+    assert_eq!(
+        restored
+            .federation_quarantine(quarantine_id)?
+            .ok_or("quarantine missing after restore")?
+            .state,
+        FederationQuarantineState::Restored
     );
     Ok(())
 }

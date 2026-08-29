@@ -15,6 +15,8 @@ mod cleanup_reclamation;
 mod cluster;
 mod component;
 mod consensus;
+#[cfg(test)]
+mod federation_backup_test_support;
 mod federation_grant;
 #[cfg(test)]
 mod federation_grant_tests;

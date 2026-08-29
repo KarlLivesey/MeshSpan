@@ -25,6 +25,7 @@ use crate::{
 fn relationship_lifecycle_is_fenced_audited_replayable_and_restart_safe()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::open()?;
+    let backup_directory = fixture.directory.path().to_path_buf();
     let file_path = fixture.file_path.clone();
     let mut repository = fixture.repository;
     bootstrap(&mut repository, fixture.ids)?;
@@ -51,7 +52,19 @@ fn relationship_lifecycle_is_fenced_audited_replayable_and_restart_safe()
             .state,
         FederationRelationshipState::Retired
     );
-    verify_lifecycle(&repository.into_database(), relationship_id)
+    let restored = super::federation_backup_test_support::backup_and_restore(
+        &repository,
+        &backup_directory,
+        90,
+    )?;
+    assert_eq!(
+        restored
+            .federation_relationship(relationship_id)?
+            .ok_or("restored relationship missing")?
+            .state,
+        FederationRelationshipState::Retired
+    );
+    verify_lifecycle(&restored.into_database(), relationship_id)
 }
 
 #[test]
@@ -574,7 +587,7 @@ struct FixtureIds {
 }
 
 struct Fixture {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     file_path: std::path::PathBuf,
     repository: AuthoritativeRepository,
     ids: FixtureIds,
@@ -590,7 +603,7 @@ impl Fixture {
         };
         let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(0))?;
         Ok(Self {
-            _directory: directory,
+            directory,
             file_path,
             repository: AuthoritativeRepository::new(database),
             ids,
