@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use ed25519_dalek::{Signer, SigningKey};
+use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AuditEventId, FederationRelationshipId, FederationRelationshipKind, HostId, MeshId, NodeId,
     OperationId, PartitionId, PrincipalId, Revision, RoleId, UnixMicros,
@@ -12,8 +14,9 @@ use super::{
 };
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
-    FederationGovernanceDirection, FederationIdentityOwner, FederationTrustIdentity,
-    PartitionDatabase, ProposeFederationRelationship, RecordName, RecoverFederationRelationship,
+    FederationGovernanceDirection, FederationGovernanceEdge, FederationGovernanceProof,
+    FederationIdentityOwner, FederationTrustIdentity, PartitionDatabase,
+    ProposeFederationRelationship, RecordName, RecoverFederationRelationship,
     RestrictFederationRelationship, RetireFederationRelationship, RevokeFederationRelationship,
     RotateFederationTrustIdentity,
 };
@@ -70,6 +73,7 @@ fn prepare_active_relationship(
             expected_authority_epoch: 1,
             local_identity: identity(1, 26, 27),
             remote_identity: identity(1, 28, 29),
+            governance_proof: None,
         }),
     )?;
     let relationship = repository
@@ -184,8 +188,8 @@ fn approval_rejects_reflected_identity_and_rolls_back_both_sides()
             relationship_id,
             remote_mesh_id: MeshId::from_bytes([53; 16])?,
             remote_name: RecordName::new("Untrusted reflection")?,
-            kind: FederationRelationshipKind::Governance,
-            governance_direction: FederationGovernanceDirection::LocalGovernsRemote,
+            kind: FederationRelationshipKind::Horizontal,
+            governance_direction: FederationGovernanceDirection::None,
         }),
     )?;
     let reflected = identity(1, 54, 55);
@@ -198,6 +202,7 @@ fn approval_rejects_reflected_identity_and_rolls_back_both_sides()
                 expected_authority_epoch: 1,
                 local_identity: reflected,
                 remote_identity: reflected,
+                governance_proof: None,
             }),
         ),
         Err(RepositoryError::InvalidCommand)
@@ -214,6 +219,78 @@ fn approval_rejects_reflected_identity_and_rolls_back_both_sides()
     )?;
     assert_eq!((state, identities, edges), (1, 0, 0));
     Ok(())
+}
+
+#[test]
+fn signed_remote_ancestry_rejects_three_swarm_governance_cycle_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    bootstrap(&mut repository, fixture.ids)?;
+    let local_mesh = MeshId::from_bytes([5; 16])?;
+    let second_mesh = MeshId::from_bytes([60; 16])?;
+    let third_mesh = MeshId::from_bytes([61; 16])?;
+    let first_relationship = FederationRelationshipId::from_bytes([62; 16])?;
+    let second_key = SigningKey::from_bytes(&[63; 32]);
+    propose_governance(
+        &mut repository,
+        fixture.ids,
+        2,
+        first_relationship,
+        second_mesh,
+        FederationGovernanceDirection::LocalGovernsRemote,
+    )?;
+    approve_governance(
+        &mut repository,
+        fixture.ids,
+        3,
+        first_relationship,
+        local_mesh,
+        second_mesh,
+        FederationGovernanceDirection::LocalGovernsRemote,
+        Vec::new(),
+        &second_key,
+    )?;
+
+    let circular_relationship = FederationRelationshipId::from_bytes([64; 16])?;
+    let third_key = SigningKey::from_bytes(&[65; 32]);
+    propose_governance(
+        &mut repository,
+        fixture.ids,
+        4,
+        circular_relationship,
+        third_mesh,
+        FederationGovernanceDirection::RemoteGovernsLocal,
+    )?;
+    let ancestry = vec![
+        FederationGovernanceEdge {
+            parent_mesh_id: second_mesh,
+            child_mesh_id: third_mesh,
+        },
+        FederationGovernanceEdge {
+            parent_mesh_id: local_mesh,
+            child_mesh_id: second_mesh,
+        },
+    ];
+    let command = governance_approval(
+        circular_relationship,
+        local_mesh,
+        third_mesh,
+        FederationGovernanceDirection::RemoteGovernsLocal,
+        ancestry,
+        &third_key,
+    )?;
+    let rejection = repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(66, fixture.ids.administrator, 67, 5, 4)?,
+        &command,
+    );
+    assert!(
+        matches!(rejection, Err(RepositoryError::InvalidCommand)),
+        "unexpected circular-governance result: {rejection:?}"
+    );
+    assert_eq!(repository.current_revision()?, Revision::new(4));
+    verify_rejected_governance_approval(&repository.into_database(), circular_relationship)
 }
 
 fn verify_lifecycle(
@@ -242,6 +319,128 @@ fn verify_lifecycle(
         },
     )?;
     assert_eq!(row, (5, 5, 6, 3, 0));
+    Ok(())
+}
+
+fn propose_governance(
+    repository: &mut AuthoritativeRepository,
+    ids: FixtureIds,
+    index: u64,
+    relationship_id: FederationRelationshipId,
+    remote_mesh_id: MeshId,
+    direction: FederationGovernanceDirection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operation = u8::try_from(index)?.saturating_add(68);
+    apply(
+        repository,
+        index,
+        context(
+            operation,
+            ids.administrator,
+            operation.saturating_add(1),
+            i64::try_from(index)?,
+            index - 1,
+        )?,
+        &AuthoritativeCommand::ProposeFederationRelationship(ProposeFederationRelationship {
+            relationship_id,
+            remote_mesh_id,
+            remote_name: RecordName::new("Governance peer")?,
+            kind: FederationRelationshipKind::Governance,
+            governance_direction: direction,
+        }),
+    )?;
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the test helper names each independent governance proof dimension"
+)]
+fn approve_governance(
+    repository: &mut AuthoritativeRepository,
+    ids: FixtureIds,
+    index: u64,
+    relationship_id: FederationRelationshipId,
+    local_mesh_id: MeshId,
+    remote_mesh_id: MeshId,
+    direction: FederationGovernanceDirection,
+    ancestry: Vec<FederationGovernanceEdge>,
+    remote_key: &SigningKey,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operation = u8::try_from(index)?.saturating_add(70);
+    let command = governance_approval(
+        relationship_id,
+        local_mesh_id,
+        remote_mesh_id,
+        direction,
+        ancestry,
+        remote_key,
+    )?;
+    apply(
+        repository,
+        index,
+        context(
+            operation,
+            ids.administrator,
+            operation.saturating_add(1),
+            i64::try_from(index)?,
+            index - 1,
+        )?,
+        &command,
+    )?;
+    Ok(())
+}
+
+fn governance_approval(
+    relationship_id: FederationRelationshipId,
+    local_mesh_id: MeshId,
+    remote_mesh_id: MeshId,
+    direction: FederationGovernanceDirection,
+    ancestry: Vec<FederationGovernanceEdge>,
+    remote_key: &SigningKey,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let identity_seed = relationship_id.as_bytes()[0];
+    let mut proof = FederationGovernanceProof {
+        remote_authority_epoch: 1,
+        ancestry: BoundedItems::new(ancestry, 1_024)?,
+        signer_generation: 1,
+        signature: [0; 64],
+    };
+    proof.signature = remote_key
+        .sign(&proof.signing_payload(relationship_id, local_mesh_id, remote_mesh_id, direction))
+        .to_bytes();
+    Ok(AuthoritativeCommand::ApproveFederationRelationship(
+        ApproveFederationRelationship {
+            relationship_id,
+            expected_authority_epoch: 1,
+            local_identity: identity(1, identity_seed, identity_seed.saturating_add(10)),
+            remote_identity: FederationTrustIdentity {
+                generation: 1,
+                certificate_fingerprint: [identity_seed.saturating_add(128); 32],
+                verifying_key: remote_key.verifying_key().to_bytes(),
+                valid_from: UnixMicros::new(1),
+                valid_until: UnixMicros::new(100),
+            },
+            governance_proof: Some(proof),
+        },
+    ))
+}
+
+fn verify_rejected_governance_approval(
+    database: &PartitionDatabase,
+    relationship_id: FederationRelationshipId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let relationship = relationship_id.as_bytes();
+    let row: (i64, i64, i64, i64) = database.connection().query_row(
+        "SELECT state,
+                (SELECT count(*) FROM federation_trust_identities WHERE relationship_id = ?1),
+                (SELECT count(*) FROM federation_governance_proofs WHERE relationship_id = ?1),
+                (SELECT count(*) FROM federation_governance_edges WHERE relationship_id = ?1)
+         FROM federation_relationships WHERE relationship_id = ?1",
+        [relationship.as_slice()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(row, (1, 0, 0, 0));
     Ok(())
 }
 
@@ -301,10 +500,11 @@ fn bootstrap(
 }
 
 fn identity(generation: u64, fingerprint: u8, key: u8) -> FederationTrustIdentity {
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[key; 32]);
     FederationTrustIdentity {
         generation,
         certificate_fingerprint: [fingerprint; 32],
-        verifying_key: [key; 32],
+        verifying_key: signing_key.verifying_key().to_bytes(),
         valid_from: UnixMicros::new(1),
         valid_until: UnixMicros::new(100),
     }

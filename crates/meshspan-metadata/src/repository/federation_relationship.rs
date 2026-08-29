@@ -2,18 +2,21 @@
 
 //! Atomic relationship lifecycle, governance validation and public identity rotation.
 
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use meshspan_domain::{
     FederationGraph, FederationRelationshipId, FederationRelationshipKind, MeshId, Revision,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
+use sha2::{Digest, Sha256};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, CommandContext,
-    FederationGovernanceDirection, FederationIdentityOwner, FederationTrustIdentity,
-    ProposeFederationRelationship, RecoverFederationRelationship, RestrictFederationRelationship,
-    RetireFederationRelationship, RevokeFederationRelationship, RotateFederationTrustIdentity,
+    FederationGovernanceDirection, FederationGovernanceEdge, FederationGovernanceProof,
+    FederationIdentityOwner, FederationTrustIdentity, ProposeFederationRelationship,
+    RecoverFederationRelationship, RestrictFederationRelationship, RetireFederationRelationship,
+    RevokeFederationRelationship, RotateFederationTrustIdentity,
 };
 
 const RELATIONSHIP_PROPOSED: u8 = 1;
@@ -58,7 +61,7 @@ pub(super) fn execute(
             propose(transaction, context, value, revision)
         }
         AuthoritativeCommand::ApproveFederationRelationship(value) => {
-            approve(transaction, context, *value, revision)
+            approve(transaction, context, value, revision)
         }
         AuthoritativeCommand::RotateFederationTrustIdentity(value) => {
             rotate_identity(transaction, context, *value, revision)
@@ -126,7 +129,7 @@ fn propose(
 fn approve(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    command: ApproveFederationRelationship,
+    command: &ApproveFederationRelationship,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     let relationship = load_relationship(transaction, command.relationship_id)?;
@@ -151,7 +154,9 @@ fn approve(
         revision,
     )?;
     if relationship.kind == FederationRelationshipKind::Governance {
-        insert_governance_edge(transaction, context, relationship, revision)?;
+        insert_governance_edge(transaction, context, relationship, command, revision)?;
+    } else if command.governance_proof.is_some() {
+        return Err(RepositoryError::InvalidCommand);
     }
     let updated = transaction.execute(
         "UPDATE federation_relationships
@@ -420,6 +425,7 @@ fn insert_governance_edge(
     transaction: &Transaction<'_>,
     context: CommandContext,
     relationship: RelationshipState,
+    command: &ApproveFederationRelationship,
     revision: Revision,
 ) -> Result<(), RepositoryError> {
     let (parent, child) = match relationship.direction {
@@ -431,7 +437,13 @@ fn insert_governance_edge(
         }
         FederationGovernanceDirection::None => return Err(RepositoryError::CorruptState),
     };
-    validate_governance_graph(transaction, parent, child)?;
+    let proof = command
+        .governance_proof
+        .as_ref()
+        .ok_or(RepositoryError::InvalidCommand)?;
+    validate_governance_proof(relationship, command, proof)?;
+    validate_governance_graph(transaction, proof.ancestry.as_slice(), parent, child)?;
+    persist_governance_proof(transaction, context, relationship, proof, revision)?;
     transaction.execute(
         "INSERT INTO federation_governance_edges(
             relationship_id, parent_mesh_id, child_mesh_id, authority_epoch,
@@ -451,6 +463,7 @@ fn insert_governance_edge(
 
 fn validate_governance_graph(
     transaction: &Transaction<'_>,
+    remote_ancestry: &[FederationGovernanceEdge],
     proposed_parent: MeshId,
     proposed_child: MeshId,
 ) -> Result<(), RepositoryError> {
@@ -468,9 +481,112 @@ fn validate_governance_graph(
             .add_governance(parse_mesh_id(&parent)?, parse_mesh_id(&child)?)
             .map_err(|_| RepositoryError::CorruptState)?;
     }
+    for edge in remote_ancestry {
+        graph
+            .add_governance(edge.parent_mesh_id, edge.child_mesh_id)
+            .map_err(|_| RepositoryError::InvalidCommand)?;
+    }
     graph
         .add_governance(proposed_parent, proposed_child)
         .map_err(|_| RepositoryError::InvalidCommand)
+}
+
+fn validate_governance_proof(
+    relationship: RelationshipState,
+    command: &ApproveFederationRelationship,
+    proof: &FederationGovernanceProof,
+) -> Result<(), RepositoryError> {
+    if proof.remote_authority_epoch == 0
+        || proof.signer_generation != command.remote_identity.generation
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    validate_ancestry_shape(relationship, proof.ancestry.as_slice())?;
+    let payload = proof.signing_payload(
+        relationship.relationship_id,
+        relationship.local_mesh_id,
+        relationship.remote_mesh_id,
+        relationship.direction,
+    );
+    let verifying_key = VerifyingKey::from_bytes(&command.remote_identity.verifying_key)
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    verifying_key
+        .verify(&payload, &Signature::from_bytes(&proof.signature))
+        .map_err(|_| RepositoryError::InvalidCommand)
+}
+
+fn validate_ancestry_shape(
+    relationship: RelationshipState,
+    ancestry: &[FederationGovernanceEdge],
+) -> Result<(), RepositoryError> {
+    if relationship.direction == FederationGovernanceDirection::LocalGovernsRemote {
+        return if ancestry.is_empty() {
+            Ok(())
+        } else {
+            Err(RepositoryError::InvalidCommand)
+        };
+    }
+    if let Some(first) = ancestry.first()
+        && first.child_mesh_id != relationship.remote_mesh_id
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    for pair in ancestry.windows(2) {
+        if pair[1].child_mesh_id != pair[0].parent_mesh_id {
+            return Err(RepositoryError::InvalidCommand);
+        }
+    }
+    Ok(())
+}
+
+fn persist_governance_proof(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    relationship: RelationshipState,
+    proof: &FederationGovernanceProof,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let payload = proof.signing_payload(
+        relationship.relationship_id,
+        relationship.local_mesh_id,
+        relationship.remote_mesh_id,
+        relationship.direction,
+    );
+    let proof_digest: [u8; 32] = Sha256::digest(&payload).into();
+    transaction.execute(
+        "INSERT INTO federation_governance_proofs(
+            relationship_id, remote_authority_epoch, edge_count, proof_digest,
+            signer_generation, signature, accepted_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            relationship.relationship_id.as_bytes().as_slice(),
+            to_i64(proof.remote_authority_epoch)?,
+            to_i64(
+                u64::try_from(proof.ancestry.len())
+                    .map_err(|_| RepositoryError::CapacityExceeded)?
+            )?,
+            proof_digest.as_slice(),
+            to_i64(proof.signer_generation)?,
+            proof.signature.as_slice(),
+            context.occurred_at.get(),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    for (sequence, edge) in proof.ancestry.as_slice().iter().enumerate() {
+        transaction.execute(
+            "INSERT INTO federation_governance_proof_edges(
+                relationship_id, edge_sequence, parent_mesh_id, child_mesh_id, revision
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                relationship.relationship_id.as_bytes().as_slice(),
+                to_i64(u64::try_from(sequence).map_err(|_| RepositoryError::CapacityExceeded)?)?,
+                edge.parent_mesh_id.as_bytes().as_slice(),
+                edge.child_mesh_id.as_bytes().as_slice(),
+                to_i64(revision.get())?,
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 #[allow(
@@ -581,7 +697,7 @@ fn validate_direction(
 
 fn validate_identity_pair(
     now: i64,
-    command: ApproveFederationRelationship,
+    command: &ApproveFederationRelationship,
 ) -> Result<(), RepositoryError> {
     validate_identity(now, command.local_identity)?;
     validate_identity(now, command.remote_identity)?;
@@ -600,6 +716,7 @@ fn validate_identity(now: i64, identity: FederationTrustIdentity) -> Result<(), 
         || identity.verifying_key == [0; 32]
         || identity.valid_from.get() > now
         || identity.valid_until.get() <= now
+        || VerifyingKey::from_bytes(&identity.verifying_key).is_err()
     {
         Err(RepositoryError::InvalidCommand)
     } else {
