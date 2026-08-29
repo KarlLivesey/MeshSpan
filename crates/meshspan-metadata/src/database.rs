@@ -238,7 +238,8 @@ mod tests {
         partition_active_quorum_plan_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
-        partition_component_rollout_migration_digest, partition_migration_digest,
+        partition_component_rollout_migration_digest,
+        partition_federation_authority_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
         partition_principal_lifecycle_migration_digest, partition_roles_migration_digest,
         partition_routing_migration_digest, partition_snapshot_expiry_migration_digest,
@@ -268,7 +269,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 28);
+        assert_eq!(database.check_integrity()?.schema_version, 29);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -318,7 +319,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            28
+            29
         );
         Ok(())
     }
@@ -603,6 +604,14 @@ mod tests {
                 0xdc, 0x97, 0x88, 0xee, 0xe7, 0xb0, 0xe2, 0x46, 0x4e, 0x2c, 0xae, 0xac, 0x10, 0x72,
                 0x06, 0xb4, 0xa6, 0xf3, 0xc9, 0xe7, 0x23, 0xde, 0x94, 0xf5, 0x6f, 0x6b, 0xdd, 0x7f,
                 0xf2, 0x74, 0x34, 0x5a,
+            ]
+        );
+        assert_eq!(
+            partition_federation_authority_migration_digest(),
+            [
+                0xfb, 0x27, 0xb3, 0xc5, 0x3b, 0xb8, 0x7d, 0x53, 0x5f, 0x07, 0x95, 0x4d, 0xfa, 0xc2,
+                0x34, 0x14, 0x72, 0x5c, 0xa5, 0x94, 0xe9, 0xf7, 0x55, 0x52, 0x3e, 0x41, 0x92, 0xc2,
+                0x61, 0x20, 0x57, 0xb1,
             ]
         );
     }
