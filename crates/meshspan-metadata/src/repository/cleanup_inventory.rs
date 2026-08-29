@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use meshspan_contracts::ShardIdentity;
-use meshspan_domain::{OperationId, Revision, TargetId, UnixMicros};
+use meshspan_domain::{NodeId, OperationId, Revision, TargetId, UnixMicros};
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
@@ -68,6 +68,8 @@ pub struct VersionCleanupItem {
     pub target_id: TargetId,
     /// Exact target generation.
     pub target_generation: u64,
+    /// Exact storage node authorised to report this target generation's provider results.
+    pub storage_node_id: NodeId,
     /// Replicated revision that appended the item.
     pub revision: Revision,
 }
@@ -250,12 +252,13 @@ pub(super) fn page(
             authorisation_revision: Revision::new(inventory.authorisation_revision),
         },
     )?;
-    let stored_count: i64 = database.connection().query_row(
-        "SELECT count(*) FROM version_cleanup_items WHERE cleanup_operation_id = ?1",
+    let (stored_count, owned_count): (i64, i64) = database.connection().query_row(
+        "SELECT count(*), count(storage_node_id) FROM version_cleanup_items
+         WHERE cleanup_operation_id = ?1",
         [cleanup_operation_id.as_bytes().as_slice()],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    if non_negative(stored_count)? != inventory.expected_item_count {
+    if non_negative(stored_count)? != inventory.expected_item_count || owned_count != stored_count {
         return Err(RepositoryError::CorruptState);
     }
     let after_index = match after {
@@ -268,7 +271,8 @@ pub(super) fn page(
     let maximum = limit.get();
     let mut statement = database.connection().prepare(
         "SELECT item_index, removal_operation_id, manifest_digest, stripe_index,
-                shard_index, shard_generation, target_id, target_generation, revision
+                shard_index, shard_generation, target_id, target_generation, storage_node_id,
+                revision
          FROM version_cleanup_items
          WHERE cleanup_operation_id = ?1 AND item_index > ?2
          ORDER BY item_index LIMIT ?3",
@@ -326,12 +330,14 @@ pub(super) fn sealed_item(
             authorisation_revision: Revision::new(inventory.authorisation_revision),
         },
     )?;
-    let stored_count: i64 = connection.query_row(
-        "SELECT count(*) FROM version_cleanup_items WHERE cleanup_operation_id = ?1",
+    let (stored_count, owned_count): (i64, i64) = connection.query_row(
+        "SELECT count(*), count(storage_node_id) FROM version_cleanup_items
+         WHERE cleanup_operation_id = ?1",
         [cleanup_operation_id.as_bytes().as_slice()],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     if non_negative(stored_count)? != inventory.expected_item_count
+        || owned_count != stored_count
         || item_index >= inventory.expected_item_count
     {
         return Err(RepositoryError::CorruptState);
@@ -339,7 +345,8 @@ pub(super) fn sealed_item(
     let item = connection
         .query_row(
             "SELECT item_index, removal_operation_id, manifest_digest, stripe_index,
-                    shard_index, shard_generation, target_id, target_generation, revision
+                    shard_index, shard_generation, target_id, target_generation, storage_node_id,
+                    revision
              FROM version_cleanup_items
              WHERE cleanup_operation_id = ?1 AND item_index = ?2",
             params![
@@ -448,6 +455,7 @@ fn validate_items(
     manifest_digest: [u8; 32],
 ) -> Result<(), RepositoryError> {
     let mut operations = BTreeSet::new();
+    let mut storage_nodes = BTreeSet::new();
     for item in command.items.as_slice() {
         if item.shard.manifest_digest != manifest_digest
             || item.shard.generation == 0
@@ -458,11 +466,28 @@ fn validate_items(
             || i64::try_from(item.shard.stripe_index).is_err()
             || super::apply::operation_exists(transaction, item.removal_operation_id)?
             || is_reserved_operation(transaction, item.removal_operation_id)?
+            || (storage_nodes.insert(item.storage_node_id)
+                && !active_node_exists(transaction, item.storage_node_id)?)
         {
             return Err(RepositoryError::InvalidCommand);
         }
     }
     Ok(())
+}
+
+fn active_node_exists(
+    connection: &rusqlite::Connection,
+    node_id: NodeId,
+) -> Result<bool, RepositoryError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM nodes WHERE node_id = ?1 AND state IN (1, 2)
+             )",
+            [node_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
 }
 
 pub(super) fn is_reserved_operation(
@@ -513,8 +538,8 @@ fn insert_item(
         "INSERT INTO version_cleanup_items(
             cleanup_operation_id, item_index, removal_operation_id, manifest_digest,
             stripe_index, shard_index, shard_generation, target_id, target_generation,
-            append_operation_id, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            append_operation_id, revision, storage_node_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             cleanup_operation_id.as_bytes().as_slice(),
             to_i64(item_index)?,
@@ -527,6 +552,7 @@ fn insert_item(
             to_i64(item.target_generation)?,
             context.operation_id.as_bytes().as_slice(),
             to_i64(revision.get())?,
+            item.storage_node_id.as_bytes().as_slice(),
         ],
     )?;
     Ok(())
@@ -615,7 +641,9 @@ fn decode_item(row: &rusqlite::Row<'_>) -> Result<VersionCleanupItem, rusqlite::
         target_id: TargetId::from_bytes(array(&row.get::<_, Vec<u8>>(6)?)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         target_generation: positive(row.get(7)?)?,
-        revision: Revision::new(positive(row.get(8)?)?),
+        storage_node_id: NodeId::from_bytes(array(&row.get::<_, Vec<u8>>(8)?)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        revision: Revision::new(positive(row.get(9)?)?),
     })
 }
 
@@ -632,7 +660,7 @@ fn inventory_seed(command: &AppendVersionCleanupItems, manifest_digest: [u8; 32]
 
 fn extend_digest(prior: [u8; 32], item_index: u64, item: VersionCleanupItemPlacement) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.version-cleanup-inventory.item.v1\0");
+    digest.update(b"meshspan.version-cleanup-inventory.item.v2\0");
     digest.update(&prior);
     digest.update(&item_index.to_be_bytes());
     digest.update(&item.removal_operation_id.as_bytes());
@@ -642,6 +670,7 @@ fn extend_digest(prior: [u8; 32], item_index: u64, item: VersionCleanupItemPlace
     digest.update(&item.shard.generation.to_be_bytes());
     digest.update(&item.target_id.as_bytes());
     digest.update(&item.target_generation.to_be_bytes());
+    digest.update(&item.storage_node_id.as_bytes());
     digest.finalize().into()
 }
 

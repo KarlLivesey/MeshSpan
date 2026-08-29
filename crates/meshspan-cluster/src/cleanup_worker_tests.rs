@@ -188,6 +188,25 @@ fn substituted_dispatch_authority_fails_before_provider_io()
         Err(CleanupWorkerError::InconsistentAuthority)
     ));
     assert_eq!(dispatch.store.inventory(None, 10)?.entries.len(), 1);
+    let result = execute_cleanup_work(
+        &mut dispatch,
+        CleanupWorkEntry {
+            cleanup_operation_id,
+            item,
+            action: CleanupWorkAction::Tombstone {
+                inventory_sealed_revision: Revision::new(10),
+                attempt,
+            },
+        },
+        NodeId::from_bytes([99; 16])?,
+        1,
+        UnixMicros::new(30),
+    );
+    assert!(matches!(
+        result,
+        Err(CleanupWorkerError::InconsistentAuthority)
+    ));
+    assert_eq!(dispatch.store.inventory(None, 10)?.entries.len(), 1);
     Ok(())
 }
 
@@ -264,6 +283,7 @@ fn install_shard(
         shard,
         target_id: registration.target_id,
         target_generation: registration.generation,
+        storage_node_id: NodeId::from_bytes(REPORTER_ID)?,
         revision: Revision::new(8),
     })
 }

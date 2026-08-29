@@ -68,6 +68,9 @@ pub(super) fn complete(
     if command.inventory_sealed_revision != sealed.sealed_revision {
         return Err(RepositoryError::StaleRevision);
     }
+    if command.reporter_node_id != sealed.item.storage_node_id {
+        return Err(RepositoryError::InvalidCommand);
+    }
     if load_item(
         transaction,
         command.cleanup_operation_id,

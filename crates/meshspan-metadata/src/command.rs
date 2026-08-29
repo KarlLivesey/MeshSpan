@@ -604,6 +604,8 @@ pub struct VersionCleanupItemPlacement {
     pub target_id: TargetId,
     /// Exact target generation fenced by the placement receipt.
     pub target_generation: u64,
+    /// Exact storage node that owns this target generation and must report provider results.
+    pub storage_node_id: NodeId,
 }
 
 /// One bounded contiguous page of exact physical cleanup items.
@@ -1330,6 +1332,7 @@ digest_simple_record!(
             digest.unsigned(u64::from(item.shard.generation));
             digest.identifier(item.target_id.as_bytes());
             digest.unsigned(item.target_generation);
+            digest.identifier(item.storage_node_id.as_bytes());
         }
     }
 );

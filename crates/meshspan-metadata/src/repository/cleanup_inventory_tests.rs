@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_contracts::{BoundedItems, ShardIdentity};
-use meshspan_domain::{OperationId, Revision, TargetId, UnixMicros};
+use meshspan_domain::{NodeId, OperationId, Revision, TargetId, UnixMicros};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
@@ -201,6 +201,42 @@ fn sealed_inventory_rejects_missing_or_substituted_items() -> Result<(), Box<dyn
 }
 
 #[test]
+fn inventory_without_a_target_owner_fails_closed_after_migration()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let ProposalFixture {
+        mut repository,
+        administrator,
+        cleanup_id,
+        manifest_root_digest,
+        ..
+    } = authorised_proposal(&directory.path().join("missing-owner.sqlite3"))?;
+    repository.apply_committed(
+        LogPosition { index: 8, term: 1 },
+        context(186, administrator, 187, 108, Some(7))?,
+        &append_command(cleanup_id, manifest_root_digest, 1, 0, 1)?,
+    )?;
+    let inventory = repository
+        .version_cleanup_inventory(cleanup_id)?
+        .ok_or("missing inventory")?;
+    repository.apply_committed(
+        LogPosition { index: 9, term: 1 },
+        context(188, administrator, 189, 109, Some(8))?,
+        &seal_command(cleanup_id, 1, inventory.inventory_digest),
+    )?;
+    repository.database.connection().execute(
+        "UPDATE version_cleanup_items SET storage_node_id = NULL
+         WHERE cleanup_operation_id = ?1",
+        [cleanup_id.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        repository.version_cleanup_items(cleanup_id, None, PageLimit::new(1)?),
+        Err(RepositoryError::CorruptState)
+    ));
+    Ok(())
+}
+
+#[test]
 fn duplicate_item_authority_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let ProposalFixture {
@@ -221,6 +257,18 @@ fn duplicate_item_authority_is_rejected() -> Result<(), Box<dyn std::error::Erro
         items: BoundedItems::new(duplicate_items, 2)?,
     });
     assert_rejected_without_advance(&mut repository, administrator, &duplicate, 8, 7)?;
+
+    let mut unknown_node_items = placements(manifest_root_digest, 0, 1)?;
+    unknown_node_items[0].storage_node_id = NodeId::from_bytes([99; 16])?;
+    let unknown_node = AuthoritativeCommand::AppendVersionCleanupItems(AppendVersionCleanupItems {
+        cleanup_operation_id: cleanup_id,
+        cleanup_revision: Revision::new(4),
+        authorisation_revision: Revision::new(7),
+        expected_item_count: 1,
+        start_index: 0,
+        items: BoundedItems::new(unknown_node_items, 1)?,
+    });
+    assert_rejected_without_advance(&mut repository, administrator, &unknown_node, 8, 7)?;
 
     let only = append_command(cleanup_id, manifest_root_digest, 1, 0, 1)?;
     repository.apply_committed(
@@ -410,6 +458,7 @@ pub(super) fn placements(
                 },
                 target_id: TargetId::from_bytes([140; 16])?,
                 target_generation: 1,
+                storage_node_id: NodeId::from_bytes([15; 16])?,
             })
         })
         .collect()

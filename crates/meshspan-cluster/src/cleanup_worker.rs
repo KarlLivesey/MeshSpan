@@ -225,6 +225,7 @@ pub fn execute_cleanup_work<D: CleanupProviderDispatch>(
             attempt,
         } => {
             validate_attempt(entry.cleanup_operation_id, entry.item, attempt)?;
+            validate_reporter(entry.item, reporter_node_id)?;
             let receipt = dispatch.tombstone(entry.item.target_id, attempt.permit, observed_at)?;
             Ok(CleanupWorkerOutcome::CommandReady(
                 version_cleanup_tombstone_completion(
@@ -238,6 +239,7 @@ pub fn execute_cleanup_work<D: CleanupProviderDispatch>(
         }
         CleanupWorkAction::Reclaim(completion) => {
             validate_completion(entry.cleanup_operation_id, entry.item, completion)?;
+            validate_reporter(entry.item, reporter_node_id)?;
             let receipt =
                 dispatch.reclaim(entry.item.target_id, completion.receipt, observed_at)?;
             Ok(CleanupWorkerOutcome::CommandReady(
@@ -253,6 +255,17 @@ pub fn execute_cleanup_work<D: CleanupProviderDispatch>(
             validate_reclamation(entry.cleanup_operation_id, entry.item, &reclamation)?;
             Ok(CleanupWorkerOutcome::Complete(reclamation))
         }
+    }
+}
+
+fn validate_reporter(
+    item: VersionCleanupItem,
+    reporter_node_id: NodeId,
+) -> Result<(), CleanupWorkerError> {
+    if item.storage_node_id == reporter_node_id {
+        Ok(())
+    } else {
+        Err(CleanupWorkerError::InconsistentAuthority)
     }
 }
 

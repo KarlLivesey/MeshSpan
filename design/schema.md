@@ -1109,7 +1109,7 @@ version_cleanup_items(
   cleanup_operation_id -> version_cleanup_inventories, item_index,
   removal_operation_id UNIQUE, manifest_digest,
   stripe_index, shard_index, shard_generation,
-  target_id, target_generation,
+  target_id, target_generation, storage_node_id -> nodes,
   append_operation_id -> operations, revision,
   PK(cleanup_operation_id, item_index)
 )
@@ -1225,8 +1225,8 @@ revision, authority epoch, issue and expiry instants and keyed digest. Same-epoc
 attempts cannot overlap, while an epoch advance may fence an earlier attempt.
 An item completion is accepted once and only for the exact committed permit
 attempt, shard, target generation, permit digest, canonical provider tombstone
-digest and current reporter incarnation. The final summary is inserted in the
-same transaction as the last item only when the completed count equals the
+digest, inventory-bound storage node and its current reporter incarnation. The
+final summary is inserted in the same transaction as the last item only when the completed count equals the
 sealed count; its digest is canonical item-index order regardless of arrival
 order. Completed items cannot receive more permits. Each gateway derives local
 retirement only from the matching authorised intent, its own signature-verified
