@@ -823,6 +823,11 @@ Status: **draft for review**.
 - **EXT-007** Replicated metadata stores component selection and configuration, not executable
   plugin code. Installing or updating executable code remains an authenticated software deployment
   operation with normal artefact verification.
+- **EXT-008** The owned consensus implementation MUST remain a composable Rust library boundary:
+  its deterministic election, replication, quorum and membership pieces MUST accept explicit
+  inputs and emit explicit effects, while MeshSpan-specific authorisation, metadata commands, SQL,
+  transport and process lifecycle remain adapters outside the core. Separate publication and
+  compatibility guarantees are deferred, but application coupling MUST NOT accumulate in the core.
 - **CFG-001** Every mesh-wide desired setting MUST be an authoritative, schema-versioned,
   revisioned metadata record committed through consensus.
 - **CFG-002** Configuration changes MUST be validated, authorised and audited and MUST produce a

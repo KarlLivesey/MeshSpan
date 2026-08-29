@@ -11,6 +11,26 @@ The core has one job: order bounded, versioned metadata commands safely. It does
 not merge filesystem branches, authorise users, transfer shards, run SQL, choose
 placement or expose storage to clients.
 
+## Composition boundary
+
+The implementation is a library of small cooperating pieces, not a daemon
+framework and not a generic-parameter maze:
+
+- the deterministic core consumes validated events and emits explicit effects;
+- quorum compilation and transition proof are pure independent modules;
+- membership planning composes proved quorum plans without owning transport;
+- a persistence driver durably applies effects before returning confirmations;
+- a transport adapter maps authenticated bounded messages to core events; and
+- the MeshSpan daemon composes clocks, timers, storage, transport and metadata
+  application at its outer boundary.
+
+The current crate may use MeshSpan's opaque identifier types, but it MUST NOT
+interpret MeshSpan records or acquire dependencies on SQL, Quinn, Protobuf,
+filesystem, storage or API crates. If the core is published independently, its
+small identity dependency can be extracted without changing the algorithm or
+effect model. Publication, a stable public API and compatibility promises are
+not Stage 1 requirements.
+
 ## Why a MeshSpan core
 
 MeshSpan requires two capabilities that stock OpenRaft and `raft-rs` do not

@@ -92,6 +92,18 @@ macro_rules! define_identifier {
 }
 
 define_identifier!(MeshId, "Stable identity of one `MeshSpan` mesh.");
+define_identifier!(
+    FederationRelationshipId,
+    "Stable identity of one mutually approved federation relationship."
+);
+define_identifier!(
+    FederationGrantId,
+    "Stable identity of one scoped federation grant."
+);
+define_identifier!(
+    QuarantineId,
+    "Stable identity of one quarantined federated mutation."
+);
 define_identifier!(NodeId, "Stable identity of one daemon node.");
 define_identifier!(HostId, "Stable identity of one physical or virtual host.");
 define_identifier!(

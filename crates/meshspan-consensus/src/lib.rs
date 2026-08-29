@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Deterministic owned consensus building blocks with mechanically proved quorum plans.
+//! Deterministic, composable consensus building blocks with mechanically proved quorum plans.
+//!
+//! The core consumes explicit inputs and emits explicit effects. Persistence, transport,
+//! application commands and process lifecycle are deliberately supplied by outer adapters.
 
 mod core;
 mod membership;

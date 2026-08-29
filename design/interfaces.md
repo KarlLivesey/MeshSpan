@@ -156,6 +156,12 @@ read quorum families. The engine does not interpret user permissions, namespace
 records, fault-placement policy or shards. Application code does not mutate its
 log/storage directly. See [`consensus.md`](consensus.md).
 
+The Rust implementation is composed around a deterministic core: validated
+inputs enter the core and persistence/network/timer effects leave it. Quorum
+compilation and membership planning remain independently usable pieces. MeshSpan
+adapters own SQL transactions, Quinn messages, command encoding and daemon
+lifecycle; those concerns do not become callbacks hidden inside the core.
+
 ## Metadata repository
 
 **Owns:** transactional persistence of one deterministic state-machine command.
