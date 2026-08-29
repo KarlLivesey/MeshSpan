@@ -26,8 +26,12 @@ mod federation_relationship;
 #[cfg(test)]
 mod federation_relationship_tests;
 mod federation_succession;
+mod federation_succession_evidence;
+mod federation_succession_graph;
 #[cfg(test)]
 mod federation_succession_tests;
+mod federation_succession_transition;
+mod federation_succession_trust;
 mod group_closure;
 mod identity;
 mod kernel;
