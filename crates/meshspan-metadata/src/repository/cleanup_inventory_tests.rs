@@ -336,11 +336,25 @@ fn prove_seal_fault(fault: ApplyFaultPoint) -> Result<(), Box<dyn std::error::Er
 pub(super) fn sealed_inventory(
     file_path: &std::path::Path,
 ) -> Result<ProposalFixture, Box<dyn std::error::Error>> {
+    sealed_inventory_with_count(file_path, 1)
+}
+
+pub(super) fn sealed_inventory_with_count(
+    file_path: &std::path::Path,
+    item_count: usize,
+) -> Result<ProposalFixture, Box<dyn std::error::Error>> {
     let mut fixture = authorised_proposal(file_path)?;
+    let expected_item_count = u64::try_from(item_count)?;
     fixture.repository.apply_committed(
         LogPosition { index: 8, term: 1 },
         context(186, fixture.administrator, 187, 108, Some(7))?,
-        &append_command(fixture.cleanup_id, fixture.manifest_root_digest, 1, 0, 1)?,
+        &append_command(
+            fixture.cleanup_id,
+            fixture.manifest_root_digest,
+            expected_item_count,
+            0,
+            item_count,
+        )?,
     )?;
     let inventory = fixture
         .repository
@@ -349,7 +363,11 @@ pub(super) fn sealed_inventory(
     fixture.repository.apply_committed(
         LogPosition { index: 9, term: 1 },
         context(188, fixture.administrator, 189, 109, Some(8))?,
-        &seal_command(fixture.cleanup_id, 1, inventory.inventory_digest),
+        &seal_command(
+            fixture.cleanup_id,
+            expected_item_count,
+            inventory.inventory_digest,
+        ),
     )?;
     Ok(fixture)
 }

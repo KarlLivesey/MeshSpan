@@ -1124,6 +1124,24 @@ version_cleanup_permit_attempts(
   FK(cleanup_operation_id, item_index) -> version_cleanup_items
 )
 
+version_cleanup_item_completions(
+  cleanup_operation_id, item_index, permit_attempt_sequence,
+  provider_operation_id UNIQUE, target_id, target_generation,
+  manifest_digest, stripe_index, shard_index, shard_generation,
+  permit_digest, tombstone_digest UNIQUE,
+  reporter_node_id -> nodes, reporter_incarnation,
+  completion_operation_id UNIQUE -> operations, completed_at, revision UNIQUE,
+  PK(cleanup_operation_id, item_index),
+  FK(cleanup_operation_id, item_index, permit_attempt_sequence)
+    -> version_cleanup_permit_attempts
+)
+
+version_cleanup_completions(
+  cleanup_operation_id PK -> version_cleanup_inventories,
+  completed_item_count, completion_digest UNIQUE,
+  completion_operation_id UNIQUE -> operations, completed_at, revision UNIQUE
+)
+
 cleanup_completions(
   cleanup_id, item_index, target_id, target_generation,
   result_kind, provider_tombstone_digest, completed_at,
@@ -1166,6 +1184,12 @@ strictly sequenced records. The first consumes the item's reserved ID; retries
 use fresh globally reserved IDs. Each attempt binds its committed catalogue
 revision, authority epoch, issue and expiry instants and keyed digest. Same-epoch
 attempts cannot overlap, while an epoch advance may fence an earlier attempt.
+An item completion is accepted once and only for the exact committed permit
+attempt, shard, target generation, permit digest, canonical provider tombstone
+digest and current reporter incarnation. The final summary is inserted in the
+same transaction as the last item only when the completed count equals the
+sealed count; its digest is canonical item-index order regardless of arrival
+order. Completed items cannot receive more permits.
 
 ## 20. Repair, scrub and drain
 

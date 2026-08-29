@@ -2,7 +2,7 @@
 
 //! Durable pack tombstones and guarded physical byte reclamation.
 
-use meshspan_contracts::{RemovalPermit, TombstoneReceipt};
+use meshspan_contracts::{RemovalPermit, TombstoneReceipt, tombstone_receipt_digest};
 use meshspan_domain::{OperationId, UnixMicros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
@@ -234,19 +234,12 @@ fn verify_tombstoned(
 }
 
 fn tombstone_receipt(permit: RemovalPermit) -> TombstoneReceipt {
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.storage.tombstone-receipt.v1");
-    digest.update(&permit.operation_id.as_bytes());
-    digest.update(&encode_shard(permit.shard));
-    digest.update(&permit.target_id.as_bytes());
-    digest.update(&permit.target_generation.to_be_bytes());
-    digest.update(&permit.permit_digest);
     TombstoneReceipt {
         operation_id: permit.operation_id,
         shard: permit.shard,
         target_id: permit.target_id,
         target_generation: permit.target_generation,
         permit_digest: permit.permit_digest,
-        tombstone_digest: digest.finalize().into(),
+        tombstone_digest: tombstone_receipt_digest(permit),
     }
 }

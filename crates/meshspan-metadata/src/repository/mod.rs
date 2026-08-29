@@ -6,6 +6,7 @@ mod apply;
 mod backup;
 mod bootstrap;
 mod cleanup_attestation;
+mod cleanup_completion;
 mod cleanup_inventory;
 mod cleanup_permit;
 mod cluster;
@@ -37,6 +38,7 @@ use crate::{MetadataStoreError, PartitionDatabase};
 
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::VersionCleanupAttestationProgress;
+pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
 pub use cleanup_inventory::{
     VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
     VersionCleanupItemCursor,
@@ -403,6 +405,31 @@ impl AuthoritativeRepository {
         cleanup_permit::latest(&self.database, operation_id, item_index)
     }
 
+    /// Returns one independently validated provider tombstone completion.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing/corrupt inventory or completion state.
+    pub fn version_cleanup_item_completion(
+        &self,
+        operation_id: OperationId,
+        item_index: u64,
+    ) -> Result<Option<VersionCleanupItemCompletion>, RepositoryError> {
+        cleanup_completion::item(&self.database, operation_id, item_index)
+    }
+
+    /// Returns terminal proof only after every exact sealed item completed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt inventory, item completion or summary state.
+    pub fn version_cleanup_completion(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<VersionCleanupCompletion>, RepositoryError> {
+        cleanup_completion::summary(&self.database, operation_id)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -556,6 +583,8 @@ pub enum RepositoryError {
 
 #[cfg(test)]
 mod cleanup_attestation_tests;
+#[cfg(test)]
+mod cleanup_completion_tests;
 #[cfg(test)]
 mod cleanup_inventory_tests;
 #[cfg(test)]

@@ -99,6 +99,7 @@ pub(super) fn authority(
     cleanup_operation_id: OperationId,
     item_index: u64,
 ) -> Result<VersionCleanupPermitAuthority, RepositoryError> {
+    require_incomplete(database.connection(), cleanup_operation_id, item_index)?;
     let state_revision = super::apply::read_current_revision(database)?;
     let issue_revision = state_revision
         .next()
@@ -200,6 +201,7 @@ fn load_authority(
     cleanup_operation_id: OperationId,
     item_index: u64,
 ) -> Result<VersionCleanupPermitAuthority, RepositoryError> {
+    require_incomplete(transaction, cleanup_operation_id, item_index)?;
     let sealed = sealed_item(transaction, cleanup_operation_id, item_index)?;
     let previous = load_latest(transaction, cleanup_operation_id, item_index)?;
     let state_revision: i64 = transaction.query_row(
@@ -244,39 +246,95 @@ fn load_latest(
                 cleanup_operation_id.as_bytes().as_slice(),
                 to_i64(item_index)?,
             ],
-            |row| {
-                let permit_operation_id = operation(&row.get::<_, Vec<u8>>(1)?)?;
-                let mesh_id = MeshId::from_bytes(array(&row.get::<_, Vec<u8>>(2)?)?)
-                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
-                let stored_revision = revision(row.get(9)?)?;
-                let catalogue_revision = revision(row.get(4)?)?;
-                if stored_revision != catalogue_revision {
-                    return Err(rusqlite::Error::InvalidQuery);
-                }
-                Ok(VersionCleanupPermitAttempt {
-                    cleanup_operation_id,
-                    item_index,
-                    attempt_sequence: positive(row.get(0)?)?,
-                    permit: RemovalPermit {
-                        operation_id: permit_operation_id,
-                        mesh_id,
-                        target_id: item.target_id,
-                        shard: item.shard,
-                        target_generation: item.target_generation,
-                        authority_epoch: positive(row.get(3)?)?,
-                        catalogue_revision,
-                        expires_at: UnixMicros::new(row.get(6)?),
-                        permit_digest: array(&row.get::<_, Vec<u8>>(7)?)?,
-                    },
-                    issue_operation_id: operation(&row.get::<_, Vec<u8>>(8)?)?,
-                    issued_at: UnixMicros::new(row.get(5)?),
-                    revision: stored_revision,
-                })
-            },
+            |row| decode_attempt(row, cleanup_operation_id, item_index, item),
         )
         .optional()?
         .map(|attempt| validate_attempt(attempt).map(|()| attempt))
         .transpose()
+}
+
+pub(super) fn exact_attempt(
+    connection: &rusqlite::Connection,
+    cleanup_operation_id: OperationId,
+    item_index: u64,
+    attempt_sequence: u64,
+) -> Result<VersionCleanupPermitAttempt, RepositoryError> {
+    let item = sealed_item(connection, cleanup_operation_id, item_index)?.item;
+    connection
+        .query_row(
+            "SELECT attempt_sequence, permit_operation_id, mesh_id, authority_epoch,
+                    catalogue_revision, issued_at, expires_at, permit_digest,
+                    issue_operation_id, revision
+             FROM version_cleanup_permit_attempts
+             WHERE cleanup_operation_id = ?1 AND item_index = ?2 AND attempt_sequence = ?3",
+            params![
+                cleanup_operation_id.as_bytes().as_slice(),
+                to_i64(item_index)?,
+                to_i64(attempt_sequence)?,
+            ],
+            |row| decode_attempt(row, cleanup_operation_id, item_index, item),
+        )
+        .optional()?
+        .ok_or(RepositoryError::InvalidCommand)
+        .and_then(|attempt| validate_attempt(attempt).map(|()| attempt))
+}
+
+fn decode_attempt(
+    row: &rusqlite::Row<'_>,
+    cleanup_operation_id: OperationId,
+    item_index: u64,
+    item: VersionCleanupItem,
+) -> Result<VersionCleanupPermitAttempt, rusqlite::Error> {
+    let permit_operation_id = operation(&row.get::<_, Vec<u8>>(1)?)?;
+    let mesh_id = MeshId::from_bytes(array(&row.get::<_, Vec<u8>>(2)?)?)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let stored_revision = revision(row.get(9)?)?;
+    let catalogue_revision = revision(row.get(4)?)?;
+    if stored_revision != catalogue_revision {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(VersionCleanupPermitAttempt {
+        cleanup_operation_id,
+        item_index,
+        attempt_sequence: positive(row.get(0)?)?,
+        permit: RemovalPermit {
+            operation_id: permit_operation_id,
+            mesh_id,
+            target_id: item.target_id,
+            shard: item.shard,
+            target_generation: item.target_generation,
+            authority_epoch: positive(row.get(3)?)?,
+            catalogue_revision,
+            expires_at: UnixMicros::new(row.get(6)?),
+            permit_digest: array(&row.get::<_, Vec<u8>>(7)?)?,
+        },
+        issue_operation_id: operation(&row.get::<_, Vec<u8>>(8)?)?,
+        issued_at: UnixMicros::new(row.get(5)?),
+        revision: stored_revision,
+    })
+}
+
+fn require_incomplete(
+    connection: &rusqlite::Connection,
+    cleanup_operation_id: OperationId,
+    item_index: u64,
+) -> Result<(), RepositoryError> {
+    let completed: i64 = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM version_cleanup_item_completions
+            WHERE cleanup_operation_id = ?1 AND item_index = ?2
+         )",
+        params![
+            cleanup_operation_id.as_bytes().as_slice(),
+            to_i64(item_index)?,
+        ],
+        |row| row.get(0),
+    )?;
+    if completed == 0 {
+        Ok(())
+    } else {
+        Err(RepositoryError::StaleRevision)
+    }
 }
 
 fn validate_attempt(attempt: VersionCleanupPermitAttempt) -> Result<(), RepositoryError> {

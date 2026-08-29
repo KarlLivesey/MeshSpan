@@ -3,13 +3,16 @@
 //! Exact boundary from durable filesystem reachability evidence to a replicated cleanup proposal.
 
 use ed25519_dalek::{Signer, SigningKey};
-use meshspan_contracts::{RemovalPermit, StoragePermitMacKey, removal_permit_mac};
+use meshspan_contracts::{
+    RemovalPermit, StoragePermitMacKey, TombstoneReceipt, removal_permit_mac,
+    tombstone_receipt_digest,
+};
 use meshspan_domain::{DurationMicros, MeshId, NodeId, OperationId, Revision, UnixMicros};
 use meshspan_filesystem::VersionUnreachableProof;
 use meshspan_metadata::{
-    AttestVersionCleanup, AuthoritativeCommand, IssueVersionCleanupPermit,
-    MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, ProposeVersionCleanup, VersionCleanupAttestation,
-    VersionCleanupPermitAuthority,
+    AttestVersionCleanup, AuthoritativeCommand, CompleteVersionCleanupItem,
+    IssueVersionCleanupPermit, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, ProposeVersionCleanup,
+    VersionCleanupAttestation, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
 };
 
 /// Stable local construction failures before a cleanup attestation enters consensus.
@@ -25,6 +28,14 @@ pub enum CleanupAttestationError {
 pub enum CleanupPermitError {
     /// The attempt sequence, epoch, operation identity or lifetime is not current and bounded.
     #[error("cleanup removal-permit authority is invalid")]
+    InvalidAuthority,
+}
+
+/// Stable rejection before a provider tombstone result enters consensus.
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+pub enum CleanupCompletionError {
+    /// The receipt, seal or authenticated reporter does not match exact committed authority.
+    #[error("cleanup tombstone completion authority is invalid")]
     InvalidAuthority,
 }
 
@@ -142,22 +153,68 @@ pub fn version_cleanup_removal_permit(
     ))
 }
 
+/// Converts one exact provider receipt into a replicated item-completion command.
+///
+/// The caller obtains the reporter identity from the authenticated transport peer, never from
+/// message claims. The metadata state machine independently repeats every identity and digest
+/// check.
+///
+/// # Errors
+///
+/// Rejects a zero seal/incarnation or any receipt field not derived from the committed attempt.
+pub fn version_cleanup_tombstone_completion(
+    inventory_sealed_revision: Revision,
+    attempt: VersionCleanupPermitAttempt,
+    receipt: TombstoneReceipt,
+    reporter_node_id: NodeId,
+    reporter_incarnation: u64,
+) -> Result<AuthoritativeCommand, CleanupCompletionError> {
+    let permit = attempt.permit;
+    if inventory_sealed_revision == Revision::ZERO
+        || reporter_incarnation == 0
+        || receipt.operation_id != permit.operation_id
+        || receipt.shard != permit.shard
+        || receipt.target_id != permit.target_id
+        || receipt.target_generation != permit.target_generation
+        || receipt.permit_digest != permit.permit_digest
+        || receipt.tombstone_digest != tombstone_receipt_digest(permit)
+    {
+        return Err(CleanupCompletionError::InvalidAuthority);
+    }
+    Ok(AuthoritativeCommand::CompleteVersionCleanupItem(
+        CompleteVersionCleanupItem {
+            cleanup_operation_id: attempt.cleanup_operation_id,
+            inventory_sealed_revision,
+            item_index: attempt.item_index,
+            permit_attempt_sequence: attempt.attempt_sequence,
+            receipt,
+            reporter_node_id,
+            reporter_incarnation,
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-    use meshspan_contracts::{ShardIdentity, StoragePermitMacKey, verify_removal_permit_mac};
+    use meshspan_contracts::{
+        ShardIdentity, StoragePermitMacKey, TombstoneReceipt, tombstone_receipt_digest,
+        verify_removal_permit_mac,
+    };
     use meshspan_domain::{
         ContentManifestId, DurationMicros, FileVersionId, MeshId, NodeId, OperationId, Revision,
         TargetId, UnixMicros, VolumeId,
     };
     use meshspan_filesystem::VersionUnreachableProof;
     use meshspan_metadata::{
-        AuthoritativeCommand, VersionCleanupItem, VersionCleanupPermitAuthority,
+        AuthoritativeCommand, VersionCleanupItem, VersionCleanupPermitAttempt,
+        VersionCleanupPermitAuthority,
     };
 
     use super::{
-        CleanupPermitError, version_cleanup_attestation, version_cleanup_proposal,
-        version_cleanup_removal_permit,
+        CleanupCompletionError, CleanupPermitError, version_cleanup_attestation,
+        version_cleanup_proposal, version_cleanup_removal_permit,
+        version_cleanup_tombstone_completion,
     };
 
     #[test]
@@ -278,6 +335,68 @@ mod tests {
                 &key,
             ),
             Err(CleanupPermitError::InvalidAuthority)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tombstone_completion_accepts_only_the_exact_committed_attempt()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authority = permit_authority()?;
+        let key = StoragePermitMacKey::from_bytes([30; 32])?;
+        let AuthoritativeCommand::IssueVersionCleanupPermit(issue) =
+            version_cleanup_removal_permit(
+                authority,
+                MeshId::from_bytes([31; 16])?,
+                authority.item.removal_operation_id,
+                5,
+                UnixMicros::new(1_000),
+                DurationMicros::new(60_000_000),
+                &key,
+            )?
+        else {
+            return Err("wrong permit command".into());
+        };
+        let attempt = VersionCleanupPermitAttempt {
+            cleanup_operation_id: issue.cleanup_operation_id,
+            item_index: issue.item_index,
+            attempt_sequence: issue.attempt_sequence,
+            permit: issue.permit,
+            issue_operation_id: OperationId::from_bytes([33; 16])?,
+            issued_at: UnixMicros::new(1_000),
+            revision: issue.permit.catalogue_revision,
+        };
+        let mut receipt = TombstoneReceipt {
+            operation_id: issue.permit.operation_id,
+            shard: issue.permit.shard,
+            target_id: issue.permit.target_id,
+            target_generation: issue.permit.target_generation,
+            permit_digest: issue.permit.permit_digest,
+            tombstone_digest: tombstone_receipt_digest(issue.permit),
+        };
+        let command = version_cleanup_tombstone_completion(
+            issue.inventory_sealed_revision,
+            attempt,
+            receipt,
+            NodeId::from_bytes([34; 16])?,
+            6,
+        )?;
+        let AuthoritativeCommand::CompleteVersionCleanupItem(command) = command else {
+            return Err("wrong completion command".into());
+        };
+        assert_eq!(command.receipt, receipt);
+        assert_eq!(command.permit_attempt_sequence, attempt.attempt_sequence);
+
+        receipt.tombstone_digest[0] ^= 1;
+        assert_eq!(
+            version_cleanup_tombstone_completion(
+                issue.inventory_sealed_revision,
+                attempt,
+                receipt,
+                NodeId::from_bytes([34; 16])?,
+                6,
+            ),
+            Err(CleanupCompletionError::InvalidAuthority)
         );
         Ok(())
     }

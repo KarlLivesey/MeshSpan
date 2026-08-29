@@ -160,7 +160,12 @@ tombstones and cleanup when it returns.
    bytes.
 7. The node reports a typed result. The quorum records completion idempotently;
    a missing shard is success only when its identity and prior cleanup intent
-   match.
+   match. A durable tombstone receipt is accepted only when every field and its
+   canonical digest match one committed permit attempt and the reporting node's
+   current incarnation. Each item has one immutable completion. When—and only
+   when—the completed count equals the exact sealed inventory count, the final
+   item transaction also records an ordered completion digest. New permits for
+   completed items are permanently rejected.
 
 A path, target ID, shard ID or peer identity by itself can never authorise
 deletion. Expired permits and stale epochs fail closed.

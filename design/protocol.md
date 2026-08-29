@@ -273,6 +273,12 @@ recovery reuse the exact committed capability.
 `DeleteShardRequest` carries the exact shard identity and a quorum-issued
 `RemovalPermit`. `DeleteShardResult` reports `removed`, `already_absent`,
 `identity_mismatch`, `permit_expired`, `stale_epoch` or a typed local failure.
+The recipient identity comes from mTLS rather than payload claims. A durable
+result is converted to `CompleteVersionCleanupItem` only if its receipt exactly
+matches a committed attempt and its canonical tombstone digest recomputes. The
+metadata state machine repeats those checks, validates the reporter's current
+incarnation and creates a terminal ordered summary only after every sealed item
+has one completion.
 
 Before acting, the storage node sends `ValidateRemoval` to the current metadata
 authority unless the permit itself is a verifiable, unexpired capability from
