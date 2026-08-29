@@ -42,20 +42,42 @@ struct StoredPlan {
     created_at: i64,
     path_depth: i64,
     result_digest: Vec<u8>,
+    create_disposition: i64,
+    expected_existing_object: Option<Vec<u8>>,
 }
 
-pub(crate) fn parent(
+struct LoadedPlan {
+    request: FilesystemHandleCreateRequest,
+    expected_existing_object: Option<ObjectId>,
+}
+
+#[derive(Clone, Copy)]
+struct DecodedPlanHeader {
+    create_disposition: CreateDisposition,
+    expected_existing_object: Option<ObjectId>,
+    authorization_revision: Revision,
+    policy: FilesystemAdapterPolicy,
+    principal: PrincipalId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FileCreateAuthorityTarget {
+    pub(crate) object_id: ObjectId,
+    pub(crate) existing_object_id: Option<ObjectId>,
+}
+
+pub(crate) fn authority_target(
     connection: &Connection,
     branch_id: BranchId,
     context: FilesystemAccessContext,
     request: &AdapterCreateFileRequest,
-) -> Result<ObjectId, HandleError> {
+) -> Result<FileCreateAuthorityTarget, HandleError> {
     validate_request(context, request)?;
     let request_digest = request_digest(branch_id, context, request);
     if let Some(plan) = load_plan(connection, branch_id, context, request, request_digest)? {
-        return Ok(publication_parent(&plan.initial_file));
+        return Ok(target_from_plan(&plan));
     }
-    Ok(resolve_absent(connection, branch_id, request)?.parent_object)
+    target_from_resolution(&resolve_current(connection, branch_id, request)?, request)
 }
 
 pub(crate) fn prepare(
@@ -65,22 +87,22 @@ pub(crate) fn prepare(
     request: &AdapterCreateFileRequest,
     policy: FilesystemAdapterPolicy,
     grant: FilesystemAuthorityGrant,
-    expected_parent: ObjectId,
+    expected_target: FileCreateAuthorityTarget,
 ) -> Result<FilesystemHandleCreateRequest, HandleError> {
     validate_request(context, request)?;
     let request_digest = request_digest(branch_id, context, request);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(plan) = load_plan(&transaction, branch_id, context, request, request_digest)? {
-        if plan.open.handle.principal_id == grant.principal_id
-            && publication_parent(&plan.initial_file) == expected_parent
+        if plan.request.open.handle.principal_id == grant.principal_id
+            && target_from_plan(&plan) == expected_target
         {
-            return Ok(plan);
+            return Ok(plan.request);
         }
         return Err(HandleError::OperationConflict);
     }
     reject_operation_collision(&transaction, request.operation_id)?;
-    let current = resolve_absent(&transaction, branch_id, request)?;
-    if current.parent_object != expected_parent {
+    let current = resolve_current(&transaction, branch_id, request)?;
+    if target_from_resolution(&current, request)? != expected_target {
         return Err(HandleError::StaleHandle);
     }
     let plan = build_plan(branch_id, context, request, policy, grant, &current)?;
@@ -90,7 +112,8 @@ pub(crate) fn prepare(
         context,
         policy,
         &plan,
-        expected_parent,
+        current.parent_object,
+        expected_target.existing_object_id,
     )?;
     transaction.commit()?;
     Ok(plan)
@@ -101,6 +124,12 @@ fn validate_request(
     request: &AdapterCreateFileRequest,
 ) -> Result<(), HandleError> {
     let stage_shape = request.desired_access.writes() == request.maximum_stage_bytes.is_some();
+    let creation_capable = matches!(
+        request.create_disposition,
+        CreateDisposition::CreateNew
+            | CreateDisposition::OpenOrCreate
+            | CreateDisposition::OverwriteOrCreate
+    );
     if context.now != request.observed_at
         || context.gateway_incarnation == 0
         || context.token_digest == [0; 32]
@@ -109,6 +138,8 @@ fn validate_request(
         || request.content_deadline <= request.observed_at
         || request.content_deadline > request.lease_expires_at
         || !stage_shape
+        || !creation_capable
+        || request.create_disposition.truncates_existing() && !request.desired_access.writes()
         || request.delete_on_close && !request.desired_access.deletes()
     {
         Err(HandleError::InvalidInput)
@@ -117,17 +148,31 @@ fn validate_request(
     }
 }
 
-fn resolve_absent(
+fn resolve_current(
     connection: &Connection,
     branch_id: BranchId,
     request: &AdapterCreateFileRequest,
 ) -> Result<resolution::ResolvedNamespacePath, HandleError> {
-    let current = resolution::resolve(connection, branch_id, request.volume_id, &request.path)?;
-    if current.leaf.is_some() {
-        Err(HandleError::AlreadyExists)
-    } else {
-        Ok(current)
-    }
+    resolution::resolve(connection, branch_id, request.volume_id, &request.path)
+}
+
+fn target_from_resolution(
+    current: &resolution::ResolvedNamespacePath,
+    request: &AdapterCreateFileRequest,
+) -> Result<FileCreateAuthorityTarget, HandleError> {
+    let existing_object_id = match (request.create_disposition, current.leaf) {
+        (CreateDisposition::CreateNew, Some(_)) => return Err(HandleError::AlreadyExists),
+        (_, Some(leaf)) if leaf.kind != crate::DirectoryEntryKind::File => {
+            return Err(HandleError::AlreadyExists);
+        }
+        (_, Some(leaf)) if leaf.version.is_none() => return Err(HandleError::Corrupt),
+        (_, Some(leaf)) => Some(leaf.object),
+        (_, None) => None,
+    };
+    Ok(FileCreateAuthorityTarget {
+        object_id: existing_object_id.unwrap_or(current.parent_object),
+        existing_object_id,
+    })
 }
 
 fn build_plan(
@@ -165,7 +210,7 @@ fn build_plan(
                 gateway_node_id: context.gateway_node_id,
                 desired_access: request.desired_access,
                 share_access: request.share_access,
-                create_disposition: CreateDisposition::CreateNew,
+                create_disposition: request.create_disposition,
                 delete_on_close: request.delete_on_close,
                 lease_expires_at: request.lease_expires_at,
                 opened_at: request.observed_at,
@@ -216,10 +261,17 @@ fn persist_plan(
     policy: FilesystemAdapterPolicy,
     plan: &FilesystemHandleCreateRequest,
     parent: ObjectId,
+    expected_existing_object: Option<ObjectId>,
 ) -> Result<(), HandleError> {
     let open = &plan.open.handle;
     let file = &plan.initial_file;
-    let result_digest = plan_digest(request_digest, context.gateway_incarnation, plan, parent);
+    let result_digest = plan_digest(
+        request_digest,
+        context.gateway_incarnation,
+        plan,
+        parent,
+        expected_existing_object,
+    );
     transaction.execute(
         "INSERT INTO adapter_file_create_plans(
             operation_id, request_digest, branch_id, volume_id, handle_id, principal_id,
@@ -228,9 +280,10 @@ fn persist_plan(
             creation_operation_id, object_id, version_id, manifest_id, root_object_id,
             expected_namespace_commit_id, file_object_revision_id, root_object_revision_id,
             namespace_commit_id, entry_generation, parent_object_id, created_at, path_depth,
-            result_digest
+            result_digest, create_disposition, expected_existing_object_id
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                   ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+                   ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
+                   ?27, ?28)",
         params![
             open.operation_id.as_bytes().as_slice(),
             request_digest.as_slice(),
@@ -261,6 +314,8 @@ fn persist_plan(
             file.created_at.get(),
             path_depth(&open.path)?,
             result_digest.as_slice(),
+            i64::from(open.create_disposition.code()),
+            expected_existing_object.map(ObjectId::as_bytes),
         ],
     )?;
     let mut statement = transaction.prepare(
@@ -286,7 +341,7 @@ fn load_plan(
     context: FilesystemAccessContext,
     request: &AdapterCreateFileRequest,
     request_digest: [u8; 32],
-) -> Result<Option<FilesystemHandleCreateRequest>, HandleError> {
+) -> Result<Option<LoadedPlan>, HandleError> {
     let stored: Option<StoredPlan> = connection
         .query_row(
             "SELECT request_digest, branch_id, volume_id, handle_id, principal_id,
@@ -295,7 +350,7 @@ fn load_plan(
                     creation_operation_id, object_id, version_id, manifest_id, root_object_id,
                     expected_namespace_commit_id, file_object_revision_id, root_object_revision_id,
                     namespace_commit_id, entry_generation, parent_object_id, created_at, path_depth,
-                    result_digest
+                    result_digest, create_disposition, expected_existing_object_id
              FROM adapter_file_create_plans WHERE operation_id = ?1",
             [request.operation_id.as_bytes().as_slice()],
             |row| {
@@ -325,6 +380,8 @@ fn load_plan(
                     created_at: row.get(22)?,
                     path_depth: row.get(23)?,
                     result_digest: row.get(24)?,
+                    create_disposition: row.get(25)?,
+                    expected_existing_object: row.get(26)?,
                 })
             },
         )
@@ -350,7 +407,42 @@ fn decode_plan(
     request: &AdapterCreateFileRequest,
     request_digest: [u8; 32],
     stored: &StoredPlan,
-) -> Result<FilesystemHandleCreateRequest, HandleError> {
+) -> Result<LoadedPlan, HandleError> {
+    let header = decode_plan_header(branch_id, context, request, request_digest, stored)?;
+    let plan = reconstruct_plan(connection, branch_id, context, request, stored, header)?;
+    let parent = identifier(&stored.parent, ObjectId::from_bytes)?;
+    if stored.result_digest.as_slice()
+        != plan_digest(
+            request_digest,
+            context.gateway_incarnation,
+            &plan,
+            parent,
+            header.expected_existing_object,
+        )
+    {
+        return Err(HandleError::Corrupt);
+    }
+    Ok(LoadedPlan {
+        request: plan,
+        expected_existing_object: header.expected_existing_object,
+    })
+}
+
+fn decode_plan_header(
+    branch_id: BranchId,
+    context: FilesystemAccessContext,
+    request: &AdapterCreateFileRequest,
+    request_digest: [u8; 32],
+    stored: &StoredPlan,
+) -> Result<DecodedPlanHeader, HandleError> {
+    let create_disposition = CreateDisposition::from_code(
+        u8::try_from(stored.create_disposition).map_err(|_| HandleError::Corrupt)?,
+    )?;
+    let expected_existing_object = stored
+        .expected_existing_object
+        .as_deref()
+        .map(|value| identifier(value, ObjectId::from_bytes))
+        .transpose()?;
     if stored.request_digest.as_slice() != request_digest
         || stored.branch.as_slice() != branch_id.as_bytes()
         || stored.volume.as_slice() != request.volume_id.as_bytes()
@@ -359,6 +451,8 @@ fn decode_plan(
         || positive(stored.gateway_incarnation)? != context.gateway_incarnation
         || stored.created_at != request.observed_at.get()
         || usize::try_from(stored.path_depth) != Ok(request.path.components().len())
+        || create_disposition != request.create_disposition
+        || create_disposition == CreateDisposition::CreateNew && expected_existing_object.is_some()
     {
         return Err(HandleError::OperationConflict);
     }
@@ -370,7 +464,24 @@ fn decode_plan(
             .map_err(|_| HandleError::Corrupt)?,
     };
     let principal = identifier(&stored.principal, PrincipalId::from_bytes)?;
-    let plan = FilesystemHandleCreateRequest {
+    Ok(DecodedPlanHeader {
+        create_disposition,
+        expected_existing_object,
+        authorization_revision,
+        policy,
+        principal,
+    })
+}
+
+fn reconstruct_plan(
+    connection: &Connection,
+    branch_id: BranchId,
+    context: FilesystemAccessContext,
+    request: &AdapterCreateFileRequest,
+    stored: &StoredPlan,
+    header: DecodedPlanHeader,
+) -> Result<FilesystemHandleCreateRequest, HandleError> {
+    Ok(FilesystemHandleCreateRequest {
         open: FilesystemHandleOpenRequest {
             handle: OpenHandleRequest {
                 operation_id: request.operation_id,
@@ -378,12 +489,12 @@ fn decode_plan(
                 branch_id,
                 volume_id: request.volume_id,
                 path: request.path.clone(),
-                principal_id: principal,
-                authorization_revision,
+                principal_id: header.principal,
+                authorization_revision: header.authorization_revision,
                 gateway_node_id: context.gateway_node_id,
                 desired_access: request.desired_access,
                 share_access: request.share_access,
-                create_disposition: CreateDisposition::CreateNew,
+                create_disposition: header.create_disposition,
                 delete_on_close: request.delete_on_close,
                 lease_expires_at: request.lease_expires_at,
                 opened_at: request.observed_at,
@@ -406,11 +517,11 @@ fn decode_plan(
             object_id: identifier(&stored.object, ObjectId::from_bytes)?,
             expected_current_version_id: None,
             version_id: identifier(&stored.version, FileVersionId::from_bytes)?,
-            retain_superseded_history: policy.retain_superseded_history,
-            retention_policy_sequence: policy.retention_policy_sequence,
+            retain_superseded_history: header.policy.retain_superseded_history,
+            retention_policy_sequence: header.policy.retention_policy_sequence,
             manifest_id: identifier(&stored.manifest, ContentManifestId::from_bytes)?,
-            manifest_format_version: policy.manifest_format_version,
-            content_authorization_revision: authorization_revision,
+            manifest_format_version: header.policy.manifest_format_version,
+            content_authorization_revision: header.authorization_revision,
             content_deadline: request.content_deadline,
             root_object_id: identifier(&stored.root_object, ObjectId::from_bytes)?,
             expected_namespace_commit_id: Some(identifier(
@@ -437,18 +548,10 @@ fn decode_plan(
             )
             .map_err(|_| HandleError::Corrupt)?,
             entry_generation: positive(stored.generation)?,
-            created_by: principal,
+            created_by: header.principal,
             created_at: request.observed_at,
         },
-    };
-    let parent = identifier(&stored.parent, ObjectId::from_bytes)?;
-    if stored.result_digest.as_slice()
-        == plan_digest(request_digest, context.gateway_incarnation, &plan, parent)
-    {
-        Ok(plan)
-    } else {
-        Err(HandleError::Corrupt)
-    }
+    })
 }
 
 fn load_ancestors(
@@ -521,7 +624,12 @@ fn request_digest(
     request: &AdapterCreateFileRequest,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.adapter-create-file-request.v1\0");
+    if request.create_disposition == CreateDisposition::CreateNew {
+        digest.update(b"meshspan.filesystem.adapter-create-file-request.v1\0");
+    } else {
+        digest.update(b"meshspan.filesystem.adapter-create-file-request.v2\0");
+        digest.update(&[request.create_disposition.code()]);
+    }
     digest.update(&request.operation_id.as_bytes());
     digest.update(&request.handle_id.as_bytes());
     digest.update(&branch_id.as_bytes());
@@ -544,6 +652,7 @@ fn plan_digest(
     gateway_incarnation: u64,
     plan: &FilesystemHandleCreateRequest,
     parent: ObjectId,
+    expected_existing_object: Option<ObjectId>,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.filesystem.adapter-create-file-plan.v1\0");
@@ -570,6 +679,9 @@ fn plan_digest(
     digest.update(&file.namespace_commit_id.as_bytes());
     digest.update(&file.entry_generation.to_be_bytes());
     digest.update(&parent.as_bytes());
+    if plan.open.handle.create_disposition != CreateDisposition::CreateNew {
+        digest.update(&expected_existing_object.map_or([0; 16], ObjectId::as_bytes));
+    }
     update_transitions(&mut digest, file.path.ancestors());
     digest.finalize().into()
 }
@@ -579,6 +691,15 @@ fn publication_parent(file: &RootFileCommitRequest) -> ObjectId {
         .ancestors()
         .last()
         .map_or(file.root_object_id, |value| value.object_id())
+}
+
+fn target_from_plan(plan: &LoadedPlan) -> FileCreateAuthorityTarget {
+    FileCreateAuthorityTarget {
+        object_id: plan
+            .expected_existing_object
+            .unwrap_or_else(|| publication_parent(&plan.request.initial_file)),
+        existing_object_id: plan.expected_existing_object,
+    }
 }
 
 fn access_bytes(request: &AdapterCreateFileRequest) -> [u8; 3] {

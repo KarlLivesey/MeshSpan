@@ -687,17 +687,22 @@ where
         policy: FilesystemAdapterPolicy,
     ) -> Result<FilesystemHandleCreateReceipt, AuthorisedFilesystemError<A::Error>> {
         require_adapter_context(context, request.observed_at)?;
-        let parent = self
+        let target = self
             .filesystem
-            .adapter_file_create_parent(branch_id, context, request)
+            .adapter_file_create_target(branch_id, context, request)
             .map_err(AuthorisedFilesystemError::Handle)?;
-        let grant = self.authorise(context, request.volume_id, parent, Rights::CREATE_CHILD)?;
+        let rights = if target.existing_object_id.is_some() {
+            rights_for_access(request.desired_access)
+        } else {
+            Rights::CREATE_CHILD
+        };
+        let grant = self.authorise(context, request.volume_id, target.object_id, rights)?;
         let prepared = self
             .filesystem
-            .prepare_adapter_file_create(branch_id, context, request, policy, grant, parent)
+            .prepare_adapter_file_create(branch_id, context, request, policy, grant, target)
             .map_err(AuthorisedFilesystemError::Handle)?;
         self.filesystem
-            .open_or_create_handle_at(&prepared, None)
+            .open_or_create_handle_at(&prepared, target.existing_object_id)
             .map_err(AuthorisedFilesystemError::Commit)
     }
 

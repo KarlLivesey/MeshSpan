@@ -698,14 +698,15 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .prepare_adapter_directory(branch_id, request, created_by, expected_parent)
     }
 
-    pub(crate) fn adapter_file_create_parent(
+    pub(crate) fn adapter_file_create_target(
         &self,
         branch_id: BranchId,
         context: crate::FilesystemAccessContext,
         request: &crate::AdapterCreateFileRequest,
-    ) -> Result<ObjectId, crate::HandleError> {
+    ) -> Result<crate::namespace_planning::create_file::FileCreateAuthorityTarget, crate::HandleError>
+    {
         self.publications
-            .adapter_file_create_parent(branch_id, context, request)
+            .adapter_file_create_target(branch_id, context, request)
     }
 
     pub(crate) fn prepare_adapter_file_create(
@@ -715,7 +716,7 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         request: &crate::AdapterCreateFileRequest,
         policy: crate::FilesystemAdapterPolicy,
         grant: crate::FilesystemAuthorityGrant,
-        expected_parent: ObjectId,
+        expected_target: crate::namespace_planning::create_file::FileCreateAuthorityTarget,
     ) -> Result<crate::FilesystemHandleCreateRequest, crate::HandleError> {
         self.publications.prepare_adapter_file_create(
             branch_id,
@@ -723,7 +724,7 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             request,
             policy,
             grant,
-            expected_parent,
+            expected_target,
         )
     }
 

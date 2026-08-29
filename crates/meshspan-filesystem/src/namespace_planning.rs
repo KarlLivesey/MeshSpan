@@ -472,10 +472,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        AdapterCreateFileRequest, AdapterRenameRequest, AdapterUnlinkRequest, FilePublication,
-        FilesystemAccessContext, FilesystemAdapterPolicy, FilesystemAuthorityGrant, HandleAccess,
-        HandleShare, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
-        RootFilePublication, VersionPublicationStore,
+        AdapterCreateFileRequest, AdapterRenameRequest, AdapterUnlinkRequest, CreateDisposition,
+        FilePublication, FilesystemAccessContext, FilesystemAdapterPolicy,
+        FilesystemAuthorityGrant, HandleAccess, HandleShare, ManifestPublication, NamespaceLimits,
+        NamespacePath, NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
     };
 
     #[test]
@@ -693,6 +693,7 @@ mod tests {
             handle_id: meshspan_domain::HandleId::from_bytes([61; 16])?,
             volume_id: seed.file.volume_id,
             path: NamespacePath::from_components(["new"], NamespaceLimits::PORTABLE)?,
+            create_disposition: CreateDisposition::OpenOrCreate,
             desired_access: HandleAccess::new(true, true, false)?,
             share_access: HandleShare::new(true, true, false),
             delete_on_close: false,
@@ -701,8 +702,13 @@ mod tests {
             content_deadline: UnixMicros::new(90),
             observed_at: context.now,
         };
-        let parent = store.adapter_file_create_parent(seed.file.branch_id, context, &request)?;
-        let grant = create_grant(context, seed.file.volume_id, parent, Revision::new(1))?;
+        let target = store.adapter_file_create_target(seed.file.branch_id, context, &request)?;
+        let grant = create_grant(
+            context,
+            seed.file.volume_id,
+            target.object_id,
+            Revision::new(1),
+        )?;
         let policy = FilesystemAdapterPolicy::new(true, 1, 1)?;
         let plan = store.prepare_adapter_file_create(
             seed.file.branch_id,
@@ -710,12 +716,17 @@ mod tests {
             &request,
             policy,
             grant,
-            parent,
+            target,
         )?;
         drop(store);
 
         let mut reopened = VersionPublicationStore::open(state.path(), UnixMicros::new(3))?;
-        let changed_grant = create_grant(context, seed.file.volume_id, parent, Revision::new(2))?;
+        let changed_grant = create_grant(
+            context,
+            seed.file.volume_id,
+            target.object_id,
+            Revision::new(2),
+        )?;
         let changed_policy = FilesystemAdapterPolicy::new(false, 2, 2)?;
         let replay = reopened.prepare_adapter_file_create(
             seed.file.branch_id,
@@ -723,7 +734,7 @@ mod tests {
             &request,
             changed_policy,
             changed_grant,
-            parent,
+            target,
         )?;
         assert_eq!(replay, plan);
         assert_eq!(replay.open.handle.authorization_revision, Revision::new(1));
@@ -735,7 +746,107 @@ mod tests {
             params![&[99_u8; 16], request.operation_id.as_bytes().as_slice()],
         )?;
         assert!(matches!(
-            reopened.adapter_file_create_parent(seed.file.branch_id, context, &request),
+            reopened.adapter_file_create_target(seed.file.branch_id, context, &request),
+            Err(HandleError::Corrupt)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn open_or_create_plan_binds_an_existing_file_across_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let state = tempdir()?;
+        let seed = seed_publication()?;
+        let mut store = VersionPublicationStore::open(state.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&seed)?;
+        let context = access_context()?;
+        let request = AdapterCreateFileRequest {
+            operation_id: OperationId::from_bytes([62; 16])?,
+            handle_id: meshspan_domain::HandleId::from_bytes([63; 16])?,
+            volume_id: seed.file.volume_id,
+            path: NamespacePath::from_components(["seed"], NamespaceLimits::PORTABLE)?,
+            create_disposition: CreateDisposition::OpenOrCreate,
+            desired_access: HandleAccess::new(true, false, false)?,
+            share_access: HandleShare::new(true, true, true),
+            delete_on_close: false,
+            maximum_stage_bytes: None,
+            lease_expires_at: UnixMicros::new(100),
+            content_deadline: UnixMicros::new(90),
+            observed_at: context.now,
+        };
+        let target = store.adapter_file_create_target(seed.file.branch_id, context, &request)?;
+        assert_eq!(target.object_id, seed.file.object_id);
+        assert_eq!(target.existing_object_id, Some(seed.file.object_id));
+        let grant = create_grant(
+            context,
+            seed.file.volume_id,
+            target.object_id,
+            Revision::new(1),
+        )?;
+        let plan = store.prepare_adapter_file_create(
+            seed.file.branch_id,
+            context,
+            &request,
+            FilesystemAdapterPolicy::new(true, 1, 1)?,
+            grant,
+            target,
+        )?;
+        assert_eq!(
+            plan.open.handle.create_disposition,
+            CreateDisposition::OpenOrCreate
+        );
+        drop(store);
+
+        let mut reopened = VersionPublicationStore::open(state.path(), UnixMicros::new(3))?;
+        assert_eq!(
+            reopened.adapter_file_create_target(seed.file.branch_id, context, &request)?,
+            target
+        );
+        assert_eq!(
+            reopened.prepare_adapter_file_create(
+                seed.file.branch_id,
+                context,
+                &request,
+                FilesystemAdapterPolicy::new(false, 2, 2)?,
+                grant,
+                target,
+            )?,
+            plan
+        );
+        let conflicting = AdapterCreateFileRequest {
+            create_disposition: CreateDisposition::CreateNew,
+            ..request.clone()
+        };
+        assert!(matches!(
+            reopened.adapter_file_create_target(seed.file.branch_id, context, &conflicting),
+            Err(HandleError::OperationConflict)
+        ));
+        let create_new = AdapterCreateFileRequest {
+            operation_id: OperationId::from_bytes([64; 16])?,
+            handle_id: meshspan_domain::HandleId::from_bytes([65; 16])?,
+            ..conflicting
+        };
+        assert!(matches!(
+            reopened.adapter_file_create_target(seed.file.branch_id, context, &create_new),
+            Err(HandleError::AlreadyExists)
+        ));
+        let invalid_overwrite = AdapterCreateFileRequest {
+            operation_id: OperationId::from_bytes([66; 16])?,
+            handle_id: meshspan_domain::HandleId::from_bytes([67; 16])?,
+            create_disposition: CreateDisposition::OverwriteOrCreate,
+            ..request.clone()
+        };
+        assert!(matches!(
+            reopened.adapter_file_create_target(seed.file.branch_id, context, &invalid_overwrite),
+            Err(HandleError::InvalidInput)
+        ));
+        reopened.test_connection().execute(
+            "UPDATE adapter_file_create_plans SET expected_existing_object_id = ?1
+             WHERE operation_id = ?2",
+            params![&[99_u8; 16], request.operation_id.as_bytes().as_slice()],
+        )?;
+        assert!(matches!(
+            reopened.adapter_file_create_target(seed.file.branch_id, context, &request),
             Err(HandleError::Corrupt)
         ));
         Ok(())

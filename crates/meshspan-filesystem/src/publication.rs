@@ -27,7 +27,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 30] = [
+const MIGRATIONS: [Migration; 31] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -148,8 +148,12 @@ const MIGRATIONS: [Migration; 30] = [
         version: 30,
         sql: include_str!("../schema/branch/030_adapter_file_create_plans.sql"),
     },
+    Migration {
+        version: 31,
+        sql: include_str!("../schema/branch/031_adapter_file_create_dispositions.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 30;
+const SCHEMA_VERSION: u32 = 31;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -850,13 +854,14 @@ impl VersionPublicationStore {
         )
     }
 
-    pub(crate) fn adapter_file_create_parent(
+    pub(crate) fn adapter_file_create_target(
         &self,
         branch_id: BranchId,
         context: crate::FilesystemAccessContext,
         request: &crate::AdapterCreateFileRequest,
-    ) -> Result<ObjectId, crate::HandleError> {
-        crate::namespace_planning::create_file::parent(
+    ) -> Result<crate::namespace_planning::create_file::FileCreateAuthorityTarget, crate::HandleError>
+    {
+        crate::namespace_planning::create_file::authority_target(
             &self.connection,
             branch_id,
             context,
@@ -871,7 +876,7 @@ impl VersionPublicationStore {
         request: &crate::AdapterCreateFileRequest,
         policy: crate::FilesystemAdapterPolicy,
         grant: crate::FilesystemAuthorityGrant,
-        expected_parent: ObjectId,
+        expected_target: crate::namespace_planning::create_file::FileCreateAuthorityTarget,
     ) -> Result<crate::FilesystemHandleCreateRequest, crate::HandleError> {
         crate::namespace_planning::create_file::prepare(
             &mut self.connection,
@@ -880,7 +885,7 @@ impl VersionPublicationStore {
             request,
             policy,
             grant,
-            expected_parent,
+            expected_target,
         )
     }
 

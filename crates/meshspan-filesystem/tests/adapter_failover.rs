@@ -57,6 +57,8 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
     let rename_request = rename_directory(&gateway_b, &mut service, &directory_request)?;
     let unlink_request = unlink_directory(&gateway_a, &mut service, &rename_request)?;
     let create_file_request = create_file(&gateway_b, &mut service, publication.file.volume_id)?;
+    let creation_dispositions =
+        exercise_creation_dispositions(&gateway_b, &mut service, publication.file.volume_id)?;
 
     let rejected = open_request(35, 36, false, true, 9, 80)?;
     let missing_credential = InProcessAdapter::new(gateway_b.node_id, [0; 32]);
@@ -103,7 +105,10 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
     assert_directory_replay(&gateway_b, &mut restarted, &directory_request)?;
     assert_rename_replay(&gateway_a, &mut restarted, &rename_request)?;
     assert_unlink_replay(&gateway_a, &mut restarted, &unlink_request)?;
-    assert_file_create_replay(&gateway_b, &mut restarted, &create_file_request)?;
+    assert_file_create_replay(&gateway_b, &mut restarted, &create_file_request, true)?;
+    for (request, created) in &creation_dispositions {
+        assert_file_create_replay(&gateway_b, &mut restarted, request, *created)?;
+    }
     let failover_reader = open_request(32, 33, false, true, 100, 180)?;
     gateway_b.open(&mut restarted, &failover_reader, None)?;
     assert_read(
@@ -127,6 +132,7 @@ fn create_file(
         handle_id: HandleId::from_bytes([58; 16])?,
         volume_id,
         path: NamespacePath::from_components(["Created"], NamespaceLimits::PORTABLE)?,
+        create_disposition: meshspan_filesystem::CreateDisposition::CreateNew,
         desired_access: HandleAccess::new(true, true, false)?,
         share_access: HandleShare::new(true, true, false),
         delete_on_close: false,
@@ -167,6 +173,7 @@ fn assert_file_create_replay(
     gateway: &InProcessAdapter,
     service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
     request: &AdapterCreateFileRequest,
+    created: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let replayed = gateway.create_file(service, request)?;
     assert_eq!(
@@ -175,7 +182,7 @@ fn assert_file_create_replay(
     );
     assert_eq!(
         replayed.creation.map(|value| value.disposition),
-        Some(PublicationDisposition::Replayed)
+        created.then_some(PublicationDisposition::Replayed)
     );
     let conflicting = AdapterCreateFileRequest {
         path: NamespacePath::from_components(["Different"], NamespaceLimits::PORTABLE)?,
@@ -187,6 +194,133 @@ fn assert_file_create_replay(
             HandleError::OperationConflict
         ))
     ));
+    Ok(())
+}
+
+fn exercise_creation_dispositions(
+    gateway: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    volume_id: VolumeId,
+) -> Result<Vec<(AdapterCreateFileRequest, bool)>, Box<dyn std::error::Error>> {
+    let existing = creation_request(
+        60,
+        61,
+        volume_id,
+        "Created",
+        meshspan_filesystem::CreateDisposition::OpenOrCreate,
+        13,
+    )?;
+    let receipt = gateway.create_file(service, &existing)?;
+    assert_eq!(receipt.creation, None);
+    close_created_handle(gateway, service, &existing, 62, 14, None)?;
+
+    let absent = creation_request(
+        63,
+        64,
+        volume_id,
+        "OpenedOrCreated",
+        meshspan_filesystem::CreateDisposition::OpenOrCreate,
+        15,
+    )?;
+    let receipt = gateway.create_file(service, &absent)?;
+    assert_eq!(
+        receipt.creation.map(|value| value.disposition),
+        Some(PublicationDisposition::Applied)
+    );
+    close_created_handle(gateway, service, &absent, 65, 16, None)?;
+
+    let overwrite = creation_request(
+        66,
+        67,
+        volume_id,
+        "Created",
+        meshspan_filesystem::CreateDisposition::OverwriteOrCreate,
+        17,
+    )?;
+    let receipt = gateway.create_file(service, &overwrite)?;
+    assert_eq!(receipt.creation, None);
+    close_created_handle(
+        gateway,
+        service,
+        &overwrite,
+        69,
+        19,
+        Some(AdapterFlushFileRequest {
+            operation_id: OperationId::from_bytes([68; 16])?,
+            handle_id: overwrite.handle_id,
+            handle_fence: 1,
+            expected_stage_sequence: 1,
+            final_length: 0,
+            sparse: false,
+            content_deadline: UnixMicros::new(50),
+            observed_at: UnixMicros::new(19),
+        }),
+    )?;
+
+    let overwrite_absent = creation_request(
+        70,
+        71,
+        volume_id,
+        "OverwrittenOrCreated",
+        meshspan_filesystem::CreateDisposition::OverwriteOrCreate,
+        20,
+    )?;
+    let receipt = gateway.create_file(service, &overwrite_absent)?;
+    assert_eq!(
+        receipt.creation.map(|value| value.disposition),
+        Some(PublicationDisposition::Applied)
+    );
+    close_created_handle(gateway, service, &overwrite_absent, 72, 21, None)?;
+    Ok(vec![
+        (existing, false),
+        (absent, true),
+        (overwrite, false),
+        (overwrite_absent, true),
+    ])
+}
+
+fn creation_request(
+    operation: u8,
+    handle: u8,
+    volume_id: VolumeId,
+    name: &str,
+    create_disposition: meshspan_filesystem::CreateDisposition,
+    observed_at: i64,
+) -> Result<AdapterCreateFileRequest, Box<dyn std::error::Error>> {
+    Ok(AdapterCreateFileRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        handle_id: HandleId::from_bytes([handle; 16])?,
+        volume_id,
+        path: NamespacePath::from_components([name], NamespaceLimits::PORTABLE)?,
+        create_disposition,
+        desired_access: HandleAccess::new(true, true, false)?,
+        share_access: HandleShare::new(true, true, false),
+        delete_on_close: false,
+        maximum_stage_bytes: Some(1_024),
+        lease_expires_at: UnixMicros::new(observed_at + 60),
+        content_deadline: UnixMicros::new(observed_at + 40),
+        observed_at: UnixMicros::new(observed_at),
+    })
+}
+
+fn close_created_handle(
+    gateway: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    request: &AdapterCreateFileRequest,
+    operation: u8,
+    observed_at: i64,
+    flush: Option<AdapterFlushFileRequest>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    gateway.close(
+        service,
+        AdapterCloseFileRequest {
+            operation_id: OperationId::from_bytes([operation; 16])?,
+            handle_id: request.handle_id,
+            handle_fence: 1,
+            flush,
+            observed_at: UnixMicros::new(observed_at),
+        },
+    )?;
     Ok(())
 }
 
