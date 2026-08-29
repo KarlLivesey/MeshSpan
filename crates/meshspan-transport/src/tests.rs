@@ -7,9 +7,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use meshspan_domain::{MeshId, NodeId, PartitionId};
 use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::data_control_envelope::Message as DataMessage;
+use meshspan_protocol::v1::federation_envelope::Message as FederationMessage;
 use meshspan_protocol::v1::{
-    ControlEnvelope, DataControlEnvelope, DataFrame, NodeHello, Ping, ProtocolVersion,
-    PutShardFinish,
+    ControlEnvelope, DataControlEnvelope, DataFrame, FederationEnvelope, FederationHeader,
+    FederationHello, NodeHello, Ping, ProtocolVersion, PutShardFinish,
 };
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
@@ -22,8 +23,8 @@ use super::identity::certificate_fingerprint;
 use super::{
     NegotiationConfig, NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportError,
     TransportLimits, accept_stream, client_endpoint, connect, open_stream, receive_control,
-    receive_data_control, receive_data_frame, send_control, send_data_control, send_data_frame,
-    server_endpoint,
+    receive_data_control, receive_data_frame, receive_federation, send_control, send_data_control,
+    send_data_frame, send_federation, server_endpoint,
 };
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -279,6 +280,53 @@ async fn saturated_data_stream_does_not_block_consensus_control() -> Result<(), 
     Ok(())
 }
 
+#[tokio::test]
+async fn federation_envelope_round_trips_on_its_own_bounded_stream() -> Result<(), Box<dyn Error>> {
+    let certificates = certificates()?;
+    let limits = limits()?;
+    let server = server_endpoint(
+        loopback(),
+        certificates.server_credentials()?,
+        roots(&certificates.authority_certificate)?,
+        limits,
+    )?;
+    let client = client_endpoint(
+        loopback(),
+        certificates.client_credentials()?,
+        roots(&certificates.authority_certificate)?,
+        limits,
+    )?;
+    let server_address = server.local_addr()?;
+    let server_connection = async {
+        server
+            .accept()
+            .await
+            .ok_or(TransportError::InvalidConfiguration)?
+            .await
+            .map_err(TransportError::from)
+    };
+    let (client_connection, server_connection) = tokio::try_join!(
+        connect(&client, server_address, CERTIFICATE_NAME),
+        server_connection
+    )?;
+    let envelope = federation_hello();
+    let (mut send, _receive) = open_stream(&client_connection, StreamKind::Federation).await?;
+    let mut accepted = accept_stream(&server_connection).await?;
+    assert_eq!(accepted.kind, StreamKind::Federation);
+    send_federation(&mut send, &envelope, limits.wire).await?;
+    assert_eq!(
+        receive_federation(&mut accepted.receive, limits.wire)
+            .await?
+            .into_inner(),
+        envelope
+    );
+    client_connection.close(0_u32.into(), b"test complete");
+    server_connection.close(0_u32.into(), b"test complete");
+    client.wait_idle().await;
+    server.wait_idle().await;
+    Ok(())
+}
+
 struct Certificates {
     authority_certificate: CertificateDer<'static>,
     server_certificate: CertificateDer<'static>,
@@ -368,6 +416,34 @@ fn hello(mesh_id: MeshId, node_id: NodeId, incarnation: u64) -> NodeHello {
         maximum_control_bytes: 1,
         maximum_data_frame_bytes: 1,
         maximum_streams: 1,
+    }
+}
+
+fn federation_hello() -> FederationEnvelope {
+    FederationEnvelope {
+        header: Some(FederationHeader {
+            version: Some(version(1, 0)),
+            relationship_id: vec![1; 16],
+            sender_mesh_id: vec![2; 16],
+            recipient_mesh_id: vec![3; 16],
+            request_id: vec![4; 16],
+            operation_id: vec![5; 16],
+            authority_epoch: 1,
+            deadline_unix_micros: 2_000_000,
+            trace_id: vec![6; 16],
+            replay_nonce: vec![7; 32],
+        }),
+        message: Some(FederationMessage::Hello(FederationHello {
+            versions: vec![version(1, 0)],
+            identity_generation: 1,
+            public_identity_chain: vec![8; 32],
+            challenge_nonce: vec![9; 32],
+            feature_bits: vec![1],
+            maximum_control_bytes: 64 * 1_024,
+            maximum_data_frame_bytes: 64 * 1_024,
+            maximum_streams: 128,
+            signature: vec![10; 64],
+        })),
     }
 }
 
