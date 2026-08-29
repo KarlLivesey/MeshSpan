@@ -95,8 +95,8 @@ async fn current_metadata_authority_admits_then_revokes_a_real_federation_sessio
         server_mesh,
         client_mesh,
     )?;
-    let client_runtime = runtime(&certificates.client, &client_key, limits.wire, 11)?;
-    let server_runtime = runtime(&certificates.server, &server_key, limits.wire, 22)?;
+    let client_runtime = runtime(&certificates.client, &client_key, limits.wire)?;
+    let server_runtime = runtime(&certificates.server, &server_key, limits.wire)?;
 
     {
         let proof = SessionProof {
@@ -165,7 +165,7 @@ async fn prove_admitted_session(proof: &SessionProof<'_>) -> Result<(), Box<dyn 
     let (client_session, server_session) = tokio::try_join!(dial, accept)?;
     assert_eq!(client_session.relationship_id, proof.relationship_id);
     assert_eq!(client_session.remote_mesh_id, proof.server_mesh);
-    assert_eq!(client_session.remote_authority_revision, 22);
+    assert_eq!(client_session.remote_authority_revision, 3);
     assert_eq!(server_session.relationship_id, proof.relationship_id);
     assert_eq!(server_session.remote_mesh_id, proof.client_mesh);
     assert_eq!(server_session.remote_identity_generation, 1);
@@ -381,13 +381,12 @@ fn runtime<'a>(
     certificate: &'a CertificateDer<'_>,
     signing_key: &'a SigningKey,
     limits: WireLimits,
-    authority_revision: u64,
 ) -> Result<FederationSessionRuntime<'a>, TransportError> {
     Ok(FederationSessionRuntime::new(
         certificate.as_ref(),
         signing_key,
         FederationHelloConfig::new(versions(), vec![1], limits, 64)?,
-        FederationNegotiationConfig::new(versions(), authority_revision, limits, 64)?,
+        FederationNegotiationConfig::new(versions(), limits, 64)?,
     ))
 }
 

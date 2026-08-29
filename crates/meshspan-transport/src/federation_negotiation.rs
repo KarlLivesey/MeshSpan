@@ -24,7 +24,6 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationNegotiationConfig {
     versions: Vec<ProtocolVersion>,
-    authority_revision: u64,
     wire_limits: WireLimits,
     maximum_streams: u32,
 }
@@ -34,10 +33,9 @@ impl FederationNegotiationConfig {
     ///
     /// # Errors
     ///
-    /// Rejects duplicate/zero versions, zero revisions or zero streams.
+    /// Rejects duplicate/zero versions or zero streams.
     pub fn new(
         versions: Vec<ProtocolVersion>,
-        authority_revision: u64,
         wire_limits: WireLimits,
         maximum_streams: u32,
     ) -> Result<Self, TransportError> {
@@ -48,14 +46,12 @@ impl FederationNegotiationConfig {
         if versions.is_empty()
             || distinct.len() != versions.len()
             || versions.iter().any(|version| version.major == 0)
-            || authority_revision == 0
             || maximum_streams == 0
         {
             return Err(TransportError::InvalidConfiguration);
         }
         Ok(Self {
             versions,
-            authority_revision,
             wire_limits,
             maximum_streams,
         })
@@ -222,7 +218,11 @@ impl AuthenticatedFederationHello {
         config: &FederationNegotiationConfig,
         nonces: FederationWelcomeNonces,
         local_identity: &FederationLocalIdentity<'_>,
+        authority_revision: u64,
     ) -> Result<OutboundFederationWelcome, TransportError> {
+        if authority_revision == 0 {
+            return Err(TransportError::InvalidConfiguration);
+        }
         let request_challenge: [u8; 32] = exact(&self.hello().challenge_nonce)?;
         if nonces.challenge == request_challenge {
             return Err(TransportError::InvalidConfiguration);
@@ -256,7 +256,7 @@ impl AuthenticatedFederationHello {
             identity_generation: local_binding.identity_generation,
             request_challenge_nonce: request_challenge.to_vec(),
             responder_challenge_nonce: nonces.challenge.to_vec(),
-            authority_revision: config.authority_revision,
+            authority_revision,
             maximum_control_bytes: lower_u64(
                 self.hello().maximum_control_bytes,
                 config.wire_limits.maximum_control_bytes(),

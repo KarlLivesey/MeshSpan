@@ -138,6 +138,7 @@ impl<'a> FederationSessionRuntime<'a> {
             &self.negotiation_config,
             request.nonces,
             &local_identity,
+            authority.authority_revision.get(),
         )?;
         send_federation(
             &mut stream.send,

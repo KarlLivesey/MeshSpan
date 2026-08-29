@@ -454,14 +454,10 @@ async fn prove_federation_welcome(
     )?;
     let welcome_limits = WireLimits::new(32 * 1_024, 16 * 1_024, 128, 2_048)?;
     let welcome = authenticated.signed_welcome(
-        &FederationNegotiationConfig::new(
-            vec![version(1, 0), version(1, 2)],
-            9,
-            welcome_limits,
-            64,
-        )?,
+        &FederationNegotiationConfig::new(vec![version(1, 0), version(1, 2)], welcome_limits, 64)?,
         FederationWelcomeNonces::new([21; 32], [22; 32])?,
         &local_identity,
+        9,
     )?;
     assert_eq!(welcome.session().remote_identity_generation, 1);
     assert_eq!(welcome.session().version, version(1, 2));

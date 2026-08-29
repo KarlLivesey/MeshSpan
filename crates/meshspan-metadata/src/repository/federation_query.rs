@@ -67,6 +67,8 @@ pub struct FederationTrustIdentityRecord {
 /// Complete active relationship authority needed to construct one federation transport binding.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationTransportAuthority {
+    /// Exact committed partition revision from which this complete projection was read.
+    pub authority_revision: Revision,
     /// Independently evidence-verified active or restricted relationship.
     pub relationship: FederationRelationshipRecord,
     /// Current identity which this swarm presents.
@@ -199,6 +201,7 @@ pub(super) fn transport_authority(
         active_identity(database, relationship_id, FederationIdentityOwner::Remote)?
             .ok_or(RepositoryError::CorruptState)?;
     Ok(Some(FederationTransportAuthority {
+        authority_revision: super::apply::read_current_revision(database)?,
         relationship,
         local_identity,
         remote_identity,
