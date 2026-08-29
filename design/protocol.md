@@ -290,6 +290,14 @@ still outstanding. The terminal reclamation summary appears only after the
 terminal tombstone count and every per-item reclamation agree; it stores a
 checked byte sum and canonical item-index-ordered digest.
 
+The cleanup worker catalogue returns bounded keyset pages of sealed items and
+classifies each from replicated state as `acquire_permit`, `tombstone`,
+`reclaim` or `complete`. Entries share no worker-local mutable state and may be
+dispatched concurrently. One execution performs at most one provider mutation
+and returns the exact authoritative command to submit. Restart or a lost reply
+re-reads metadata and replays the provider's immutable receipt; it never guesses
+that either side committed.
+
 Each gateway then reads its signature-verified `VersionCleanupParticipant` and
 joins its local scan operation with the matching authorised intent and terminal
 completion. `VersionCleanupRetirementAuthority` is applied only to that exact
