@@ -44,10 +44,10 @@ impl FederationAuthoritySource for AuthoritativeRepository {
 
 /// Immutable process material and bounded negotiation policy shared by connection attempts.
 pub struct FederationSessionRuntime<'a> {
-    certificate_der: &'a [u8],
-    signing_key: &'a SigningKey,
-    hello_config: FederationHelloConfig,
-    negotiation_config: FederationNegotiationConfig,
+    pub(crate) certificate_der: &'a [u8],
+    pub(crate) signing_key: &'a SigningKey,
+    pub(crate) hello_config: FederationHelloConfig,
+    pub(crate) negotiation_config: FederationNegotiationConfig,
 }
 
 impl<'a> FederationSessionRuntime<'a> {
@@ -150,7 +150,7 @@ impl<'a> FederationSessionRuntime<'a> {
         Ok(welcome.session())
     }
 
-    fn local_identity(
+    pub(crate) fn local_identity(
         &self,
         authority: &FederationConnectionAuthority,
         now: UnixMicros,
@@ -185,7 +185,7 @@ pub struct FederationAcceptRequest {
     pub now: UnixMicros,
 }
 
-fn load_authority(
+pub(crate) fn load_authority(
     source: &impl FederationAuthoritySource,
     relationship_id: FederationRelationshipId,
     now: UnixMicros,
@@ -195,7 +195,7 @@ fn load_authority(
         .ok_or(FederationSessionError::AuthorityUnavailable)
 }
 
-fn envelope_relationship(
+pub(crate) fn envelope_relationship(
     envelope: &meshspan_protocol::ValidatedFederationEnvelope,
 ) -> Result<FederationRelationshipId, FederationSessionError> {
     let bytes: [u8; 16] = envelope
@@ -219,6 +219,9 @@ pub enum FederationSessionError {
     /// Metadata authority could not be read or proved current.
     #[error("federation authority could not be established")]
     Authority(#[from] FederationAuthorityError),
+    /// The bounded page source rejected or could not produce an exact stable-revision page.
+    #[error("federation authority page could not be produced")]
+    AuthorityPage(#[from] crate::FederationAuthorityPageSourceError),
     /// Quinn, framing, identity or signature validation failed.
     #[error("federation transport negotiation failed")]
     Transport(#[from] TransportError),
