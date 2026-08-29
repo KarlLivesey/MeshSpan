@@ -3,6 +3,7 @@
 //! Atomic authoritative command application and exact operation resolution.
 
 mod access_evaluation;
+mod access_query;
 mod apply;
 mod backup;
 mod bootstrap;
@@ -40,6 +41,10 @@ use thiserror::Error;
 use crate::{MetadataStoreError, PartitionDatabase};
 
 pub use access_evaluation::{AccessCapability, AccessDecision, AccessDenial, AccessRequest};
+pub use access_query::{
+    AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
+    PermissionGrantRecord, ScopedGrantCursor, SubjectGrantCursor,
+};
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -222,6 +227,79 @@ impl AuthoritativeRepository {
         request: AccessRequest,
     ) -> Result<AccessDecision, RepositoryError> {
         access_evaluation::evaluate(&self.database, request)
+    }
+
+    /// Returns a stable bounded page from one object's current immutable owner set.
+    ///
+    /// A continuation fails stale if the object changes owner set between pages.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed ownership evidence, cursor substitution or database failure.
+    pub fn object_owners(
+        &self,
+        object_id: meshspan_domain::ObjectId,
+        after: Option<ObjectOwnerCursor>,
+        limit: PageLimit,
+    ) -> Result<Option<Page<ObjectOwnerRecord, ObjectOwnerCursor>>, RepositoryError> {
+        access_query::object_owners(&self.database, object_id, after, limit)
+    }
+
+    /// Returns one stable bounded page of current grants attached to an exact scope.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed grants, cursor substitution or database failure.
+    pub fn permission_grants_for_scope(
+        &self,
+        scope: crate::PermissionScope,
+        after: Option<ScopedGrantCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<PermissionGrantRecord, ScopedGrantCursor>, RepositoryError> {
+        access_query::permission_grants_for_scope(&self.database, scope, after, limit)
+    }
+
+    /// Returns one stable bounded page of current grants assigned to one user or group.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed grants, cursor substitution or database failure.
+    pub fn permission_grants_for_subject(
+        &self,
+        subject_principal_id: meshspan_domain::PrincipalId,
+        after: Option<SubjectGrantCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<PermissionGrantRecord, SubjectGrantCursor>, RepositoryError> {
+        access_query::permission_grants_for_subject(
+            &self.database,
+            subject_principal_id,
+            after,
+            limit,
+        )
+    }
+
+    /// Returns nominally live activation records at one authoritative instant.
+    ///
+    /// A continuation is bound to the original principal and instant. This administration view
+    /// does not grant access: operation-time evaluation rechecks every source and session.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed activation evidence, cursor substitution or database failure.
+    pub fn unrevoked_access_activations(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        observed_at: meshspan_domain::UnixMicros,
+        after: Option<AccessActivationCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<AccessActivationRecord, AccessActivationCursor>, RepositoryError> {
+        access_query::unrevoked_access_activations(
+            &self.database,
+            principal_id,
+            observed_at,
+            after,
+            limit,
+        )
     }
 
     /// Reads one exact user or group principal.
@@ -639,6 +717,8 @@ pub enum RepositoryError {
 
 #[cfg(test)]
 mod access_evaluation_tests;
+#[cfg(test)]
+mod access_query_tests;
 #[cfg(test)]
 mod access_revocation_tests;
 #[cfg(test)]

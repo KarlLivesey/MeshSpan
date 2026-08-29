@@ -20,10 +20,10 @@ pub(super) struct Fixture {
     pub(super) administrator: PrincipalId,
     pub(super) user: PrincipalId,
     pub(super) second_user: PrincipalId,
-    gateway: NodeId,
-    volume: VolumeId,
-    folder: ObjectId,
-    file: ObjectId,
+    pub(super) gateway: NodeId,
+    pub(super) volume: VolumeId,
+    pub(super) folder: ObjectId,
+    pub(super) file: ObjectId,
     pub(super) next_revision: u64,
 }
 

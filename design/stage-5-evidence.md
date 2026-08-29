@@ -224,13 +224,24 @@ copy-on-write filesystem service. This document records executable evidence only
   object/revision, last name hash and canonical component; a later namespace
   head fails stale rather than mixing pages. Tests prove one-entry paging,
   reauthorisation, revocation and stale continuation after mutation. Connector
-  conformance and remaining administration queries remain open.
+  conformance remains open.
 - The complete 13-bit protocol-neutral rights vocabulary now has an executable
   authority vector. Each right is granted independently on one exact object,
   evaluated through a freshly fenced real session, bound into a distinct
   capability digest and then evaluated together as `Rights::ALL`. This catches
   omitted bit handling and accidental aliasing rather than assuming read/write
   examples cover rename, delete, ownership or permission administration.
+- Metadata schema v28 adds partial seek indexes and typed administration
+  projections for an object's current immutable owner set, current grants by
+  exact scope or subject, and nominally live activation records. Every page is
+  explicitly bounded. Cursors are bound to their original object, scope or
+  subject; owner pages also bind the exact object and owner-set revision, while
+  activation pages bind the authoritative observation instant. Substitution or
+  an ownership change fails stale. Revoked grants and explicitly revoked or
+  expired activation records disappear from the current views, while activation
+  records remain informational and never substitute for operation-time source,
+  membership, policy and session evaluation. Migration digest, paging,
+  revocation, expiry and stale-cursor behaviour are executable.
 
 ## Closure gates
 
@@ -466,8 +477,10 @@ copy-on-write filesystem service. This document records executable evidence only
    validation now fronts the implemented mutating handle and namespace service
    families plus bounded handle reads, immutable stat and directory enumeration
    through one metadata adapter. The complete 13-right vector is proven both
-   independently and as one atomic requested set. Administration queries remain
-   open.
+   independently and as one atomic requested set. Indexed bounded owner, active
+   grant and nominal activation administration projections are implemented.
+   Their operation-time-authorised filesystem composition remains part of gate
+   7 so no connector can treat a repository read as access authority.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
