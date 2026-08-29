@@ -13,6 +13,7 @@ use meshspan_domain::{
     GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId,
     Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
 };
+use std::collections::BTreeSet;
 
 pub(super) struct Fixture {
     pub(super) repository: AuthoritativeRepository,
@@ -77,6 +78,74 @@ fn nested_inherited_grant_is_bounded_and_admin_role_is_not_file_authority()
             .evaluate_access(request(&fixture, [43; 32], Rights::READ_DATA, 200,))?,
         AccessDecision::Denied(AccessDenial::MissingRights)
     );
+    Ok(())
+}
+
+#[test]
+fn every_defined_right_is_independently_granted_and_bound_into_capability_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = build_fixture(false)?;
+    let administrator = fixture.administrator;
+    let user = fixture.user;
+    let volume = fixture.volume;
+    let file = fixture.file;
+    for index in 0_u8..13 {
+        let right = Rights::from_bits(1_u32 << index)?;
+        apply(
+            &mut fixture,
+            administrator,
+            130 + i64::from(index),
+            AuthoritativeCommand::GrantPermission(GrantPermission {
+                grant_id: GrantId::from_bytes([60 + index; 16])?,
+                subject_principal_id: user,
+                scope: PermissionScope::Object {
+                    volume_id: volume,
+                    object_id: file,
+                },
+                rights: right,
+                inheritance: GrantInheritance::Object,
+                valid_from: None,
+                valid_until: Some(UnixMicros::new(700)),
+                activation_policy_id: None,
+            }),
+        )?;
+    }
+    apply(
+        &mut fixture,
+        user,
+        200,
+        AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+            session_id: SessionId::from_bytes([73; 16])?,
+            principal_id: user,
+            token_digest: [74; 32],
+            assurance: AssuranceLevel::MultiFactor,
+            expires_at: UnixMicros::new(900),
+        }),
+    )?;
+
+    let mut evidence = BTreeSet::new();
+    for index in 0_u8..13 {
+        let right = Rights::from_bits(1_u32 << index)?;
+        let AccessDecision::Granted(capability) = fixture
+            .repository
+            .evaluate_access(request(&fixture, [74; 32], right, 220))?
+        else {
+            return Err(format!("defined right bit {index} was unexpectedly denied").into());
+        };
+        assert_eq!(capability.requested_rights, right);
+        assert!(capability.effective_rights.contains(right));
+        assert!(evidence.insert(capability.capability_digest));
+    }
+    let AccessDecision::Granted(all) =
+        fixture
+            .repository
+            .evaluate_access(request(&fixture, [74; 32], Rights::ALL, 220))?
+    else {
+        return Err("combined complete rights set was unexpectedly denied".into());
+    };
+    assert_eq!(all.requested_rights, Rights::ALL);
+    assert!(all.effective_rights.contains(Rights::ALL));
+    assert_eq!(evidence.len(), 13);
     Ok(())
 }
 
