@@ -259,6 +259,10 @@ fn verify_binding(
     let recipient =
         identifier(&header.recipient_mesh_id).and_then(|bytes| MeshId::from_bytes(bytes).ok());
     let advertised_fingerprint: [u8; 32] = Sha256::digest(&hello.public_identity_chain).into();
+    let offered_header_version = header
+        .version
+        .as_ref()
+        .is_some_and(|version| hello.versions.contains(version));
     if relationship_id != Some(binding.relationship_id)
         || sender != Some(binding.remote_mesh_id)
         || recipient != Some(binding.local_mesh_id)
@@ -268,6 +272,7 @@ fn verify_binding(
         || now >= binding.valid_until
         || advertised_fingerprint != fingerprint
         || fingerprint != binding.certificate_fingerprint
+        || !offered_header_version
     {
         return Err(TransportError::UntrustedFederationPeer);
     }
