@@ -189,6 +189,23 @@ pub struct AdapterUnlinkRequest {
     pub observed_at: UnixMicros,
 }
 
+/// Semantic same-volume namespace rename or move supplied by an access connector.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterRenameRequest {
+    /// Stable end-to-end idempotency identity.
+    pub operation_id: OperationId,
+    /// Logical volume selected by the authenticated request.
+    pub volume_id: VolumeId,
+    /// Canonical bounded current path.
+    pub source: NamespacePath,
+    /// Canonical bounded unoccupied destination, or the same canonical name with new display case.
+    pub target: NamespacePath,
+    /// Optional live delete-capable handle carrying connector share-mode authority.
+    pub requesting_handle_id: Option<HandleId>,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
 /// Semantic close, optionally including the exact dirty checkpoint to publish first.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdapterCloseFileRequest {
@@ -354,6 +371,18 @@ pub trait FilesystemFileAdapter {
         request: &AdapterUnlinkRequest,
     ) -> Result<crate::NamespaceUnlinkReceipt, Self::Error>;
 
+    /// Atomically renames or moves one exact current object within its volume.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed source/destination authority, cycle, sharing, collision or durability
+    /// failure.
+    fn rename(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterRenameRequest,
+    ) -> Result<crate::NamespaceRenameReceipt, Self::Error>;
+
     /// Flushes when required and then releases one exact live handle.
     ///
     /// # Errors
@@ -502,6 +531,15 @@ where
     ) -> Result<crate::NamespaceUnlinkReceipt, Self::Error> {
         self.filesystem
             .adapter_unlink(self.branch_id, context, request)
+    }
+
+    fn rename(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterRenameRequest,
+    ) -> Result<crate::NamespaceRenameReceipt, Self::Error> {
+        self.filesystem
+            .adapter_rename(self.branch_id, context, request)
     }
 
     fn close_file(

@@ -736,6 +736,25 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         self.publications.rename_namespace(publication)
     }
 
+    pub(crate) fn adapter_rename_targets(
+        &self,
+        branch_id: BranchId,
+        request: &crate::AdapterRenameRequest,
+    ) -> Result<crate::namespace_planning::rename::RenameTargets, crate::HandleError> {
+        self.publications.adapter_rename_targets(branch_id, request)
+    }
+
+    pub(crate) fn prepare_adapter_rename(
+        &mut self,
+        branch_id: BranchId,
+        request: &crate::AdapterRenameRequest,
+        created_by: PrincipalId,
+        expected_targets: crate::namespace_planning::rename::RenameTargets,
+    ) -> Result<crate::NamespaceRenamePublication, crate::HandleError> {
+        self.publications
+            .prepare_adapter_rename(branch_id, request, created_by, expected_targets)
+    }
+
     pub(crate) fn unlink_namespace(
         &mut self,
         publication: &crate::NamespaceUnlinkPublication,

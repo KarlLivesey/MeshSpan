@@ -13,22 +13,7 @@ use crate::{
     NamespacePublicationPath, NamespaceUnlinkAuthority, NamespaceUnlinkPublication,
 };
 
-struct CurrentTarget {
-    namespace_commit: NamespaceCommitId,
-    root_object: ObjectId,
-    object: ObjectId,
-    revision: ObjectRevisionId,
-    kind: DirectoryEntryKind,
-    version: Option<FileVersionId>,
-    generation: u64,
-    ancestors: Vec<CurrentAncestor>,
-}
-
-#[derive(Clone, Copy)]
-struct CurrentAncestor {
-    object: ObjectId,
-    revision: ObjectRevisionId,
-}
+use super::resolution;
 
 struct StoredPlan {
     request_digest: Vec<u8>,
@@ -60,7 +45,10 @@ pub(crate) fn target(
     if let Some(plan) = load_plan(connection, branch_id, request, request_digest)? {
         return Ok(plan.expected_object_id);
     }
-    Ok(resolve_current(connection, branch_id, request)?.object)
+    Ok(resolve_current(connection, branch_id, request)?
+        .leaf
+        .ok_or(HandleError::Corrupt)?
+        .object)
 }
 
 pub(crate) fn prepare(
@@ -81,7 +69,7 @@ pub(crate) fn prepare(
     }
     reject_operation_collision(&transaction, request.operation_id)?;
     let current = resolve_current(&transaction, branch_id, request)?;
-    if current.object != expected_object {
+    if current.leaf.ok_or(HandleError::Corrupt)?.object != expected_object {
         return Err(HandleError::StaleHandle);
     }
     let plan = build_plan(branch_id, request, created_by, &current)?;
@@ -102,80 +90,22 @@ fn resolve_current(
     connection: &Connection,
     branch_id: BranchId,
     request: &AdapterUnlinkRequest,
-) -> Result<CurrentTarget, HandleError> {
-    type StoredHead = (Vec<u8>, Vec<u8>, Vec<u8>);
-    let stored: Option<StoredHead> = connection
-        .query_row(
-            "SELECT h.namespace_commit_id, c.root_object_id, c.root_object_revision_id
-             FROM branch_namespace_heads h JOIN namespace_commits c USING(namespace_commit_id)
-             WHERE h.branch_id = ?1 AND h.volume_id = ?2",
-            params![
-                branch_id.as_bytes().as_slice(),
-                request.volume_id.as_bytes().as_slice()
-            ],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    let Some((commit, root_object, root_revision)) = stored else {
-        return Err(HandleError::NotFound);
-    };
-    let namespace_commit = identifier(&commit, NamespaceCommitId::from_bytes)?;
-    let root_object = identifier(&root_object, ObjectId::from_bytes)?;
-    let mut selected_object = root_object;
-    let mut selected_revision = identifier(&root_revision, ObjectRevisionId::from_bytes)?;
-    let mut ancestors = Vec::with_capacity(request.path.components().len().saturating_sub(1));
-    for (index, component) in request.path.components().iter().enumerate() {
-        let parent = crate::handles::load_revision(connection, selected_revision)?;
-        if parent.volume_id != request.volume_id
-            || parent.object_id != selected_object
-            || parent.kind != DirectoryEntryKind::Directory
-        {
-            return Err(HandleError::Corrupt);
-        }
-        let entry = crate::handles::lookup_entry(
-            connection,
-            parent.directory_root.ok_or(HandleError::Corrupt)?,
-            component,
-        )?
-        .ok_or(HandleError::NotFound)?;
-        if index + 1 == request.path.components().len() {
-            let target = crate::handles::load_revision(connection, entry.object_revision_id())?;
-            if target.volume_id != request.volume_id
-                || target.object_id != entry.object_id()
-                || target.kind != entry.kind()
-            {
-                return Err(HandleError::Corrupt);
-            }
-            return Ok(CurrentTarget {
-                namespace_commit,
-                root_object,
-                object: entry.object_id(),
-                revision: entry.object_revision_id(),
-                kind: entry.kind(),
-                version: target.file_version_id,
-                generation: entry.generation(),
-                ancestors,
-            });
-        }
-        if entry.kind() != DirectoryEntryKind::Directory {
-            return Err(HandleError::NotFound);
-        }
-        ancestors.push(CurrentAncestor {
-            object: entry.object_id(),
-            revision: entry.object_revision_id(),
-        });
-        selected_object = entry.object_id();
-        selected_revision = entry.object_revision_id();
+) -> Result<resolution::ResolvedNamespacePath, HandleError> {
+    let current = resolution::resolve(connection, branch_id, request.volume_id, &request.path)?;
+    if current.leaf.is_some() {
+        Ok(current)
+    } else {
+        Err(HandleError::NotFound)
     }
-    Err(HandleError::InvalidInput)
 }
 
 fn build_plan(
     branch_id: BranchId,
     request: &AdapterUnlinkRequest,
     created_by: PrincipalId,
-    current: &CurrentTarget,
+    current: &resolution::ResolvedNamespacePath,
 ) -> Result<NamespaceUnlinkPublication, HandleError> {
+    let leaf = current.leaf.ok_or(HandleError::Corrupt)?;
     let ancestors = current
         .ancestors
         .iter()
@@ -195,11 +125,11 @@ fn build_plan(
         volume_id: request.volume_id,
         root_object_id: current.root_object,
         expected_namespace_commit_id: current.namespace_commit,
-        expected_object_id: current.object,
-        expected_object_revision_id: current.revision,
-        expected_kind: current.kind,
-        expected_file_version_id: current.version,
-        expected_entry_generation: current.generation,
+        expected_object_id: leaf.object,
+        expected_object_revision_id: leaf.revision,
+        expected_kind: leaf.kind,
+        expected_file_version_id: leaf.version,
+        expected_entry_generation: leaf.generation,
         path: NamespacePublicationPath::new(request.path.clone(), ancestors)
             .map_err(|_| HandleError::InvalidInput)?,
         root_object_revision_id: derive_revision(request.operation_id, b"root", 0)?,
@@ -433,6 +363,7 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM namespace_rename_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM adapter_directory_plans WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM adapter_rename_plans WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)",

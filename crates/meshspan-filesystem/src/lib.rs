@@ -29,9 +29,9 @@ mod version_retention;
 pub use adapter::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
     AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
-    AdapterReadFileRequest, AdapterStatRequest, AdapterUnlinkRequest, AdapterUnlockRequest,
-    AdapterWriteFileRequest, BoundFilesystemAdapter, FilesystemAdapterConfigurationError,
-    FilesystemAdapterPolicy, FilesystemFileAdapter,
+    AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest, AdapterUnlinkRequest,
+    AdapterUnlockRequest, AdapterWriteFileRequest, BoundFilesystemAdapter,
+    FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemFileAdapter,
 };
 pub use authority::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, FilesystemAccessAuthority,
