@@ -20,6 +20,7 @@ use crate::{
     RestrictFederationRelationship, RetireFederationRelationship, RevokeFederationRelationship,
     RotateFederationTrustIdentity,
 };
+use crate::{IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant};
 
 /// Context applied identically to every state-machine command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -155,6 +156,12 @@ pub enum AuthoritativeCommand {
     RevokeFederationRelationship(RevokeFederationRelationship),
     /// Retires an already revoked relationship without deleting evidence.
     RetireFederationRelationship(RetireFederationRelationship),
+    /// Issues an effective grant from every independent restriction.
+    IssueFederationGrant(IssueFederationGrant),
+    /// Replaces one immutable grant for renewal or explicit narrowing.
+    ReplaceFederationGrant(ReplaceFederationGrant),
+    /// Revokes one live federation grant while retaining its evidence.
+    RevokeFederationGrant(RevokeFederationGrant),
 }
 
 impl AuthoritativeCommand {
@@ -231,6 +238,9 @@ impl AuthoritativeCommand {
             Self::RecoverFederationRelationship(value) => value.update_digest(digest),
             Self::RevokeFederationRelationship(value) => value.update_digest(digest),
             Self::RetireFederationRelationship(value) => value.update_digest(digest),
+            Self::IssueFederationGrant(value) => value.update_digest(digest),
+            Self::ReplaceFederationGrant(value) => value.update_digest(digest),
+            Self::RevokeFederationGrant(value) => value.update_digest(digest),
         }
     }
 }
@@ -1836,7 +1846,7 @@ fn assurance_code(value: AssuranceLevel) -> u8 {
 pub(crate) struct CanonicalDigest(Sha256);
 
 impl CanonicalDigest {
-    fn new(domain: &[u8]) -> Self {
+    pub(crate) fn new(domain: &[u8]) -> Self {
         let mut digest = Sha256::new();
         digest.update(domain);
         Self(digest)
@@ -1884,7 +1894,7 @@ impl CanonicalDigest {
         }
     }
 
-    fn finish(self) -> [u8; 32] {
+    pub(crate) fn finish(self) -> [u8; 32] {
         self.0.finalize().into()
     }
 
@@ -1892,7 +1902,7 @@ impl CanonicalDigest {
         self.0.update([value]);
     }
 
-    fn boolean(&mut self, value: bool) {
+    pub(crate) fn boolean(&mut self, value: bool) {
         self.byte(u8::from(value));
     }
 
@@ -1940,7 +1950,7 @@ impl CanonicalDigest {
         self.optional_unsigned(value.map(Revision::get));
     }
 
-    fn optional_instant(&mut self, value: Option<UnixMicros>) {
+    pub(crate) fn optional_instant(&mut self, value: Option<UnixMicros>) {
         match value {
             Some(value) => {
                 self.byte(1);
@@ -1960,7 +1970,7 @@ impl CanonicalDigest {
         }
     }
 
-    fn optional_unsigned(&mut self, value: Option<u64>) {
+    pub(crate) fn optional_unsigned(&mut self, value: Option<u64>) {
         match value {
             Some(value) => {
                 self.byte(1);

@@ -240,6 +240,7 @@ mod tests {
         partition_cluster_enrollment_migration_digest,
         partition_component_rollout_migration_digest,
         partition_federation_authority_migration_digest,
+        partition_federation_grant_history_migration_digest,
         partition_federation_relationship_history_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
         partition_principal_lifecycle_migration_digest, partition_roles_migration_digest,
@@ -270,7 +271,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 30);
+        assert_eq!(database.check_integrity()?.schema_version, 31);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -320,7 +321,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            30
+            31
         );
         Ok(())
     }
@@ -621,6 +622,14 @@ mod tests {
                 0x72, 0x22, 0xb7, 0x98, 0x76, 0x1b, 0x71, 0x8b, 0xb5, 0x9f, 0x86, 0x7f, 0x2e, 0x9b,
                 0x2d, 0xcf, 0x6e, 0x9d, 0x4d, 0xd4, 0xab, 0x55, 0x14, 0xeb, 0xa8, 0xe6, 0x95, 0x9d,
                 0xc4, 0x13, 0xd7, 0x5e,
+            ]
+        );
+        assert_eq!(
+            partition_federation_grant_history_migration_digest(),
+            [
+                0x2f, 0x42, 0x05, 0x02, 0xfb, 0x52, 0x66, 0xd6, 0xc6, 0x8d, 0x49, 0x42, 0xb2, 0x0f,
+                0x04, 0xf7, 0xe6, 0x80, 0x30, 0xad, 0x1f, 0x26, 0x8f, 0xfc, 0x17, 0x3c, 0x15, 0x7a,
+                0xfb, 0xc6, 0xc6, 0x31,
             ]
         );
     }
