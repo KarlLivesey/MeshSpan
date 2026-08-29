@@ -190,6 +190,16 @@ tombstones and cleanup when it returns.
    expose `bytes_reclaimed`, with a checked byte sum and item-index-ordered
    digest. Tombstone completion therefore means permanently unreadable;
    reclamation completion alone means the physical capacity was released.
+10. Cleanup execution is paged in at most 1,000 exact sealed items. Each entry is
+    independently classified as needing a new permit, ready to tombstone, ready
+    to reclaim or complete, so callers may dispatch entries concurrently rather
+    than running one serial global loop. A worker performs at most one durable
+    provider transition and then emits the exact metadata command that must
+    commit before the next transition. Cleanup needs no separate mutable worker
+    claim: the replicated short-lived permit is its epoch-fenced lease, provider
+    operation replay is exact, and refreshed metadata state resolves a lost
+    command response. Duplicate workers may repeat IO but cannot create a second
+    tombstone, byte credit or terminal history.
 
 A path, target ID, shard ID or peer identity by itself can never authorise
 deletion. Expired permits and stale epochs fail closed.

@@ -882,6 +882,7 @@ dependencies = [
 name = "meshspan-cluster"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "ed25519-dalek",
  "meshspan-consensus",
  "meshspan-contracts",
@@ -889,6 +890,7 @@ dependencies = [
  "meshspan-filesystem",
  "meshspan-metadata",
  "meshspan-protocol",
+ "meshspan-storage",
  "meshspan-transport",
  "quinn",
  "rcgen",

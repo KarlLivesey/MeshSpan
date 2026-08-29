@@ -357,7 +357,15 @@ copy-on-write filesystem service. This document records executable evidence only
    the temporary fence. Replay/restart, interruption, wrong subjects, operation
    conflict, stored corruption and both cancellation-after-retirement and
    retirement-after-cancellation are executable; permanent retirement cannot be
-   weakened. Distributed worker dispatch/recovery remains outstanding.
+   weakened. A bounded cleanup-work catalogue now classifies sealed items as
+   permit, tombstone, reclamation or complete work. Entries are independent and
+   can run concurrently; each execution performs at most one provider transition
+   before returning an exact command for consensus. A real registered-folder
+   proof drops and reopens the provider after both a lost tombstone command and
+   a lost reclamation command, recovering byte-identical commands without
+   duplicate capacity accounting. Substituted dispatch authority fails before
+   provider IO. The authenticated QUIC delete/reclaim dispatch adapter remains
+   outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

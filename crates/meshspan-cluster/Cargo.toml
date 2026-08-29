@@ -26,6 +26,8 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+blake3.workspace = true
+meshspan-storage = { path = "../meshspan-storage" }
 rcgen.workspace = true
 tempfile = "3.27.0"
 

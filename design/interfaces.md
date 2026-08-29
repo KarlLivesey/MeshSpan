@@ -193,6 +193,13 @@ clock or message arrival order to choose a winner.
 
 **Owns:** bytes and local recovery inside one registered folder.
 
+`CleanupWorkCatalogue` derives bounded independently dispatchable work only from
+validated replicated inventory, permit, completion and reclamation records.
+`CleanupProviderDispatch` is the replaceable local/remote tombstone and unlink
+boundary. The worker executes one durable transition at a time and returns an
+authoritative command; consensus submission remains a separate explicit side
+effect.
+
 ```text
 reserve(operation, bytes, expiry) -> reservation
 put_exact(reservation, shard_identity, expected_length, expected_digest, bytes)
