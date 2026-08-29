@@ -53,7 +53,7 @@ impl NamespaceHistoryCommitRecord {
         self.digest
     }
 
-    fn from_commit(
+    pub(in crate::publication) fn from_commit(
         commit: &TransferredMutationCommit,
     ) -> Result<Self, NamespaceHistoryRecordError> {
         let canonical_bytes = encode_commit(commit)?;

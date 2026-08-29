@@ -10,8 +10,8 @@ use tempfile::{TempDir, tempdir};
 
 use super::{
     DATABASE_FILE, DirectoryPublication, DirectoryRevisionTransition, FilePublication, MIGRATIONS,
-    ManifestPublication, NamespaceHistoryLimits, NamespacePublicationPath,
-    NamespacePublicationReceipt, NamespaceReconciliationApplication,
+    ManifestPublication, NamespaceHistoryLimits, NamespaceHistoryPageRequest,
+    NamespacePublicationPath, NamespacePublicationReceipt, NamespaceReconciliationApplication,
     NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
     RootFilePublication, SCHEMA_VERSION, SnapshotRestorePublication, VersionPublicationStore,
     configure,
@@ -248,6 +248,111 @@ fn history_export_includes_only_records_reachable_from_requested_heads()
     Ok(())
 }
 
+#[test]
+fn durable_history_pages_are_incremental_exact_and_restart_resumable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let expected_store = fixture.open_home()?;
+    let expected = expected_store.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[fixture.home.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+    let mut expected_commits = expected.commit_records()?;
+    expected_commits.sort_by_key(super::NamespaceHistoryCommitRecord::digest);
+    let mut expected_objects = expected
+        .immutable_records()?
+        .into_iter()
+        .map(|record| record.digest())
+        .collect::<Vec<_>>();
+    expected_objects.sort_unstable();
+    drop(expected_store);
+
+    let mut cursor = Vec::new();
+    let mut commits = Vec::new();
+    let mut objects = Vec::new();
+    let mut page_count = 0;
+    loop {
+        let mut store = fixture.open_home()?;
+        let page = store.namespace_history_page(history_page_request(&fixture, cursor, 1, 10))?;
+        let materialised: i64 = store.connection.query_row(
+            "SELECT count(*) FROM namespace_history_export_records",
+            [],
+            |row| row.get(0),
+        )?;
+        page_count += 1;
+        assert_eq!(materialised, page_count);
+        assert_eq!(page.commits.len() + page.immutable_object_digests.len(), 1);
+        commits.extend(page.commits);
+        objects.extend(page.immutable_object_digests);
+        if page.next_cursor.is_empty() {
+            break;
+        }
+        cursor = page.next_cursor;
+    }
+    commits.sort_by_key(super::NamespaceHistoryCommitRecord::digest);
+    objects.sort_unstable();
+    assert_eq!(commits, expected_commits);
+    assert_eq!(objects, expected_objects);
+    Ok(())
+}
+
+#[test]
+fn history_pages_reject_unissued_substituted_and_expired_cursors()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let mut store = fixture.open_home()?;
+    let first = store.namespace_history_page(history_page_request(&fixture, Vec::new(), 1, 20))?;
+    let replay = store.namespace_history_page(history_page_request(&fixture, Vec::new(), 1, 20))?;
+    assert_eq!(replay, first);
+
+    let mut skipped = first.next_cursor.clone();
+    let final_byte = skipped.last_mut().ok_or("missing cursor")?;
+    *final_byte = final_byte.saturating_add(1);
+    assert!(matches!(
+        store.namespace_history_page(history_page_request(&fixture, skipped, 1, 20)),
+        Err(PublicationError::InvalidInput)
+    ));
+
+    let mut substituted = history_page_request(&fixture, first.next_cursor.clone(), 1, 20);
+    substituted.scope_binding[0] ^= 1;
+    assert!(matches!(
+        store.namespace_history_page(substituted),
+        Err(PublicationError::InvalidInput)
+    ));
+
+    let expired = NamespaceHistoryPageRequest {
+        now: UnixMicros::new(101),
+        expires_at: UnixMicros::new(102),
+        cursor: first.next_cursor,
+        ..history_page_request(&fixture, Vec::new(), 1, 20)
+    };
+    assert!(matches!(
+        store.namespace_history_page(expired),
+        Err(PublicationError::InvalidInput)
+    ));
+    Ok(())
+}
+
+fn history_page_request(
+    fixture: &IsolatedHistoryFixture,
+    cursor: Vec<u8>,
+    limit: usize,
+    now: i64,
+) -> NamespaceHistoryPageRequest {
+    NamespaceHistoryPageRequest {
+        scope_binding: [200; 32],
+        volume_id: fixture.first.file.volume_id,
+        requested_heads: vec![fixture.home.namespace_commit_id],
+        known_commits: vec![fixture.first.namespace_commit_id],
+        cursor,
+        limit,
+        now: UnixMicros::new(now),
+        expires_at: UnixMicros::new(100),
+    }
+}
+
 struct IsolatedHistoryFixture {
     home_directory: TempDir,
     office_directory: TempDir,
@@ -476,6 +581,11 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "adapter_rename_plan_target_ancestors",
         "adapter_file_create_plans",
         "adapter_file_create_plan_ancestors",
+        "namespace_history_exports",
+        "namespace_history_export_known_commits",
+        "namespace_history_export_work",
+        "namespace_history_export_records",
+        "namespace_history_export_cursors",
     ] {
         assert_table_exists(&store.connection, table)?;
     }
