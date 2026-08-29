@@ -78,6 +78,8 @@ pub enum EntityKind {
     VersionCleanup = 21,
     /// Node-scoped public key for cleanup attestations.
     CleanupAttestationKey = 22,
+    /// Mesh-wide authentication session.
+    AuthenticationSession = 23,
 }
 
 impl EntityKind {
@@ -105,6 +107,7 @@ impl EntityKind {
             20 => Ok(Self::SnapshotSchedule),
             21 => Ok(Self::VersionCleanup),
             22 => Ok(Self::CleanupAttestationKey),
+            23 => Ok(Self::AuthenticationSession),
             _ => Err(RepositoryError::CorruptState),
         }
     }

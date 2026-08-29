@@ -24,6 +24,7 @@ mod reachability;
 mod receipt;
 mod retention;
 mod routing;
+mod session;
 mod snapshot;
 mod snapshot_schedule;
 mod tags;

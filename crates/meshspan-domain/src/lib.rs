@@ -24,8 +24,8 @@ pub use primitives::{
     ContentManifestId, DurationMicros, FaultGroupClassId, FaultGroupId, FileVersionId, GrantId,
     GroupId, HandleId, HostId, IdentifierError, JoinGrantId, LockId, MeshId, NamespaceCommitId,
     NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId,
-    QuorumPlanId, Revision, RevisionError, RoleId, ScopeId, SnapshotId, SnapshotScheduleId,
-    StageId, TagId, TargetId, UnixMicros, VolumeId,
+    QuorumPlanId, Revision, RevisionError, RoleId, ScopeId, SessionId, SnapshotId,
+    SnapshotScheduleId, StageId, TagId, TargetId, UnixMicros, VolumeId,
 };
 pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};

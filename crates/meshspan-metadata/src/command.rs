@@ -9,7 +9,7 @@ use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
     ContentManifestId, DurationMicros, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
     JoinGrantId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId,
-    OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId, SnapshotId,
+    OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId, SessionId, SnapshotId,
     SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
@@ -98,6 +98,10 @@ pub enum AuthoritativeCommand {
     ActivateGrant(ActivateGrant),
     /// Activates one pre-authorised group for the requesting user.
     ActivateGroup(ActivateGroup),
+    /// Issues one bounded authentication session after an accepted authentication ceremony.
+    IssueAuthenticationSession(IssueAuthenticationSession),
+    /// Revokes one exact authentication session immediately.
+    RevokeAuthenticationSession(RevokeAuthenticationSession),
     /// Creates a versioned desired component configuration.
     CreateComponent(CreateComponent),
     /// Selects a new validated desired configuration revision.
@@ -172,6 +176,8 @@ impl AuthoritativeCommand {
             Self::GrantPermission(value) => value.update_digest(digest),
             Self::ActivateGrant(value) => value.update_digest(digest),
             Self::ActivateGroup(value) => value.update_digest(digest),
+            Self::IssueAuthenticationSession(value) => value.update_digest(digest),
+            Self::RevokeAuthenticationSession(value) => value.update_digest(digest),
             Self::CreateComponent(value) => value.update_digest(digest),
             Self::ConfigureComponent(value) => value.update_digest(digest),
             Self::AssignComponent(value) => value.update_digest(digest),
@@ -858,6 +864,30 @@ pub struct ActivateGroup {
     pub authentication_digest: [u8; 32],
 }
 
+/// Accepted authentication ceremony converted into a mesh-wide bounded session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IssueAuthenticationSession {
+    /// Stable session identity.
+    pub session_id: SessionId,
+    /// User authenticated by the ceremony.
+    pub principal_id: PrincipalId,
+    /// Digest of the bearer token; raw tokens never enter authoritative metadata.
+    pub token_digest: [u8; 32],
+    /// Assurance established by the ceremony.
+    pub assurance: AssuranceLevel,
+    /// Exclusive absolute expiry.
+    pub expires_at: UnixMicros,
+}
+
+/// Immediate revocation of one exact session belonging to one exact user.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RevokeAuthenticationSession {
+    /// Exact session to revoke.
+    pub session_id: SessionId,
+    /// Expected owning user, preventing confused-deputy revocation.
+    pub principal_id: PrincipalId,
+}
+
 /// New desired component instance and its first configuration revision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreateComponent {
@@ -1507,6 +1537,25 @@ digest_simple_record!(ActivateGroup, b"activate-group", |value, digest| {
     digest.byte(assurance_code(value.assurance));
     digest.bytes(&value.authentication_digest);
 });
+digest_simple_record!(
+    IssueAuthenticationSession,
+    b"issue-authentication-session",
+    |value, digest| {
+        digest.identifier(value.session_id.as_bytes());
+        digest.identifier(value.principal_id.as_bytes());
+        digest.bytes(&value.token_digest);
+        digest.byte(assurance_code(value.assurance));
+        digest.signed(value.expires_at.get());
+    }
+);
+digest_simple_record!(
+    RevokeAuthenticationSession,
+    b"revoke-authentication-session",
+    |value, digest| {
+        digest.identifier(value.session_id.as_bytes());
+        digest.identifier(value.principal_id.as_bytes());
+    }
+);
 digest_simple_record!(CreateComponent, b"create-component", |value, digest| {
     digest.identifier(value.instance_id.as_bytes());
     digest.byte(value.component_kind);
