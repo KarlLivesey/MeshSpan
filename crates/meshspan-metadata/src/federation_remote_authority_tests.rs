@@ -54,6 +54,17 @@ fn cache_applies_delta_replays_exactly_and_survives_restart()
             .collect::<Vec<_>>(),
         vec![grant_id(20)?, grant_id(21)?]
     );
+    let exact = database
+        .remote_federation_grant_authority(relationship_id()?, grant_id(21)?)?
+        .ok_or("exact cached grant missing")?;
+    assert_eq!(exact.authority_revision, Revision::new(8));
+    assert_eq!(exact.grant, cached.grants[1]);
+    assert_eq!(exact.relationship, cached.relationship);
+    assert!(
+        database
+            .remote_federation_grant_authority(relationship_id()?, grant_id(99)?)?
+            .is_none()
+    );
     drop(database);
 
     let reopened = LocalDatabase::open(&database_path, node_id, UnixMicros::new(13))?;
@@ -183,6 +194,37 @@ fn cache_reads_fail_closed_on_persisted_byte_or_key_corruption()
         database.remote_federation_authority(relationship_id()?),
         Err(FederationRemoteAuthorityCacheError::Corrupt)
     ));
+    Ok(())
+}
+
+#[test]
+fn exact_grant_read_uses_the_relationship_grant_primary_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = TempDir::new()?;
+    let mut database = LocalDatabase::open(
+        &directory.path().join("local.sqlite3"),
+        node(6)?,
+        UnixMicros::new(1),
+    )?;
+    database.install_remote_federation_authority(
+        &snapshot(Revision::ZERO, 5, 3, &[(20, 4)])?,
+        UnixMicros::new(10),
+    )?;
+    let detail: String = database.connection().query_row(
+        "EXPLAIN QUERY PLAN
+         SELECT grant_id, record_revision, record_bytes, record_digest
+         FROM local_federation_authority_grants
+         WHERE relationship_id = ?1 AND grant_id = ?2",
+        rusqlite::params![
+            relationship_id()?.as_bytes().as_slice(),
+            grant_id(20)?.as_bytes().as_slice(),
+        ],
+        |row| row.get(3),
+    )?;
+    assert!(
+        detail.contains("sqlite_autoindex_local_federation_authority_grants_1"),
+        "{detail}"
+    );
     Ok(())
 }
 
