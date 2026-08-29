@@ -2,7 +2,7 @@
 
 //! Composition from authoritative relationship metadata into transport-only peer bindings.
 
-use meshspan_domain::{FederationRelationshipId, UnixMicros};
+use meshspan_domain::{FederationRelationshipId, Revision, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeRepository, FederationIdentityOwner, FederationRelationshipState,
     FederationTransportAuthority, FederationTrustIdentity, RepositoryError,
@@ -13,6 +13,8 @@ use thiserror::Error;
 /// Complete local/remote authority required to configure one federation connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FederationConnectionAuthority {
+    /// Exact committed partition revision producing both identities and the relationship fence.
+    pub authority_revision: Revision,
     /// Remote certificate and signing identity accepted by transport.
     pub peer: FederationPeerBinding,
     /// Local public identity whose private material remains outside replicated metadata.
@@ -59,6 +61,7 @@ fn connection_authority(
         return Err(FederationAuthorityError::IdentityNotCurrent);
     }
     Ok(FederationConnectionAuthority {
+        authority_revision: authority.authority_revision,
         peer: FederationPeerBinding {
             relationship_id: relationship.relationship_id,
             local_mesh_id: relationship.local_mesh_id,
@@ -124,6 +127,7 @@ mod tests {
             active.relationship.relationship_id
         );
         assert_eq!(admitted.peer.identity_generation, 2);
+        assert_eq!(admitted.authority_revision, Revision::new(5));
         assert_eq!(admitted.local_identity.identity_generation, 1);
         assert_eq!(
             admitted.local_identity.local_mesh_id,
@@ -162,6 +166,7 @@ mod tests {
     ) -> Result<FederationTransportAuthority, Box<dyn std::error::Error>> {
         let relationship_id = FederationRelationshipId::from_bytes([1; 16])?;
         Ok(FederationTransportAuthority {
+            authority_revision: Revision::new(5),
             relationship: FederationRelationshipRecord {
                 relationship_id,
                 local_mesh_id: MeshId::from_bytes([2; 16])?,
