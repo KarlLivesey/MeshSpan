@@ -11,7 +11,8 @@ use super::publication_request_digest;
 use super::repository::{ObjectRevisionInsert, StoredCommit};
 use crate::{
     DirectoryNodeDigest, DirectoryPublication, NamespacePath, NamespacePublicationPath,
-    NamespaceRenamePublication, RootFilePublication, SnapshotRestorePublication,
+    NamespaceRenamePublication, NamespaceUnlinkAuthority, NamespaceUnlinkPublication,
+    RootFilePublication, SnapshotRestorePublication,
 };
 use crate::{NamespaceReconciliationApplication, PreparedNamespaceReconciliation};
 
@@ -67,6 +68,45 @@ pub(super) fn rename_request(publication: &NamespaceRenamePublication) -> [u8; 3
     digest.update(&publication.root_object_revision_id.as_bytes());
     digest.update(&publication.namespace_commit_id.as_bytes());
     update_optional_handle(&mut digest, publication.requesting_handle_id);
+    digest.update(&publication.created_by.as_bytes());
+    digest.update(&publication.created_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+pub(super) fn unlink_request(publication: &NamespaceUnlinkPublication) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.namespace-unlink.v1\0");
+    digest.update(&publication.operation_id.as_bytes());
+    digest.update(&publication.branch_id.as_bytes());
+    digest.update(&publication.volume_id.as_bytes());
+    digest.update(&publication.root_object_id.as_bytes());
+    digest.update(&publication.expected_namespace_commit_id.as_bytes());
+    digest.update(&publication.expected_object_id.as_bytes());
+    digest.update(&publication.expected_object_revision_id.as_bytes());
+    digest.update(&[kind_code(publication.expected_kind)]);
+    update_optional_version(&mut digest, publication.expected_file_version_id);
+    digest.update(&publication.expected_entry_generation.to_be_bytes());
+    update_publication_path(&mut digest, &publication.path);
+    digest.update(&publication.root_object_revision_id.as_bytes());
+    digest.update(&publication.namespace_commit_id.as_bytes());
+    match publication.authority {
+        NamespaceUnlinkAuthority::Direct {
+            requesting_handle_id,
+        } => {
+            digest.update(&[1]);
+            update_optional_handle(&mut digest, requesting_handle_id);
+        }
+        NamespaceUnlinkAuthority::DeleteOnClose {
+            requesting_handle_id,
+            requested_at,
+            ready_at,
+        } => {
+            digest.update(&[2]);
+            digest.update(&requesting_handle_id.as_bytes());
+            digest.update(&requested_at.get().to_be_bytes());
+            digest.update(&ready_at.get().to_be_bytes());
+        }
+    }
     digest.update(&publication.created_by.as_bytes());
     digest.update(&publication.created_at.get().to_be_bytes());
     digest.finalize().into()
@@ -234,12 +274,40 @@ pub(super) fn rename_result(
     digest.finalize().into()
 }
 
+pub(super) fn unlink_result(
+    operation_id: OperationId,
+    request_digest: [u8; 32],
+    object_id: ObjectId,
+    object_revision_id: ObjectRevisionId,
+    object_kind: crate::DirectoryEntryKind,
+    namespace_commit_id: NamespaceCommitId,
+    head_sequence: u64,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.namespace-unlink-result.v1\0");
+    digest.update(&operation_id.as_bytes());
+    digest.update(&request_digest);
+    digest.update(&object_id.as_bytes());
+    digest.update(&object_revision_id.as_bytes());
+    digest.update(&[kind_code(object_kind)]);
+    digest.update(&namespace_commit_id.as_bytes());
+    digest.update(&head_sequence.to_be_bytes());
+    digest.finalize().into()
+}
+
 fn update_publication_path(digest: &mut blake3::Hasher, path: &NamespacePublicationPath) {
     update_namespace_path(digest, path.path());
     for transition in path.ancestors() {
         digest.update(&transition.object_id().as_bytes());
         digest.update(&transition.expected_revision_id().as_bytes());
         digest.update(&transition.new_revision_id().as_bytes());
+    }
+}
+
+const fn kind_code(kind: crate::DirectoryEntryKind) -> u8 {
+    match kind {
+        crate::DirectoryEntryKind::Directory => 1,
+        crate::DirectoryEntryKind::File => 2,
     }
 }
 

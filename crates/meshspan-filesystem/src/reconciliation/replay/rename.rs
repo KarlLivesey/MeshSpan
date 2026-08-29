@@ -286,6 +286,7 @@ impl ReplayState {
             revision_id: target_revision,
             kind: DirectoryEntryKind::File,
             file_version_id: Some(target_version),
+            directory_is_empty: None,
             generation: 1,
         };
         self.entries.insert(path_key(&target_path), target.clone());

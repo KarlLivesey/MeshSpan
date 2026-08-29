@@ -1,0 +1,14 @@
+-- SPDX-License-Identifier: GPL-2.0-only
+
+CREATE TABLE namespace_unlink_operations (
+    operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
+    request_digest BLOB NOT NULL CHECK (length(request_digest) = 32),
+    namespace_commit_id BLOB NOT NULL REFERENCES namespace_commits(namespace_commit_id),
+    object_id BLOB NOT NULL CHECK (length(object_id) = 16),
+    object_revision_id BLOB NOT NULL REFERENCES object_revisions(object_revision_id)
+        CHECK (length(object_revision_id) = 16),
+    object_kind INTEGER NOT NULL CHECK (object_kind IN (1, 2)),
+    head_sequence INTEGER NOT NULL CHECK (head_sequence > 0),
+    result_digest BLOB NOT NULL CHECK (length(result_digest) = 32),
+    committed_at INTEGER NOT NULL
+) STRICT;

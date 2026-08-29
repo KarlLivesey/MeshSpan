@@ -16,7 +16,9 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::{DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespacePath};
+use crate::{
+    DirectoryEntryKind, DirectoryNodeDigest, DirectoryNodeRecord, DirectoryTrieError, NamespacePath,
+};
 use crate::{
     PreparedNamespaceReconciliation, ReconciliationCommit, ReconciliationCommitPayload,
     ReconciliationFrontier, ReconciliationLimits, ReconciliationPlan, ReconciliationStoreError,
@@ -25,7 +27,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 25] = [
+const MIGRATIONS: [Migration; 26] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -126,8 +128,12 @@ const MIGRATIONS: [Migration; 25] = [
         version: 25,
         sql: include_str!("../schema/branch/025_namespace_commit_deletions.sql"),
     },
+    Migration {
+        version: 26,
+        sql: include_str!("../schema/branch/026_namespace_unlink_operations.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 25;
+const SCHEMA_VERSION: u32 = 26;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -378,6 +384,62 @@ pub struct NamespaceRenamePublication {
     pub created_at: UnixMicros,
 }
 
+/// Authority used for one logical namespace removal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NamespaceUnlinkAuthority {
+    /// A connector-authorised unlink, optionally presented through a live delete-capable handle.
+    Direct {
+        /// Live handle carrying delete access, when the connector uses handle authority.
+        requesting_handle_id: Option<HandleId>,
+    },
+    /// Finalisation of the exact durable delete-on-close state created by a prior handle.
+    DeleteOnClose {
+        /// Handle that requested deletion.
+        requesting_handle_id: HandleId,
+        /// Authoritative instant at which deletion became pending.
+        requested_at: UnixMicros,
+        /// Authoritative instant at which the last live handle released the object.
+        ready_at: UnixMicros,
+    },
+}
+
+/// One atomic logical removal of an exact file or empty directory name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespaceUnlinkPublication {
+    /// Idempotency identity for the complete namespace transaction.
+    pub operation_id: OperationId,
+    /// Writable local/cell branch receiving the deletion.
+    pub branch_id: BranchId,
+    /// Volume containing the selected path.
+    pub volume_id: VolumeId,
+    /// Stable volume-root directory identity.
+    pub root_object_id: ObjectId,
+    /// Exact namespace commit required before removal.
+    pub expected_namespace_commit_id: NamespaceCommitId,
+    /// Stable object required at the selected path.
+    pub expected_object_id: ObjectId,
+    /// Exact immutable object revision required at the selected path.
+    pub expected_object_revision_id: ObjectRevisionId,
+    /// Exact selected kind; deletion is never authorised by location alone.
+    pub expected_kind: DirectoryEntryKind,
+    /// Exact file version removed, or none for a directory.
+    pub expected_file_version_id: Option<FileVersionId>,
+    /// Stable name-incarnation generation required before removal.
+    pub expected_entry_generation: u64,
+    /// Selected path and exact directory transitions producing the new root.
+    pub path: NamespacePublicationPath,
+    /// Final root revision selected by the new namespace commit.
+    pub root_object_revision_id: ObjectRevisionId,
+    /// New immutable namespace commit that becomes current.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Direct connector authority or exact durable delete-on-close authority.
+    pub authority: NamespaceUnlinkAuthority,
+    /// Principal responsible for the deletion.
+    pub created_by: PrincipalId,
+    /// Authoritative deletion instant.
+    pub created_at: UnixMicros,
+}
+
 /// Current immutable namespace commit selected by one branch/volume pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BranchNamespaceHead {
@@ -442,6 +504,29 @@ pub struct NamespaceRenameReceipt {
     pub object_id: ObjectId,
     /// Immutable object revision retained by the move.
     pub object_revision_id: ObjectRevisionId,
+    /// Namespace commit made current.
+    pub namespace_commit_id: NamespaceCommitId,
+    /// Resulting volume branch-head sequence.
+    pub head_sequence: u64,
+    /// Digest binding the exact durable result.
+    pub result_digest: [u8; 32],
+}
+
+/// Durable result of one atomic logical namespace removal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespaceUnlinkReceipt {
+    /// Whether this call applied or replayed the exact operation.
+    pub disposition: PublicationDisposition,
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Digest of the exact name, object, revision, generation and authority.
+    pub request_digest: [u8; 32],
+    /// Stable object removed from the namespace.
+    pub object_id: ObjectId,
+    /// Immutable object revision removed from the namespace.
+    pub object_revision_id: ObjectRevisionId,
+    /// Exact removed object kind.
+    pub object_kind: DirectoryEntryKind,
     /// Namespace commit made current.
     pub namespace_commit_id: NamespaceCommitId,
     /// Resulting volume branch-head sequence.
@@ -741,6 +826,59 @@ impl VersionPublicationStore {
         publication: &NamespaceRenamePublication,
     ) -> Result<NamespaceRenameReceipt, crate::HandleError> {
         namespace::rename_namespace(&mut self.connection, publication, None)
+    }
+
+    /// Atomically removes one exact file name or empty directory from the logical namespace.
+    ///
+    /// Immutable versions remain available through live handles, snapshots and retention roots;
+    /// physical shard reclamation is a separate proven-liveness operation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale or substituted targets, non-empty directories, sharing conflicts, unfinished
+    /// flushes, invalid delete-on-close evidence, identity reuse, corruption and persistence
+    /// failure. Exact retries return the original immutable receipt.
+    pub fn unlink_namespace(
+        &mut self,
+        publication: &NamespaceUnlinkPublication,
+    ) -> Result<NamespaceUnlinkReceipt, crate::HandleError> {
+        namespace::unlink_namespace(&mut self.connection, publication, None)
+    }
+
+    /// Reloads and independently verifies one prior unlink receipt.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt durable receipts or namespace lineage.
+    pub fn resolve_namespace_unlink(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<NamespaceUnlinkReceipt>, PublicationError> {
+        namespace::load_unlink(&self.connection, operation_id)
+    }
+
+    /// Loads one bounded restart-safe page of delete-on-close work ready for logical unlink.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero/excessive page limits, corrupt identities, invalid time order, missing handle
+    /// paths and SQLite failure.
+    pub fn ready_namespace_deletes(
+        &mut self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        after_object_id: Option<ObjectId>,
+        maximum_results: u16,
+        observed_at: UnixMicros,
+    ) -> Result<crate::ReadyNamespaceDeletePage, crate::HandleError> {
+        crate::handles::load_ready_deletes(
+            &mut self.connection,
+            branch_id,
+            volume_id,
+            after_object_id,
+            maximum_results,
+            observed_at,
+        )
     }
 
     /// Loads the exact current namespace commit for one branch and volume.

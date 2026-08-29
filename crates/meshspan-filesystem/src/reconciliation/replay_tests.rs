@@ -957,6 +957,7 @@ fn entry(
         file_version_id: (kind == DirectoryEntryKind::File)
             .then(|| version(object_revision))
             .transpose()?,
+        directory_is_empty: (kind == DirectoryEntryKind::Directory).then_some(true),
         entry_generation: 1,
     })
 }

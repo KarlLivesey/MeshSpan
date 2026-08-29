@@ -34,7 +34,11 @@ pub use locks::{
     UnlockRangeRequest,
 };
 pub(crate) use locks::{lock_range, unlock_range};
-pub(crate) use rename::{prepare as prepare_rename, relocate_paths as relocate_handle_paths};
+pub use rename::{ReadyNamespaceDelete, ReadyNamespaceDeletePage};
+pub(crate) use rename::{
+    consume_unlink_authority, load_ready_deletes, prepare as prepare_rename, prepare_unlink,
+    relocate_paths as relocate_handle_paths,
+};
 pub(crate) use write::admit_write;
 pub use write::{HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest};
 
@@ -305,6 +309,9 @@ pub enum HandleError {
     /// A prepared handle flush must reach a durable terminal state before namespace relocation.
     #[error("filesystem handle flush is still in progress")]
     FlushInProgress,
+    /// A selected directory still contains at least one logical child.
+    #[error("filesystem directory is not empty")]
+    DirectoryNotEmpty,
     /// The selected lock is absent, released, expired or owned by another fence.
     #[error("filesystem byte-range lock is stale")]
     StaleLock,
@@ -965,10 +972,13 @@ fn expire_stale_handles(transaction: &Transaction<'_>, now: UnixMicros) -> Resul
             branch_id, volume_id, object_id, requesting_handle_id,
             object_revision_id, version_id, state, requested_at, ready_at
          )
-         SELECT branch_id, volume_id, object_id, handle_id,
-                object_revision_id, opened_version_id, 1, ?1, NULL
-         FROM open_handles
-         WHERE state = 1 AND lease_expires_at <= ?1 AND delete_on_close = 1
+         SELECT handles.branch_id, handles.volume_id, handles.object_id, handles.handle_id,
+                COALESCE(progress.object_revision_id, handles.object_revision_id),
+                COALESCE(progress.version_id, handles.opened_version_id), 1, ?1, NULL
+         FROM open_handles handles
+         LEFT JOIN handle_flush_progress progress ON progress.handle_id = handles.handle_id
+         WHERE handles.state = 1 AND handles.lease_expires_at <= ?1
+           AND handles.delete_on_close = 1
          ON CONFLICT(branch_id, object_id) DO NOTHING",
         [now.get()],
     )?;
@@ -999,6 +1009,8 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM directory_publication_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM namespace_reconciliation_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM namespace_snapshot_restore_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM namespace_rename_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)

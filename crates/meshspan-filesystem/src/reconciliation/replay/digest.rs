@@ -17,7 +17,7 @@ pub(super) fn replay_digest(
     final_root: Option<ObjectRevisionId>,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.namespace-replay-plan.v3\0");
+    digest.update(b"meshspan.filesystem.namespace-replay-plan.v4\0");
     digest.update(&causal_digest);
     update_optional_revision(&mut digest, base.root_object_revision_id);
     let mut entries = base.entries.iter().collect::<Vec<_>>();
@@ -32,6 +32,7 @@ pub(super) fn replay_digest(
             &mut digest,
             entry.file_version_id.map(FileVersionId::as_bytes),
         );
+        update_optional_bool(&mut digest, entry.directory_is_empty);
         digest.update(&entry.entry_generation.to_be_bytes());
     }
     update_count(&mut digest, actions.len());
@@ -167,4 +168,11 @@ fn update_optional_identifier(digest: &mut blake3::Hasher, value: Option<[u8; 16
     } else {
         digest.update(&[0]);
     }
+}
+
+fn update_optional_bool(digest: &mut blake3::Hasher, value: Option<bool>) {
+    match value {
+        Some(value) => digest.update(&[1, u8::from(value)]),
+        None => digest.update(&[0]),
+    };
 }

@@ -16,18 +16,19 @@ use super::{
     VersionPublicationStore, configure,
 };
 use crate::{
-    BranchMutation, BranchMutationIntent, BranchRenameIntent, CreateDisposition, DirectoryEntry,
-    DirectoryEntryKind, DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError, HandleAccess,
-    HandleError, HandleShare, NamespaceComponent, NamespaceLimits, NamespacePath,
-    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceReplayDisposition,
-    OpenHandleRequest, ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource,
-    ReconciliationFrontier, ReconciliationLimits, VersionCleanupCancellationAuthority,
-    VersionCleanupCancellationError, VersionCleanupRetirementAuthority,
-    VersionCleanupRetirementError, VersionReachabilityError, VersionReachabilityScanRequest,
-    VersionReachabilityState, VersionReclaimMode, VersionRetentionCandidate,
-    VersionRetentionCandidateReason, VersionRetentionError, VersionRetentionPageLimit,
-    VersionRetentionPressure, VersionRetentionSelectionPolicy, reachability_root_digest,
-    reachability_root_set_digest, reachability_subject_digest,
+    BranchMutation, BranchMutationIntent, BranchRenameIntent, CloseHandleOutcome,
+    CloseHandleRequest, CreateDisposition, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
+    DirectoryTrie, DirectoryTrieError, HandleAccess, HandleError, HandleShare, NamespaceComponent,
+    NamespaceLimits, NamespacePath, NamespaceRenamePublication, NamespaceRenameReceipt,
+    NamespaceReplayDisposition, NamespaceUnlinkAuthority, NamespaceUnlinkPublication,
+    NamespaceUnlinkReceipt, OpenHandleRequest, ReachabilityRoot, ReachabilityRootPage,
+    ReachabilityRootSource, ReconciliationFrontier, ReconciliationLimits,
+    VersionCleanupCancellationAuthority, VersionCleanupCancellationError,
+    VersionCleanupRetirementAuthority, VersionCleanupRetirementError, VersionReachabilityError,
+    VersionReachabilityScanRequest, VersionReachabilityState, VersionReclaimMode,
+    VersionRetentionCandidate, VersionRetentionCandidateReason, VersionRetentionError,
+    VersionRetentionPageLimit, VersionRetentionPressure, VersionRetentionSelectionPolicy,
+    reachability_root_digest, reachability_root_set_digest, reachability_subject_digest,
 };
 
 #[test]
@@ -135,6 +136,7 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "namespace_reconciliation_operations",
         "namespace_snapshot_restore_operations",
         "namespace_rename_operations",
+        "namespace_unlink_operations",
         "namespace_commit_deletions",
         "file_version_history",
         "open_handles",
@@ -1693,6 +1695,417 @@ fn namespace_rename_enforces_delete_sharing_and_relocates_live_handles()
 }
 
 #[test]
+fn namespace_unlink_is_atomic_durable_and_exactly_replayable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let unlink = root_file_unlink(&file)?;
+    let applied = {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        let receipt = store.unlink_namespace(&unlink)?;
+        assert_eq!(receipt.disposition, PublicationDisposition::Applied);
+        assert_eq!(receipt.head_sequence, 2);
+        assert_unlink_result(&store, &unlink)?;
+        assert_eq!(
+            store.branch_mutation_intent(unlink.namespace_commit_id)?,
+            Some(expected_unlink_intent(&file, &unlink))
+        );
+        receipt
+    };
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let replayed = NamespaceUnlinkReceipt {
+        disposition: PublicationDisposition::Replayed,
+        ..applied
+    };
+    assert_eq!(
+        reopened.resolve_namespace_unlink(unlink.operation_id)?,
+        Some(replayed)
+    );
+    assert_eq!(reopened.unlink_namespace(&unlink)?, replayed);
+    let mut conflicting = unlink.clone();
+    conflicting.expected_entry_generation = 2;
+    assert!(matches!(
+        reopened.unlink_namespace(&conflicting),
+        Err(HandleError::OperationConflict)
+    ));
+    assert_unlink_result(&reopened, &unlink)?;
+    let mut replacement = sibling_root_publication(&file)?;
+    replacement.expected_namespace_commit_id = Some(unlink.namespace_commit_id);
+    replacement.path = file.path.clone();
+    replacement.entry_generation = 2;
+    assert_eq!(reopened.publish_root_file(&replacement)?.head_sequence, 3);
+    let selected = stored_directory_entry(
+        &reopened,
+        replacement.root_object_revision_id,
+        &replacement.path.path().components()[0],
+    )?;
+    assert_eq!(selected.object_id(), replacement.file.object_id);
+    assert_eq!(selected.generation(), 2);
+    Ok(())
+}
+
+#[test]
+fn namespace_unlink_rejects_non_empty_directories_and_removes_empty_ones()
+-> Result<(), Box<dyn std::error::Error>> {
+    let non_empty = tempdir()?;
+    let first = initial_directory_publication()?;
+    let nested = nested_directory_publication(&first)?;
+    let mut store = VersionPublicationStore::open(non_empty.path(), UnixMicros::new(1))?;
+    store.create_directory(&first)?;
+    store.create_directory(&nested)?;
+    let unlink = root_directory_unlink(
+        &first,
+        nested.namespace_commit_id,
+        nested.path.ancestors()[0].new_revision_id(),
+    )?;
+    assert!(matches!(
+        store.unlink_namespace(&unlink),
+        Err(HandleError::DirectoryNotEmpty)
+    ));
+    assert_eq!(store.resolve_namespace_unlink(unlink.operation_id)?, None);
+
+    let empty = tempdir()?;
+    let mut empty_store = VersionPublicationStore::open(empty.path(), UnixMicros::new(1))?;
+    empty_store.create_directory(&first)?;
+    let empty_unlink = root_directory_unlink(
+        &first,
+        first.namespace_commit_id,
+        first.directory_object_revision_id,
+    )?;
+    let receipt = empty_store.unlink_namespace(&empty_unlink)?;
+    assert_eq!(receipt.object_kind, DirectoryEntryKind::Directory);
+    assert_unlink_result(&empty_store, &empty_unlink)?;
+    Ok(())
+}
+
+#[test]
+fn namespace_unlink_rejects_every_substituted_target_without_partial_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let unlink = root_file_unlink(&file)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+
+    let mut wrong_generation = unlink.clone();
+    wrong_generation.expected_entry_generation = 2;
+    assert!(matches!(
+        store.unlink_namespace(&wrong_generation),
+        Err(HandleError::Namespace(PublicationError::StaleHead))
+    ));
+    let mut wrong_object = unlink.clone();
+    wrong_object.expected_object_id = ObjectId::from_bytes([226; 16])?;
+    assert!(matches!(
+        store.unlink_namespace(&wrong_object),
+        Err(HandleError::Namespace(PublicationError::StaleHead))
+    ));
+    let mut wrong_revision = unlink.clone();
+    wrong_revision.expected_object_revision_id = ObjectRevisionId::from_bytes([227; 16])?;
+    assert!(matches!(
+        store.unlink_namespace(&wrong_revision),
+        Err(HandleError::Namespace(PublicationError::StaleHead))
+    ));
+    let mut wrong_version = unlink.clone();
+    wrong_version.expected_file_version_id = Some(FileVersionId::from_bytes([228; 16])?);
+    assert!(matches!(
+        store.unlink_namespace(&wrong_version),
+        Err(HandleError::Namespace(PublicationError::StaleHead))
+    ));
+    let mut wrong_kind = unlink.clone();
+    wrong_kind.expected_kind = DirectoryEntryKind::Directory;
+    wrong_kind.expected_file_version_id = None;
+    assert!(matches!(
+        store.unlink_namespace(&wrong_kind),
+        Err(HandleError::Namespace(PublicationError::StaleHead))
+    ));
+    let mut wrong_path = unlink.clone();
+    wrong_path.path = NamespacePublicationPath::new(
+        NamespacePath::from_components(["absent"], NamespaceLimits::PORTABLE)?,
+        Vec::new(),
+    )?;
+    assert!(matches!(
+        store.unlink_namespace(&wrong_path),
+        Err(HandleError::NotFound)
+    ));
+    assert_eq!(
+        store
+            .namespace_head(file.file.branch_id, file.file.volume_id)?
+            .map(|head| head.namespace_commit_id),
+        Some(file.namespace_commit_id)
+    );
+    assert_eq!(store.resolve_namespace_unlink(unlink.operation_id)?, None);
+    assert_eq!(
+        store.unlink_namespace(&unlink)?.disposition,
+        PublicationDisposition::Applied
+    );
+    Ok(())
+}
+
+#[test]
+fn final_delete_on_close_requires_and_consumes_exact_durable_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let mut open = rename_open_request(&file, 200, 201)?;
+    open.desired_access = HandleAccess::new(true, false, true)?;
+    open.delete_on_close = true;
+    let close = CloseHandleRequest {
+        operation_id: OperationId::from_bytes([202; 16])?,
+        handle_id: open.handle_id,
+        expected_fence: 1,
+        principal_id: open.principal_id,
+        gateway_node_id: open.gateway_node_id,
+        observed_at: UnixMicros::new(20),
+    };
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    store.open_handle(&open)?;
+    assert_eq!(
+        store.close_handle(close)?.outcome,
+        CloseHandleOutcome::DeleteReady
+    );
+    drop(store);
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    assert!(matches!(
+        store.ready_namespace_deletes(
+            file.file.branch_id,
+            file.file.volume_id,
+            None,
+            0,
+            UnixMicros::new(30),
+        ),
+        Err(HandleError::InvalidInput)
+    ));
+    let ready = store.ready_namespace_deletes(
+        file.file.branch_id,
+        file.file.volume_id,
+        None,
+        16,
+        UnixMicros::new(30),
+    )?;
+    assert_eq!(ready.next_after_object_id, None);
+    let pending_delete = ready.entries.first().ok_or("missing ready deletion")?;
+    assert_eq!(pending_delete.object_id, file.file.object_id);
+    assert_eq!(pending_delete.path, file.path.path().clone());
+    assert_eq!(
+        pending_delete.object_revision_id,
+        file.file_object_revision_id
+    );
+    assert_eq!(pending_delete.file_version_id, file.file.version_id);
+    let mut unlink = root_file_unlink(&file)?;
+    unlink.authority = NamespaceUnlinkAuthority::DeleteOnClose {
+        requesting_handle_id: pending_delete.requesting_handle_id,
+        requested_at: pending_delete.requested_at,
+        ready_at: pending_delete.ready_at,
+    };
+    unlink.created_at = UnixMicros::new(30);
+    assert!(matches!(
+        super::namespace::unlink_namespace(
+            &mut store.connection,
+            &unlink,
+            Some(super::namespace::NamespaceFaultPoint::UnlinkPendingDelete),
+        ),
+        Err(HandleError::Namespace(PublicationError::InjectedFault))
+    ));
+    let pending_after_fault: i64 = store.connection.query_row(
+        "SELECT count(*) FROM pending_object_deletes WHERE object_id = ?1 AND state = 2",
+        [file.file.object_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(pending_after_fault, 1);
+    assert_unlink_was_not_committed(&store, &file, &unlink)?;
+    let mut substituted = unlink.clone();
+    substituted.authority = NamespaceUnlinkAuthority::DeleteOnClose {
+        requesting_handle_id: open.handle_id,
+        requested_at: close.observed_at,
+        ready_at: UnixMicros::new(21),
+    };
+    assert!(matches!(
+        store.unlink_namespace(&substituted),
+        Err(HandleError::DeletePending)
+    ));
+    store.unlink_namespace(&unlink)?;
+    assert_unlink_result(&store, &unlink)?;
+    let pending: i64 = store.connection.query_row(
+        "SELECT count(*) FROM pending_object_deletes WHERE object_id = ?1",
+        [file.file.object_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(pending, 0);
+    Ok(())
+}
+
+#[test]
+fn ready_delete_scan_recovers_expired_delete_on_close_after_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let mut open = rename_open_request(&file, 218, 219)?;
+    open.desired_access = HandleAccess::new(true, false, true)?;
+    open.delete_on_close = true;
+    open.lease_expires_at = UnixMicros::new(50);
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        store.open_handle(&open)?;
+    }
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(51))?;
+    let ready = reopened.ready_namespace_deletes(
+        file.file.branch_id,
+        file.file.volume_id,
+        None,
+        1,
+        UnixMicros::new(51),
+    )?;
+    let recovered = ready.entries.first().ok_or("missing expired deletion")?;
+    assert_eq!(recovered.requesting_handle_id, open.handle_id);
+    assert_eq!(recovered.requested_at, UnixMicros::new(51));
+    assert_eq!(recovered.ready_at, UnixMicros::new(51));
+    assert_eq!(recovered.path, file.path.path().clone());
+    Ok(())
+}
+
+#[test]
+fn ready_delete_scan_pages_without_skipping_or_repeating_objects()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = sibling_root_publication(&first)?;
+    let mut first_open = rename_open_request(&first, 220, 221)?;
+    first_open.desired_access = HandleAccess::new(true, false, true)?;
+    first_open.share_access = HandleShare::new(true, true, true);
+    first_open.delete_on_close = true;
+    let mut second_open = first_open.clone();
+    second_open.operation_id = OperationId::from_bytes([222; 16])?;
+    second_open.handle_id = HandleId::from_bytes([223; 16])?;
+    second_open.path = second.path.path().clone();
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    store.open_handle(&first_open)?;
+    store.open_handle(&second_open)?;
+    for (operation, open) in [(224, &first_open), (225, &second_open)] {
+        store.close_handle(CloseHandleRequest {
+            operation_id: OperationId::from_bytes([operation; 16])?,
+            handle_id: open.handle_id,
+            expected_fence: 1,
+            principal_id: open.principal_id,
+            gateway_node_id: open.gateway_node_id,
+            observed_at: UnixMicros::new(20),
+        })?;
+    }
+
+    let first_page = store.ready_namespace_deletes(
+        first.file.branch_id,
+        first.file.volume_id,
+        None,
+        1,
+        UnixMicros::new(30),
+    )?;
+    let cursor = first_page
+        .next_after_object_id
+        .ok_or("missing ready-delete cursor")?;
+    assert_eq!(first_page.entries.len(), 1);
+    let second_page = store.ready_namespace_deletes(
+        first.file.branch_id,
+        first.file.volume_id,
+        Some(cursor),
+        1,
+        UnixMicros::new(30),
+    )?;
+    assert_eq!(second_page.entries.len(), 1);
+    assert_eq!(second_page.next_after_object_id, None);
+    assert_ne!(
+        first_page.entries[0].object_id,
+        second_page.entries[0].object_id
+    );
+    Ok(())
+}
+
+#[test]
+fn namespace_unlink_enforces_delete_access_and_live_share_modes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let allowed_directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let mut allowed = rename_open_request(&file, 203, 204)?;
+    allowed.desired_access = HandleAccess::new(true, false, true)?;
+    allowed.share_access = HandleShare::new(true, true, true);
+    let mut unlink = root_file_unlink(&file)?;
+    unlink.authority = NamespaceUnlinkAuthority::Direct {
+        requesting_handle_id: Some(allowed.handle_id),
+    };
+    let mut allowed_store =
+        VersionPublicationStore::open(allowed_directory.path(), UnixMicros::new(1))?;
+    allowed_store.publish_root_file(&file)?;
+    allowed_store.open_handle(&allowed)?;
+    allowed_store.unlink_namespace(&unlink)?;
+
+    let blocked_directory = tempdir()?;
+    let mut blocked_store =
+        VersionPublicationStore::open(blocked_directory.path(), UnixMicros::new(1))?;
+    blocked_store.publish_root_file(&file)?;
+    let mut blocker = rename_open_request(&file, 205, 206)?;
+    blocker.share_access = HandleShare::new(true, true, false);
+    blocked_store.open_handle(&blocker)?;
+    let unlink_attempt = root_file_unlink(&file)?;
+    assert!(matches!(
+        blocked_store.unlink_namespace(&unlink_attempt),
+        Err(HandleError::SharingViolation)
+    ));
+    assert_unlink_was_not_committed(&blocked_store, &file, &unlink_attempt)?;
+
+    let denied_directory = tempdir()?;
+    let mut denied_store =
+        VersionPublicationStore::open(denied_directory.path(), UnixMicros::new(1))?;
+    denied_store.publish_root_file(&file)?;
+    let denied = rename_open_request(&file, 207, 208)?;
+    denied_store.open_handle(&denied)?;
+    let mut denied_unlink = root_file_unlink(&file)?;
+    denied_unlink.authority = NamespaceUnlinkAuthority::Direct {
+        requesting_handle_id: Some(denied.handle_id),
+    };
+    assert!(matches!(
+        denied_store.unlink_namespace(&denied_unlink),
+        Err(HandleError::InvalidInput)
+    ));
+    assert_unlink_was_not_committed(&denied_store, &file, &denied_unlink)?;
+    Ok(())
+}
+
+#[test]
+fn every_namespace_unlink_fault_rolls_back_path_head_pending_state_and_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    use super::namespace::NamespaceFaultPoint;
+
+    for fault in [
+        NamespaceFaultPoint::UnlinkPath,
+        NamespaceFaultPoint::UnlinkCommit,
+        NamespaceFaultPoint::UnlinkPendingDelete,
+        NamespaceFaultPoint::UnlinkOperation,
+    ] {
+        let directory = tempdir()?;
+        let file = initial_root_publication()?;
+        let unlink = root_file_unlink(&file)?;
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        assert!(matches!(
+            super::namespace::unlink_namespace(&mut store.connection, &unlink, Some(fault)),
+            Err(HandleError::Namespace(PublicationError::InjectedFault))
+        ));
+        assert_unlink_was_not_committed(&store, &file, &unlink)?;
+        assert_eq!(
+            store.unlink_namespace(&unlink)?.disposition,
+            PublicationDisposition::Applied
+        );
+        assert_unlink_result(&store, &unlink)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn durable_affected_base_prepares_exact_replay_after_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
@@ -1811,6 +2224,183 @@ fn authored_rename_reconciles_atomically_from_its_durable_intent()
         &sibling.path.path().components()[0],
     )?;
     assert_eq!(retained.object_id(), sibling.file.object_id);
+    Ok(())
+}
+
+#[test]
+fn authored_unlink_reconciles_as_one_durable_bound_removal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let sibling = sibling_root_publication(&file)?;
+    let fork_branch = BranchId::from_bytes([209; 16])?;
+    let mut unlink = root_file_unlink(&file)?;
+    unlink.branch_id = fork_branch;
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        seed_file_branch(&store.connection, &file, fork_branch)?;
+        store.unlink_namespace(&unlink)?;
+        store.publish_root_file(&sibling)?;
+    }
+
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(sibling.namespace_commit_id),
+        eligible_heads: vec![unlink.namespace_commit_id],
+    };
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([210; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([211; 16])?,
+        created_by: file.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        created_at: UnixMicros::new(210),
+    };
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let prepared =
+        reopened.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    let action = prepared
+        .replay_plan()
+        .actions()
+        .first()
+        .ok_or("missing unlink replay action")?;
+    assert_eq!(action.effect, crate::NamespaceReplayEffect::Remove);
+    assert_eq!(action.target_object_id, file.file.object_id);
+    assert!(action.source_removal.is_some());
+    let receipt = reopened.apply_namespace_reconciliation(application, &prepared)?;
+    assert!(
+        stored_directory_lookup(
+            &reopened,
+            receipt.root_object_revision_id,
+            &file.path.path().components()[0],
+        )?
+        .is_none()
+    );
+    let retained = stored_directory_entry(
+        &reopened,
+        receipt.root_object_revision_id,
+        &sibling.path.path().components()[0],
+    )?;
+    assert_eq!(retained.object_id(), sibling.file.object_id);
+    Ok(())
+}
+
+#[test]
+fn concurrent_durable_edit_survives_an_authored_unlink() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let edit = next_root_publication(&file)?;
+    let fork_branch = BranchId::from_bytes([212; 16])?;
+    let mut unlink = root_file_unlink(&file)?;
+    unlink.branch_id = fork_branch;
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        seed_file_branch(&store.connection, &file, fork_branch)?;
+        store.unlink_namespace(&unlink)?;
+        store.publish_root_file(&edit)?;
+    }
+
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(edit.namespace_commit_id),
+        eligible_heads: vec![unlink.namespace_commit_id],
+    };
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([213; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([214; 16])?,
+        created_by: file.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        created_at: UnixMicros::new(213),
+    };
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let prepared =
+        reopened.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    let action = prepared
+        .replay_plan()
+        .actions()
+        .first()
+        .ok_or("missing preserved unlink action")?;
+    assert_eq!(action.effect, crate::NamespaceReplayEffect::Preserve);
+    assert_eq!(action.disposition, NamespaceReplayDisposition::Preserved);
+    let receipt = reopened.apply_namespace_reconciliation(application, &prepared)?;
+    let selected = stored_directory_entry(
+        &reopened,
+        receipt.root_object_revision_id,
+        &edit.path.path().components()[0],
+    )?;
+    assert_eq!(selected.object_revision_id(), edit.file_object_revision_id);
+    Ok(())
+}
+
+#[test]
+fn concurrent_durable_descendant_change_recovers_an_unlinked_directory()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_directory_publication()?;
+    let nested = nested_directory_publication(&first)?;
+    let fork_branch = BranchId::from_bytes([215; 16])?;
+    let mut unlink = root_directory_unlink(
+        &first,
+        first.namespace_commit_id,
+        first.directory_object_revision_id,
+    )?;
+    unlink.branch_id = fork_branch;
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.create_directory(&first)?;
+        seed_namespace_branch(&store.connection, &first, fork_branch)?;
+        store.unlink_namespace(&unlink)?;
+        store.create_directory(&nested)?;
+    }
+
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(nested.namespace_commit_id),
+        eligible_heads: vec![unlink.namespace_commit_id],
+    };
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([216; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([217; 16])?,
+        created_by: first.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        created_at: UnixMicros::new(216),
+    };
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let prepared = reopened
+        .prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)
+        .map_err(|error| format!("prepare descendant deletion reconciliation: {error:?}"))?;
+    let action = prepared
+        .replay_plan()
+        .actions()
+        .first()
+        .ok_or("missing recovered directory action")?;
+    assert_eq!(action.effect, crate::NamespaceReplayEffect::Upsert);
+    assert_eq!(action.disposition, NamespaceReplayDisposition::Recovered);
+    let recovered_path = action.target_path.clone();
+    let receipt = reopened
+        .apply_namespace_reconciliation(application, &prepared)
+        .map_err(|error| format!("apply descendant deletion reconciliation: {error:?}"))?;
+    assert!(
+        stored_directory_lookup(
+            &reopened,
+            receipt.root_object_revision_id,
+            &first.path.path().components()[0],
+        )?
+        .is_none()
+    );
+    let recovered = stored_directory_entry(
+        &reopened,
+        receipt.root_object_revision_id,
+        &recovered_path.components()[0],
+    )?;
+    assert_eq!(recovered.object_id(), first.directory_object_id);
+    let child = stored_directory_entry(
+        &reopened,
+        recovered.object_revision_id(),
+        &nested.path.path().components()[1],
+    )?;
+    assert_eq!(child.object_id(), nested.directory_object_id);
     Ok(())
 }
 
@@ -2489,6 +3079,50 @@ fn rename_receipt_corruption_and_cross_kind_operation_reuse_fail_closed()
     Ok(())
 }
 
+#[test]
+fn unlink_receipt_corruption_and_cross_kind_operation_reuse_fail_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let corrupted_directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let unlink = root_file_unlink(&file)?;
+    let mut corrupted =
+        VersionPublicationStore::open(corrupted_directory.path(), UnixMicros::new(1))?;
+    corrupted.publish_root_file(&file)?;
+    corrupted.unlink_namespace(&unlink)?;
+    corrupted.connection.execute(
+        "UPDATE namespace_unlink_operations SET result_digest = zeroblob(32)",
+        [],
+    )?;
+    assert!(matches!(
+        corrupted.resolve_namespace_unlink(unlink.operation_id),
+        Err(PublicationError::Corrupt)
+    ));
+
+    let file_collision_directory = tempdir()?;
+    let mut file_collision =
+        VersionPublicationStore::open(file_collision_directory.path(), UnixMicros::new(1))?;
+    file_collision.publish_root_file(&file)?;
+    let mut colliding_unlink = unlink.clone();
+    colliding_unlink.operation_id = file.file.operation_id;
+    assert!(matches!(
+        file_collision.unlink_namespace(&colliding_unlink),
+        Err(HandleError::Namespace(PublicationError::OperationConflict))
+    ));
+
+    let unlink_collision_directory = tempdir()?;
+    let mut unlink_collision =
+        VersionPublicationStore::open(unlink_collision_directory.path(), UnixMicros::new(1))?;
+    unlink_collision.publish_root_file(&file)?;
+    unlink_collision.unlink_namespace(&unlink)?;
+    let mut colliding_directory = initial_directory_publication()?;
+    colliding_directory.operation_id = unlink.operation_id;
+    assert!(matches!(
+        unlink_collision.create_directory(&colliding_directory),
+        Err(PublicationError::OperationConflict)
+    ));
+    Ok(())
+}
+
 fn make_publication(
     operation: u8,
     parent: Option<FileVersionId>,
@@ -2686,6 +3320,58 @@ fn root_file_rename(
     })
 }
 
+fn root_file_unlink(
+    file: &RootFilePublication,
+) -> Result<NamespaceUnlinkPublication, Box<dyn std::error::Error>> {
+    Ok(NamespaceUnlinkPublication {
+        operation_id: OperationId::from_bytes([190; 16])?,
+        branch_id: file.file.branch_id,
+        volume_id: file.file.volume_id,
+        root_object_id: file.root_object_id,
+        expected_namespace_commit_id: file.namespace_commit_id,
+        expected_object_id: file.file.object_id,
+        expected_object_revision_id: file.file_object_revision_id,
+        expected_kind: DirectoryEntryKind::File,
+        expected_file_version_id: Some(file.file.version_id),
+        expected_entry_generation: file.entry_generation,
+        path: file.path.clone(),
+        root_object_revision_id: ObjectRevisionId::from_bytes([191; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([192; 16])?,
+        authority: NamespaceUnlinkAuthority::Direct {
+            requesting_handle_id: None,
+        },
+        created_by: file.file.created_by,
+        created_at: UnixMicros::new(190),
+    })
+}
+
+fn root_directory_unlink(
+    directory: &DirectoryPublication,
+    expected_commit_id: NamespaceCommitId,
+    expected_revision_id: ObjectRevisionId,
+) -> Result<NamespaceUnlinkPublication, Box<dyn std::error::Error>> {
+    Ok(NamespaceUnlinkPublication {
+        operation_id: OperationId::from_bytes([193; 16])?,
+        branch_id: directory.branch_id,
+        volume_id: directory.volume_id,
+        root_object_id: directory.root_object_id,
+        expected_namespace_commit_id: expected_commit_id,
+        expected_object_id: directory.directory_object_id,
+        expected_object_revision_id: expected_revision_id,
+        expected_kind: DirectoryEntryKind::Directory,
+        expected_file_version_id: None,
+        expected_entry_generation: directory.entry_generation,
+        path: directory.path.clone(),
+        root_object_revision_id: ObjectRevisionId::from_bytes([194; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([196; 16])?,
+        authority: NamespaceUnlinkAuthority::Direct {
+            requesting_handle_id: None,
+        },
+        created_by: directory.created_by,
+        created_at: UnixMicros::new(193),
+    })
+}
+
 fn root_directory_rename(
     directory: &DirectoryPublication,
     target: &str,
@@ -2816,6 +3502,25 @@ fn expected_rename_intent(
     }
 }
 
+fn expected_unlink_intent(
+    file: &RootFilePublication,
+    unlink: &NamespaceUnlinkPublication,
+) -> BranchMutationIntent {
+    BranchMutationIntent {
+        commit_id: unlink.namespace_commit_id,
+        path: unlink.path.path().clone(),
+        ancestors: unlink.path.ancestors().to_vec(),
+        object_id: file.file.object_id,
+        object_revision_id: file.file_object_revision_id,
+        prior_object_revision_id: None,
+        entry_generation: unlink.expected_entry_generation,
+        mutation: BranchMutation::DeleteFile {
+            version_id: file.file.version_id,
+        },
+        rename: None,
+    }
+}
+
 fn assert_namespace_rename_result(
     store: &VersionPublicationStore,
     file: &RootFilePublication,
@@ -2881,6 +3586,56 @@ fn assert_rename_was_not_committed(
     Ok(())
 }
 
+fn assert_unlink_result(
+    store: &VersionPublicationStore,
+    unlink: &NamespaceUnlinkPublication,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        store
+            .namespace_head(unlink.branch_id, unlink.volume_id)?
+            .map(|head| (head.namespace_commit_id, head.sequence)),
+        Some((unlink.namespace_commit_id, 2))
+    );
+    assert!(
+        stored_directory_lookup(
+            store,
+            unlink.root_object_revision_id,
+            &unlink.path.path().components()[0],
+        )?
+        .is_none()
+    );
+    Ok(())
+}
+
+fn assert_unlink_was_not_committed(
+    store: &VersionPublicationStore,
+    base: &RootFilePublication,
+    unlink: &NamespaceUnlinkPublication,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        store
+            .namespace_head(unlink.branch_id, unlink.volume_id)?
+            .map(|head| head.namespace_commit_id),
+        Some(base.namespace_commit_id)
+    );
+    let source = stored_directory_entry(
+        store,
+        base.root_object_revision_id,
+        &unlink.path.path().components()[0],
+    )?;
+    assert_eq!(source.object_id(), unlink.expected_object_id);
+    assert_eq!(store.resolve_namespace_unlink(unlink.operation_id)?, None);
+    let exists: i64 = store.connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM object_revisions WHERE object_revision_id = ?1
+         )",
+        [unlink.root_object_revision_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(exists, 0);
+    Ok(())
+}
+
 fn rename_open_request(
     file: &RootFilePublication,
     operation: u8,
@@ -2902,6 +3657,24 @@ fn rename_open_request(
         lease_expires_at: UnixMicros::new(1_000),
         opened_at: UnixMicros::new(10),
     })
+}
+
+fn seed_namespace_branch(
+    connection: &Connection,
+    directory: &DirectoryPublication,
+    branch_id: BranchId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    connection.execute(
+        "INSERT INTO branch_namespace_heads(
+            branch_id, volume_id, namespace_commit_id, head_sequence
+         ) VALUES (?1, ?2, ?3, 1)",
+        params![
+            branch_id.as_bytes().as_slice(),
+            directory.volume_id.as_bytes().as_slice(),
+            directory.namespace_commit_id.as_bytes().as_slice(),
+        ],
+    )?;
+    Ok(())
 }
 
 fn seed_file_branch(

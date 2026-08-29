@@ -12,6 +12,8 @@ mod rename;
 mod repository;
 #[path = "namespace_publication/snapshot_restore.rs"]
 mod snapshot_restore;
+#[path = "namespace_publication/unlink.rs"]
+mod unlink;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -392,11 +394,12 @@ fn reject_operation_receipts(
     operation_id: OperationId,
     allowed: PublicationOperationKind,
 ) -> Result<(), PublicationError> {
-    let collisions: (i64, i64, i64, i64, i64) = transaction.query_row(
+    let collisions: (i64, i64, i64, i64, i64, i64) = transaction.query_row(
         "SELECT
             EXISTS(SELECT 1 FROM namespace_publication_operations WHERE operation_id = ?1),
             EXISTS(SELECT 1 FROM directory_publication_operations WHERE operation_id = ?1),
             EXISTS(SELECT 1 FROM namespace_rename_operations WHERE operation_id = ?1),
+            EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?1),
             EXISTS(
                 SELECT 1 FROM namespace_snapshot_restore_operations WHERE operation_id = ?1
             ),
@@ -409,13 +412,16 @@ fn reject_operation_receipts(
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
+                row.get(5)?,
             ))
         },
     )?;
     let collision = match allowed {
-        PublicationOperationKind::File => collisions.1 + collisions.2 + collisions.3 + collisions.4,
+        PublicationOperationKind::File => {
+            collisions.1 + collisions.2 + collisions.3 + collisions.4 + collisions.5
+        }
         PublicationOperationKind::Directory => {
-            collisions.0 + collisions.2 + collisions.3 + collisions.4
+            collisions.0 + collisions.2 + collisions.3 + collisions.4 + collisions.5
         }
     };
     if collision == 0 {
@@ -440,6 +446,21 @@ pub(super) fn load_rename(
     rename::resolve(connection, operation_id)
 }
 
+pub(super) fn unlink_namespace(
+    connection: &mut Connection,
+    publication: &super::NamespaceUnlinkPublication,
+    fault: Option<NamespaceFaultPoint>,
+) -> Result<super::NamespaceUnlinkReceipt, crate::HandleError> {
+    unlink::apply(connection, publication, fault)
+}
+
+pub(super) fn load_unlink(
+    connection: &Connection,
+    operation_id: OperationId,
+) -> Result<Option<super::NamespaceUnlinkReceipt>, PublicationError> {
+    unlink::resolve(connection, operation_id)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NamespaceFaultPoint {
     DirectoryNodes,
@@ -453,6 +474,10 @@ pub(super) enum NamespaceFaultPoint {
     RenameCommit,
     RenameHandles,
     RenameOperation,
+    UnlinkPath,
+    UnlinkCommit,
+    UnlinkPendingDelete,
+    UnlinkOperation,
     ReconciliationLeaf,
     ReconciliationDirectories,
     ReconciliationCommit,
@@ -851,6 +876,12 @@ fn load_replay_path(
             object_revision_id: entry.object_revision_id(),
             kind: entry.kind(),
             file_version_id,
+            directory_is_empty: match entry.kind() {
+                DirectoryEntryKind::Directory => Some(
+                    selected_revision.directory_root == Some(crate::DirectoryTrie::empty().root()),
+                ),
+                DirectoryEntryKind::File => None,
+            },
             entry_generation: entry.generation(),
         };
         let key = replay_entry

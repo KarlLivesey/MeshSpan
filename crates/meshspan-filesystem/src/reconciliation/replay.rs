@@ -40,6 +40,8 @@ pub struct NamespaceReplayEntry {
     pub kind: DirectoryEntryKind,
     /// Exact immutable file version, absent for directories.
     pub file_version_id: Option<FileVersionId>,
+    /// Verified emptiness for directories, absent for files.
+    pub directory_is_empty: Option<bool>,
     /// Stable incarnation of the canonical leaf name.
     pub entry_generation: u64,
 }
@@ -170,6 +172,7 @@ struct EffectiveEntry {
     revision_id: ObjectRevisionId,
     kind: DirectoryEntryKind,
     file_version_id: Option<FileVersionId>,
+    directory_is_empty: Option<bool>,
     generation: u64,
 }
 
@@ -243,6 +246,8 @@ impl ReplayState {
             if entry.entry_generation == 0
                 || entry.path.components().is_empty()
                 || ((entry.kind == DirectoryEntryKind::File) != entry.file_version_id.is_some())
+                || ((entry.kind == DirectoryEntryKind::Directory)
+                    != entry.directory_is_empty.is_some())
             {
                 return Err(ReconciliationError::InvalidInput);
             }
@@ -252,6 +257,7 @@ impl ReplayState {
                 revision_id: entry.object_revision_id,
                 kind: entry.kind,
                 file_version_id: entry.file_version_id,
+                directory_is_empty: entry.directory_is_empty,
                 generation: entry.entry_generation,
             };
             if entries
@@ -330,6 +336,10 @@ impl ReplayState {
             revision_id: target_revision,
             kind: target_kind,
             file_version_id,
+            directory_is_empty: match target_kind {
+                DirectoryEntryKind::Directory => Some(true),
+                DirectoryEntryKind::File => None,
+            },
             generation,
         };
         self.entries.insert(path_key(&target_path), target.clone());
@@ -593,6 +603,7 @@ impl ReplayState {
                     .map_err(|_| ReconciliationError::InvalidLineage)?;
             let updated = EffectiveEntry {
                 revision_id: next,
+                directory_is_empty: Some(false),
                 ..current
             };
             self.entries.insert(path_key(&prefix), updated.clone());
