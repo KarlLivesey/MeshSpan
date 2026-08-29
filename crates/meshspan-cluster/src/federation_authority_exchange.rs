@@ -10,7 +10,7 @@ use crate::{
 };
 use meshspan_domain::{FederationRelationshipId, Revision, UnixMicros};
 use meshspan_transport::{
-    AuthenticatedFederationAuthorityPage, FederationAuthorityContext, FederationReplayGuard,
+    AuthenticatedFederationAuthorityPage, FederationExchangeContext, FederationReplayGuard,
     StreamKind, TransportError, accept_stream, open_stream, receive_federation, send_federation,
     signed_federation_authority_fetch, signed_federation_authority_page,
 };
@@ -21,7 +21,7 @@ pub struct FederationAuthorityFetchRequest {
     /// Current approved relationship.
     pub relationship_id: FederationRelationshipId,
     /// Signed request correlation, deadline and fresh nonce.
-    pub context: FederationAuthorityContext,
+    pub context: FederationExchangeContext,
     /// Last remote authority revision already applied, or zero initially.
     pub after_revision: u64,
     /// Opaque signed continuation from the previous page.

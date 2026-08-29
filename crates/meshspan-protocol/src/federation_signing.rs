@@ -5,9 +5,9 @@
 use prost::Message;
 
 use crate::v1::{
-    FederationAuthorityPage, FederationHeader, FederationHello, FederationWelcome,
-    FetchFederatedBranchPage, FetchFederatedStorageInventory, FetchFederationAuthority,
-    RequestFederatedStorageCapability,
+    FederatedBranchPage, FederationAuthorityPage, FederationHeader, FederationHello,
+    FederationWelcome, FetchFederatedBranchPage, FetchFederatedStorageInventory,
+    FetchFederationAuthority, RequestFederatedStorageCapability,
 };
 
 const HELLO_DOMAIN: &[u8] = b"meshspan.federation.hello.v1\0";
@@ -16,6 +16,8 @@ const AUTHORITY_PAGE_DOMAIN: &[u8] = b"meshspan.federation.authority-page.v1\0";
 const AUTHORITY_PAGE_DIGEST_DOMAIN: &[u8] = b"meshspan.federation.authority-page-digest.v1\0";
 const AUTHORITY_FETCH_DOMAIN: &[u8] = b"meshspan.federation.authority-fetch.v1\0";
 const BRANCH_FETCH_DOMAIN: &[u8] = b"meshspan.federation.branch-fetch.v1\0";
+const BRANCH_PAGE_DOMAIN: &[u8] = b"meshspan.federation.branch-page.v1\0";
+const BRANCH_PAGE_DIGEST_DOMAIN: &[u8] = b"meshspan.federation.branch-page-digest.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DOMAIN: &[u8] =
     b"meshspan.federation.storage-capability-request.v1\0";
 const STORAGE_INVENTORY_FETCH_DOMAIN: &[u8] = b"meshspan.federation.storage-inventory-fetch.v1\0";
@@ -93,6 +95,35 @@ pub fn federation_branch_fetch_signing_payload(
     signing_payload(BRANCH_FETCH_DOMAIN, header, &unsigned)
 }
 
+/// Returns the exact bytes signed by a federated branch-page identity.
+#[must_use]
+pub fn federation_branch_page_signing_payload(
+    header: &FederationHeader,
+    page: &FederatedBranchPage,
+) -> Vec<u8> {
+    let mut unsigned = page.clone();
+    unsigned.signature.clear();
+    signing_payload(BRANCH_PAGE_DOMAIN, header, &unsigned)
+}
+
+/// Returns canonical domain-separated branch-page content for the embedded digest.
+#[must_use]
+pub fn federation_branch_page_digest_payload(page: &FederatedBranchPage) -> Vec<u8> {
+    let mut unsigned = page.clone();
+    unsigned.page_digest.clear();
+    unsigned.signature.clear();
+    let encoded = unsigned.encode_to_vec();
+    let mut payload = Vec::with_capacity(
+        BRANCH_PAGE_DIGEST_DOMAIN
+            .len()
+            .saturating_add(8)
+            .saturating_add(encoded.len()),
+    );
+    payload.extend_from_slice(BRANCH_PAGE_DIGEST_DOMAIN);
+    append_part(&mut payload, &encoded);
+    payload
+}
+
 /// Returns the exact bytes signed by a remote-storage capability requester.
 #[must_use]
 pub fn federation_storage_capability_request_signing_payload(
@@ -139,12 +170,13 @@ fn append_part(payload: &mut Vec<u8>, part: &[u8]) {
 #[cfg(test)]
 mod tests {
     use crate::v1::{
-        FederationAuthorityPage, FederationHeader, FederationHello, ProtocolVersion,
-        VersionedPayload,
+        FederatedBranchPage, FederationAuthorityPage, FederationHeader, FederationHello,
+        ProtocolVersion, VersionedPayload,
     };
 
     use super::{
         federation_authority_page_digest_payload, federation_authority_page_signing_payload,
+        federation_branch_page_digest_payload, federation_branch_page_signing_payload,
         federation_hello_signing_payload,
     };
 
@@ -235,5 +267,52 @@ mod tests {
             federation_authority_page_digest_payload(&page),
             digest_payload
         );
+    }
+
+    #[test]
+    fn branch_page_digest_and_signature_bind_every_page_field() {
+        let header = FederationHeader {
+            version: Some(ProtocolVersion { major: 1, minor: 0 }),
+            relationship_id: vec![1; 16],
+            sender_mesh_id: vec![2; 16],
+            recipient_mesh_id: vec![3; 16],
+            request_id: vec![4; 16],
+            operation_id: vec![5; 16],
+            authority_epoch: 1,
+            deadline_unix_micros: 10,
+            trace_id: vec![6; 16],
+            replay_nonce: vec![7; 32],
+        };
+        let mut page = FederatedBranchPage {
+            grant_id: vec![8; 16],
+            resource_scope: Some(VersionedPayload {
+                format_version: 1,
+                canonical_bytes: vec![9],
+            }),
+            branch_commits: vec![VersionedPayload {
+                format_version: 1,
+                canonical_bytes: vec![10],
+            }],
+            immutable_object_digests: vec![vec![11; 32]],
+            next_cursor: vec![12],
+            page_digest: vec![13; 32],
+            signature: vec![14; 64],
+        };
+        let digest = federation_branch_page_digest_payload(&page);
+        let signature = federation_branch_page_signing_payload(&header, &page);
+        page.signature = vec![15; 64];
+        assert_eq!(federation_branch_page_digest_payload(&page), digest);
+        assert_eq!(
+            federation_branch_page_signing_payload(&header, &page),
+            signature
+        );
+        page.page_digest = vec![16; 32];
+        assert_eq!(federation_branch_page_digest_payload(&page), digest);
+        assert_ne!(
+            federation_branch_page_signing_payload(&header, &page),
+            signature
+        );
+        page.immutable_object_digests[0][0] ^= 1;
+        assert_ne!(federation_branch_page_digest_payload(&page), digest);
     }
 }

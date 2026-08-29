@@ -28,7 +28,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 use super::identity::certificate_fingerprint;
 use super::{
-    AuthenticatedFederationHello, FederationAuthorityContext, FederationAuthorityPageExpectation,
+    AuthenticatedFederationHello, FederationAuthorityPageExpectation, FederationExchangeContext,
     FederationHelloConfig, FederationHelloContext, FederationHelloExpectation,
     FederationLocalIdentity, FederationLocalIdentityBinding, FederationNegotiationConfig,
     FederationPeerBinding, FederationPeerRegistry, FederationReplayGuard, FederationWelcomeNonces,
@@ -38,6 +38,8 @@ use super::{
     send_control, send_data_control, send_data_frame, send_federation, server_endpoint,
     signed_federation_authority_fetch, signed_federation_authority_page, signed_federation_hello,
 };
+
+mod federation_branch_page;
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
 
@@ -414,7 +416,7 @@ fn prove_signed_authority_fetch(
         signing_key,
         UnixMicros::new(1_500_000),
     )?;
-    let context = FederationAuthorityContext::new(
+    let context = FederationExchangeContext::new(
         version(1, 2),
         [41; 16],
         [42; 16],
@@ -619,7 +621,7 @@ struct AuthorityPageProof<'a> {
 async fn prove_federation_authority_page(
     proof: &mut AuthorityPageProof<'_>,
 ) -> Result<(), Box<dyn Error>> {
-    let request_context = FederationAuthorityContext::new(
+    let request_context = FederationExchangeContext::new(
         version(1, 2),
         [31; 16],
         [32; 16],
@@ -627,7 +629,7 @@ async fn prove_federation_authority_page(
         UnixMicros::new(2_000_000),
         [30; 32],
     )?;
-    let response_context = FederationAuthorityContext::new(
+    let response_context = FederationExchangeContext::new(
         request_context.version,
         request_context.request_id,
         request_context.operation_id,
@@ -705,6 +707,7 @@ async fn prove_federation_authority_page(
         ),
         Err(TransportError::UntrustedFederationPeer)
     ));
+    federation_branch_page::prove_federation_branch_page(proof).await?;
     Ok(())
 }
 
@@ -780,6 +783,13 @@ fn prove_hostile_federation_hellos(
     };
     let certificate = CertificateDer::from(hello.public_identity_chain.clone());
     prove_signed_authority_fetch(registry, connection, &certificate, signing_key, limits)?;
+    federation_branch_page::prove_signed_branch_fetch(
+        registry,
+        connection,
+        &certificate,
+        signing_key,
+        limits,
+    )?;
     Ok(())
 }
 
