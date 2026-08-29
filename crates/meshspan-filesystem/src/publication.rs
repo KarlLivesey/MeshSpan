@@ -5,7 +5,10 @@
 #[path = "namespace_publication.rs"]
 mod namespace;
 
-pub use namespace::{NamespaceHistoryCommitRecord, NamespaceHistoryRecordError};
+pub use namespace::{
+    NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
+    NamespaceHistoryRecordError,
+};
 
 use std::collections::BTreeSet;
 use std::fs;

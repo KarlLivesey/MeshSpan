@@ -169,6 +169,54 @@ fn history_commit_records_round_trip_and_reject_noncanonical_bytes()
     Ok(())
 }
 
+#[test]
+fn history_immutable_records_are_independent_content_addressed_bodies()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let source = fixture.open_home()?;
+    let bundle = source.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[fixture.home.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+    let records = bundle.immutable_records()?;
+    assert_eq!(records.len(), bundle.immutable_record_count());
+    let kinds = records
+        .iter()
+        .map(super::NamespaceHistoryImmutableRecord::kind)
+        .collect::<Vec<_>>();
+    for expected in [
+        super::NamespaceHistoryImmutableKind::DirectoryNode,
+        super::NamespaceHistoryImmutableKind::Manifest,
+        super::NamespaceHistoryImmutableKind::FileVersion,
+        super::NamespaceHistoryImmutableKind::ObjectRevision,
+    ] {
+        assert!(kinds.contains(&expected));
+    }
+    for record in &records {
+        let rebuilt = super::NamespaceHistoryImmutableRecord::from_expected_digest(
+            record.digest(),
+            record.canonical_bytes().to_vec(),
+        )?;
+        assert_eq!(&rebuilt, record);
+        let _decoded = record.decoded()?;
+        let mut substituted = record.canonical_bytes().to_vec();
+        substituted.push(0);
+        assert!(
+            super::NamespaceHistoryImmutableRecord::from_expected_digest(
+                record.digest(),
+                substituted,
+            )
+            .is_err()
+        );
+    }
+    let mut altered = records[0].canonical_bytes().to_vec();
+    altered[0] ^= 1;
+    assert!(super::NamespaceHistoryImmutableRecord::from_canonical_bytes(altered).is_err());
+    Ok(())
+}
+
 struct IsolatedHistoryFixture {
     home_directory: TempDir,
     office_directory: TempDir,
