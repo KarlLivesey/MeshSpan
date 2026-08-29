@@ -9,10 +9,69 @@ use meshspan_domain::{
 };
 use tempfile::tempdir;
 
+use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
     AuthoritativeRepository, EntityKind, FederationGrantState, FederationGrantTerminationKind,
     LogPosition, RepositoryError,
 };
+
+#[test]
+fn every_apply_boundary_rolls_back_complete_grant_replacement()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (repository, first_id, ids) = repository_with_active_grant(100)?;
+    let second_id = FederationGrantId::from_bytes([101; 16])?;
+    let command = AuthoritativeCommand::ReplaceFederationGrant(ReplaceFederationGrant {
+        predecessor_grant_id: first_id,
+        grant: grant(ids, second_id, storage_policy(40, false)?)?,
+        restrictions: restrictions(ids, 80, 40)?,
+        restricts_authority: true,
+        reason: "Atomic restriction replacement".to_owned(),
+    });
+    let mut database = repository.into_database();
+    for (offset, fault) in all_apply_faults().into_iter().enumerate() {
+        let seed = 104_u8.saturating_add(u8::try_from(offset)?);
+        assert!(matches!(
+            apply_committed_with_fault(
+                &mut database,
+                LogPosition { index: 5, term: 1 },
+                context(seed, ids.administrator, seed.saturating_add(4), 5, 4)?,
+                &command,
+                fault,
+            ),
+            Err(RepositoryError::InjectedFault)
+        ));
+        let retained: (i64, i64, i64, i64, i64) = database.connection().query_row(
+            "SELECT
+                (SELECT count(*) FROM federation_grants),
+                (SELECT state FROM federation_grants WHERE grant_id = ?1),
+                (SELECT count(*) FROM federation_grant_restrictions),
+                (SELECT count(*) FROM federation_grant_successions),
+                (SELECT count(*) FROM federation_grant_terminations)",
+            [first_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?;
+        assert_eq!(retained, (1, 1, 2, 0, 0));
+        assert_eq!(read_current_revision(&database)?, Revision::new(4));
+    }
+    Ok(())
+}
+
+const fn all_apply_faults() -> [ApplyFaultPoint; 4] {
+    [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterOperation,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ]
+}
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
     FederationGovernanceDirection, FederationGrantRestriction, FederationTrustIdentity,
