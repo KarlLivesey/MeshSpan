@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Real Quinn proof for metadata-reloaded federation session admission and revocation.
+//! Real Quinn proof for metadata-reloaded federation session admission, rotation and revocation.
 
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -17,8 +17,9 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     ApproveFederationRelationship, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
-    CommandContext, FederationGovernanceDirection, FederationTrustIdentity, LogPosition,
-    PartitionDatabase, ProposeFederationRelationship, RecordName, RevokeFederationRelationship,
+    CommandContext, FederationGovernanceDirection, FederationIdentityOwner,
+    FederationTrustIdentity, LogPosition, PartitionDatabase, ProposeFederationRelationship,
+    RecordName, RevokeFederationRelationship, RotateFederationTrustIdentity,
 };
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::ProtocolVersion;
@@ -38,7 +39,7 @@ const CERTIFICATE_NAME: &str = "meshspan.internal";
 const NOW: UnixMicros = UnixMicros::new(1_500_000);
 
 #[tokio::test]
-async fn current_metadata_authority_admits_then_revokes_a_real_federation_session()
+async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federation_session()
 -> Result<(), Box<dyn Error>> {
     let certificates = Certificates::new()?;
     let limits = transport_limits()?;
@@ -48,91 +49,238 @@ async fn current_metadata_authority_admits_then_revokes_a_real_federation_sessio
         roots(&certificates.authority)?,
         limits,
     )?;
-    let client = client_endpoint(
-        loopback(),
+    let initial_connections = ConnectionPair::establish(
+        &server,
         certificates.client_credentials()?,
         roots(&certificates.authority)?,
         limits,
-    )?;
-    let server_address = server.local_addr()?;
-    let incoming = async {
-        server
-            .accept()
-            .await
-            .ok_or(TransportError::InvalidConfiguration)?
-            .await
-            .map_err(TransportError::from)
-    };
-    let (client_connection, server_connection) =
-        tokio::try_join!(connect(&client, server_address, CERTIFICATE_NAME), incoming)?;
-
-    let relationship_id = FederationRelationshipId::from_bytes([1; 16])?;
-    let client_mesh = MeshId::from_bytes([2; 16])?;
-    let server_mesh = MeshId::from_bytes([3; 16])?;
+    )
+    .await?;
     let client_key = SigningKey::from_bytes(&[4; 32]);
     let server_key = SigningKey::from_bytes(&[5; 32]);
-    let client_authority = MetadataAuthority::active(
-        AuthorityIdentity {
-            seed: 20,
-            local_certificate: &certificates.client,
-            local_key: &client_key,
-            remote_certificate: &certificates.server,
-            remote_key: &server_key,
-        },
-        relationship_id,
-        client_mesh,
-        server_mesh,
-    )?;
-    let mut server_authority = MetadataAuthority::active(
-        AuthorityIdentity {
-            seed: 40,
-            local_certificate: &certificates.server,
-            local_key: &server_key,
-            remote_certificate: &certificates.client,
-            remote_key: &client_key,
-        },
-        relationship_id,
-        server_mesh,
-        client_mesh,
-    )?;
+    let mut authorities = MetadataAuthorities::active(&certificates, &client_key, &server_key)?;
     let client_runtime = runtime(&certificates.client, &client_key, limits.wire)?;
     let server_runtime = runtime(&certificates.server, &server_key, limits.wire)?;
+    let initial_runtimes = SessionRuntimes::new(&client_runtime, &server_runtime);
+    prove_admitted_session(&authorities.proof(
+        initial_runtimes,
+        &initial_connections,
+        SessionExpectation::new(6, 3, 1),
+    ))
+    .await?;
 
-    {
-        let proof = SessionProof {
-            client_runtime: &client_runtime,
-            server_runtime: &server_runtime,
-            client_connection: &client_connection,
-            server_connection: &server_connection,
-            client_authority: client_authority.repository(),
-            server_authority: server_authority.repository(),
-            relationship_id,
-            server_mesh,
-            client_mesh,
-        };
-        prove_admitted_session(&proof).await?;
-    }
-    server_authority.revoke(60)?;
-    {
-        let proof = SessionProof {
-            client_runtime: &client_runtime,
-            server_runtime: &server_runtime,
-            client_connection: &client_connection,
-            server_connection: &server_connection,
-            client_authority: client_authority.repository(),
-            server_authority: server_authority.repository(),
-            relationship_id,
-            server_mesh,
-            client_mesh,
-        };
-        prove_revoked_session_fails_closed(&proof).await?;
-    }
+    let rotated_client_key = SigningKey::from_bytes(&[10; 32]);
+    authorities.rotate_remote(50, &certificates.rotated_client, &rotated_client_key)?;
+    prove_retired_remote_identity_fails_closed(&authorities.proof(
+        initial_runtimes,
+        &initial_connections,
+        SessionExpectation::new(10, 4, 2),
+    ))
+    .await?;
+    authorities.rotate_local(55, &certificates.rotated_client, &rotated_client_key)?;
+    let rotated_client_runtime = runtime(
+        &certificates.rotated_client,
+        &rotated_client_key,
+        limits.wire,
+    )?;
+    let rotated_connections = ConnectionPair::establish(
+        &server,
+        certificates.rotated_client_credentials()?,
+        roots(&certificates.authority)?,
+        limits,
+    )
+    .await?;
+    let rotated_runtimes = SessionRuntimes::new(&rotated_client_runtime, &server_runtime);
+    prove_admitted_session(&authorities.proof(
+        rotated_runtimes,
+        &rotated_connections,
+        SessionExpectation::new(14, 4, 2),
+    ))
+    .await?;
+    authorities.revoke(60)?;
+    prove_revoked_session_fails_closed(&authorities.proof(
+        rotated_runtimes,
+        &rotated_connections,
+        SessionExpectation::new(18, 5, 2),
+    ))
+    .await?;
 
-    client_connection.close(0_u32.into(), b"proof complete");
-    server_connection.close(0_u32.into(), b"proof complete");
-    client.wait_idle().await;
+    initial_connections.close_and_wait().await;
+    rotated_connections.close_and_wait().await;
     server.wait_idle().await;
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct SessionRuntimes<'a> {
+    client: &'a FederationSessionRuntime<'a>,
+    server: &'a FederationSessionRuntime<'a>,
+}
+
+impl<'a> SessionRuntimes<'a> {
+    const fn new(
+        client: &'a FederationSessionRuntime<'a>,
+        server: &'a FederationSessionRuntime<'a>,
+    ) -> Self {
+        Self { client, server }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SessionExpectation {
+    seed: u8,
+    remote_authority_revision: u64,
+    remote_identity_generation: u64,
+}
+
+impl SessionExpectation {
+    const fn new(
+        seed: u8,
+        remote_authority_revision: u64,
+        remote_identity_generation: u64,
+    ) -> Self {
+        Self {
+            seed,
+            remote_authority_revision,
+            remote_identity_generation,
+        }
+    }
+}
+
+struct ConnectionPair {
+    client_endpoint: quinn::Endpoint,
+    client: quinn::Connection,
+    server: quinn::Connection,
+}
+
+impl ConnectionPair {
+    async fn establish(
+        server_endpoint: &quinn::Endpoint,
+        credentials: NodeCredentials,
+        roots: RootCertStore,
+        limits: TransportLimits,
+    ) -> Result<Self, Box<dyn Error>> {
+        let client_endpoint = client_endpoint(loopback(), credentials, roots, limits)?;
+        let server_address = server_endpoint.local_addr()?;
+        let incoming = async {
+            server_endpoint
+                .accept()
+                .await
+                .ok_or(TransportError::InvalidConfiguration)?
+                .await
+                .map_err(TransportError::from)
+        };
+        let (client, server) = tokio::try_join!(
+            connect(&client_endpoint, server_address, CERTIFICATE_NAME),
+            incoming
+        )?;
+        Ok(Self {
+            client_endpoint,
+            client,
+            server,
+        })
+    }
+
+    async fn close_and_wait(&self) {
+        self.client.close(0_u32.into(), b"proof complete");
+        self.server.close(0_u32.into(), b"proof complete");
+        self.client_endpoint.wait_idle().await;
+    }
+}
+
+struct MetadataAuthorities {
+    client: MetadataAuthority,
+    server: MetadataAuthority,
+    relationship_id: FederationRelationshipId,
+    client_mesh: MeshId,
+    server_mesh: MeshId,
+}
+
+impl MetadataAuthorities {
+    fn active(
+        certificates: &Certificates,
+        client_key: &SigningKey,
+        server_key: &SigningKey,
+    ) -> Result<Self, Box<dyn Error>> {
+        let relationship_id = FederationRelationshipId::from_bytes([1; 16])?;
+        let client_mesh = MeshId::from_bytes([2; 16])?;
+        let server_mesh = MeshId::from_bytes([3; 16])?;
+        let client = MetadataAuthority::active(
+            AuthorityIdentity {
+                seed: 20,
+                local_certificate: &certificates.client,
+                local_key: client_key,
+                remote_certificate: &certificates.server,
+                remote_key: server_key,
+            },
+            relationship_id,
+            client_mesh,
+            server_mesh,
+        )?;
+        let server = MetadataAuthority::active(
+            AuthorityIdentity {
+                seed: 40,
+                local_certificate: &certificates.server,
+                local_key: server_key,
+                remote_certificate: &certificates.client,
+                remote_key: client_key,
+            },
+            relationship_id,
+            server_mesh,
+            client_mesh,
+        )?;
+        Ok(Self {
+            client,
+            server,
+            relationship_id,
+            client_mesh,
+            server_mesh,
+        })
+    }
+
+    fn proof<'a>(
+        &'a self,
+        runtimes: SessionRuntimes<'a>,
+        connections: &'a ConnectionPair,
+        expectation: SessionExpectation,
+    ) -> SessionProof<'a> {
+        SessionProof {
+            client_runtime: runtimes.client,
+            server_runtime: runtimes.server,
+            client_connection: &connections.client,
+            server_connection: &connections.server,
+            client_authority: self.client.repository(),
+            server_authority: self.server.repository(),
+            relationship_id: self.relationship_id,
+            server_mesh: self.server_mesh,
+            client_mesh: self.client_mesh,
+            session_seed: expectation.seed,
+            expected_remote_authority_revision: expectation.remote_authority_revision,
+            expected_remote_identity_generation: expectation.remote_identity_generation,
+        }
+    }
+
+    fn rotate_local(
+        &mut self,
+        seed: u8,
+        certificate: &CertificateDer<'_>,
+        signing_key: &SigningKey,
+    ) -> Result<(), Box<dyn Error>> {
+        self.client.rotate_local(seed, certificate, signing_key)
+    }
+
+    fn rotate_remote(
+        &mut self,
+        seed: u8,
+        certificate: &CertificateDer<'_>,
+        signing_key: &SigningKey,
+    ) -> Result<(), Box<dyn Error>> {
+        self.server.rotate_remote(seed, certificate, signing_key)
+    }
+
+    fn revoke(&mut self, seed: u8) -> Result<(), Box<dyn Error>> {
+        self.server.revoke(seed)
+    }
 }
 
 struct SessionProof<'a> {
@@ -145,6 +293,9 @@ struct SessionProof<'a> {
     relationship_id: FederationRelationshipId,
     server_mesh: MeshId,
     client_mesh: MeshId,
+    session_seed: u8,
+    expected_remote_authority_revision: u64,
+    expected_remote_identity_generation: u64,
 }
 
 async fn prove_admitted_session(proof: &SessionProof<'_>) -> Result<(), Box<dyn Error>> {
@@ -153,22 +304,28 @@ async fn prove_admitted_session(proof: &SessionProof<'_>) -> Result<(), Box<dyn 
     let dial = proof.client_runtime.dial(
         proof.client_connection,
         proof.client_authority,
-        dial_request(proof.relationship_id, 6)?,
+        dial_request(proof.relationship_id, proof.session_seed)?,
         &mut client_replay,
     );
     let accept = proof.server_runtime.accept(
         proof.server_connection,
         proof.server_authority,
-        accept_request(7)?,
+        accept_request(proof.session_seed.saturating_add(1))?,
         &mut server_replay,
     );
     let (client_session, server_session) = tokio::try_join!(dial, accept)?;
     assert_eq!(client_session.relationship_id, proof.relationship_id);
     assert_eq!(client_session.remote_mesh_id, proof.server_mesh);
-    assert_eq!(client_session.remote_authority_revision, 3);
+    assert_eq!(
+        client_session.remote_authority_revision,
+        proof.expected_remote_authority_revision
+    );
     assert_eq!(server_session.relationship_id, proof.relationship_id);
     assert_eq!(server_session.remote_mesh_id, proof.client_mesh);
-    assert_eq!(server_session.remote_identity_generation, 1);
+    assert_eq!(
+        server_session.remote_identity_generation,
+        proof.expected_remote_identity_generation
+    );
     assert_eq!(
         client_session.version,
         ProtocolVersion { major: 1, minor: 1 }
@@ -177,13 +334,42 @@ async fn prove_admitted_session(proof: &SessionProof<'_>) -> Result<(), Box<dyn 
     Ok(())
 }
 
+async fn prove_retired_remote_identity_fails_closed(
+    proof: &SessionProof<'_>,
+) -> Result<(), Box<dyn Error>> {
+    let mut client_replay = replay_guard()?;
+    let mut server_replay = replay_guard()?;
+    let dial_request = dial_request(proof.relationship_id, proof.session_seed)?;
+    let accept_request = accept_request(proof.session_seed.saturating_add(1))?;
+    let attempts = async {
+        tokio::join!(
+            proof.client_runtime.dial(
+                proof.client_connection,
+                proof.client_authority,
+                dial_request,
+                &mut client_replay,
+            ),
+            proof.server_runtime.accept(
+                proof.server_connection,
+                proof.server_authority,
+                accept_request,
+                &mut server_replay,
+            )
+        )
+    };
+    let (dial, accept) = tokio::time::timeout(Duration::from_secs(2), attempts).await?;
+    assert!(dial.is_err());
+    assert!(matches!(accept, Err(FederationSessionError::Transport(_))));
+    Ok(())
+}
+
 async fn prove_revoked_session_fails_closed(
     proof: &SessionProof<'_>,
 ) -> Result<(), Box<dyn Error>> {
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
-    let dial_request = dial_request(proof.relationship_id, 8)?;
-    let accept_request = accept_request(9)?;
+    let dial_request = dial_request(proof.relationship_id, proof.session_seed)?;
+    let accept_request = accept_request(proof.session_seed.saturating_add(1))?;
     let attempts = async {
         tokio::join!(
             proof.client_runtime.dial(
@@ -260,13 +446,61 @@ impl MetadataAuthority {
     fn revoke(&mut self, seed: u8) -> Result<(), Box<dyn Error>> {
         apply(
             &mut self.repository,
-            4,
-            context(seed, self.administrator_id, 4, 3)?,
+            5,
+            context(seed, self.administrator_id, 5, 4)?,
             &AuthoritativeCommand::RevokeFederationRelationship(RevokeFederationRelationship {
                 relationship_id: self.relationship_id,
                 expected_authority_epoch: 1,
                 authority_epoch: 2,
                 reason: "Proof revocation".to_owned(),
+            }),
+        )
+    }
+
+    fn rotate_local(
+        &mut self,
+        seed: u8,
+        certificate: &CertificateDer<'_>,
+        signing_key: &SigningKey,
+    ) -> Result<(), Box<dyn Error>> {
+        self.rotate(
+            seed,
+            FederationIdentityOwner::Local,
+            certificate,
+            signing_key,
+        )
+    }
+
+    fn rotate_remote(
+        &mut self,
+        seed: u8,
+        certificate: &CertificateDer<'_>,
+        signing_key: &SigningKey,
+    ) -> Result<(), Box<dyn Error>> {
+        self.rotate(
+            seed,
+            FederationIdentityOwner::Remote,
+            certificate,
+            signing_key,
+        )
+    }
+
+    fn rotate(
+        &mut self,
+        seed: u8,
+        owner: FederationIdentityOwner,
+        certificate: &CertificateDer<'_>,
+        signing_key: &SigningKey,
+    ) -> Result<(), Box<dyn Error>> {
+        apply(
+            &mut self.repository,
+            4,
+            context(seed, self.administrator_id, 4, 3)?,
+            &AuthoritativeCommand::RotateFederationTrustIdentity(RotateFederationTrustIdentity {
+                relationship_id: self.relationship_id,
+                expected_authority_epoch: 1,
+                owner,
+                identity: trust_identity_with_generation(2, certificate, signing_key),
             }),
         )
     }
@@ -343,8 +577,16 @@ fn trust_identity(
     certificate: &CertificateDer<'_>,
     signing_key: &SigningKey,
 ) -> FederationTrustIdentity {
+    trust_identity_with_generation(1, certificate, signing_key)
+}
+
+fn trust_identity_with_generation(
+    generation: u64,
+    certificate: &CertificateDer<'_>,
+    signing_key: &SigningKey,
+) -> FederationTrustIdentity {
     FederationTrustIdentity {
-        generation: 1,
+        generation,
         certificate_fingerprint: meshspan_transport::certificate_fingerprint(certificate),
         verifying_key: signing_key.verifying_key().to_bytes(),
         valid_from: UnixMicros::new(1),
@@ -435,6 +677,8 @@ struct Certificates {
     server_key: Vec<u8>,
     client: CertificateDer<'static>,
     client_key: Vec<u8>,
+    rotated_client: CertificateDer<'static>,
+    rotated_client_key: Vec<u8>,
 }
 
 impl Certificates {
@@ -450,12 +694,15 @@ impl Certificates {
         let issuer = Issuer::new(parameters, authority_key);
         let (server, server_key) = leaf(&issuer)?;
         let (client, client_key) = leaf(&issuer)?;
+        let (rotated_client, rotated_client_key) = leaf(&issuer)?;
         Ok(Self {
             authority: authority_der,
             server,
             server_key,
             client,
             client_key,
+            rotated_client,
+            rotated_client_key,
         })
     }
 
@@ -465,6 +712,10 @@ impl Certificates {
 
     fn client_credentials(&self) -> Result<NodeCredentials, TransportError> {
         credentials(&self.client, &self.client_key)
+    }
+
+    fn rotated_client_credentials(&self) -> Result<NodeCredentials, TransportError> {
+        credentials(&self.rotated_client, &self.rotated_client_key)
     }
 }
 
