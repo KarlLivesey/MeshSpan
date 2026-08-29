@@ -3,7 +3,8 @@
 //! Exact conversions between generated private-wire records and provider contracts.
 
 use meshspan_contracts::{
-    ContractError, ContractVersion, RequestContext, ShardIdentity, ShardReceipt,
+    ContractError, ContractVersion, ReclamationReceipt, RemovalPermit, RequestContext,
+    ShardIdentity, ShardReceipt, TombstoneReceipt,
 };
 use meshspan_domain::{OperationId, Revision, UnixMicros};
 use meshspan_protocol::v1::{
@@ -11,7 +12,11 @@ use meshspan_protocol::v1::{
 };
 
 use crate::DataPlaneError;
-use crate::capability::{decode_shard_receipt, encode_shard_receipt};
+use crate::capability::{
+    decode_reclamation_receipt, decode_removal_permit, decode_shard_receipt,
+    decode_tombstone_receipt, encode_reclamation_receipt, encode_removal_permit,
+    encode_shard_receipt, encode_tombstone_receipt,
+};
 
 pub(crate) const RECEIPT_FORMAT_VERSION: u32 = 1;
 const DIAGNOSTIC_PROVIDER_REJECTION: u32 = 1;
@@ -19,6 +24,19 @@ const DIAGNOSTIC_PROVIDER_REJECTION: u32 = 1;
 pub(crate) fn request_context(
     header: &RequestHeader,
     revision: Revision,
+) -> Result<RequestContext, DataPlaneError> {
+    request_context_with_revision(header, Some(revision))
+}
+
+pub(crate) fn request_context_without_revision(
+    header: &RequestHeader,
+) -> Result<RequestContext, DataPlaneError> {
+    request_context_with_revision(header, None)
+}
+
+fn request_context_with_revision(
+    header: &RequestHeader,
+    expected_revision: Option<Revision>,
 ) -> Result<RequestContext, DataPlaneError> {
     let version = header
         .version
@@ -37,7 +55,7 @@ pub(crate) fn request_context(
         operation_id: OperationId::from_bytes(operation_bytes)
             .map_err(|_| DataPlaneError::InvalidMessage)?,
         deadline: UnixMicros::new(header.deadline_unix_micros),
-        expected_revision: Some(revision),
+        expected_revision,
     })
 }
 
@@ -134,6 +152,59 @@ pub(crate) fn receipt(value: Option<&VersionedPayload>) -> Result<ShardReceipt, 
         return Err(DataPlaneError::InvalidMessage);
     }
     decode_shard_receipt(&value.canonical_bytes).map_err(Into::into)
+}
+
+pub(crate) fn removal_permit_payload(permit: RemovalPermit) -> VersionedPayload {
+    VersionedPayload {
+        format_version: RECEIPT_FORMAT_VERSION,
+        canonical_bytes: encode_removal_permit(permit),
+    }
+}
+
+pub(crate) fn removal_permit(
+    value: Option<&VersionedPayload>,
+) -> Result<RemovalPermit, DataPlaneError> {
+    let value = versioned_payload(value)?;
+    decode_removal_permit(&value.canonical_bytes).map_err(Into::into)
+}
+
+pub(crate) fn tombstone_receipt_payload(receipt: TombstoneReceipt) -> VersionedPayload {
+    VersionedPayload {
+        format_version: RECEIPT_FORMAT_VERSION,
+        canonical_bytes: encode_tombstone_receipt(receipt),
+    }
+}
+
+pub(crate) fn tombstone_receipt(
+    value: Option<&VersionedPayload>,
+) -> Result<TombstoneReceipt, DataPlaneError> {
+    let value = versioned_payload(value)?;
+    decode_tombstone_receipt(&value.canonical_bytes).map_err(Into::into)
+}
+
+pub(crate) fn reclamation_receipt_payload(receipt: ReclamationReceipt) -> VersionedPayload {
+    VersionedPayload {
+        format_version: RECEIPT_FORMAT_VERSION,
+        canonical_bytes: encode_reclamation_receipt(receipt),
+    }
+}
+
+pub(crate) fn reclamation_receipt(
+    value: Option<&VersionedPayload>,
+) -> Result<ReclamationReceipt, DataPlaneError> {
+    let value = versioned_payload(value)?;
+    decode_reclamation_receipt(&value.canonical_bytes).map_err(Into::into)
+}
+
+fn versioned_payload(
+    value: Option<&VersionedPayload>,
+) -> Result<&VersionedPayload, DataPlaneError> {
+    let value = value.ok_or(DataPlaneError::InvalidMessage)?;
+    if value.format_version == RECEIPT_FORMAT_VERSION {
+        Ok(value)
+    } else {
+        Err(DataPlaneError::InvalidMessage)
+    }
 }
 
 const fn error_code(error: ContractError) -> ErrorCode {

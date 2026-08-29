@@ -2,8 +2,11 @@
 
 //! Canonical fixed-width encodings for opaque private-wire storage capabilities.
 
-use meshspan_contracts::{ReservationClass, ShardIdentity, ShardReadPermit, ShardWritePermit};
-use meshspan_contracts::{ShardReceipt, StorageReservation};
+use meshspan_contracts::{
+    ReclamationReceipt, RemovalPermit, ReservationClass, ShardIdentity, ShardReadPermit,
+    ShardReceipt, ShardWritePermit, StorageReservation, TombstoneReceipt,
+    reclamation_receipt_digest,
+};
 use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 use thiserror::Error;
 
@@ -11,6 +14,9 @@ const WRITE_PERMIT_BYTES: usize = 159;
 const READ_PERMIT_BYTES: usize = 150;
 const RESERVATION_BYTES: usize = 89;
 const SHARD_RECEIPT_BYTES: usize = 126;
+const REMOVAL_PERMIT_BYTES: usize = 158;
+const TOMBSTONE_RECEIPT_BYTES: usize = 150;
+const RECLAMATION_RECEIPT_BYTES: usize = 198;
 
 /// Stable rejection for malformed or non-canonical capability bytes.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -133,6 +139,142 @@ pub fn decode_read_permit(bytes: &[u8]) -> Result<ShardReadPermit, CapabilityCod
         expires_at,
         permit_digest,
     })
+}
+
+/// Encodes one exact removal capability without a self-describing representation.
+#[must_use]
+pub fn encode_removal_permit(permit: RemovalPermit) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(REMOVAL_PERMIT_BYTES);
+    push_common(
+        &mut bytes,
+        permit.operation_id,
+        permit.mesh_id,
+        permit.target_id,
+    );
+    bytes.extend_from_slice(&permit.target_generation.to_be_bytes());
+    push_shard(&mut bytes, permit.shard);
+    bytes.extend_from_slice(&permit.authority_epoch.to_be_bytes());
+    bytes.extend_from_slice(&permit.catalogue_revision.get().to_be_bytes());
+    bytes.extend_from_slice(&permit.expires_at.get().to_be_bytes());
+    bytes.extend_from_slice(&permit.permit_digest);
+    bytes
+}
+
+/// Decodes one exact canonical removal capability.
+///
+/// # Errors
+///
+/// Rejects every truncated, excessive or zero-sentinel encoding.
+pub fn decode_removal_permit(bytes: &[u8]) -> Result<RemovalPermit, CapabilityCodecError> {
+    if bytes.len() != REMOVAL_PERMIT_BYTES {
+        return Err(CapabilityCodecError::Invalid);
+    }
+    let mut reader = Reader::new(bytes);
+    let (operation_id, mesh_id, target_id) = read_common(&mut reader)?;
+    let target_generation = reader.u64()?;
+    let shard = reader.shard()?;
+    let authority_epoch = reader.u64()?;
+    let catalogue_revision = Revision::new(reader.u64()?);
+    let expires_at = UnixMicros::new(reader.i64()?);
+    let permit_digest = reader.array()?;
+    reader.finish()?;
+    if target_generation == 0
+        || authority_epoch == 0
+        || catalogue_revision == Revision::ZERO
+        || expires_at.get() <= 0
+        || permit_digest == [0; 32]
+    {
+        return Err(CapabilityCodecError::Invalid);
+    }
+    Ok(RemovalPermit {
+        operation_id,
+        mesh_id,
+        target_id,
+        shard,
+        target_generation,
+        authority_epoch,
+        catalogue_revision,
+        expires_at,
+        permit_digest,
+    })
+}
+
+pub(crate) fn encode_tombstone_receipt(receipt: TombstoneReceipt) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(TOMBSTONE_RECEIPT_BYTES);
+    bytes.extend_from_slice(&receipt.operation_id.as_bytes());
+    push_shard(&mut bytes, receipt.shard);
+    bytes.extend_from_slice(&receipt.target_id.as_bytes());
+    bytes.extend_from_slice(&receipt.target_generation.to_be_bytes());
+    bytes.extend_from_slice(&receipt.permit_digest);
+    bytes.extend_from_slice(&receipt.tombstone_digest);
+    bytes
+}
+
+pub(crate) fn decode_tombstone_receipt(
+    bytes: &[u8],
+) -> Result<TombstoneReceipt, CapabilityCodecError> {
+    if bytes.len() != TOMBSTONE_RECEIPT_BYTES {
+        return Err(CapabilityCodecError::Invalid);
+    }
+    let mut reader = Reader::new(bytes);
+    let receipt = TombstoneReceipt {
+        operation_id: OperationId::from_bytes(reader.array()?)
+            .map_err(|_| CapabilityCodecError::Invalid)?,
+        shard: reader.shard()?,
+        target_id: TargetId::from_bytes(reader.array()?)
+            .map_err(|_| CapabilityCodecError::Invalid)?,
+        target_generation: reader.u64()?,
+        permit_digest: reader.array()?,
+        tombstone_digest: reader.array()?,
+    };
+    reader.finish()?;
+    if receipt.target_generation == 0
+        || receipt.permit_digest == [0; 32]
+        || receipt.tombstone_digest == [0; 32]
+    {
+        Err(CapabilityCodecError::Invalid)
+    } else {
+        Ok(receipt)
+    }
+}
+
+pub(crate) fn encode_reclamation_receipt(receipt: ReclamationReceipt) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(RECLAMATION_RECEIPT_BYTES);
+    bytes.extend_from_slice(&encode_tombstone_receipt(receipt.tombstone));
+    bytes.extend_from_slice(&receipt.bytes_unlinked_at.get().to_be_bytes());
+    bytes.extend_from_slice(&receipt.reclaimed_bytes.to_be_bytes());
+    bytes.extend_from_slice(&receipt.reclamation_digest);
+    bytes
+}
+
+pub(crate) fn decode_reclamation_receipt(
+    bytes: &[u8],
+) -> Result<ReclamationReceipt, CapabilityCodecError> {
+    if bytes.len() != RECLAMATION_RECEIPT_BYTES {
+        return Err(CapabilityCodecError::Invalid);
+    }
+    let tombstone = decode_tombstone_receipt(&bytes[..TOMBSTONE_RECEIPT_BYTES])?;
+    let mut reader = Reader::new(&bytes[TOMBSTONE_RECEIPT_BYTES..]);
+    let receipt = ReclamationReceipt {
+        tombstone,
+        bytes_unlinked_at: UnixMicros::new(reader.i64()?),
+        reclaimed_bytes: reader.u64()?,
+        reclamation_digest: reader.array()?,
+    };
+    reader.finish()?;
+    if receipt.bytes_unlinked_at.get() <= 0
+        || receipt.reclaimed_bytes == 0
+        || receipt.reclamation_digest
+            != reclamation_receipt_digest(
+                tombstone,
+                receipt.bytes_unlinked_at,
+                receipt.reclaimed_bytes,
+            )
+    {
+        Err(CapabilityCodecError::Invalid)
+    } else {
+        Ok(receipt)
+    }
 }
 
 pub(crate) fn encode_reservation(reservation: StorageReservation) -> Vec<u8> {
@@ -292,10 +434,18 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
-    use meshspan_contracts::{ReservationClass, ShardIdentity, ShardReadPermit, ShardWritePermit};
+    use meshspan_contracts::{
+        ReclamationReceipt, RemovalPermit, ReservationClass, ShardIdentity, ShardReadPermit,
+        ShardWritePermit, TombstoneReceipt, reclamation_receipt_digest, tombstone_receipt_digest,
+    };
     use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 
-    use super::{decode_read_permit, decode_write_permit, encode_read_permit, encode_write_permit};
+    use super::{
+        decode_read_permit, decode_reclamation_receipt, decode_removal_permit,
+        decode_tombstone_receipt, decode_write_permit, encode_read_permit,
+        encode_reclamation_receipt, encode_removal_permit, encode_tombstone_receipt,
+        encode_write_permit,
+    };
 
     #[test]
     fn permit_encodings_round_trip_and_reject_non_exact_bytes()
@@ -323,6 +473,73 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn removal_lifecycle_encodings_are_exact_and_self_checking()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let permit = removal_permit()?;
+        let tombstone = TombstoneReceipt {
+            operation_id: permit.operation_id,
+            shard: permit.shard,
+            target_id: permit.target_id,
+            target_generation: permit.target_generation,
+            permit_digest: permit.permit_digest,
+            tombstone_digest: tombstone_receipt_digest(permit),
+        };
+        let mut reclamation = ReclamationReceipt {
+            tombstone,
+            bytes_unlinked_at: UnixMicros::new(12),
+            reclaimed_bytes: 13,
+            reclamation_digest: [0; 32],
+        };
+        reclamation.reclamation_digest = reclamation_receipt_digest(
+            tombstone,
+            reclamation.bytes_unlinked_at,
+            reclamation.reclaimed_bytes,
+        );
+
+        assert_eq!(
+            decode_removal_permit(&encode_removal_permit(permit))?,
+            permit
+        );
+        assert_eq!(
+            decode_tombstone_receipt(&encode_tombstone_receipt(tombstone))?,
+            tombstone
+        );
+        assert_eq!(
+            decode_reclamation_receipt(&encode_reclamation_receipt(reclamation))?,
+            reclamation
+        );
+        reject_every_non_exact_length(encode_removal_permit(permit), decode_removal_permit);
+        reject_every_non_exact_length(
+            encode_tombstone_receipt(tombstone),
+            decode_tombstone_receipt,
+        );
+        reject_every_non_exact_length(
+            encode_reclamation_receipt(reclamation),
+            decode_reclamation_receipt,
+        );
+        let mut forged = encode_reclamation_receipt(reclamation);
+        let last = forged.len() - 1;
+        forged[last] ^= 1;
+        assert!(decode_reclamation_receipt(&forged).is_err());
+        Ok(())
+    }
+
+    fn reject_every_non_exact_length<T>(
+        bytes: Vec<u8>,
+        decode: fn(&[u8]) -> Result<T, super::CapabilityCodecError>,
+    ) {
+        for length in 0..bytes.len() {
+            assert!(
+                decode(&bytes[..length]).is_err(),
+                "accepted length {length}"
+            );
+        }
+        let mut excessive = bytes;
+        excessive.push(0);
+        assert!(decode(&excessive).is_err());
+    }
+
     fn read_permit() -> Result<ShardReadPermit, Box<dyn std::error::Error>> {
         Ok(ShardReadPermit {
             operation_id: OperationId::from_bytes([1; 16])?,
@@ -338,6 +555,21 @@ mod tests {
             authorization_revision: Revision::new(9),
             expires_at: UnixMicros::new(10),
             permit_digest: [11; 32],
+        })
+    }
+
+    fn removal_permit() -> Result<RemovalPermit, Box<dyn std::error::Error>> {
+        let read = read_permit()?;
+        Ok(RemovalPermit {
+            operation_id: read.operation_id,
+            mesh_id: read.mesh_id,
+            target_id: read.target_id,
+            shard: read.shard,
+            target_generation: read.target_generation,
+            authority_epoch: 9,
+            catalogue_revision: Revision::new(10),
+            expires_at: UnixMicros::new(11),
+            permit_digest: [12; 32],
         })
     }
 }

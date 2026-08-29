@@ -7,10 +7,12 @@ use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use meshspan_contracts::{
-    BoundedBytes, ReservationClass, ShardIdentity, ShardReadPermit, ShardWritePermit,
-    StoragePermitMacKey, read_permit_mac, write_permit_mac,
+    BoundedBytes, RemovalPermit, ReservationClass, ShardIdentity, ShardReadPermit,
+    ShardWritePermit, StoragePermitMacKey, read_permit_mac, removal_permit_mac, write_permit_mac,
 };
-use meshspan_data_plane::{DataPlaneError, RemoteShardService, get_shard, put_shard};
+use meshspan_data_plane::{
+    DataPlaneError, RemoteShardService, get_shard, put_shard, reclaim_shard, tombstone_shard,
+};
 use meshspan_domain::{
     EntropyError, MeshId, NodeId, OperationId, PartitionId, RandomSource, Revision, TargetId,
     UnixMicros,
@@ -46,7 +48,7 @@ impl RandomSource for FixedRandom {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_mtls_stream_puts_and_gets_verified_folder_bytes() -> Result<(), Box<dyn Error>> {
+async fn real_mtls_stream_proves_exact_remote_shard_lifecycle() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     let limits = wire_limits()?;
     let transport_limits = TransportLimits::new(limits, 32, 64 * 1_024, 1024 * 1_024)?;
@@ -88,58 +90,159 @@ async fn real_mtls_stream_puts_and_gets_verified_folder_bytes() -> Result<(), Bo
     )?;
 
     let mut service = fixture.service()?;
-    let payload = BoundedBytes::copy_from(b"one shard over several bounded frames", 1_024)?;
-    let write = fixture.write_permit(payload.len())?;
-    let read = fixture.read_permit()?;
-    let server_task = async {
-        for _ in 0..3 {
-            let stream = accept_stream(&server_connection).await?;
-            service
-                .serve_stream(stream, limits, UnixMicros::new(20))
-                .await?;
-        }
-        Ok::<_, Box<dyn Error>>(())
-    };
-    let client_task = async {
-        let mut forged = write;
-        forged.permit_digest[0] ^= 1;
-        assert!(matches!(
-            put_shard(
-                &client_connection,
-                request_header(fixture.mesh, client_node, forged.operation_id)?,
-                forged,
-                &payload,
-                limits,
-            )
-            .await,
-            Err(DataPlaneError::Remote(ErrorCode::Unauthorised))
-        ));
-        let receipt = put_shard(
-            &client_connection,
-            request_header(fixture.mesh, client_node, write.operation_id)?,
-            write,
-            &payload,
-            limits,
-        )
-        .await?;
-        let expected_digest: [u8; 32] = blake3::hash(payload.as_slice()).into();
-        assert_eq!(receipt.digest, expected_digest);
-        let returned = get_shard(
-            &client_connection,
-            request_header(fixture.mesh, client_node, read.operation_id)?,
-            read,
-            1_024,
-            limits,
-        )
-        .await?;
-        assert_eq!(returned.as_slice(), payload.as_slice());
-        Ok::<_, Box<dyn Error>>(())
-    };
-    tokio::try_join!(server_task, client_task)?;
+    tokio::try_join!(
+        serve_lifecycle(&server_connection, &mut service, limits),
+        prove_client_lifecycle(&client_connection, &fixture, client_node, limits),
+    )?;
     client_connection.close(0_u32.into(), b"test complete");
     server_connection.close(0_u32.into(), b"test complete");
     client.wait_idle().await;
     server.wait_idle().await;
+    Ok(())
+}
+
+async fn serve_lifecycle(
+    connection: &quinn::Connection,
+    service: &mut RemoteShardService<FolderShardStore>,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    for index in 0..8 {
+        let stream = accept_stream(connection).await?;
+        service
+            .serve_stream(stream, limits, UnixMicros::new(20 + index))
+            .await?;
+    }
+    Ok(())
+}
+
+async fn prove_client_lifecycle(
+    connection: &quinn::Connection,
+    fixture: &Fixture,
+    client_node: NodeId,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    let payload = BoundedBytes::copy_from(b"one shard over several bounded frames", 1_024)?;
+    let write = fixture.write_permit(payload.len())?;
+    let read = fixture.read_permit()?;
+    let removal = fixture.removal_permit()?;
+    reject_forged_write(connection, fixture, client_node, write, &payload, limits).await?;
+    prove_put_and_get(
+        connection,
+        fixture,
+        client_node,
+        write,
+        read,
+        &payload,
+        limits,
+    )
+    .await?;
+    reject_forged_removal(connection, fixture, client_node, removal, limits).await?;
+    let tombstone = tombstone_shard(
+        connection,
+        request_header(fixture.mesh, client_node, removal.operation_id)?,
+        removal,
+        limits,
+    )
+    .await?;
+    let replayed_tombstone = tombstone_shard(
+        connection,
+        request_header(fixture.mesh, client_node, removal.operation_id)?,
+        removal,
+        limits,
+    )
+    .await?;
+    assert_eq!(replayed_tombstone, tombstone);
+    let reclamation = reclaim_shard(
+        connection,
+        request_header(fixture.mesh, client_node, tombstone.operation_id)?,
+        tombstone,
+        limits,
+    )
+    .await?;
+    let replayed_reclamation = reclaim_shard(
+        connection,
+        request_header(fixture.mesh, client_node, tombstone.operation_id)?,
+        tombstone,
+        limits,
+    )
+    .await?;
+    assert_eq!(replayed_reclamation, reclamation);
+    assert_eq!(reclamation.reclaimed_bytes, payload.len() as u64);
+    Ok(())
+}
+
+async fn reject_forged_write(
+    connection: &quinn::Connection,
+    fixture: &Fixture,
+    client_node: NodeId,
+    mut forged: ShardWritePermit,
+    payload: &BoundedBytes,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    forged.permit_digest[0] ^= 1;
+    assert!(matches!(
+        put_shard(
+            connection,
+            request_header(fixture.mesh, client_node, forged.operation_id)?,
+            forged,
+            payload,
+            limits,
+        )
+        .await,
+        Err(DataPlaneError::Remote(ErrorCode::Unauthorised))
+    ));
+    Ok(())
+}
+
+async fn prove_put_and_get(
+    connection: &quinn::Connection,
+    fixture: &Fixture,
+    client_node: NodeId,
+    write: ShardWritePermit,
+    read: ShardReadPermit,
+    payload: &BoundedBytes,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    let receipt = put_shard(
+        connection,
+        request_header(fixture.mesh, client_node, write.operation_id)?,
+        write,
+        payload,
+        limits,
+    )
+    .await?;
+    let expected_digest: [u8; 32] = blake3::hash(payload.as_slice()).into();
+    assert_eq!(receipt.digest, expected_digest);
+    let returned = get_shard(
+        connection,
+        request_header(fixture.mesh, client_node, read.operation_id)?,
+        read,
+        1_024,
+        limits,
+    )
+    .await?;
+    assert_eq!(returned.as_slice(), payload.as_slice());
+    Ok(())
+}
+
+async fn reject_forged_removal(
+    connection: &quinn::Connection,
+    fixture: &Fixture,
+    client_node: NodeId,
+    mut forged: RemovalPermit,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    forged.permit_digest[0] ^= 1;
+    assert!(matches!(
+        tombstone_shard(
+            connection,
+            request_header(fixture.mesh, client_node, forged.operation_id)?,
+            forged,
+            limits,
+        )
+        .await,
+        Err(DataPlaneError::Remote(ErrorCode::Unauthorised))
+    ));
     Ok(())
 }
 
@@ -239,6 +342,23 @@ impl Fixture {
             permit_digest: [0; 32],
         };
         permit.permit_digest = read_permit_mac(&key, permit);
+        Ok(permit)
+    }
+
+    fn removal_permit(&self) -> Result<RemovalPermit, Box<dyn Error>> {
+        let key = StoragePermitMacKey::from_bytes(PERMIT_KEY)?;
+        let mut permit = RemovalPermit {
+            operation_id: OperationId::from_bytes([3; 16])?,
+            mesh_id: self.mesh,
+            target_id: self.target,
+            shard: self.shard,
+            target_generation: 3,
+            authority_epoch: 1,
+            catalogue_revision: Revision::new(1),
+            expires_at: UnixMicros::new(1_000),
+            permit_digest: [0; 32],
+        };
+        permit.permit_digest = removal_permit_mac(&key, permit);
         Ok(permit)
     }
 }

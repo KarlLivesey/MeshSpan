@@ -83,6 +83,8 @@ fn message_route(message: &Message) -> Result<(TargetId, u64), DataPlaneError> {
     let (bytes, generation) = match message {
         Message::PutShardBegin(value) => (&value.target_id, value.target_generation),
         Message::GetShardRequest(value) => (&value.target_id, value.target_generation),
+        Message::DeleteShardRequest(value) => (&value.target_id, value.target_generation),
+        Message::ReclaimShardRequest(value) => (&value.target_id, value.target_generation),
         _ => return Err(DataPlaneError::InvalidMessage),
     };
     if generation == 0 {

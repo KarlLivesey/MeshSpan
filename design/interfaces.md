@@ -224,6 +224,13 @@ calling a provider. It converts provider receipts/errors to protocol records but
 does not invent receipts, retry mutations under a new operation ID or interpret
 namespace permissions.
 
+Put, get, tombstone and reclamation each use a distinct bounded data stream.
+Tombstone accepts only a canonical current removal permit; physical reclamation
+accepts only the exact earlier durable tombstone receipt. Both client and server
+independently bind operation, mesh, target generation and shard identity, and
+the client rejects a durable response whose canonical receipt digest does not
+recompute.
+
 ## Coding scheme
 
 **Owns:** deterministic streaming transform and reconstruction.
