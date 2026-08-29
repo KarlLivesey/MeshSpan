@@ -40,6 +40,8 @@ pub enum AuthoritativeCommand {
     CreateUser(CreateUser),
     /// Creates one group principal.
     CreateGroup(CreateGroup),
+    /// Changes one user or group between active, suspended and terminal retirement states.
+    ChangePrincipalState(ChangePrincipalState),
     /// Adds one direct user/group membership and rebuilds exact closure rows.
     AddGroupMember(AddGroupMember),
     /// Removes one exact direct membership while retaining audit evidence.
@@ -155,6 +157,7 @@ impl AuthoritativeCommand {
             Self::BootstrapMesh(value) => value.update_digest(digest),
             Self::CreateUser(value) => value.update_digest(digest),
             Self::CreateGroup(value) => value.update_digest(digest),
+            Self::ChangePrincipalState(value) => value.update_digest(digest),
             Self::AddGroupMember(value) => value.update_digest(digest),
             Self::RemoveGroupMember(value) => value.update_digest(digest),
             Self::CreateActivationPolicy(value) => value.update_digest(digest),
@@ -249,6 +252,30 @@ pub struct CreateGroup {
     pub name: RecordName,
     /// Optional policy required before membership contributes rights.
     pub activation_policy_id: Option<ActivationPolicyId>,
+}
+
+/// Closed administrator-controlled principal lifecycle states.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrincipalLifecycleState {
+    /// Principal may authenticate and contribute authority.
+    Active,
+    /// Principal is reversibly disabled without deleting history.
+    Suspended,
+    /// Principal is terminally disabled and cannot be reactivated.
+    Retired,
+}
+
+/// One audited principal transition plus any required atomic owner replacements.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChangePrincipalState {
+    /// Existing user or group principal.
+    pub principal_id: PrincipalId,
+    /// Exact desired lifecycle state.
+    pub state: PrincipalLifecycleState,
+    /// Non-blank bounded human audit reason.
+    pub reason: String,
+    /// Exact owner replacements required to avoid leaving a current object ownerless.
+    pub owner_transfers: BoundedItems<ReplaceObjectOwners>,
 }
 
 /// One direct containing-group membership edge.
@@ -1218,6 +1245,23 @@ digest_simple_record!(AddGroupMember, b"add-group-member", |value, digest| {
     digest.optional_instant(value.valid_until);
     digest.boolean(value.activation_required);
 });
+digest_simple_record!(
+    ChangePrincipalState,
+    b"change-principal-state",
+    |value, digest| {
+        digest.identifier(value.principal_id.as_bytes());
+        digest.byte(match value.state {
+            PrincipalLifecycleState::Active => 1,
+            PrincipalLifecycleState::Suspended => 2,
+            PrincipalLifecycleState::Retired => 3,
+        });
+        digest.bytes(value.reason.as_bytes());
+        digest.unsigned(u64::try_from(value.owner_transfers.len()).unwrap_or(u64::MAX));
+        for transfer in value.owner_transfers.as_slice() {
+            transfer.update_digest(digest);
+        }
+    }
+);
 digest_simple_record!(
     RemoveGroupMember,
     b"remove-group-member",

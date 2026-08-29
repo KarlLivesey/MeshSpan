@@ -146,6 +146,39 @@ pub(super) fn replace_object_owners(
     command: &ReplaceObjectOwners,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
+    replace_object_owner_sets(
+        transaction,
+        context,
+        std::slice::from_ref(command),
+        revision,
+    )?;
+    Ok(EntityReference {
+        kind: EntityKind::NamespaceObject,
+        id: command.object_id.as_bytes(),
+    })
+}
+
+pub(super) fn replace_object_owner_sets(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    commands: &[ReplaceObjectOwners],
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    for command in commands {
+        persist_owner_replacement(transaction, context, command, revision)?;
+    }
+    if !commands.is_empty() {
+        update_namespace_revision(transaction, revision)?;
+    }
+    Ok(())
+}
+
+fn persist_owner_replacement(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &ReplaceObjectOwners,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
     let object = command.object_id.as_bytes();
     let exists: i64 = transaction.query_row(
         "SELECT EXISTS(
@@ -177,11 +210,7 @@ pub(super) fn replace_object_owners(
     if updated != 1 {
         return Err(RepositoryError::CorruptState);
     }
-    update_namespace_revision(transaction, revision)?;
-    Ok(EntityReference {
-        kind: EntityKind::NamespaceObject,
-        id: object,
-    })
+    Ok(())
 }
 
 pub(super) fn set_grant_inheritance(

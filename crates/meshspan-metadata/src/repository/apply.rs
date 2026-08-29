@@ -424,6 +424,7 @@ fn is_identity_command(command: &AuthoritativeCommand) -> bool {
         command,
         AuthoritativeCommand::CreateUser(_)
             | AuthoritativeCommand::CreateGroup(_)
+            | AuthoritativeCommand::ChangePrincipalState(_)
             | AuthoritativeCommand::AddGroupMember(_)
             | AuthoritativeCommand::RemoveGroupMember(_)
             | AuthoritativeCommand::CreateActivationPolicy(_)
@@ -449,6 +450,9 @@ fn execute_identity_command(
         }
         AuthoritativeCommand::CreateGroup(value) => {
             identity::create_group(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ChangePrincipalState(value) => {
+            identity::change_principal_state(transaction, context, value, revision)
         }
         AuthoritativeCommand::AddGroupMember(value) => {
             identity::add_group_member(transaction, context, *value, revision)
@@ -767,6 +771,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RemoveGroupMember(_) => 48,
         AuthoritativeCommand::RevokePermissionGrant(_) => 49,
         AuthoritativeCommand::RevokeAccessActivation(_) => 50,
+        AuthoritativeCommand::ChangePrincipalState(_) => 51,
     }
 }
 

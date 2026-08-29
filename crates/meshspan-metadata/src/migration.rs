@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 26;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 27;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 1;
 
-const PARTITION_MIGRATIONS: [Migration; 26] = [
+const PARTITION_MIGRATIONS: [Migration; 27] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -115,8 +115,12 @@ const PARTITION_MIGRATIONS: [Migration; 26] = [
         sql: include_str!("../schema/partition/025_namespace_inheritance_boundaries.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 26,
         sql: include_str!("../schema/partition/026_access_revocation_evidence.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/027_principal_lifecycle.sql"),
     },
 ];
 
@@ -172,6 +176,18 @@ pub(crate) fn migrate_local(
     applied_at: i64,
 ) -> Result<(), MetadataStoreError> {
     apply_migrations(connection, &LOCAL_MIGRATIONS, applied_at)
+}
+
+#[cfg(test)]
+pub(crate) fn migrate_partition_through(
+    connection: &mut Connection,
+    version: usize,
+    applied_at: i64,
+) -> Result<(), MetadataStoreError> {
+    let migrations = PARTITION_MIGRATIONS
+        .get(..version)
+        .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
+    apply_migrations(connection, migrations, applied_at)
 }
 
 fn apply_migrations(
@@ -419,6 +435,11 @@ pub(crate) fn partition_namespace_inheritance_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn partition_access_revocation_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[25].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_principal_lifecycle_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[26].sql)
 }
 
 #[cfg(test)]

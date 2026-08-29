@@ -20,6 +20,8 @@ pub enum InvariantKind {
     IncompleteOperationResult,
     /// A direct group edge is absent from the materialised closure.
     MissingDirectGroupClosure,
+    /// A principal's current state disagrees with its append-only lifecycle ledger.
+    InvalidPrincipalLifecycle,
     /// The authoritative partition has no active voter record.
     PartitionWithoutActiveVoter,
 }
@@ -95,6 +97,23 @@ pub(super) fn check_invariants(
         limit.get(),
     )?;
     collect_volume_head_findings(database, sql_limit, &mut findings, limit.get())?;
+    collect(
+        database,
+        "SELECT p.principal_id FROM principals p
+         WHERE NOT EXISTS(
+             SELECT 1 FROM principal_lifecycle_events e
+             WHERE e.principal_id = p.principal_id AND e.event_kind = 1
+         ) OR p.state <> (
+             SELECT e.resulting_state FROM principal_lifecycle_events e
+             WHERE e.principal_id = p.principal_id
+             ORDER BY e.revision DESC LIMIT 1
+         )
+         ORDER BY p.principal_id LIMIT ?1",
+        sql_limit,
+        InvariantKind::InvalidPrincipalLifecycle,
+        &mut findings,
+        limit.get(),
+    )?;
     collect(
         database,
         "SELECT gm.containing_group_id FROM group_memberships gm
