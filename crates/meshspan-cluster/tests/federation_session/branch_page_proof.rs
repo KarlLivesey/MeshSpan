@@ -8,17 +8,24 @@ use std::time::Duration;
 
 use meshspan_cluster::{
     EffectiveFederationGrantAuthority, EffectiveFederationGrantAuthorityError,
-    FederationBranchAuthoritySource, FederationBranchFetchRequest, FederationBranchPageQuery,
-    FederationBranchPageRecords, FederationBranchPageServeRequest, FederationBranchPageServices,
-    FederationBranchPageSource, FederationBranchPageSourceError, FederationSessionError,
+    FederationBranchAuthoritySource, FederationBranchFetchRequest, FederationBranchPageFuture,
+    FederationBranchPageQuery, FederationBranchPageRecords, FederationBranchPageServeRequest,
+    FederationBranchPageServices, FederationBranchPageSource, FederationBranchPageSourceError,
+    FederationSessionError, FilesystemFederationHistorySource,
 };
 use meshspan_domain::{
-    FederatedPrincipal, FederationAccess, FederationGrant, FederationGrantId, FederationPolicy,
-    FederationPreset, FederationRelationshipId, FederationResourceScope, NamespaceCommitId,
-    NamespaceFederationPolicy, PrincipalId, Revision, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, FederatedPrincipal, FederationAccess, FederationGrant,
+    FederationGrantId, FederationPolicy, FederationPreset, FederationRelationshipId,
+    FederationResourceScope, FileVersionId, NamespaceCommitId, NamespaceFederationPolicy, ObjectId,
+    ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
+};
+use meshspan_filesystem::{
+    FilePublication, ManifestPublication, NamespaceHistoryCommitRecord, NamespaceLimits,
+    NamespacePath, NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
 };
 use meshspan_protocol::v1::{ProtocolVersion, VersionedPayload};
 use meshspan_transport::FederationExchangeContext;
+use tempfile::tempdir;
 
 use super::{NOW, SessionProof, replay_guard};
 
@@ -27,8 +34,56 @@ pub(super) async fn prove_branch_page_service(
 ) -> Result<(), Box<dyn Error>> {
     let fixture = BranchFixture::new(proof)?;
     prove_authorised_exchange(proof, &fixture).await?;
+    prove_filesystem_backed_exchange(proof, &fixture).await?;
     prove_denied_exchange_skips_source(proof, &fixture).await?;
     prove_excessive_source_page_fails_closed(proof, &fixture).await
+}
+
+async fn prove_filesystem_backed_exchange(
+    proof: &SessionProof<'_>,
+    fixture: &BranchFixture,
+) -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let publication = publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&publication)?;
+    drop(store);
+    let source = FilesystemFederationHistorySource::new(directory.path());
+    let client_grants = StaticBranchAuthority::admit(fixture.authority);
+    let server_grants = StaticBranchAuthority::admit(fixture.authority);
+    let mut client_replay = replay_guard()?;
+    let mut server_replay = replay_guard()?;
+    let mut request = fixture.request(130)?;
+    request.requested_heads = vec![publication.namespace_commit_id];
+    request.known_commits.clear();
+    request.cursor.clear();
+    request.limit = 1;
+    let fetch = proof.client_runtime.fetch_branch_page(
+        proof.client_connection,
+        proof.client_authority,
+        &client_grants,
+        request,
+        &mut client_replay,
+    );
+    let serve = proof.server_runtime.serve_branch_page(
+        proof.server_connection,
+        FederationBranchPageServices::new(proof.server_authority, &server_grants, &source),
+        FederationBranchPageServeRequest {
+            response_replay_nonce: [135; 32],
+            now: NOW,
+        },
+        &mut server_replay,
+    );
+    let (page, served) = tokio::try_join!(fetch, serve)?;
+    assert_eq!(page.branch_commits().len(), 1);
+    assert!(page.immutable_object_digests().is_empty());
+    assert!(!page.next_cursor().is_empty());
+    NamespaceHistoryCommitRecord::from_canonical_bytes(
+        page.branch_commits()[0].canonical_bytes.clone(),
+    )?;
+    assert_eq!(served.record_count, 1);
+    assert!(served.has_next_page);
+    Ok(())
 }
 
 async fn prove_authorised_exchange(
@@ -285,40 +340,76 @@ impl RecordingHistorySource {
 }
 
 impl FederationBranchPageSource for RecordingHistorySource {
-    fn branch_page(
-        &self,
-        query: FederationBranchPageQuery,
-    ) -> Result<FederationBranchPageRecords, FederationBranchPageSourceError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        if query.authority != self.expected_authority
-            || query.resource != self.expected_resource
-            || query.requested_heads
-                != vec![
-                    NamespaceCommitId::from_bytes([11; 16])
-                        .map_err(|_| FederationBranchPageSourceError::InvalidQuery)?,
-                ]
-            || query.known_commits
-                != vec![
-                    NamespaceCommitId::from_bytes([12; 16])
-                        .map_err(|_| FederationBranchPageSourceError::InvalidQuery)?,
-                ]
-            || query.cursor != vec![12; 16]
-            || query.limit != 2
-        {
-            return Err(FederationBranchPageSourceError::InvalidQuery);
-        }
-        let commit = VersionedPayload {
-            format_version: 1,
-            canonical_bytes: b"canonical-history-record".to_vec(),
-        };
-        Ok(FederationBranchPageRecords {
-            branch_commits: if self.excessive {
-                vec![commit.clone(), commit]
-            } else {
-                vec![commit]
-            },
-            immutable_object_digests: vec![[9; 32]],
-            next_cursor: vec![10; 16],
+    fn branch_page(&self, query: FederationBranchPageQuery) -> FederationBranchPageFuture<'_> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if query.authority != self.expected_authority
+                || query.resource != self.expected_resource
+                || query.requested_heads
+                    != vec![
+                        NamespaceCommitId::from_bytes([11; 16])
+                            .map_err(|_| FederationBranchPageSourceError::InvalidQuery)?,
+                    ]
+                || query.known_commits
+                    != vec![
+                        NamespaceCommitId::from_bytes([12; 16])
+                            .map_err(|_| FederationBranchPageSourceError::InvalidQuery)?,
+                    ]
+                || query.cursor != vec![12; 16]
+                || query.limit != 2
+                || query.now != NOW
+            {
+                return Err(FederationBranchPageSourceError::InvalidQuery);
+            }
+            let commit = VersionedPayload {
+                format_version: 1,
+                canonical_bytes: b"canonical-history-record".to_vec(),
+            };
+            Ok(FederationBranchPageRecords {
+                branch_commits: if self.excessive {
+                    vec![commit.clone(), commit]
+                } else {
+                    vec![commit]
+                },
+                immutable_object_digests: vec![[9; 32]],
+                next_cursor: vec![10; 16],
+            })
         })
     }
+}
+
+fn publication() -> Result<RootFilePublication, Box<dyn Error>> {
+    Ok(RootFilePublication {
+        file: FilePublication {
+            operation_id: OperationId::from_bytes([140; 16])?,
+            branch_id: BranchId::from_bytes([141; 16])?,
+            volume_id: VolumeId::from_bytes([8; 16])?,
+            object_id: ObjectId::from_bytes([142; 16])?,
+            expected_current_version_id: None,
+            version_id: FileVersionId::from_bytes([143; 16])?,
+            parent_version_id: None,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
+            manifest: ManifestPublication {
+                manifest_id: ContentManifestId::from_bytes([144; 16])?,
+                format_version: 1,
+                logical_length: 4,
+                content_digest: [145; 32],
+                root_digest: [146; 32],
+            },
+            created_by: PrincipalId::from_bytes([147; 16])?,
+            created_at: UnixMicros::new(140),
+        },
+        root_object_id: ObjectId::from_bytes([148; 16])?,
+        expected_namespace_commit_id: None,
+        expected_file_object_revision_id: None,
+        file_object_revision_id: ObjectRevisionId::from_bytes([149; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([150; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([151; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["report"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        entry_generation: 1,
+    })
 }

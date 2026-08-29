@@ -168,7 +168,7 @@ impl FederationSessionRuntime<'_> {
             fetch.request(),
             request.now,
         )?;
-        let page = services.history.branch_page(query)?;
+        let page = services.history.branch_page(query).await?;
         validate_source_page(fetch.request().limit, &page)?;
         let response = signed_federation_branch_page(
             &local_identity,
@@ -241,6 +241,7 @@ fn admitted_query(
         known_commits: parse_commit_ids(&request.known_commit_ids)?,
         cursor: request.cursor.clone(),
         limit: request.limit,
+        now,
     })
 }
 
