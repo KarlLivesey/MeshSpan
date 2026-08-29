@@ -79,6 +79,11 @@ pub struct VersionCleanupItemCursor {
     item_index: u64,
 }
 
+pub(super) struct SealedCleanupItem {
+    pub(super) item: VersionCleanupItem,
+    pub(super) sealed_revision: Revision,
+}
+
 pub(super) fn append(
     transaction: &Transaction<'_>,
     context: CommandContext,
@@ -299,6 +304,61 @@ pub(super) fn page(
     Ok(Page { items, next })
 }
 
+pub(super) fn sealed_item(
+    connection: &rusqlite::Connection,
+    cleanup_operation_id: OperationId,
+    item_index: u64,
+) -> Result<SealedCleanupItem, RepositoryError> {
+    let inventory =
+        load_inventory(connection, cleanup_operation_id)?.ok_or(RepositoryError::InvalidCommand)?;
+    if inventory.state != INVENTORY_SEALED {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let sealed_revision = inventory
+        .sealed_revision
+        .map(Revision::new)
+        .ok_or(RepositoryError::CorruptState)?;
+    let manifest_digest = load_authorised_manifest(
+        connection,
+        CleanupIdentity {
+            cleanup_operation_id,
+            cleanup_revision: Revision::new(inventory.cleanup_revision),
+            authorisation_revision: Revision::new(inventory.authorisation_revision),
+        },
+    )?;
+    let stored_count: i64 = connection.query_row(
+        "SELECT count(*) FROM version_cleanup_items WHERE cleanup_operation_id = ?1",
+        [cleanup_operation_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    if non_negative(stored_count)? != inventory.expected_item_count
+        || item_index >= inventory.expected_item_count
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    let item = connection
+        .query_row(
+            "SELECT item_index, removal_operation_id, manifest_digest, stripe_index,
+                    shard_index, shard_generation, target_id, target_generation, revision
+             FROM version_cleanup_items
+             WHERE cleanup_operation_id = ?1 AND item_index = ?2",
+            params![
+                cleanup_operation_id.as_bytes().as_slice(),
+                to_i64(item_index)?,
+            ],
+            decode_item,
+        )
+        .optional()?
+        .ok_or(RepositoryError::CorruptState)?;
+    if item.item_index != item_index || item.shard.manifest_digest != manifest_digest {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(SealedCleanupItem {
+        item,
+        sealed_revision,
+    })
+}
+
 #[derive(Clone, Copy)]
 struct CleanupIdentity {
     cleanup_operation_id: OperationId,
@@ -413,6 +473,8 @@ pub(super) fn is_reserved_operation(
         .query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM version_cleanup_items WHERE removal_operation_id = ?1
+                UNION ALL
+                SELECT 1 FROM version_cleanup_permit_attempts WHERE permit_operation_id = ?1
              )",
             [operation_id.as_bytes().as_slice()],
             |row| row.get(0),

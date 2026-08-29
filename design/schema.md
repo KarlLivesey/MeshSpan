@@ -1114,6 +1114,16 @@ version_cleanup_items(
   PK(cleanup_operation_id, item_index)
 )
 
+version_cleanup_permit_attempts(
+  cleanup_operation_id, item_index, attempt_sequence,
+  permit_operation_id UNIQUE, mesh_id, authority_epoch,
+  catalogue_revision, issued_at, expires_at,
+  permit_digest UNIQUE, issue_operation_id UNIQUE -> operations,
+  revision UNIQUE,
+  PK(cleanup_operation_id, item_index, attempt_sequence),
+  FK(cleanup_operation_id, item_index) -> version_cleanup_items
+)
+
 cleanup_completions(
   cleanup_id, item_index, target_id, target_generation,
   result_kind, provider_tombstone_digest, completed_at,
@@ -1151,7 +1161,11 @@ deletion authority. The database rejects mixed or partial terminal state.
 Physical items are appended in bounded contiguous pages and remain unusable
 until one exact count and rolling digest are sealed. Removal operation IDs are
 reserved across the metadata operation namespace so a later unrelated command
-cannot reuse provider idempotency authority.
+cannot reuse provider idempotency authority. Permit attempts are immutable,
+strictly sequenced records. The first consumes the item's reserved ID; retries
+use fresh globally reserved IDs. Each attempt binds its committed catalogue
+revision, authority epoch, issue and expiry instants and keyed digest. Same-epoch
+attempts cannot overlap, while an epoch advance may fence an earlier attempt.
 
 ## 20. Repair, scrub and drain
 

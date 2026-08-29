@@ -261,6 +261,15 @@ canonical rolling digest. `SealVersionCleanupInventory` succeeds only when the
 declared count is complete and that final digest matches. Building inventory
 pages cannot produce removal permits.
 
+`IssueVersionCleanupPermit` records one exact attempt for one sealed inventory
+item before provider work starts. It binds the sealed-inventory revision, item
+index, strict attempt sequence and the complete keyed `RemovalPermit`. The
+permit's catalogue revision is the command's committed revision. The first
+attempt consumes the item's reserved provider operation ID; subsequent attempts
+use fresh IDs and may not overlap in one authority epoch. An epoch advance may
+fence an earlier attempt. The replicated record lets restart and lost-response
+recovery reuse the exact committed capability.
+
 `DeleteShardRequest` carries the exact shard identity and a quorum-issued
 `RemovalPermit`. `DeleteShardResult` reports `removed`, `already_absent`,
 `identity_mismatch`, `permit_expired`, `stale_epoch` or a typed local failure.

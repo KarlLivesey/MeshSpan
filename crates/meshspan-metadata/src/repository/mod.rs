@@ -7,6 +7,7 @@ mod backup;
 mod bootstrap;
 mod cleanup_attestation;
 mod cleanup_inventory;
+mod cleanup_permit;
 mod cluster;
 mod component;
 mod consensus;
@@ -39,6 +40,10 @@ pub use cleanup_attestation::VersionCleanupAttestationProgress;
 pub use cleanup_inventory::{
     VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
     VersionCleanupItemCursor,
+};
+pub use cleanup_permit::{
+    MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, VersionCleanupPermitAttempt,
+    VersionCleanupPermitAuthority,
 };
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use kernel::{
@@ -372,6 +377,32 @@ impl AuthoritativeRepository {
         cleanup_inventory::page(&self.database, operation_id, after, limit)
     }
 
+    /// Returns the exact current inputs for constructing one removal-permit attempt.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsealed, missing or corrupt inventory state.
+    pub fn version_cleanup_permit_authority(
+        &self,
+        operation_id: OperationId,
+        item_index: u64,
+    ) -> Result<VersionCleanupPermitAuthority, RepositoryError> {
+        cleanup_permit::authority(&self.database, operation_id, item_index)
+    }
+
+    /// Returns the latest independently validated permit attempt for one item.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsealed, missing or corrupt inventory and permit state.
+    pub fn version_cleanup_permit_attempt(
+        &self,
+        operation_id: OperationId,
+        item_index: u64,
+    ) -> Result<Option<VersionCleanupPermitAttempt>, RepositoryError> {
+        cleanup_permit::latest(&self.database, operation_id, item_index)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -527,6 +558,8 @@ pub enum RepositoryError {
 mod cleanup_attestation_tests;
 #[cfg(test)]
 mod cleanup_inventory_tests;
+#[cfg(test)]
+mod cleanup_permit_tests;
 #[cfg(test)]
 mod retention_tests;
 #[cfg(test)]

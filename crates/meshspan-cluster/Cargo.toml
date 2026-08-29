@@ -13,6 +13,7 @@ version.workspace = true
 [dependencies]
 ed25519-dalek.workspace = true
 meshspan-consensus = { path = "../meshspan-consensus" }
+meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-filesystem = { path = "../meshspan-filesystem" }
 meshspan-metadata = { path = "../meshspan-metadata" }

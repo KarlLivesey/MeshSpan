@@ -320,8 +320,15 @@ copy-on-write filesystem service. This document records executable evidence only
    worker pagination becomes available. Tests cover gaps, changed totals, wrong
    roots, duplicate/reused operation authority, premature and post-seal
    mutations, restart/replay, missing or substituted rows, relational partial
-   state and every injected transaction boundary. Short-lived permit issue and
-   provider completion remain outstanding.
+   state and every injected transaction boundary. Replicated short-lived permit
+   issue now derives only from an exact sealed inventory item, consumes its reserved
+   operation identity on the first attempt, binds the resulting catalogue
+   revision and persists the complete keyed capability before use. Same-epoch
+   retries wait for expiry, epoch advances can fence immediately and later
+   attempts reserve fresh operation identities. Restart/replay, stale seal,
+   substituted mesh/item/revision, excessive lifetime, persisted corruption and
+   every injected transaction boundary are executable. Provider tombstone
+   completion and permanent root retirement remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable
