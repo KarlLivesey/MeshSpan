@@ -12,9 +12,66 @@ use meshspan_domain::{
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
+use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
     AuthoritativeRepository, EntityKind, FederationSuccessionState, LogPosition, RepositoryError,
 };
+
+#[test]
+fn every_apply_boundary_rolls_back_complete_signed_succession_designation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare_relationship(&mut repository, fixture.ids)?;
+    let command = AuthoritativeCommand::DesignateFederationSuccessor(designation(
+        fixture.ids,
+        1,
+        vec![FederationSuccessionEdge {
+            retiring_mesh_id: MeshId::from_bytes([60; 16])?,
+            successor_mesh_id: fixture.ids.remote_mesh,
+        }],
+    )?);
+    let mut database = repository.into_database();
+    for (offset, fault) in all_apply_faults().into_iter().enumerate() {
+        let seed = 61_u8.saturating_add(u8::try_from(offset)?);
+        assert!(matches!(
+            apply_committed_with_fault(
+                &mut database,
+                LogPosition { index: 4, term: 1 },
+                context(
+                    seed,
+                    fixture.ids.administrator,
+                    seed.saturating_add(4),
+                    4,
+                    3
+                )?,
+                &command,
+                fault,
+            ),
+            Err(RepositoryError::InjectedFault)
+        ));
+        let retained: (i64, i64, i64) = database.connection().query_row(
+            "SELECT
+                (SELECT count(*) FROM federation_ownership_successions),
+                (SELECT count(*) FROM federation_ownership_succession_ancestry),
+                (SELECT count(*) FROM federation_ownership_succession_events)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(retained, (0, 0, 0));
+        assert_eq!(read_current_revision(&database)?, Revision::new(3));
+    }
+    Ok(())
+}
+
+const fn all_apply_faults() -> [ApplyFaultPoint; 4] {
+    [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterOperation,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ]
+}
 use crate::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, ApproveFederationRelationship,
     AuthoritativeCommand, BootstrapMesh, CommandContext, DesignateFederationSuccessor,
