@@ -101,6 +101,10 @@ define_identifier!(
     "Stable identity of one scoped federation grant."
 );
 define_identifier!(
+    FederationSuccessionId,
+    "Stable identity of one pre-authorised federation ownership succession."
+);
+define_identifier!(
     QuarantineId,
     "Stable identity of one quarantined federated mutation."
 );

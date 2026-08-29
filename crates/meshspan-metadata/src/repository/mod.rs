@@ -25,6 +25,9 @@ mod federation_query;
 mod federation_relationship;
 #[cfg(test)]
 mod federation_relationship_tests;
+mod federation_succession;
+#[cfg(test)]
+mod federation_succession_tests;
 mod group_closure;
 mod identity;
 mod kernel;
@@ -74,6 +77,7 @@ pub use federation_principal::FederatedPrincipalProjectionRecord;
 pub use federation_query::{
     FederationRelationshipRecord, FederationRelationshipState, FederationTrustIdentityRecord,
 };
+pub use federation_succession::{FederationSuccessionRecord, FederationSuccessionState};
 pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, run_repository_conformance,
@@ -233,6 +237,18 @@ impl AuthoritativeRepository {
         principal: meshspan_domain::FederatedPrincipal,
     ) -> Result<Option<FederatedPrincipalProjectionRecord>, RepositoryError> {
         federation_principal::projection(&self.database, relationship_id, principal)
+    }
+
+    /// Returns the active, locally authoritative recovery successor for one retired swarm.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed identifiers, epochs or lifecycle state.
+    pub fn active_federation_successor(
+        &self,
+        retiring_mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<FederationSuccessionRecord>, RepositoryError> {
+        federation_succession::active_for_retiring(&self.database, retiring_mesh_id)
     }
 
     /// Loads and verifies the exact durable consensus state for one membership epoch.

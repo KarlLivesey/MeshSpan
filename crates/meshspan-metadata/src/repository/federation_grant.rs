@@ -65,7 +65,14 @@ pub(super) fn active_grant(
              FROM federation_grants g
              JOIN federation_relationships r ON r.relationship_id = g.relationship_id
              WHERE g.grant_id = ?1 AND g.state = 1 AND r.state = 2
-               AND g.authority_epoch = r.authority_epoch",
+               AND g.authority_epoch = r.authority_epoch
+               AND NOT EXISTS (
+                   SELECT 1 FROM federation_ownership_successions s
+                   WHERE s.state = 3
+                     AND s.retiring_mesh_id IN (
+                         g.subject_home_mesh_id, g.authority_mesh_id
+                     )
+               )",
             [grant_id.as_bytes().as_slice()],
             |row| {
                 Ok((
@@ -255,12 +262,35 @@ fn validate_and_persist(
     revision: Revision,
 ) -> Result<(), RepositoryError> {
     validate_parties(grant, relationship)?;
+    reject_retired_authority(transaction, grant)?;
     validate_restrictions(grant, restrictions, relationship)?;
     persist_grant(transaction, context, grant, revision)?;
     for restriction in restrictions {
         persist_restriction(transaction, grant.grant_id(), *restriction, revision)?;
     }
     Ok(())
+}
+
+fn reject_retired_authority(
+    connection: &Connection,
+    grant: FederationGrant,
+) -> Result<(), RepositoryError> {
+    let retired: i64 = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM federation_ownership_successions
+            WHERE state = 3 AND retiring_mesh_id IN (?1, ?2)
+         )",
+        params![
+            grant.subject().home_mesh_id().as_bytes().as_slice(),
+            grant.resource().authority_mesh_id().as_bytes().as_slice(),
+        ],
+        |row| row.get(0),
+    )?;
+    if retired == 0 {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
 }
 
 fn validate_parties(

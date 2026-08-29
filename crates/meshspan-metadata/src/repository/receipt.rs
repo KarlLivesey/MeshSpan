@@ -88,6 +88,8 @@ pub enum EntityKind {
     FederationGrant = 26,
     /// Signed home-swarm principal projection.
     FederatedPrincipalProjection = 27,
+    /// Two-sided pre-authorised recovery succession.
+    FederationSuccession = 28,
 }
 
 impl EntityKind {
@@ -120,6 +122,7 @@ impl EntityKind {
             25 => Ok(Self::FederationTrustIdentity),
             26 => Ok(Self::FederationGrant),
             27 => Ok(Self::FederatedPrincipalProjection),
+            28 => Ok(Self::FederationSuccession),
             _ => Err(RepositoryError::CorruptState),
         }
     }
