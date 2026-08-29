@@ -10,7 +10,7 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, identity, namespace, retention, routing,
+    cleanup_reclamation, cluster, component, identity, namespace, retention, routing, session,
     snapshot_schedule, tags, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
@@ -267,6 +267,7 @@ fn authorise(
     let self_activation_principal = match command {
         AuthoritativeCommand::ActivateGrant(value) => Some(value.principal_id),
         AuthoritativeCommand::ActivateGroup(value) => Some(value.principal_id),
+        AuthoritativeCommand::IssueAuthenticationSession(value) => Some(value.principal_id),
         _ => None,
     };
     if matches!(command, AuthoritativeCommand::ConsumeJoinGrant(_)) {
@@ -278,6 +279,11 @@ fn authorise(
         } else {
             Err(RepositoryError::InvalidCommand)
         };
+    }
+    if let AuthoritativeCommand::RevokeAuthenticationSession(value) = command
+        && context.actor_principal_id == value.principal_id
+    {
+        return Ok(());
     }
     require_system_administrator(
         transaction,
@@ -323,21 +329,12 @@ fn execute(
     if is_cleanup_command(command) {
         return execute_cleanup_command(transaction, context, command, revision);
     }
+    if is_identity_command(command) {
+        return execute_identity_command(transaction, context, command, revision);
+    }
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
             bootstrap::bootstrap(transaction, partition_id, context, value, revision)
-        }
-        AuthoritativeCommand::CreateUser(value) => {
-            identity::create_user(transaction, context, value, revision)
-        }
-        AuthoritativeCommand::CreateGroup(value) => {
-            identity::create_group(transaction, context, value, revision)
-        }
-        AuthoritativeCommand::AddGroupMember(value) => {
-            identity::add_group_member(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::CreateActivationPolicy(value) => {
-            identity::create_activation_policy(transaction, value, revision)
         }
         AuthoritativeCommand::CreateVolume(value) => {
             namespace::create_volume(transaction, context, value, revision)
@@ -370,15 +367,6 @@ fn execute(
         }
         AuthoritativeCommand::DetachTag(value) => {
             tags::detach(transaction, value.tag_id, value.target)
-        }
-        AuthoritativeCommand::GrantPermission(value) => {
-            identity::grant_permission(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::ActivateGrant(value) => {
-            identity::activate_grant(transaction, context, value, revision)
-        }
-        AuthoritativeCommand::ActivateGroup(value) => {
-            identity::activate_group(transaction, context, value, revision)
         }
         AuthoritativeCommand::CreateComponent(value) => {
             component::create(transaction, context, value, revision)
@@ -415,6 +403,59 @@ fn execute(
         }
         AuthoritativeCommand::AbortScopeHandoff(value) => {
             routing::abort_handoff(transaction, context, *value, revision)
+        }
+        _ => Err(RepositoryError::InvalidCommand),
+    }
+}
+
+fn is_identity_command(command: &AuthoritativeCommand) -> bool {
+    matches!(
+        command,
+        AuthoritativeCommand::CreateUser(_)
+            | AuthoritativeCommand::CreateGroup(_)
+            | AuthoritativeCommand::AddGroupMember(_)
+            | AuthoritativeCommand::CreateActivationPolicy(_)
+            | AuthoritativeCommand::GrantPermission(_)
+            | AuthoritativeCommand::ActivateGrant(_)
+            | AuthoritativeCommand::ActivateGroup(_)
+            | AuthoritativeCommand::IssueAuthenticationSession(_)
+            | AuthoritativeCommand::RevokeAuthenticationSession(_)
+    )
+}
+
+fn execute_identity_command(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    match command {
+        AuthoritativeCommand::CreateUser(value) => {
+            identity::create_user(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CreateGroup(value) => {
+            identity::create_group(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AddGroupMember(value) => {
+            identity::add_group_member(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CreateActivationPolicy(value) => {
+            identity::create_activation_policy(transaction, value, revision)
+        }
+        AuthoritativeCommand::GrantPermission(value) => {
+            identity::grant_permission(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ActivateGrant(value) => {
+            identity::activate_grant(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ActivateGroup(value) => {
+            identity::activate_group(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::IssueAuthenticationSession(value) => {
+            session::issue(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RevokeAuthenticationSession(value) => {
+            session::revoke(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -697,6 +738,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::IssueVersionCleanupPermit(_) => 42,
         AuthoritativeCommand::CompleteVersionCleanupItem(_) => 43,
         AuthoritativeCommand::ConfirmVersionCleanupReclamation(_) => 44,
+        AuthoritativeCommand::IssueAuthenticationSession(_) => 45,
+        AuthoritativeCommand::RevokeAuthenticationSession(_) => 46,
     }
 }
 

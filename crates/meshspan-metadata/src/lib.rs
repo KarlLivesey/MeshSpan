@@ -17,13 +17,14 @@ pub use command::{
     ConfirmVersionCleanupReclamation, ConsumeJoinGrant, ConvergedHeadEvidence,
     CreateActivationPolicy, CreateComponent, CreateGroup, CreateMetadataPartition, CreateObject,
     CreateScopeRoute, CreateTag, CreateUser, CreateVolume, CreateVolumeSnapshot, DetachTag,
-    FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant,
-    IssueVersionCleanupPermit, JoinRoles, NamespaceObjectKind, PermissionScope,
+    FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueAuthenticationSession,
+    IssueJoinGrant, IssueVersionCleanupPermit, JoinRoles, NamespaceObjectKind, PermissionScope,
     ProposeVersionCleanup, RegisterCleanupAttestationKey, RegisterRoutingSigner,
     RemoveVolumeSnapshotRoot, ReplaceObjectOwners, RepositoryCommandError,
-    RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode, RouteAttestation,
-    RunSnapshotSchedule, SealVersionCleanupInventory, SnapshotExpiryReason, TagTarget,
-    VersionCleanupAttestation, VersionCleanupItemPlacement,
+    RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode,
+    RevokeAuthenticationSession, RouteAttestation, RunSnapshotSchedule,
+    SealVersionCleanupInventory, SnapshotExpiryReason, TagTarget, VersionCleanupAttestation,
+    VersionCleanupItemPlacement,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use migration::MetadataStoreError;

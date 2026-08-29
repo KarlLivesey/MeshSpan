@@ -131,6 +131,7 @@ define_identifier!(StageId, "Stable identity of one private write stage.");
 define_identifier!(HandleId, "Stable identity of one fenced filesystem handle.");
 define_identifier!(LockId, "Stable identity of one fenced byte-range lock.");
 define_identifier!(GrantId, "Stable identity of one permission grant.");
+define_identifier!(SessionId, "Stable identity of one authentication session.");
 define_identifier!(
     ActivationPolicyId,
     "Stable identity of one access-activation policy."

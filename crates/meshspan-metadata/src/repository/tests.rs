@@ -11,7 +11,7 @@ use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, ComponentInstanceId,
     DurationMicros, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, NodeId,
     ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights,
-    RoleId, ScopeId, ScopeRoute, SnapshotId, TagId, UnixMicros, VolumeId,
+    RoleId, ScopeId, ScopeRoute, SessionId, SnapshotId, TagId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -27,9 +27,10 @@ use crate::{
     AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext, ConfigureComponent,
     ConsumeJoinGrant, CreateActivationPolicy, CreateComponent, CreateGroup,
     CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
-    DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueJoinGrant, JoinRoles,
-    NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName, RegisterRoutingSigner,
-    ReplaceObjectOwners, RouteAttestation, TagTarget,
+    DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission, IssueAuthenticationSession,
+    IssueJoinGrant, JoinRoles, NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName,
+    RegisterRoutingSigner, ReplaceObjectOwners, RevokeAuthenticationSession, RouteAttestation,
+    TagTarget,
 };
 
 struct FixtureIds {
@@ -1234,6 +1235,105 @@ fn every_atomic_apply_stage_rolls_back_to_the_old_valid_state()
         assert_eq!(repository.current_revision()?, Revision::new(1));
         assert!(repository.into_database().check_integrity()?.sqlite_ok);
     }
+    Ok(())
+}
+
+#[test]
+fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("authentication-sessions.sqlite3");
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    apply(
+        &mut repository,
+        1,
+        context(80, ids.administrator, 81, 100, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([82; 16])?,
+            mesh_name: RecordName::new("Session proof")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([83; 16])?,
+            host_id: HostId::from_bytes([84; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: NodeId::from_bytes([85; 16])?,
+            node_name: RecordName::new("Node")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
+    apply(
+        &mut repository,
+        2,
+        context(86, ids.administrator, 87, 101, Some(1))?,
+        &AuthoritativeCommand::CreateUser(CreateUser {
+            principal_id: ids.user,
+            name: RecordName::new("Session user")?,
+        }),
+    )?;
+
+    let session_id = SessionId::from_bytes([88; 16])?;
+    let issue = AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+        session_id,
+        principal_id: ids.user,
+        token_digest: [89; 32],
+        assurance: AssuranceLevel::MultiFactor,
+        expires_at: UnixMicros::new(1_000),
+    });
+    let issue_context = context(90, ids.user, 91, 200, Some(2))?;
+    let receipt =
+        repository.apply_committed(LogPosition { index: 3, term: 1 }, issue_context, &issue)?;
+    assert_eq!(receipt.entity.kind, EntityKind::AuthenticationSession);
+    assert_eq!(receipt.entity.id, session_id.as_bytes());
+
+    let duplicate = AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+        session_id: SessionId::from_bytes([92; 16])?,
+        principal_id: ids.user,
+        token_digest: [89; 32],
+        assurance: AssuranceLevel::SingleFactor,
+        expires_at: UnixMicros::new(2_000),
+    });
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 4, term: 1 },
+            context(93, ids.user, 94, 201, Some(3))?,
+            &duplicate,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+
+    let revoke = AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
+        session_id,
+        principal_id: ids.user,
+    });
+    apply(
+        &mut repository,
+        4,
+        context(95, ids.user, 96, 202, Some(3))?,
+        &revoke,
+    )?;
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 5, term: 1 },
+            context(97, ids.user, 98, 203, Some(4))?,
+            &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
+                session_id,
+                principal_id: ids.user,
+            }),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+
+    drop(repository);
+    let database = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(300))?;
+    let stored: (Vec<u8>, i64, i64, i64) = database.connection().query_row(
+        "SELECT token_digest, assurance, revoked_at, revision
+         FROM authentication_sessions WHERE session_id = ?1",
+        [session_id.as_bytes().as_slice()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(stored, (vec![89; 32], 2, 202, 4));
     Ok(())
 }
 
