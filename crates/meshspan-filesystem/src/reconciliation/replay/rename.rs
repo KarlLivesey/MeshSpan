@@ -223,12 +223,14 @@ impl ReplayState {
         Ok(NamespaceReplayAction {
             commit_id: commit.commit_id,
             source_removal: Some(source.removal),
+            effect: super::NamespaceReplayEffect::Upsert,
             source_path: rename.source_path.clone(),
             target_path: target.path,
             source_object_id: source.entry.object_id,
             target_object_id: source.entry.object_id,
             source_object_revision_id: source.entry.revision_id,
             target_object_revision_id: source.entry.revision_id,
+            target_kind: source.entry.kind,
             target_entry_generation: target.generation,
             target_prior_object_revision_id: None,
             target_file_version_id: source.entry.file_version_id,
@@ -294,12 +296,14 @@ impl ReplayState {
         Ok(NamespaceReplayAction {
             commit_id: commit.commit_id,
             source_removal: None,
+            effect: super::NamespaceReplayEffect::Upsert,
             source_path: rename.source_path.clone(),
             target_path,
             source_object_id: intent.object_id,
             target_object_id: target_object,
             source_object_revision_id: intent.object_revision_id,
             target_object_revision_id: target_revision,
+            target_kind: DirectoryEntryKind::File,
             target_entry_generation: 1,
             target_prior_object_revision_id: None,
             target_file_version_id: Some(target_version),
@@ -311,7 +315,7 @@ impl ReplayState {
         })
     }
 
-    fn relocate_descendants(
+    pub(super) fn relocate_descendants(
         &mut self,
         source: &NamespacePath,
         target: &NamespacePath,
@@ -385,12 +389,14 @@ fn already_applied(
     NamespaceReplayAction {
         commit_id: commit.commit_id,
         source_removal: None,
+        effect: super::NamespaceReplayEffect::Preserve,
         source_path: rename.source_path.clone(),
         target_path: current.path,
         source_object_id: intent.object_id,
         target_object_id: current.object_id,
         source_object_revision_id: intent.object_revision_id,
         target_object_revision_id: current.revision_id,
+        target_kind: current.kind,
         target_entry_generation: current.generation,
         target_prior_object_revision_id: Some(current.revision_id),
         target_file_version_id: current.file_version_id,

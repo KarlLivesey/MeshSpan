@@ -5,7 +5,8 @@ use meshspan_domain::{
 };
 
 use super::{
-    NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEntry, plan_namespace_replay,
+    NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEffect, NamespaceReplayEntry,
+    plan_namespace_replay,
 };
 use crate::{
     BranchMutation, BranchMutationIntent, BranchRenameIntent, DirectoryEntryKind,
@@ -458,6 +459,134 @@ fn deletion_intent_digest_is_distinct_and_binds_the_removed_version()
 }
 
 #[test]
+fn exact_deletion_replays_as_one_bound_removal() -> Result<(), Box<dyn std::error::Error>> {
+    let mut commits = vec![commit(1, 1, &[], 1, 10)?, commit(2, 2, &[1], 2, 20)?];
+    let deletion = file_delete_intent(2, &["report"], 51, 62)?;
+    bind_intents(&mut commits, std::slice::from_ref(&deletion));
+    let causal = plan_reconciliation(&commits, &frontier(1, &[2])?, ReconciliationLimits::DEFAULT)?;
+    let replay = plan_namespace_replay(
+        &causal,
+        &commits,
+        &[deletion],
+        &NamespaceReplayBase {
+            root_object_revision_id: Some(revision(10)?),
+            entries: vec![entry(&["report"], 51, 62, DirectoryEntryKind::File)?],
+        },
+    )?;
+    let action = replay.actions().first().ok_or("missing deletion")?;
+    assert_eq!(action.effect, NamespaceReplayEffect::Remove);
+    assert_eq!(action.disposition, NamespaceReplayDisposition::Applied);
+    assert_eq!(action.target_root_object_revision_id, Some(revision(20)?));
+    let removal = action.source_removal.as_ref().ok_or("missing removal")?;
+    assert_eq!(removal.path, path(&["report"])?);
+    assert_eq!(removal.object_revision_id, revision(62)?);
+    assert_eq!(removal.intermediate_root_object_revision_id, revision(20)?);
+    Ok(())
+}
+
+#[test]
+fn concurrent_content_edit_survives_deletion_in_every_delivery_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut commits = vec![
+        commit(1, 1, &[], 1, 10)?,
+        commit(2, 2, &[1], 2, 20)?,
+        commit(3, 3, &[1], 3, 30)?,
+    ];
+    let intents = vec![
+        file_intent(2, &["report"], 51, Some(62), 63)?,
+        file_delete_intent(3, &["report"], 51, 62)?,
+    ];
+    bind_intents(&mut commits, &intents);
+    let causal = plan_reconciliation(
+        &commits,
+        &frontier(1, &[3, 2])?,
+        ReconciliationLimits::DEFAULT,
+    )?;
+    let base = NamespaceReplayBase {
+        root_object_revision_id: Some(revision(10)?),
+        entries: vec![entry(&["report"], 51, 62, DirectoryEntryKind::File)?],
+    };
+    let expected = plan_namespace_replay(&causal, &commits, &intents, &base)?;
+    let mut reversed_commits = commits.clone();
+    reversed_commits.reverse();
+    let mut reversed_intents = intents.clone();
+    reversed_intents.reverse();
+    assert_eq!(
+        plan_namespace_replay(&causal, &reversed_commits, &reversed_intents, &base)?,
+        expected
+    );
+    let deletion = expected.actions().last().ok_or("missing deletion action")?;
+    assert_eq!(deletion.effect, NamespaceReplayEffect::Preserve);
+    assert_eq!(deletion.disposition, NamespaceReplayDisposition::Preserved);
+    assert_eq!(deletion.target_object_revision_id, revision(63)?);
+    assert_eq!(deletion.target_file_version_id, Some(version(63)?));
+    assert_eq!(
+        expected.final_root_object_revision_id(),
+        Some(revision(20)?)
+    );
+    Ok(())
+}
+
+#[test]
+fn concurrent_descendant_change_moves_deleted_directory_to_recovered_items()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut commits = vec![
+        commit(1, 1, &[], 1, 10)?,
+        commit(2, 2, &[1], 2, 20)?,
+        commit(3, 3, &[1], 3, 30)?,
+    ];
+    let create = BranchMutationIntent {
+        commit_id: commit_id(2)?,
+        path: path(&["docs", "new"])?,
+        ancestors: vec![DirectoryRevisionTransition::new(
+            object(51)?,
+            revision(61)?,
+            revision(63)?,
+        )?],
+        object_id: object(52)?,
+        object_revision_id: revision(64)?,
+        prior_object_revision_id: None,
+        entry_generation: 1,
+        mutation: BranchMutation::File {
+            version_id: version(64)?,
+        },
+        rename: None,
+    };
+    let deletion = directory_delete_intent(3, &["docs"], 51, 61)?;
+    let intents = vec![create, deletion];
+    bind_intents(&mut commits, &intents);
+    let causal = plan_reconciliation(
+        &commits,
+        &frontier(1, &[3, 2])?,
+        ReconciliationLimits::DEFAULT,
+    )?;
+    let replay = plan_namespace_replay(
+        &causal,
+        &commits,
+        &intents,
+        &NamespaceReplayBase {
+            root_object_revision_id: Some(revision(10)?),
+            entries: vec![entry(&["docs"], 51, 61, DirectoryEntryKind::Directory)?],
+        },
+    )?;
+    let recovery = replay
+        .actions()
+        .last()
+        .ok_or("missing directory recovery")?;
+    assert_eq!(recovery.effect, NamespaceReplayEffect::Upsert);
+    assert_eq!(recovery.disposition, NamespaceReplayDisposition::Recovered);
+    assert!(recovery.source_removal.is_some());
+    assert!(
+        recovery.target_path.components()[0]
+            .display()
+            .contains("recovered")
+    );
+    assert_eq!(recovery.target_object_id, object(51)?);
+    assert_eq!(recovery.target_object_revision_id, revision(63)?);
+    Ok(())
+}
+
+#[test]
 fn rename_intent_plans_one_bound_source_removal_and_destination_insertion()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut commits = vec![commit(1, 1, &[], 1, 10)?, commit(2, 2, &[1], 2, 20)?];
@@ -723,6 +852,46 @@ fn file_intent(
         mutation: BranchMutation::File {
             version_id: version(new_revision)?,
         },
+        rename: None,
+    })
+}
+
+fn file_delete_intent(
+    commit: u8,
+    components: &[&str],
+    object_id: u8,
+    revision_id: u8,
+) -> Result<BranchMutationIntent, Box<dyn std::error::Error>> {
+    Ok(BranchMutationIntent {
+        commit_id: commit_id(commit)?,
+        path: path(components)?,
+        ancestors: Vec::new(),
+        object_id: object(object_id)?,
+        object_revision_id: revision(revision_id)?,
+        prior_object_revision_id: None,
+        entry_generation: 1,
+        mutation: BranchMutation::DeleteFile {
+            version_id: version(revision_id)?,
+        },
+        rename: None,
+    })
+}
+
+fn directory_delete_intent(
+    commit: u8,
+    components: &[&str],
+    object_id: u8,
+    revision_id: u8,
+) -> Result<BranchMutationIntent, Box<dyn std::error::Error>> {
+    Ok(BranchMutationIntent {
+        commit_id: commit_id(commit)?,
+        path: path(components)?,
+        ancestors: Vec::new(),
+        object_id: object(object_id)?,
+        object_revision_id: revision(revision_id)?,
+        prior_object_revision_id: None,
+        entry_generation: 1,
+        mutation: BranchMutation::DeleteDirectory,
         rename: None,
     })
 }

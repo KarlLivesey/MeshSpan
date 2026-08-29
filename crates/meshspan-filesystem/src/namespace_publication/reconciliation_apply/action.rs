@@ -18,7 +18,7 @@ use crate::publication::{
 };
 use crate::{
     BranchMutation, DirectoryEntry, DirectoryEntryKind, NamespacePublicationPath,
-    NamespaceReplayAction,
+    NamespaceReplayAction, NamespaceReplayEffect,
 };
 
 #[derive(Clone, Copy)]
@@ -35,6 +35,9 @@ pub(super) fn apply_action(
     current_root: ObjectRevisionId,
     action: &NamespaceReplayAction,
 ) -> Result<ObjectRevisionId, PublicationError> {
+    if action.effect == NamespaceReplayEffect::Preserve {
+        return Err(PublicationError::InvalidInput);
+    }
     if let BranchMutation::File { version_id } = action.mutation {
         crate::cleanup_fence::reject_version_reference(transaction, version_id)?;
     }
@@ -53,6 +56,16 @@ pub(super) fn apply_action(
     let next_root = action
         .target_root_object_revision_id
         .ok_or(PublicationError::InvalidInput)?;
+    if action.effect == NamespaceReplayEffect::Remove {
+        return if action.source_removal.is_some()
+            && action.target_ancestors.is_empty()
+            && next_root == current_root
+        {
+            Ok(current_root)
+        } else {
+            Err(PublicationError::InvalidInput)
+        };
+    }
     let path =
         NamespacePublicationPath::new(action.target_path.clone(), action.target_ancestors.clone())
             .map_err(|_| PublicationError::InvalidInput)?;
@@ -80,7 +93,7 @@ pub(super) fn apply_action(
             .clone(),
         action.target_object_id,
         action.target_object_revision_id,
-        mutation_kind(action.mutation),
+        action.target_kind,
         action.target_entry_generation,
     )?;
     let mutation = mutate_namespace_path(
@@ -142,7 +155,7 @@ fn apply_removal(
         .ok_or(PublicationError::StaleHead)?;
     if leaf.object_id() != removal.object_id
         || leaf.object_revision_id() != removal.object_revision_id
-        || leaf.kind() != mutation_kind(action.mutation)
+        || leaf.kind() != action.target_kind
         || leaf.generation() != removal.entry_generation
     {
         return Err(PublicationError::StaleHead);
@@ -216,6 +229,17 @@ fn prepare_leaf_revision(
     context: ApplyContext,
     action: &NamespaceReplayAction,
 ) -> Result<(), PublicationError> {
+    if is_deletion(action.mutation) {
+        let target = load_object_revision(transaction, action.target_object_revision_id)?;
+        return if target.volume_id == context.volume_id
+            && target.object_id == action.target_object_id
+            && target.kind == kind_code(action.mutation)
+        {
+            Ok(())
+        } else {
+            Err(PublicationError::Corrupt)
+        };
+    }
     let source = load_object_revision(transaction, action.source_object_revision_id)?;
     if source.volume_id != context.volume_id
         || source.object_id != action.source_object_id
@@ -393,17 +417,26 @@ pub(super) fn verify_already_applied(
         root_object_id,
         current_root,
         &action.target_path,
-    )?
-    .ok_or(PublicationError::StaleHead)?;
-    if entry.object_id() == action.target_object_id
-        && entry.object_revision_id() == action.target_object_revision_id
-        && entry.kind() == mutation_kind(action.mutation)
-        && entry.generation() == action.target_entry_generation
-    {
-        Ok(())
-    } else {
-        Err(PublicationError::StaleHead)
+    )?;
+    match entry {
+        Some(entry)
+            if entry.object_id() == action.target_object_id
+                && entry.object_revision_id() == action.target_object_revision_id
+                && entry.kind() == action.target_kind
+                && entry.generation() == action.target_entry_generation =>
+        {
+            Ok(())
+        }
+        None if is_deletion(action.mutation) => Ok(()),
+        _ => Err(PublicationError::StaleHead),
     }
+}
+
+const fn is_deletion(mutation: BranchMutation) -> bool {
+    matches!(
+        mutation,
+        BranchMutation::DeleteFile { .. } | BranchMutation::DeleteDirectory
+    )
 }
 
 fn load_selected_entry(
@@ -436,15 +469,6 @@ fn load_selected_entry(
         directory_revision_id = entry.object_revision_id();
     }
     Ok(None)
-}
-
-const fn mutation_kind(mutation: BranchMutation) -> DirectoryEntryKind {
-    match mutation {
-        BranchMutation::File { .. } | BranchMutation::DeleteFile { .. } => DirectoryEntryKind::File,
-        BranchMutation::CreateDirectory | BranchMutation::DeleteDirectory => {
-            DirectoryEntryKind::Directory
-        }
-    }
 }
 
 const fn kind_code(mutation: BranchMutation) -> u8 {
