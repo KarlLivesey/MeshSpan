@@ -225,6 +225,12 @@ copy-on-write filesystem service. This document records executable evidence only
   head fails stale rather than mixing pages. Tests prove one-entry paging,
   reauthorisation, revocation and stale continuation after mutation. Connector
   conformance and remaining administration queries remain open.
+- The complete 13-bit protocol-neutral rights vocabulary now has an executable
+  authority vector. Each right is granted independently on one exact object,
+  evaluated through a freshly fenced real session, bound into a distinct
+  capability digest and then evaluated together as `Rights::ALL`. This catches
+  omitted bit handling and accidental aliasing rather than assuming read/write
+  examples cover rename, delete, ownership or permission administration.
 
 ## Closure gates
 
@@ -459,8 +465,9 @@ copy-on-write filesystem service. This document records executable evidence only
    lifecycle transitions are implemented and tested. Operation-time capability
    validation now fronts the implemented mutating handle and namespace service
    families plus bounded handle reads, immutable stat and directory enumeration
-   through one metadata adapter. Administration queries and the complete
-   rights-vector suite remain open.
+   through one metadata adapter. The complete 13-right vector is proven both
+   independently and as one atomic requested set. Administration queries remain
+   open.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
