@@ -40,7 +40,8 @@ pub use repository::{
     SnapshotExpiryCursor, SnapshotSchedule, SnapshotScheduleCursor,
     VersionCleanupAttestationProgress, VersionCleanupCompletion, VersionCleanupIntent,
     VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
-    VersionCleanupItemCompletion, VersionCleanupItemCursor, VersionCleanupPermitAttempt,
-    VersionCleanupPermitAuthority, VersionCleanupState, VersionRetentionPolicy, VolumeSnapshot,
-    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
+    VersionCleanupItemCompletion, VersionCleanupItemCursor, VersionCleanupParticipant,
+    VersionCleanupPermitAttempt, VersionCleanupPermitAuthority, VersionCleanupState,
+    VersionRetentionPolicy, VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
+    run_repository_conformance,
 };

@@ -3,6 +3,7 @@
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
 mod cleanup_fence;
+mod cleanup_retirement;
 mod commit_service;
 mod content_catalog;
 mod content_crypto;
@@ -20,6 +21,10 @@ mod stage_store;
 mod staging;
 mod version_retention;
 
+pub use cleanup_retirement::{
+    VersionCleanupRetirementAuthority, VersionCleanupRetirementError,
+    VersionCleanupRetirementReceipt,
+};
 pub use commit_service::{
     ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
     FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,

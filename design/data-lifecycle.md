@@ -166,6 +166,13 @@ tombstones and cleanup when it returns.
    when—the completed count equals the exact sealed inventory count, the final
    item transaction also records an ordered completion digest. New permits for
    completed items are permanently rejected.
+8. Every gateway joins that terminal completion with its own previously signed
+   participant scan and applies one local retirement transaction. The exact
+   manifest root is then permanently excluded from publication, reconciliation,
+   restore and new cleanup scans. A reachable or cancelled proof may release its
+   temporary fence; a completed unreachable proof never does. The separate
+   retired-root record preserves exclusion even if temporary fence state is
+   later damaged, and exact application retries return the original receipt.
 
 A path, target ID, shard ID or peer identity by itself can never authorise
 deletion. Expired permits and stale epochs fail closed.

@@ -334,8 +334,15 @@ copy-on-write filesystem service. This document records executable evidence only
    digest only after the sealed count is complete. Out-of-order arrival,
    restart/replay, duplicate completion, substituted receipts/attempts/seals,
    stale reporters, persisted corruption and every injected transaction
-   boundary are executable. Permanent gateway root retirement remains
-   outstanding.
+   boundary are executable. Every gateway can now load its independently
+   signature-verified participant scan, join it with the exact authorised intent
+   and terminal completion, and atomically install permanent local manifest-root
+   retirement. Exact replay/restart, subject substitution, operation conflict,
+   transaction interruption, persisted retirement corruption and deliberate
+   damage to the older temporary fence are executable; publication and repeated
+   cleanup scans remain blocked by the independent retirement record. Distributed
+   worker dispatch/recovery and replicated post-unlink byte-reclamation status
+   remain outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

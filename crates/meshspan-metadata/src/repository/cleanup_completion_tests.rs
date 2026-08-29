@@ -22,6 +22,7 @@ fn exact_completion_is_replayable_restart_safe_and_terminal()
         administrator,
         partition,
         cleanup_id,
+        subject_digest,
         ..
     } = sealed_inventory(&file_path)?;
     let attempt = issue(&mut repository, administrator, cleanup_id, 0, 10, 210)?;
@@ -45,6 +46,11 @@ fn exact_completion_is_replayable_restart_safe_and_terminal()
         command_context.operation_id
     );
     assert_eq!(summary.revision, Revision::new(11));
+    let participant = repository
+        .version_cleanup_participant(cleanup_id, NodeId::from_bytes([15; 16])?)?
+        .ok_or("missing signed cleanup participant")?;
+    assert_eq!(participant.cleanup_operation_id, cleanup_id);
+    assert_eq!(participant.reachability_subject_digest, subject_digest);
     assert!(
         repository
             .version_cleanup_permit_authority(cleanup_id, 0)
@@ -66,6 +72,18 @@ fn exact_completion_is_replayable_restart_safe_and_terminal()
         Err(RepositoryError::OperationConflict)
     ));
     assert_eq!(repository.current_revision()?, Revision::new(11));
+    repository.database.connection_mut().execute(
+        "UPDATE version_cleanup_participants SET signature = zeroblob(64)
+         WHERE cleanup_operation_id = ?1 AND node_id = ?2",
+        rusqlite::params![
+            cleanup_id.as_bytes().as_slice(),
+            NodeId::from_bytes([15; 16])?.as_bytes().as_slice(),
+        ],
+    )?;
+    assert!(matches!(
+        repository.version_cleanup_participant(cleanup_id, NodeId::from_bytes([15; 16])?),
+        Err(RepositoryError::CorruptState)
+    ));
     drop(repository);
 
     let reopened = PartitionDatabase::open(&file_path, partition, UnixMicros::new(500))?;

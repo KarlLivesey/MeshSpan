@@ -280,6 +280,13 @@ metadata state machine repeats those checks, validates the reporter's current
 incarnation and creates a terminal ordered summary only after every sealed item
 has one completion.
 
+Each gateway then reads its signature-verified `VersionCleanupParticipant` and
+joins its local scan operation with the matching authorised intent and terminal
+completion. `VersionCleanupRetirementAuthority` is applied only to that exact
+still-active local fence. The resulting retired-root record is permanent and
+independently rejects later publication, reconciliation, restore and scan
+admission even if the temporary fence row is damaged.
+
 Before acting, the storage node sends `ValidateRemoval` to the current metadata
 authority unless the permit itself is a verifiable, unexpired capability from
 the current epoch. Implementations must fail closed when authority is unknown.

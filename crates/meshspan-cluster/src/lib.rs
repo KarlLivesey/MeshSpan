@@ -18,7 +18,8 @@ mod handoff_tests;
 
 pub use cleanup::{
     CleanupAttestationError, CleanupCompletionError, CleanupPermitError,
-    version_cleanup_attestation, version_cleanup_proposal, version_cleanup_removal_permit,
+    CleanupRetirementAuthorityError, version_cleanup_attestation, version_cleanup_proposal,
+    version_cleanup_removal_permit, version_cleanup_retirement_authority,
     version_cleanup_tombstone_completion,
 };
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};

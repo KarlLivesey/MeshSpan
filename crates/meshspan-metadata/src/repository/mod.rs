@@ -37,7 +37,7 @@ use thiserror::Error;
 use crate::{MetadataStoreError, PartitionDatabase};
 
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
-pub use cleanup_attestation::VersionCleanupAttestationProgress;
+pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
 pub use cleanup_inventory::{
     VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
@@ -351,6 +351,19 @@ impl AuthoritativeRepository {
         operation_id: OperationId,
     ) -> Result<Option<VersionCleanupAttestationProgress>, RepositoryError> {
         cleanup_attestation::progress(&self.database, operation_id)
+    }
+
+    /// Returns one independently signature-verified participant scan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or signature-inconsistent persisted attestation state.
+    pub fn version_cleanup_participant(
+        &self,
+        operation_id: OperationId,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<VersionCleanupParticipant>, RepositoryError> {
+        cleanup_attestation::participant(&self.database, operation_id, node_id)
     }
 
     /// Returns one independently validated physical cleanup-inventory summary.

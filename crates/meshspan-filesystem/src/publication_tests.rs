@@ -18,11 +18,12 @@ use crate::{
     BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
     DirectoryTrie, DirectoryTrieError, NamespaceComponent, NamespaceLimits, NamespacePath,
     NamespaceReplayDisposition, ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource,
-    ReconciliationFrontier, ReconciliationLimits, VersionReachabilityError,
-    VersionReachabilityScanRequest, VersionReachabilityState, VersionReclaimMode,
-    VersionRetentionCandidate, VersionRetentionCandidateReason, VersionRetentionError,
-    VersionRetentionPageLimit, VersionRetentionPressure, VersionRetentionSelectionPolicy,
-    reachability_root_digest, reachability_root_set_digest, reachability_subject_digest,
+    ReconciliationFrontier, ReconciliationLimits, VersionCleanupRetirementAuthority,
+    VersionCleanupRetirementError, VersionReachabilityError, VersionReachabilityScanRequest,
+    VersionReachabilityState, VersionReclaimMode, VersionRetentionCandidate,
+    VersionRetentionCandidateReason, VersionRetentionError, VersionRetentionPageLimit,
+    VersionRetentionPressure, VersionRetentionSelectionPolicy, reachability_root_digest,
+    reachability_root_set_digest, reachability_subject_digest,
 };
 
 #[test]
@@ -409,16 +410,10 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
             .roots_received,
         1
     );
-    let mut progress =
+    let progress =
         reopened.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
     assert_eq!(progress.state, VersionReachabilityState::Scanning);
-    while progress.state == VersionReachabilityState::Scanning {
-        progress = reopened.advance_version_reachability_scan(
-            request.operation_id,
-            1,
-            UnixMicros::new(123),
-        )?;
-    }
+    let progress = finish_reachability_scan(&mut reopened, request.operation_id, progress, 1)?;
     assert_eq!(progress.state, VersionReachabilityState::Unreachable);
     let proof = progress.proof.ok_or("missing unreachable proof")?;
     assert_eq!(proof.version_id, first.file.version_id);
@@ -436,6 +431,14 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
         reopened.publish_root_file(&republished),
         Err(PublicationError::CleanupFenced)
     ));
+    assert!(matches!(
+        crate::cleanup_fence::reject_version_reference(&reopened.connection, first.file.version_id,),
+        Err(PublicationError::CleanupFenced)
+    ));
+    assert!(matches!(
+        reopened.prepare_snapshot_restore(snapshot_restore_publication(&first, &second)?),
+        Err(PublicationError::CleanupFenced)
+    ));
     assert_eq!(
         reopened.advance_version_reachability_scan(
             request.operation_id,
@@ -444,6 +447,132 @@ fn reachability_scan_is_bounded_restart_safe_and_proves_an_old_version_unreachab
         )?,
         progress
     );
+    Ok(())
+}
+
+#[test]
+fn completed_cleanup_permanently_retires_the_exact_manifest_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
+    let request = reachability_request(candidate, policy, &roots, 165)?;
+    store.begin_version_reachability_scan(&request)?;
+    store.append_version_reachability_roots(&ReachabilityRootPage {
+        operation_id: request.operation_id,
+        start_ordinal: 0,
+        roots,
+    })?;
+    let progress =
+        store.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
+    let progress = finish_reachability_scan(&mut store, request.operation_id, progress, 1)?;
+    let proof = progress.proof.ok_or("missing unreachable proof")?;
+    let authority = retirement_authority(proof.operation_id, proof.subject_digest)?;
+    let mut wrong_subject = authority;
+    wrong_subject.reachability_subject_digest[0] ^= 1;
+    assert!(matches!(
+        store.retire_completed_version_cleanup(wrong_subject),
+        Err(VersionCleanupRetirementError::Stale)
+    ));
+
+    let receipt = store.retire_completed_version_cleanup(authority)?;
+    assert_eq!(receipt.manifest_id, first.file.manifest.manifest_id);
+    assert_eq!(
+        receipt.manifest_root_digest,
+        first.file.manifest.root_digest
+    );
+    assert_eq!(store.retire_completed_version_cleanup(authority)?, receipt);
+    drop(store);
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(130))?;
+    assert_eq!(
+        reopened.retire_completed_version_cleanup(authority)?,
+        receipt
+    );
+    reopened.connection.execute(
+        "UPDATE version_cleanup_reference_fences SET state = 2, released_at = 131
+         WHERE operation_id = ?1",
+        [request.operation_id.as_bytes().as_slice()],
+    )?;
+    let mut republished = following_root_publication(&second, 196, 197, 198, 199, 200)?;
+    republished.file.manifest = first.file.manifest;
+    republished.file.manifest.manifest_id = ContentManifestId::from_bytes([201; 16])?;
+    assert!(matches!(
+        reopened.publish_root_file(&republished),
+        Err(PublicationError::CleanupFenced)
+    ));
+    let mut repeated_scan = request;
+    repeated_scan.operation_id = OperationId::from_bytes([202; 16])?;
+    assert!(matches!(
+        reopened.begin_version_reachability_scan(&repeated_scan),
+        Err(VersionReachabilityError::Conflict)
+    ));
+    Ok(())
+}
+
+#[test]
+fn cleanup_retirement_rejects_invalid_replay_and_persisted_corruption()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let roots = vec![publication_root(&second)];
+    let request = reachability_request(candidate, policy, &roots, 164)?;
+    store.begin_version_reachability_scan(&request)?;
+    store.append_version_reachability_roots(&ReachabilityRootPage {
+        operation_id: request.operation_id,
+        start_ordinal: 0,
+        roots,
+    })?;
+    let progress =
+        store.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
+    let progress = finish_reachability_scan(&mut store, request.operation_id, progress, 64)?;
+    let proof = progress.proof.ok_or("missing unreachable proof")?;
+    let authority = retirement_authority(proof.operation_id, proof.subject_digest)?;
+    assert!(matches!(
+        crate::cleanup_fence::retire_completed_with_fault(&mut store.connection, authority),
+        Err(VersionCleanupRetirementError::InjectedFault)
+    ));
+    let retired_count: i64 =
+        store
+            .connection
+            .query_row("SELECT count(*) FROM retired_manifest_roots", [], |row| {
+                row.get(0)
+            })?;
+    assert_eq!(retired_count, 0);
+    store.retire_completed_version_cleanup(authority)?;
+
+    let mut conflicting = authority;
+    conflicting.completion_digest[0] ^= 1;
+    assert!(matches!(
+        store.retire_completed_version_cleanup(conflicting),
+        Err(VersionCleanupRetirementError::Conflict)
+    ));
+    let mut duplicate_cleanup = authority;
+    duplicate_cleanup.retirement_operation_id = OperationId::from_bytes([239; 16])?;
+    assert!(matches!(
+        store.retire_completed_version_cleanup(duplicate_cleanup),
+        Err(VersionCleanupRetirementError::Conflict)
+    ));
+    store.connection.execute(
+        "UPDATE retired_manifest_roots SET retirement_digest = ?1",
+        [[9_u8; 32].as_slice()],
+    )?;
+    assert!(matches!(
+        store.retire_completed_version_cleanup(authority),
+        Err(VersionCleanupRetirementError::Corrupt)
+    ));
     Ok(())
 }
 
@@ -551,15 +680,9 @@ fn retained_snapshot_root_and_substituted_root_manifest_fail_closed()
         start_ordinal: 0,
         roots,
     })?;
-    let mut progress =
+    let progress =
         store.seal_version_reachability_roots(request.operation_id, UnixMicros::new(122))?;
-    while progress.state == VersionReachabilityState::Scanning {
-        progress = store.advance_version_reachability_scan(
-            request.operation_id,
-            1,
-            UnixMicros::new(123),
-        )?;
-    }
+    let progress = finish_reachability_scan(&mut store, request.operation_id, progress, 1)?;
     assert_eq!(progress.state, VersionReachabilityState::Reachable);
     assert!(progress.proof.is_none());
     Ok(())
@@ -690,6 +813,40 @@ fn reachability_request(
         root_digest: reachability_root_digest(candidate.volume_id, metadata_revision, roots)?,
         root_set_digest: reachability_root_set_digest(candidate.volume_id, roots)?,
     })
+}
+
+fn retirement_authority(
+    source_scan_operation_id: OperationId,
+    reachability_subject_digest: [u8; 32],
+) -> Result<VersionCleanupRetirementAuthority, Box<dyn std::error::Error>> {
+    Ok(VersionCleanupRetirementAuthority {
+        retirement_operation_id: OperationId::from_bytes([240; 16])?,
+        cleanup_operation_id: OperationId::from_bytes([241; 16])?,
+        source_scan_operation_id,
+        reachability_subject_digest,
+        completed_item_count: 3,
+        completion_digest: [243; 32],
+        completion_operation_id: OperationId::from_bytes([244; 16])?,
+        completion_revision: Revision::new(30),
+        completed_at: UnixMicros::new(125),
+        retired_at: UnixMicros::new(126),
+    })
+}
+
+fn finish_reachability_scan(
+    store: &mut VersionPublicationStore,
+    operation_id: OperationId,
+    mut progress: crate::VersionReachabilityProgress,
+    maximum_work: usize,
+) -> Result<crate::VersionReachabilityProgress, VersionReachabilityError> {
+    while progress.state == VersionReachabilityState::Scanning {
+        progress = store.advance_version_reachability_scan(
+            operation_id,
+            maximum_work,
+            UnixMicros::new(123),
+        )?;
+    }
+    Ok(progress)
 }
 
 fn assert_retention_restart_and_corruption(

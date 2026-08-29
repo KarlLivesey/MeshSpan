@@ -1142,6 +1142,18 @@ version_cleanup_completions(
   completion_operation_id UNIQUE -> operations, completed_at, revision UNIQUE
 )
 
+-- node-local branch store
+retired_manifest_roots(
+  retirement_operation_id PK, request_digest UNIQUE,
+  cleanup_operation_id UNIQUE,
+  source_scan_operation_id UNIQUE -> version_cleanup_reference_fences,
+  volume_id, version_id, manifest_id, manifest_root_digest UNIQUE,
+  reachability_subject_digest, completed_item_count,
+  completion_digest UNIQUE, completion_operation_id UNIQUE,
+  completion_revision, completed_at, retired_at,
+  retirement_digest UNIQUE
+)
+
 cleanup_completions(
   cleanup_id, item_index, target_id, target_generation,
   result_kind, provider_tombstone_digest, completed_at,
@@ -1189,7 +1201,11 @@ attempt, shard, target generation, permit digest, canonical provider tombstone
 digest and current reporter incarnation. The final summary is inserted in the
 same transaction as the last item only when the completed count equals the
 sealed count; its digest is canonical item-index order regardless of arrival
-order. Completed items cannot receive more permits.
+order. Completed items cannot receive more permits. Each gateway derives local
+retirement only from the matching authorised intent, its own signature-verified
+participant row and the terminal completion. The active scan fence is retained,
+while a separate digest-bound retired-root row makes the exclusion permanent
+and independently restart-safe.
 
 ## 20. Repair, scrub and drain
 
