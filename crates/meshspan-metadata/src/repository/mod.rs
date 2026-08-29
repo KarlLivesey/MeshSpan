@@ -18,6 +18,9 @@ mod consensus;
 mod federation_grant;
 #[cfg(test)]
 mod federation_grant_tests;
+mod federation_principal;
+#[cfg(test)]
+mod federation_principal_tests;
 mod federation_query;
 mod federation_relationship;
 #[cfg(test)]
@@ -67,6 +70,7 @@ pub use cleanup_permit::{
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use federation_grant::FederationGrantRecord;
+pub use federation_principal::FederatedPrincipalProjectionRecord;
 pub use federation_query::{
     FederationRelationshipRecord, FederationRelationshipState, FederationTrustIdentityRecord,
 };
@@ -216,6 +220,19 @@ impl AuthoritativeRepository {
         grant_id: meshspan_domain::FederationGrantId,
     ) -> Result<Option<FederationGrantRecord>, RepositoryError> {
         federation_grant::active_grant(&self.database, grant_id)
+    }
+
+    /// Returns one current, signed home-swarm principal projection.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed identifiers, state, revision or missing history evidence.
+    pub fn federated_principal_projection(
+        &self,
+        relationship_id: meshspan_domain::FederationRelationshipId,
+        principal: meshspan_domain::FederatedPrincipal,
+    ) -> Result<Option<FederatedPrincipalProjectionRecord>, RepositoryError> {
+        federation_principal::projection(&self.database, relationship_id, principal)
     }
 
     /// Loads and verifies the exact durable consensus state for one membership epoch.
