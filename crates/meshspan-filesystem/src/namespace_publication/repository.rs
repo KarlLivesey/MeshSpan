@@ -8,6 +8,8 @@ mod deletion_intent;
 mod rename_intent;
 #[path = "repository/rename_operation.rs"]
 pub(super) mod rename_operation;
+#[path = "repository/unlink_operation.rs"]
+pub(super) mod unlink_operation;
 
 use meshspan_domain::{
     BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
@@ -709,17 +711,22 @@ fn load_commit_request_digest(
     )?;
     let rename =
         rename_operation::load(connection, operation_id, PublicationDisposition::Replayed)?;
-    match (file, directory, restore, rename) {
-        (Some(receipt), None, None, None) if receipt.namespace_commit_id == commit_id => {
+    let unlink =
+        unlink_operation::load(connection, operation_id, PublicationDisposition::Replayed)?;
+    match (file, directory, restore, rename, unlink) {
+        (Some(receipt), None, None, None, None) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
-        (None, Some(receipt), None, None) if receipt.namespace_commit_id == commit_id => {
+        (None, Some(receipt), None, None, None) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
-        (None, None, Some(receipt), None) if receipt.namespace_commit_id == commit_id => {
+        (None, None, Some(receipt), None, None) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
-        (None, None, None, Some(receipt)) if receipt.namespace_commit_id == commit_id => {
+        (None, None, None, Some(receipt), None) if receipt.namespace_commit_id == commit_id => {
+            Ok(receipt.request_digest)
+        }
+        (None, None, None, None, Some(receipt)) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
         _ => Err(PublicationError::Corrupt),

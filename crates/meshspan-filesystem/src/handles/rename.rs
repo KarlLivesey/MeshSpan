@@ -2,11 +2,137 @@
 
 //! Share-mode admission and logical-path relocation for namespace rename.
 
-use meshspan_domain::{BranchId, HandleId, ObjectId, UnixMicros, VolumeId};
-use rusqlite::{OptionalExtension, Transaction, params};
+use meshspan_domain::{
+    BranchId, FileVersionId, HandleId, ObjectId, ObjectRevisionId, UnixMicros, VolumeId,
+};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::{DELETE_ACCESS, HandleError, expire_stale_handles, path};
-use crate::NamespacePath;
+use crate::{NamespacePath, NamespaceUnlinkAuthority, NamespaceUnlinkPublication};
+
+/// Exact durable delete-on-close work item ready for logical namespace removal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadyNamespaceDelete {
+    /// Branch containing the pending name.
+    pub branch_id: BranchId,
+    /// Volume containing the pending name.
+    pub volume_id: VolumeId,
+    /// Stable file object to remove.
+    pub object_id: ObjectId,
+    /// Handle that originally requested delete-on-close.
+    pub requesting_handle_id: HandleId,
+    /// Latest immutable object revision committed before the handle closed.
+    pub object_revision_id: ObjectRevisionId,
+    /// Latest immutable file version committed before the handle closed.
+    pub file_version_id: FileVersionId,
+    /// Logical path retained by the closed handle.
+    pub path: NamespacePath,
+    /// Authoritative instant at which deletion became pending.
+    pub requested_at: UnixMicros,
+    /// Authoritative instant at which no live handle remained.
+    pub ready_at: UnixMicros,
+}
+
+/// One bounded page of durable delete-on-close work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadyNamespaceDeletePage {
+    /// Exact work items ordered by stable object identity.
+    pub entries: Vec<ReadyNamespaceDelete>,
+    /// Cursor to present after this page, absent when the scan is complete.
+    pub next_after_object_id: Option<ObjectId>,
+}
+
+pub(crate) fn load_ready_deletes(
+    connection: &mut Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    after_object_id: Option<ObjectId>,
+    maximum_results: u16,
+    observed_at: UnixMicros,
+) -> Result<ReadyNamespaceDeletePage, HandleError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    expire_stale_handles(&transaction, observed_at)?;
+    let page = read_ready_deletes(
+        &transaction,
+        branch_id,
+        volume_id,
+        after_object_id,
+        maximum_results,
+    )?;
+    transaction.commit()?;
+    Ok(page)
+}
+
+fn read_ready_deletes(
+    connection: &Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    after_object_id: Option<ObjectId>,
+    maximum_results: u16,
+) -> Result<ReadyNamespaceDeletePage, HandleError> {
+    const MAXIMUM_PAGE: u16 = 1_024;
+    if maximum_results == 0 || maximum_results > MAXIMUM_PAGE {
+        return Err(HandleError::InvalidInput);
+    }
+    let after = after_object_id.map(ObjectId::as_bytes);
+    let fetch_limit = i64::from(maximum_results) + 1;
+    let mut statement = connection.prepare(
+        "SELECT object_id, requesting_handle_id, object_revision_id, version_id,
+                requested_at, ready_at
+         FROM pending_object_deletes
+         WHERE branch_id = ?1 AND volume_id = ?2 AND state = 2
+           AND (?3 IS NULL OR object_id > ?3)
+         ORDER BY object_id LIMIT ?4",
+    )?;
+    let rows = statement.query_map(
+        params![
+            branch_id.as_bytes().as_slice(),
+            volume_id.as_bytes().as_slice(),
+            after.as_ref().map(<[u8; 16]>::as_slice),
+            fetch_limit,
+        ],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        },
+    )?;
+    let mut entries = Vec::with_capacity(usize::from(maximum_results) + 1);
+    for row in rows {
+        let (object, handle, revision, version, requested_at, ready_at) = row?;
+        if ready_at < requested_at {
+            return Err(HandleError::Corrupt);
+        }
+        let requesting_handle_id = super::identifier(&handle, HandleId::from_bytes)?;
+        entries.push(ReadyNamespaceDelete {
+            branch_id,
+            volume_id,
+            object_id: super::identifier(&object, ObjectId::from_bytes)?,
+            requesting_handle_id,
+            object_revision_id: super::identifier(&revision, ObjectRevisionId::from_bytes)?,
+            file_version_id: super::identifier(&version, FileVersionId::from_bytes)?,
+            path: path::load(connection, requesting_handle_id)?,
+            requested_at: UnixMicros::new(requested_at),
+            ready_at: UnixMicros::new(ready_at),
+        });
+    }
+    let has_more = entries.len() > usize::from(maximum_results);
+    if has_more {
+        entries.pop();
+    }
+    let next_after_object_id = has_more
+        .then(|| entries.last().map(|entry| entry.object_id))
+        .flatten();
+    Ok(ReadyNamespaceDeletePage {
+        entries,
+        next_after_object_id,
+    })
+}
 
 pub(crate) fn prepare(
     transaction: &Transaction<'_>,
@@ -30,6 +156,118 @@ pub(crate) fn prepare(
     )?;
     reject_pending_delete(transaction, branch_id, volume_id, object_id)?;
     reject_unfinished_flush(transaction, branch_id, volume_id, object_id)
+}
+
+pub(crate) fn prepare_unlink(
+    transaction: &Transaction<'_>,
+    publication: &NamespaceUnlinkPublication,
+) -> Result<(), HandleError> {
+    match publication.authority {
+        NamespaceUnlinkAuthority::Direct {
+            requesting_handle_id,
+        } => prepare(
+            transaction,
+            publication.branch_id,
+            publication.volume_id,
+            publication.expected_object_id,
+            requesting_handle_id,
+            publication.created_at,
+        ),
+        NamespaceUnlinkAuthority::DeleteOnClose {
+            requesting_handle_id,
+            requested_at,
+            ready_at,
+        } => {
+            expire_stale_handles(transaction, publication.created_at)?;
+            reject_unfinished_flush(
+                transaction,
+                publication.branch_id,
+                publication.volume_id,
+                publication.expected_object_id,
+            )?;
+            let version_id = publication
+                .expected_file_version_id
+                .ok_or(HandleError::InvalidInput)?;
+            let valid: i64 = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM pending_object_deletes pending
+                    WHERE pending.branch_id = ?1 AND pending.volume_id = ?2
+                      AND pending.object_id = ?3 AND pending.requesting_handle_id = ?4
+                      AND pending.object_revision_id = ?5 AND pending.version_id = ?6
+                      AND pending.state = 2 AND pending.requested_at = ?7
+                      AND pending.ready_at = ?8
+                      AND NOT EXISTS(
+                          SELECT 1 FROM open_handles handles
+                          WHERE handles.branch_id = pending.branch_id
+                            AND handles.volume_id = pending.volume_id
+                            AND handles.object_id = pending.object_id
+                            AND handles.state = 1 AND handles.lease_expires_at > ?9
+                      )
+                 )",
+                params![
+                    publication.branch_id.as_bytes().as_slice(),
+                    publication.volume_id.as_bytes().as_slice(),
+                    publication.expected_object_id.as_bytes().as_slice(),
+                    requesting_handle_id.as_bytes().as_slice(),
+                    publication
+                        .expected_object_revision_id
+                        .as_bytes()
+                        .as_slice(),
+                    version_id.as_bytes().as_slice(),
+                    requested_at.get(),
+                    ready_at.get(),
+                    publication.created_at.get(),
+                ],
+                |row| row.get(0),
+            )?;
+            if valid == 1 {
+                Ok(())
+            } else {
+                Err(HandleError::DeletePending)
+            }
+        }
+    }
+}
+
+pub(crate) fn consume_unlink_authority(
+    transaction: &Transaction<'_>,
+    publication: &NamespaceUnlinkPublication,
+) -> Result<(), HandleError> {
+    let NamespaceUnlinkAuthority::DeleteOnClose {
+        requesting_handle_id,
+        requested_at,
+        ready_at,
+    } = publication.authority
+    else {
+        return Ok(());
+    };
+    let version_id = publication
+        .expected_file_version_id
+        .ok_or(HandleError::InvalidInput)?;
+    let removed = transaction.execute(
+        "DELETE FROM pending_object_deletes
+         WHERE branch_id = ?1 AND volume_id = ?2 AND object_id = ?3
+           AND requesting_handle_id = ?4 AND object_revision_id = ?5 AND version_id = ?6
+           AND state = 2 AND requested_at = ?7 AND ready_at = ?8",
+        params![
+            publication.branch_id.as_bytes().as_slice(),
+            publication.volume_id.as_bytes().as_slice(),
+            publication.expected_object_id.as_bytes().as_slice(),
+            requesting_handle_id.as_bytes().as_slice(),
+            publication
+                .expected_object_revision_id
+                .as_bytes()
+                .as_slice(),
+            version_id.as_bytes().as_slice(),
+            requested_at.get(),
+            ready_at.get(),
+        ],
+    )?;
+    if removed == 1 {
+        Ok(())
+    } else {
+        Err(HandleError::Corrupt)
+    }
 }
 
 fn require_delete_handle(

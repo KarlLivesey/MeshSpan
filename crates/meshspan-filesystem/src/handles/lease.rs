@@ -196,7 +196,7 @@ pub(crate) fn close(
     close_handle_row(&transaction, request)?;
     release_handle_locks(&transaction, request)?;
     if handle.delete_on_close {
-        persist_pending_delete(&transaction, request, &handle)?;
+        persist_pending_delete(&transaction, request)?;
     }
     let outcome = advance_pending_delete(&transaction, request, &handle)?;
     let receipt = persist_close_operation(&transaction, request, request_digest, outcome)?;
@@ -475,21 +475,21 @@ fn release_handle_locks(
 fn persist_pending_delete(
     transaction: &Transaction<'_>,
     request: CloseHandleRequest,
-    handle: &ActiveHandle,
 ) -> Result<(), HandleError> {
     transaction.execute(
         "INSERT INTO pending_object_deletes(
             branch_id, volume_id, object_id, requesting_handle_id,
             object_revision_id, version_id, state, requested_at, ready_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, NULL)
+         )
+         SELECT handles.branch_id, handles.volume_id, handles.object_id, handles.handle_id,
+                COALESCE(progress.object_revision_id, handles.object_revision_id),
+                COALESCE(progress.version_id, handles.opened_version_id), 1, ?2, NULL
+         FROM open_handles handles
+         LEFT JOIN handle_flush_progress progress ON progress.handle_id = handles.handle_id
+         WHERE handles.handle_id = ?1
          ON CONFLICT(branch_id, object_id) DO NOTHING",
         params![
-            handle.branch.as_bytes().as_slice(),
-            handle.volume.as_bytes().as_slice(),
-            handle.object.as_bytes().as_slice(),
             request.handle_id.as_bytes().as_slice(),
-            handle.object_revision.as_bytes().as_slice(),
-            handle.version.as_bytes().as_slice(),
             request.observed_at.get(),
         ],
     )?;

@@ -558,6 +558,55 @@ fn dirty_close_flushes_once_before_releasing_the_handle() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn delete_on_close_binds_the_revision_committed_by_its_final_flush()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut open = writable_open(93, 94, 300)?;
+    open.create_disposition = CreateDisposition::OverwriteExisting;
+    open.desired_access = HandleAccess::new(true, true, true)?;
+    open.share_access = HandleShare::new(true, true, true);
+    open.delete_on_close = true;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    service.write_handle(&handle_write(95, &open, 0, b"new")?)?;
+    let request = FilesystemHandleCloseRequest {
+        close: close_request(97, &open, 1, 60)?,
+        flush: Some(flush_request(96, &open, 2, 3, 200)?),
+    };
+    let receipt = service.close_handle(request)?;
+    assert_eq!(
+        receipt.close.outcome,
+        crate::CloseHandleOutcome::DeleteReady
+    );
+    drop(service);
+
+    let mut publications = VersionPublicationStore::open(directory.path(), UnixMicros::new(3))?;
+    let exact: i64 = publications.test_connection().query_row(
+        "SELECT count(*)
+         FROM pending_object_deletes pending
+         JOIN handle_flush_progress progress
+           ON progress.handle_id = pending.requesting_handle_id
+         JOIN open_handles handles ON handles.handle_id = pending.requesting_handle_id
+         WHERE pending.object_revision_id = progress.object_revision_id
+           AND pending.version_id = progress.version_id
+           AND pending.object_revision_id != handles.object_revision_id
+           AND pending.version_id != handles.opened_version_id",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(exact, 1);
+    Ok(())
+}
+
+#[test]
 fn clean_read_only_close_performs_no_content_work() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     seed_file(directory.path())?;

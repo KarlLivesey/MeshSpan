@@ -65,7 +65,8 @@ pub use handles::{
     ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,
     HandleAccess, HandleError, HandleLeaseReceipt, HandleLeaseRequest, HandleShare,
     HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest, LockRangeReceipt, LockRangeRequest,
-    OpenHandleReceipt, OpenHandleRequest, RangeLockKind, UnlockRangeReceipt, UnlockRangeRequest,
+    OpenHandleReceipt, OpenHandleRequest, RangeLockKind, ReadyNamespaceDelete,
+    ReadyNamespaceDeletePage, UnlockRangeReceipt, UnlockRangeRequest,
 };
 pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,
@@ -75,6 +76,7 @@ pub use publication::{
     DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespacePublicationPath,
     NamespacePublicationReceipt, NamespaceReconciliationApplication,
     NamespaceReconciliationReceipt, NamespaceRenamePublication, NamespaceRenameReceipt,
+    NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,
     PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
     SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedReconciliationHead,
     VerifiedSnapshotRestoreHead, VersionPublicationStore,

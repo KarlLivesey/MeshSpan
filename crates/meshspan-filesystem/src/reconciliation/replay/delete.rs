@@ -42,7 +42,7 @@ impl ReplayState {
             && selected.kind == DirectoryEntryKind::Directory
             && selected.object_id == intent.object_id
             && selected.path == intended_path
-            && self.has_descendants(&selected.path)
+            && selected.directory_is_empty == Some(false)
         {
             return self.recover_changed_directory(plan_digest, commit, intent, selected);
         }
@@ -150,9 +150,9 @@ impl ReplayState {
             effect: NamespaceReplayEffect::Upsert,
             source_path: intent.path.clone(),
             target_path,
-            source_object_id: intent.object_id,
+            source_object_id: selected.object_id,
             target_object_id: selected.object_id,
-            source_object_revision_id: intent.object_revision_id,
+            source_object_revision_id: selected.revision_id,
             target_object_revision_id: selected.revision_id,
             target_kind: selected.kind,
             target_entry_generation: selected.generation,
@@ -164,13 +164,6 @@ impl ReplayState {
             mutation: intent.mutation,
             disposition: NamespaceReplayDisposition::Recovered,
         })
-    }
-
-    fn has_descendants(&self, source: &crate::NamespacePath) -> bool {
-        let source_key = path_key(source);
-        self.entries
-            .keys()
-            .any(|key| key.len() > source_key.len() && key.starts_with(&source_key))
     }
 }
 
@@ -230,6 +223,10 @@ fn preserve_delete(
         revision_id: intent.object_revision_id,
         kind: deleted_kind,
         file_version_id: deleted_version,
+        directory_is_empty: match deleted_kind {
+            DirectoryEntryKind::Directory => Some(true),
+            DirectoryEntryKind::File => None,
+        },
         generation: intent.entry_generation,
     });
     NamespaceReplayAction {
