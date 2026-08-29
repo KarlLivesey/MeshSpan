@@ -2,9 +2,13 @@
 
 //! Generated private wire messages plus strict bounded framing and validation.
 
+mod federation_signing;
 mod framing;
 mod validation;
 
+pub use federation_signing::{
+    federation_hello_signing_payload, federation_welcome_signing_payload,
+};
 pub use framing::{
     ValidatedControlEnvelope, ValidatedDataControlEnvelope, ValidatedDataFrame,
     ValidatedFederationEnvelope, WireContractError, WireLimits, decode_control_frame,

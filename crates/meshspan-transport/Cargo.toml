@@ -12,6 +12,7 @@ version.workspace = true
 
 [dependencies]
 bytes.workspace = true
+ed25519-dalek.workspace = true
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-protocol = { path = "../meshspan-protocol" }
 quinn.workspace = true

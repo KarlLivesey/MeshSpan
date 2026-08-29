@@ -3,6 +3,7 @@
 //! Mutually authenticated QUIC connections with certificate-bound node identity and bounded,
 //! independent protocol streams.
 
+mod federation;
 mod identity;
 mod snapshot;
 mod stream;
@@ -23,3 +24,7 @@ pub use tls::{
 
 #[cfg(test)]
 mod tests;
+pub use federation::{
+    AuthenticatedFederationHello, FederationPeerBinding, FederationPeerRegistry,
+    FederationReplayGuard,
+};
