@@ -9,6 +9,7 @@ mod cleanup_worker;
 mod convergence;
 mod driver;
 mod federation_authority;
+mod federation_authority_exchange;
 mod federation_session;
 mod filesystem_authority;
 mod filesystem_convergence;
@@ -55,6 +56,11 @@ pub use convergence::{reconciliation_head_command, snapshot_restore_head_command
 pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};
 pub use federation_authority::{
     FederationAuthorityError, FederationConnectionAuthority, federation_connection_authority,
+};
+pub use federation_authority_exchange::{
+    FederationAuthorityFetchRequest, FederationAuthorityPageQuery, FederationAuthorityPageRecords,
+    FederationAuthorityPageServeRequest, FederationAuthorityPageSource,
+    FederationAuthorityPageSourceError, ServedFederationAuthorityPage,
 };
 pub use federation_session::{
     FederationAcceptRequest, FederationAuthoritySource, FederationDialRequest,
