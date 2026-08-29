@@ -1076,6 +1076,13 @@ impl VersionPublicationStore {
         crate::handles::handle_base_content(&self.connection, handle_id)
     }
 
+    pub(crate) fn prepare_handle_read(
+        &self,
+        request: crate::FilesystemHandleReadRequest,
+    ) -> Result<crate::handles::HandleReadPlan, crate::HandleError> {
+        crate::handles::prepare_read(&self.connection, request)
+    }
+
     #[cfg(test)]
     pub(crate) fn test_connection(&mut self) -> &mut Connection {
         &mut self.connection

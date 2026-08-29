@@ -2,7 +2,10 @@
 
 //! Cross-database orchestration for fenced handles and private write stages.
 
-use meshspan_domain::{HandleId, NodeId, OperationId, PrincipalId, Revision, StageId, UnixMicros};
+use meshspan_contracts::BoundedBytes;
+use meshspan_domain::{
+    FileVersionId, HandleId, NodeId, OperationId, PrincipalId, Revision, StageId, UnixMicros,
+};
 use thiserror::Error;
 
 use crate::{
@@ -67,6 +70,42 @@ pub struct FilesystemHandleWriteReceipt {
     pub stage_outcome: StageWriteOutcome,
     /// Exact durable checkpoint after the write.
     pub checkpoint: Checkpoint,
+}
+
+/// Exact bounded range read through one live logical file handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilesystemHandleReadRequest {
+    /// Stable attempt identity passed to immutable-content providers.
+    pub operation_id: OperationId,
+    /// Handle selecting the immutable base and optional private stage.
+    pub handle_id: HandleId,
+    /// Exact current handle/stage fence.
+    pub handle_fence: u64,
+    /// Authenticated principal bound to the handle.
+    pub principal_id: PrincipalId,
+    /// Authority revision retained by the live handle.
+    pub authorization_revision: Revision,
+    /// Gateway currently holding the handle lease.
+    pub gateway_node_id: NodeId,
+    /// First logical byte requested.
+    pub offset: u64,
+    /// Maximum requested bytes; EOF may produce a shorter result.
+    pub length: u64,
+    /// Exclusive provider-work deadline.
+    pub content_deadline: UnixMicros,
+    /// Authoritative attempt instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Verified bounded bytes and exact private checkpoint observed by one handle read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilesystemHandleReadReceipt {
+    /// Opened immutable version beneath the private stage.
+    pub opened_version_id: FileVersionId,
+    /// Exact private checkpoint sequence, or zero for a read-only handle.
+    pub checkpoint_sequence: u64,
+    /// Verified bytes; length may be shorter than requested at EOF.
+    pub bytes: BoundedBytes,
 }
 
 /// Exact durable-publication intent for one selected writable-handle checkpoint.
@@ -134,6 +173,23 @@ pub enum HandleIoError {
     /// Private-stage persistence or fencing rejected the operation.
     #[error("handle IO private stage failed")]
     Stage(#[from] StageStoreError),
+}
+
+/// Stable failures from an authorised immutable/private-overlay range read.
+#[derive(Debug, Error)]
+pub enum HandleReadError {
+    /// Request bounds, deadline or cross-field relationships are malformed.
+    #[error("filesystem handle read input is invalid")]
+    InvalidInput,
+    /// Live handle authority or immutable namespace state rejected the request.
+    #[error("filesystem handle read authority failed")]
+    Handle(#[from] HandleError),
+    /// Private-stage checkpoint or part verification failed.
+    #[error("filesystem handle read private stage failed")]
+    Stage(#[from] StageStoreError),
+    /// Immutable content retrieval or verification failed.
+    #[error("filesystem handle read content failed")]
+    Content(#[from] crate::ContentReadError),
 }
 
 pub(crate) fn open(
