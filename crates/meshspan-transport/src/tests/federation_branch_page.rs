@@ -7,7 +7,8 @@ use meshspan_domain::{DurationMicros, FederationRelationshipId, MeshId, UnixMicr
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::federation_envelope::Message as FederationMessage;
 use meshspan_protocol::v1::{
-    FederatedBranchPage, FederationEnvelope, FetchFederatedBranchPage, VersionedPayload,
+    FederatedBranchPage, FederatedHistoryObjectHeader, FederationEnvelope,
+    FetchFederatedBranchPage, FetchFederatedHistoryObject, VersionedPayload,
 };
 use rustls::pki_types::CertificateDer;
 
@@ -16,6 +17,7 @@ use crate::{
     FederationLocalIdentityBinding, FederationPeerRegistry, FederationReplayGuard,
     OutboundFederationBranchPage, TransportError, receive_federation, send_federation,
     signed_federation_branch_fetch, signed_federation_branch_page,
+    signed_federation_history_object_fetch, signed_federation_history_object_header,
 };
 
 use super::{AuthorityPageProof, certificate_fingerprint, validated_federation, version};
@@ -75,7 +77,8 @@ pub(super) fn prove_signed_branch_fetch(
         ),
         Err(TransportError::ReplayedFederationMessage)
     ));
-    prove_tampered_fetch_is_rejected(registry, connection, outbound.envelope(), limits)
+    prove_tampered_fetch_is_rejected(registry, connection, outbound.envelope(), limits)?;
+    prove_signed_history_object_fetch(registry, connection, certificate, signing_key, limits)
 }
 
 pub(super) async fn prove_federation_branch_page(
@@ -107,7 +110,126 @@ pub(super) async fn prove_federation_branch_page(
         ),
         Err(TransportError::ReplayedFederationMessage)
     ));
-    prove_hostile_branch_pages(proof, &exchange)
+    prove_hostile_branch_pages(proof, &exchange)?;
+    prove_history_object_header(proof)
+}
+
+fn prove_signed_history_object_fetch(
+    registry: &FederationPeerRegistry,
+    connection: &quinn::Connection,
+    certificate: &CertificateDer<'_>,
+    signing_key: &SigningKey,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    let identity = branch_identity(certificate, signing_key)?;
+    let context = exchange_context(71, 72, 73, 74)?;
+    let outbound = signed_federation_history_object_fetch(
+        &identity,
+        context,
+        history_object_fetch(),
+        limits,
+        UnixMicros::new(1_500_000),
+    )?;
+    let validated = validated_federation(outbound.envelope(), limits)?;
+    let mut replay = federation_replay()?;
+    let authenticated = registry.authenticate_history_object_fetch(
+        connection,
+        &validated,
+        UnixMicros::new(1_500_000),
+        &mut replay,
+    )?;
+    assert_eq!(authenticated.request().export_token, vec![75; 32]);
+    assert_eq!(authenticated.request().object_digest, vec![76; 32]);
+    assert_eq!(
+        authenticated.remote_mesh_id(),
+        identity.binding().local_mesh_id
+    );
+    let mut tampered = outbound.envelope().clone();
+    history_object_fetch_mut(&mut tampered).object_digest[0] ^= 1;
+    let mut fresh_replay = federation_replay()?;
+    assert!(matches!(
+        registry.authenticate_history_object_fetch(
+            connection,
+            &validated_federation(&tampered, limits)?,
+            UnixMicros::new(1_500_000),
+            &mut fresh_replay,
+        ),
+        Err(TransportError::UntrustedFederationPeer)
+    ));
+    Ok(())
+}
+
+fn prove_history_object_header(proof: &AuthorityPageProof<'_>) -> Result<(), Box<dyn Error>> {
+    let client_signing_key = SigningKey::from_bytes(&[42; 32]);
+    let client_identity = FederationLocalIdentity::authenticate(
+        FederationLocalIdentityBinding {
+            relationship_id: proof.authenticated.relationship_id(),
+            local_mesh_id: proof.authenticated.remote_mesh_id(),
+            remote_mesh_id: proof.authenticated.local_mesh_id(),
+            authority_epoch: 1,
+            identity_generation: 1,
+            certificate_fingerprint: certificate_fingerprint(
+                &proof.certificates.client_certificate,
+            ),
+            verifying_key: client_signing_key.verifying_key().to_bytes(),
+            valid_from: UnixMicros::new(1),
+            valid_until: UnixMicros::new(3_000_000),
+        },
+        proof.certificates.client_certificate.as_ref(),
+        &client_signing_key,
+        UnixMicros::new(1_500_000),
+    )?;
+    let request_context = exchange_context(81, 82, 83, 84)?;
+    let fetch = signed_federation_history_object_fetch(
+        &client_identity,
+        request_context,
+        history_object_fetch(),
+        proof.limits,
+        UnixMicros::new(1_500_000),
+    )?;
+    let response_context = FederationExchangeContext::new(
+        request_context.version,
+        request_context.request_id,
+        request_context.operation_id,
+        request_context.trace_id,
+        request_context.deadline,
+        [85; 32],
+    )?;
+    let outbound = signed_federation_history_object_header(
+        proof.server_identity,
+        response_context,
+        history_object_header(),
+        proof.limits,
+        UnixMicros::new(1_500_000),
+    )?;
+    let validated = validated_federation(outbound.envelope(), proof.limits)?;
+    let mut replay = federation_replay()?;
+    let authenticated = proof.registry.authenticate_history_object_header(
+        proof.connection,
+        &validated,
+        fetch.expectation(),
+        UnixMicros::new(1_500_000),
+        &mut replay,
+    )?;
+    assert_eq!(authenticated.export_token(), &[75; 32]);
+    assert_eq!(authenticated.object_digest(), &[76; 32]);
+    assert_eq!(authenticated.declared_length(), 1_500);
+    assert_eq!(authenticated.maximum_frame_bytes(), 1_024);
+
+    let mut tampered = outbound.envelope().clone();
+    history_object_header_mut(&mut tampered).declared_length = 1_499;
+    let mut fresh_replay = federation_replay()?;
+    assert!(matches!(
+        proof.registry.authenticate_history_object_header(
+            proof.connection,
+            &validated_federation(&tampered, proof.limits)?,
+            fetch.expectation(),
+            UnixMicros::new(1_500_000),
+            &mut fresh_replay,
+        ),
+        Err(TransportError::UntrustedFederationPeer)
+    ));
+    Ok(())
 }
 
 struct BranchPageExchange {
@@ -313,6 +435,28 @@ fn branch_page(grant_id: Vec<u8>, scope: VersionedPayload) -> FederatedBranchPag
     }
 }
 
+fn history_object_fetch() -> FetchFederatedHistoryObject {
+    FetchFederatedHistoryObject {
+        grant_id: vec![55; 16],
+        resource_scope: Some(resource_scope(b"volume:finance/folder:quarterly".to_vec())),
+        export_token: vec![75; 32],
+        object_digest: vec![76; 32],
+        signature: Vec::new(),
+    }
+}
+
+fn history_object_header() -> FederatedHistoryObjectHeader {
+    FederatedHistoryObjectHeader {
+        grant_id: vec![55; 16],
+        resource_scope: Some(resource_scope(b"volume:finance/folder:quarterly".to_vec())),
+        export_token: vec![75; 32],
+        object_digest: vec![76; 32],
+        declared_length: 1_500,
+        maximum_frame_bytes: 1_024,
+        signature: Vec::new(),
+    }
+}
+
 fn resource_scope(canonical_bytes: Vec<u8>) -> VersionedPayload {
     VersionedPayload {
         format_version: 1,
@@ -336,6 +480,22 @@ fn branch_fetch_mut(envelope: &mut FederationEnvelope) -> &mut FetchFederatedBra
         unreachable!("fixture branch fetch")
     };
     fetch
+}
+
+fn history_object_fetch_mut(envelope: &mut FederationEnvelope) -> &mut FetchFederatedHistoryObject {
+    let Some(FederationMessage::FetchHistoryObject(request)) = envelope.message.as_mut() else {
+        unreachable!("fixture history object fetch")
+    };
+    request
+}
+
+fn history_object_header_mut(
+    envelope: &mut FederationEnvelope,
+) -> &mut FederatedHistoryObjectHeader {
+    let Some(FederationMessage::HistoryObjectHeader(response)) = envelope.message.as_mut() else {
+        unreachable!("fixture history object header")
+    };
+    response
 }
 
 fn branch_page_resource_mut(envelope: &mut FederationEnvelope) -> &mut VersionedPayload {
