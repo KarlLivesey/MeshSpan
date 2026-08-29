@@ -8,8 +8,11 @@ use meshspan_domain::{NamespaceCommitId, UnixMicros, VolumeId};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::history_records::NamespaceHistoryCommitRecord;
+use super::history_records::NamespaceHistoryImmutableRecord;
 use crate::PublicationError;
 
+#[path = "history_export/object.rs"]
+mod object;
 #[path = "history_export/output.rs"]
 mod output;
 #[path = "history_export/work.rs"]
@@ -44,12 +47,27 @@ pub struct NamespaceHistoryPageRequest {
 /// One bounded page of canonical commits and separately retrievable immutable identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceHistoryPage {
+    /// Stable source-side export identity required for separately fetched immutable bodies.
+    pub export_token: [u8; 32],
     /// Canonical independently validated mutation commits.
     pub commits: Vec<NamespaceHistoryCommitRecord>,
     /// Canonical transfer digests for immutable bodies carried on data streams.
     pub immutable_object_digests: Vec<[u8; 32]>,
     /// Exact continuation, empty only when this export is terminal.
     pub next_cursor: Vec<u8>,
+}
+
+/// Exact active export and advertised immutable body selected for a bounded fetch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespaceHistoryObjectRequest {
+    /// Digest of the current external grant, authority revisions and resource scope.
+    pub scope_binding: [u8; 32],
+    /// Export token returned by the signed history page which advertised the object.
+    pub export_token: [u8; 32],
+    /// Exact immutable transfer digest advertised by that export.
+    pub object_digest: [u8; 32],
+    /// Current authoritative mesh time.
+    pub now: UnixMicros,
 }
 
 pub(super) fn page(
@@ -70,8 +88,16 @@ pub(super) fn page(
     Ok(result)
 }
 
+pub(super) fn history_object(
+    connection: &Connection,
+    request: NamespaceHistoryObjectRequest,
+) -> Result<NamespaceHistoryImmutableRecord, PublicationError> {
+    object::load(connection, request)
+}
+
 struct ValidatedQuery {
     digest: [u8; 32],
+    scope_binding: [u8; 32],
     volume_id: VolumeId,
     heads: Vec<NamespaceCommitId>,
     known: Vec<NamespaceCommitId>,
@@ -107,6 +133,7 @@ impl ValidatedQuery {
         };
         Ok(Self {
             digest,
+            scope_binding: request.scope_binding,
             volume_id: request.volume_id,
             heads,
             known,
@@ -170,16 +197,18 @@ fn initialise(
     transaction: &Transaction<'_>,
     query: &ValidatedQuery,
 ) -> Result<(), PublicationError> {
-    let existing: Option<(Vec<u8>, i64)> = transaction
+    let existing: Option<(Vec<u8>, Vec<u8>, i64)> = transaction
         .query_row(
-            "SELECT volume_id, expires_at FROM namespace_history_exports
+            "SELECT volume_id, scope_binding, expires_at FROM namespace_history_exports
              WHERE request_digest = ?1",
             [query.digest.as_slice()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    if let Some((volume, expires_at)) = existing {
-        if volume.as_slice() != query.volume_id.as_bytes() {
+    if let Some((volume, scope_binding, expires_at)) = existing {
+        if volume.as_slice() != query.volume_id.as_bytes()
+            || scope_binding.as_slice() != query.scope_binding
+        {
             return Err(PublicationError::Corrupt);
         }
         if expires_at > query.now.get() {
@@ -195,13 +224,15 @@ fn initialise(
     }
     transaction.execute(
         "INSERT INTO namespace_history_exports(
-            request_digest, volume_id, next_record_ordinal, complete, created_at, expires_at
-         ) VALUES (?1, ?2, 0, 0, ?3, ?4)",
+            request_digest, volume_id, next_record_ordinal, complete, created_at, expires_at,
+            scope_binding
+         ) VALUES (?1, ?2, 0, 0, ?3, ?4, ?5)",
         params![
             query.digest.as_slice(),
             query.volume_id.as_bytes().as_slice(),
             query.now.get(),
-            query.expires_at.get()
+            query.expires_at.get(),
+            query.scope_binding.as_slice()
         ],
     )?;
     for commit_id in &query.known {

@@ -16,10 +16,10 @@ use crate::publication::load_directory_node;
 use crate::{DirectoryNodeDigest, PublicationError};
 
 pub(super) const WORK_COMMIT: i64 = 1;
-const WORK_REVISION: i64 = 2;
-const WORK_DIRECTORY_NODE: i64 = 3;
-const WORK_FILE_VERSION: i64 = 4;
-const WORK_MANIFEST: i64 = 5;
+pub(super) const WORK_REVISION: i64 = 2;
+pub(super) const WORK_DIRECTORY_NODE: i64 = 3;
+pub(super) const WORK_FILE_VERSION: i64 = 4;
+pub(super) const WORK_MANIFEST: i64 = 5;
 pub(super) const WORK_LAST: i64 = WORK_MANIFEST;
 pub(super) const RECORD_COMMIT: i64 = 1;
 pub(super) const RECORD_IMMUTABLE: i64 = 2;

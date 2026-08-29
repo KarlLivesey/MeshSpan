@@ -39,6 +39,7 @@ pub(super) fn load_page(
         .ok_or(PublicationError::Corrupt)?;
     let next_cursor = next_cursor(transaction, query, next, stored.is_empty())?;
     Ok(NamespaceHistoryPage {
+        export_token: query.digest,
         commits,
         immutable_object_digests,
         next_cursor,

@@ -10,11 +10,11 @@ use tempfile::{TempDir, tempdir};
 
 use super::{
     DATABASE_FILE, DirectoryPublication, DirectoryRevisionTransition, FilePublication, MIGRATIONS,
-    ManifestPublication, NamespaceHistoryLimits, NamespaceHistoryPageRequest,
-    NamespacePublicationPath, NamespacePublicationReceipt, NamespaceReconciliationApplication,
-    NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
-    RootFilePublication, SCHEMA_VERSION, SnapshotRestorePublication, VersionPublicationStore,
-    configure,
+    ManifestPublication, NamespaceHistoryLimits, NamespaceHistoryObjectRequest,
+    NamespaceHistoryPageRequest, NamespacePublicationPath, NamespacePublicationReceipt,
+    NamespaceReconciliationApplication, NamespaceReconciliationReceipt, PublicationDisposition,
+    PublicationError, PublicationPathError, RootFilePublication, SCHEMA_VERSION,
+    SnapshotRestorePublication, VersionPublicationStore, configure,
 };
 
 #[test]
@@ -261,10 +261,10 @@ fn durable_history_pages_are_incremental_exact_and_restart_resumable()
     )?;
     let mut expected_commits = expected.commit_records()?;
     expected_commits.sort_by_key(super::NamespaceHistoryCommitRecord::digest);
-    let mut expected_objects = expected
-        .immutable_records()?
-        .into_iter()
-        .map(|record| record.digest())
+    let expected_records = expected.immutable_records()?;
+    let mut expected_objects = expected_records
+        .iter()
+        .map(super::NamespaceHistoryImmutableRecord::digest)
         .collect::<Vec<_>>();
     expected_objects.sort_unstable();
     drop(expected_store);
@@ -272,6 +272,7 @@ fn durable_history_pages_are_incremental_exact_and_restart_resumable()
     let mut cursor = Vec::new();
     let mut commits = Vec::new();
     let mut objects = Vec::new();
+    let mut export_token = None;
     let mut page_count = 0;
     loop {
         let mut store = fixture.open_home()?;
@@ -282,6 +283,11 @@ fn durable_history_pages_are_incremental_exact_and_restart_resumable()
             |row| row.get(0),
         )?;
         page_count += 1;
+        if let Some(expected_token) = export_token {
+            assert_eq!(page.export_token, expected_token);
+        } else {
+            export_token = Some(page.export_token);
+        }
         assert_eq!(materialised, page_count);
         assert_eq!(page.commits.len() + page.immutable_object_digests.len(), 1);
         commits.extend(page.commits);
@@ -295,6 +301,44 @@ fn durable_history_pages_are_incremental_exact_and_restart_resumable()
     objects.sort_unstable();
     assert_eq!(commits, expected_commits);
     assert_eq!(objects, expected_objects);
+    let store = fixture.open_home()?;
+    let export_token = export_token.ok_or("missing export token")?;
+    for expected in expected_records {
+        let loaded = store.namespace_history_object(NamespaceHistoryObjectRequest {
+            scope_binding: [200; 32],
+            export_token,
+            object_digest: expected.digest(),
+            now: UnixMicros::new(50),
+        })?;
+        assert_eq!(loaded, expected);
+    }
+    assert!(matches!(
+        store.namespace_history_object(NamespaceHistoryObjectRequest {
+            scope_binding: [201; 32],
+            export_token,
+            object_digest: expected_objects[0],
+            now: UnixMicros::new(50),
+        }),
+        Err(PublicationError::InvalidInput)
+    ));
+    assert!(matches!(
+        store.namespace_history_object(NamespaceHistoryObjectRequest {
+            scope_binding: [200; 32],
+            export_token,
+            object_digest: [0; 32],
+            now: UnixMicros::new(50),
+        }),
+        Err(PublicationError::InvalidInput)
+    ));
+    assert!(matches!(
+        store.namespace_history_object(NamespaceHistoryObjectRequest {
+            scope_binding: [200; 32],
+            export_token,
+            object_digest: expected_objects[0],
+            now: UnixMicros::new(100),
+        }),
+        Err(PublicationError::InvalidInput)
+    ));
     Ok(())
 }
 
