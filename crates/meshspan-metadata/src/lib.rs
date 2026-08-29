@@ -25,14 +25,15 @@ pub use command::{
     ConvergedHeadEvidence, CreateActivationPolicy, CreateComponent, CreateGroup,
     CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
     CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission,
-    IssueAuthenticationSession, IssueJoinGrant, IssueVersionCleanupPermit, JoinRoles,
-    NamespaceObjectKind, PermissionScope, PrincipalLifecycleState, ProposeVersionCleanup,
-    RegisterCleanupAttestationKey, RegisterRoutingSigner, RemoveGroupMember,
-    RemoveVolumeSnapshotRoot, ReplaceObjectOwners, RepositoryCommandError,
-    RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode,
-    RevokeAccessActivation, RevokeAuthenticationSession, RevokePermissionGrant, RouteAttestation,
-    RunSnapshotSchedule, SealVersionCleanupInventory, SetObjectGrantInheritance,
-    SnapshotExpiryReason, TagTarget, VersionCleanupAttestation, VersionCleanupItemPlacement,
+    InstallScopeRouteProjection, IssueAuthenticationSession, IssueJoinGrant,
+    IssueVersionCleanupPermit, JoinRoles, NamespaceObjectKind, PermissionScope,
+    PrincipalLifecycleState, ProposeVersionCleanup, RegisterCleanupAttestationKey,
+    RegisterRoutingSigner, RemoveGroupMember, RemoveVolumeSnapshotRoot, ReplaceObjectOwners,
+    RepositoryCommandError, RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot,
+    RetentionReclaimMode, RevokeAccessActivation, RevokeAuthenticationSession,
+    RevokePermissionGrant, RouteAttestation, RunSnapshotSchedule, SealVersionCleanupInventory,
+    SetObjectGrantInheritance, SnapshotExpiryReason, TagTarget, VersionCleanupAttestation,
+    VersionCleanupItemPlacement,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use federation_command::{
