@@ -102,6 +102,53 @@ fn grant_policy_shapes_and_quarantine_evidence_fail_closed()
     Ok(())
 }
 
+#[test]
+fn succession_identity_and_partial_lifecycle_rows_fail_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    fixture.insert_mesh()?;
+    let relationship = [3_u8; 16];
+    let remote = [2_u8; 16];
+    fixture.insert_relationship(relationship, remote, 1, 0)?;
+    let insert = |successor: [u8; 16], state: i64, acceptance: Option<[u8; 32]>| {
+        fixture.database.connection().execute(
+            "INSERT INTO federation_ownership_successions(
+                succession_id, relationship_id, retiring_mesh_id, successor_mesh_id,
+                relationship_authority_epoch, succession_epoch, designation_digest,
+                designation_signer_generation, designation_signature, acceptance_digest,
+                acceptance_signer_generation, acceptance_signature, activation_digest,
+                state, designated_at, accepted_at, activated_at, revoked_at, revision
+             ) VALUES (?1, ?2, ?3, ?4, 1, 1, ?5, 1, ?6, ?7,
+                       NULL, NULL, NULL, ?8, 1, NULL, NULL, NULL, 1)",
+            params![
+                [30_u8; 16].as_slice(),
+                relationship.as_slice(),
+                remote.as_slice(),
+                successor.as_slice(),
+                [31_u8; 32].as_slice(),
+                [32_u8; 64].as_slice(),
+                acceptance.as_ref().map(<[u8; 32]>::as_slice),
+                state,
+            ],
+        )
+    };
+    assert!(insert(remote, 1, None).is_err());
+    assert!(insert(fixture.local_mesh, 2, Some([33; 32])).is_err());
+    insert(fixture.local_mesh, 1, None)?;
+    assert!(
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE federation_ownership_successions SET retiring_mesh_id = ?1
+                 WHERE succession_id = ?2",
+                params![fixture.local_mesh.as_slice(), [30_u8; 16].as_slice()],
+            )
+            .is_err()
+    );
+    Ok(())
+}
+
 struct Fixture {
     _directory: tempfile::TempDir,
     database: PartitionDatabase,

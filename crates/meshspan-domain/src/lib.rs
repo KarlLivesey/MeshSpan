@@ -40,11 +40,11 @@ pub use partitioning::{
 pub use primitives::{
     ActivationId, ActivationPolicyId, AuditEventId, BackupId, BranchId, ComponentInstanceId,
     ContentManifestId, DurationMicros, FaultGroupClassId, FaultGroupId, FederationGrantId,
-    FederationRelationshipId, FileVersionId, GrantId, GroupId, HandleId, HostId, IdentifierError,
-    JoinGrantId, LockId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
-    OperationId, OwnerSetId, PartitionId, PrincipalId, QuarantineId, QuorumPlanId, Revision,
-    RevisionError, RoleId, ScopeId, SessionId, SnapshotId, SnapshotScheduleId, StageId, TagId,
-    TargetId, UnixMicros, VolumeId,
+    FederationRelationshipId, FederationSuccessionId, FileVersionId, GrantId, GroupId, HandleId,
+    HostId, IdentifierError, JoinGrantId, LockId, MeshId, NamespaceCommitId, NodeId, ObjectId,
+    ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuarantineId,
+    QuorumPlanId, Revision, RevisionError, RoleId, ScopeId, SessionId, SnapshotId,
+    SnapshotScheduleId, StageId, TagId, TargetId, UnixMicros, VolumeId,
 };
 pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};

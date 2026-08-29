@@ -17,9 +17,10 @@ use sha2::{Digest, Sha256};
 use crate::RecordName;
 use crate::UpsertFederatedPrincipalProjection;
 use crate::{
-    ApproveFederationRelationship, ProposeFederationRelationship, RecoverFederationRelationship,
+    AcceptFederationSuccessor, ActivateFederationSuccessor, ApproveFederationRelationship,
+    DesignateFederationSuccessor, ProposeFederationRelationship, RecoverFederationRelationship,
     RestrictFederationRelationship, RetireFederationRelationship, RevokeFederationRelationship,
-    RotateFederationTrustIdentity,
+    RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
 use crate::{IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant};
 
@@ -165,6 +166,14 @@ pub enum AuthoritativeCommand {
     RevokeFederationGrant(RevokeFederationGrant),
     /// Advances one signed home-swarm principal projection.
     UpsertFederatedPrincipalProjection(UpsertFederatedPrincipalProjection),
+    /// Persists a retiring swarm's signed pre-authorisation of one recovery successor.
+    DesignateFederationSuccessor(DesignateFederationSuccessor),
+    /// Persists the nominated successor's exact signed acceptance.
+    AcceptFederationSuccessor(AcceptFederationSuccessor),
+    /// Activates an accepted successor and permanently fences the retired swarm.
+    ActivateFederationSuccessor(ActivateFederationSuccessor),
+    /// Cancels a dormant successor designation before activation.
+    RevokeFederationSuccessorDesignation(RevokeFederationSuccessorDesignation),
 }
 
 impl AuthoritativeCommand {
@@ -245,6 +254,10 @@ impl AuthoritativeCommand {
             Self::ReplaceFederationGrant(value) => value.update_digest(digest),
             Self::RevokeFederationGrant(value) => value.update_digest(digest),
             Self::UpsertFederatedPrincipalProjection(value) => value.update_digest(digest),
+            Self::DesignateFederationSuccessor(value) => value.update_digest(digest),
+            Self::AcceptFederationSuccessor(value) => value.update_digest(digest),
+            Self::ActivateFederationSuccessor(value) => value.update_digest(digest),
+            Self::RevokeFederationSuccessorDesignation(value) => value.update_digest(digest),
         }
     }
 }

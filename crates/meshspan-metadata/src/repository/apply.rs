@@ -11,8 +11,8 @@ use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
     cleanup_reclamation, cluster, component, federation_grant, federation_principal,
-    federation_relationship, identity, namespace, retention, routing, session, snapshot_schedule,
-    tags, user_snapshot, version_cleanup, volume_head,
+    federation_relationship, federation_succession, identity, namespace, retention, routing,
+    session, snapshot_schedule, tags, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -349,6 +349,9 @@ fn execute(
     }
     if federation_principal::is_command(command) {
         return federation_principal::execute(transaction, context, command, revision);
+    }
+    if federation_succession::is_command(command) {
+        return federation_succession::execute(transaction, context, command, revision);
     }
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
@@ -793,6 +796,10 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ReplaceFederationGrant(_) => 60,
         AuthoritativeCommand::RevokeFederationGrant(_) => 61,
         AuthoritativeCommand::UpsertFederatedPrincipalProjection(_) => 62,
+        AuthoritativeCommand::DesignateFederationSuccessor(_) => 63,
+        AuthoritativeCommand::AcceptFederationSuccessor(_) => 64,
+        AuthoritativeCommand::ActivateFederationSuccessor(_) => 65,
+        AuthoritativeCommand::RevokeFederationSuccessorDesignation(_) => 66,
     }
 }
 
