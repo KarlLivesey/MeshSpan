@@ -132,6 +132,14 @@ impl LocalDatabase {
     pub fn check_integrity(&self) -> Result<IntegrityReport, MetadataStoreError> {
         check_integrity(&self.connection, LOCAL_SCHEMA_VERSION)
     }
+
+    pub(crate) const fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
+    pub(crate) const fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
 }
 
 fn open_connection(file_path: &Path) -> Result<Connection, MetadataStoreError> {
@@ -232,7 +240,8 @@ mod tests {
 
     use super::{LocalDatabase, MetadataStoreError, PartitionDatabase, open_connection};
     use crate::migration::{
-        local_migration_digest, migrate_partition, migrate_partition_through,
+        local_federation_authority_cache_migration_digest, local_migration_digest,
+        migrate_partition, migrate_partition_through,
         partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
@@ -409,6 +418,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
+        assert_eq!(database.schema_version(), 2);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -452,6 +462,14 @@ mod tests {
                 0x6d, 0x94, 0xdb, 0x99, 0x71, 0xa3, 0xc3, 0x74, 0x3f, 0xce, 0xf1, 0x6b, 0x7c, 0xb3,
                 0x30, 0xdf, 0xd0, 0x7d, 0x63, 0xf7, 0x69, 0xf7, 0xdb, 0xe3, 0x9f, 0x72, 0x9d, 0x2d,
                 0xbb, 0x53, 0xa5, 0x10,
+            ]
+        );
+        assert_eq!(
+            local_federation_authority_cache_migration_digest(),
+            [
+                0x14, 0xb5, 0x12, 0x46, 0x24, 0xbb, 0x2b, 0xf7, 0x14, 0x29, 0x26, 0x35, 0xab, 0x2e,
+                0x15, 0x65, 0xdb, 0x12, 0x7b, 0x72, 0x7a, 0xde, 0xee, 0x88, 0x0a, 0xe7, 0x56, 0x86,
+                0x90, 0x1d, 0x81, 0xd3,
             ]
         );
         assert_eq!(
