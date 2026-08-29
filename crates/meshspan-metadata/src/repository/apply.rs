@@ -359,6 +359,9 @@ fn execute(
         AuthoritativeCommand::ReplaceObjectOwners(value) => {
             namespace::replace_object_owners(transaction, context, value, revision)
         }
+        AuthoritativeCommand::SetObjectGrantInheritance(value) => {
+            namespace::set_grant_inheritance(transaction, *value, revision)
+        }
         AuthoritativeCommand::CreateTag(value) => {
             tags::create(transaction, context, value, revision)
         }
@@ -740,6 +743,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ConfirmVersionCleanupReclamation(_) => 44,
         AuthoritativeCommand::IssueAuthenticationSession(_) => 45,
         AuthoritativeCommand::RevokeAuthenticationSession(_) => 46,
+        AuthoritativeCommand::SetObjectGrantInheritance(_) => 47,
     }
 }
 

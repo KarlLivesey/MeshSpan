@@ -9,7 +9,10 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError};
-use crate::{CommandContext, CreateObject, CreateVolume, NamespaceObjectKind, ReplaceObjectOwners};
+use crate::{
+    CommandContext, CreateObject, CreateVolume, NamespaceObjectKind, ReplaceObjectOwners,
+    SetObjectGrantInheritance,
+};
 
 const MAXIMUM_OWNERS: usize = 1_024;
 const DEFAULT_RETENTION_MICROS: i64 = 2_592_000_000_000;
@@ -175,6 +178,39 @@ pub(super) fn replace_object_owners(
         return Err(RepositoryError::CorruptState);
     }
     update_namespace_revision(transaction, revision)?;
+    Ok(EntityReference {
+        kind: EntityKind::NamespaceObject,
+        id: object,
+    })
+}
+
+pub(super) fn set_grant_inheritance(
+    transaction: &Transaction<'_>,
+    command: SetObjectGrantInheritance,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    let object = command.object_id.as_bytes();
+    let updated = transaction.execute(
+        "UPDATE namespace_objects
+         SET stop_parent_grant_inheritance = ?1, revision = ?2
+         WHERE object_id = ?3 AND object_kind = 1 AND state = 1",
+        params![
+            u8::from(command.stop_parent_grants),
+            to_i64(revision.get())?,
+            object.as_slice(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let updated_mesh = transaction.execute(
+        "UPDATE meshes
+         SET identity_revision = ?1, namespace_revision = ?1, revision = ?1",
+        [to_i64(revision.get())?],
+    )?;
+    if updated_mesh != 1 {
+        return Err(RepositoryError::CorruptState);
+    }
     Ok(EntityReference {
         kind: EntityKind::NamespaceObject,
         id: object,

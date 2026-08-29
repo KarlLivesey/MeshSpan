@@ -12,7 +12,7 @@ use crate::{
     ActivateGrant, AddGroupMember, AuthoritativeCommand, BootstrapMesh, CommandContext,
     CreateActivationPolicy, CreateGroup, CreateObject, CreateUser, CreateVolume, GrantInheritance,
     GrantPermission, IssueAuthenticationSession, NamespaceObjectKind, PartitionDatabase,
-    PermissionScope, RecordName,
+    PermissionScope, RecordName, SetObjectGrantInheritance,
 };
 
 struct Fixture {
@@ -178,6 +178,72 @@ fn sessions_are_fenced_by_identity_assurance_gateway_and_object()
         fixture.repository.evaluate_access(access)?,
         AccessDecision::Denied(AccessDenial::StaleIdentity)
     );
+    Ok(())
+}
+
+#[test]
+fn folder_boundary_stops_higher_grants_but_keeps_grants_scoped_at_the_folder()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = build_fixture(false)?;
+    let administrator = fixture.administrator;
+    let user = fixture.user;
+    let volume = fixture.volume;
+    apply(
+        &mut fixture,
+        administrator,
+        120,
+        AuthoritativeCommand::GrantPermission(GrantPermission {
+            grant_id: GrantId::from_bytes([50; 16])?,
+            subject_principal_id: user,
+            scope: PermissionScope::Volume(volume),
+            rights: Rights::WRITE_DATA,
+            inheritance: GrantInheritance::Descendants,
+            valid_from: None,
+            valid_until: None,
+            activation_policy_id: None,
+        }),
+    )?;
+    issue_session(
+        &mut fixture,
+        user,
+        SessionId::from_bytes([51; 16])?,
+        [52; 32],
+    )?;
+    assert!(matches!(
+        fixture
+            .repository
+            .evaluate_access(request(&fixture, [52; 32], Rights::WRITE_DATA, 200,))?,
+        AccessDecision::Granted(_)
+    ));
+
+    let folder = fixture.folder;
+    apply(
+        &mut fixture,
+        administrator,
+        210,
+        AuthoritativeCommand::SetObjectGrantInheritance(SetObjectGrantInheritance {
+            object_id: folder,
+            stop_parent_grants: true,
+        }),
+    )?;
+    issue_session(
+        &mut fixture,
+        user,
+        SessionId::from_bytes([53; 16])?,
+        [54; 32],
+    )?;
+    assert_eq!(
+        fixture
+            .repository
+            .evaluate_access(request(&fixture, [54; 32], Rights::WRITE_DATA, 220,))?,
+        AccessDecision::Denied(AccessDenial::MissingRights)
+    );
+    assert!(matches!(
+        fixture
+            .repository
+            .evaluate_access(request(&fixture, [54; 32], Rights::READ_DATA, 220,))?,
+        AccessDecision::Granted(_)
+    ));
     Ok(())
 }
 
