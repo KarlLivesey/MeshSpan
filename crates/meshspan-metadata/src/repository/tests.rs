@@ -17,7 +17,7 @@ use meshspan_domain::{
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
-use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
+use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
     ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, PageLimit, PreservedVote,
     PrincipalKind, RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
@@ -1060,6 +1060,62 @@ fn signed_scope_handoff_persists_without_a_dual_writer_window()
     )?;
     verify_persisted_route(&repository, directory.path(), scope_id, destination)?;
     Ok(())
+}
+
+#[test]
+fn every_apply_boundary_rolls_back_permanent_root_scope_creation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let RoutingProofFixture {
+        _directory: _keep_directory_alive,
+        repository,
+        source,
+        destination: _,
+        scope_id,
+        administrator,
+        signer_node,
+        signing_key,
+    } = RoutingProofFixture::open()?;
+    let scope = DelegatedMetadataScope::new(
+        scope_id,
+        MetadataOperationFamily::Namespace,
+        MetadataKeyRange::All,
+    )?;
+    let route = RootDelegatedRoute::new(source, scope, 1, 1)?;
+    let command = create_root_route(source, scope, signer_node, &signing_key, &route);
+    let mut database = repository.into_database();
+    for (offset, fault) in root_apply_faults().into_iter().enumerate() {
+        let seed = 180_u8.saturating_add(u8::try_from(offset)?);
+        assert!(matches!(
+            apply_committed_with_fault(
+                &mut database,
+                LogPosition { index: 4, term: 1 },
+                context(seed, administrator, seed.saturating_add(4), 14, Some(3))?,
+                &command,
+                fault,
+            ),
+            Err(RepositoryError::InjectedFault)
+        ));
+        let retained: (i64, i64, i64) = database.connection().query_row(
+            "SELECT
+                (SELECT count(*) FROM partition_scopes),
+                (SELECT count(*) FROM root_delegated_scopes),
+                (SELECT count(*) FROM partition_routes)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(retained, (0, 0, 0));
+        assert_eq!(read_current_revision(&database)?, Revision::new(3));
+    }
+    Ok(())
+}
+
+const fn root_apply_faults() -> [ApplyFaultPoint; 4] {
+    [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterOperation,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ]
 }
 
 #[test]
