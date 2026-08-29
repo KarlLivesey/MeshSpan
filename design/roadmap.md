@@ -1,7 +1,7 @@
 # Product roadmap
 
-Status: draft for review. This is an implementation dependency order, not a
-claim that documentation is product progress.
+Status: active implementation plan. Stage status is claimed only where the linked
+executable evidence passes.
 
 ## Delivery rules
 
@@ -16,6 +16,9 @@ claim that documentation is product progress.
   model.
 
 ## Stage 0 — lock the contracts
+
+**Status:** complete. The accepted design set is indexed by
+[`design/README.md`](README.md) and its decisions by [`decisions.md`](decisions.md).
 
 **Purpose:** agree what will be built before implementation starts.
 
@@ -183,7 +186,7 @@ Requirements: TOP-001–005, DAT-005, DAT-006, DAT-010–013, TST-002.
 
 **Depends on:** Stages 2–4.
 
-**Status:** in progress. See [`stage-5-evidence.md`](stage-5-evidence.md).
+**Status:** complete. See [`stage-5-evidence.md`](stage-5-evidence.md).
 
 Build:
 

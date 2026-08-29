@@ -1,6 +1,6 @@
 # Stage 5 implementation evidence
 
-Status: in progress, started 2026-08-28.
+Status: complete, started and closed on 2026-08-28.
 
 Stage 5 turns authoritative identity/metadata foundations into one protocol-neutral,
 copy-on-write filesystem service. This document records executable evidence only.
@@ -59,8 +59,8 @@ copy-on-write filesystem service. This document records executable evidence only
   ordering and keys placed under the wrong radix path. Historical roots retain
   unchanged subtrees. A 512-entry executable vector proves constant mutation
   work, while stale revision and stable-object replacement attempts fail without
-  moving the root. Durable node persistence is described next; volume-head
-  integration remains open.
+  moving the root. Durable node persistence is described next; the later branch
+  schema v3 transaction closes the volume-head integration.
 - Branch schema v2 adds a bounded immutable directory-node repository without
   rewriting schema v1 history. Each canonical node encoding is decoded,
   structurally revalidated and rehashed before insertion and after every load;
@@ -78,9 +78,9 @@ copy-on-write filesystem service. This document records executable evidence only
   with one receipt. The request/record/commit/result digests bind every causal
   base and result. Restart replay, stale concurrent base, corrupt receipt/commit/
   object revision, and injected interruption after each of six internal phases
-  prove exact old-or-new atomicity. Gate 2 remains open until durable stage
-  completion and manifest construction are composed with this publication as
-  one recoverable service operation.
+  prove exact old-or-new atomicity. The later receipt-backed commit service closes
+  gate 2 by composing durable stage completion and manifest construction with
+  this publication as one recoverable service operation.
 - Branch schema v4 adds receipt-bound directory creation and generalises file
   publication from a root leaf to a validated root-relative path. Every existing
   ancestor is bound by stable object identity plus exact prior and replacement
@@ -223,8 +223,8 @@ copy-on-write filesystem service. This document records executable evidence only
   only when another entry exists. The cursor binds namespace commit, directory
   object/revision, last name hash and canonical component; a later namespace
   head fails stale rather than mixing pages. Tests prove one-entry paging,
-  reauthorisation, revocation and stale continuation after mutation. Connector
-  conformance remains open.
+  reauthorisation, revocation and stale continuation after mutation. Gate 7 below
+  completes connector conformance.
 - The complete 13-bit protocol-neutral rights vocabulary now has an executable
   authority vector. Each right is granted independently on one exact object,
   evaluated through a freshly fenced real session, bound into a distinct
@@ -349,7 +349,7 @@ copy-on-write filesystem service. This document records executable evidence only
    head rejects without hiding or deleting the local merge. Tests cover the real
    cross-crate path, restart/lost response, conflicting evidence, stale bases,
    broken history and rollback at every metadata transaction boundary.
-4. Snapshots, retention and restore-as-new-head. The first authoritative slice is
+4. [x] Snapshots, retention and restore-as-new-head. The first authoritative slice is
    implemented: a manual snapshot command pins the exact current converged
    commit and root in constant metadata work, records an idempotent audited
    receipt, rejects stale heads and elapsed expiry, survives restart, and exposes
@@ -516,7 +516,7 @@ copy-on-write filesystem service. This document records executable evidence only
    against the real folder provider and verifies exact reporter identity and
    released-byte accounting; the full data-plane proof additionally drives put,
    get, forged sender/write/removal, tombstone replay and reclamation replay.
-5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
+5. [x] Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable
    and tested. Handle-bound random writes, their lock ordering and cross-database
@@ -548,7 +548,7 @@ copy-on-write filesystem service. This document records executable evidence only
    existing all-or-nothing transaction, using the explicit intermediate root.
    The public branch-local rename and unlink transactions and their end-to-end
    durable replay proofs are complete.
-6. Complete nested-group/owner/grant/time/activation permission evaluation.
+6. [x] Complete nested-group/owner/grant/time/activation permission evaluation.
    The authoritative evaluator, session fencing, revocation and principal
    lifecycle transitions are implemented and tested. Operation-time capability
    validation now fronts the implemented mutating handle and namespace service
@@ -559,7 +559,7 @@ copy-on-write filesystem service. This document records executable evidence only
    exposed only through their operation-time object/self/system-authorised
    composition. No connector can treat a raw repository read or administrator
    role as file-data authority.
-7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
+7. [x] Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
    The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
    contract, every creation-capable file disposition, semantic directory
    creation/rename/unlink, authorised access-administration views and two-gateway
@@ -570,9 +570,13 @@ copy-on-write filesystem service. This document records executable evidence only
    transaction, verify canonical commit and intent evidence, reject bounds,
    corruption and identity collisions, and feed the existing deterministic planner.
    The store-level proof has two independently writable databases exchange both
-   branches and produce the same recovered merge after restart. Binding that exchange
-   to the private service messages and proving the complete service composition remains
-   open.
+   branches and produce the same recovered merge after restart. The completed
+   production composition proof now forks two local branches from one converged
+   commit, has two authorised semantic adapters create the same logical filename,
+   restarts both nodes, exchanges their immutable histories through the bounded
+   cluster convergence service, and independently obtains the same merge. It proves
+   both acknowledged source versions survive, exactly one collision becomes a
+   recovered logical copy, imports never move local heads, and a second restart
+   resolves the same durable merge receipt on both nodes.
 
-Stage 5 remains incomplete until every gate is checked and the complete local
-suite passes together.
+Stage 5 has passed every listed gate and the complete local suite together.

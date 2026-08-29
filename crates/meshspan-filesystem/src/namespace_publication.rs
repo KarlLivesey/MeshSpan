@@ -56,6 +56,43 @@ pub(super) fn prepare_snapshot_restore(
     snapshot_restore::prepare(connection, publication, fault)
 }
 
+pub(super) fn ensure_branch(
+    connection: &mut Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    base_commit_id: NamespaceCommitId,
+) -> Result<BranchNamespaceHead, PublicationError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let base = repository::load_commit(&transaction, base_commit_id)?;
+    if base.volume_id != volume_id {
+        return Err(PublicationError::InvalidInput);
+    }
+    if let Some(existing) = repository::load_head(&transaction, branch_id, volume_id)? {
+        return if existing.namespace_commit_id == base_commit_id {
+            Ok(existing)
+        } else {
+            Err(PublicationError::OperationConflict)
+        };
+    }
+    transaction.execute(
+        "INSERT INTO branch_namespace_heads(
+            branch_id, volume_id, namespace_commit_id, head_sequence
+         ) VALUES (?1, ?2, ?3, 1)",
+        rusqlite::params![
+            branch_id.as_bytes().as_slice(),
+            volume_id.as_bytes().as_slice(),
+            base_commit_id.as_bytes().as_slice(),
+        ],
+    )?;
+    transaction.commit()?;
+    Ok(BranchNamespaceHead {
+        branch_id,
+        volume_id,
+        namespace_commit_id: base_commit_id,
+        sequence: 1,
+    })
+}
+
 #[cfg(test)]
 pub(super) fn prepare_snapshot_restore_with_fault(
     connection: &mut Connection,
