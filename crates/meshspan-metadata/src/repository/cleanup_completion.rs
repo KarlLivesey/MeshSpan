@@ -191,7 +191,7 @@ fn validate_receipt(
     }
 }
 
-fn validate_reporter(
+pub(super) fn validate_reporter(
     transaction: &Transaction<'_>,
     node_id: NodeId,
     incarnation: u64,
@@ -344,7 +344,7 @@ fn ordered_completion_digest(
     Ok((count, digest.finalize().into()))
 }
 
-fn load_item(
+pub(super) fn load_item(
     connection: &rusqlite::Connection,
     cleanup_operation_id: OperationId,
     item_index: u64,

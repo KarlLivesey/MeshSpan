@@ -173,6 +173,17 @@ tombstones and cleanup when it returns.
    temporary fence; a completed unreachable proof never does. The separate
    retired-root record preserves exclusion even if temporary fence state is
    later damaged, and exact application retries return the original receipt.
+9. Physical unlink is a later, separately acknowledged transition. The provider
+   returns one immutable `ReclamationReceipt` containing the exact tombstone,
+   original unlink instant, released byte count and canonical digest. Replay
+   returns that original receipt and never accounts the bytes twice. Metadata
+   accepts it only after the matching item tombstone completion, from the same
+   authenticated node at a current incarnation. Individual items may be
+   reclaimed before the whole tombstone inventory completes. Only after every
+   completed item has an exact reclamation receipt does the final transaction
+   expose `bytes_reclaimed`, with a checked byte sum and item-index-ordered
+   digest. Tombstone completion therefore means permanently unreadable;
+   reclamation completion alone means the physical capacity was released.
 
 A path, target ID, shard ID or peer identity by itself can never authorise
 deletion. Expired permits and stale epochs fail closed.

@@ -192,9 +192,19 @@ fn recover_and_unlink_once(
             .is_err()
     );
     assert_eq!(store.journal.capacity()?.committed_bytes, stored_length);
-    store.unlink_tombstoned(receipt, UnixMicros::new(44))?;
+    let reclamation = store.unlink_tombstoned(receipt, UnixMicros::new(44))?;
+    assert_eq!(reclamation.tombstone, receipt);
+    assert_eq!(reclamation.bytes_unlinked_at, UnixMicros::new(44));
+    assert_eq!(reclamation.reclaimed_bytes, stored_length);
+    assert_eq!(
+        reclamation.reclamation_digest,
+        meshspan_contracts::reclamation_receipt_digest(receipt, UnixMicros::new(44), stored_length,)
+    );
     assert_eq!(store.journal.capacity()?.committed_bytes, 0);
-    store.unlink_tombstoned(receipt, UnixMicros::new(45))?;
+    assert_eq!(
+        store.unlink_tombstoned(receipt, UnixMicros::new(45))?,
+        reclamation
+    );
     assert_eq!(store.journal.capacity()?.committed_bytes, 0);
     Ok(())
 }

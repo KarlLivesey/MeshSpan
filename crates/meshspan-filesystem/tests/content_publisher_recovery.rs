@@ -344,7 +344,7 @@ impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
         &mut self,
         receipt: TombstoneReceipt,
         observed_at: UnixMicros,
-    ) -> Result<(), ContractError> {
+    ) -> Result<meshspan_contracts::ReclamationReceipt, ContractError> {
         self.inner.unlink_tombstoned(receipt, observed_at)
     }
 

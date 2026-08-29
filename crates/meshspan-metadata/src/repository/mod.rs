@@ -9,6 +9,7 @@ mod cleanup_attestation;
 mod cleanup_completion;
 mod cleanup_inventory;
 mod cleanup_permit;
+mod cleanup_reclamation;
 mod cluster;
 mod component;
 mod consensus;
@@ -47,6 +48,7 @@ pub use cleanup_permit::{
     MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, VersionCleanupPermitAttempt,
     VersionCleanupPermitAuthority,
 };
+pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
@@ -443,6 +445,31 @@ impl AuthoritativeRepository {
         cleanup_completion::summary(&self.database, operation_id)
     }
 
+    /// Returns one independently validated physical-reclamation confirmation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing/corrupt completion or reclamation state.
+    pub fn version_cleanup_item_reclamation(
+        &self,
+        operation_id: OperationId,
+        item_index: u64,
+    ) -> Result<Option<VersionCleanupItemReclamation>, RepositoryError> {
+        cleanup_reclamation::item(&self.database, operation_id, item_index)
+    }
+
+    /// Returns terminal physical-byte accounting only after every item was reclaimed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt completion, item reclamation or summary state.
+    pub fn version_cleanup_reclamation(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<VersionCleanupReclamation>, RepositoryError> {
+        cleanup_reclamation::summary(&self.database, operation_id)
+    }
+
     /// Returns one stable, bounded page of direct members of a group.
     ///
     /// # Errors
@@ -602,6 +629,8 @@ mod cleanup_completion_tests;
 mod cleanup_inventory_tests;
 #[cfg(test)]
 mod cleanup_permit_tests;
+#[cfg(test)]
+mod cleanup_reclamation_tests;
 #[cfg(test)]
 mod retention_tests;
 #[cfg(test)]

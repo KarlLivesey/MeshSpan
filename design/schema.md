@@ -1142,6 +1142,23 @@ version_cleanup_completions(
   completion_operation_id UNIQUE -> operations, completed_at, revision UNIQUE
 )
 
+version_cleanup_item_reclamations(
+  cleanup_operation_id, item_index,
+  tombstone_digest, bytes_unlinked_at, reclaimed_bytes,
+  reclamation_digest UNIQUE,
+  reporter_node_id -> nodes, reporter_incarnation,
+  reclamation_operation_id UNIQUE -> operations, reclaimed_at, revision UNIQUE,
+  PK(cleanup_operation_id, item_index),
+  FK(cleanup_operation_id, item_index)
+    -> version_cleanup_item_completions
+)
+
+version_cleanup_reclamations(
+  cleanup_operation_id PK -> version_cleanup_completions,
+  reclaimed_item_count, reclaimed_bytes, reclamation_digest UNIQUE,
+  reclamation_operation_id UNIQUE -> operations, reclaimed_at, revision UNIQUE
+)
+
 -- node-local branch store
 retired_manifest_roots(
   retirement_operation_id PK, request_digest UNIQUE,
@@ -1206,6 +1223,13 @@ retirement only from the matching authorised intent, its own signature-verified
 participant row and the terminal completion. The active scan fence is retained,
 while a separate digest-bound retired-root row makes the exclusion permanent
 and independently restart-safe.
+Physical byte accounting is deliberately separate. Each item reclamation must
+bind the exact earlier tombstone completion, a positive released-byte count and
+the canonical provider reclamation digest, and it must be reported by the same
+authenticated node at a current incarnation. The provider's exact replay keeps
+one unlink from incrementing accounting twice. The final reclamation row is
+created only after the completed-item count and reclaimed-item count match; its
+byte total is checked for overflow and its digest is item-index ordered.
 
 ## 20. Repair, scrub and drain
 
