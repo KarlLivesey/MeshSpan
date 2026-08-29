@@ -19,7 +19,9 @@ mod federation_authority_snapshot;
 #[cfg(test)]
 mod federation_backup_test_support;
 mod federation_grant;
+mod federation_grant_cursor;
 mod federation_grant_evidence;
+mod federation_grant_page;
 #[cfg(test)]
 mod federation_grant_tests;
 mod federation_principal;
@@ -90,6 +92,7 @@ pub use cleanup_permit::{
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use federation_authority_snapshot::FederationAuthoritySnapshotError;
+pub use federation_grant_cursor::{FederationGrantCursor, FederationGrantCursorError};
 pub use federation_grant_evidence::{
     FederationGrantRecord, FederationGrantState, FederationGrantTermination,
     FederationGrantTerminationKind,
@@ -283,6 +286,33 @@ impl AuthoritativeRepository {
         grant_id: meshspan_domain::FederationGrantId,
     ) -> Result<Option<FederationGrantRecord>, RepositoryError> {
         federation_grant_evidence::grant(&self.database, grant_id)
+    }
+
+    /// Returns a stable bounded page of complete grants changed within one relationship snapshot.
+    ///
+    /// Every returned grant is reconstructed with bilateral restrictions, termination and
+    /// succession evidence. A metadata revision change invalidates the continuation rather than
+    /// mixing authority snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/mismatched cursors, invalid bounds and corrupt grant or relationship history.
+    pub fn federation_grants_page(
+        &self,
+        relationship_id: meshspan_domain::FederationRelationshipId,
+        after_revision: Revision,
+        snapshot_revision: Revision,
+        after: Option<FederationGrantCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<FederationGrantRecord, FederationGrantCursor>, RepositoryError> {
+        federation_grant_page::grants_by_relationship(
+            &self.database,
+            relationship_id,
+            after_revision,
+            snapshot_revision,
+            after,
+            limit,
+        )
     }
 
     /// Returns one current, signed home-swarm principal projection.
