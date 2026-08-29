@@ -198,17 +198,35 @@ fn authorise_branch_request(
     grants: &(impl FederationBranchAuthoritySource + ?Sized),
     request: &FederationBranchFetchRequest,
 ) -> Result<(), FederationSessionError> {
+    admitted_history_grant(
+        grants,
+        request.relationship_id,
+        request.grant_id,
+        request.resource,
+        request.now,
+    )?;
+    Ok(())
+}
+
+pub(super) fn admitted_history_grant(
+    grants: &(impl FederationBranchAuthoritySource + ?Sized),
+    relationship_id: FederationRelationshipId,
+    grant_id: FederationGrantId,
+    resource: FederationResourceScope,
+    now: UnixMicros,
+) -> Result<crate::EffectiveFederationGrantAuthority, FederationSessionError> {
     let authority = grants
-        .effective_grant_authority(request.relationship_id, request.grant_id, request.now)?
+        .effective_grant_authority(relationship_id, grant_id, now)?
         .ok_or(FederationSessionError::AuthorityUnavailable)?;
-    if authority.grant.grant_id() != request.grant_id
-        || authority.grant.relationship_id() != request.relationship_id
-        || authority.grant.resource() != request.resource
+    if authority.grant.grant_id() != grant_id
+        || authority.grant.relationship_id() != relationship_id
+        || authority.grant.resource() != resource
         || !grant_allows_history_read(authority)
     {
-        return Err(FederationSessionError::AuthorityUnavailable);
+        Err(FederationSessionError::AuthorityUnavailable)
+    } else {
+        Ok(authority)
     }
-    Ok(())
 }
 
 fn admitted_query(
@@ -224,16 +242,7 @@ fn admitted_query(
             .as_ref()
             .ok_or(FederationSessionError::InvalidEnvelope)?,
     )?;
-    let authority = grants
-        .effective_grant_authority(relationship_id, grant_id, now)?
-        .ok_or(FederationSessionError::AuthorityUnavailable)?;
-    if authority.grant.grant_id() != grant_id
-        || authority.grant.relationship_id() != relationship_id
-        || authority.grant.resource() != resource
-        || !grant_allows_history_read(authority)
-    {
-        return Err(FederationSessionError::AuthorityUnavailable);
-    }
+    let authority = admitted_history_grant(grants, relationship_id, grant_id, resource, now)?;
     Ok(FederationBranchPageQuery {
         authority,
         resource,

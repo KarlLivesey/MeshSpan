@@ -7,15 +7,16 @@ use meshspan_domain::{
     ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    FilePublication, ManifestPublication, NamespaceHistoryCommitRecord, NamespaceLimits,
-    NamespacePath, NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
+    FilePublication, ManifestPublication, NamespaceHistoryCommitRecord,
+    NamespaceHistoryImmutableRecord, NamespaceLimits, NamespacePath, NamespacePublicationPath,
+    RootFilePublication, VersionPublicationStore,
 };
 use tempfile::tempdir;
 
 use super::FilesystemFederationHistorySource;
 use crate::{
     EffectiveFederationGrantAuthority, FederationBranchPageQuery, FederationBranchPageSource,
-    FederationBranchPageSourceError,
+    FederationBranchPageSourceError, FederationHistoryObjectQuery, FederationHistoryObjectSource,
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -49,6 +50,17 @@ async fn real_store_pages_after_restart_and_fences_changed_authority()
         .await?;
     assert!(second.branch_commits.is_empty());
     assert_eq!(second.immutable_object_digests.len(), 1);
+    let digest = second.immutable_object_digests[0];
+    let object = restarted
+        .history_object(FederationHistoryObjectQuery {
+            authority: refreshed,
+            resource: refreshed.grant.resource(),
+            export_token: first.export_token,
+            object_digest: digest,
+            now: UnixMicros::new(100),
+        })
+        .await?;
+    NamespaceHistoryImmutableRecord::from_expected_digest(digest, object.canonical_bytes)?;
 
     let changed = test_authority(publication.file.volume_id, Revision::new(5))?;
     assert_eq!(

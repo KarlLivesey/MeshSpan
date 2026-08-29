@@ -228,6 +228,9 @@ pub enum FederationSessionError {
     /// The bounded history source rejected or could not produce an exact page.
     #[error("federation branch page could not be produced")]
     BranchPage(#[from] crate::FederationBranchPageSourceError),
+    /// The advertised immutable history body could not be produced safely.
+    #[error("federation history object could not be produced")]
+    HistoryObject(#[from] crate::FederationHistoryObjectSourceError),
     /// The signed resource scope was not the exact canonical typed form.
     #[error("federation resource scope is invalid")]
     ResourceScope(#[from] crate::FederationResourceWireError),
