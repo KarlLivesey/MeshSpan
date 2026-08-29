@@ -11,9 +11,147 @@ use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
-    AuthoritativeRepository, EntityKind, FederationGrantState, FederationGrantTerminationKind,
-    LogPosition, RepositoryError,
+    AuthoritativeRepository, EntityKind, FederationGrantCursor, FederationGrantCursorError,
+    FederationGrantState, FederationGrantTerminationKind, LogPosition, PageLimit, RepositoryError,
 };
+
+#[test]
+fn relationship_grants_page_stably_and_fail_closed_when_snapshot_changes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare_relationship(&mut repository, fixture.ids)?;
+    let grant_ids = issue_paged_grants(&mut repository, fixture.ids)?;
+    let first_cursor = assert_stable_grant_pages(&repository, fixture.ids, grant_ids)?;
+    assert_snapshot_advance_fences_cursor(&mut repository, fixture.ids, grant_ids, first_cursor)
+}
+
+fn issue_paged_grants(
+    repository: &mut AuthoritativeRepository,
+    ids: FixtureIds,
+) -> Result<[FederationGrantId; 3], Box<dyn std::error::Error>> {
+    let grant_ids = [
+        FederationGrantId::from_bytes([150; 16])?,
+        FederationGrantId::from_bytes([151; 16])?,
+        FederationGrantId::from_bytes([152; 16])?,
+    ];
+    for (offset, grant_id) in grant_ids.iter().enumerate() {
+        let index = 4_u64.saturating_add(u64::try_from(offset)?);
+        let seed = 160_u8.saturating_add(u8::try_from(offset)?.saturating_mul(2));
+        apply(
+            repository,
+            index,
+            context(
+                seed,
+                ids.administrator,
+                seed.saturating_add(1),
+                i64::try_from(index)?,
+                index - 1,
+            )?,
+            &AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
+                grant: grant(ids, *grant_id, storage_policy(50, false)?)?,
+                restrictions: restrictions(ids, 100, 50)?,
+            }),
+        )?;
+    }
+    Ok(grant_ids)
+}
+
+fn assert_stable_grant_pages(
+    repository: &AuthoritativeRepository,
+    ids: FixtureIds,
+    grant_ids: [FederationGrantId; 3],
+) -> Result<FederationGrantCursor, Box<dyn std::error::Error>> {
+    let first = repository.federation_grants_page(
+        ids.relationship,
+        Revision::new(3),
+        Revision::new(6),
+        None,
+        PageLimit::new(1)?,
+    )?;
+    assert_eq!(first.items[0].grant.grant_id(), grant_ids[0]);
+    let first_cursor = first.next.ok_or("first grant continuation missing")?;
+    assert_eq!(first_cursor.snapshot_revision(), Revision::new(6));
+    let cursor_bytes = first_cursor.canonical_bytes();
+    assert_eq!(
+        FederationGrantCursor::from_canonical_bytes(&cursor_bytes)?,
+        first_cursor
+    );
+    let mut corrupt_cursor = cursor_bytes;
+    corrupt_cursor[0] ^= 1;
+    assert_eq!(
+        FederationGrantCursor::from_canonical_bytes(&corrupt_cursor),
+        Err(FederationGrantCursorError::Invalid)
+    );
+    let second = repository.federation_grants_page(
+        ids.relationship,
+        Revision::new(3),
+        Revision::new(6),
+        Some(first_cursor),
+        PageLimit::new(1)?,
+    )?;
+    assert_eq!(second.items[0].grant.grant_id(), grant_ids[1]);
+    let second_cursor = second.next.ok_or("second grant continuation missing")?;
+    let third = repository.federation_grants_page(
+        ids.relationship,
+        Revision::new(3),
+        Revision::new(6),
+        Some(second_cursor),
+        PageLimit::new(1)?,
+    )?;
+    assert_eq!(third.items[0].grant.grant_id(), grant_ids[2]);
+    assert!(third.next.is_none());
+    Ok(first_cursor)
+}
+
+fn assert_snapshot_advance_fences_cursor(
+    repository: &mut AuthoritativeRepository,
+    ids: FixtureIds,
+    grant_ids: [FederationGrantId; 3],
+    stale_cursor: FederationGrantCursor,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        7,
+        context(170, ids.administrator, 171, 7, 6)?,
+        &AuthoritativeCommand::RevokeFederationGrant(RevokeFederationGrant {
+            grant_id: grant_ids[0],
+            expected_authority_epoch: 1,
+            reason: "Page snapshot advanced".to_owned(),
+        }),
+    )?;
+    assert!(matches!(
+        repository.federation_grants_page(
+            ids.relationship,
+            Revision::new(3),
+            Revision::new(6),
+            Some(stale_cursor),
+            PageLimit::new(1)?,
+        ),
+        Err(RepositoryError::StaleRevision)
+    ));
+    let changed = repository.federation_grants_page(
+        ids.relationship,
+        Revision::new(4),
+        Revision::new(7),
+        None,
+        PageLimit::new(3)?,
+    )?;
+    assert_eq!(
+        changed
+            .items
+            .iter()
+            .map(|record| (record.revision, record.grant.grant_id()))
+            .collect::<Vec<_>>(),
+        vec![
+            (Revision::new(5), grant_ids[1]),
+            (Revision::new(6), grant_ids[2]),
+            (Revision::new(7), grant_ids[0]),
+        ]
+    );
+    assert_eq!(changed.items[2].state, FederationGrantState::Revoked);
+    Ok(())
+}
 
 #[test]
 fn every_apply_boundary_rolls_back_complete_grant_replacement()

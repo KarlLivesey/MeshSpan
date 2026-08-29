@@ -626,7 +626,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 15);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        38
+        39
     );
     Ok(())
 }
@@ -785,6 +785,17 @@ fn request_path_queries_are_explicitly_bounded_and_indexed()
          ORDER BY member_principal_id LIMIT 101",
     )?;
     assert!(membership_plan.contains("sqlite_autoindex_group_memberships_1"));
+    let federation_grant_plan = query_plan(
+        &database,
+        "EXPLAIN QUERY PLAN
+         SELECT grant_id, revision FROM federation_grants
+         WHERE relationship_id = X'01010101010101010101010101010101'
+           AND revision > 1 AND revision <= 20
+           AND (revision > 1
+                OR (revision = 1 AND grant_id > X'00000000000000000000000000000000'))
+         ORDER BY revision, grant_id LIMIT 101",
+    )?;
+    assert!(federation_grant_plan.contains("federation_grants_by_relationship_revision"));
     Ok(())
 }
 
