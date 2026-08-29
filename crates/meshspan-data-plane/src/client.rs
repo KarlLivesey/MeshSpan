@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Client side of exact remote shard put and get streams.
+//! Client side of exact remote shard lifecycle streams.
 
-use meshspan_contracts::{BoundedBytes, ShardReadPermit, ShardReceipt, ShardWritePermit};
+use meshspan_contracts::{
+    BoundedBytes, ReclamationReceipt, RemovalPermit, ShardReadPermit, ShardReceipt,
+    ShardWritePermit, TombstoneReceipt, reclamation_receipt_digest, tombstone_receipt_digest,
+};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::data_control_envelope::Message;
 use meshspan_protocol::v1::{
-    DataControlEnvelope, DataFrame, GetShardRequest, PutShardBegin, PutShardFinish, RequestHeader,
+    DataControlEnvelope, DataFrame, DeleteShardRequest, GetShardRequest, PutShardBegin,
+    PutShardFinish, ReclaimShardRequest, RequestHeader,
 };
 use meshspan_transport::{
     StreamKind, open_stream, receive_data_control, receive_data_frame, send_data_control,
@@ -15,7 +19,11 @@ use meshspan_transport::{
 
 use crate::DataPlaneError;
 use crate::capability::{encode_read_permit, encode_write_permit};
-use crate::wire::{receipt, remote_rejection, require_durable, shard, wire_shard};
+use crate::wire::{
+    receipt, reclamation_receipt, remote_rejection, removal_permit_payload, request_context,
+    request_context_without_revision, require_durable, shard, tombstone_receipt,
+    tombstone_receipt_payload, wire_shard,
+};
 
 /// Writes one exact immutable shard and returns only a decoded durable provider receipt.
 ///
@@ -184,6 +192,120 @@ pub async fn get_shard(
         return Err(DataPlaneError::InvalidMessage);
     }
     BoundedBytes::copy_from(&bytes, maximum_shard_bytes).map_err(|_| DataPlaneError::InvalidMessage)
+}
+
+/// Makes one exact shard generation durably unreachable on an authenticated remote provider.
+///
+/// # Errors
+///
+/// Rejects contradictory local authority, transport/wire failure, typed remote rejection and any
+/// receipt that does not bind the exact operation, target, shard and removal permit.
+pub async fn tombstone_shard(
+    connection: &quinn::Connection,
+    header: RequestHeader,
+    permit: RemovalPermit,
+    limits: WireLimits,
+) -> Result<TombstoneReceipt, DataPlaneError> {
+    let context = request_context(&header, permit.catalogue_revision)?;
+    if context.operation_id != permit.operation_id
+        || header.mesh_id.as_slice() != permit.mesh_id.as_bytes()
+        || context.deadline.get() <= 0
+    {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    let (mut send, mut receive) = open_stream(connection, StreamKind::Data).await?;
+    send_data_control(
+        &mut send,
+        &DataControlEnvelope {
+            message: Some(Message::DeleteShardRequest(DeleteShardRequest {
+                header: Some(header),
+                target_id: permit.target_id.as_bytes().to_vec(),
+                target_generation: permit.target_generation,
+                shard: Some(wire_shard(permit.shard)),
+                removal_permit: Some(removal_permit_payload(permit)),
+            })),
+        },
+        limits,
+    )
+    .await?;
+    send.finish()
+        .map_err(meshspan_transport::TransportError::from)?;
+    let result = receive_data_control(&mut receive, limits)
+        .await?
+        .into_inner();
+    let Message::DeleteShardResult(result) =
+        result.message.ok_or(DataPlaneError::InvalidMessage)?
+    else {
+        return Err(DataPlaneError::InvalidMessage);
+    };
+    require_durable(result.result.as_ref())?;
+    let receipt = tombstone_receipt(result.receipt.as_ref())?;
+    if receipt.operation_id != permit.operation_id
+        || receipt.target_id != permit.target_id
+        || receipt.target_generation != permit.target_generation
+        || receipt.shard != permit.shard
+        || receipt.permit_digest != permit.permit_digest
+        || receipt.tombstone_digest != tombstone_receipt_digest(permit)
+    {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    Ok(receipt)
+}
+
+/// Physically unlinks one exact remotely tombstoned shard and returns durable accounting proof.
+///
+/// # Errors
+///
+/// Rejects contradictory local evidence, transport/wire failure, typed remote rejection and any
+/// receipt that does not exactly contain and bind the supplied tombstone.
+pub async fn reclaim_shard(
+    connection: &quinn::Connection,
+    header: RequestHeader,
+    tombstone: TombstoneReceipt,
+    limits: WireLimits,
+) -> Result<ReclamationReceipt, DataPlaneError> {
+    let context = request_context_without_revision(&header)?;
+    if context.operation_id != tombstone.operation_id || context.deadline.get() <= 0 {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    let (mut send, mut receive) = open_stream(connection, StreamKind::Data).await?;
+    send_data_control(
+        &mut send,
+        &DataControlEnvelope {
+            message: Some(Message::ReclaimShardRequest(ReclaimShardRequest {
+                header: Some(header),
+                target_id: tombstone.target_id.as_bytes().to_vec(),
+                target_generation: tombstone.target_generation,
+                shard: Some(wire_shard(tombstone.shard)),
+                tombstone_receipt: Some(tombstone_receipt_payload(tombstone)),
+            })),
+        },
+        limits,
+    )
+    .await?;
+    send.finish()
+        .map_err(meshspan_transport::TransportError::from)?;
+    let result = receive_data_control(&mut receive, limits)
+        .await?
+        .into_inner();
+    let Message::ReclaimShardResult(result) =
+        result.message.ok_or(DataPlaneError::InvalidMessage)?
+    else {
+        return Err(DataPlaneError::InvalidMessage);
+    };
+    require_durable(result.result.as_ref())?;
+    let receipt = reclamation_receipt(result.receipt.as_ref())?;
+    if receipt.tombstone != tombstone
+        || receipt.reclamation_digest
+            != reclamation_receipt_digest(
+                tombstone,
+                receipt.bytes_unlinked_at,
+                receipt.reclaimed_bytes,
+            )
+    {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    Ok(receipt)
 }
 
 async fn send_bytes(

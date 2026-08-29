@@ -2,6 +2,8 @@
 
 //! Provider-neutral server side of the authenticated shard stream state machine.
 
+mod removal;
+
 use meshspan_contracts::{
     BoundedBytes, ContractError, PutShardRequest, ReserveStorageRequest, ShardWritePermit,
     StoragePermitMacKey, StorageProvider, verify_write_permit_mac,
@@ -107,6 +109,14 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             }
             Message::GetShardRequest(request) => {
                 self.serve_get(&mut stream, limits, observed_at, request)
+                    .await
+            }
+            Message::DeleteShardRequest(request) => {
+                self.serve_delete(&mut stream, limits, observed_at, request)
+                    .await
+            }
+            Message::ReclaimShardRequest(request) => {
+                self.serve_reclaim(&mut stream, limits, observed_at, request)
                     .await
             }
             _ => Err(DataPlaneError::InvalidMessage),

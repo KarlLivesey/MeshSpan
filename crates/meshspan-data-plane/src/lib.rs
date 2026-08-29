@@ -10,10 +10,10 @@ mod server;
 mod wire;
 
 pub use capability::{
-    CapabilityCodecError, decode_read_permit, decode_write_permit, encode_read_permit,
-    encode_write_permit,
+    CapabilityCodecError, decode_read_permit, decode_removal_permit, decode_write_permit,
+    encode_read_permit, encode_removal_permit, encode_write_permit,
 };
-pub use client::{get_shard, put_shard};
+pub use client::{get_shard, put_shard, reclaim_shard, tombstone_shard};
 pub use error::DataPlaneError;
 pub use router::RemoteShardRouter;
 pub use server::RemoteShardService;

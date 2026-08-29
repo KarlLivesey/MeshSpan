@@ -82,6 +82,10 @@ implementation claim.
   with different capacity ceilings on each, transfers multi-frame shards to and
   from all six targets, rejects a forged write permit and proves ordinary sibling
   files remain unchanged.
+- The authenticated Quinn adapter now also carries distinct tombstone and
+  physical-reclamation operations. Its real folder-provider proof rejects a
+  forged removal permit and proves exact tombstone and reclamation replay across
+  different observed times without double-accounting released capacity.
 
 ## Closure gates
 

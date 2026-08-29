@@ -364,8 +364,14 @@ copy-on-write filesystem service. This document records executable evidence only
    proof drops and reopens the provider after both a lost tombstone command and
    a lost reclamation command, recovering byte-identical commands without
    duplicate capacity accounting. Substituted dispatch authority fails before
-   provider IO. The authenticated QUIC delete/reclaim dispatch adapter remains
-   outstanding.
+   provider IO. The cleanup worker's asynchronous connection-selection adapter
+   remains outstanding. The underlying authenticated QUIC lifecycle is implemented:
+   distinct bounded delete and reclaim messages carry canonical versioned
+   authority, return exact durable receipts, preserve replayed time/byte
+   accounting and reject forged removal permits. A real Quinn/mTLS test drives
+   put, get, forged deletion, tombstone replay and reclamation replay against the
+   real folder provider. Connection selection and asynchronous cleanup-worker
+   dispatch remain to be composed before this item closes.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

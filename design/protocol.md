@@ -271,18 +271,20 @@ fence an earlier attempt. The replicated record lets restart and lost-response
 recovery reuse the exact committed capability.
 
 `DeleteShardRequest` carries the exact shard identity and a quorum-issued
-`RemovalPermit`. `DeleteShardResult` reports `removed`, `already_absent`,
-`identity_mismatch`, `permit_expired`, `stale_epoch` or a typed local failure.
-The recipient identity comes from mTLS rather than payload claims. A durable
-result is converted to `CompleteVersionCleanupItem` only if its receipt exactly
-matches a committed attempt and its canonical tombstone digest recomputes. The
-metadata state machine repeats those checks, validates the reporter's current
-incarnation and creates a terminal ordered summary only after every sealed item
-has one completion.
+`RemovalPermit`. `DeleteShardResult` contains either the exact durable
+`TombstoneReceipt` or a typed rejection; retrying the same operation returns the
+same receipt. The recipient identity comes from mTLS rather than payload claims.
+A durable result is converted to `CompleteVersionCleanupItem` only if its
+receipt exactly matches a committed attempt and its canonical tombstone digest
+recomputes. The metadata state machine repeats those checks, validates the
+reporter's current incarnation and creates a terminal ordered summary only
+after every sealed item has one completion.
 
-Physical unlink returns a distinct `ReclamationReceipt`; a tombstone receipt is
-never interpreted as evidence that capacity was freed. The receipt binds the
-exact completed tombstone, original provider-journal unlink instant, positive
+`ReclaimShardRequest` carries that exact versioned tombstone receipt to the same
+target generation. `ReclaimShardResult` contains either a distinct durable
+`ReclamationReceipt` or a typed rejection; a tombstone receipt is never
+interpreted as evidence that capacity was freed. The receipt binds the exact
+completed tombstone, original provider-journal unlink instant, positive
 released-byte count and canonical digest. `ConfirmVersionCleanupReclamation`
 is admitted only for the matching completed item and same authenticated node at
 a current incarnation. Per-item results may arrive while other tombstones are

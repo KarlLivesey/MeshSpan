@@ -70,6 +70,19 @@ message DeleteShardResult {
   VersionedPayload receipt = 2;
 }
 
+message ReclaimShardRequest {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  VersionedPayload tombstone_receipt = 5;
+}
+
+message ReclaimShardResult {
+  OperationResult result = 1;
+  VersionedPayload receipt = 2;
+}
+
 message ValidateRemoval {
   RequestHeader header = 1;
   bytes target_id = 2;
@@ -90,5 +103,7 @@ message DataControlEnvelope {
     DeleteShardRequest delete_shard_request = 30;
     DeleteShardResult delete_shard_result = 31;
     ValidateRemoval validate_removal = 32;
+    ReclaimShardRequest reclaim_shard_request = 33;
+    ReclaimShardResult reclaim_shard_result = 34;
   }
 }

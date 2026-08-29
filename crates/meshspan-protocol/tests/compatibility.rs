@@ -6,8 +6,9 @@ use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::data_control_envelope::Message as DataMessage;
 use meshspan_protocol::v1::{
     ComponentSupport, ControlEnvelope, DataControlEnvelope, DataFrame, DeleteShardRequest,
-    NodeHello, NodeRole, Ping, ProtocolVersion, PublishPresence, PutShardBegin, RequestHeader,
-    ShardIdentity, VersionedPayload, VoteRequest, VoteResponse,
+    DeleteShardResult, NodeHello, NodeRole, OperationOutcome, OperationResult, Ping,
+    ProtocolVersion, PublishPresence, PutShardBegin, ReclaimShardRequest, ReclaimShardResult,
+    RequestHeader, ShardIdentity, VersionedPayload, VoteRequest, VoteResponse,
 };
 use meshspan_protocol::{
     WireContractError, WireLimits, decode_control_frame, decode_data_control_frame,
@@ -237,7 +238,54 @@ fn shard_control_requires_bound_authority_and_round_trips() -> Result<(), Box<dy
         encode_data_control_frame(&missing_permit, wire_limits),
         Err(WireContractError::InvalidMessage)
     );
+
+    for accepted in [
+        DataControlEnvelope {
+            message: Some(DataMessage::DeleteShardResult(DeleteShardResult {
+                result: Some(durable_result()),
+                receipt: Some(versioned_payload()),
+            })),
+        },
+        DataControlEnvelope {
+            message: Some(DataMessage::ReclaimShardRequest(ReclaimShardRequest {
+                header: Some(valid_header()),
+                target_id: vec![7; 16],
+                target_generation: 2,
+                shard: Some(valid_shard()),
+                tombstone_receipt: Some(versioned_payload()),
+            })),
+        },
+        DataControlEnvelope {
+            message: Some(DataMessage::ReclaimShardResult(ReclaimShardResult {
+                result: Some(durable_result()),
+                receipt: Some(versioned_payload()),
+            })),
+        },
+    ] {
+        let encoded = encode_data_control_frame(&accepted, wire_limits)?;
+        assert_eq!(
+            decode_data_control_frame(&encoded, wire_limits)?.into_inner(),
+            accepted
+        );
+    }
     Ok(())
+}
+
+fn durable_result() -> OperationResult {
+    OperationResult {
+        outcome: OperationOutcome::Durable.into(),
+        committed_revision: None,
+        error: None,
+        result: None,
+        result_digest: Vec::new(),
+    }
+}
+
+fn versioned_payload() -> VersionedPayload {
+    VersionedPayload {
+        format_version: 1,
+        canonical_bytes: vec![1],
+    }
 }
 
 fn hello_envelope(fixture: &HelloFixture) -> Result<ControlEnvelope, Box<dyn std::error::Error>> {

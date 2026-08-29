@@ -63,6 +63,21 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             validate_operation_result(value.result.as_ref(), limits)?;
             validate_mutation_receipt(value.result.as_ref(), value.receipt.as_ref(), limits)
         }
+        Message::ReclaimShardRequest(value) => {
+            validate_header(
+                value
+                    .header
+                    .as_ref()
+                    .ok_or(WireContractError::InvalidMessage)?,
+            )?;
+            validate_target(&value.target_id, value.target_generation)?;
+            validate_shard(value.shard.as_ref())?;
+            validate_payload(value.tombstone_receipt.as_ref(), limits)
+        }
+        Message::ReclaimShardResult(value) => {
+            validate_operation_result(value.result.as_ref(), limits)?;
+            validate_mutation_receipt(value.result.as_ref(), value.receipt.as_ref(), limits)
+        }
         Message::ValidateRemoval(value) => {
             validate_header(
                 value
