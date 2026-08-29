@@ -12,6 +12,7 @@ mod federation_authority;
 mod federation_authority_exchange;
 mod federation_authority_page_source;
 mod federation_authority_receiver;
+mod federation_authority_sync;
 mod federation_grant_authority;
 mod federation_session;
 mod filesystem_authority;
@@ -71,6 +72,9 @@ pub use federation_authority_page_source::{
 pub use federation_authority_receiver::{
     FederationAuthorityImportError, FederationAuthorityImportLimits, FederationAuthorityUpdate,
     FederationRemoteAuthoritySnapshotReceiver,
+};
+pub use federation_authority_sync::{
+    FederationAuthoritySyncError, FederationAuthoritySyncOutcome, FederationAuthoritySyncRequest,
 };
 pub use federation_grant_authority::{
     EffectiveFederationGrantAuthority, EffectiveFederationGrantAuthorityError,

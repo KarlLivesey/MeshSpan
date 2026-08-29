@@ -33,6 +33,10 @@ fn cache_applies_delta_replays_exactly_and_survives_restart()
         FederationRemoteAuthorityCacheDisposition::Applied
     );
     assert_eq!(
+        database.remote_federation_authority_revision(relationship_id()?)?,
+        Revision::new(5)
+    );
+    assert_eq!(
         database.install_remote_federation_authority(&initial, UnixMicros::new(11))?,
         FederationRemoteAuthorityCacheDisposition::Replayed
     );
@@ -45,6 +49,10 @@ fn cache_applies_delta_replays_exactly_and_survives_restart()
         .remote_federation_authority(relationship_id()?)?
         .ok_or("cache missing")?;
     assert_eq!(cached.authority_revision, Revision::new(8));
+    assert_eq!(
+        database.remote_federation_authority_revision(relationship_id()?)?,
+        Revision::new(8)
+    );
     assert_eq!(cached.observed_at, UnixMicros::new(12));
     assert_eq!(
         cached

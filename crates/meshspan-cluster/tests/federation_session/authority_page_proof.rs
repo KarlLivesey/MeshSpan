@@ -7,18 +7,23 @@ use std::error::Error;
 use meshspan_cluster::{
     FederationAuthorityFetchRequest, FederationAuthorityImportLimits, FederationAuthorityPageQuery,
     FederationAuthorityPageServeRequest, FederationAuthorityPageSource,
-    FederationAuthorityPageSourceError, FederationAuthorityUpdate,
+    FederationAuthorityPageSourceError, FederationAuthoritySyncError,
+    FederationAuthoritySyncOutcome, FederationAuthoritySyncRequest, FederationAuthorityUpdate,
     FederationRemoteAuthoritySnapshotReceiver, federation_connection_authority,
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId, FederationPolicy,
-    FederationRelationshipId, FederationResourceScope, MeshId, PrincipalId, Revision,
+    FederationRelationshipId, FederationResourceScope, MeshId, NodeId, PrincipalId, Revision,
     StorageFederationPolicy, StorageParticipation, UnixMicros,
 };
-use meshspan_metadata::{AuthoritativeCommand, FederationGrantRestriction, IssueFederationGrant};
+use meshspan_metadata::{
+    AuthoritativeCommand, FederationGrantRestriction, FederationRemoteAuthorityCacheDisposition,
+    IssueFederationGrant, LocalDatabase,
+};
 use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_transport::{FederationAuthorityContext, FederationReplayGuard};
+use tempfile::tempdir;
 
 use super::{NOW, SessionProof, prove_admitted_session, replay_guard};
 
@@ -87,8 +92,157 @@ pub(super) async fn prove_rotated_authority(
             .collect::<Vec<_>>(),
         expected_grants
     );
+    prove_persisted_authority_sync(proof, expected_grants).await?;
     prove_authority_cursor_fails_closed(proof, &stream.first_cursor)?;
     Ok(stream.first_cursor)
+}
+
+async fn prove_persisted_authority_sync(
+    proof: &SessionProof<'_>,
+    expected_grants: &[FederationGrantId],
+) -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("local.sqlite3");
+    let node_id = NodeId::from_bytes([101; 16])?;
+    let mut cache = LocalDatabase::open(&database_path, node_id, NOW)?;
+    assert_eq!(
+        cache.remote_federation_authority_revision(proof.relationship_id)?,
+        Revision::ZERO
+    );
+    let page_count = expected_grants.len().saturating_add(1);
+    let mut client_replay = replay_guard()?;
+    let mut server_replay = replay_guard()?;
+    let incomplete_sync = proof.client_runtime.sync_remote_authority(
+        proof.client_connection,
+        proof.client_authority,
+        &mut cache,
+        sync_request(proof.relationship_id, 1, 130)?,
+        &mut client_replay,
+    );
+    let incomplete_serve = async {
+        serve_sync_pages(proof, 1, 140, &mut server_replay)
+            .await
+            .map_err(FederationAuthoritySyncError::from)
+    };
+    let incomplete = tokio::try_join!(incomplete_sync, incomplete_serve);
+    assert!(matches!(
+        incomplete,
+        Err(FederationAuthoritySyncError::Incomplete)
+    ));
+    assert_eq!(
+        cache.remote_federation_authority_revision(proof.relationship_id)?,
+        Revision::ZERO
+    );
+
+    let sync = proof.client_runtime.sync_remote_authority(
+        proof.client_connection,
+        proof.client_authority,
+        &mut cache,
+        sync_request(proof.relationship_id, page_count, 150)?,
+        &mut client_replay,
+    );
+    let serve = async {
+        serve_sync_pages(proof, page_count, 190, &mut server_replay)
+            .await
+            .map_err(FederationAuthoritySyncError::from)
+    };
+    let (outcome, ()) = tokio::try_join!(sync, serve)?;
+    assert_eq!(
+        outcome,
+        FederationAuthoritySyncOutcome::Updated {
+            authority_revision: Revision::new(6),
+            disposition: FederationRemoteAuthorityCacheDisposition::Applied,
+            pages: page_count,
+            records: page_count,
+        }
+    );
+    assert_eq!(
+        cache.remote_federation_authority_revision(proof.relationship_id)?,
+        Revision::new(6)
+    );
+    for grant_id in expected_grants {
+        assert!(
+            cache
+                .remote_federation_grant_authority(proof.relationship_id, *grant_id)?
+                .is_some()
+        );
+    }
+    drop(cache);
+
+    let mut cache = LocalDatabase::open(&database_path, node_id, NOW)?;
+    let sync = proof.client_runtime.sync_remote_authority(
+        proof.client_connection,
+        proof.client_authority,
+        &mut cache,
+        sync_request(proof.relationship_id, 1, 220)?,
+        &mut client_replay,
+    );
+    let serve = async {
+        serve_sync_pages(proof, 1, 230, &mut server_replay)
+            .await
+            .map_err(FederationAuthoritySyncError::from)
+    };
+    let (outcome, ()) = tokio::try_join!(sync, serve)?;
+    assert_eq!(
+        outcome,
+        FederationAuthoritySyncOutcome::Unchanged {
+            authority_revision: Revision::new(6),
+            pages: 1,
+        }
+    );
+    Ok(())
+}
+
+async fn serve_sync_pages(
+    proof: &SessionProof<'_>,
+    page_count: usize,
+    nonce_seed: u8,
+    replay: &mut FederationReplayGuard,
+) -> Result<(), meshspan_cluster::FederationSessionError> {
+    for index in 0..page_count {
+        let offset = u8::try_from(index).unwrap_or(u8::MAX);
+        proof
+            .server_runtime
+            .serve_authority_page(
+                proof.server_connection,
+                proof.server_authority,
+                proof.server_authority,
+                FederationAuthorityPageServeRequest {
+                    response_replay_nonce: [nonce_seed.saturating_add(offset); 32],
+                    now: NOW,
+                },
+                replay,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn sync_request(
+    relationship_id: FederationRelationshipId,
+    page_count: usize,
+    seed: u8,
+) -> Result<FederationAuthoritySyncRequest, Box<dyn Error>> {
+    let contexts = (0..page_count)
+        .map(|index| {
+            let offset = u8::try_from(index).unwrap_or(u8::MAX).saturating_mul(5);
+            FederationAuthorityContext::new(
+                ProtocolVersion { major: 1, minor: 1 },
+                [seed.saturating_add(offset); 16],
+                [seed.saturating_add(offset).saturating_add(1); 16],
+                [seed.saturating_add(offset).saturating_add(2); 16],
+                UnixMicros::new(2_000_000),
+                [seed.saturating_add(offset).saturating_add(3); 32],
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(FederationAuthoritySyncRequest::new(
+        relationship_id,
+        contexts,
+        1,
+        FederationAuthorityImportLimits::new(page_count, page_count, 1_048_576)?,
+        NOW,
+    )?)
 }
 
 async fn exchange_authority_page(

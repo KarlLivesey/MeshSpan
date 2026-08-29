@@ -105,6 +105,18 @@ impl LocalDatabase {
     ) -> Result<Option<CachedFederationGrantAuthority>, FederationRemoteAuthorityCacheError> {
         cache_read::load_exact_grant(self, relationship_id, grant_id)
     }
+
+    /// Returns the latest independently verified remote authority revision, or zero if absent.
+    ///
+    /// # Errors
+    ///
+    /// Rejects persisted relationship bytes, digests, identifiers or revisions which disagree.
+    pub fn remote_federation_authority_revision(
+        &self,
+        relationship_id: FederationRelationshipId,
+    ) -> Result<Revision, FederationRemoteAuthorityCacheError> {
+        cache_read::load_revision(self, relationship_id)
+    }
 }
 
 struct EncodedSnapshot {
