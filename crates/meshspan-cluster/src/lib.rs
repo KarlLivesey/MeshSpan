@@ -16,6 +16,7 @@ mod federation_authority_sync;
 mod federation_branch_authority;
 mod federation_branch_exchange;
 mod federation_branch_page_source;
+mod federation_filesystem_history;
 mod federation_grant_authority;
 mod federation_resource_wire;
 mod federation_session;
@@ -88,9 +89,10 @@ pub use federation_branch_exchange::{
     ServedFederationBranchPage,
 };
 pub use federation_branch_page_source::{
-    FederationBranchPageQuery, FederationBranchPageRecords, FederationBranchPageSource,
-    FederationBranchPageSourceError,
+    FederationBranchPageFuture, FederationBranchPageQuery, FederationBranchPageRecords,
+    FederationBranchPageSource, FederationBranchPageSourceError,
 };
+pub use federation_filesystem_history::FilesystemFederationHistorySource;
 pub use federation_grant_authority::{
     EffectiveFederationGrantAuthority, EffectiveFederationGrantAuthorityError,
     effective_federation_grant_authority,

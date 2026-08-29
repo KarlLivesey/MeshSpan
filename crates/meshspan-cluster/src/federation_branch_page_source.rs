@@ -2,7 +2,10 @@
 
 //! Narrow, bounded source boundary for already-authorised federated history pages.
 
-use meshspan_domain::{FederationResourceScope, NamespaceCommitId, Rights};
+use std::future::Future;
+use std::pin::Pin;
+
+use meshspan_domain::{FederationResourceScope, NamespaceCommitId, Rights, UnixMicros};
 use meshspan_protocol::v1::VersionedPayload;
 use thiserror::Error;
 
@@ -23,6 +26,8 @@ pub struct FederationBranchPageQuery {
     pub cursor: Vec<u8>,
     /// Positive maximum combined commit/object records requested for this page.
     pub limit: u32,
+    /// Current authoritative mesh time used for the durable export lifetime.
+    pub now: UnixMicros,
 }
 
 /// Canonical branch commit records and referenced immutable object identities.
@@ -37,17 +42,23 @@ pub struct FederationBranchPageRecords {
 }
 
 /// Read boundary which cannot be reached with an unauthenticated or unauthorised request.
-pub trait FederationBranchPageSource {
+pub trait FederationBranchPageSource: Send + Sync {
     /// Produces one stable bounded page for an already-authorised exact resource.
     ///
     /// # Errors
     ///
     /// Fails closed for forged cursors, unavailable history or corrupt immutable records.
-    fn branch_page(
-        &self,
-        query: FederationBranchPageQuery,
-    ) -> Result<FederationBranchPageRecords, FederationBranchPageSourceError>;
+    fn branch_page(&self, query: FederationBranchPageQuery) -> FederationBranchPageFuture<'_>;
 }
+
+/// Asynchronous page lookup which may use a designated blocking persistence worker.
+pub type FederationBranchPageFuture<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<FederationBranchPageRecords, FederationBranchPageSourceError>>
+            + Send
+            + 'a,
+    >,
+>;
 
 /// Deliberately non-diagnostic source failures safe across the service boundary.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
