@@ -10,7 +10,7 @@ use super::super::repository::{
 };
 use super::super::{
     DirectoryRevisionResult, LoadedDirectory, load_directory, load_path_editor,
-    mutate_namespace_path,
+    mutate_namespace_path, remove_namespace_path,
 };
 use crate::publication::{
     FilePublication, ManifestPublication, NamespaceReconciliationApplication, PublicationError,
@@ -38,6 +38,18 @@ pub(super) fn apply_action(
     if let BranchMutation::File { version_id } = action.mutation {
         crate::cleanup_fence::reject_version_reference(transaction, version_id)?;
     }
+    let current_root = if let Some(removal) = &action.source_removal {
+        apply_removal(
+            transaction,
+            context,
+            root_object_id,
+            current_root,
+            action,
+            removal,
+        )?
+    } else {
+        current_root
+    };
     let next_root = action
         .target_root_object_revision_id
         .ok_or(PublicationError::InvalidInput)?;
@@ -95,6 +107,65 @@ pub(super) fn apply_action(
         return Err(PublicationError::Corrupt);
     }
     Ok(next_root)
+}
+
+fn apply_removal(
+    transaction: &Transaction<'_>,
+    context: ApplyContext,
+    root_object_id: ObjectId,
+    current_root: ObjectRevisionId,
+    action: &NamespaceReplayAction,
+    removal: &crate::NamespaceReplayRemoval,
+) -> Result<ObjectRevisionId, PublicationError> {
+    if removal.object_id != action.source_object_id
+        || removal.object_revision_id != action.source_object_revision_id
+        || removal.entry_generation == 0
+    {
+        return Err(PublicationError::InvalidInput);
+    }
+    let path = NamespacePublicationPath::new(removal.path.clone(), removal.ancestors.clone())
+        .map_err(|_| PublicationError::InvalidInput)?;
+    let directories = load_action_directories(
+        transaction,
+        context.volume_id,
+        root_object_id,
+        current_root,
+        removal.intermediate_root_object_revision_id,
+        &path,
+    )?;
+    let leaf_name = path.leaf_name().ok_or(PublicationError::InvalidInput)?;
+    let leaf = directories
+        .last()
+        .ok_or(PublicationError::Corrupt)?
+        .editor
+        .lookup(leaf_name)?
+        .ok_or(PublicationError::StaleHead)?;
+    if leaf.object_id() != removal.object_id
+        || leaf.object_revision_id() != removal.object_revision_id
+        || leaf.kind() != mutation_kind(action.mutation)
+        || leaf.generation() != removal.entry_generation
+    {
+        return Err(PublicationError::StaleHead);
+    }
+    let mutation = remove_namespace_path(directories, &path, removal.object_revision_id)?;
+    for record in &mutation.created_nodes {
+        persist_directory_node(transaction, record, context.application.created_at)?;
+    }
+    persist_directory_revisions(
+        transaction,
+        context.volume_id,
+        context.application.created_by,
+        context.application.created_at,
+        &mutation.directories,
+    )?;
+    let selected = mutation
+        .directories
+        .first()
+        .ok_or(PublicationError::Corrupt)?;
+    if selected.new_revision_id != removal.intermediate_root_object_revision_id {
+        return Err(PublicationError::Corrupt);
+    }
+    Ok(removal.intermediate_root_object_revision_id)
 }
 
 fn persist_directory_revisions(

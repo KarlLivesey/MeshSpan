@@ -434,7 +434,7 @@ fn rename_intent_digest_binds_both_paths_generation_and_intermediate_root()
 }
 
 #[test]
-fn rename_intent_cannot_degrade_to_a_destination_only_replay()
+fn rename_intent_plans_one_bound_source_removal_and_destination_insertion()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut commits = vec![commit(1, 1, &[], 1, 10)?, commit(2, 2, &[1], 2, 20)?];
     let mut intent = file_intent(2, &["destination"], 51, None, 62)?;
@@ -444,6 +444,7 @@ fn rename_intent_cannot_degrade_to_a_destination_only_replay()
         source_entry_generation: 1,
         intermediate_root_object_revision_id: revision(19)?,
     });
+    intent.entry_generation = 2;
     bind_intents(&mut commits, std::slice::from_ref(&intent));
     let causal = plan_reconciliation(&commits, &frontier(1, &[2])?, ReconciliationLimits::DEFAULT)?;
     let result = plan_namespace_replay(
@@ -454,10 +455,190 @@ fn rename_intent_cannot_degrade_to_a_destination_only_replay()
             root_object_revision_id: Some(revision(10)?),
             entries: vec![entry(&["source"], 51, 62, DirectoryEntryKind::File)?],
         },
+    )?;
+    let action = &result.actions()[0];
+    let removal = action.source_removal.as_ref().ok_or("missing removal")?;
+    assert_eq!(removal.path, path(&["source"])?);
+    assert_eq!(removal.object_id, object(51)?);
+    assert_eq!(removal.object_revision_id, revision(62)?);
+    assert_eq!(removal.entry_generation, 1);
+    assert_eq!(removal.intermediate_root_object_revision_id, revision(19)?);
+    assert_eq!(action.target_path, path(&["destination"])?);
+    assert_eq!(action.target_object_id, object(51)?);
+    assert_eq!(action.target_object_revision_id, revision(62)?);
+    assert_eq!(action.target_entry_generation, 2);
+    assert_eq!(action.target_root_object_revision_id, Some(revision(20)?));
+    assert_eq!(action.disposition, NamespaceReplayDisposition::Applied);
+    Ok(())
+}
+
+#[test]
+fn destination_conflict_moves_the_source_once_to_a_recovered_name()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut commits = vec![
+        commit(1, 1, &[], 1, 10)?,
+        commit(2, 2, &[1], 3, 20)?,
+        commit(3, 3, &[1], 2, 30)?,
+    ];
+    let rename = rename_file_intent(2, &["destination"], &["source"], 51, 62, 19)?;
+    let create = file_intent(3, &["destination"], 52, None, 63)?;
+    bind_intents(&mut commits, &[rename.clone(), create.clone()]);
+    let causal = plan_reconciliation(
+        &commits,
+        &frontier(1, &[2, 3])?,
+        ReconciliationLimits::DEFAULT,
+    )?;
+    let replay = plan_namespace_replay(
+        &causal,
+        &commits,
+        &[rename, create],
+        &NamespaceReplayBase {
+            root_object_revision_id: Some(revision(10)?),
+            entries: vec![entry(&["source"], 51, 62, DirectoryEntryKind::File)?],
+        },
+    )?;
+    let rename_action = &replay.actions()[1];
+    assert!(rename_action.source_removal.is_some());
+    assert_eq!(
+        rename_action.disposition,
+        NamespaceReplayDisposition::Recovered
     );
+    assert!(
+        rename_action.target_path.components()[0]
+            .display()
+            .contains("recovered")
+    );
+    assert_eq!(rename_action.target_object_id, object(51)?);
+    assert_eq!(rename_action.target_entry_generation, 1);
+    Ok(())
+}
+
+#[test]
+fn competing_renames_preserve_one_original_and_one_logical_copy()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut commits = vec![
+        commit(1, 1, &[], 1, 10)?,
+        commit(2, 2, &[1], 2, 20)?,
+        commit(3, 3, &[1], 3, 30)?,
+    ];
+    let first = rename_file_intent(2, &["home"], &["source"], 51, 62, 19)?;
+    let second = rename_file_intent(3, &["office"], &["source"], 51, 62, 29)?;
+    bind_intents(&mut commits, &[first.clone(), second.clone()]);
+    let causal = plan_reconciliation(
+        &commits,
+        &frontier(1, &[3, 2])?,
+        ReconciliationLimits::DEFAULT,
+    )?;
+    let base = NamespaceReplayBase {
+        root_object_revision_id: Some(revision(10)?),
+        entries: vec![entry(&["source"], 51, 62, DirectoryEntryKind::File)?],
+    };
+    let replay = plan_namespace_replay(&causal, &commits, &[second.clone(), first.clone()], &base)?;
+    let mut reversed_commits = commits.clone();
+    reversed_commits.reverse();
+    let reversed = plan_namespace_replay(&causal, &reversed_commits, &[first, second], &base)?;
+    assert_eq!(replay, reversed);
+    let winner = &replay.actions()[0];
+    let alternative = &replay.actions()[1];
+    assert!(winner.source_removal.is_some());
+    assert_eq!(winner.target_path, path(&["home"])?);
+    assert!(alternative.source_removal.is_none());
+    assert_eq!(alternative.target_path, path(&["office"])?);
+    assert_eq!(
+        alternative.disposition,
+        NamespaceReplayDisposition::Recovered
+    );
+    assert_ne!(alternative.target_object_id, winner.target_object_id);
+    assert_ne!(
+        alternative.target_object_revision_id,
+        winner.target_object_revision_id
+    );
+    assert_ne!(
+        alternative.target_file_version_id,
+        winner.target_file_version_id
+    );
+    assert!(alternative.target_publication_operation_id.is_some());
+    Ok(())
+}
+
+#[test]
+fn concurrent_edit_is_carried_to_the_rename_destination() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut commits = vec![
+        commit(1, 1, &[], 1, 10)?,
+        commit(2, 2, &[1], 2, 20)?,
+        commit(3, 3, &[1], 3, 30)?,
+    ];
+    let edit = file_intent(2, &["source"], 51, Some(61), 62)?;
+    let rename = rename_file_intent(3, &["destination"], &["source"], 51, 61, 29)?;
+    bind_intents(&mut commits, &[edit.clone(), rename.clone()]);
+    let causal = plan_reconciliation(
+        &commits,
+        &frontier(1, &[3, 2])?,
+        ReconciliationLimits::DEFAULT,
+    )?;
+    let replay = plan_namespace_replay(
+        &causal,
+        &commits,
+        &[rename, edit],
+        &NamespaceReplayBase {
+            root_object_revision_id: Some(revision(10)?),
+            entries: vec![entry(&["source"], 51, 61, DirectoryEntryKind::File)?],
+        },
+    )?;
+    let rename_action = &replay.actions()[1];
+    let removal = rename_action
+        .source_removal
+        .as_ref()
+        .ok_or("missing rename removal")?;
+    assert_eq!(removal.object_revision_id, revision(62)?);
+    assert_eq!(rename_action.target_object_revision_id, revision(62)?);
+    assert_eq!(rename_action.target_file_version_id, Some(version(62)?));
+    assert_eq!(
+        rename_action.mutation,
+        BranchMutation::File {
+            version_id: version(62)?
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn directory_rename_into_its_descendant_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    let mut commits = vec![commit(1, 1, &[], 1, 10)?, commit(2, 2, &[1], 2, 20)?];
+    let intent = BranchMutationIntent {
+        commit_id: commit_id(2)?,
+        path: path(&["docs", "nested"])?,
+        ancestors: vec![DirectoryRevisionTransition::new(
+            object(51)?,
+            revision(61)?,
+            revision(63)?,
+        )?],
+        object_id: object(51)?,
+        object_revision_id: revision(61)?,
+        prior_object_revision_id: None,
+        entry_generation: 1,
+        mutation: BranchMutation::CreateDirectory,
+        rename: Some(BranchRenameIntent {
+            source_path: path(&["docs"])?,
+            source_ancestors: Vec::new(),
+            source_entry_generation: 1,
+            intermediate_root_object_revision_id: revision(19)?,
+        }),
+    };
+    bind_intents(&mut commits, std::slice::from_ref(&intent));
+    let causal = plan_reconciliation(&commits, &frontier(1, &[2])?, ReconciliationLimits::DEFAULT)?;
     assert!(matches!(
-        result,
-        Err(crate::ReconciliationError::InvalidInput)
+        plan_namespace_replay(
+            &causal,
+            &commits,
+            &[intent],
+            &NamespaceReplayBase {
+                root_object_revision_id: Some(revision(10)?),
+                entries: vec![entry(&["docs"], 51, 61, DirectoryEntryKind::Directory)?],
+            },
+        ),
+        Err(crate::ReconciliationError::InvalidLineage)
     ));
     Ok(())
 }
@@ -522,6 +703,34 @@ fn file_intent(
     })
 }
 
+fn rename_file_intent(
+    commit: u8,
+    target_components: &[&str],
+    source_components: &[&str],
+    object_id: u8,
+    object_revision: u8,
+    intermediate_root: u8,
+) -> Result<BranchMutationIntent, Box<dyn std::error::Error>> {
+    Ok(BranchMutationIntent {
+        commit_id: commit_id(commit)?,
+        path: path(target_components)?,
+        ancestors: Vec::new(),
+        object_id: object(object_id)?,
+        object_revision_id: revision(object_revision)?,
+        prior_object_revision_id: None,
+        entry_generation: 1,
+        mutation: BranchMutation::File {
+            version_id: version(object_revision)?,
+        },
+        rename: Some(BranchRenameIntent {
+            source_path: path(source_components)?,
+            source_ancestors: Vec::new(),
+            source_entry_generation: 1,
+            intermediate_root_object_revision_id: revision(intermediate_root)?,
+        }),
+    })
+}
+
 fn directory_intent(
     commit: u8,
     components: &[&str],
@@ -552,6 +761,9 @@ fn entry(
         object_id: object(object_id)?,
         object_revision_id: revision(object_revision)?,
         kind,
+        file_version_id: (kind == DirectoryEntryKind::File)
+            .then(|| version(object_revision))
+            .transpose()?,
         entry_generation: 1,
     })
 }

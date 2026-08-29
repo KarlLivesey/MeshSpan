@@ -16,6 +16,8 @@ use crate::{DirectoryEntryKind, DirectoryRevisionTransition, NamespacePath};
 mod digest;
 #[path = "replay/naming.rs"]
 mod naming;
+#[path = "replay/rename.rs"]
+mod rename;
 
 use digest::replay_digest;
 use naming::{
@@ -34,6 +36,8 @@ pub struct NamespaceReplayEntry {
     pub object_revision_id: ObjectRevisionId,
     /// File or directory kind.
     pub kind: DirectoryEntryKind,
+    /// Exact immutable file version, absent for directories.
+    pub file_version_id: Option<FileVersionId>,
     /// Stable incarnation of the canonical leaf name.
     pub entry_generation: u64,
 }
@@ -58,11 +62,30 @@ pub enum NamespaceReplayDisposition {
     AlreadyApplied,
 }
 
+/// Exact source-side removal performed before one replayed rename insertion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespaceReplayRemoval {
+    /// Effective source path at this point in deterministic replay.
+    pub path: NamespacePath,
+    /// Stable object removed from the source name.
+    pub object_id: ObjectId,
+    /// Exact immutable object revision removed from the source name.
+    pub object_revision_id: ObjectRevisionId,
+    /// Stable source-name incarnation required by the removal.
+    pub entry_generation: u64,
+    /// Exact source ancestor transitions after deterministic rebase.
+    pub ancestors: Vec<DirectoryRevisionTransition>,
+    /// Root selected after removal and before destination insertion.
+    pub intermediate_root_object_revision_id: ObjectRevisionId,
+}
+
 /// Exact target transition for one ordered branch intent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceReplayAction {
     /// Source commit being included.
     pub commit_id: NamespaceCommitId,
+    /// Source removal for a rename; absent for ordinary upserts and recovered logical copies.
+    pub source_removal: Option<NamespaceReplayRemoval>,
     /// Source path recorded by the disconnected branch.
     pub source_path: NamespacePath,
     /// Effective path after any recovered-directory remapping.
@@ -127,6 +150,7 @@ struct EffectiveEntry {
     object_id: ObjectId,
     revision_id: ObjectRevisionId,
     kind: DirectoryEntryKind,
+    file_version_id: Option<FileVersionId>,
     generation: u64,
 }
 
@@ -181,12 +205,6 @@ pub fn plan_namespace_replay(
             .get(commit_id)
             .ok_or(ReconciliationError::MissingIntent)?;
         validate_intent(commit, intent)?;
-        // A relocation is deliberately not degraded to the existing one-path upsert. The
-        // two-path replay planner consumes this contract in the following implementation slice;
-        // until then no public authoring path can create it and hostile injected rows fail closed.
-        if intent.rename.is_some() {
-            return Err(ReconciliationError::InvalidInput);
-        }
         actions.push(state.apply(causal_plan.digest(), commit, intent, &commits)?);
     }
     let digest = replay_digest(causal_plan.digest(), base, &actions, state.current_root);
@@ -203,7 +221,10 @@ impl ReplayState {
         let mut objects = BTreeMap::new();
         let mut revisions = BTreeMap::new();
         for entry in &base.entries {
-            if entry.entry_generation == 0 || entry.path.components().is_empty() {
+            if entry.entry_generation == 0
+                || entry.path.components().is_empty()
+                || ((entry.kind == DirectoryEntryKind::File) != entry.file_version_id.is_some())
+            {
                 return Err(ReconciliationError::InvalidInput);
             }
             let effective = EffectiveEntry {
@@ -211,6 +232,7 @@ impl ReplayState {
                 object_id: entry.object_id,
                 revision_id: entry.object_revision_id,
                 kind: entry.kind,
+                file_version_id: entry.file_version_id,
                 generation: entry.entry_generation,
             };
             if entries
@@ -239,6 +261,9 @@ impl ReplayState {
         intent: &BranchMutationIntent,
         commits: &BTreeMap<NamespaceCommitId, &ReconciliationCommit>,
     ) -> Result<NamespaceReplayAction, ReconciliationError> {
+        if let Some(rename) = &intent.rename {
+            return self.apply_rename(plan_digest, commit, intent, rename, commits);
+        }
         let source_path = intent.path.clone();
         let selection = self.select_leaf(plan_digest, commit, intent)?;
         let LeafSelection::Change {
@@ -279,6 +304,7 @@ impl ReplayState {
             object_id: target_object,
             revision_id: target_revision,
             kind: target_kind,
+            file_version_id,
             generation,
         };
         self.entries.insert(path_key(&target_path), target.clone());
@@ -290,6 +316,7 @@ impl ReplayState {
         }
         Ok(NamespaceReplayAction {
             commit_id: commit.commit_id,
+            source_removal: None,
             source_path,
             target_path,
             source_object_id: intent.object_id,
@@ -418,7 +445,15 @@ impl ReplayState {
         &self,
         intent: &BranchMutationIntent,
     ) -> Result<NamespacePath, ReconciliationError> {
-        for (index, ancestor) in intent.ancestors.iter().enumerate().rev() {
+        self.effective_path_for(&intent.path, &intent.ancestors)
+    }
+
+    fn effective_path_for(
+        &self,
+        path: &NamespacePath,
+        ancestors: &[DirectoryRevisionTransition],
+    ) -> Result<NamespacePath, ReconciliationError> {
+        for (index, ancestor) in ancestors.iter().enumerate().rev() {
             if let Some(target) = self
                 .revisions
                 .get(&ancestor.expected_revision_id())
@@ -430,12 +465,12 @@ impl ReplayState {
                     return Err(ReconciliationError::InvalidLineage);
                 }
                 let mut components = target.path.components().to_vec();
-                components.extend_from_slice(&intent.path.components()[index + 1..]);
+                components.extend_from_slice(&path.components()[index + 1..]);
                 return NamespacePath::from_stored_components(components)
                     .map_err(|_| ReconciliationError::BoundsExceeded);
             }
         }
-        Ok(intent.path.clone())
+        Ok(path.clone())
     }
 
     fn recovered_target(
@@ -491,8 +526,18 @@ impl ReplayState {
         intent: &BranchMutationIntent,
         target_path: &NamespacePath,
     ) -> Result<Vec<DirectoryRevisionTransition>, ReconciliationError> {
-        let mut transitions = Vec::with_capacity(intent.ancestors.len());
-        for (index, source) in intent.ancestors.iter().enumerate() {
+        self.advance_ancestors_for(plan_digest, commit, &intent.ancestors, target_path)
+    }
+
+    fn advance_ancestors_for(
+        &mut self,
+        plan_digest: [u8; 32],
+        commit: &ReconciliationCommit,
+        source_ancestors: &[DirectoryRevisionTransition],
+        target_path: &NamespacePath,
+    ) -> Result<Vec<DirectoryRevisionTransition>, ReconciliationError> {
+        let mut transitions = Vec::with_capacity(source_ancestors.len());
+        for (index, source) in source_ancestors.iter().enumerate() {
             let source_target = self
                 .revisions
                 .get(&source.expected_revision_id())
@@ -646,6 +691,29 @@ fn validate_intent(
             return Err(ReconciliationError::InvalidLineage);
         }
     }
+    if let Some(rename) = &intent.rename {
+        if rename.source_entry_generation == 0
+            || rename.source_ancestors.len().checked_add(1)
+                != Some(rename.source_path.components().len())
+            || path_key(&rename.source_path) == path_key(&intent.path)
+            || rename.intermediate_root_object_revision_id == commit.root_object_revision_id
+        {
+            return Err(ReconciliationError::InvalidInput);
+        }
+        let mut source_objects = BTreeSet::from([intent.object_id]);
+        let mut source_revisions = BTreeSet::from([
+            intent.object_revision_id,
+            rename.intermediate_root_object_revision_id,
+        ]);
+        for ancestor in &rename.source_ancestors {
+            if !source_objects.insert(ancestor.object_id())
+                || !source_revisions.insert(ancestor.expected_revision_id())
+                || !source_revisions.insert(ancestor.new_revision_id())
+            {
+                return Err(ReconciliationError::InvalidLineage);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -690,6 +758,7 @@ fn already_applied(
 ) -> NamespaceReplayAction {
     NamespaceReplayAction {
         commit_id: commit.commit_id,
+        source_removal: None,
         source_path: intent.path.clone(),
         target_path,
         source_object_id: intent.object_id,

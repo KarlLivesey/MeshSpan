@@ -26,7 +26,6 @@ pub(super) fn validate_shape(intent: &BranchMutationIntent) -> Result<(), Public
             .zip(rename.source_path.components())
             .all(|(target, source)| target.canonical() == source.canonical());
     if rename.source_entry_generation == 0
-        || rename.source_entry_generation != intent.entry_generation
         || rename.source_ancestors.len().checked_add(1)
             != Some(rename.source_path.components().len())
         || same_canonical_path
