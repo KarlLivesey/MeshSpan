@@ -27,6 +27,7 @@ mod receipt;
 mod retention;
 mod routing;
 mod session;
+mod session_access;
 mod snapshot;
 mod snapshot_schedule;
 mod tags;
@@ -73,6 +74,9 @@ pub use reachability::{
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use retention::VersionRetentionPolicy;
+pub use session_access::{
+    SessionAccessCapability, SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
+};
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use snapshot_schedule::{SnapshotSchedule, SnapshotScheduleCursor};
 pub use user_snapshot::{
@@ -227,6 +231,21 @@ impl AuthoritativeRepository {
         request: AccessRequest,
     ) -> Result<AccessDecision, RepositoryError> {
         access_evaluation::evaluate(&self.database, request)
+    }
+
+    /// Authenticates one session and gateway for a non-filesystem administration read.
+    ///
+    /// The returned capability binds the current identity and system-role projection. It grants
+    /// no file rights; callers must still enforce self-only or system-management scope.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if persisted session, gateway, identity or role evidence is malformed.
+    pub fn evaluate_session_access(
+        &self,
+        request: SessionAccessRequest,
+    ) -> Result<SessionAccessDecision, RepositoryError> {
+        session_access::evaluate(&self.database, request)
     }
 
     /// Returns a stable bounded page from one object's current immutable owner set.

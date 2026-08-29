@@ -389,6 +389,14 @@ An administration client may be omitted or replaced without changing daemon
 state. It cannot load SQL, call internal Rust traits or gain rights unavailable
 to its authenticated principal.
 
+The committed administration service authenticates the session and live gateway
+before loading any bounded access-control page. Object owners and grants require
+`READ_PERMISSIONS` on the exact object to which the requested scope applies.
+Users may inspect their own grants and activation records; inspecting another
+principal requires the separately evaluated system-management role. Every page
+includes the current authority evidence used for disclosure, and the
+system-management role never contributes file-data rights.
+
 ## Work coordinator
 
 **Owns:** durable scheduling of repair, scrub, drain, rebalance, recoding,
