@@ -395,6 +395,9 @@ copy-on-write filesystem service. This document records executable evidence only
    and close, and leaves the handle live on incomplete content. Overwrite opens
    journal truncation as a replayable mutation, including empty close without a
    later write. Rename/move and final namespace unlink remain open.
+   The immutable directory trie now has a bounded exact-removal primitive with
+   stale-revision rejection and historical-root preservation; persisted two-path
+   rename intent and its atomic namespace transaction remain open.
 6. Complete nested-group/owner/grant/time/activation permission evaluation.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 
