@@ -8,6 +8,7 @@ use crate::{BoundedBytes, BoundedItems, ContractError, ImplementationDescriptor,
 
 const READ_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.read-permit.v1";
 const REMOVAL_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.removal-permit.v1";
+const TOMBSTONE_RECEIPT_DOMAIN: &[u8] = b"meshspan.storage.tombstone-receipt.v1";
 const WRITE_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.write-permit.v1";
 
 /// Secret 256-bit key used to authenticate short-lived storage permits.
@@ -267,6 +268,22 @@ pub fn removal_permit_mac(key: &StoragePermitMacKey, permit: RemovalPermit) -> [
 pub fn verify_removal_permit_mac(key: &StoragePermitMacKey, permit: RemovalPermit) -> bool {
     blake3::Hash::from_bytes(removal_permit_mac(key, permit))
         == blake3::Hash::from_bytes(permit.permit_digest)
+}
+
+/// Calculates the canonical digest of the durable provider tombstone for one exact permit.
+///
+/// This is an integrity binding, not an authentication MAC. The provider connection and permit
+/// are authenticated separately; authoritative completion must also match a committed permit.
+#[must_use]
+pub fn tombstone_receipt_digest(permit: RemovalPermit) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(TOMBSTONE_RECEIPT_DOMAIN);
+    digest.update(&permit.operation_id.as_bytes());
+    encode_shard_for_mac(&mut digest, permit.shard);
+    digest.update(&permit.target_id.as_bytes());
+    digest.update(&permit.target_generation.to_be_bytes());
+    digest.update(&permit.permit_digest);
+    digest.finalize().into()
 }
 
 fn encode_shard_for_mac(mac: &mut blake3::Hasher, shard: ShardIdentity) {

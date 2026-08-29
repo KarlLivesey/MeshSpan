@@ -9,9 +9,9 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
-    cleanup_attestation, cleanup_inventory, cleanup_permit, cluster, component, identity,
-    namespace, retention, routing, snapshot_schedule, tags, user_snapshot, version_cleanup,
-    volume_head,
+    cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit, cluster, component,
+    identity, namespace, retention, routing, snapshot_schedule, tags, user_snapshot,
+    version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -431,6 +431,7 @@ fn is_cleanup_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::AppendVersionCleanupItems(_)
             | AuthoritativeCommand::SealVersionCleanupInventory(_)
             | AuthoritativeCommand::IssueVersionCleanupPermit(_)
+            | AuthoritativeCommand::CompleteVersionCleanupItem(_)
     )
 }
 
@@ -464,6 +465,9 @@ fn execute_cleanup_command(
         }
         AuthoritativeCommand::IssueVersionCleanupPermit(value) => {
             cleanup_permit::issue(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CompleteVersionCleanupItem(value) => {
+            cleanup_completion::complete(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -687,6 +691,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::AppendVersionCleanupItems(_) => 40,
         AuthoritativeCommand::SealVersionCleanupInventory(_) => 41,
         AuthoritativeCommand::IssueVersionCleanupPermit(_) => 42,
+        AuthoritativeCommand::CompleteVersionCleanupItem(_) => 43,
     }
 }
 

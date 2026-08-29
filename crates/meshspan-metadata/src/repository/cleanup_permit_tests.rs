@@ -247,7 +247,7 @@ fn persisted_permit_corruption_fails_closed() -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-fn issue_command(
+pub(super) fn issue_command(
     authority: super::VersionCleanupPermitAuthority,
     authority_epoch: u64,
     expires_at: UnixMicros,

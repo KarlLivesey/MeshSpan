@@ -17,8 +17,9 @@ mod convergence_tests;
 mod handoff_tests;
 
 pub use cleanup::{
-    CleanupAttestationError, CleanupPermitError, version_cleanup_attestation,
-    version_cleanup_proposal, version_cleanup_removal_permit,
+    CleanupAttestationError, CleanupCompletionError, CleanupPermitError,
+    version_cleanup_attestation, version_cleanup_proposal, version_cleanup_removal_permit,
+    version_cleanup_tombstone_completion,
 };
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
 pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};

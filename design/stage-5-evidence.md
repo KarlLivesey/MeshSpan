@@ -328,7 +328,14 @@ copy-on-write filesystem service. This document records executable evidence only
    attempts reserve fresh operation identities. Restart/replay, stale seal,
    substituted mesh/item/revision, excessive lifetime, persisted corruption and
    every injected transaction boundary are executable. Provider tombstone
-   completion and permanent root retirement remain outstanding.
+   receipts now cross into consensus only through exact committed-attempt and
+   canonical-digest validation. Each completion binds the current reporting
+   node incarnation, and the final item atomically creates an ordered terminal
+   digest only after the sealed count is complete. Out-of-order arrival,
+   restart/replay, duplicate completion, substituted receipts/attempts/seals,
+   stale reporters, persisted corruption and every injected transaction
+   boundary are executable. Permanent gateway root retirement remains
+   outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable
