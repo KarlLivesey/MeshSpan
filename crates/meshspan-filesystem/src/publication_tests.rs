@@ -153,6 +153,8 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "cancelled_cleanup_releases",
         "adapter_directory_plans",
         "adapter_directory_plan_ancestors",
+        "adapter_unlink_plans",
+        "adapter_unlink_plan_ancestors",
     ] {
         assert_table_exists(&store.connection, table)?;
     }

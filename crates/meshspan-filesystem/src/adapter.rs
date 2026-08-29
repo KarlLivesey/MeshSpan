@@ -174,6 +174,21 @@ pub struct AdapterCreateDirectoryRequest {
     pub observed_at: UnixMicros,
 }
 
+/// Semantic logical namespace removal supplied by an access connector.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterUnlinkRequest {
+    /// Stable end-to-end idempotency identity.
+    pub operation_id: OperationId,
+    /// Logical volume selected by the authenticated request.
+    pub volume_id: VolumeId,
+    /// Canonical bounded logical path to remove.
+    pub path: NamespacePath,
+    /// Optional live delete-capable handle carrying connector share-mode authority.
+    pub requesting_handle_id: Option<HandleId>,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
 /// Semantic close, optionally including the exact dirty checkpoint to publish first.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdapterCloseFileRequest {
@@ -328,6 +343,17 @@ pub trait FilesystemFileAdapter {
         request: &AdapterCreateDirectoryRequest,
     ) -> Result<crate::DirectoryPublicationReceipt, Self::Error>;
 
+    /// Logically removes one exact current file or empty directory name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, sharing, non-empty-directory, stale-head or durability failure.
+    fn unlink(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterUnlinkRequest,
+    ) -> Result<crate::NamespaceUnlinkReceipt, Self::Error>;
+
     /// Flushes when required and then releases one exact live handle.
     ///
     /// # Errors
@@ -467,6 +493,15 @@ where
     ) -> Result<crate::DirectoryPublicationReceipt, Self::Error> {
         self.filesystem
             .adapter_create_directory(self.branch_id, context, request)
+    }
+
+    fn unlink(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterUnlinkRequest,
+    ) -> Result<crate::NamespaceUnlinkReceipt, Self::Error> {
+        self.filesystem
+            .adapter_unlink(self.branch_id, context, request)
     }
 
     fn close_file(

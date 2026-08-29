@@ -27,7 +27,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 27] = [
+const MIGRATIONS: [Migration; 28] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -136,8 +136,12 @@ const MIGRATIONS: [Migration; 27] = [
         version: 27,
         sql: include_str!("../schema/branch/027_adapter_directory_plans.sql"),
     },
+    Migration {
+        version: 28,
+        sql: include_str!("../schema/branch/028_adapter_unlink_plans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 27;
+const SCHEMA_VERSION: u32 = 28;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -871,6 +875,30 @@ impl VersionPublicationStore {
         publication: &NamespaceUnlinkPublication,
     ) -> Result<NamespaceUnlinkReceipt, crate::HandleError> {
         namespace::unlink_namespace(&mut self.connection, publication, None)
+    }
+
+    pub(crate) fn adapter_unlink_target(
+        &self,
+        branch_id: BranchId,
+        request: &crate::AdapterUnlinkRequest,
+    ) -> Result<ObjectId, crate::HandleError> {
+        crate::namespace_planning::unlink::target(&self.connection, branch_id, request)
+    }
+
+    pub(crate) fn prepare_adapter_unlink(
+        &mut self,
+        branch_id: BranchId,
+        request: &crate::AdapterUnlinkRequest,
+        created_by: PrincipalId,
+        expected_object: ObjectId,
+    ) -> Result<NamespaceUnlinkPublication, crate::HandleError> {
+        crate::namespace_planning::unlink::prepare(
+            &mut self.connection,
+            branch_id,
+            request,
+            created_by,
+            expected_object,
+        )
     }
 
     /// Reloads and independently verifies one prior unlink receipt.

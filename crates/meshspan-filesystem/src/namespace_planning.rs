@@ -2,6 +2,9 @@
 
 //! Restart-safe daemon planning for semantic connector namespace mutations.
 
+#[path = "namespace_planning/unlink.rs"]
+pub(crate) mod unlink;
+
 use meshspan_domain::{
     BranchId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, UnixMicros,
 };
@@ -525,7 +528,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        FilePublication, ManifestPublication, NamespaceLimits, NamespacePath,
+        AdapterUnlinkRequest, FilePublication, ManifestPublication, NamespaceLimits, NamespacePath,
         NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
     };
 
@@ -587,6 +590,57 @@ mod tests {
         )?;
         assert!(matches!(
             reopened.adapter_directory_parent(seed.file.branch_id, &nested),
+            Err(HandleError::Corrupt)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn unlink_plan_binds_the_exact_file_and_fails_closed_when_tampered()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let state = tempdir()?;
+        let seed = seed_publication()?;
+        let mut store = VersionPublicationStore::open(state.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&seed)?;
+        let request = AdapterUnlinkRequest {
+            operation_id: OperationId::from_bytes([40; 16])?,
+            volume_id: seed.file.volume_id,
+            path: seed.path.path().clone(),
+            requesting_handle_id: None,
+            observed_at: UnixMicros::new(2),
+        };
+        let target = store.adapter_unlink_target(seed.file.branch_id, &request)?;
+        assert_eq!(target, seed.file.object_id);
+        let planned = store.prepare_adapter_unlink(
+            seed.file.branch_id,
+            &request,
+            seed.file.created_by,
+            target,
+        )?;
+        assert_eq!(
+            planned.expected_object_revision_id,
+            seed.file_object_revision_id
+        );
+        assert_eq!(planned.expected_file_version_id, Some(seed.file.version_id));
+        drop(store);
+
+        let mut reopened = VersionPublicationStore::open(state.path(), UnixMicros::new(3))?;
+        assert_eq!(
+            reopened.prepare_adapter_unlink(
+                seed.file.branch_id,
+                &request,
+                seed.file.created_by,
+                target,
+            )?,
+            planned
+        );
+        reopened.test_connection().execute(
+            "UPDATE adapter_unlink_plans SET expected_object_id = ?1
+             WHERE operation_id = ?2",
+            params![&[99_u8; 16], request.operation_id.as_bytes().as_slice()],
+        )?;
+        assert!(matches!(
+            reopened.adapter_unlink_target(seed.file.branch_id, &request),
             Err(HandleError::Corrupt)
         ));
         Ok(())
