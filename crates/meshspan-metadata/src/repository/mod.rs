@@ -15,6 +15,9 @@ mod cleanup_reclamation;
 mod cluster;
 mod component;
 mod consensus;
+mod federation_grant;
+#[cfg(test)]
+mod federation_grant_tests;
 mod federation_query;
 mod federation_relationship;
 #[cfg(test)]
@@ -63,6 +66,7 @@ pub use cleanup_permit::{
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
+pub use federation_grant::FederationGrantRecord;
 pub use federation_query::{
     FederationRelationshipRecord, FederationRelationshipState, FederationTrustIdentityRecord,
 };
@@ -197,6 +201,21 @@ impl AuthoritativeRepository {
         owner: crate::FederationIdentityOwner,
     ) -> Result<Option<FederationTrustIdentityRecord>, RepositoryError> {
         federation_query::active_identity(&self.database, relationship_id, owner)
+    }
+
+    /// Returns one currently usable, independently revalidated federation grant.
+    ///
+    /// A grant is hidden when revoked, superseded, fenced by a relationship epoch or carried by
+    /// a non-active relationship. Stored policy and restriction digests are recomputed first.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed resource, principal, policy or bilateral restriction evidence.
+    pub fn active_federation_grant(
+        &self,
+        grant_id: meshspan_domain::FederationGrantId,
+    ) -> Result<Option<FederationGrantRecord>, RepositoryError> {
+        federation_grant::active_grant(&self.database, grant_id)
     }
 
     /// Loads and verifies the exact durable consensus state for one membership epoch.

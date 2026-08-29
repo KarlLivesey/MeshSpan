@@ -84,6 +84,8 @@ pub enum EntityKind {
     FederationRelationship = 24,
     /// One side's rotating public federation identity.
     FederationTrustIdentity = 25,
+    /// Effective immutable federation authority grant.
+    FederationGrant = 26,
 }
 
 impl EntityKind {
@@ -114,6 +116,7 @@ impl EntityKind {
             23 => Ok(Self::AuthenticationSession),
             24 => Ok(Self::FederationRelationship),
             25 => Ok(Self::FederationTrustIdentity),
+            26 => Ok(Self::FederationGrant),
             _ => Err(RepositoryError::CorruptState),
         }
     }
