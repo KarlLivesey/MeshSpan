@@ -165,3 +165,10 @@ Such a grant covers existing and future descendants of its scope and may be
 permanent, scheduled or activation-required. Owners cannot prevent authorised
 system recovery, but creation, activation and every data operation remain
 attributable and audited.
+
+Administration reads follow the same separation. Exact-object owner and grant
+pages require current `READ_PERMISSIONS`; users can read their own grant and
+activation pages, while cross-user views require a current system-management
+role. Authentication and gateway fencing happen before projection work, and
+each bounded page carries the authority evidence used so revocation changes the
+response validator immediately.

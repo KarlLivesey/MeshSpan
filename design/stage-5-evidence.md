@@ -242,6 +242,18 @@ copy-on-write filesystem service. This document records executable evidence only
   records remain informational and never substitute for operation-time source,
   membership, policy and session evaluation. Migration digest, paging,
   revocation, expiry and stale-cursor behaviour are executable.
+- The access-administration composition authenticates every bounded page before
+  reading its projection. Owner and exact-scope grant pages require a fresh
+  `READ_PERMISSIONS` capability on the exact authority object. Subject grants
+  and live activations are self-only unless the same current session has the
+  system-management role; that role grants no file-data access. Session
+  authority is independently bound to the credential digest, assurance,
+  gateway incarnation, current identity/role revision, expiries and a canonical
+  evidence digest. Every returned page carries the exact object or session
+  capability used, so an HTTP validator cannot outlive permission revocation.
+  Executable proof covers ordinary self-service, system-manager inspection,
+  cross-user denial, scope substitution, authentication-before-validation,
+  insufficient assurance, stale gateway incarnation and immediate revocation.
 - The first true adapter-facing surface now covers existing-file open, bounded
   read, private write and flush. Its inputs contain no branch ID, principal,
   authorisation revision, gateway claim, content digest, retention sequence,
@@ -543,15 +555,16 @@ copy-on-write filesystem service. This document records executable evidence only
    families plus bounded handle reads, immutable stat and directory enumeration
    through one metadata adapter. The complete 13-right vector is proven both
    independently and as one atomic requested set. Indexed bounded owner, active
-   grant and nominal activation administration projections are implemented.
-   Their operation-time-authorised filesystem composition remains part of gate
-   7 so no connector can treat a repository read as access authority.
+   grant and nominal activation administration projections are implemented and
+   exposed only through their operation-time object/self/system-authorised
+   composition. No connector can treat a raw repository read or administrator
+   role as file-data authority.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
    The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
    contract, every creation-capable file disposition, semantic directory
-   creation/rename/unlink, and two-gateway restart proof are complete. Authorised
-   administration views and the two-isolated-node service-level reconciliation
-   proof remain open.
+   creation/rename/unlink, authorised access-administration views and two-gateway
+   restart proof are complete. The two-isolated-node service-level reconciliation
+   proof remains open.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
 suite passes together.

@@ -2,6 +2,7 @@
 
 //! Runtime composition boundary for deterministic consensus, metadata persistence and QUIC.
 
+mod access_administration;
 mod cleanup;
 mod cleanup_network;
 mod cleanup_worker;
@@ -15,10 +16,16 @@ mod status;
 mod wire;
 
 #[cfg(test)]
+mod access_administration_tests;
+#[cfg(test)]
 mod convergence_tests;
 #[cfg(test)]
 mod handoff_tests;
 
+pub use access_administration::{
+    AccessAdministrationAuthority, AccessAdministrationError, AuthorisedAccessPage,
+    MetadataAccessAdministration,
+};
 pub use cleanup::{
     CleanupAttestationError, CleanupCancellationAuthorityError, CleanupCompletionError,
     CleanupPermitError, CleanupReclamationError, CleanupRetirementAuthorityError,
