@@ -2,32 +2,36 @@
 
 //! Real Quinn proof for metadata-reloaded federation session admission, rotation and revocation.
 
+#[path = "federation_session/authority_page_proof.rs"]
+mod authority_page_proof;
+
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use meshspan_cluster::{
-    FederationAcceptRequest, FederationAuthorityFetchRequest, FederationAuthorityPageServeRequest,
-    FederationDialRequest, FederationSessionError, FederationSessionRuntime,
+    FederationAcceptRequest, FederationAuthorityPageQuery, FederationAuthorityPageSource,
+    FederationAuthorityPageSourceError, FederationDialRequest, FederationSessionError,
+    FederationSessionRuntime,
 };
 use meshspan_domain::{
-    AuditEventId, DurationMicros, FederationRelationshipId, FederationRelationshipKind, HostId,
-    MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId, UnixMicros,
+    AuditEventId, DurationMicros, FederationGrantId, FederationRelationshipId,
+    FederationRelationshipKind, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId,
+    Revision, RoleId, UnixMicros,
 };
 use meshspan_metadata::{
     ApproveFederationRelationship, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
     CommandContext, FederationGovernanceDirection, FederationIdentityOwner,
-    FederationTransportAuthority, FederationTrustIdentity, LogPosition, PartitionDatabase,
-    ProposeFederationRelationship, RecordName, RevokeFederationRelationship,
-    RotateFederationTrustIdentity,
+    FederationTrustIdentity, LogPosition, PartitionDatabase, ProposeFederationRelationship,
+    RecordName, RevokeFederationRelationship, RotateFederationTrustIdentity,
 };
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_transport::{
-    FederationAuthorityContext, FederationHelloConfig, FederationHelloContext,
-    FederationNegotiationConfig, FederationReplayGuard, FederationWelcomeNonces, NodeCredentials,
-    TransportError, TransportLimits, client_endpoint, connect, server_endpoint,
+    FederationHelloConfig, FederationHelloContext, FederationNegotiationConfig,
+    FederationReplayGuard, FederationWelcomeNonces, NodeCredentials, TransportError,
+    TransportLimits, client_endpoint, connect, server_endpoint,
 };
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
@@ -35,6 +39,10 @@ use rcgen::{
 };
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+
+use authority_page_proof::{
+    prove_initial_authority, prove_rotated_authority, storage_grant_command,
+};
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
 const NOW: UnixMicros = UnixMicros::new(1_500_000);
@@ -68,15 +76,7 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
         &initial_connections,
         SessionExpectation::new(6, 3, 1),
     );
-    prove_admitted_session(&initial_proof).await?;
-    let initial_page = exchange_authority_page(&initial_proof, 0).await?;
-    assert_eq!(initial_page.authority_revision(), 3);
-    let initial_snapshot = FederationTransportAuthority::from_canonical_bytes(
-        &initial_page.records()[0].canonical_bytes,
-    )?;
-    assert_eq!(initial_snapshot.relationship.authority_epoch, 1);
-    assert_eq!(initial_snapshot.remote_identity.identity.generation, 1);
-    assert!(initial_page.next_cursor().is_empty());
+    prove_initial_authority(&initial_proof).await?;
 
     let rotated_client_key = SigningKey::from_bytes(&[10; 32]);
     authorities.rotate_remote(50, &certificates.rotated_client, &rotated_client_key)?;
@@ -87,6 +87,7 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
     ))
     .await?;
     authorities.rotate_local(55, &certificates.rotated_client, &rotated_client_key)?;
+    let expected_grants = authorities.issue_server_grants(70, 2)?;
     let rotated_client_runtime = runtime(
         &certificates.rotated_client,
         &rotated_client_key,
@@ -100,24 +101,33 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
     )
     .await?;
     let rotated_runtimes = SessionRuntimes::new(&rotated_client_runtime, &server_runtime);
-    let rotated_proof = authorities.proof(
-        rotated_runtimes,
-        &rotated_connections,
-        SessionExpectation::new(14, 4, 2),
-    );
-    prove_admitted_session(&rotated_proof).await?;
-    let final_page = exchange_authority_page(&rotated_proof, 3).await?;
-    assert_eq!(final_page.authority_revision(), 4);
-    let rotated_snapshot = FederationTransportAuthority::from_canonical_bytes(
-        &final_page.records()[0].canonical_bytes,
-    )?;
-    assert_eq!(rotated_snapshot.remote_identity.identity.generation, 2);
-    assert!(final_page.next_cursor().is_empty());
+    let stale_cursor = {
+        let rotated_proof = authorities.proof(
+            rotated_runtimes,
+            &rotated_connections,
+            SessionExpectation::new(14, 6, 2),
+        );
+        prove_rotated_authority(&rotated_proof, &expected_grants).await?
+    };
+    authorities.issue_server_grants(80, 1)?;
+    assert!(matches!(
+        authorities
+            .server
+            .repository()
+            .authority_page(FederationAuthorityPageQuery {
+                relationship_id: authorities.relationship_id,
+                after_revision: 3,
+                cursor: stale_cursor,
+                limit: 1,
+                authority_revision: Revision::new(6),
+            }),
+        Err(FederationAuthorityPageSourceError::Unavailable)
+    ));
     authorities.revoke(60)?;
     prove_revoked_session_fails_closed(&authorities.proof(
         rotated_runtimes,
         &rotated_connections,
-        SessionExpectation::new(18, 5, 2),
+        SessionExpectation::new(18, 8, 2),
     ))
     .await?;
 
@@ -297,6 +307,15 @@ impl MetadataAuthorities {
     fn revoke(&mut self, seed: u8) -> Result<(), Box<dyn Error>> {
         self.server.revoke(seed)
     }
+
+    fn issue_server_grants(
+        &mut self,
+        seed: u8,
+        count: u8,
+    ) -> Result<Vec<FederationGrantId>, Box<dyn Error>> {
+        self.server
+            .issue_storage_grants(seed, count, self.client_mesh, self.server_mesh)
+    }
 }
 
 struct SessionProof<'a> {
@@ -312,51 +331,6 @@ struct SessionProof<'a> {
     session_seed: u8,
     expected_remote_authority_revision: u64,
     expected_remote_identity_generation: u64,
-}
-
-async fn exchange_authority_page(
-    proof: &SessionProof<'_>,
-    after_revision: u64,
-) -> Result<meshspan_transport::AuthenticatedFederationAuthorityPage, Box<dyn Error>> {
-    let seed = proof.session_seed.saturating_add(40);
-    let mut client_replay = replay_guard()?;
-    let mut server_replay = replay_guard()?;
-    let fetch = proof.client_runtime.fetch_authority_page(
-        proof.client_connection,
-        proof.client_authority,
-        FederationAuthorityFetchRequest {
-            relationship_id: proof.relationship_id,
-            context: FederationAuthorityContext::new(
-                ProtocolVersion { major: 1, minor: 1 },
-                [seed; 16],
-                [seed.saturating_add(1); 16],
-                [seed.saturating_add(2); 16],
-                UnixMicros::new(2_000_000),
-                [seed.saturating_add(3); 32],
-            )?,
-            after_revision,
-            cursor: Vec::new(),
-            limit: 1,
-            now: NOW,
-        },
-        &mut client_replay,
-    );
-    let serve = proof.server_runtime.serve_authority_page(
-        proof.server_connection,
-        proof.server_authority,
-        proof.server_authority,
-        FederationAuthorityPageServeRequest {
-            response_replay_nonce: [seed.saturating_add(4); 32],
-            now: NOW,
-        },
-        &mut server_replay,
-    );
-    let (page, served) = tokio::try_join!(fetch, serve)?;
-    assert_eq!(served.relationship_id, proof.relationship_id);
-    assert_eq!(served.authority_revision.get(), page.authority_revision());
-    assert_eq!(served.record_count, page.records().len());
-    assert_eq!(served.has_next_page, !page.next_cursor().is_empty());
-    Ok(page)
 }
 
 async fn prove_admitted_session(proof: &SessionProof<'_>) -> Result<(), Box<dyn Error>> {
@@ -505,10 +479,12 @@ impl MetadataAuthority {
     }
 
     fn revoke(&mut self, seed: u8) -> Result<(), Box<dyn Error>> {
+        let current = self.repository.current_revision()?;
+        let next = current.next()?;
         apply(
             &mut self.repository,
-            5,
-            context(seed, self.administrator_id, 5, 4)?,
+            next.get(),
+            context(seed, self.administrator_id, next.get(), current.get())?,
             &AuthoritativeCommand::RevokeFederationRelationship(RevokeFederationRelationship {
                 relationship_id: self.relationship_id,
                 expected_authority_epoch: 1,
@@ -516,6 +492,39 @@ impl MetadataAuthority {
                 reason: "Proof revocation".to_owned(),
             }),
         )
+    }
+
+    fn issue_storage_grants(
+        &mut self,
+        seed: u8,
+        count: u8,
+        consumer_mesh_id: MeshId,
+        provider_mesh_id: MeshId,
+    ) -> Result<Vec<FederationGrantId>, Box<dyn Error>> {
+        let mut grant_ids = Vec::with_capacity(usize::from(count));
+        for offset in 0..count {
+            let grant_id = FederationGrantId::from_bytes([seed.saturating_add(offset); 16])?;
+            let current = self.repository.current_revision()?;
+            let next = current.next()?;
+            apply(
+                &mut self.repository,
+                next.get(),
+                context(
+                    seed.saturating_add(count).saturating_add(offset),
+                    self.administrator_id,
+                    next.get(),
+                    current.get(),
+                )?,
+                &storage_grant_command(
+                    grant_id,
+                    self.relationship_id,
+                    consumer_mesh_id,
+                    provider_mesh_id,
+                )?,
+            )?;
+            grant_ids.push(grant_id);
+        }
+        Ok(grant_ids)
     }
 
     fn rotate_local(

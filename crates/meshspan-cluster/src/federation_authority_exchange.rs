@@ -2,106 +2,18 @@
 
 //! Metadata-authorised signed authority fetch/page exchange over dedicated Quinn streams.
 
+use crate::federation_session::{envelope_relationship, load_authority};
+use crate::{
+    FederationAuthorityPageQuery, FederationAuthorityPageRecords, FederationAuthorityPageSource,
+    FederationAuthorityPageSourceError, FederationAuthoritySource, FederationSessionError,
+    FederationSessionRuntime,
+};
 use meshspan_domain::{FederationRelationshipId, Revision, UnixMicros};
-use meshspan_metadata::AuthoritativeRepository;
-use meshspan_protocol::v1::VersionedPayload;
 use meshspan_transport::{
     AuthenticatedFederationAuthorityPage, FederationAuthorityContext, FederationReplayGuard,
     StreamKind, TransportError, accept_stream, open_stream, receive_federation, send_federation,
     signed_federation_authority_fetch, signed_federation_authority_page,
 };
-use thiserror::Error;
-
-use crate::federation_session::{envelope_relationship, load_authority};
-use crate::{FederationAuthoritySource, FederationSessionError, FederationSessionRuntime};
-
-/// Stable-revision query passed only after the requesting peer and message are authenticated.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FederationAuthorityPageQuery {
-    /// Exact admitted relationship.
-    pub relationship_id: FederationRelationshipId,
-    /// Peer revision floor; zero requests its initial authority snapshot.
-    pub after_revision: u64,
-    /// Opaque continuation previously emitted in a signed page.
-    pub cursor: Vec<u8>,
-    /// Positive peer-requested bound already checked against negotiated wire limits.
-    pub limit: u32,
-    /// Exact local committed revision under which the page must remain stable.
-    pub authority_revision: Revision,
-}
-
-/// Canonical records and optional continuation returned by an authority source.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FederationAuthorityPageRecords {
-    /// Exact stable source revision represented by this page.
-    pub authority_revision: Revision,
-    /// Independently versioned canonical authority records.
-    pub records: Vec<VersionedPayload>,
-    /// Opaque continuation, empty only when this stable page is terminal.
-    pub next_cursor: Vec<u8>,
-}
-
-/// Narrow read boundary for relationship, identity, delegation and restriction history.
-pub trait FederationAuthorityPageSource {
-    /// Produces one stable page for an already authenticated request.
-    ///
-    /// # Errors
-    ///
-    /// Fails closed for stale/forged cursors, unavailable revisions or corrupt authority records.
-    fn authority_page(
-        &self,
-        query: FederationAuthorityPageQuery,
-    ) -> Result<FederationAuthorityPageRecords, FederationAuthorityPageSourceError>;
-}
-
-/// Deliberately non-diagnostic authority source failures safe to expose across composition layers.
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-pub enum FederationAuthorityPageSourceError {
-    /// Cursor, revision or page bounds did not identify one valid stable query.
-    #[error("federation authority page query is invalid")]
-    InvalidQuery,
-    /// The requested stable revision is not currently available.
-    #[error("federation authority page revision is unavailable")]
-    Unavailable,
-    /// Persisted or generated authority evidence failed validation.
-    #[error("federation authority page evidence is corrupt")]
-    Corrupt,
-}
-
-impl FederationAuthorityPageSource for AuthoritativeRepository {
-    fn authority_page(
-        &self,
-        query: FederationAuthorityPageQuery,
-    ) -> Result<FederationAuthorityPageRecords, FederationAuthorityPageSourceError> {
-        if query.limit == 0 || !query.cursor.is_empty() {
-            return Err(FederationAuthorityPageSourceError::InvalidQuery);
-        }
-        let authority = self
-            .federation_transport_authority(query.relationship_id)
-            .map_err(|_| FederationAuthorityPageSourceError::Corrupt)?
-            .ok_or(FederationAuthorityPageSourceError::Unavailable)?;
-        if authority.authority_revision != query.authority_revision
-            || query.after_revision > authority.authority_revision.get()
-        {
-            return Err(FederationAuthorityPageSourceError::InvalidQuery);
-        }
-        let records = if query.after_revision == authority.authority_revision.get() {
-            Vec::new()
-        } else {
-            vec![VersionedPayload {
-                format_version: 1,
-                canonical_bytes: authority
-                    .canonical_bytes()
-                    .map_err(|_| FederationAuthorityPageSourceError::Corrupt)?,
-            }]
-        };
-        Ok(FederationAuthorityPageRecords {
-            authority_revision: authority.authority_revision,
-            records,
-            next_cursor: Vec::new(),
-        })
-    }
-}
 
 /// Complete client-side inputs for one signed authority page fetch.
 #[derive(Clone, Debug, Eq, PartialEq)]
