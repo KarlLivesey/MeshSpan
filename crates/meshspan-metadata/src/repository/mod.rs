@@ -21,6 +21,12 @@ mod federation_grant_tests;
 mod federation_principal;
 #[cfg(test)]
 mod federation_principal_tests;
+mod federation_quarantine;
+mod federation_quarantine_codec;
+mod federation_quarantine_evidence;
+#[cfg(test)]
+mod federation_quarantine_tests;
+mod federation_quarantine_transition;
 mod federation_query;
 mod federation_relationship;
 #[cfg(test)]
@@ -78,6 +84,7 @@ pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupRecla
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use federation_grant::FederationGrantRecord;
 pub use federation_principal::FederatedPrincipalProjectionRecord;
+pub use federation_quarantine::{FederationQuarantineRecord, FederationQuarantineState};
 pub use federation_query::{
     FederationRelationshipRecord, FederationRelationshipState, FederationTrustIdentityRecord,
 };
@@ -253,6 +260,18 @@ impl AuthoritativeRepository {
         retiring_mesh_id: meshspan_domain::MeshId,
     ) -> Result<Option<FederationSuccessionRecord>, RepositoryError> {
         federation_succession::active_for_retiring(&self.database, retiring_mesh_id)
+    }
+
+    /// Returns one independently revalidated federated quarantine item.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for substituted grant evidence, signatures, lifecycle or payload digests.
+    pub fn federation_quarantine(
+        &self,
+        quarantine_id: meshspan_domain::QuarantineId,
+    ) -> Result<Option<FederationQuarantineRecord>, RepositoryError> {
+        federation_quarantine::quarantine(&self.database, quarantine_id)
     }
 
     /// Loads and verifies the exact durable consensus state for one membership epoch.

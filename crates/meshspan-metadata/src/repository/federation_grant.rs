@@ -5,9 +5,10 @@
 use std::collections::BTreeSet;
 
 use meshspan_domain::{
-    DurationMicros, FederationAccess, FederationGrant, FederationGrantId, FederationPolicy,
+    DurationMicros, FederatedMutationAdmission, FederatedMutationEvidence, FederationAccess,
+    FederationGrant, FederationGrantError, FederationGrantId, FederationPolicy,
     FederationResourceScope, MeshId, NamespaceFederationPolicy, Revision, StorageFederationPolicy,
-    UnixMicros,
+    UnixMicros, classify_federated_mutation,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -125,6 +126,60 @@ pub(super) fn active_grant(
         })
     })
     .transpose()
+}
+
+pub(super) fn classify_persisted_mutation(
+    connection: &Connection,
+    evidence: FederatedMutationEvidence,
+) -> Result<FederatedMutationAdmission, RepositoryError> {
+    let row = connection
+        .query_row(
+            "SELECT relationship_id, subject_home_mesh_id, subject_principal_id,
+                    resource_kind, authority_mesh_id, volume_id, object_id,
+                    authority_epoch, valid_from, valid_until, effective_policy_digest, revoked_at
+             FROM federation_grants WHERE grant_id = ?1",
+            [evidence.grant_id().as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, Option<i64>>(9)?,
+                    row.get::<_, Vec<u8>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(RepositoryError::InvalidCommand)?;
+    let policy = load_effective_policy(connection, evidence.grant_id())?;
+    if row.10.as_slice() != policy_digest(policy) {
+        return Err(RepositoryError::CorruptState);
+    }
+    let grant = FederationGrant::new(
+        evidence.grant_id(),
+        parse_relationship(&row.0)?,
+        meshspan_domain::FederatedPrincipal::new(parse_mesh(&row.1)?, parse_principal(&row.2)?),
+        parse_resource(row.3, &row.4, row.5.as_deref(), row.6.as_deref())?,
+        policy,
+        positive(row.7)?,
+        UnixMicros::new(row.8),
+        row.9.map(UnixMicros::new),
+    )
+    .map_err(|_| RepositoryError::CorruptState)?;
+    classify_federated_mutation(grant, evidence, row.11.map(UnixMicros::new)).map_err(|error| {
+        if error == FederationGrantError::EvidenceMismatch {
+            RepositoryError::InvalidCommand
+        } else {
+            RepositoryError::CorruptState
+        }
+    })
 }
 
 pub(super) fn is_command(command: &AuthoritativeCommand) -> bool {

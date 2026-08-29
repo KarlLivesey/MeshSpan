@@ -150,6 +150,54 @@ impl FederatedMutationEvidence {
             storage_bytes,
         }
     }
+
+    /// Returns the exact historical grant used by the accepting swarm.
+    #[must_use]
+    pub const fn grant_id(self) -> FederationGrantId {
+        self.grant_id
+    }
+
+    /// Returns the relationship carrying the historical grant.
+    #[must_use]
+    pub const fn relationship_id(self) -> FederationRelationshipId {
+        self.relationship_id
+    }
+
+    /// Returns the globally qualified principal which performed the mutation.
+    #[must_use]
+    pub const fn subject(self) -> FederatedPrincipal {
+        self.subject
+    }
+
+    /// Returns the exact owner-qualified resource presented at acceptance.
+    #[must_use]
+    pub const fn resource(self) -> FederationResourceScope {
+        self.resource
+    }
+
+    /// Returns the relationship authority epoch presented at acceptance.
+    #[must_use]
+    pub const fn authority_epoch(self) -> u64 {
+        self.authority_epoch
+    }
+
+    /// Returns when the remote swarm durably acknowledged the mutation.
+    #[must_use]
+    pub const fn accepted_at(self) -> UnixMicros {
+        self.accepted_at
+    }
+
+    /// Returns the namespace rights exercised by the operation.
+    #[must_use]
+    pub const fn required_rights(self) -> Rights {
+        self.required_rights
+    }
+
+    /// Returns the storage bytes claimed by a storage-capacity operation.
+    #[must_use]
+    pub const fn storage_bytes(self) -> u64 {
+        self.storage_bytes
+    }
 }
 
 /// Authoritative reconciliation result for one structurally authentic remote operation.
