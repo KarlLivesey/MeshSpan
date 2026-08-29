@@ -29,13 +29,13 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use super::identity::certificate_fingerprint;
 use super::{
     AuthenticatedFederationHello, FederationHelloConfig, FederationHelloContext,
-    FederationHelloExpectation, FederationLocalIdentityBinding, FederationNegotiationConfig,
-    FederationPeerBinding, FederationPeerRegistry, FederationReplayGuard, FederationWelcomeNonces,
-    NegotiationConfig, NodeCredentials, OutboundFederationHello, PeerBinding, PeerRegistry,
-    StreamKind, TransportError, TransportLimits, accept_stream, client_endpoint, connect,
-    open_stream, receive_control, receive_data_control, receive_data_frame, receive_federation,
-    send_control, send_data_control, send_data_frame, send_federation, server_endpoint,
-    signed_federation_hello,
+    FederationHelloExpectation, FederationLocalIdentity, FederationLocalIdentityBinding,
+    FederationNegotiationConfig, FederationPeerBinding, FederationPeerRegistry,
+    FederationReplayGuard, FederationWelcomeNonces, NegotiationConfig, NodeCredentials,
+    OutboundFederationHello, PeerBinding, PeerRegistry, StreamKind, TransportError,
+    TransportLimits, accept_stream, client_endpoint, connect, open_stream, receive_control,
+    receive_data_control, receive_data_frame, receive_federation, send_control, send_data_control,
+    send_data_frame, send_federation, server_endpoint, signed_federation_hello,
 };
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -395,7 +395,7 @@ fn outbound_federation_hello(
     signing_key: &SigningKey,
     limits: WireLimits,
 ) -> Result<OutboundFederationHello, Box<dyn Error>> {
-    Ok(signed_federation_hello(
+    let identity = FederationLocalIdentity::authenticate(
         FederationLocalIdentityBinding {
             relationship_id: FederationRelationshipId::from_bytes([1; 16])?,
             local_mesh_id: MeshId::from_bytes([2; 16])?,
@@ -407,6 +407,12 @@ fn outbound_federation_hello(
             valid_from: UnixMicros::new(1),
             valid_until: UnixMicros::new(3_000_000),
         },
+        certificate.as_ref(),
+        signing_key,
+        UnixMicros::new(1_000_000),
+    )?;
+    Ok(signed_federation_hello(
+        &identity,
         &FederationHelloConfig::new(vec![version(1, 0), version(1, 2)], vec![1], limits, 128)?,
         FederationHelloContext::new(
             [4; 16],
@@ -416,8 +422,6 @@ fn outbound_federation_hello(
             [7; 32],
             [9; 32],
         )?,
-        certificate.as_ref(),
-        signing_key,
         UnixMicros::new(1_000_000),
     )?)
 }
@@ -432,19 +436,36 @@ async fn prove_federation_welcome(
     limits: WireLimits,
 ) -> Result<(), Box<dyn Error>> {
     let signing_key = SigningKey::from_bytes(&[43; 32]);
+    let local_identity = FederationLocalIdentity::authenticate(
+        FederationLocalIdentityBinding {
+            relationship_id: authenticated.relationship_id(),
+            local_mesh_id: authenticated.local_mesh_id(),
+            remote_mesh_id: authenticated.remote_mesh_id(),
+            authority_epoch: 1,
+            identity_generation: 4,
+            certificate_fingerprint: certificate_fingerprint(&certificates.server_certificate),
+            verifying_key: signing_key.verifying_key().to_bytes(),
+            valid_from: UnixMicros::new(1),
+            valid_until: UnixMicros::new(3_000_000),
+        },
+        certificates.server_certificate.as_ref(),
+        &signing_key,
+        UnixMicros::new(1_500_000),
+    )?;
     let welcome_limits = WireLimits::new(32 * 1_024, 16 * 1_024, 128, 2_048)?;
     let welcome = authenticated.signed_welcome(
         &FederationNegotiationConfig::new(
             vec![version(1, 0), version(1, 2)],
-            4,
             9,
             welcome_limits,
             64,
         )?,
         FederationWelcomeNonces::new([21; 32], [22; 32])?,
-        &signing_key,
+        &local_identity,
     )?;
-    send_federation(send, &welcome, welcome_limits).await?;
+    assert_eq!(welcome.session().remote_identity_generation, 1);
+    assert_eq!(welcome.session().version, version(1, 2));
+    send_federation(send, welcome.envelope(), welcome_limits).await?;
     let received_welcome = receive_federation(receive, limits).await?;
     let relationship_id = authenticated.relationship_id();
     let client_registry = FederationPeerRegistry::new([FederationPeerBinding {
@@ -485,7 +506,7 @@ async fn prove_federation_welcome(
         &client_registry,
         connection,
         expectation,
-        &welcome,
+        welcome.envelope(),
         &signing_key,
         limits,
     )?;
