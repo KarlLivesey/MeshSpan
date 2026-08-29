@@ -1,6 +1,11 @@
 # Stage 3 completion evidence
 
-Status: complete; reopened audit closed on 2026-08-28.
+Status: original scope complete after its 2026-08-28 audit; Stage 3 reopened for
+autonomous-swarm trust and exchange.
+
+The missing federation transport/identity evidence and new closure gates are
+recorded in [`federation.md`](federation.md) and [`roadmap.md`](roadmap.md). This
+document does not claim that retrofit is implemented.
 
 The original completion claim was broader than its executable proof. The
 reopened audit repaired that gap; all corrected closure gates and their exact

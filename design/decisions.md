@@ -34,8 +34,8 @@ Status: **draft for review**.
 | D-026 | A growing mesh may use multiple consensus-backed metadata partitions and availability cells; each control record and converged head has exactly one mutation authority, while filesystem outage branches reconcile into it. Small meshes use the same partitioned record model. |
 | D-027 | Campus partition tolerance combines cell-local services with durable filesystem branches: disconnected cells may both write ordinary content, while only one quorum-authorised converged head and control-plane authority exist. |
 | D-028 | Volume, folder and file scopes may require complete locally decodable copies in one or more administrator-defined cells; writes remain availability-first and remote cells may be explicitly lagging. |
-| D-029 | Filesystem writes may commit durably to local CoW branches without wider quorum, advertise exact durability scope and reconcile automatically without discarding acknowledged alternatives. |
-| D-030 | Security-critical control-plane mutations remain authority-gated; offline merge is limited to defined filesystem/content operations unless a later constrained delegation is designed. |
+| D-029 | Filesystem writes may commit durably to local CoW branches without wider quorum, advertise exact durability scope and reconcile automatically without discarding acknowledged admissible alternatives. Work later proved outside a federated grant is quarantined rather than published or silently destroyed. |
+| D-030 | Security-critical control-plane mutations remain authority-gated. Offline merge is limited to defined filesystem/content operations under an exact signed local or federation delegation; disconnection never expands authority. |
 | D-031 | Normal writes use availability-first eventual convergence; a scope may instead require a declarative strong publication barrier over verified nodes, zones and protection predicates followed by one ACID converged-head commit. Only zones marked required hold that barrier. |
 | D-032 | MeshSpan exposes one appliance daemon and intent-level controls; internal daemon roles, consensus, placement, coding and reconciliation are automatic and do not become routine operator configuration. |
 | D-033 | Consensus MUST support topology-aware flexible/hierarchical quorums and independently model election, consensus-write and linearizable-read quorum families. Every active and transitional plan is mechanically checked for its required intersections before use. |
@@ -68,6 +68,16 @@ Status: **draft for review**.
 | D-060 | Direct retrieval uses one short-lived, explicitly typed Ed25519-signed JWT per authorised immutable file-version read, never a token per shard, under `stage-4-5-decisions.md` section 10. |
 | D-061 | Mesh time, non-wall-clock ordering and the `committed`, `branch-durable`, `eventual` and `ephemeral` state classes follow `stage-4-5-decisions.md` section 11. |
 | D-062 | Discovery and access are independent; anonymous live/pinned sharing and future read-only BitTorrent export follow `stage-4-5-decisions.md` section 12. |
+| D-063 | Federation is a graph between autonomous swarms, never consensus across swarms. Horizontal peer relationships may be cyclic; hierarchical governance is acyclic and each subordinate has at most one immediate governing parent. |
+| D-064 | Every federated volume, folder or file has one owning swarm for ACL and canonical history, while authorised remote swarms may accept durable concurrent offline edits and reconcile them automatically. |
+| D-065 | Remote users authenticate only with their home swarm and are identified by globally qualified swarm/principal identity. Federation never copies their passwords, factors or raw sessions. |
+| D-066 | Both sides and every governing level may restrict a relationship. Effective rights, capacity and policy are their intersection; a subordinate acts without upstream confirmation only inside that durable envelope. |
+| D-067 | Remote capacity is an ordinary placement resource classified separately for protection contribution and serving availability. Storage-only partners receive encrypted shards and bounded capabilities, never volume keys or namespace metadata. |
+| D-068 | The ordinary offline federation grant defaults to 30 days and may be shortened, extended or made indefinite explicitly. Known revocation is immediate; newly inadmissible disconnected work is quarantined for authorised recovery. |
+| D-069 | Federation recovery never uses timeout alone. Ownership transfer requires offline recovery material or an explicitly pre-authorised successor and fences the former authority with signed durable evidence. |
+| D-070 | The normal federation UI is connect swarm, select file/folder/volume, choose view/edit/manage, or offer capacity and choose whether it serves ordinary reads. Cryptographic and reconciliation machinery remains hidden. |
+| D-071 | Federation is an intentional scale-out boundary that keeps consensus local to each swarm. It has no fixed node-count trigger; large deployments distribute owned volumes or explicit subtrees because a shared scope's canonical merge/ACL load still belongs to its owner. |
+| D-072 | Within one swarm, catalogue, identity/configuration and volume or explicit-subtree metadata partitions may use independent Raft groups. Routing is hierarchical but commit confirmation is not: an owning group does not append every mutation through a parent group. Automatic partition creation/split/merge is a future optimisation whose exact policy remains open. |
 
 ## Open decisions
 
@@ -81,3 +91,4 @@ Concrete recommendations and proof gates for every item are in
 | O-004 | What chunk size and erasure geometries meet the first performance and repair targets? |
 | O-006 | What measurable latency, throughput, recovery-time and scale targets gate MUP? |
 | O-007 | Which native archive and container platforms are mandatory for the first release? |
+| O-008 | Which measured load, size and locality signals safely trigger, defer or reverse an automatic namespace-subtree partition split? |

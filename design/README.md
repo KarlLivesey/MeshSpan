@@ -22,22 +22,23 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 13. [consistency.md](consistency.md) — eventual writes and declarative strong acknowledgement barriers.
 14. [consensus.md](consensus.md) — owned consensus core, flexible quorums and safety proof obligations.
 15. [scaling.md](scaling.md) — campus-scale availability cells and metadata partitioning.
-16. [data-lifecycle.md](data-lifecycle.md) — write, read, deletion, repair and drain state machines.
-17. [protocol.md](protocol.md) — private node protocol over Quinn.
-18. [public-api.md](public-api.md) — Rust-generated OpenAPI, validation, versions, pagination and streaming.
-19. [flows.md](flows.md) — complete create, join, access and failure operation sequences.
-20. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
-21. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
-22. [stage-1-evidence.md](stage-1-evidence.md) — completed foundation evidence and measured gate.
-23. [stage-2-evidence.md](stage-2-evidence.md) — completed authoritative-kernel evidence and recovery proof.
-24. [stage-3-evidence.md](stage-3-evidence.md) — completed cluster-kernel, failover and partition proof.
-25. [stage-1-3-audit.md](stage-1-3-audit.md) — executable re-audit and closure gates for prior completion claims.
-26. [stage-4-5-decisions.md](stage-4-5-decisions.md) — accepted detailed folder-storage and filesystem decisions.
-27. [stage-4-evidence.md](stage-4-evidence.md) — active folder-storage implementation and exit-gate evidence.
-28. [stage-5-evidence.md](stage-5-evidence.md) — active protocol-neutral filesystem implementation and exit-gate evidence.
-28. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
-29. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
-30. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
+16. [federation.md](federation.md) — autonomous horizontal/hierarchical swarm sharing and scale-out.
+17. [data-lifecycle.md](data-lifecycle.md) — write, read, deletion, repair and drain state machines.
+18. [protocol.md](protocol.md) — private node protocol over Quinn.
+19. [public-api.md](public-api.md) — Rust-generated OpenAPI, validation, versions, pagination and streaming.
+20. [flows.md](flows.md) — complete create, join, access and failure operation sequences.
+21. [verification.md](verification.md) — fast local suites, simulation, real clients and release proofs.
+22. [roadmap.md](roadmap.md) — dependency order and observable exit gates.
+23. [stage-1-evidence.md](stage-1-evidence.md) — original foundation evidence and measured gate.
+24. [stage-2-evidence.md](stage-2-evidence.md) — original authoritative-kernel evidence and recovery proof.
+25. [stage-3-evidence.md](stage-3-evidence.md) — original cluster-kernel, failover and partition proof.
+26. [stage-1-3-audit.md](stage-1-3-audit.md) — executable re-audit and federation retrofit gaps.
+27. [stage-4-5-decisions.md](stage-4-5-decisions.md) — accepted detailed folder-storage and filesystem decisions.
+28. [stage-4-evidence.md](stage-4-evidence.md) — original folder-storage implementation evidence.
+29. [stage-5-evidence.md](stage-5-evidence.md) — filesystem evidence and reopened completion gaps.
+30. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
+31. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
+32. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
 
 ## Document rules
 

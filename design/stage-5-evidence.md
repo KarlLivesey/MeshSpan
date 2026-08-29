@@ -1,9 +1,34 @@
 # Stage 5 implementation evidence
 
-Status: complete, started and closed on 2026-08-28.
+Status: reopened after completion audit and acceptance of autonomous-swarm
+federation. Existing evidence remains valid for the behaviour it actually proves.
 
 Stage 5 turns authoritative identity/metadata foundations into one protocol-neutral,
 copy-on-write filesystem service. This document records executable evidence only.
+
+## Reopened gaps
+
+The prior completion claim exceeded the available evidence:
+
+1. A newly forked writable branch does not materialise existing file heads, so the
+   proof covers disconnected creates but not modification of an existing file.
+2. History export selects all object revisions and file versions for a volume and
+   fails at its batch bound instead of fetching only referenced records through
+   resumable cursor pages.
+3. The cluster convergence service passes an opaque in-process bundle and has no
+   concrete signed Protobuf/Quinn encoding or handler for the existing private
+   branch/object transfer messages and required identity/delegation evidence.
+4. The final healing proof uses empty content whose test reader is unavailable;
+   it proves namespace/version identities but not exact non-empty bytes after
+   partition, restart and healing.
+5. Imported history needs complete cross-record validation binding branch/object
+   scope, parent versions, manifests, content evidence and authenticated origin.
+6. Federation additionally requires home-swarm principal authorisation, bilateral
+   restriction evaluation, signed offline grants, cross-swarm multi-writer
+   reconciliation and revocation quarantine.
+
+Stage 5 closes again only when the corresponding roadmap gates pass. Documentation
+of these gaps is not implementation evidence.
 
 ## Delivered foundation
 
@@ -579,4 +604,5 @@ copy-on-write filesystem service. This document records executable evidence only
    recovered logical copy, imports never move local heads, and a second restart
    resolves the same durable merge receipt on both nodes.
 
-Stage 5 has passed every listed gate and the complete local suite together.
+The original Stage 5 suites pass together, but they do not prove the reopened
+gates above. Stage 5 is therefore not complete.

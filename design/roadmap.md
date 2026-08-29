@@ -17,8 +17,9 @@ executable evidence passes.
 
 ## Stage 0 — lock the contracts
 
-**Status:** complete. The accepted design set is indexed by
-[`design/README.md`](README.md) and its decisions by [`decisions.md`](decisions.md).
+**Status:** reopened for the accepted federation contract. Existing contracts remain useful, but
+Stages 1–5 cannot close again until the federation records/messages and the Stage 5 audit gaps are
+locked and proved. See [`federation.md`](federation.md).
 
 **Purpose:** agree what will be built before implementation starts.
 
@@ -32,12 +33,17 @@ Deliverables:
 - decisions for the first SMB profile, consensus implementation, protection
   policy UI, eventual/strong acknowledgement presets, performance gates and
   release platforms.
+- autonomous-swarm federation contracts covering horizontal sharing, acyclic
+  governance, remote principals, bilateral restrictions, multi-writer branches,
+  remote capacity, revocation/quarantine and ownership recovery.
 
 Exit evidence:
 
 - every open decision needed by Stage 1–3 is accepted or deliberately deferred;
 - all normative requirements map to a roadmap gate;
 - contradictory, duplicate and platform-as-protocol requirements are removed.
+- federation logical records, canonical encodings, trust transitions and private
+  message flows are complete enough that Stages 1–5 need no authority guesses.
 
 No production implementation is claimed in this stage.
 
@@ -45,7 +51,8 @@ No production implementation is claimed in this stage.
 
 **Depends on:** Stage 0.
 
-**Status:** complete. See [`stage-1-evidence.md`](stage-1-evidence.md).
+**Status:** reopened for federation. The original foundation evidence remains valid; the missing
+federation domain and contract evidence below is not implemented.
 
 Build:
 
@@ -63,6 +70,11 @@ Build:
   deterministic committed TypeScript/Fetch/Zod generation harness;
 - one local scheduler that runs independent Rust, web, schema/protocol and
   integration lanes concurrently with resource-aware worker limits.
+- globally qualified swarm/principal identities, relationship and governance
+  graph types, bilateral policy intersections, federation rights, offline grants,
+  recovery transitions, quarantine outcomes and federated durability states;
+- versioned contracts and canonical fixtures for swarm authentication, remote
+  branch paging, remote storage capabilities and signed receipts.
 
 Exit evidence:
 
@@ -72,16 +84,20 @@ Exit evidence:
 - public API fixtures prove Rust, OpenAPI and generated Zod accept/reject parity;
 - clean checkout can run the fast suite with one documented command;
 - suite duration is measured and budgeted before more tests accumulate.
+- transition and hostile-input vectors prove governance-cycle rejection,
+  restriction intersection, bounded delegation, revocation/quarantine and exact
+  federation outcome semantics.
 
 Requirements: SYS-002, SYS-004, SYS-006, SYS-009, PER-002, SCL-007, TST-001, REL-001,
-REL-002, DEV-001–006, EXT-001–005.
+REL-002, DEV-001–006, EXT-001–005, FED-001–005, FED-007–009, FED-013–015,
+FED-022, FED-025.
 
 ## Stage 2 — authoritative metadata kernel
 
 **Depends on:** Stage 1.
 
-**Status:** complete after executable re-audit. See
-[`stage-1-3-audit.md`](stage-1-3-audit.md).
+**Status:** reopened for federation. The original metadata-kernel evidence remains valid; the
+records and transitions below are missing.
 
 Build:
 
@@ -94,6 +110,11 @@ Build:
 - backup/snapshot representation at an exact state revision;
 - engine conformance harness, initially against SQLite and optionally Turso as a
   non-production compatibility lane.
+- authoritative federation relationships, rotating trust identities, governance
+  edges, resource grants, delegated ceilings, bilateral quotas, offline validity,
+  remote-principal projections, successor designations and quarantine records;
+- typed idempotent commands and receipts for connect/approve, renew, restrict,
+  revoke, recover, transfer ownership and retire a relationship.
 
 First vertical proof:
 
@@ -108,16 +129,19 @@ Exit evidence:
 - crash at every transaction boundary yields either the old or new valid state;
 - migration, integrity, backup/restore and constraint vectors pass;
 - no request-path query is unbounded or lacks its intended index.
+- migration, crash and backup/restore proofs cover every federation transition;
+  no transaction spans a remote call or treats another swarm's database as local
+  atomic state.
 
 Requirements: IAM-001–014, ACL-001–008, PER-001–005, SCL-002, SCL-003,
-CFG-001–008, EXT-002–004, EXT-007.
+CFG-001–008, EXT-002–004, EXT-007, FED-003–015, FED-021–025.
 
 ## Stage 3 — one-to-many cluster kernel
 
 **Depends on:** Stage 2.
 
-**Status:** complete after executable re-audit. See
-[`stage-1-3-audit.md`](stage-1-3-audit.md).
+**Status:** reopened for federation. Existing within-swarm consensus and transport proofs remain
+valid; autonomous-swarm trust and exchange are missing.
 
 Build:
 
@@ -131,6 +155,11 @@ Build:
   deployment that can create and hand off a second namespace partition;
 - bounded branch-head comparison and immutable commit/object transfer messages,
   before filesystem merge behaviour is added in Stage 5.
+- mutually approved swarm connection over Quinn/mTLS, federation identity
+  rotation/recovery, signed delegation and restriction propagation, bounded
+  cursor-based remote branch/object transfer and remote-storage routing;
+- strict separation between federation sessions and within-swarm membership,
+  routing, voters and consensus authority.
 
 First vertical proof:
 
@@ -148,14 +177,19 @@ Exit evidence:
   head;
 - stale processes, replayed messages and corrupt snapshots fail closed;
 - control traffic remains responsive during a saturated synthetic data stream.
+- real autonomous processes connect, rotate identity, disconnect, renew/revoke,
+  reject replay/stale epochs, resume bounded pages and never admit a peer as a
+  voter or local principal merely because it is federated.
 
-Requirements: CLU-001–027, OPS-003, TST-003, SCL-005, SCL-006, SCL-010.
+Requirements: CLU-001–027, OPS-003, TST-003, SCL-005, SCL-006, SCL-010,
+FED-001–007, FED-011–015, FED-020, FED-022, FED-025, FED-026, SCL-011, SCL-012.
 
 ## Stage 4 — folder storage and safe shard lifecycle
 
 **Depends on:** Stage 3.
 
-**Status:** complete. See [`stage-4-evidence.md`](stage-4-evidence.md).
+**Status:** reopened for federation. The local registered-folder provider remains complete; remote
+partner capacity and its lifecycle evidence are missing.
 
 Build:
 
@@ -166,6 +200,10 @@ Build:
 - guarded cleanup intents, removal permits and provider tombstones;
 - scrub observations, staging recovery, reservations and full/partial/corrupt IO
   injection.
+- capability-scoped partner-swarm capacity with bilateral quotas and separate
+  protection-contribution and ordinary-read classifications;
+- encrypted cross-swarm put/get/scrub/repair/retire flows whose signed receipts
+  never expose volume keys or namespace/user metadata to storage-only partners.
 
 First vertical proof:
 
@@ -179,14 +217,20 @@ Exit evidence:
 - real folder IO tests cover restart, `ENOSPC`, short write, lost fsync result,
   corruption, path replacement and stale target incarnation;
 - provider contract tests can be reused by a future storage backend.
+- real partner-provider tests prove quota intersection, protection-only placement,
+  optional serving reads, reconnect, revocation, lost response and receipt-backed
+  cleanup without location authority.
 
-Requirements: TOP-001–005, DAT-005, DAT-006, DAT-010–013, TST-002.
+Requirements: TOP-001–005, DAT-005, DAT-006, DAT-010–013, TST-002,
+FED-005, FED-016–021, FED-024, FED-025.
 
 ## Stage 5 — filesystem and access-control service
 
 **Depends on:** Stages 2–4.
 
-**Status:** complete. See [`stage-5-evidence.md`](stage-5-evidence.md).
+**Status:** reopened. The existing filesystem foundation remains valid, but the completion audit
+found local convergence gaps and federation adds remote-principal/multi-writer obligations.
+See [`stage-5-evidence.md`](stage-5-evidence.md) and [`federation.md`](federation.md).
 
 Build:
 
@@ -200,6 +244,14 @@ Build:
 - complete permission evaluation over nested groups, multiple owners,
   inheritance and time windows;
 - sessions, capabilities, audit events and adapter-facing filesystem API.
+- lazily materialised existing-file state on a forked writable branch so offline
+  branches can edit existing content, not only create new names;
+- referenced-record-only, cursor-paged history exchange with concrete signed
+  Protobuf/Quinn codecs and handlers rather than one opaque in-memory bundle;
+- remote-principal authorisation, signed offline delegation, deterministic
+  cross-swarm multi-writer reconciliation and revocation quarantine;
+- fail-closed cross-record import validation binding commits, identities,
+  delegations, versions, manifests and content evidence.
 
 First vertical proof:
 
@@ -209,15 +261,24 @@ First vertical proof:
   adapter; uncommitted staged content is never visible;
 - two isolated nodes both write through the filesystem service, restart, heal
   and automatically converge with every acknowledged version preserved.
+- two autonomous swarms accept non-empty edits from home-authenticated users while
+  disconnected, restart, exchange paged signed history over real Quinn, reconcile
+  into the owner and read every admissible version's exact bytes;
+- a retroactively inadmissible disconnected edit remains invisible but enters
+  bounded audited quarantine, and exact retry/restart cannot publish or lose it.
 
 Exit evidence:
 
 - protocol-neutral filesystem vector suite covers every operation, disposition,
   right, inheritance shape, group graph and lost-response state;
 - no adapter requires SQL or provider-path knowledge.
+- large-volume paging does not scan/export every immutable volume record and
+  resumes after loss without a mesh-size ceiling;
+- existing-file fork edits, non-empty content healing, delegation expiry,
+  revocation, bilateral restriction and hostile imported-record vectors pass.
 
 Requirements: FS-001–013, COW-001–009, CON-001–015, IAM-005–011, ACL-003–008,
-AUTH-006.
+AUTH-006, SIM-008, SIM-009, FED-005, FED-007–015, FED-022–025.
 
 ## Stage 6 — usable HTTPS appliance slice
 
@@ -410,5 +471,6 @@ Requirements: all non-deferred requirement IDs.
 After the first useful product is proven, separately designed extensions may
 include additional access adapters, direct-shard clients, disconnected
 application-specific semantic merge handlers, more storage-provider
-implementations and native Windows hosting. None may bypass the filesystem,
+implementations, native Windows hosting and automatic volume/subtree metadata
+partition creation, split, merge and rebalancing. None may bypass the filesystem,
 authority, lifecycle or access-control contracts established above.
