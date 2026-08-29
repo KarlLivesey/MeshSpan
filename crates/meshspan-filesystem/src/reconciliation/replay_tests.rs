@@ -8,9 +8,9 @@ use super::{
     NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEntry, plan_namespace_replay,
 };
 use crate::{
-    BranchMutation, BranchMutationIntent, DirectoryEntryKind, DirectoryRevisionTransition,
-    NamespaceLimits, NamespacePath, ReconciliationCommit, ReconciliationCommitPayload,
-    ReconciliationFrontier, ReconciliationLimits, plan_reconciliation,
+    BranchMutation, BranchMutationIntent, BranchRenameIntent, DirectoryEntryKind,
+    DirectoryRevisionTransition, NamespaceLimits, NamespacePath, ReconciliationCommit,
+    ReconciliationCommitPayload, ReconciliationFrontier, ReconciliationLimits, plan_reconciliation,
 };
 
 #[test]
@@ -172,6 +172,7 @@ fn descendants_follow_a_conflicting_directory_to_its_recovered_path()
         mutation: BranchMutation::File {
             version_id: version(70)?,
         },
+        rename: None,
     };
     bind_intents(
         &mut commits,
@@ -242,6 +243,7 @@ fn nested_edits_rebase_over_a_newer_converged_directory_revision()
         mutation: BranchMutation::File {
             version_id: version(70)?,
         },
+        rename: None,
     };
     bind_intents(&mut commits, std::slice::from_ref(&intent));
     let causal = plan_reconciliation(&commits, &frontier(2, &[3])?, ReconciliationLimits::DEFAULT)?;
@@ -355,6 +357,7 @@ fn malformed_intents_and_incomplete_nested_bases_fail_closed()
         mutation: BranchMutation::File {
             version_id: version(70)?,
         },
+        rename: None,
     };
     let mut substituted_intent = file.clone();
     substituted_intent.path = path(&["other"])?;
@@ -388,6 +391,73 @@ fn malformed_intents_and_incomplete_nested_bases_fail_closed()
             },
         ),
         Err(crate::ReconciliationError::MissingBaseEntry)
+    ));
+    Ok(())
+}
+
+#[test]
+fn rename_intent_digest_binds_both_paths_generation_and_intermediate_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut intent = file_intent(2, &["destination"], 51, None, 62)?;
+    intent.rename = Some(BranchRenameIntent {
+        source_path: path(&["source"])?,
+        source_ancestors: Vec::new(),
+        source_entry_generation: 1,
+        intermediate_root_object_revision_id: revision(70)?,
+    });
+    let digest = intent.digest();
+
+    let mut changed_source = intent.clone();
+    changed_source
+        .rename
+        .as_mut()
+        .ok_or("missing rename")?
+        .source_path = path(&["other"])?;
+    assert_ne!(digest, changed_source.digest());
+
+    let mut changed_generation = intent.clone();
+    changed_generation
+        .rename
+        .as_mut()
+        .ok_or("missing rename")?
+        .source_entry_generation = 2;
+    assert_ne!(digest, changed_generation.digest());
+
+    let mut changed_intermediate = intent;
+    changed_intermediate
+        .rename
+        .as_mut()
+        .ok_or("missing rename")?
+        .intermediate_root_object_revision_id = revision(71)?;
+    assert_ne!(digest, changed_intermediate.digest());
+    Ok(())
+}
+
+#[test]
+fn rename_intent_cannot_degrade_to_a_destination_only_replay()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut commits = vec![commit(1, 1, &[], 1, 10)?, commit(2, 2, &[1], 2, 20)?];
+    let mut intent = file_intent(2, &["destination"], 51, None, 62)?;
+    intent.rename = Some(BranchRenameIntent {
+        source_path: path(&["source"])?,
+        source_ancestors: Vec::new(),
+        source_entry_generation: 1,
+        intermediate_root_object_revision_id: revision(19)?,
+    });
+    bind_intents(&mut commits, std::slice::from_ref(&intent));
+    let causal = plan_reconciliation(&commits, &frontier(1, &[2])?, ReconciliationLimits::DEFAULT)?;
+    let result = plan_namespace_replay(
+        &causal,
+        &commits,
+        &[intent],
+        &NamespaceReplayBase {
+            root_object_revision_id: Some(revision(10)?),
+            entries: vec![entry(&["source"], 51, 62, DirectoryEntryKind::File)?],
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(crate::ReconciliationError::InvalidInput)
     ));
     Ok(())
 }
@@ -448,6 +518,7 @@ fn file_intent(
         mutation: BranchMutation::File {
             version_id: version(new_revision)?,
         },
+        rename: None,
     })
 }
 
@@ -466,6 +537,7 @@ fn directory_intent(
         prior_object_revision_id: None,
         entry_generation: 1,
         mutation: BranchMutation::CreateDirectory,
+        rename: None,
     })
 }
 

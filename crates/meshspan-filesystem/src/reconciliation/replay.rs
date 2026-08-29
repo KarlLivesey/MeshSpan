@@ -181,6 +181,12 @@ pub fn plan_namespace_replay(
             .get(commit_id)
             .ok_or(ReconciliationError::MissingIntent)?;
         validate_intent(commit, intent)?;
+        // A relocation is deliberately not degraded to the existing one-path upsert. The
+        // two-path replay planner consumes this contract in the following implementation slice;
+        // until then no public authoring path can create it and hostile injected rows fail closed.
+        if intent.rename.is_some() {
+            return Err(ReconciliationError::InvalidInput);
+        }
         actions.push(state.apply(causal_plan.digest(), commit, intent, &commits)?);
     }
     let digest = replay_digest(causal_plan.digest(), base, &actions, state.current_root);

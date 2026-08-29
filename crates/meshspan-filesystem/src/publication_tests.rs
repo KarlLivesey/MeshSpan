@@ -1942,6 +1942,7 @@ fn branch_mutation_intents_round_trip_restart_and_reject_path_corruption()
         mutation: BranchMutation::File {
             version_id: file.file.version_id,
         },
+        rename: None,
     };
     {
         let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
@@ -1985,6 +1986,7 @@ fn directory_commit_records_a_typed_replay_intent() -> Result<(), Box<dyn std::e
             prior_object_revision_id: None,
             entry_generation: publication.entry_generation,
             mutation: BranchMutation::CreateDirectory,
+            rename: None,
         })
     );
     Ok(())

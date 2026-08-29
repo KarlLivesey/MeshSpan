@@ -34,6 +34,24 @@ pub enum BranchMutation {
     CreateDirectory,
 }
 
+/// Source-side half of one atomic same-volume rename or move.
+///
+/// The enclosing [`BranchMutationIntent`] describes the destination insertion. This record binds
+/// the exact source removal and the intermediate root produced before that insertion. Keeping the
+/// intermediate root explicit makes the two path copies one replayable operation rather than two
+/// independently visible namespace edits.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchRenameIntent {
+    /// Original validated source path.
+    pub source_path: crate::NamespacePath,
+    /// Source child-directory lineage in root-to-leaf order before removal.
+    pub source_ancestors: Vec<crate::DirectoryRevisionTransition>,
+    /// Stable incarnation required at the source name.
+    pub source_entry_generation: u64,
+    /// Volume-root revision after source removal and before destination insertion.
+    pub intermediate_root_object_revision_id: ObjectRevisionId,
+}
+
 /// Immutable payload bound by one namespace commit header.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReconciliationCommitPayload {
@@ -75,6 +93,8 @@ pub struct BranchMutationIntent {
     pub entry_generation: u64,
     /// Typed leaf mutation whose immutable records must already be durable.
     pub mutation: BranchMutation,
+    /// Exact source removal when this mutation relocates the leaf to `path`.
+    pub rename: Option<BranchRenameIntent>,
 }
 
 impl BranchMutationIntent {
@@ -82,7 +102,12 @@ impl BranchMutationIntent {
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
         let mut digest = blake3::Hasher::new();
-        digest.update(b"meshspan.filesystem.branch-mutation-intent.v2\0");
+        if self.rename.is_some() {
+            digest.update(b"meshspan.filesystem.branch-mutation-intent.v3\0");
+        } else {
+            // Preserve every already-persisted ordinary mutation digest across the migration.
+            digest.update(b"meshspan.filesystem.branch-mutation-intent.v2\0");
+        }
         digest.update(&self.commit_id.as_bytes());
         update_namespace_path(&mut digest, &self.path);
         for ancestor in &self.ancestors {
@@ -102,6 +127,17 @@ impl BranchMutationIntent {
             BranchMutation::CreateDirectory => {
                 digest.update(&[2]);
             }
+        }
+        if let Some(rename) = &self.rename {
+            digest.update(&[1]);
+            update_namespace_path(&mut digest, &rename.source_path);
+            for ancestor in &rename.source_ancestors {
+                digest.update(&ancestor.object_id().as_bytes());
+                digest.update(&ancestor.expected_revision_id().as_bytes());
+                digest.update(&ancestor.new_revision_id().as_bytes());
+            }
+            digest.update(&rename.source_entry_generation.to_be_bytes());
+            digest.update(&rename.intermediate_root_object_revision_id.as_bytes());
         }
         digest.finalize().into()
     }
