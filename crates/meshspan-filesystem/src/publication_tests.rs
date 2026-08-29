@@ -6,15 +6,220 @@ use meshspan_domain::{
     VolumeId,
 };
 use rusqlite::{Connection, TransactionBehavior, params};
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 
 use super::{
     DATABASE_FILE, DirectoryPublication, DirectoryRevisionTransition, FilePublication, MIGRATIONS,
-    ManifestPublication, NamespacePublicationPath, NamespacePublicationReceipt,
-    NamespaceReconciliationApplication, PublicationDisposition, PublicationError,
-    PublicationPathError, RootFilePublication, SCHEMA_VERSION, SnapshotRestorePublication,
-    VersionPublicationStore, configure,
+    ManifestPublication, NamespaceHistoryLimits, NamespacePublicationPath,
+    NamespacePublicationReceipt, NamespaceReconciliationApplication,
+    NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
+    RootFilePublication, SCHEMA_VERSION, SnapshotRestorePublication, VersionPublicationStore,
+    configure,
 };
+
+#[test]
+fn two_restarted_isolated_stores_exchange_and_converge_without_moving_local_heads()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let mut home_store = fixture.open_home()?;
+    let mut office_store = fixture.open_office()?;
+    let limits = NamespaceHistoryLimits::DEFAULT;
+    let home_bundle = home_store.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[fixture.home.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        limits,
+    )?;
+    let office_bundle = office_store.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[fixture.office.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        limits,
+    )?;
+    assert_eq!(home_bundle.commit_count(), 1);
+    assert_eq!(office_bundle.commit_count(), 1);
+    assert_eq!(
+        home_store
+            .import_namespace_history(&office_bundle, limits)?
+            .imported_commits,
+        1
+    );
+    assert_eq!(
+        office_store
+            .import_namespace_history(&home_bundle, limits)?
+            .imported_commits,
+        1
+    );
+    assert_eq!(
+        home_store
+            .import_namespace_history(&office_bundle, limits)?
+            .imported_commits,
+        0
+    );
+    assert_eq!(
+        office_store.namespace_head(fixture.first.file.branch_id, fixture.first.file.volume_id)?,
+        Some(crate::BranchNamespaceHead {
+            branch_id: fixture.first.file.branch_id,
+            volume_id: fixture.first.file.volume_id,
+            namespace_commit_id: fixture.first.namespace_commit_id,
+            sequence: 1,
+        })
+    );
+
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(fixture.first.namespace_commit_id),
+        eligible_heads: vec![
+            fixture.home.namespace_commit_id,
+            fixture.office.namespace_commit_id,
+        ],
+    };
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([140; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([141; 16])?,
+        created_by: fixture.first.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        created_at: UnixMicros::new(140),
+    };
+    let home_prepared =
+        home_store.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    let office_prepared =
+        office_store.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    assert_eq!(home_prepared, office_prepared);
+    let home_receipt = home_store.apply_namespace_reconciliation(application, &home_prepared)?;
+    let office_receipt =
+        office_store.apply_namespace_reconciliation(application, &office_prepared)?;
+    assert_eq!(home_receipt, office_receipt);
+
+    drop(home_store);
+    drop(office_store);
+    assert_restarted_convergence(&fixture, application.operation_id, home_receipt)?;
+    Ok(())
+}
+
+#[test]
+fn history_exchange_bounds_and_commit_digests_fail_closed_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let source = fixture.open_home()?;
+    let limits = NamespaceHistoryLimits::DEFAULT;
+    assert!(matches!(
+        source.export_namespace_history(
+            fixture.first.file.volume_id,
+            &[fixture.home.namespace_commit_id],
+            &[fixture.first.namespace_commit_id],
+            NamespaceHistoryLimits {
+                maximum_immutable_records: 1,
+                ..limits
+            },
+        ),
+        Err(PublicationError::InvalidInput)
+    ));
+    let mut bundle = source.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[fixture.home.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        limits,
+    )?;
+    bundle.commits[0].commit.request_digest[0] ^= 1;
+    let rejected_directory = tempdir()?;
+    let mut target = VersionPublicationStore::open(rejected_directory.path(), UnixMicros::new(2))?;
+    target.publish_root_file(&fixture.first)?;
+    assert!(matches!(
+        target.import_namespace_history(&bundle, limits),
+        Err(PublicationError::Corrupt)
+    ));
+    assert!(
+        target
+            .branch_mutation_intent(fixture.home.namespace_commit_id)?
+            .is_none()
+    );
+    Ok(())
+}
+
+struct IsolatedHistoryFixture {
+    home_directory: TempDir,
+    office_directory: TempDir,
+    first: RootFilePublication,
+    home: RootFilePublication,
+    office: RootFilePublication,
+}
+
+impl IsolatedHistoryFixture {
+    fn open_home(&self) -> Result<VersionPublicationStore, PublicationError> {
+        VersionPublicationStore::open(self.home_directory.path(), UnixMicros::new(2))
+    }
+
+    fn open_office(&self) -> Result<VersionPublicationStore, PublicationError> {
+        VersionPublicationStore::open(self.office_directory.path(), UnixMicros::new(2))
+    }
+}
+
+fn isolated_history_fixture() -> Result<IsolatedHistoryFixture, Box<dyn std::error::Error>> {
+    let home_directory = tempdir()?;
+    let office_directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let home = next_root_publication(&first)?;
+    let office_branch = BranchId::from_bytes([125; 16])?;
+    let mut office = next_root_publication(&first)?;
+    office.file.operation_id = OperationId::from_bytes([130; 16])?;
+    office.file.branch_id = office_branch;
+    office.file.version_id = FileVersionId::from_bytes([131; 16])?;
+    office.file.manifest.manifest_id = ContentManifestId::from_bytes([132; 16])?;
+    office.file.manifest.content_digest = [133; 32];
+    office.file.manifest.root_digest = [134; 32];
+    office.file_object_revision_id = ObjectRevisionId::from_bytes([135; 16])?;
+    office.root_object_revision_id = ObjectRevisionId::from_bytes([136; 16])?;
+    office.namespace_commit_id = NamespaceCommitId::from_bytes([137; 16])?;
+    let mut home_store = VersionPublicationStore::open(home_directory.path(), UnixMicros::new(1))?;
+    let mut office_store =
+        VersionPublicationStore::open(office_directory.path(), UnixMicros::new(1))?;
+    home_store.publish_root_file(&first)?;
+    office_store.publish_root_file(&first)?;
+    seed_file_branch(&office_store.connection, &first, office_branch)?;
+    home_store.publish_root_file(&home)?;
+    office_store.publish_root_file(&office)?;
+    drop(home_store);
+    drop(office_store);
+    Ok(IsolatedHistoryFixture {
+        home_directory,
+        office_directory,
+        first,
+        home,
+        office,
+    })
+}
+
+fn assert_restarted_convergence(
+    fixture: &IsolatedHistoryFixture,
+    operation_id: OperationId,
+    expected: NamespaceReconciliationReceipt,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let home = VersionPublicationStore::open(fixture.home_directory.path(), UnixMicros::new(3))?;
+    let office =
+        VersionPublicationStore::open(fixture.office_directory.path(), UnixMicros::new(3))?;
+    for store in [&home, &office] {
+        let mut resolved = store
+            .resolve_namespace_reconciliation(operation_id)?
+            .ok_or("missing restarted receipt")?;
+        assert_eq!(resolved.disposition, PublicationDisposition::Replayed);
+        resolved.disposition = PublicationDisposition::Applied;
+        assert_eq!(resolved, expected);
+    }
+    assert_eq!(
+        stored_directory_entry(
+            &home,
+            expected.root_object_revision_id,
+            &fixture.home.path.path().components()[0],
+        )?,
+        stored_directory_entry(
+            &office,
+            expected.root_object_revision_id,
+            &fixture.home.path.path().components()[0],
+        )?
+    );
+    Ok(())
+}
 use crate::{
     BranchMutation, BranchMutationIntent, BranchRenameIntent, CloseHandleOutcome,
     CloseHandleRequest, CreateDisposition, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,

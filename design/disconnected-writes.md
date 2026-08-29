@@ -109,6 +109,15 @@ On reconnection:
 Interrupted reconciliation resumes from immutable IDs. Repeating it produces
 the same graph/root and cannot duplicate a user operation.
 
+The branch store imports remote history as immutable evidence, never as locally
+executed connector receipts. A transfer may add commit headers, mutation intents,
+directory nodes, manifests, file versions and object revisions, but cannot move a
+local branch head or import handles, sessions or other mutable daemon state. The
+whole bounded bundle is accepted or rolled back; exact retries only revalidate the
+same records. A caller stops traversal at commit IDs already known by the receiver,
+so the shared base remains local and later exchanges carry only the missing causal
+suffix.
+
 ### Executable planning contract
 
 Reconciliation is split into a pure planner and a receipt-backed applier. The

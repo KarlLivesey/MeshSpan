@@ -9,9 +9,11 @@ mod reconciliation_apply;
 #[path = "namespace_publication/rename.rs"]
 mod rename;
 #[path = "namespace_publication/repository.rs"]
-mod repository;
+pub(super) mod repository;
 #[path = "namespace_publication/snapshot_restore.rs"]
 mod snapshot_restore;
+#[path = "namespace_publication/transfer.rs"]
+pub(super) mod transfer;
 #[path = "namespace_publication/unlink.rs"]
 mod unlink;
 
