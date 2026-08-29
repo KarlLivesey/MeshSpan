@@ -698,6 +698,35 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .prepare_adapter_directory(branch_id, request, created_by, expected_parent)
     }
 
+    pub(crate) fn adapter_file_create_parent(
+        &self,
+        branch_id: BranchId,
+        context: crate::FilesystemAccessContext,
+        request: &crate::AdapterCreateFileRequest,
+    ) -> Result<ObjectId, crate::HandleError> {
+        self.publications
+            .adapter_file_create_parent(branch_id, context, request)
+    }
+
+    pub(crate) fn prepare_adapter_file_create(
+        &mut self,
+        branch_id: BranchId,
+        context: crate::FilesystemAccessContext,
+        request: &crate::AdapterCreateFileRequest,
+        policy: crate::FilesystemAdapterPolicy,
+        grant: crate::FilesystemAuthorityGrant,
+        expected_parent: ObjectId,
+    ) -> Result<crate::FilesystemHandleCreateRequest, crate::HandleError> {
+        self.publications.prepare_adapter_file_create(
+            branch_id,
+            context,
+            request,
+            policy,
+            grant,
+            expected_parent,
+        )
+    }
+
     /// Resolves immutable protocol-neutral attributes for one current branch path.
     ///
     /// # Errors

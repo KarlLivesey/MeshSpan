@@ -27,7 +27,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 29] = [
+const MIGRATIONS: [Migration; 30] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -144,8 +144,12 @@ const MIGRATIONS: [Migration; 29] = [
         version: 29,
         sql: include_str!("../schema/branch/029_adapter_rename_plans.sql"),
     },
+    Migration {
+        version: 30,
+        sql: include_str!("../schema/branch/030_adapter_file_create_plans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 29;
+const SCHEMA_VERSION: u32 = 30;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -842,6 +846,40 @@ impl VersionPublicationStore {
             branch_id,
             request,
             created_by,
+            expected_parent,
+        )
+    }
+
+    pub(crate) fn adapter_file_create_parent(
+        &self,
+        branch_id: BranchId,
+        context: crate::FilesystemAccessContext,
+        request: &crate::AdapterCreateFileRequest,
+    ) -> Result<ObjectId, crate::HandleError> {
+        crate::namespace_planning::create_file::parent(
+            &self.connection,
+            branch_id,
+            context,
+            request,
+        )
+    }
+
+    pub(crate) fn prepare_adapter_file_create(
+        &mut self,
+        branch_id: BranchId,
+        context: crate::FilesystemAccessContext,
+        request: &crate::AdapterCreateFileRequest,
+        policy: crate::FilesystemAdapterPolicy,
+        grant: crate::FilesystemAuthorityGrant,
+        expected_parent: ObjectId,
+    ) -> Result<crate::FilesystemHandleCreateRequest, crate::HandleError> {
+        crate::namespace_planning::create_file::prepare(
+            &mut self.connection,
+            branch_id,
+            context,
+            request,
+            policy,
+            grant,
             expected_parent,
         )
     }

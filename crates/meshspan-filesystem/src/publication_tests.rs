@@ -158,6 +158,8 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "adapter_rename_plans",
         "adapter_rename_plan_source_ancestors",
         "adapter_rename_plan_target_ancestors",
+        "adapter_file_create_plans",
+        "adapter_file_create_plan_ancestors",
     ] {
         assert_table_exists(&store.connection, table)?;
     }

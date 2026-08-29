@@ -27,10 +27,10 @@ mod staging;
 mod version_retention;
 
 pub use adapter::{
-    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
-    AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
-    AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest, AdapterUnlinkRequest,
-    AdapterUnlockRequest, AdapterWriteFileRequest, BoundFilesystemAdapter,
+    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
+    AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
+    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
+    AdapterUnlinkRequest, AdapterUnlockRequest, AdapterWriteFileRequest, BoundFilesystemAdapter,
     FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemFileAdapter,
 };
 pub use authority::{
