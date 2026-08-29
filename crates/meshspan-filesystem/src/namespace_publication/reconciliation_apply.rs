@@ -15,7 +15,7 @@ use crate::publication::{
     NamespaceReconciliationApplication, NamespaceReconciliationReceipt, PublicationDisposition,
     PublicationError,
 };
-use crate::{NamespaceReplayDisposition, PreparedNamespaceReconciliation, ReconciliationPlan};
+use crate::{NamespaceReplayEffect, PreparedNamespaceReconciliation, ReconciliationPlan};
 
 #[path = "reconciliation_apply/action.rs"]
 mod action;
@@ -62,7 +62,7 @@ pub(super) fn apply(
         .transpose()?
         .ok_or(PublicationError::InvalidInput)?;
     for action in replay.actions() {
-        if action.disposition == NamespaceReplayDisposition::AlreadyApplied {
+        if action.effect == NamespaceReplayEffect::Preserve {
             verify_already_applied(
                 &transaction,
                 causal.volume_id(),

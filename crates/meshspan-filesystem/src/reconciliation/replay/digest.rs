@@ -5,7 +5,9 @@
 use meshspan_domain::{FileVersionId, ObjectRevisionId, OperationId};
 
 use super::naming::path_key;
-use super::{NamespaceReplayAction, NamespaceReplayBase, NamespaceReplayDisposition};
+use super::{
+    NamespaceReplayAction, NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEffect,
+};
 use crate::{BranchMutation, DirectoryEntryKind, NamespacePath};
 
 pub(super) fn replay_digest(
@@ -15,7 +17,7 @@ pub(super) fn replay_digest(
     final_root: Option<ObjectRevisionId>,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.namespace-replay-plan.v2\0");
+    digest.update(b"meshspan.filesystem.namespace-replay-plan.v3\0");
     digest.update(&causal_digest);
     update_optional_revision(&mut digest, base.root_object_revision_id);
     let mut entries = base.entries.iter().collect::<Vec<_>>();
@@ -42,6 +44,7 @@ pub(super) fn replay_digest(
 
 fn update_action(digest: &mut blake3::Hasher, action: &NamespaceReplayAction) {
     digest.update(&action.commit_id.as_bytes());
+    digest.update(&[effect_code(action.effect)]);
     if let Some(removal) = &action.source_removal {
         digest.update(&[1]);
         update_path(digest, &removal.path);
@@ -64,6 +67,7 @@ fn update_action(digest: &mut blake3::Hasher, action: &NamespaceReplayAction) {
     digest.update(&action.target_object_id.as_bytes());
     digest.update(&action.source_object_revision_id.as_bytes());
     digest.update(&action.target_object_revision_id.as_bytes());
+    digest.update(&[kind_code(action.target_kind)]);
     digest.update(&action.target_entry_generation.to_be_bytes());
     update_optional_revision(digest, action.target_prior_object_revision_id);
     update_optional_identifier(
@@ -114,6 +118,15 @@ fn disposition_code(disposition: NamespaceReplayDisposition) -> u8 {
         NamespaceReplayDisposition::Applied => 1,
         NamespaceReplayDisposition::Recovered => 2,
         NamespaceReplayDisposition::AlreadyApplied => 3,
+        NamespaceReplayDisposition::Preserved => 4,
+    }
+}
+
+const fn effect_code(effect: NamespaceReplayEffect) -> u8 {
+    match effect {
+        NamespaceReplayEffect::Upsert => 1,
+        NamespaceReplayEffect::Remove => 2,
+        NamespaceReplayEffect::Preserve => 3,
     }
 }
 

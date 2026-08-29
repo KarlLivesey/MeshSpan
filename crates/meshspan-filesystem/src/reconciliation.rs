@@ -14,8 +14,8 @@ use thiserror::Error;
 mod replay;
 
 pub use replay::{
-    NamespaceReplayAction, NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEntry,
-    NamespaceReplayPlan, NamespaceReplayRemoval, plan_namespace_replay,
+    NamespaceReplayAction, NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEffect,
+    NamespaceReplayEntry, NamespaceReplayPlan, NamespaceReplayRemoval, plan_namespace_replay,
 };
 
 const MAXIMUM_COMMITS: usize = 65_536;

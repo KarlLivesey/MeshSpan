@@ -12,6 +12,8 @@ use super::{
 };
 use crate::{DirectoryEntryKind, DirectoryRevisionTransition, NamespacePath};
 
+#[path = "replay/delete.rs"]
+mod delete;
 #[path = "replay/digest.rs"]
 mod digest;
 #[path = "replay/naming.rs"]
@@ -60,6 +62,19 @@ pub enum NamespaceReplayDisposition {
     Recovered,
     /// The exact source revision is already selected and needs no namespace mutation.
     AlreadyApplied,
+    /// A concurrent content or namespace change takes precedence over a deletion.
+    Preserved,
+}
+
+/// Concrete namespace effect performed by one deterministic replay action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NamespaceReplayEffect {
+    /// Insert or replace the target entry.
+    Upsert,
+    /// Remove the exact source entry without inserting a target.
+    Remove,
+    /// Leave the effective namespace unchanged after validating its selected state.
+    Preserve,
 }
 
 /// Exact source-side removal performed before one replayed rename insertion.
@@ -86,6 +101,8 @@ pub struct NamespaceReplayAction {
     pub commit_id: NamespaceCommitId,
     /// Source removal for a rename; absent for ordinary upserts and recovered logical copies.
     pub source_removal: Option<NamespaceReplayRemoval>,
+    /// Concrete effect applied to the effective namespace.
+    pub effect: NamespaceReplayEffect,
     /// Source path recorded by the disconnected branch.
     pub source_path: NamespacePath,
     /// Effective path after any recovered-directory remapping.
@@ -98,6 +115,8 @@ pub struct NamespaceReplayAction {
     pub source_object_revision_id: ObjectRevisionId,
     /// Effective immutable leaf revision selected by the target path.
     pub target_object_revision_id: ObjectRevisionId,
+    /// Exact kind of the selected target entry.
+    pub target_kind: DirectoryEntryKind,
     /// Stable target name-incarnation generation after this action.
     pub target_entry_generation: u64,
     /// Exact target leaf revision replaced by this action, if any.
@@ -112,7 +131,7 @@ pub struct NamespaceReplayAction {
     pub target_root_object_revision_id: Option<ObjectRevisionId>,
     /// File-version selection or directory creation semantics.
     pub mutation: BranchMutation,
-    /// Direct, recovered or already-applied disposition.
+    /// Direct, recovered, preserved or already-applied disposition.
     pub disposition: NamespaceReplayDisposition,
 }
 
@@ -268,7 +287,7 @@ impl ReplayState {
             intent.mutation,
             BranchMutation::DeleteFile { .. } | BranchMutation::DeleteDirectory
         ) {
-            return Err(ReconciliationError::InvalidInput);
+            return self.apply_delete(plan_digest, commit, intent, commits);
         }
         let source_path = intent.path.clone();
         let selection = self.select_leaf(plan_digest, commit, intent)?;
@@ -323,12 +342,14 @@ impl ReplayState {
         Ok(NamespaceReplayAction {
             commit_id: commit.commit_id,
             source_removal: None,
+            effect: NamespaceReplayEffect::Upsert,
             source_path,
             target_path,
             source_object_id: intent.object_id,
             target_object_id: target_object,
             source_object_revision_id: intent.object_revision_id,
             target_object_revision_id: target_revision,
+            target_kind,
             target_entry_generation: generation,
             target_prior_object_revision_id: prior_revision_id,
             target_file_version_id: file_version_id,
@@ -793,12 +814,14 @@ fn already_applied(
     NamespaceReplayAction {
         commit_id: commit.commit_id,
         source_removal: None,
+        effect: NamespaceReplayEffect::Preserve,
         source_path: intent.path.clone(),
         target_path,
         source_object_id: intent.object_id,
         target_object_id: intent.object_id,
         source_object_revision_id: intent.object_revision_id,
         target_object_revision_id: intent.object_revision_id,
+        target_kind: mutation_kind(intent.mutation),
         target_entry_generation: intent.entry_generation,
         target_prior_object_revision_id: Some(intent.object_revision_id),
         target_file_version_id: match intent.mutation {
