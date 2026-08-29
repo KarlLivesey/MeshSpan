@@ -15,6 +15,7 @@ mod cleanup_reclamation;
 mod cluster;
 mod component;
 mod consensus;
+mod federation_authority_snapshot;
 #[cfg(test)]
 mod federation_backup_test_support;
 mod federation_grant;
@@ -88,6 +89,7 @@ pub use cleanup_permit::{
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
+pub use federation_authority_snapshot::FederationAuthoritySnapshotError;
 pub use federation_grant_evidence::{
     FederationGrantRecord, FederationGrantState, FederationGrantTermination,
     FederationGrantTerminationKind,
