@@ -1011,6 +1011,7 @@ name = "meshspan-transport"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ed25519-dalek",
  "meshspan-domain",
  "meshspan-protocol",
  "quinn",

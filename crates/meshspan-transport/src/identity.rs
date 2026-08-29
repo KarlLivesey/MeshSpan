@@ -63,16 +63,7 @@ impl PeerRegistry {
         &self,
         connection: &quinn::Connection,
     ) -> Result<AuthenticatedPeer, TransportError> {
-        let identity = connection
-            .peer_identity()
-            .ok_or(TransportError::UntrustedPeer)?;
-        let certificates = identity
-            .downcast::<Vec<CertificateDer<'static>>>()
-            .map_err(|_| TransportError::UntrustedPeer)?;
-        if certificates.is_empty() || certificates.len() > 8 {
-            return Err(TransportError::UntrustedPeer);
-        }
-        let fingerprint = certificate_fingerprint(&certificates[0]);
+        let fingerprint = connection_certificate_fingerprint(connection)?;
         let binding = self
             .by_fingerprint
             .get(&fingerprint)
@@ -80,6 +71,21 @@ impl PeerRegistry {
             .ok_or(TransportError::UntrustedPeer)?;
         Ok(AuthenticatedPeer(binding))
     }
+}
+
+pub(crate) fn connection_certificate_fingerprint(
+    connection: &quinn::Connection,
+) -> Result<[u8; 32], TransportError> {
+    let identity = connection
+        .peer_identity()
+        .ok_or(TransportError::UntrustedPeer)?;
+    let certificates = identity
+        .downcast::<Vec<CertificateDer<'static>>>()
+        .map_err(|_| TransportError::UntrustedPeer)?;
+    if certificates.is_empty() || certificates.len() > 8 {
+        return Err(TransportError::UntrustedPeer);
+    }
+    Ok(certificate_fingerprint(&certificates[0]))
 }
 
 /// Proof that TLS and committed certificate enrolment resolved one exact peer.

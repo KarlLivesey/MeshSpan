@@ -251,7 +251,7 @@ impl PeerNetwork {
                     self.receive_snapshot(peer.node_id(), &state_path, &mut accepted, &snapshots)
                         .await?;
                 }
-                StreamKind::Metadata | StreamKind::Data => {
+                StreamKind::Metadata | StreamKind::Data | StreamKind::Federation => {
                     return Err(NodeRuntimeError::InvalidConfiguration);
                 }
             }

@@ -195,6 +195,18 @@ pub enum TransportError {
     /// A peer certificate or claimed enrolled identity did not match.
     #[error("private transport peer identity is not trusted")]
     UntrustedPeer,
+    /// A certificate, relationship, swarm, authority epoch or signature did not agree.
+    #[error("federation peer identity is not trusted")]
+    UntrustedFederationPeer,
+    /// A federation message deadline is expired or exceeds the admitted replay window.
+    #[error("federation message is outside its admitted lifetime")]
+    StaleFederationMessage,
+    /// A still-live authenticated federation nonce was presented again.
+    #[error("federation message replay was rejected")]
+    ReplayedFederationMessage,
+    /// No additional live federation nonce can be retained without exceeding the configured bound.
+    #[error("federation replay capacity is exhausted")]
+    FederationReplayCapacity,
     /// A stream kind or frame violates the private wire contract.
     #[error("private transport stream frame is invalid")]
     InvalidFrame,
