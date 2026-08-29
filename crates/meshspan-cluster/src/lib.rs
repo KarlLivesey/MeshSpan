@@ -9,6 +9,7 @@ mod cleanup_worker;
 mod convergence;
 mod driver;
 mod filesystem_authority;
+mod filesystem_convergence;
 mod membership;
 mod node_runtime;
 mod retention;
@@ -19,6 +20,8 @@ mod wire;
 mod access_administration_tests;
 #[cfg(test)]
 mod convergence_tests;
+#[cfg(test)]
+mod filesystem_convergence_tests;
 #[cfg(test)]
 mod handoff_tests;
 
@@ -49,6 +52,9 @@ mod cleanup_worker_tests;
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
 pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};
 pub use filesystem_authority::{MetadataFilesystemAuthority, MetadataFilesystemAuthorityError};
+pub use filesystem_convergence::{
+    FilesystemConvergenceError, FilesystemConvergenceService, PreparedHistoryReconciliation,
+};
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
 pub use retention::version_retention_selection_policy;
 pub use status::{

@@ -830,6 +830,23 @@ impl VersionPublicationStore {
         Ok(Self { connection })
     }
 
+    /// Ensures one local writable branch begins at an exact already-durable namespace commit.
+    ///
+    /// This internal lifecycle operation does not copy file heads or advance an existing branch.
+    /// Exact retries return the same head; a branch already based elsewhere fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown or wrong-volume base, branch reuse, corrupt state or SQLite failure.
+    pub fn ensure_namespace_branch(
+        &mut self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        base_commit_id: NamespaceCommitId,
+    ) -> Result<BranchNamespaceHead, PublicationError> {
+        namespace::ensure_branch(&mut self.connection, branch_id, volume_id, base_commit_id)
+    }
+
     /// Exports the bounded mutation closure missing after the caller's known commits.
     ///
     /// The result contains immutable records only and is safe to encode into the private
