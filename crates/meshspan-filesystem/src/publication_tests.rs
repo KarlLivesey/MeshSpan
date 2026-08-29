@@ -217,6 +217,37 @@ fn history_immutable_records_are_independent_content_addressed_bodies()
     Ok(())
 }
 
+#[test]
+fn history_export_includes_only_records_reachable_from_requested_heads()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let mut source = fixture.open_home()?;
+    let limits = NamespaceHistoryLimits::DEFAULT;
+    let before = source.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[fixture.home.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        limits,
+    )?;
+
+    seed_file_branch(
+        &source.connection,
+        &fixture.first,
+        fixture.office.file.branch_id,
+    )?;
+    source.publish_root_file(&fixture.office)?;
+    let after = source.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[fixture.home.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        limits,
+    )?;
+
+    assert_eq!(after.commit_records()?, before.commit_records()?);
+    assert_eq!(after.immutable_records()?, before.immutable_records()?);
+    Ok(())
+}
+
 struct IsolatedHistoryFixture {
     home_directory: TempDir,
     office_directory: TempDir,
