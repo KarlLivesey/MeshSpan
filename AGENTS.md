@@ -131,6 +131,13 @@ The domain layer has no network, SQL, web or SMB dependency. Database rows and
 wire messages convert at explicit boundaries. Do not expose raw SQL, generic KV
 operations or storage paths through the private protocol.
 
+Compose the consensus crate from deterministic core, quorum proof and membership
+pieces with explicit inputs and effects. SQL persistence, Quinn/Protobuf,
+MeshSpan commands, timers and daemon lifecycle are outer adapters. Do not add
+application callbacks or concrete infrastructure dependencies to the core merely
+for convenience; do not replace clear composition with premature generic
+abstractions solely to make the crate independently publishable.
+
 ## Code quality
 
 - Use descriptive names and small modules with one clear responsibility.

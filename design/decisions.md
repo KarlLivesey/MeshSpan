@@ -78,6 +78,7 @@ Status: **draft for review**.
 | D-070 | The normal federation UI is connect swarm, select file/folder/volume, choose view/edit/manage, or offer capacity and choose whether it serves ordinary reads. Cryptographic and reconciliation machinery remains hidden. |
 | D-071 | Federation is an intentional scale-out boundary that keeps consensus local to each swarm. It has no fixed node-count trigger; large deployments distribute owned volumes or explicit subtrees because a shared scope's canonical merge/ACL load still belongs to its owner. |
 | D-072 | Every swarm starts with one permanent root control Raft owning all authoritative scopes. The root retains swarm identity, node enrolment, federation trust and partition delegation, but may epoch-fence and delegate an operation family plus scope/key range to another Raft group when eligible membership and measured load justify it. Delegated operations bypass the root log. Automatic split/merge heuristics remain future work. |
+| D-073 | The owned consensus implementation is composed from deterministic election, replication, quorum and membership pieces behind explicit input/effect boundaries. MeshSpan supplies adapters for identity, persistence, commands, transport and lifecycle. This keeps later extraction as a useful Rust library possible without imposing premature generic abstractions or a publication promise. |
 
 ## Open decisions
 

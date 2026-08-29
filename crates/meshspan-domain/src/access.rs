@@ -66,10 +66,22 @@ impl Rights {
         self.0
     }
 
+    /// Reports whether this value grants no rights.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
     /// Returns the union of independently applicable allow grants.
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+
+    /// Returns the rights permitted by both independently authoritative restrictions.
+    #[must_use]
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
     }
 
     /// Reports whether every requested right is present.

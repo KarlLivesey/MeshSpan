@@ -64,6 +64,8 @@ Build:
 - versioned contracts and conformance harnesses for replaceable storage,
   connectors, administration clients, persistence, consensus, coding, placement,
   authentication, certificate and observability implementations;
+- a composed deterministic consensus-library boundary whose MeshSpan persistence,
+  transport, command and daemon integrations remain outer adapters;
 - deterministic clock/random/IO interfaces for tests;
 - Protobuf schema generation and compatibility fixture harness;
 - Rust-authored OpenAPI generation, server request/response validation and the
@@ -92,7 +94,7 @@ Exit evidence:
   federation outcome semantics.
 
 Requirements: SYS-002, SYS-004, SYS-006, SYS-009, PER-002, SCL-007, TST-001, REL-001,
-REL-002, DEV-001–006, EXT-001–005, FED-001–005, FED-007–009, FED-013–015,
+REL-002, DEV-001–006, EXT-001–005, EXT-008, FED-001–005, FED-007–009, FED-013–015,
 FED-022, FED-025, CLU-035, CLU-036, SCL-013, SCL-014.
 
 ## Stage 2 — authoritative metadata kernel
