@@ -291,18 +291,22 @@ copy-on-write filesystem service. This document records executable evidence only
   rejection, restart replay, changed requests and corrupted plans. The external
   two-gateway proof renames, queries and then unlinks the moved directory before
   replaying both operations after later commits and a complete restart.
-- Semantic create-new file now accepts only connector-owned operation/handle
+- Semantic creation-capable file open now accepts only connector-owned operation/handle
   identities, logical volume/path, access/share intent and bounded lease/stage
-  times. The daemon resolves and authorises the exact current parent, then
-  durably freezes the admitted principal and identity revision, retention and
-  manifest policy, every object/version/manifest/revision/commit identity and
-  the complete ancestor path-copy before atomically publishing the empty file
-  and admitting its handle. Exact retry after a full filesystem-store restart
-  reuses that frozen plan even after the current authority revision or daemon
-  policy changes; changed input, plan corruption and an existing target fail
-  closed. The external two-gateway proof creates, stats and closes the file,
-  restarts the store, replays the exact creation and rejects operation-ID reuse
-  with a different path.
+  times plus one explicit create-new, open-or-create or overwrite-or-create
+  disposition. The daemon resolves whether the current authority target is the
+  exact existing file or its parent; a race between resolution, authorisation
+  and planning fails stale rather than changing targets. It durably freezes the
+  admitted principal and identity revision, disposition, existing-object
+  identity when present, retention and manifest policy, every generated
+  object/version/manifest/revision/commit identity and the complete ancestor
+  path-copy. Absent paths are atomically published with their first handle;
+  existing paths open without a connector probe, while overwrite begins with a
+  durable empty private stage. Exact retries after a full filesystem-store
+  restart reuse the frozen plan even after the current authority revision or
+  daemon policy changes. Tests cover all four existing/absent combined outcomes,
+  create-new collision, changed input, invalid read-only overwrite and plan
+  corruption.
 
 ## Closure gates
 
@@ -544,10 +548,10 @@ copy-on-write filesystem service. This document records executable evidence only
    7 so no connector can treat a repository read as access authority.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
    The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
-   contract, semantic create-new file and directory creation/rename/unlink, and
-   two-gateway restart proof are complete. Creation-capable combined
-   open-or-create dispositions, authorised administration views and the
-   two-isolated-node service-level reconciliation proof remain open.
+   contract, every creation-capable file disposition, semantic directory
+   creation/rename/unlink, and two-gateway restart proof are complete. Authorised
+   administration views and the two-isolated-node service-level reconciliation
+   proof remain open.
 
 Stage 5 remains incomplete until every gate is checked and the complete local
 suite passes together.

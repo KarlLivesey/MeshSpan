@@ -6,12 +6,12 @@ use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{BranchId, HandleId, LockId, OperationId, UnixMicros, VolumeId};
 
 use crate::{
-    AuthorisedFilesystemError, AuthorisedFilesystemService, DurableContentPublisher,
-    DurableContentReader, FilesystemAccessAuthority, FilesystemAccessContext,
-    FilesystemHandleCloseReceipt, FilesystemHandleFlushRequest, FilesystemHandleReadReceipt,
-    FilesystemHandleWriteReceipt, HandleAccess, HandleLeaseReceipt, HandleShare, LockRangeReceipt,
-    NamespaceListPage, NamespaceObjectStat, NamespacePath, NamespacePublicationReceipt,
-    OpenHandleReceipt, RangeLockKind, UnlockRangeReceipt,
+    AuthorisedFilesystemError, AuthorisedFilesystemService, CreateDisposition,
+    DurableContentPublisher, DurableContentReader, FilesystemAccessAuthority,
+    FilesystemAccessContext, FilesystemHandleCloseReceipt, FilesystemHandleFlushRequest,
+    FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt, HandleAccess, HandleLeaseReceipt,
+    HandleShare, LockRangeReceipt, NamespaceListPage, NamespaceObjectStat, NamespacePath,
+    NamespacePublicationReceipt, OpenHandleReceipt, RangeLockKind, UnlockRangeReceipt,
 };
 
 /// Daemon-owned publication policy that access connectors cannot override.
@@ -174,7 +174,7 @@ pub struct AdapterCreateDirectoryRequest {
     pub observed_at: UnixMicros,
 }
 
-/// Semantic atomic creation of one empty file and its initial open handle.
+/// Semantic atomic create/open of one file and its handle.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdapterCreateFileRequest {
     /// Stable end-to-end handle-open identity.
@@ -183,8 +183,10 @@ pub struct AdapterCreateFileRequest {
     pub handle_id: HandleId,
     /// Logical volume selected by the authenticated request.
     pub volume_id: VolumeId,
-    /// Canonical bounded logical path of the new file.
+    /// Canonical bounded logical path of the selected or new file.
     pub path: NamespacePath,
+    /// Creation-capable atomic create/open behaviour requested by the connector.
+    pub create_disposition: CreateDisposition,
     /// Protocol-neutral access requested for the newly created handle.
     pub desired_access: HandleAccess,
     /// Protocol-neutral sharing contract.
@@ -387,7 +389,7 @@ pub trait FilesystemFileAdapter {
         request: &AdapterCreateDirectoryRequest,
     ) -> Result<crate::DirectoryPublicationReceipt, Self::Error>;
 
-    /// Atomically creates one empty logical file and reserves its first handle.
+    /// Atomically creates or opens one logical file according to its disposition.
     ///
     /// # Errors
     ///

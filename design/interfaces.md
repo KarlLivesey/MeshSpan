@@ -343,11 +343,12 @@ creation, same-volume rename and unlink already use this boundary: the daemon
 resolves exact parent/object targets, derives every internal identity and
 persists the complete publication plan so a lost-response retry cannot silently
 rebase. Rename destination lineage is explicitly based on the intermediate root
-after source removal. Create-new file now uses the same boundary and atomically
-publishes an empty version while admitting its handle from one durable,
-daemon-generated plan. Creation-capable combined open-or-create dispositions,
-administration and snapshot families must still adopt the semantic boundary
-before the Stage 5 adapter contract is complete.
+after source removal. Creation-capable file open uses the same boundary for
+create-new, open-or-create and overwrite-or-create. It freezes whether authority
+was granted on the exact existing file or its parent and atomically publishes an
+empty version with its handle only when absent. Administration and snapshot
+families must still adopt the semantic boundary before the Stage 5 adapter
+contract is complete.
 
 A live handle read pins its current private-stage sequence. The service reads
 only the requested immutable-base range, overlays every intersecting verified

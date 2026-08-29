@@ -193,7 +193,7 @@ pub enum CreateDisposition {
 }
 
 impl CreateDisposition {
-    const fn code(self) -> u8 {
+    pub(crate) const fn code(self) -> u8 {
         match self {
             Self::OpenExisting => 1,
             Self::CreateNew => 2,
@@ -203,7 +203,7 @@ impl CreateDisposition {
         }
     }
 
-    fn from_code(code: u8) -> Result<Self, HandleError> {
+    pub(crate) fn from_code(code: u8) -> Result<Self, HandleError> {
         match code {
             1 => Ok(Self::OpenExisting),
             2 => Ok(Self::CreateNew),
