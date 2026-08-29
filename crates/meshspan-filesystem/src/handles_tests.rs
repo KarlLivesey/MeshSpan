@@ -128,6 +128,65 @@ fn unsafe_or_creation_required_opens_fail_without_a_handle()
 }
 
 #[test]
+fn failed_created_handle_admission_rolls_back_the_namespace_transaction()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let initial = publication()?;
+    let existing_open = open_request(40, 41, CreateDisposition::OpenExisting, 100)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&initial)?;
+    store.open_handle(&existing_open)?;
+
+    let mut create_open = open_request(40, 42, CreateDisposition::CreateNew, 100)?;
+    create_open.path = NamespacePath::from_components(["new"], NamespaceLimits::PORTABLE)?;
+    let creation = RootFilePublication {
+        file: FilePublication {
+            operation_id: OperationId::from_bytes([43; 16])?,
+            branch_id: initial.file.branch_id,
+            volume_id: initial.file.volume_id,
+            object_id: ObjectId::from_bytes([44; 16])?,
+            expected_current_version_id: None,
+            version_id: FileVersionId::from_bytes([45; 16])?,
+            parent_version_id: None,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
+            manifest: ManifestPublication {
+                manifest_id: ContentManifestId::from_bytes([46; 16])?,
+                format_version: 1,
+                logical_length: 0,
+                content_digest: *blake3::hash(&[]).as_bytes(),
+                root_digest: [47; 32],
+            },
+            created_by: create_open.principal_id,
+            created_at: create_open.opened_at,
+        },
+        root_object_id: initial.root_object_id,
+        expected_namespace_commit_id: Some(initial.namespace_commit_id),
+        expected_file_object_revision_id: None,
+        file_object_revision_id: ObjectRevisionId::from_bytes([48; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([49; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([50; 16])?,
+        path: NamespacePublicationPath::new(create_open.path.clone(), Vec::new())?,
+        entry_generation: 1,
+    };
+
+    assert!(matches!(
+        store.publish_root_file_and_open(&creation, &create_open),
+        Err(HandleError::OperationConflict)
+    ));
+    let Some(head) = store.namespace_head(initial.file.branch_id, initial.file.volume_id)? else {
+        return Err(std::io::Error::other("initial namespace head disappeared").into());
+    };
+    assert_eq!(head.namespace_commit_id, initial.namespace_commit_id);
+    assert!(
+        store
+            .resolve_namespace_publication(creation.file.operation_id)?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
 fn corrupt_open_receipt_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let file = publication()?;

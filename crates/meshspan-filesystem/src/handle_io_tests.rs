@@ -13,10 +13,136 @@ use super::*;
 use crate::{
     ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
     CreateDisposition, DurableContentPublisher, DurableContentReader, FilePublication,
-    FilesystemCommitError, FilesystemCommitService, HandleAccess, HandleShare, LockRangeRequest,
-    ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
-    PublicationDisposition, RangeLockKind, RootFilePublication, UnlockRangeRequest,
+    FilesystemCommitError, FilesystemCommitService, FilesystemHandleCreateRequest, HandleAccess,
+    HandleShare, LockRangeRequest, ManifestPublication, NamespaceLimits, NamespacePath,
+    NamespacePublicationPath, PublicationDisposition, RangeLockKind, RootFileCommitRequest,
+    RootFilePublication, StageCompletionRequest, UnlockRangeRequest,
 };
+
+#[test]
+fn absent_open_or_create_publishes_empty_file_and_handle_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let request = create_request(CreateDisposition::OpenOrCreate)?;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(1),
+        MemoryPublisher::default(),
+    )?;
+
+    let receipt = service.open_or_create_handle(&request)?;
+    let Some(creation) = receipt.creation else {
+        return Err(std::io::Error::other("absent path was not created").into());
+    };
+    assert_eq!(creation.disposition, PublicationDisposition::Applied);
+    assert_eq!(receipt.handle.disposition, PublicationDisposition::Applied);
+    assert_eq!(receipt.handle.object_id, request.initial_file.object_id);
+    assert_eq!(
+        receipt.handle.namespace_commit_id,
+        request.initial_file.namespace_commit_id
+    );
+    assert_eq!(
+        receipt.handle.opened_version_id,
+        request.initial_file.version_id
+    );
+    assert_eq!(
+        service
+            .into_content_publisher()
+            .bytes(&request.initial_file.completion.operation_id),
+        Some([].as_slice())
+    );
+
+    let mut reopened = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+    let replay = reopened.open_or_create_handle(&request)?;
+    assert_eq!(replay.handle.disposition, PublicationDisposition::Replayed);
+    let Some(replayed_creation) = replay.creation else {
+        return Err(std::io::Error::other("creation receipt did not survive restart").into());
+    };
+    assert_eq!(
+        replayed_creation.disposition,
+        PublicationDisposition::Replayed
+    );
+    let mut conflicting = request;
+    conflicting.open.handle.path =
+        NamespacePath::from_components(["Different"], NamespaceLimits::PORTABLE)?;
+    conflicting.initial_file.path =
+        NamespacePublicationPath::new(conflicting.open.handle.path.clone(), Vec::new())?;
+    assert!(matches!(
+        reopened.open_or_create_handle(&conflicting),
+        Err(FilesystemCommitError::Handle(
+            HandleError::OperationConflict
+        ))
+    ));
+    Ok(())
+}
+
+#[test]
+fn existing_open_or_create_does_not_publish_the_reserved_creation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let mut request = create_request(CreateDisposition::OpenOrCreate)?;
+    request.open.handle.path =
+        NamespacePath::from_components(["report"], NamespaceLimits::PORTABLE)?;
+    request.initial_file.path =
+        NamespacePublicationPath::new(request.open.handle.path.clone(), Vec::new())?;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(2),
+        MemoryPublisher::default(),
+    )?;
+
+    let receipt = service.open_or_create_handle(&request)?;
+    assert!(receipt.creation.is_none());
+    assert_eq!(receipt.handle.object_id, ObjectId::from_bytes([13; 16])?);
+    assert!(
+        service
+            .into_content_publisher()
+            .bytes(&request.initial_file.completion.operation_id)
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn mismatched_creation_plan_fails_before_content_or_namespace_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let mut request = create_request(CreateDisposition::CreateNew)?;
+    request.initial_file.created_by = PrincipalId::from_bytes([99; 16])?;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(1),
+        MemoryPublisher::default(),
+    )?;
+
+    assert!(matches!(
+        service.open_or_create_handle(&request),
+        Err(FilesystemCommitError::InvalidInput)
+    ));
+    assert!(
+        service
+            .into_content_publisher()
+            .bytes(&request.initial_file.completion.operation_id)
+            .is_none()
+    );
+    let publications = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    assert!(
+        publications
+            .resolve_open_handle(request.open.handle.operation_id)?
+            .is_none()
+    );
+    assert!(
+        publications
+            .resolve_namespace_publication(request.initial_file.completion.operation_id)?
+            .is_none()
+    );
+    Ok(())
+}
 
 #[test]
 fn writable_handle_stage_and_write_replay_together_after_restart()
@@ -458,6 +584,53 @@ fn handle_write(
             digest: blake3::hash(bytes).into(),
         },
         observed_at: UnixMicros::new(25),
+    })
+}
+
+fn create_request(
+    disposition: CreateDisposition,
+) -> Result<FilesystemHandleCreateRequest, Box<dyn std::error::Error>> {
+    let mut handle = writable_open(70, 71, 100)?;
+    handle.path = NamespacePath::from_components(["New"], NamespaceLimits::PORTABLE)?;
+    handle.create_disposition = disposition;
+    handle.opened_at = UnixMicros::new(10);
+    Ok(FilesystemHandleCreateRequest {
+        open: FilesystemHandleOpenRequest {
+            handle: handle.clone(),
+            maximum_stage_bytes: Some(1_024),
+        },
+        initial_file: RootFileCommitRequest {
+            completion: StageCompletionRequest {
+                operation_id: OperationId::from_bytes([72; 16])?,
+                stage_id: StageId::from_bytes(handle.handle_id.as_bytes())?,
+                stage_fence: 1,
+                expected_sequence: 0,
+                final_length: 0,
+                sparse: false,
+                observed_at: UnixMicros::new(10),
+            },
+            branch_id: handle.branch_id,
+            volume_id: handle.volume_id,
+            object_id: ObjectId::from_bytes([73; 16])?,
+            expected_current_version_id: None,
+            version_id: FileVersionId::from_bytes([74; 16])?,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
+            manifest_id: ContentManifestId::from_bytes([75; 16])?,
+            manifest_format_version: 1,
+            content_authorization_revision: handle.authorization_revision,
+            content_deadline: UnixMicros::new(90),
+            root_object_id: ObjectId::from_bytes([76; 16])?,
+            expected_namespace_commit_id: None,
+            expected_file_object_revision_id: None,
+            file_object_revision_id: ObjectRevisionId::from_bytes([77; 16])?,
+            root_object_revision_id: ObjectRevisionId::from_bytes([78; 16])?,
+            namespace_commit_id: NamespaceCommitId::from_bytes([79; 16])?,
+            path: NamespacePublicationPath::new(handle.path.clone(), Vec::new())?,
+            entry_generation: 1,
+            created_by: handle.principal_id,
+            created_at: handle.opened_at,
+        },
     })
 }
 

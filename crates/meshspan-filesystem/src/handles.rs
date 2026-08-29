@@ -316,12 +316,28 @@ pub enum HandleError {
     Sqlite(#[from] rusqlite::Error),
 }
 
-#[derive(Clone, Copy)]
-struct ResolvedFile {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedFile {
     namespace_commit: NamespaceCommitId,
     object: ObjectId,
     object_revision: ObjectRevisionId,
     version: FileVersionId,
+}
+
+impl ResolvedFile {
+    pub(crate) const fn created(
+        namespace_commit: NamespaceCommitId,
+        object: ObjectId,
+        object_revision: ObjectRevisionId,
+        version: FileVersionId,
+    ) -> Self {
+        Self {
+            namespace_commit,
+            object,
+            object_revision,
+            version,
+        }
+    }
 }
 
 struct StoredOpenReceipt {
@@ -345,20 +361,11 @@ pub(crate) fn open_existing(
     request: &OpenHandleRequest,
 ) -> Result<OpenHandleReceipt, HandleError> {
     validate_open(request)?;
-    let request_digest = open_request_digest(request);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(receipt) = load_open_receipt(
-        &transaction,
-        request.operation_id,
-        PublicationDisposition::Replayed,
-    )? {
-        return if receipt.request_digest == request_digest && receipt.handle_id == request.handle_id
-        {
-            Ok(receipt)
-        } else {
-            Err(HandleError::OperationConflict)
-        };
+    if let Some(receipt) = resolve_open_request(&transaction, request)? {
+        return Ok(receipt);
     }
+    let request_digest = open_request_digest(request);
     reject_operation_collision(&transaction, request.operation_id)?;
     expire_stale_handles(&transaction, request.opened_at)?;
     let Some(resolved) = resolve_file(&transaction, request)? else {
@@ -373,6 +380,72 @@ pub(crate) fn open_existing(
     let receipt = persist_open(&transaction, request, request_digest, resolved)?;
     transaction.commit()?;
     Ok(receipt)
+}
+
+pub(crate) fn resolve_open_request(
+    connection: &Connection,
+    request: &OpenHandleRequest,
+) -> Result<Option<OpenHandleReceipt>, HandleError> {
+    validate_open(request)?;
+    let request_digest = open_request_digest(request);
+    let receipt = load_open_receipt(
+        connection,
+        request.operation_id,
+        PublicationDisposition::Replayed,
+    )?;
+    receipt
+        .map(|receipt| {
+            if receipt.request_digest == request_digest && receipt.handle_id == request.handle_id {
+                Ok(receipt)
+            } else {
+                Err(HandleError::OperationConflict)
+            }
+        })
+        .transpose()
+}
+
+pub(crate) fn open_created(
+    transaction: &Transaction<'_>,
+    request: &OpenHandleRequest,
+    expected: ResolvedFile,
+) -> Result<OpenHandleReceipt, HandleError> {
+    validate_open(request)?;
+    if !matches!(
+        request.create_disposition,
+        CreateDisposition::CreateNew
+            | CreateDisposition::OpenOrCreate
+            | CreateDisposition::OverwriteOrCreate
+    ) {
+        return Err(HandleError::InvalidInput);
+    }
+    let request_digest = open_request_digest(request);
+    if let Some(receipt) = load_open_receipt(
+        transaction,
+        request.operation_id,
+        PublicationDisposition::Replayed,
+    )? {
+        return if receipt.request_digest == request_digest
+            && receipt.handle_id == request.handle_id
+            && receipt.namespace_commit_id == expected.namespace_commit
+            && receipt.object_id == expected.object
+            && receipt.object_revision_id == expected.object_revision
+            && receipt.opened_version_id == expected.version
+        {
+            Ok(receipt)
+        } else {
+            Err(HandleError::OperationConflict)
+        };
+    }
+    reject_operation_collision(transaction, request.operation_id)?;
+    expire_stale_handles(transaction, request.opened_at)?;
+    let resolved = resolve_file(transaction, request)?.ok_or(HandleError::Corrupt)?;
+    if resolved != expected {
+        return Err(HandleError::Corrupt);
+    }
+    reject_handle_collision(transaction, request.handle_id)?;
+    reject_pending_delete(transaction, request, resolved.object)?;
+    enforce_share_modes(transaction, request, resolved.object)?;
+    persist_open(transaction, request, request_digest, resolved)
 }
 
 pub(crate) fn preflight_open(
