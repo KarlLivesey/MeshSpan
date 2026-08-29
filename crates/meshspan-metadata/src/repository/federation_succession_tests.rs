@@ -64,6 +64,122 @@ fn every_apply_boundary_rolls_back_complete_signed_succession_designation()
     Ok(())
 }
 
+#[test]
+fn every_succession_transition_rolls_back_its_command_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    prove_designate_accept_activate_rollbacks()?;
+    prove_designation_revocation_rollback()
+}
+
+fn prove_designate_accept_activate_rollbacks() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare_relationship(&mut repository, fixture.ids)?;
+    let designation = designation(fixture.ids, 1, vec![])?;
+    let designation_digest = payload_digest(&designation.signing_payload());
+    apply_succession_after_rollback(
+        &mut repository,
+        LogPosition { index: 4, term: 1 },
+        context(70, fixture.ids.administrator, 71, 4, 3)?,
+        &AuthoritativeCommand::DesignateFederationSuccessor(designation),
+        fixture.ids.remote_mesh,
+    )?;
+    let acceptance = acceptance(fixture.ids, designation_digest, 1);
+    let acceptance_digest = payload_digest(&acceptance.signing_payload());
+    apply_succession_after_rollback(
+        &mut repository,
+        LogPosition { index: 5, term: 1 },
+        context(72, fixture.ids.administrator, 73, 5, 4)?,
+        &AuthoritativeCommand::AcceptFederationSuccessor(acceptance),
+        fixture.ids.remote_mesh,
+    )?;
+    apply_succession_after_rollback(
+        &mut repository,
+        LogPosition { index: 6, term: 1 },
+        context(74, fixture.ids.administrator, 75, 6, 5)?,
+        &AuthoritativeCommand::ActivateFederationSuccessor(ActivateFederationSuccessor {
+            succession_id: fixture.ids.succession,
+            relationship_id: fixture.ids.relationship,
+            retiring_mesh_id: fixture.ids.remote_mesh,
+            successor_mesh_id: fixture.ids.local_mesh,
+            expected_authority_epoch: 1,
+            succession_epoch: 1,
+            designation_digest,
+            acceptance_digest,
+            reason: "Atomic activation".to_owned(),
+        }),
+        fixture.ids.remote_mesh,
+    )?;
+    Ok(())
+}
+
+fn prove_designation_revocation_rollback() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare_relationship(&mut repository, fixture.ids)?;
+    let designation = designation(fixture.ids, 1, vec![])?;
+    let designation_digest = payload_digest(&designation.signing_payload());
+    apply(
+        &mut repository,
+        4,
+        context(76, fixture.ids.administrator, 77, 4, 3)?,
+        &AuthoritativeCommand::DesignateFederationSuccessor(designation),
+    )?;
+    let mut revocation = RevokeFederationSuccessorDesignation {
+        succession_id: fixture.ids.succession,
+        relationship_id: fixture.ids.relationship,
+        retiring_mesh_id: fixture.ids.remote_mesh,
+        successor_mesh_id: fixture.ids.local_mesh,
+        expected_authority_epoch: 1,
+        succession_epoch: 1,
+        designation_digest,
+        signer_generation: 1,
+        reason: "Atomic dormant revocation".to_owned(),
+        signature: [0; 64],
+    };
+    revocation.signature = remote_key().sign(&revocation.signing_payload()).to_bytes();
+    apply_succession_after_rollback(
+        &mut repository,
+        LogPosition { index: 5, term: 1 },
+        context(78, fixture.ids.administrator, 79, 5, 4)?,
+        &AuthoritativeCommand::RevokeFederationSuccessorDesignation(revocation),
+        fixture.ids.remote_mesh,
+    )?;
+    Ok(())
+}
+
+fn apply_succession_after_rollback(
+    repository: &mut AuthoritativeRepository,
+    position: LogPosition,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    retiring_mesh_id: MeshId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let before = repository.active_federation_successor(retiring_mesh_id)?;
+    let revision = repository.current_revision()?;
+    assert!(matches!(
+        repository.apply_committed_with_fault(
+            position,
+            context,
+            command,
+            ApplyFaultPoint::AfterCommand,
+        ),
+        Err(RepositoryError::InjectedFault)
+    ));
+    assert_eq!(
+        repository.active_federation_successor(retiring_mesh_id)?,
+        before
+    );
+    assert_eq!(repository.current_revision()?, revision);
+    assert!(
+        repository
+            .resolve_operation(context.operation_id)?
+            .is_none()
+    );
+    repository.apply_committed(position, context, command)?;
+    Ok(())
+}
+
 const fn all_apply_faults() -> [ApplyFaultPoint; 4] {
     [
         ApplyFaultPoint::AfterCommand,

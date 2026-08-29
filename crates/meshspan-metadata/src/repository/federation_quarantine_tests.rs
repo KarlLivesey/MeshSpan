@@ -252,6 +252,93 @@ fn every_apply_boundary_rolls_back_the_complete_quarantine_proof()
 }
 
 #[test]
+fn every_quarantine_transition_rolls_back_its_command_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::open("quarantine-transition-atomicity.sqlite3")?;
+    fixture.prepare()?;
+    let retained = fixture.retain_command(80, 81, 51)?;
+    let quarantine_id = retained.quarantine_id;
+    let source_operation_id = retained.source_operation_id;
+    apply_quarantine_after_rollback(
+        &mut fixture,
+        5,
+        82,
+        &AuthoritativeCommand::RetainFederatedMutationQuarantine(retained),
+        quarantine_id,
+    )?;
+    apply_quarantine_after_rollback(
+        &mut fixture,
+        6,
+        84,
+        &AuthoritativeCommand::SurfaceFederatedMutationQuarantine(
+            SurfaceFederatedMutationQuarantine {
+                quarantine_id,
+                source_operation_id,
+            },
+        ),
+        quarantine_id,
+    )?;
+    apply_quarantine_after_rollback(
+        &mut fixture,
+        7,
+        86,
+        &AuthoritativeCommand::ResolveFederatedMutationQuarantine(
+            ResolveFederatedMutationQuarantine {
+                quarantine_id,
+                source_operation_id,
+                resolution: FederationQuarantineResolution::Restore,
+                reason: "Atomic authorised restore".to_owned(),
+            },
+        ),
+        quarantine_id,
+    )?;
+    Ok(())
+}
+
+fn apply_quarantine_after_rollback(
+    fixture: &mut Fixture,
+    index: u64,
+    operation_seed: u8,
+    command: &AuthoritativeCommand,
+    quarantine_id: QuarantineId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let before = fixture.repository.federation_quarantine(quarantine_id)?;
+    let revision = fixture.repository.current_revision()?;
+    let command_context = context(
+        operation_seed,
+        fixture.ids.administrator,
+        operation_seed.wrapping_add(1),
+        i64::from(operation_seed),
+        revision.get(),
+    )?;
+    let position = LogPosition { index, term: 1 };
+    assert!(matches!(
+        fixture.repository.apply_committed_with_fault(
+            position,
+            command_context,
+            command,
+            ApplyFaultPoint::AfterCommand,
+        ),
+        Err(RepositoryError::InjectedFault)
+    ));
+    assert_eq!(
+        fixture.repository.federation_quarantine(quarantine_id)?,
+        before
+    );
+    assert_eq!(fixture.repository.current_revision()?, revision);
+    assert!(
+        fixture
+            .repository
+            .resolve_operation(command_context.operation_id)?
+            .is_none()
+    );
+    fixture
+        .repository
+        .apply_committed(position, command_context, command)?;
+    Ok(())
+}
+
+#[test]
 fn missing_acknowledgement_is_corruption_not_absence() -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::open("quarantine-missing-proof.sqlite3")?;
     fixture.prepare()?;
