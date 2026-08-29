@@ -2,7 +2,7 @@
 
 //! Journal authority checks and accounting for physical shard reclamation.
 
-use meshspan_contracts::TombstoneReceipt;
+use meshspan_contracts::{ReclamationReceipt, TombstoneReceipt, reclamation_receipt_digest};
 use meshspan_domain::UnixMicros;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -65,7 +65,7 @@ impl TargetJournal {
         &mut self,
         receipt: TombstoneReceipt,
         now: UnixMicros,
-    ) -> Result<(), TargetJournalError> {
+    ) -> Result<ReclamationReceipt, TargetJournalError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -73,7 +73,7 @@ impl TargetJournal {
         let stored = load_unlink_state(&transaction, receipt)?;
         validate_unlink_state(&stored, receipt)?;
         if stored.2.is_some() && stored.4 == INVENTORY_UNLINKED {
-            return Ok(());
+            return reclamation_receipt(receipt, &stored);
         }
         let length = to_u64(stored.3)?;
         let changed = transaction.execute(
@@ -94,11 +94,34 @@ impl TargetJournal {
             return Err(TargetJournalError::CorruptState);
         }
         transaction.commit()?;
-        Ok(())
+        Ok(ReclamationReceipt {
+            tombstone: receipt,
+            bytes_unlinked_at: now,
+            reclaimed_bytes: length,
+            reclamation_digest: reclamation_receipt_digest(receipt, now, length),
+        })
     }
 }
 
 type UnlinkState = (Vec<u8>, Vec<u8>, Option<i64>, i64, i64);
+
+fn reclamation_receipt(
+    tombstone: TombstoneReceipt,
+    stored: &UnlinkState,
+) -> Result<ReclamationReceipt, TargetJournalError> {
+    let bytes_unlinked_at = UnixMicros::new(stored.2.ok_or(TargetJournalError::CorruptState)?);
+    let reclaimed_bytes = to_u64(stored.3)?;
+    Ok(ReclamationReceipt {
+        tombstone,
+        bytes_unlinked_at,
+        reclaimed_bytes,
+        reclamation_digest: reclamation_receipt_digest(
+            tombstone,
+            bytes_unlinked_at,
+            reclaimed_bytes,
+        ),
+    })
+}
 
 fn load_unlink_state(
     transaction: &rusqlite::Transaction<'_>,

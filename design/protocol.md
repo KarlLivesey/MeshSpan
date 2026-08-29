@@ -280,6 +280,16 @@ metadata state machine repeats those checks, validates the reporter's current
 incarnation and creates a terminal ordered summary only after every sealed item
 has one completion.
 
+Physical unlink returns a distinct `ReclamationReceipt`; a tombstone receipt is
+never interpreted as evidence that capacity was freed. The receipt binds the
+exact completed tombstone, original provider-journal unlink instant, positive
+released-byte count and canonical digest. `ConfirmVersionCleanupReclamation`
+is admitted only for the matching completed item and same authenticated node at
+a current incarnation. Per-item results may arrive while other tombstones are
+still outstanding. The terminal reclamation summary appears only after the
+terminal tombstone count and every per-item reclamation agree; it stores a
+checked byte sum and canonical item-index-ordered digest.
+
 Each gateway then reads its signature-verified `VersionCleanupParticipant` and
 joins its local scan operation with the matching authorised intent and terminal
 completion. `VersionCleanupRetirementAuthority` is applied only to that exact

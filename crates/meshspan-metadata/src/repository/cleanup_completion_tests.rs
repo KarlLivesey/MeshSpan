@@ -254,7 +254,7 @@ fn persisted_completion_corruption_fails_closed() -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-fn issue(
+pub(super) fn issue(
     repository: &mut super::AuthoritativeRepository,
     administrator: meshspan_domain::PrincipalId,
     cleanup_id: OperationId,
@@ -290,7 +290,7 @@ fn issue(
         .ok_or_else(|| "missing permit attempt".into())
 }
 
-fn completion_command(
+pub(super) fn completion_command(
     cleanup_id: OperationId,
     sealed_revision: Revision,
     attempt: VersionCleanupPermitAttempt,
@@ -309,7 +309,7 @@ fn completion_command(
     ))
 }
 
-fn tombstone(attempt: VersionCleanupPermitAttempt) -> TombstoneReceipt {
+pub(super) fn tombstone(attempt: VersionCleanupPermitAttempt) -> TombstoneReceipt {
     let permit = attempt.permit;
     TombstoneReceipt {
         operation_id: permit.operation_id,

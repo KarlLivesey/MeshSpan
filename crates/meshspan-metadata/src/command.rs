@@ -2,7 +2,9 @@
 
 //! Typed authoritative state-machine commands and canonical request digests.
 
-use meshspan_contracts::{BoundedItems, RemovalPermit, ShardIdentity, TombstoneReceipt};
+use meshspan_contracts::{
+    BoundedItems, ReclamationReceipt, RemovalPermit, ShardIdentity, TombstoneReceipt,
+};
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
     ContentManifestId, DurationMicros, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
@@ -78,6 +80,8 @@ pub enum AuthoritativeCommand {
     IssueVersionCleanupPermit(IssueVersionCleanupPermit),
     /// Records one provider-confirmed durable tombstone for a sealed cleanup item.
     CompleteVersionCleanupItem(CompleteVersionCleanupItem),
+    /// Records one provider-confirmed physical unlink for a completed cleanup item.
+    ConfirmVersionCleanupReclamation(ConfirmVersionCleanupReclamation),
     /// Creates one folder or file record beneath an existing folder.
     CreateObject(CreateObject),
     /// Atomically points one logical object at a new immutable owner set.
@@ -159,6 +163,7 @@ impl AuthoritativeCommand {
             Self::SealVersionCleanupInventory(value) => value.update_digest(digest),
             Self::IssueVersionCleanupPermit(value) => value.update_digest(digest),
             Self::CompleteVersionCleanupItem(value) => value.update_digest(digest),
+            Self::ConfirmVersionCleanupReclamation(value) => value.update_digest(digest),
             Self::CreateObject(value) => value.update_digest(digest),
             Self::ReplaceObjectOwners(value) => value.update_digest(digest),
             Self::CreateTag(value) => value.update_digest(digest),
@@ -661,6 +666,21 @@ pub struct CompleteVersionCleanupItem {
     pub permit_attempt_sequence: u64,
     /// Provider's exact durable tombstone receipt.
     pub receipt: TombstoneReceipt,
+    /// mTLS-authenticated node that reported the provider result.
+    pub reporter_node_id: NodeId,
+    /// Current process incarnation of the reporting node.
+    pub reporter_incarnation: u64,
+}
+
+/// One immutable provider-confirmed physical reclamation for a completed cleanup item.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfirmVersionCleanupReclamation {
+    /// Authorised cleanup proposal.
+    pub cleanup_operation_id: OperationId,
+    /// Stable item position in the sealed inventory.
+    pub item_index: u64,
+    /// Provider's exact durable physical-unlink receipt.
+    pub receipt: ReclamationReceipt,
     /// mTLS-authenticated node that reported the provider result.
     pub reporter_node_id: NodeId,
     /// Current process incarnation of the reporting node.
@@ -1365,6 +1385,30 @@ digest_simple_record!(
         digest.unsigned(receipt.target_generation);
         digest.bytes(&receipt.permit_digest);
         digest.bytes(&receipt.tombstone_digest);
+        digest.identifier(value.reporter_node_id.as_bytes());
+        digest.unsigned(value.reporter_incarnation);
+    }
+);
+digest_simple_record!(
+    ConfirmVersionCleanupReclamation,
+    b"confirm-version-cleanup-reclamation",
+    |value, digest| {
+        digest.identifier(value.cleanup_operation_id.as_bytes());
+        digest.unsigned(value.item_index);
+        let receipt = value.receipt;
+        let tombstone = receipt.tombstone;
+        digest.identifier(tombstone.operation_id.as_bytes());
+        digest.bytes(&tombstone.shard.manifest_digest);
+        digest.unsigned(tombstone.shard.stripe_index);
+        digest.unsigned(u64::from(tombstone.shard.shard_index));
+        digest.unsigned(u64::from(tombstone.shard.generation));
+        digest.identifier(tombstone.target_id.as_bytes());
+        digest.unsigned(tombstone.target_generation);
+        digest.bytes(&tombstone.permit_digest);
+        digest.bytes(&tombstone.tombstone_digest);
+        digest.signed(receipt.bytes_unlinked_at.get());
+        digest.unsigned(receipt.reclaimed_bytes);
+        digest.bytes(&receipt.reclamation_digest);
         digest.identifier(value.reporter_node_id.as_bytes());
         digest.unsigned(value.reporter_incarnation);
     }

@@ -340,9 +340,18 @@ copy-on-write filesystem service. This document records executable evidence only
    retirement. Exact replay/restart, subject substitution, operation conflict,
    transaction interruption, persisted retirement corruption and deliberate
    damage to the older temporary fence are executable; publication and repeated
-   cleanup scans remain blocked by the independent retirement record. Distributed
-   worker dispatch/recovery and replicated post-unlink byte-reclamation status
-   remain outstanding.
+   cleanup scans remain blocked by the independent retirement record. Provider
+   unlink now returns a distinct durable `ReclamationReceipt`, and exact replay
+   returns its original time and byte count without double-accounting capacity.
+   Replicated per-item reclamation accepts only the exact earlier tombstone,
+   canonical digest, same authenticated node and current incarnation. Earlier
+   items may be reclaimed before the terminal tombstone summary; the final
+   reclamation transaction waits for every item, checks the byte sum and records
+   an arrival-order-independent digest. Restart/replay, early and out-of-order
+   results, forged/substituted receipts, stale reporters, persisted corruption
+   and every injected transaction boundary are executable. Tombstone completion
+   and permanent gateway retirement therefore never overclaim physical byte
+   release. Distributed worker dispatch/recovery remains outstanding.
 5. Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
    Existing-file opens, cross-gateway share admission, leased/fenced handle
    takeover, byte-range locks and guarded delete-on-close readiness are durable

@@ -8,6 +8,7 @@ use crate::{BoundedBytes, BoundedItems, ContractError, ImplementationDescriptor,
 
 const READ_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.read-permit.v1";
 const REMOVAL_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.removal-permit.v1";
+const RECLAMATION_RECEIPT_DOMAIN: &[u8] = b"meshspan.storage.reclamation-receipt.v1";
 const TOMBSTONE_RECEIPT_DOMAIN: &[u8] = b"meshspan.storage.tombstone-receipt.v1";
 const WRITE_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.write-permit.v1";
 
@@ -286,6 +287,26 @@ pub fn tombstone_receipt_digest(permit: RemovalPermit) -> [u8; 32] {
     digest.finalize().into()
 }
 
+/// Calculates the canonical digest of one exact physical-unlink acknowledgement.
+#[must_use]
+pub fn reclamation_receipt_digest(
+    tombstone: TombstoneReceipt,
+    bytes_unlinked_at: UnixMicros,
+    reclaimed_bytes: u64,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(RECLAMATION_RECEIPT_DOMAIN);
+    digest.update(&tombstone.operation_id.as_bytes());
+    encode_shard_for_mac(&mut digest, tombstone.shard);
+    digest.update(&tombstone.target_id.as_bytes());
+    digest.update(&tombstone.target_generation.to_be_bytes());
+    digest.update(&tombstone.permit_digest);
+    digest.update(&tombstone.tombstone_digest);
+    digest.update(&bytes_unlinked_at.get().to_be_bytes());
+    digest.update(&reclaimed_bytes.to_be_bytes());
+    digest.finalize().into()
+}
+
 fn encode_shard_for_mac(mac: &mut blake3::Hasher, shard: ShardIdentity) {
     mac.update(&shard.manifest_digest);
     mac.update(&shard.stripe_index.to_be_bytes());
@@ -316,6 +337,19 @@ pub struct TombstoneReceipt {
     pub permit_digest: [u8; 32],
     /// Digest binding the durable provider tombstone and its identity.
     pub tombstone_digest: [u8; 32],
+}
+
+/// Durable proof that one exact tombstoned shard's physical bytes were unlinked and accounted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReclamationReceipt {
+    /// Exact earlier durable tombstone.
+    pub tombstone: TombstoneReceipt,
+    /// Original provider-journal instant at which unlink accounting committed.
+    pub bytes_unlinked_at: UnixMicros,
+    /// Exact physical byte count released from committed capacity.
+    pub reclaimed_bytes: u64,
+    /// Canonical digest binding the tombstone, instant and released byte count.
+    pub reclamation_digest: [u8; 32],
 }
 
 /// One bounded provider inventory result.
@@ -441,7 +475,7 @@ pub trait StorageProvider {
         &mut self,
         receipt: TombstoneReceipt,
         observed_at: UnixMicros,
-    ) -> Result<(), ContractError>;
+    ) -> Result<ReclamationReceipt, ContractError>;
 
     /// Returns one stable bounded inventory page.
     ///

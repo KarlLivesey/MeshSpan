@@ -4,15 +4,16 @@
 
 use ed25519_dalek::{Signer, SigningKey};
 use meshspan_contracts::{
-    RemovalPermit, StoragePermitMacKey, TombstoneReceipt, removal_permit_mac,
-    tombstone_receipt_digest,
+    ReclamationReceipt, RemovalPermit, StoragePermitMacKey, TombstoneReceipt,
+    reclamation_receipt_digest, removal_permit_mac, tombstone_receipt_digest,
 };
 use meshspan_domain::{DurationMicros, MeshId, NodeId, OperationId, Revision, UnixMicros};
 use meshspan_filesystem::{VersionCleanupRetirementAuthority, VersionUnreachableProof};
 use meshspan_metadata::{
     AttestVersionCleanup, AuthoritativeCommand, CompleteVersionCleanupItem,
-    IssueVersionCleanupPermit, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, ProposeVersionCleanup,
-    VersionCleanupAttestation, VersionCleanupCompletion, VersionCleanupIntent,
+    ConfirmVersionCleanupReclamation, IssueVersionCleanupPermit,
+    MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, ProposeVersionCleanup, VersionCleanupAttestation,
+    VersionCleanupCompletion, VersionCleanupIntent, VersionCleanupItemCompletion,
     VersionCleanupParticipant, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
     VersionCleanupState,
 };
@@ -38,6 +39,14 @@ pub enum CleanupPermitError {
 pub enum CleanupCompletionError {
     /// The receipt, seal or authenticated reporter does not match exact committed authority.
     #[error("cleanup tombstone completion authority is invalid")]
+    InvalidAuthority,
+}
+
+/// Stable rejection before physical-reclamation accounting enters consensus.
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+pub enum CleanupReclamationError {
+    /// The receipt or authenticated reporter does not match exact tombstone completion authority.
+    #[error("cleanup physical-reclamation authority is invalid")]
     InvalidAuthority,
 }
 
@@ -204,6 +213,44 @@ pub fn version_cleanup_tombstone_completion(
     ))
 }
 
+/// Converts one exact physical-unlink receipt into replicated reclamation accounting.
+///
+/// The authenticated reporter may have a newer process incarnation after restart, but must be
+/// the same node that durably completed the provider tombstone.
+///
+/// # Errors
+///
+/// Rejects zero bytes/incarnation, a different tombstone or reporter, or a forged digest.
+pub fn version_cleanup_reclamation(
+    completion: VersionCleanupItemCompletion,
+    receipt: ReclamationReceipt,
+    reporter_node_id: NodeId,
+    reporter_incarnation: u64,
+) -> Result<AuthoritativeCommand, CleanupReclamationError> {
+    if reporter_incarnation == 0
+        || reporter_node_id != completion.reporter_node_id
+        || receipt.tombstone != completion.receipt
+        || receipt.reclaimed_bytes == 0
+        || receipt.reclamation_digest
+            != reclamation_receipt_digest(
+                receipt.tombstone,
+                receipt.bytes_unlinked_at,
+                receipt.reclaimed_bytes,
+            )
+    {
+        return Err(CleanupReclamationError::InvalidAuthority);
+    }
+    Ok(AuthoritativeCommand::ConfirmVersionCleanupReclamation(
+        ConfirmVersionCleanupReclamation {
+            cleanup_operation_id: completion.cleanup_operation_id,
+            item_index: completion.item_index,
+            receipt,
+            reporter_node_id,
+            reporter_incarnation,
+        },
+    ))
+}
+
 /// Joins replicated intent, signed local participant and terminal completion without weakening
 /// any identity before permanent gateway application.
 ///
@@ -254,8 +301,8 @@ pub fn version_cleanup_retirement_authority(
 mod tests {
     use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
     use meshspan_contracts::{
-        ShardIdentity, StoragePermitMacKey, TombstoneReceipt, tombstone_receipt_digest,
-        verify_removal_permit_mac,
+        ReclamationReceipt, ShardIdentity, StoragePermitMacKey, TombstoneReceipt,
+        reclamation_receipt_digest, tombstone_receipt_digest, verify_removal_permit_mac,
     };
     use meshspan_domain::{
         ContentManifestId, DurationMicros, FileVersionId, MeshId, NodeId, OperationId, Revision,
@@ -263,13 +310,14 @@ mod tests {
     };
     use meshspan_filesystem::VersionUnreachableProof;
     use meshspan_metadata::{
-        AuthoritativeCommand, VersionCleanupItem, VersionCleanupPermitAttempt,
-        VersionCleanupPermitAuthority, VersionCleanupState,
+        AuthoritativeCommand, VersionCleanupItem, VersionCleanupItemCompletion,
+        VersionCleanupPermitAttempt, VersionCleanupPermitAuthority, VersionCleanupState,
     };
 
     use super::{
-        CleanupCompletionError, CleanupPermitError, CleanupRetirementAuthorityError,
-        version_cleanup_attestation, version_cleanup_proposal, version_cleanup_removal_permit,
+        CleanupCompletionError, CleanupPermitError, CleanupReclamationError,
+        CleanupRetirementAuthorityError, version_cleanup_attestation, version_cleanup_proposal,
+        version_cleanup_reclamation, version_cleanup_removal_permit,
         version_cleanup_retirement_authority, version_cleanup_tombstone_completion,
     };
 
@@ -453,6 +501,64 @@ mod tests {
                 6,
             ),
             Err(CleanupCompletionError::InvalidAuthority)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reclamation_accepts_only_exact_completion_and_authenticated_node()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let reporter = NodeId::from_bytes([35; 16])?;
+        let tombstone = TombstoneReceipt {
+            operation_id: OperationId::from_bytes([36; 16])?,
+            shard: ShardIdentity {
+                manifest_digest: [37; 32],
+                stripe_index: 2,
+                shard_index: 3,
+                generation: 4,
+            },
+            target_id: TargetId::from_bytes([38; 16])?,
+            target_generation: 5,
+            permit_digest: [39; 32],
+            tombstone_digest: [40; 32],
+        };
+        let completion = VersionCleanupItemCompletion {
+            cleanup_operation_id: OperationId::from_bytes([41; 16])?,
+            item_index: 6,
+            permit_attempt_sequence: 7,
+            receipt: tombstone,
+            reporter_node_id: reporter,
+            reporter_incarnation: 8,
+            completion_operation_id: OperationId::from_bytes([42; 16])?,
+            completed_at: UnixMicros::new(900),
+            revision: Revision::new(9),
+        };
+        let mut receipt = ReclamationReceipt {
+            tombstone,
+            bytes_unlinked_at: UnixMicros::new(901),
+            reclaimed_bytes: 4_096,
+            reclamation_digest: [0; 32],
+        };
+        receipt.reclamation_digest = reclamation_receipt_digest(
+            tombstone,
+            receipt.bytes_unlinked_at,
+            receipt.reclaimed_bytes,
+        );
+        let command = version_cleanup_reclamation(completion, receipt, reporter, 9)?;
+        let AuthoritativeCommand::ConfirmVersionCleanupReclamation(command) = command else {
+            return Err("wrong reclamation command".into());
+        };
+        assert_eq!(command.receipt, receipt);
+        assert_eq!(command.item_index, completion.item_index);
+
+        assert_eq!(
+            version_cleanup_reclamation(completion, receipt, NodeId::from_bytes([43; 16])?, 9,),
+            Err(CleanupReclamationError::InvalidAuthority)
+        );
+        receipt.reclamation_digest[0] ^= 1;
+        assert_eq!(
+            version_cleanup_reclamation(completion, receipt, reporter, 9),
+            Err(CleanupReclamationError::InvalidAuthority)
         );
         Ok(())
     }

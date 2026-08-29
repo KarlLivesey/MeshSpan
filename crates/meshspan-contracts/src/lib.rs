@@ -49,12 +49,12 @@ pub use security::{
     CertificateChallengeKind, CertificateChallengeReceipt, CertificateChallengeRequest,
 };
 pub use storage::{
-    InventoryEntry, InventoryPage, PutShardRequest, RemovalPermit, ReservationClass,
-    ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage, ShardIdentity,
-    ShardReadPermit, ShardReceipt, ShardWritePermit, StoragePermitMacKey, StorageProvider,
-    StorageReservation, TombstoneReceipt, read_permit_mac, removal_permit_mac,
-    tombstone_receipt_digest, verify_read_permit_mac, verify_removal_permit_mac,
-    verify_write_permit_mac, write_permit_mac,
+    InventoryEntry, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalPermit,
+    ReservationClass, ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage,
+    ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit, StoragePermitMacKey,
+    StorageProvider, StorageReservation, TombstoneReceipt, read_permit_mac,
+    reclamation_receipt_digest, removal_permit_mac, tombstone_receipt_digest,
+    verify_read_permit_mac, verify_removal_permit_mac, verify_write_permit_mac, write_permit_mac,
 };
 pub use suites::{
     run_access_connector_suite, run_administration_client_suite, run_authentication_handler_suite,

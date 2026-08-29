@@ -6,10 +6,10 @@ use std::path::Path;
 
 use meshspan_contracts::{
     BoundedBytes, BoundedItems, ContractError, ContractKind, ContractLimits, ContractVersion,
-    ImplementationDescriptor, InventoryPage, PutShardRequest, RemovalPermit, RequestContext,
-    ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage, ShardReadPermit,
-    ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation, TombstoneReceipt,
-    verify_read_permit_mac, verify_removal_permit_mac,
+    ImplementationDescriptor, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalPermit,
+    RequestContext, ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage,
+    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
+    TombstoneReceipt, verify_read_permit_mac, verify_removal_permit_mac,
 };
 use meshspan_domain::{MeshId, RandomSource, Revision, UnixMicros};
 use thiserror::Error;
@@ -348,7 +348,7 @@ impl FolderShardStore {
         &mut self,
         receipt: TombstoneReceipt,
         now: UnixMicros,
-    ) -> Result<(), FolderShardStoreError> {
+    ) -> Result<ReclamationReceipt, FolderShardStoreError> {
         if receipt.target_id != self.folder.marker().target_id()
             || receipt.target_generation != self.folder.marker().generation()
         {
@@ -537,7 +537,7 @@ impl StorageProvider for FolderShardStore {
         &mut self,
         receipt: TombstoneReceipt,
         observed_at: UnixMicros,
-    ) -> Result<(), ContractError> {
+    ) -> Result<ReclamationReceipt, ContractError> {
         FolderShardStore::unlink_tombstoned(self, receipt, observed_at).map_err(contract_error)
     }
 
