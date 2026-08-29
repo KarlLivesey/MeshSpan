@@ -2,11 +2,12 @@
 
 //! Independent typed QUIC streams and allocation-safe control framing.
 
-use meshspan_protocol::v1::{ControlEnvelope, DataControlEnvelope, DataFrame};
+use meshspan_protocol::v1::{ControlEnvelope, DataControlEnvelope, DataFrame, FederationEnvelope};
 use meshspan_protocol::{
-    ValidatedControlEnvelope, ValidatedDataControlEnvelope, ValidatedDataFrame, WireLimits,
-    decode_control_frame, decode_data_control_frame, decode_data_frame, encode_control_frame,
-    encode_data_control_frame, encode_data_frame,
+    ValidatedControlEnvelope, ValidatedDataControlEnvelope, ValidatedDataFrame,
+    ValidatedFederationEnvelope, WireLimits, decode_control_frame, decode_data_control_frame,
+    decode_data_frame, decode_federation_frame, encode_control_frame, encode_data_control_frame,
+    encode_data_frame, encode_federation_frame,
 };
 use quinn::{Connection, RecvStream, SendStream};
 
@@ -26,6 +27,8 @@ pub enum StreamKind {
     Snapshot = 3,
     /// Bulk-data control; bytes themselves use separately bounded frames.
     Data = 4,
+    /// Cross-swarm authority and reconciliation; never interpreted as same-swarm control.
+    Federation = 5,
 }
 
 impl StreamKind {
@@ -35,6 +38,7 @@ impl StreamKind {
             Self::Metadata => 50,
             Self::Snapshot => 10,
             Self::Data => 0,
+            Self::Federation => 40,
         }
     }
 
@@ -44,6 +48,7 @@ impl StreamKind {
             2 => Ok(Self::Metadata),
             3 => Ok(Self::Snapshot),
             4 => Ok(Self::Data),
+            5 => Ok(Self::Federation),
             _ => Err(TransportError::InvalidFrame),
         }
     }
@@ -116,6 +121,34 @@ pub async fn receive_control(
 ) -> Result<ValidatedControlEnvelope, TransportError> {
     let frame = receive_prefixed(receive, limits.maximum_control_bytes()).await?;
     decode_control_frame(&frame, limits).map_err(Into::into)
+}
+
+/// Encodes and writes one federation envelope on its dedicated stream class.
+///
+/// # Errors
+///
+/// Rejects semantic/wire limits before writing or reports stream failure.
+pub async fn send_federation(
+    send: &mut SendStream,
+    envelope: &FederationEnvelope,
+    limits: WireLimits,
+) -> Result<(), TransportError> {
+    let frame = encode_federation_frame(envelope, limits)?;
+    send.write_all(&frame).await?;
+    Ok(())
+}
+
+/// Reads one bounded and semantically validated cross-swarm envelope.
+///
+/// # Errors
+///
+/// Rejects truncation, excess, malformed Protobuf and invalid authority-bound fields.
+pub async fn receive_federation(
+    receive: &mut RecvStream,
+    limits: WireLimits,
+) -> Result<ValidatedFederationEnvelope, TransportError> {
+    let frame = receive_prefixed(receive, limits.maximum_control_bytes()).await?;
+    decode_federation_frame(&frame, limits).map_err(Into::into)
 }
 
 /// Encodes and writes one validated data-stream control envelope.
