@@ -8,20 +8,20 @@ use meshspan_domain::{
 use thiserror::Error;
 
 use crate::{
-    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
-    AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
-    AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest, AdapterUnlinkRequest,
-    AdapterUnlockRequest, AdapterWriteFileRequest, DirectoryPublication, DurableContentPublisher,
-    DurableContentReader, FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
-    FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
-    FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleOpenRequest,
-    FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
-    FilesystemHandleWriteRequest, HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt,
-    HandleLeaseRequest, HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
-    NamespacePublicationReceipt, NamespaceQueryError, NamespaceRenamePublication,
-    NamespaceRenameReceipt, NamespaceStatRequest, NamespaceUnlinkPublication,
-    NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, StageWrite,
-    UnlockRangeReceipt, UnlockRangeRequest,
+    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
+    AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
+    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
+    AdapterUnlinkRequest, AdapterUnlockRequest, AdapterWriteFileRequest, DirectoryPublication,
+    DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy, FilesystemCommitError,
+    FilesystemCommitService, FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest,
+    FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest, FilesystemHandleFlushRequest,
+    FilesystemHandleOpenRequest, FilesystemHandleReadReceipt, FilesystemHandleReadRequest,
+    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleAccess, HandleError,
+    HandleIoError, HandleLeaseReceipt, HandleLeaseRequest, HandleReadError, LockRangeReceipt,
+    LockRangeRequest, NamespaceListRequest, NamespacePublicationReceipt, NamespaceQueryError,
+    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceStatRequest,
+    NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest,
+    RangeLockKind, StageWrite, UnlockRangeReceipt, UnlockRangeRequest,
 };
 
 /// Authenticated connector context supplied independently of a filesystem operation payload.
@@ -677,6 +677,28 @@ where
             .prepare_adapter_directory(branch_id, request, grant.principal_id, parent)
             .map_err(AuthorisedFilesystemError::Handle)?;
         self.create_directory(context, &publication)
+    }
+
+    pub(crate) fn adapter_create_file(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: &AdapterCreateFileRequest,
+        policy: FilesystemAdapterPolicy,
+    ) -> Result<FilesystemHandleCreateReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let parent = self
+            .filesystem
+            .adapter_file_create_parent(branch_id, context, request)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        let grant = self.authorise(context, request.volume_id, parent, Rights::CREATE_CHILD)?;
+        let prepared = self
+            .filesystem
+            .prepare_adapter_file_create(branch_id, context, request, policy, grant, parent)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        self.filesystem
+            .open_or_create_handle_at(&prepared, None)
+            .map_err(AuthorisedFilesystemError::Commit)
     }
 
     pub(crate) fn adapter_unlink(

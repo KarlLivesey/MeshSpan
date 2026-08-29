@@ -174,6 +174,33 @@ pub struct AdapterCreateDirectoryRequest {
     pub observed_at: UnixMicros,
 }
 
+/// Semantic atomic creation of one empty file and its initial open handle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterCreateFileRequest {
+    /// Stable end-to-end handle-open identity.
+    pub operation_id: OperationId,
+    /// Opaque handle identity allocated for the connector session.
+    pub handle_id: HandleId,
+    /// Logical volume selected by the authenticated request.
+    pub volume_id: VolumeId,
+    /// Canonical bounded logical path of the new file.
+    pub path: NamespacePath,
+    /// Protocol-neutral access requested for the newly created handle.
+    pub desired_access: HandleAccess,
+    /// Protocol-neutral sharing contract.
+    pub share_access: HandleShare,
+    /// Whether final close requests logical unlink.
+    pub delete_on_close: bool,
+    /// Maximum private-stage size, required exactly when write access is requested.
+    pub maximum_stage_bytes: Option<u64>,
+    /// Exclusive daemon-authoritative handle lease deadline.
+    pub lease_expires_at: UnixMicros,
+    /// Exclusive deadline for initial empty-content durability work.
+    pub content_deadline: UnixMicros,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
 /// Semantic logical namespace removal supplied by an access connector.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdapterUnlinkRequest {
@@ -360,6 +387,17 @@ pub trait FilesystemFileAdapter {
         request: &AdapterCreateDirectoryRequest,
     ) -> Result<crate::DirectoryPublicationReceipt, Self::Error>;
 
+    /// Atomically creates one empty logical file and reserves its first handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, collision, stage, content, namespace or durability failure.
+    fn create_file(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterCreateFileRequest,
+    ) -> Result<crate::FilesystemHandleCreateReceipt, Self::Error>;
+
     /// Logically removes one exact current file or empty directory name.
     ///
     /// # Errors
@@ -522,6 +560,15 @@ where
     ) -> Result<crate::DirectoryPublicationReceipt, Self::Error> {
         self.filesystem
             .adapter_create_directory(self.branch_id, context, request)
+    }
+
+    fn create_file(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterCreateFileRequest,
+    ) -> Result<crate::FilesystemHandleCreateReceipt, Self::Error> {
+        self.filesystem
+            .adapter_create_file(self.branch_id, context, request, self.policy)
     }
 
     fn unlink(

@@ -2,6 +2,8 @@
 
 //! Restart-safe daemon planning for semantic connector namespace mutations.
 
+#[path = "namespace_planning/create_file.rs"]
+pub(crate) mod create_file;
 #[path = "namespace_planning/rename.rs"]
 pub(crate) mod rename;
 #[path = "namespace_planning/resolution.rs"]
@@ -462,15 +464,18 @@ fn to_i64(value: u64) -> Result<i64, HandleError> {
 
 #[cfg(test)]
 mod tests {
-    use meshspan_domain::{ContentManifestId, FileVersionId, VolumeId};
+    use meshspan_domain::{
+        AssuranceLevel, ContentManifestId, FileVersionId, NodeId, Revision, Rights, VolumeId,
+    };
     use rusqlite::params;
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
-        AdapterRenameRequest, AdapterUnlinkRequest, FilePublication, ManifestPublication,
-        NamespaceLimits, NamespacePath, NamespacePublicationPath, RootFilePublication,
-        VersionPublicationStore,
+        AdapterCreateFileRequest, AdapterRenameRequest, AdapterUnlinkRequest, FilePublication,
+        FilesystemAccessContext, FilesystemAdapterPolicy, FilesystemAuthorityGrant, HandleAccess,
+        HandleShare, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
+        RootFilePublication, VersionPublicationStore,
     };
 
     #[test]
@@ -673,6 +678,99 @@ mod tests {
             Err(HandleError::Corrupt)
         ));
         Ok(())
+    }
+
+    #[test]
+    fn file_create_plan_freezes_admitted_authority_and_policy_across_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let state = tempdir()?;
+        let seed = seed_publication()?;
+        let mut store = VersionPublicationStore::open(state.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&seed)?;
+        let context = access_context()?;
+        let request = AdapterCreateFileRequest {
+            operation_id: OperationId::from_bytes([60; 16])?,
+            handle_id: meshspan_domain::HandleId::from_bytes([61; 16])?,
+            volume_id: seed.file.volume_id,
+            path: NamespacePath::from_components(["new"], NamespaceLimits::PORTABLE)?,
+            desired_access: HandleAccess::new(true, true, false)?,
+            share_access: HandleShare::new(true, true, false),
+            delete_on_close: false,
+            maximum_stage_bytes: Some(1_024),
+            lease_expires_at: UnixMicros::new(100),
+            content_deadline: UnixMicros::new(90),
+            observed_at: context.now,
+        };
+        let parent = store.adapter_file_create_parent(seed.file.branch_id, context, &request)?;
+        let grant = create_grant(context, seed.file.volume_id, parent, Revision::new(1))?;
+        let policy = FilesystemAdapterPolicy::new(true, 1, 1)?;
+        let plan = store.prepare_adapter_file_create(
+            seed.file.branch_id,
+            context,
+            &request,
+            policy,
+            grant,
+            parent,
+        )?;
+        drop(store);
+
+        let mut reopened = VersionPublicationStore::open(state.path(), UnixMicros::new(3))?;
+        let changed_grant = create_grant(context, seed.file.volume_id, parent, Revision::new(2))?;
+        let changed_policy = FilesystemAdapterPolicy::new(false, 2, 2)?;
+        let replay = reopened.prepare_adapter_file_create(
+            seed.file.branch_id,
+            context,
+            &request,
+            changed_policy,
+            changed_grant,
+            parent,
+        )?;
+        assert_eq!(replay, plan);
+        assert_eq!(replay.open.handle.authorization_revision, Revision::new(1));
+        assert!(replay.initial_file.retain_superseded_history);
+        assert_eq!(replay.initial_file.retention_policy_sequence, 1);
+        assert_eq!(replay.initial_file.manifest_format_version, 1);
+        reopened.test_connection().execute(
+            "UPDATE adapter_file_create_plans SET object_id = ?1 WHERE operation_id = ?2",
+            params![&[99_u8; 16], request.operation_id.as_bytes().as_slice()],
+        )?;
+        assert!(matches!(
+            reopened.adapter_file_create_parent(seed.file.branch_id, context, &request),
+            Err(HandleError::Corrupt)
+        ));
+        Ok(())
+    }
+
+    fn access_context() -> Result<FilesystemAccessContext, Box<dyn std::error::Error>> {
+        Ok(FilesystemAccessContext {
+            token_digest: [40; 32],
+            required_assurance: AssuranceLevel::SingleFactor,
+            gateway_node_id: NodeId::from_bytes([19; 16])?,
+            gateway_incarnation: 1,
+            now: UnixMicros::new(10),
+        })
+    }
+
+    fn create_grant(
+        context: FilesystemAccessContext,
+        volume_id: VolumeId,
+        parent: ObjectId,
+        identity_revision: Revision,
+    ) -> Result<FilesystemAuthorityGrant, Box<dyn std::error::Error>> {
+        Ok(FilesystemAuthorityGrant {
+            principal_id: PrincipalId::from_bytes([18; 16])?,
+            gateway_node_id: context.gateway_node_id,
+            gateway_incarnation: context.gateway_incarnation,
+            volume_id,
+            object_id: parent,
+            requested_rights: Rights::CREATE_CHILD,
+            identity_revision,
+            namespace_revision: Revision::new(1),
+            object_revision: Revision::new(1),
+            gateway_revision: Revision::new(1),
+            expires_at: UnixMicros::new(200),
+            evidence_digest: [42; 32],
+        })
     }
 
     fn create_path<const N: usize>(

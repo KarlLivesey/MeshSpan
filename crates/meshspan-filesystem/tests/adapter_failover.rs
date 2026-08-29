@@ -11,10 +11,10 @@ use meshspan_domain::{
     UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterFlushFileRequest,
-    AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
-    AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest, AdapterUnlinkRequest,
-    AdapterUnlockRequest, AdapterWriteFileRequest, AuthorisedFilesystemError,
+    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
+    AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
+    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
+    AdapterUnlinkRequest, AdapterUnlockRequest, AdapterWriteFileRequest, AuthorisedFilesystemError,
     AuthorisedFilesystemService, BoundFilesystemAdapter, ByteRange, ContentPublicationError,
     ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentPublisher,
     DurableContentReader, FilePublication, FilesystemAccessAuthority, FilesystemAccessContext,
@@ -56,6 +56,7 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
     let directory_request = create_directory(&gateway_a, &mut service, publication.file.volume_id)?;
     let rename_request = rename_directory(&gateway_b, &mut service, &directory_request)?;
     let unlink_request = unlink_directory(&gateway_a, &mut service, &rename_request)?;
+    let create_file_request = create_file(&gateway_b, &mut service, publication.file.volume_id)?;
 
     let rejected = open_request(35, 36, false, true, 9, 80)?;
     let missing_credential = InProcessAdapter::new(gateway_b.node_id, [0; 32]);
@@ -102,6 +103,7 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
     assert_directory_replay(&gateway_b, &mut restarted, &directory_request)?;
     assert_rename_replay(&gateway_a, &mut restarted, &rename_request)?;
     assert_unlink_replay(&gateway_a, &mut restarted, &unlink_request)?;
+    assert_file_create_replay(&gateway_b, &mut restarted, &create_file_request)?;
     let failover_reader = open_request(32, 33, false, true, 100, 180)?;
     gateway_b.open(&mut restarted, &failover_reader, None)?;
     assert_read(
@@ -112,6 +114,79 @@ fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_
         b"inZZial",
         110,
     )?;
+    Ok(())
+}
+
+fn create_file(
+    gateway: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    volume_id: VolumeId,
+) -> Result<AdapterCreateFileRequest, Box<dyn std::error::Error>> {
+    let request = AdapterCreateFileRequest {
+        operation_id: OperationId::from_bytes([57; 16])?,
+        handle_id: HandleId::from_bytes([58; 16])?,
+        volume_id,
+        path: NamespacePath::from_components(["Created"], NamespaceLimits::PORTABLE)?,
+        desired_access: HandleAccess::new(true, true, false)?,
+        share_access: HandleShare::new(true, true, false),
+        delete_on_close: false,
+        maximum_stage_bytes: Some(1_024),
+        lease_expires_at: UnixMicros::new(80),
+        content_deadline: UnixMicros::new(70),
+        observed_at: UnixMicros::new(11),
+    };
+    let receipt = gateway.create_file(service, &request)?;
+    assert_eq!(
+        receipt.creation.map(|value| value.disposition),
+        Some(PublicationDisposition::Applied)
+    );
+    let stat = gateway.stat(
+        service,
+        &AdapterStatRequest {
+            volume_id,
+            path: request.path.clone(),
+            observed_at: request.observed_at,
+        },
+    )?;
+    assert_eq!(receipt.handle.object_id, stat.object_id);
+    assert_eq!(stat.logical_length, Some(0));
+    gateway.close(
+        service,
+        AdapterCloseFileRequest {
+            operation_id: OperationId::from_bytes([59; 16])?,
+            handle_id: request.handle_id,
+            handle_fence: 1,
+            flush: None,
+            observed_at: UnixMicros::new(12),
+        },
+    )?;
+    Ok(request)
+}
+
+fn assert_file_create_replay(
+    gateway: &InProcessAdapter,
+    service: &mut BoundFilesystemAdapter<MemoryPublisher, AllowingAuthority>,
+    request: &AdapterCreateFileRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let replayed = gateway.create_file(service, request)?;
+    assert_eq!(
+        replayed.handle.disposition,
+        PublicationDisposition::Replayed
+    );
+    assert_eq!(
+        replayed.creation.map(|value| value.disposition),
+        Some(PublicationDisposition::Replayed)
+    );
+    let conflicting = AdapterCreateFileRequest {
+        path: NamespacePath::from_components(["Different"], NamespaceLimits::PORTABLE)?,
+        ..request.clone()
+    };
+    assert!(matches!(
+        gateway.create_file(service, &conflicting),
+        Err(AuthorisedFilesystemError::Handle(
+            HandleError::OperationConflict
+        ))
+    ));
     Ok(())
 }
 
@@ -485,6 +560,14 @@ impl InProcessAdapter {
         request: &AdapterCreateDirectoryRequest,
     ) -> Result<meshspan_filesystem::DirectoryPublicationReceipt, S::Error> {
         service.create_directory(self.context(request.observed_at), request)
+    }
+
+    fn create_file<S: FilesystemFileAdapter>(
+        self,
+        service: &mut S,
+        request: &AdapterCreateFileRequest,
+    ) -> Result<meshspan_filesystem::FilesystemHandleCreateReceipt, S::Error> {
+        service.create_file(self.context(request.observed_at), request)
     }
 
     fn unlink<S: FilesystemFileAdapter>(
