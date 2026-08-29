@@ -233,6 +233,7 @@ mod tests {
     use super::{LocalDatabase, MetadataStoreError, PartitionDatabase, open_connection};
     use crate::migration::{
         local_migration_digest, migrate_partition, migrate_partition_through,
+        partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
@@ -267,7 +268,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 27);
+        assert_eq!(database.check_integrity()?.schema_version, 28);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -317,7 +318,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            27
+            28
         );
         Ok(())
     }
@@ -594,6 +595,14 @@ mod tests {
                 0x38, 0x5a, 0x07, 0x96, 0xd7, 0xf3, 0x06, 0xe6, 0x15, 0x30, 0x32, 0xe6, 0x56, 0x49,
                 0xca, 0x04, 0xc1, 0x9b, 0xdb, 0xaa, 0x08, 0x98, 0x8c, 0x0d, 0xfd, 0xb7, 0x4d, 0x2f,
                 0x97, 0x17, 0x1b, 0x8f,
+            ]
+        );
+        assert_eq!(
+            partition_access_administration_migration_digest(),
+            [
+                0xdc, 0x97, 0x88, 0xee, 0xe7, 0xb0, 0xe2, 0x46, 0x4e, 0x2c, 0xae, 0xac, 0x10, 0x72,
+                0x06, 0xb4, 0xa6, 0xf3, 0xc9, 0xe7, 0x23, 0xde, 0x94, 0xf5, 0x6f, 0x6b, 0xdd, 0x7f,
+                0xf2, 0x74, 0x34, 0x5a,
             ]
         );
     }

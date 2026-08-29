@@ -70,7 +70,10 @@ pub struct NamespaceCursor {
 
 /// Stable direct-membership seek cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GroupMemberCursor(PrincipalId);
+pub struct GroupMemberCursor {
+    group_id: GroupId,
+    member_principal_id: PrincipalId,
+}
 
 /// One active namespace child returned by an indexed page.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -208,7 +211,11 @@ pub(super) fn direct_group_members(
     limit: PageLimit,
 ) -> Result<Page<PrincipalId, GroupMemberCursor>, RepositoryError> {
     let group = group_id.as_bytes();
-    let lower = after.map_or([0; 16], |cursor| cursor.0.as_bytes());
+    let lower = match after {
+        Some(cursor) if cursor.group_id == group_id => cursor.member_principal_id.as_bytes(),
+        Some(_) => return Err(RepositoryError::StaleRevision),
+        None => [0; 16],
+    };
     let mut statement = database.connection().prepare(
         "SELECT member_principal_id FROM group_memberships
          WHERE containing_group_id = ?1 AND state = 1 AND member_principal_id > ?2
@@ -222,12 +229,15 @@ pub(super) fn direct_group_members(
     for row in rows {
         items.push(parse_principal(&row?)?);
     }
-    let next = (items.len() > limit.get()).then(|| GroupMemberCursor(items[limit.get() - 1]));
+    let next = (items.len() > limit.get()).then(|| GroupMemberCursor {
+        group_id,
+        member_principal_id: items[limit.get() - 1],
+    });
     items.truncate(limit.get());
     Ok(Page { items, next })
 }
 
-fn sql_limit(limit: PageLimit) -> Result<i64, RepositoryError> {
+pub(super) fn sql_limit(limit: PageLimit) -> Result<i64, RepositoryError> {
     let value = limit
         .get()
         .checked_add(1)
@@ -268,6 +278,6 @@ fn parse_owner_set(value: &[u8]) -> Result<OwnerSetId, RepositoryError> {
     OwnerSetId::from_bytes(parse_identifier(value)?).map_err(|_| RepositoryError::CorruptState)
 }
 
-fn parse_identifier(value: &[u8]) -> Result<[u8; 16], RepositoryError> {
+pub(super) fn parse_identifier(value: &[u8]) -> Result<[u8; 16], RepositoryError> {
     value.try_into().map_err(|_| RepositoryError::CorruptState)
 }
