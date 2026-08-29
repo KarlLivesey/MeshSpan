@@ -4,6 +4,8 @@
 
 #[path = "transfer/export.rs"]
 pub(in crate::publication) mod export;
+#[path = "transfer/export_graph.rs"]
+mod export_graph;
 #[path = "transfer/import.rs"]
 pub(in crate::publication) mod import;
 
