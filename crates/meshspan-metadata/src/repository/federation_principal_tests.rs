@@ -7,6 +7,7 @@ use meshspan_domain::{
 };
 use tempfile::tempdir;
 
+use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
@@ -14,6 +15,61 @@ use crate::{
     FederationTrustIdentity, PartitionDatabase, ProposeFederationRelationship, RecordName,
     UpsertFederatedPrincipalProjection,
 };
+
+#[test]
+fn every_apply_boundary_rolls_back_complete_signed_principal_projection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare_relationship(&mut repository, fixture.ids, &fixture.remote_key)?;
+    let command = AuthoritativeCommand::UpsertFederatedPrincipalProjection(signed_projection(
+        fixture.ids,
+        PrincipalId::from_bytes([60; 16])?,
+        FederatedPrincipalState::Active,
+        1,
+        1,
+        &fixture.remote_key,
+    )?);
+    let mut database = repository.into_database();
+    for (offset, fault) in all_apply_faults().into_iter().enumerate() {
+        let seed = 61_u8.saturating_add(u8::try_from(offset)?);
+        assert!(matches!(
+            apply_committed_with_fault(
+                &mut database,
+                LogPosition { index: 4, term: 1 },
+                context(
+                    seed,
+                    fixture.ids.administrator,
+                    seed.saturating_add(4),
+                    4,
+                    3
+                )?,
+                &command,
+                fault,
+            ),
+            Err(RepositoryError::InjectedFault)
+        ));
+        let retained: (i64, i64) = database.connection().query_row(
+            "SELECT
+                (SELECT count(*) FROM federation_principal_projections),
+                (SELECT count(*) FROM federation_principal_projection_history)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(retained, (0, 0));
+        assert_eq!(read_current_revision(&database)?, Revision::new(3));
+    }
+    Ok(())
+}
+
+const fn all_apply_faults() -> [ApplyFaultPoint; 4] {
+    [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterOperation,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ]
+}
 
 #[test]
 fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dyn std::error::Error>>
