@@ -29,15 +29,24 @@ pub(in crate::publication) fn import_history(
     bundle: &NamespaceHistoryBundle,
     limits: NamespaceHistoryLimits,
 ) -> Result<NamespaceHistoryImport, PublicationError> {
-    validate_bundle_shape(bundle, limits)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    persist_nodes(&transaction, &bundle.directory_nodes)?;
-    persist_manifests(&transaction, &bundle.manifests)?;
-    persist_versions(&transaction, &bundle.file_versions)?;
-    persist_revisions(&transaction, &bundle.object_revisions)?;
-    let imported_commits = persist_commits(&transaction, &bundle.commits)?;
-    verify_heads(&transaction, bundle)?;
+    let result = import_history_transaction(&transaction, bundle, limits)?;
     transaction.commit()?;
+    Ok(result)
+}
+
+pub(in crate::publication) fn import_history_transaction(
+    transaction: &Transaction<'_>,
+    bundle: &NamespaceHistoryBundle,
+    limits: NamespaceHistoryLimits,
+) -> Result<NamespaceHistoryImport, PublicationError> {
+    validate_bundle_shape(bundle, limits)?;
+    persist_nodes(transaction, &bundle.directory_nodes)?;
+    persist_manifests(transaction, &bundle.manifests)?;
+    persist_versions(transaction, &bundle.file_versions)?;
+    persist_revisions(transaction, &bundle.object_revisions)?;
+    let imported_commits = persist_commits(transaction, &bundle.commits)?;
+    verify_heads(transaction, bundle)?;
     Ok(NamespaceHistoryImport {
         imported_commits,
         supplied_commits: bundle.commits.len(),

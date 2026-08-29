@@ -6,6 +6,8 @@
 mod digest;
 #[path = "namespace_publication/history_export.rs"]
 mod history_export;
+#[path = "namespace_publication/history_import.rs"]
+mod history_import;
 #[path = "namespace_publication/history_records.rs"]
 mod history_records;
 #[path = "namespace_publication/reconciliation_apply.rs"]
@@ -44,6 +46,10 @@ use digest::{directory_request as directory_request_digest, file_request as requ
 pub use history_export::{
     NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
 };
+pub use history_import::{
+    NamespaceHistoryReceiveCompletion, NamespaceHistoryReceiveRequest,
+    NamespaceHistoryReceiveStatus,
+};
 pub use history_records::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
     NamespaceHistoryRecordError,
@@ -71,6 +77,40 @@ pub(super) fn namespace_history_object(
     request: NamespaceHistoryObjectRequest,
 ) -> Result<NamespaceHistoryImmutableRecord, PublicationError> {
     history_export::history_object(connection, request)
+}
+
+pub(super) fn begin_namespace_history_receive(
+    connection: &mut Connection,
+    request: &NamespaceHistoryReceiveRequest,
+) -> Result<NamespaceHistoryReceiveStatus, PublicationError> {
+    history_import::begin(connection, request)
+}
+
+pub(super) fn receive_namespace_history_page(
+    connection: &mut Connection,
+    session_id: [u8; 32],
+    input_cursor: &[u8],
+    page: &NamespaceHistoryPage,
+    now: meshspan_domain::UnixMicros,
+) -> Result<NamespaceHistoryReceiveStatus, PublicationError> {
+    history_import::accept_page(connection, session_id, input_cursor, page, now)
+}
+
+pub(super) fn receive_namespace_history_object(
+    connection: &mut Connection,
+    session_id: [u8; 32],
+    record: &NamespaceHistoryImmutableRecord,
+    now: meshspan_domain::UnixMicros,
+) -> Result<NamespaceHistoryReceiveStatus, PublicationError> {
+    history_import::accept_object(connection, session_id, record, now)
+}
+
+pub(super) fn complete_namespace_history_receive(
+    connection: &mut Connection,
+    session_id: [u8; 32],
+    now: meshspan_domain::UnixMicros,
+) -> Result<NamespaceHistoryReceiveCompletion, PublicationError> {
+    history_import::complete(connection, session_id, now)
 }
 
 pub(super) fn prepare_snapshot_restore(

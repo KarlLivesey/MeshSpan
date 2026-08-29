@@ -7,7 +7,7 @@ mod decode;
 #[path = "history_records/encode.rs"]
 mod encode;
 #[path = "history_records/immutable.rs"]
-mod immutable;
+pub(in crate::publication) mod immutable;
 
 use thiserror::Error;
 
@@ -71,7 +71,6 @@ impl NamespaceHistoryCommitRecord {
         }
     }
 
-    #[cfg(test)]
     pub(in crate::publication) fn decoded(
         &self,
     ) -> Result<TransferredMutationCommit, NamespaceHistoryRecordError> {

@@ -8,7 +8,8 @@ mod namespace;
 pub use namespace::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
     NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
-    NamespaceHistoryRecordError,
+    NamespaceHistoryReceiveCompletion, NamespaceHistoryReceiveRequest,
+    NamespaceHistoryReceiveStatus, NamespaceHistoryRecordError,
 };
 
 use std::collections::BTreeSet;
@@ -33,7 +34,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 34] = [
+const MIGRATIONS: [Migration; 35] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -170,8 +171,12 @@ const MIGRATIONS: [Migration; 34] = [
         version: 34,
         sql: include_str!("../schema/branch/034_history_export_scope_binding.sql"),
     },
+    Migration {
+        version: 35,
+        sql: include_str!("../schema/branch/035_namespace_history_imports.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 34;
+const SCHEMA_VERSION: u32 = 35;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -911,6 +916,66 @@ impl VersionPublicationStore {
         request: NamespaceHistoryObjectRequest,
     ) -> Result<NamespaceHistoryImmutableRecord, PublicationError> {
         namespace::namespace_history_object(&self.connection, request)
+    }
+
+    /// Creates or resumes one durable receiver-side namespace-history transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds, identity reuse, duplicate heads or an expired request.
+    pub fn begin_namespace_history_receive(
+        &mut self,
+        request: &NamespaceHistoryReceiveRequest,
+    ) -> Result<NamespaceHistoryReceiveStatus, PublicationError> {
+        namespace::begin_namespace_history_receive(&mut self.connection, request)
+    }
+
+    /// Validates and durably stages one exact, sequential source page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects skipped, substituted, replay-mismatched, oversized or expired input.
+    pub fn receive_namespace_history_page(
+        &mut self,
+        session_id: [u8; 32],
+        input_cursor: &[u8],
+        page: &NamespaceHistoryPage,
+        now: UnixMicros,
+    ) -> Result<NamespaceHistoryReceiveStatus, PublicationError> {
+        namespace::receive_namespace_history_page(
+            &mut self.connection,
+            session_id,
+            input_cursor,
+            page,
+            now,
+        )
+    }
+
+    /// Validates and durably stages one advertised immutable history object.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unadvertised, substituted, malformed or expired object bodies.
+    pub fn receive_namespace_history_object(
+        &mut self,
+        session_id: [u8; 32],
+        record: &NamespaceHistoryImmutableRecord,
+        now: UnixMicros,
+    ) -> Result<NamespaceHistoryReceiveStatus, PublicationError> {
+        namespace::receive_namespace_history_object(&mut self.connection, session_id, record, now)
+    }
+
+    /// Atomically imports a terminal, complete and cross-record-valid receive session.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete, expired or contradictory history without exposing partial state.
+    pub fn complete_namespace_history_receive(
+        &mut self,
+        session_id: [u8; 32],
+        now: UnixMicros,
+    ) -> Result<NamespaceHistoryReceiveCompletion, PublicationError> {
+        namespace::complete_namespace_history_receive(&mut self.connection, session_id, now)
     }
 
     /// Transactionally imports one immutable disconnected-history bundle.

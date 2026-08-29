@@ -158,7 +158,6 @@ impl NamespaceHistoryImmutableRecord {
         }
     }
 
-    #[cfg(test)]
     pub(in crate::publication) fn decoded(&self) -> Result<Decoded, NamespaceHistoryRecordError> {
         decode(&self.canonical_bytes)
     }
