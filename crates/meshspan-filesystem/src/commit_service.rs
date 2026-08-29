@@ -223,6 +223,16 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         self.publications.resolve_open_object(request)
     }
 
+    pub(crate) fn resolve_path_object(
+        &self,
+        branch_id: meshspan_domain::BranchId,
+        volume_id: meshspan_domain::VolumeId,
+        path: &crate::NamespacePath,
+    ) -> Result<Option<ObjectId>, crate::HandleError> {
+        self.publications
+            .resolve_path_object(branch_id, volume_id, path)
+    }
+
     pub(crate) fn open_handle_at(
         &mut self,
         request: &FilesystemHandleOpenRequest,

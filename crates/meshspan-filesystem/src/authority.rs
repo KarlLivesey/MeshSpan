@@ -3,20 +3,22 @@
 //! Connector-neutral operation-time authority for the logical filesystem service.
 
 use meshspan_domain::{
-    AssuranceLevel, NodeId, ObjectId, PrincipalId, Revision, Rights, UnixMicros, VolumeId,
+    AssuranceLevel, BranchId, NodeId, ObjectId, PrincipalId, Revision, Rights, UnixMicros, VolumeId,
 };
 use thiserror::Error;
 
 use crate::{
-    DirectoryPublication, DurableContentPublisher, DurableContentReader, FilesystemCommitError,
-    FilesystemCommitService, FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest,
-    FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest, FilesystemHandleFlushRequest,
-    FilesystemHandleOpenRequest, FilesystemHandleReadReceipt, FilesystemHandleReadRequest,
-    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleAccess, HandleError,
-    HandleIoError, HandleLeaseReceipt, HandleLeaseRequest, HandleReadError, LockRangeReceipt,
-    LockRangeRequest, NamespaceListRequest, NamespacePublicationReceipt, NamespaceQueryError,
-    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceStatRequest,
-    NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt, RangeLockKind,
+    AdapterFlushFileRequest, AdapterOpenFileRequest, AdapterReadFileRequest,
+    AdapterWriteFileRequest, DirectoryPublication, DurableContentPublisher, DurableContentReader,
+    FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
+    FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
+    FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleOpenRequest,
+    FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
+    FilesystemHandleWriteRequest, HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt,
+    HandleLeaseRequest, HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
+    NamespacePublicationReceipt, NamespaceQueryError, NamespaceRenamePublication,
+    NamespaceRenameReceipt, NamespaceStatRequest, NamespaceUnlinkPublication,
+    NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, StageWrite,
     UnlockRangeReceipt, UnlockRangeRequest,
 };
 
@@ -497,6 +499,114 @@ where
             .map_err(AuthorisedFilesystemError::Handle)
     }
 
+    pub(crate) fn adapter_open_existing(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: &AdapterOpenFileRequest,
+    ) -> Result<OpenHandleReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let object_id = self
+            .filesystem
+            .resolve_path_object(branch_id, request.volume_id, &request.path)
+            .map_err(AuthorisedFilesystemError::Handle)?
+            .ok_or(AuthorisedFilesystemError::TargetUnavailable)?;
+        let grant = self.authorise(
+            context,
+            request.volume_id,
+            object_id,
+            rights_for_access(request.desired_access),
+        )?;
+        let prepared = FilesystemHandleOpenRequest {
+            handle: OpenHandleRequest {
+                operation_id: request.operation_id,
+                handle_id: request.handle_id,
+                branch_id,
+                volume_id: request.volume_id,
+                path: request.path.clone(),
+                principal_id: grant.principal_id,
+                authorization_revision: grant.identity_revision,
+                gateway_node_id: context.gateway_node_id,
+                desired_access: request.desired_access,
+                share_access: request.share_access,
+                create_disposition: crate::CreateDisposition::OpenExisting,
+                delete_on_close: request.delete_on_close,
+                lease_expires_at: request.lease_expires_at,
+                opened_at: request.observed_at,
+            },
+            maximum_stage_bytes: request.maximum_stage_bytes,
+        };
+        self.filesystem
+            .open_handle_at(&prepared, object_id)
+            .map_err(AuthorisedFilesystemError::HandleIo)
+    }
+
+    pub(crate) fn adapter_read(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterReadFileRequest,
+    ) -> Result<FilesystemHandleReadReceipt, AuthorisedFilesystemError<A::Error>>
+    where
+        P: DurableContentReader,
+    {
+        require_adapter_context(context, request.observed_at)?;
+        let target = self.handle_target(request.handle_id, context.now)?;
+        self.read_handle(
+            context,
+            FilesystemHandleReadRequest {
+                operation_id: request.operation_id,
+                handle_id: request.handle_id,
+                handle_fence: request.handle_fence,
+                principal_id: target.principal_id,
+                authorization_revision: target.authorization_revision,
+                gateway_node_id: context.gateway_node_id,
+                offset: request.offset,
+                length: request.length,
+                content_deadline: request.content_deadline,
+                observed_at: request.observed_at,
+            },
+        )
+    }
+
+    pub(crate) fn adapter_write(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterWriteFileRequest,
+    ) -> Result<FilesystemHandleWriteReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let target = self.handle_target(request.handle_id, context.now)?;
+        let prepared = FilesystemHandleWriteRequest {
+            handle_id: request.handle_id,
+            principal_id: target.principal_id,
+            authorization_revision: target.authorization_revision,
+            gateway_node_id: context.gateway_node_id,
+            write: StageWrite {
+                operation_id: request.operation_id,
+                stage_fence: request.handle_fence,
+                offset: request.offset,
+                bytes: request.bytes.clone(),
+                digest: blake3::hash(request.bytes.as_slice()).into(),
+            },
+            observed_at: request.observed_at,
+        };
+        self.write_handle(context, &prepared)
+    }
+
+    pub(crate) fn adapter_flush(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterFlushFileRequest,
+        policy: FilesystemAdapterPolicy,
+    ) -> Result<NamespacePublicationReceipt, AuthorisedFilesystemError<A::Error>>
+    where
+        P: DurableContentReader,
+    {
+        require_adapter_context(context, request.observed_at)?;
+        let target = self.handle_target(request.handle_id, context.now)?;
+        let prepared = crate::adapter::prepared_flush(request, target, context, policy);
+        self.flush_handle(context, prepared)
+    }
+
     /// Returns the owned parts for orderly shutdown and composition tests.
     #[must_use]
     pub fn into_parts(self) -> (FilesystemCommitService<P>, A) {
@@ -546,6 +656,17 @@ where
             .map_err(AuthorisedFilesystemError::Authority)?;
         validate_grant(request, grant)?;
         Ok(grant)
+    }
+}
+
+fn require_adapter_context<E>(
+    context: FilesystemAccessContext,
+    observed_at: UnixMicros,
+) -> Result<(), AuthorisedFilesystemError<E>> {
+    if crate::adapter::valid_adapter_context(context, observed_at) {
+        Ok(())
+    } else {
+        Err(AuthorisedFilesystemError::InvalidInput)
     }
 }
 

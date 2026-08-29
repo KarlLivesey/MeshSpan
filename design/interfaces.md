@@ -327,6 +327,18 @@ transaction. Provider locations and connector-specific credentials never cross
 this boundary. The cluster adapter translates it to the replicated metadata
 evaluator; no access adapter calculates effective rights.
 
+`FilesystemFileAdapter` is the first semantic connector surface over that
+authority boundary. An existing-file open supplies only an operation/handle
+identity, logical volume/path, access/share intent, stage bound and lease times.
+Read, write and flush then supply only their handle fence and semantic range or
+checkpoint intent. The daemon-bound `BoundFilesystemAdapter` owns the local
+branch, version-retention sequence and manifest format; it obtains the principal,
+authorisation revision and gateway from committed authority/handle state and
+derives the write digest itself. Those internal values therefore cannot be
+forged or accidentally invented by an SMB or HTTPS translator. The remaining
+create, namespace, lock, administration and snapshot families must adopt the
+same semantic boundary before the Stage 5 adapter contract is complete.
+
 A live handle read pins its current private-stage sequence. The service reads
 only the requested immutable-base range, overlays every intersecting verified
 stage part in mutation order and returns a short result at logical EOF. One read

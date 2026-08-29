@@ -953,6 +953,15 @@ impl VersionPublicationStore {
         crate::handles::resolve_open_object(&self.connection, request)
     }
 
+    pub(crate) fn resolve_path_object(
+        &self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        path: &crate::NamespacePath,
+    ) -> Result<Option<ObjectId>, crate::HandleError> {
+        crate::handles::resolve_path_object(&self.connection, branch_id, volume_id, path)
+    }
+
     /// Validates a prospective open without reserving a handle or changing durable state.
     ///
     /// The final open repeats every check transactionally. This preflight exists so a composed

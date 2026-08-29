@@ -2,6 +2,7 @@
 
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
+mod adapter;
 mod authority;
 mod cleanup_cancellation;
 mod cleanup_fence;
@@ -24,6 +25,11 @@ mod stage_store;
 mod staging;
 mod version_retention;
 
+pub use adapter::{
+    AdapterFlushFileRequest, AdapterOpenFileRequest, AdapterReadFileRequest,
+    AdapterWriteFileRequest, BoundFilesystemAdapter, FilesystemAdapterConfigurationError,
+    FilesystemAdapterPolicy, FilesystemFileAdapter,
+};
 pub use authority::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, FilesystemAccessAuthority,
     FilesystemAccessContext, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
