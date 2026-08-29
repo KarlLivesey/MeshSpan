@@ -74,9 +74,10 @@ pub use publication::{
     BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,
     DirectoryRevisionTransition, FilePublication, ManifestPublication, NamespacePublicationPath,
     NamespacePublicationReceipt, NamespaceReconciliationApplication,
-    NamespaceReconciliationReceipt, PublicationDisposition, PublicationError, PublicationPathError,
-    RootFilePublication, SnapshotRestorePublication, SnapshotRestoreReceipt,
-    VerifiedReconciliationHead, VerifiedSnapshotRestoreHead, VersionPublicationStore,
+    NamespaceReconciliationReceipt, NamespaceRenamePublication, NamespaceRenameReceipt,
+    PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
+    SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedReconciliationHead,
+    VerifiedSnapshotRestoreHead, VersionPublicationStore,
 };
 pub use reachability::{
     ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource, VersionReachabilityError,

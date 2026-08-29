@@ -17,18 +17,10 @@ pub(super) fn validate_shape(intent: &BranchMutationIntent) -> Result<(), Public
     let Some(rename) = &intent.rename else {
         return Ok(());
     };
-    let same_canonical_path = intent.path.components().len()
-        == rename.source_path.components().len()
-        && intent
-            .path
-            .components()
-            .iter()
-            .zip(rename.source_path.components())
-            .all(|(target, source)| target.canonical() == source.canonical());
     if rename.source_entry_generation == 0
         || rename.source_ancestors.len().checked_add(1)
             != Some(rename.source_path.components().len())
-        || same_canonical_path
+        || intent.path == rename.source_path
     {
         return Err(PublicationError::InvalidInput);
     }

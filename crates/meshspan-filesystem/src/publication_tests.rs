@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, DurationMicros, FileVersionId, NamespaceCommitId, ObjectId,
-    ObjectRevisionId, OperationId, PrincipalId, Revision, SnapshotId, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, DurationMicros, FileVersionId, HandleId, NamespaceCommitId,
+    NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, SnapshotId, UnixMicros,
+    VolumeId,
 };
 use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
@@ -15,9 +16,11 @@ use super::{
     VersionPublicationStore, configure,
 };
 use crate::{
-    BranchMutation, BranchMutationIntent, DirectoryEntry, DirectoryEntryKind, DirectoryNodeRecord,
-    DirectoryTrie, DirectoryTrieError, NamespaceComponent, NamespaceLimits, NamespacePath,
-    NamespaceReplayDisposition, ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource,
+    BranchMutation, BranchMutationIntent, BranchRenameIntent, CreateDisposition, DirectoryEntry,
+    DirectoryEntryKind, DirectoryNodeRecord, DirectoryTrie, DirectoryTrieError, HandleAccess,
+    HandleError, HandleShare, NamespaceComponent, NamespaceLimits, NamespacePath,
+    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceReplayDisposition,
+    OpenHandleRequest, ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource,
     ReconciliationFrontier, ReconciliationLimits, VersionCleanupCancellationAuthority,
     VersionCleanupCancellationError, VersionCleanupRetirementAuthority,
     VersionCleanupRetirementError, VersionReachabilityError, VersionReachabilityScanRequest,
@@ -131,6 +134,7 @@ fn version_one_database_migrates_to_current_branch_schema() -> Result<(), Box<dy
         "namespace_commit_intent_ancestors",
         "namespace_reconciliation_operations",
         "namespace_snapshot_restore_operations",
+        "namespace_rename_operations",
         "file_version_history",
         "open_handles",
         "pending_object_deletes",
@@ -1467,6 +1471,227 @@ fn root_file_publication_moves_file_and_volume_heads_once_across_restart()
 }
 
 #[test]
+fn namespace_rename_is_atomic_durable_and_exactly_replayable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let rename = root_file_rename(&file, "Archive")?;
+    let applied = {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        let receipt = store.rename_namespace(&rename)?;
+        assert_eq!(receipt.disposition, PublicationDisposition::Applied);
+        assert_eq!(receipt.head_sequence, 2);
+        assert_namespace_rename_result(&store, &file, &rename)?;
+        assert_eq!(
+            store.branch_mutation_intent(rename.namespace_commit_id)?,
+            Some(expected_rename_intent(&file, &rename))
+        );
+        receipt
+    };
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let replayed = NamespaceRenameReceipt {
+        disposition: PublicationDisposition::Replayed,
+        ..applied
+    };
+    assert_eq!(
+        reopened.resolve_namespace_rename(rename.operation_id)?,
+        Some(replayed)
+    );
+    assert_eq!(reopened.rename_namespace(&rename)?, replayed);
+    let mut conflicting = rename.clone();
+    conflicting.target_entry_generation = 2;
+    assert!(matches!(
+        reopened.rename_namespace(&conflicting),
+        Err(HandleError::OperationConflict)
+    ));
+    assert_namespace_rename_result(&reopened, &file, &rename)?;
+    Ok(())
+}
+
+#[test]
+fn namespace_rename_supports_display_case_changes_without_aliasing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let rename = root_file_rename(&file, "REPORT")?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    store.rename_namespace(&rename)?;
+    let entry = stored_directory_lookup(
+        &store,
+        rename.root_object_revision_id,
+        &rename.target.path().components()[0],
+    )?
+    .ok_or("missing renamed entry")?;
+    assert_eq!(entry.name().display(), "REPORT");
+    assert_eq!(entry.object_id(), file.file.object_id);
+    assert_eq!(entry.object_revision_id(), file.file_object_revision_id);
+    Ok(())
+}
+
+#[test]
+fn namespace_rename_moves_directories_and_rejects_descendant_cycles()
+-> Result<(), Box<dyn std::error::Error>> {
+    let moved_directory = tempdir()?;
+    let first = initial_directory_publication()?;
+    let rename = root_directory_rename(&first, "Archive")?;
+    let mut store = VersionPublicationStore::open(moved_directory.path(), UnixMicros::new(1))?;
+    store.create_directory(&first)?;
+    store.rename_namespace(&rename)?;
+    let target = stored_directory_entry(
+        &store,
+        rename.root_object_revision_id,
+        &rename.target.path().components()[0],
+    )?;
+    assert_eq!(target.kind(), DirectoryEntryKind::Directory);
+    assert_eq!(target.object_id(), first.directory_object_id);
+    assert_eq!(
+        target.object_revision_id(),
+        first.directory_object_revision_id
+    );
+
+    let cyclic_directory = tempdir()?;
+    let nested = nested_directory_publication(&first)?;
+    let mut cyclic_store =
+        VersionPublicationStore::open(cyclic_directory.path(), UnixMicros::new(1))?;
+    cyclic_store.create_directory(&first)?;
+    cyclic_store.create_directory(&nested)?;
+    let cycle = descendant_directory_rename(&first, &nested)?;
+    assert!(matches!(
+        cyclic_store.rename_namespace(&cycle),
+        Err(HandleError::Namespace(PublicationError::InvalidInput))
+    ));
+    assert_eq!(
+        cyclic_store
+            .namespace_head(first.branch_id, first.volume_id)?
+            .map(|head| head.namespace_commit_id),
+        Some(nested.namespace_commit_id)
+    );
+    assert_eq!(
+        cyclic_store.resolve_namespace_rename(cycle.operation_id)?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn namespace_rename_rejects_stale_or_occupied_targets_without_partial_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let sibling = sibling_root_publication(&file)?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    store.publish_root_file(&sibling)?;
+
+    let mut occupied = root_file_rename(&file, "Taken")?;
+    occupied.expected_namespace_commit_id = sibling.namespace_commit_id;
+    assert!(matches!(
+        store.rename_namespace(&occupied),
+        Err(HandleError::AlreadyExists)
+    ));
+    assert_rename_was_not_committed(&store, &sibling, &occupied)?;
+
+    let mut stale = root_file_rename(&file, "Archive")?;
+    stale.operation_id = OperationId::from_bytes([156; 16])?;
+    stale.expected_namespace_commit_id = sibling.namespace_commit_id;
+    stale.expected_source_entry_generation = 2;
+    stale.intermediate_root_object_revision_id = ObjectRevisionId::from_bytes([157; 16])?;
+    stale.root_object_revision_id = ObjectRevisionId::from_bytes([158; 16])?;
+    stale.namespace_commit_id = NamespaceCommitId::from_bytes([159; 16])?;
+    assert!(matches!(
+        store.rename_namespace(&stale),
+        Err(HandleError::Namespace(PublicationError::StaleHead))
+    ));
+    assert_rename_was_not_committed(&store, &sibling, &stale)?;
+    Ok(())
+}
+
+#[test]
+fn every_namespace_rename_fault_rolls_back_both_paths_head_and_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    use super::namespace::NamespaceFaultPoint;
+
+    for fault in [
+        NamespaceFaultPoint::RenameSource,
+        NamespaceFaultPoint::RenameTarget,
+        NamespaceFaultPoint::RenameCommit,
+        NamespaceFaultPoint::RenameHandles,
+        NamespaceFaultPoint::RenameOperation,
+    ] {
+        let directory = tempdir()?;
+        let file = initial_root_publication()?;
+        let rename = root_file_rename(&file, "Archive")?;
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        assert!(matches!(
+            super::namespace::rename_namespace(&mut store.connection, &rename, Some(fault)),
+            Err(HandleError::Namespace(PublicationError::InjectedFault))
+        ));
+        assert_rename_was_not_committed(&store, &file, &rename)?;
+        assert_eq!(
+            store.rename_namespace(&rename)?.disposition,
+            PublicationDisposition::Applied
+        );
+        assert_namespace_rename_result(&store, &file, &rename)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn namespace_rename_enforces_delete_sharing_and_relocates_live_handles()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let mut open = rename_open_request(&file, 160, 161)?;
+    open.desired_access = HandleAccess::new(true, false, true)?;
+    open.share_access = HandleShare::new(true, true, true);
+    let mut rename = root_file_rename(&file, "Archive")?;
+    rename.requesting_handle_id = Some(open.handle_id);
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&file)?;
+    store.open_handle(&open)?;
+    store.rename_namespace(&rename)?;
+    assert_eq!(
+        store.handle_path(open.handle_id)?,
+        rename.target.path().clone()
+    );
+
+    let blocked_directory = tempdir()?;
+    let mut blocked_store =
+        VersionPublicationStore::open(blocked_directory.path(), UnixMicros::new(1))?;
+    blocked_store.publish_root_file(&file)?;
+    let mut blocker = rename_open_request(&file, 162, 163)?;
+    blocker.share_access = HandleShare::new(true, true, false);
+    blocked_store.open_handle(&blocker)?;
+    let rename_attempt = root_file_rename(&file, "Archive")?;
+    assert!(matches!(
+        blocked_store.rename_namespace(&rename_attempt),
+        Err(HandleError::SharingViolation)
+    ));
+    assert_rename_was_not_committed(&blocked_store, &file, &rename_attempt)?;
+
+    let denied_directory = tempdir()?;
+    let mut denied_store =
+        VersionPublicationStore::open(denied_directory.path(), UnixMicros::new(1))?;
+    denied_store.publish_root_file(&file)?;
+    let mut denied = rename_open_request(&file, 164, 165)?;
+    denied.desired_access = HandleAccess::new(true, false, false)?;
+    denied.share_access = HandleShare::new(true, true, true);
+    denied_store.open_handle(&denied)?;
+    let mut denied_rename = root_file_rename(&file, "Archive")?;
+    denied_rename.requesting_handle_id = Some(denied.handle_id);
+    assert!(matches!(
+        denied_store.rename_namespace(&denied_rename),
+        Err(HandleError::InvalidInput)
+    ));
+    assert_rename_was_not_committed(&denied_store, &file, &denied_rename)?;
+    Ok(())
+}
+
+#[test]
 fn durable_affected_base_prepares_exact_replay_after_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
@@ -1483,8 +1708,9 @@ fn durable_affected_base_prepares_exact_replay_after_restart()
     }
 
     let reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
-    let prepared =
-        reopened.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    let prepared = reopened
+        .prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)
+        .map_err(|error| format!("prepare authored rename reconciliation: {error:?}"))?;
     assert_eq!(
         prepared.causal_plan().converged_head(),
         Some(first.namespace_commit_id)
@@ -1503,6 +1729,87 @@ fn durable_affected_base_prepares_exact_replay_after_restart()
         prepared.replay_plan().final_root_object_revision_id(),
         Some(second.root_object_revision_id)
     );
+    Ok(())
+}
+
+#[test]
+fn authored_rename_reconciles_atomically_from_its_durable_intent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let sibling = sibling_root_publication(&file)?;
+    let fork_branch = BranchId::from_bytes([170; 16])?;
+    let mut rename = root_file_rename(&file, "Archive")?;
+    rename.branch_id = fork_branch;
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        seed_file_branch(&store.connection, &file, fork_branch)?;
+        store.rename_namespace(&rename)?;
+        store.publish_root_file(&sibling)?;
+    }
+
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(sibling.namespace_commit_id),
+        eligible_heads: vec![rename.namespace_commit_id],
+    };
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([171; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([172; 16])?,
+        created_by: file.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        created_at: UnixMicros::new(171),
+    };
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let prepared =
+        reopened.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    let action = prepared
+        .replay_plan()
+        .actions()
+        .first()
+        .ok_or("missing rename replay action")?;
+    assert_eq!(action.target_path, rename.target.path().clone());
+    assert_eq!(
+        action
+            .source_removal
+            .as_ref()
+            .map(|removal| removal.path.clone()),
+        Some(rename.source.path().clone())
+    );
+    assert_eq!(prepared.causal_plan().merge_parents().len(), 2);
+    assert!(prepared.causal_plan().converged_branch_id().is_some());
+    assert!(
+        prepared
+            .replay_plan()
+            .final_root_object_revision_id()
+            .is_some()
+    );
+    let receipt = reopened
+        .apply_namespace_reconciliation(application, &prepared)
+        .map_err(|error| format!("apply authored rename reconciliation: {error:?}"))?;
+    assert_eq!(receipt.disposition, PublicationDisposition::Applied);
+    assert!(
+        stored_directory_lookup(
+            &reopened,
+            receipt.root_object_revision_id,
+            &rename.source.path().components()[0],
+        )?
+        .is_none()
+    );
+    let target = stored_directory_entry(
+        &reopened,
+        receipt.root_object_revision_id,
+        &rename.target.path().components()[0],
+    )?;
+    assert_eq!(target.object_id(), file.file.object_id);
+    assert_eq!(target.object_revision_id(), file.file_object_revision_id);
+    let retained = stored_directory_entry(
+        &reopened,
+        receipt.root_object_revision_id,
+        &sibling.path.path().components()[0],
+    )?;
+    assert_eq!(retained.object_id(), sibling.file.object_id);
     Ok(())
 }
 
@@ -2137,6 +2444,50 @@ fn directory_receipt_corruption_and_cross_kind_operation_reuse_fail_closed()
     Ok(())
 }
 
+#[test]
+fn rename_receipt_corruption_and_cross_kind_operation_reuse_fail_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let corrupted_directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let rename = root_file_rename(&file, "Archive")?;
+    let mut corrupted =
+        VersionPublicationStore::open(corrupted_directory.path(), UnixMicros::new(1))?;
+    corrupted.publish_root_file(&file)?;
+    corrupted.rename_namespace(&rename)?;
+    corrupted.connection.execute(
+        "UPDATE namespace_rename_operations SET result_digest = zeroblob(32)",
+        [],
+    )?;
+    assert!(matches!(
+        corrupted.resolve_namespace_rename(rename.operation_id),
+        Err(PublicationError::Corrupt)
+    ));
+
+    let file_collision_directory = tempdir()?;
+    let mut file_collision =
+        VersionPublicationStore::open(file_collision_directory.path(), UnixMicros::new(1))?;
+    file_collision.publish_root_file(&file)?;
+    let mut colliding_rename = rename.clone();
+    colliding_rename.operation_id = file.file.operation_id;
+    assert!(matches!(
+        file_collision.rename_namespace(&colliding_rename),
+        Err(HandleError::Namespace(PublicationError::OperationConflict))
+    ));
+
+    let rename_collision_directory = tempdir()?;
+    let mut rename_collision =
+        VersionPublicationStore::open(rename_collision_directory.path(), UnixMicros::new(1))?;
+    rename_collision.publish_root_file(&file)?;
+    rename_collision.rename_namespace(&rename)?;
+    let mut colliding_file = sibling_root_publication(&file)?;
+    colliding_file.file.operation_id = rename.operation_id;
+    assert!(matches!(
+        rename_collision.publish_root_file(&colliding_file),
+        Err(PublicationError::OperationConflict)
+    ));
+    Ok(())
+}
+
 fn make_publication(
     operation: u8,
     parent: Option<FileVersionId>,
@@ -2176,6 +2527,15 @@ fn stored_directory_entry(
     revision_id: ObjectRevisionId,
     name: &NamespaceComponent,
 ) -> Result<DirectoryEntry, Box<dyn std::error::Error>> {
+    stored_directory_lookup(store, revision_id, name)?
+        .ok_or_else(|| "missing directory entry".into())
+}
+
+fn stored_directory_lookup(
+    store: &VersionPublicationStore,
+    revision_id: ObjectRevisionId,
+    name: &NamespaceComponent,
+) -> Result<Option<DirectoryEntry>, Box<dyn std::error::Error>> {
     let root_bytes: Vec<u8> = store.connection.query_row(
         "SELECT directory_root_digest FROM object_revisions
          WHERE object_revision_id = ?1 AND object_kind = 1",
@@ -2196,9 +2556,7 @@ fn stored_directory_entry(
         };
         selected = child;
     }
-    DirectoryTrie::from_selected_records(root, records, name)?
-        .lookup(name)?
-        .ok_or_else(|| "missing directory entry".into())
+    Ok(DirectoryTrie::from_selected_records(root, records, name)?.lookup(name)?)
 }
 
 fn initial_directory_publication() -> Result<DirectoryPublication, Box<dyn std::error::Error>> {
@@ -2297,6 +2655,281 @@ fn nested_file_publication(
         )?,
         entry_generation: 1,
     })
+}
+
+fn root_file_rename(
+    file: &RootFilePublication,
+    target: &str,
+) -> Result<NamespaceRenamePublication, Box<dyn std::error::Error>> {
+    Ok(NamespaceRenamePublication {
+        operation_id: OperationId::from_bytes([150; 16])?,
+        branch_id: file.file.branch_id,
+        volume_id: file.file.volume_id,
+        root_object_id: file.root_object_id,
+        expected_namespace_commit_id: file.namespace_commit_id,
+        expected_object_id: file.file.object_id,
+        expected_object_revision_id: file.file_object_revision_id,
+        expected_source_entry_generation: file.entry_generation,
+        source: file.path.clone(),
+        intermediate_root_object_revision_id: ObjectRevisionId::from_bytes([151; 16])?,
+        target: NamespacePublicationPath::new(
+            NamespacePath::from_components([target], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        target_entry_generation: 1,
+        root_object_revision_id: ObjectRevisionId::from_bytes([152; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([153; 16])?,
+        requesting_handle_id: None,
+        created_by: file.file.created_by,
+        created_at: UnixMicros::new(150),
+    })
+}
+
+fn root_directory_rename(
+    directory: &DirectoryPublication,
+    target: &str,
+) -> Result<NamespaceRenamePublication, Box<dyn std::error::Error>> {
+    Ok(NamespaceRenamePublication {
+        operation_id: OperationId::from_bytes([180; 16])?,
+        branch_id: directory.branch_id,
+        volume_id: directory.volume_id,
+        root_object_id: directory.root_object_id,
+        expected_namespace_commit_id: directory.namespace_commit_id,
+        expected_object_id: directory.directory_object_id,
+        expected_object_revision_id: directory.directory_object_revision_id,
+        expected_source_entry_generation: directory.entry_generation,
+        source: directory.path.clone(),
+        intermediate_root_object_revision_id: ObjectRevisionId::from_bytes([181; 16])?,
+        target: NamespacePublicationPath::new(
+            NamespacePath::from_components([target], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        target_entry_generation: 1,
+        root_object_revision_id: ObjectRevisionId::from_bytes([182; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([183; 16])?,
+        requesting_handle_id: None,
+        created_by: directory.created_by,
+        created_at: UnixMicros::new(180),
+    })
+}
+
+fn descendant_directory_rename(
+    first: &DirectoryPublication,
+    nested: &DirectoryPublication,
+) -> Result<NamespaceRenamePublication, Box<dyn std::error::Error>> {
+    let current_source_revision = nested.path.ancestors()[0].new_revision_id();
+    Ok(NamespaceRenamePublication {
+        operation_id: OperationId::from_bytes([184; 16])?,
+        branch_id: first.branch_id,
+        volume_id: first.volume_id,
+        root_object_id: first.root_object_id,
+        expected_namespace_commit_id: nested.namespace_commit_id,
+        expected_object_id: first.directory_object_id,
+        expected_object_revision_id: current_source_revision,
+        expected_source_entry_generation: first.entry_generation,
+        source: first.path.clone(),
+        intermediate_root_object_revision_id: ObjectRevisionId::from_bytes([185; 16])?,
+        target: NamespacePublicationPath::new(
+            NamespacePath::from_components(["a", "b", "moved"], NamespaceLimits::PORTABLE)?,
+            vec![
+                DirectoryRevisionTransition::new(
+                    first.directory_object_id,
+                    current_source_revision,
+                    ObjectRevisionId::from_bytes([186; 16])?,
+                )?,
+                DirectoryRevisionTransition::new(
+                    nested.directory_object_id,
+                    nested.directory_object_revision_id,
+                    ObjectRevisionId::from_bytes([187; 16])?,
+                )?,
+            ],
+        )?,
+        target_entry_generation: 1,
+        root_object_revision_id: ObjectRevisionId::from_bytes([188; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([189; 16])?,
+        requesting_handle_id: None,
+        created_by: first.created_by,
+        created_at: UnixMicros::new(184),
+    })
+}
+
+fn sibling_root_publication(
+    first: &RootFilePublication,
+) -> Result<RootFilePublication, Box<dyn std::error::Error>> {
+    Ok(RootFilePublication {
+        file: FilePublication {
+            operation_id: OperationId::from_bytes([140; 16])?,
+            branch_id: first.file.branch_id,
+            volume_id: first.file.volume_id,
+            object_id: ObjectId::from_bytes([141; 16])?,
+            expected_current_version_id: None,
+            version_id: FileVersionId::from_bytes([142; 16])?,
+            parent_version_id: None,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
+            manifest: ManifestPublication {
+                manifest_id: ContentManifestId::from_bytes([143; 16])?,
+                format_version: 1,
+                logical_length: 8,
+                content_digest: [144; 32],
+                root_digest: [145; 32],
+            },
+            created_by: first.file.created_by,
+            created_at: UnixMicros::new(140),
+        },
+        root_object_id: first.root_object_id,
+        expected_namespace_commit_id: Some(first.namespace_commit_id),
+        expected_file_object_revision_id: None,
+        file_object_revision_id: ObjectRevisionId::from_bytes([146; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([147; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([148; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components(["Taken"], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        entry_generation: 1,
+    })
+}
+
+fn expected_rename_intent(
+    file: &RootFilePublication,
+    rename: &NamespaceRenamePublication,
+) -> BranchMutationIntent {
+    BranchMutationIntent {
+        commit_id: rename.namespace_commit_id,
+        path: rename.target.path().clone(),
+        ancestors: rename.target.ancestors().to_vec(),
+        object_id: file.file.object_id,
+        object_revision_id: file.file_object_revision_id,
+        prior_object_revision_id: None,
+        entry_generation: rename.target_entry_generation,
+        mutation: BranchMutation::File {
+            version_id: file.file.version_id,
+        },
+        rename: Some(BranchRenameIntent {
+            source_path: rename.source.path().clone(),
+            source_ancestors: rename.source.ancestors().to_vec(),
+            source_entry_generation: rename.expected_source_entry_generation,
+            intermediate_root_object_revision_id: rename.intermediate_root_object_revision_id,
+        }),
+    }
+}
+
+fn assert_namespace_rename_result(
+    store: &VersionPublicationStore,
+    file: &RootFilePublication,
+    rename: &NamespaceRenamePublication,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        store
+            .namespace_head(rename.branch_id, rename.volume_id)?
+            .map(|head| (head.namespace_commit_id, head.sequence)),
+        Some((rename.namespace_commit_id, 2))
+    );
+    assert!(
+        stored_directory_lookup(
+            store,
+            rename.root_object_revision_id,
+            &rename.source.path().components()[0],
+        )?
+        .is_none()
+    );
+    let target = stored_directory_lookup(
+        store,
+        rename.root_object_revision_id,
+        &rename.target.path().components()[0],
+    )?
+    .ok_or("missing rename target")?;
+    assert_eq!(target.object_id(), file.file.object_id);
+    assert_eq!(target.object_revision_id(), file.file_object_revision_id);
+    assert_eq!(target.generation(), rename.target_entry_generation);
+    Ok(())
+}
+
+fn assert_rename_was_not_committed(
+    store: &VersionPublicationStore,
+    base: &RootFilePublication,
+    rename: &NamespaceRenamePublication,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        store
+            .namespace_head(rename.branch_id, rename.volume_id)?
+            .map(|head| head.namespace_commit_id),
+        Some(base.namespace_commit_id)
+    );
+    let source = stored_directory_entry(
+        store,
+        base.root_object_revision_id,
+        &rename.source.path().components()[0],
+    )?;
+    assert_eq!(source.object_id(), rename.expected_object_id);
+    assert_eq!(store.resolve_namespace_rename(rename.operation_id)?, None);
+    for revision_id in [
+        rename.intermediate_root_object_revision_id,
+        rename.root_object_revision_id,
+    ] {
+        let exists: i64 = store.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM object_revisions WHERE object_revision_id = ?1
+             )",
+            [revision_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(exists, 0);
+    }
+    Ok(())
+}
+
+fn rename_open_request(
+    file: &RootFilePublication,
+    operation: u8,
+    handle: u8,
+) -> Result<OpenHandleRequest, Box<dyn std::error::Error>> {
+    Ok(OpenHandleRequest {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        handle_id: HandleId::from_bytes([handle; 16])?,
+        branch_id: file.file.branch_id,
+        volume_id: file.file.volume_id,
+        path: file.path.path().clone(),
+        principal_id: file.file.created_by,
+        authorization_revision: Revision::new(1),
+        gateway_node_id: NodeId::from_bytes([166; 16])?,
+        desired_access: HandleAccess::new(true, false, false)?,
+        share_access: HandleShare::new(true, true, true),
+        create_disposition: CreateDisposition::OpenExisting,
+        delete_on_close: false,
+        lease_expires_at: UnixMicros::new(1_000),
+        opened_at: UnixMicros::new(10),
+    })
+}
+
+fn seed_file_branch(
+    connection: &Connection,
+    file: &RootFilePublication,
+    branch_id: BranchId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    connection.execute(
+        "INSERT INTO branch_namespace_heads(
+            branch_id, volume_id, namespace_commit_id, head_sequence
+         ) VALUES (?1, ?2, ?3, 1)",
+        params![
+            branch_id.as_bytes().as_slice(),
+            file.file.volume_id.as_bytes().as_slice(),
+            file.namespace_commit_id.as_bytes().as_slice(),
+        ],
+    )?;
+    connection.execute(
+        "INSERT INTO branch_files(
+            branch_id, object_id, volume_id, current_version_id, head_sequence
+         ) VALUES (?1, ?2, ?3, ?4, 1)",
+        params![
+            branch_id.as_bytes().as_slice(),
+            file.file.object_id.as_bytes().as_slice(),
+            file.file.volume_id.as_bytes().as_slice(),
+            file.file.version_id.as_bytes().as_slice(),
+        ],
+    )?;
+    Ok(())
 }
 
 fn initial_root_publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {

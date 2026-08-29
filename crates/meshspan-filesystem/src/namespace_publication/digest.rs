@@ -3,7 +3,7 @@
 //! Canonical domain-separated digests for namespace requests, records and receipts.
 
 use meshspan_domain::{
-    BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId,
+    BranchId, FileVersionId, HandleId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId,
     PrincipalId, UnixMicros, VolumeId,
 };
 
@@ -11,7 +11,7 @@ use super::publication_request_digest;
 use super::repository::{ObjectRevisionInsert, StoredCommit};
 use crate::{
     DirectoryNodeDigest, DirectoryPublication, NamespacePath, NamespacePublicationPath,
-    RootFilePublication, SnapshotRestorePublication,
+    NamespaceRenamePublication, RootFilePublication, SnapshotRestorePublication,
 };
 use crate::{NamespaceReconciliationApplication, PreparedNamespaceReconciliation};
 
@@ -44,6 +44,29 @@ pub(super) fn directory_request(publication: &DirectoryPublication) -> [u8; 32] 
     digest.update(&publication.namespace_commit_id.as_bytes());
     update_publication_path(&mut digest, &publication.path);
     digest.update(&publication.entry_generation.to_be_bytes());
+    digest.update(&publication.created_by.as_bytes());
+    digest.update(&publication.created_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+pub(super) fn rename_request(publication: &NamespaceRenamePublication) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.namespace-rename.v1\0");
+    digest.update(&publication.operation_id.as_bytes());
+    digest.update(&publication.branch_id.as_bytes());
+    digest.update(&publication.volume_id.as_bytes());
+    digest.update(&publication.root_object_id.as_bytes());
+    digest.update(&publication.expected_namespace_commit_id.as_bytes());
+    digest.update(&publication.expected_object_id.as_bytes());
+    digest.update(&publication.expected_object_revision_id.as_bytes());
+    digest.update(&publication.expected_source_entry_generation.to_be_bytes());
+    update_publication_path(&mut digest, &publication.source);
+    digest.update(&publication.intermediate_root_object_revision_id.as_bytes());
+    update_publication_path(&mut digest, &publication.target);
+    digest.update(&publication.target_entry_generation.to_be_bytes());
+    digest.update(&publication.root_object_revision_id.as_bytes());
+    digest.update(&publication.namespace_commit_id.as_bytes());
+    update_optional_handle(&mut digest, publication.requesting_handle_id);
     digest.update(&publication.created_by.as_bytes());
     digest.update(&publication.created_at.get().to_be_bytes());
     digest.finalize().into()
@@ -192,6 +215,25 @@ pub(super) fn directory_result(
     digest.finalize().into()
 }
 
+pub(super) fn rename_result(
+    operation_id: OperationId,
+    request_digest: [u8; 32],
+    object_id: ObjectId,
+    object_revision_id: ObjectRevisionId,
+    namespace_commit_id: NamespaceCommitId,
+    head_sequence: u64,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.namespace-rename-result.v1\0");
+    digest.update(&operation_id.as_bytes());
+    digest.update(&request_digest);
+    digest.update(&object_id.as_bytes());
+    digest.update(&object_revision_id.as_bytes());
+    digest.update(&namespace_commit_id.as_bytes());
+    digest.update(&head_sequence.to_be_bytes());
+    digest.finalize().into()
+}
+
 fn update_publication_path(digest: &mut blake3::Hasher, path: &NamespacePublicationPath) {
     update_namespace_path(digest, path.path());
     for transition in path.ancestors() {
@@ -215,6 +257,10 @@ fn update_namespace_path(digest: &mut blake3::Hasher, path: &NamespacePath) {
 
 fn update_optional_commit(digest: &mut blake3::Hasher, value: Option<NamespaceCommitId>) {
     update_optional_bytes(digest, value.map(NamespaceCommitId::as_bytes).as_ref());
+}
+
+fn update_optional_handle(digest: &mut blake3::Hasher, value: Option<HandleId>) {
+    update_optional_bytes(digest, value.map(HandleId::as_bytes).as_ref());
 }
 
 fn update_commit_ids(digest: &mut blake3::Hasher, values: &[NamespaceCommitId]) {

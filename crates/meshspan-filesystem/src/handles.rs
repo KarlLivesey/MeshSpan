@@ -10,6 +10,8 @@ mod lease;
 mod locks;
 #[path = "handles/path.rs"]
 mod path;
+#[path = "handles/rename.rs"]
+mod rename;
 #[path = "handles/state.rs"]
 mod state;
 #[cfg(test)]
@@ -32,6 +34,7 @@ pub use locks::{
     UnlockRangeRequest,
 };
 pub(crate) use locks::{lock_range, unlock_range};
+pub(crate) use rename::{prepare as prepare_rename, relocate_paths as relocate_handle_paths};
 pub(crate) use write::admit_write;
 pub use write::{HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest};
 
@@ -299,6 +302,9 @@ pub enum HandleError {
     /// A live incompatible byte-range lock overlaps the requested range.
     #[error("filesystem byte-range lock conflicts with a live lock")]
     LockConflict,
+    /// A prepared handle flush must reach a durable terminal state before namespace relocation.
+    #[error("filesystem handle flush is still in progress")]
+    FlushInProgress,
     /// The selected lock is absent, released, expired or owned by another fence.
     #[error("filesystem byte-range lock is stale")]
     StaleLock,

@@ -9,8 +9,8 @@ use super::super::repository::{
     ObjectRevisionInsert, load_object_revision, persist_object_revision,
 };
 use super::super::{
-    DirectoryRevisionResult, LoadedDirectory, load_directory, load_path_editor,
-    mutate_namespace_path, remove_namespace_path,
+    DirectoryRevisionResult, load_path_directories, load_path_editor, mutate_namespace_path,
+    remove_namespace_path,
 };
 use crate::publication::{
     FilePublication, ManifestPublication, NamespaceReconciliationApplication, PublicationError,
@@ -56,7 +56,7 @@ pub(super) fn apply_action(
     let path =
         NamespacePublicationPath::new(action.target_path.clone(), action.target_ancestors.clone())
             .map_err(|_| PublicationError::InvalidInput)?;
-    let directories = load_action_directories(
+    let directories = load_path_directories(
         transaction,
         context.volume_id,
         root_object_id,
@@ -125,7 +125,7 @@ fn apply_removal(
     }
     let path = NamespacePublicationPath::new(removal.path.clone(), removal.ancestors.clone())
         .map_err(|_| PublicationError::InvalidInput)?;
-    let directories = load_action_directories(
+    let directories = load_path_directories(
         transaction,
         context.volume_id,
         root_object_id,
@@ -209,55 +209,6 @@ fn persist_directory_revisions(
         )?;
     }
     Ok(())
-}
-
-fn load_action_directories(
-    transaction: &Transaction<'_>,
-    volume_id: VolumeId,
-    root_object_id: ObjectId,
-    current_root: ObjectRevisionId,
-    next_root: ObjectRevisionId,
-    path: &NamespacePublicationPath,
-) -> Result<Vec<LoadedDirectory>, PublicationError> {
-    let components = path.path().components();
-    let first = components.first().ok_or(PublicationError::InvalidInput)?;
-    let mut directories = vec![load_directory(
-        transaction,
-        current_root,
-        root_object_id,
-        next_root,
-        volume_id,
-        first,
-    )?];
-    for (index, transition) in path.ancestors().iter().enumerate() {
-        let parent_name = components
-            .get(index)
-            .ok_or(PublicationError::InvalidInput)?;
-        let next_name = components
-            .get(index + 1)
-            .ok_or(PublicationError::InvalidInput)?;
-        let entry = directories
-            .last()
-            .ok_or(PublicationError::Corrupt)?
-            .editor
-            .lookup(parent_name)?
-            .ok_or(PublicationError::StaleHead)?;
-        if entry.kind() != DirectoryEntryKind::Directory
-            || entry.object_id() != transition.object_id()
-            || entry.object_revision_id() != transition.expected_revision_id()
-        {
-            return Err(PublicationError::StaleHead);
-        }
-        directories.push(load_directory(
-            transaction,
-            transition.expected_revision_id(),
-            transition.object_id(),
-            transition.new_revision_id(),
-            volume_id,
-            next_name,
-        )?);
-    }
-    Ok(directories)
 }
 
 fn prepare_leaf_revision(

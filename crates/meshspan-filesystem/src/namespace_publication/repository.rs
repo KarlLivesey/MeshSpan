@@ -4,6 +4,8 @@
 
 #[path = "repository/rename_intent.rs"]
 mod rename_intent;
+#[path = "repository/rename_operation.rs"]
+pub(super) mod rename_operation;
 
 use meshspan_domain::{
     BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
@@ -633,7 +635,7 @@ fn validate_loaded_intent(
             revision.kind == 1
                 && revision.directory_root.is_some()
                 && revision.file_version_id.is_none()
-                && intent.prior_object_revision_id.is_none()
+                && (intent.rename.is_some() || intent.prior_object_revision_id.is_none())
         }
     };
     if commit.volume_id != revision.volume_id
@@ -689,14 +691,19 @@ fn load_commit_request_digest(
         operation_id,
         PublicationDisposition::Replayed,
     )?;
-    match (file, directory, restore) {
-        (Some(receipt), None, None) if receipt.namespace_commit_id == commit_id => {
+    let rename =
+        rename_operation::load(connection, operation_id, PublicationDisposition::Replayed)?;
+    match (file, directory, restore, rename) {
+        (Some(receipt), None, None, None) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
-        (None, Some(receipt), None) if receipt.namespace_commit_id == commit_id => {
+        (None, Some(receipt), None, None) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
-        (None, None, Some(receipt)) if receipt.namespace_commit_id == commit_id => {
+        (None, None, Some(receipt), None) if receipt.namespace_commit_id == commit_id => {
+            Ok(receipt.request_digest)
+        }
+        (None, None, None, Some(receipt)) if receipt.namespace_commit_id == commit_id => {
             Ok(receipt.request_digest)
         }
         _ => Err(PublicationError::Corrupt),
