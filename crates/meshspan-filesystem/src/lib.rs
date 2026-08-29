@@ -16,6 +16,7 @@ mod directory;
 mod handle_io;
 mod handles;
 mod name;
+mod namespace_query;
 mod publication;
 mod reachability;
 mod reconciliation;
@@ -76,6 +77,10 @@ pub use handles::{
 };
 pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,
+};
+pub use namespace_query::{
+    DirectoryListCursor, NamespaceListEntry, NamespaceListPage, NamespaceListRequest,
+    NamespaceObjectStat, NamespaceQueryError, NamespaceStatRequest,
 };
 pub use publication::{
     BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,

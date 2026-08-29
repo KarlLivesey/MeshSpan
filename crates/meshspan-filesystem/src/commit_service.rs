@@ -668,6 +668,37 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .map_err(Into::into)
     }
 
+    /// Resolves immutable protocol-neutral attributes for one current branch path.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent paths and malformed, corrupt or unverifiable namespace records.
+    pub fn stat_namespace(
+        &self,
+        request: &crate::NamespaceStatRequest,
+    ) -> Result<crate::NamespaceObjectStat, crate::NamespaceQueryError> {
+        self.publications.stat_namespace(request)
+    }
+
+    /// Lists one deterministic bounded page from an immutable current directory revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid limits, stale cursors and malformed, corrupt or unverifiable records.
+    pub fn list_namespace(
+        &self,
+        request: &crate::NamespaceListRequest,
+    ) -> Result<crate::NamespaceListPage, crate::NamespaceQueryError> {
+        self.publications.list_namespace(request)
+    }
+
+    pub(crate) fn list_authority_target(
+        &self,
+        request: &crate::NamespaceListRequest,
+    ) -> Result<crate::namespace_query::ResolvedDirectory, crate::NamespaceQueryError> {
+        self.publications.list_authority_target(request)
+    }
+
     pub(crate) fn rename_namespace(
         &mut self,
         publication: &crate::NamespaceRenamePublication,

@@ -216,8 +216,15 @@ copy-on-write filesystem service. This document records executable evidence only
   at most 8 MiB of memory. Another handle continues to read only published
   bytes. Tests cover partial overlap, short EOF, zero-filled private extension,
   excessive requests, forged part bytes and revocation before content IO.
-  Connector conformance and the remaining stat/enumeration/query families remain
-  open.
+  Immutable `stat` now revalidates `READ_ATTRIBUTES` and independently checks
+  directory-entry, object-revision, file-version and manifest relationships.
+  Directory enumeration revalidates `LIST` before trie traversal, returns a
+  deterministic page of at most 1,024 minimal child records and emits a cursor
+  only when another entry exists. The cursor binds namespace commit, directory
+  object/revision, last name hash and canonical component; a later namespace
+  head fails stale rather than mixing pages. Tests prove one-entry paging,
+  reauthorisation, revocation and stale continuation after mutation. Connector
+  conformance and remaining administration queries remain open.
 
 ## Closure gates
 
@@ -451,8 +458,8 @@ copy-on-write filesystem service. This document records executable evidence only
    The authoritative evaluator, session fencing, revocation and principal
    lifecycle transitions are implemented and tested. Operation-time capability
    validation now fronts the implemented mutating handle and namespace service
-   families plus bounded handle reads through one metadata adapter. Stat and
-   enumeration enforcement, administration queries and the complete
+   families plus bounded handle reads, immutable stat and directory enumeration
+   through one metadata adapter. Administration queries and the complete
    rights-vector suite remain open.
 7. Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
 

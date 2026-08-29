@@ -14,9 +14,10 @@ use crate::{
     FilesystemHandleOpenRequest, FilesystemHandleReadReceipt, FilesystemHandleReadRequest,
     FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleAccess, HandleError,
     HandleIoError, HandleLeaseReceipt, HandleLeaseRequest, HandleReadError, LockRangeReceipt,
-    LockRangeRequest, NamespacePublicationReceipt, NamespaceRenamePublication,
-    NamespaceRenameReceipt, NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt,
-    RangeLockKind, UnlockRangeReceipt, UnlockRangeRequest,
+    LockRangeRequest, NamespaceListRequest, NamespacePublicationReceipt, NamespaceQueryError,
+    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceStatRequest,
+    NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt, RangeLockKind,
+    UnlockRangeReceipt, UnlockRangeRequest,
 };
 
 /// Authenticated connector context supplied independently of a filesystem operation payload.
@@ -396,6 +397,51 @@ where
             .map_err(AuthorisedFilesystemError::Commit)
     }
 
+    /// Returns immutable logical attributes only after authorising the resolved stable object.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed context, absent/corrupt paths, denial and substituted authority grants.
+    pub fn stat_namespace(
+        &self,
+        context: FilesystemAccessContext,
+        request: &NamespaceStatRequest,
+    ) -> Result<crate::NamespaceObjectStat, AuthorisedFilesystemError<A::Error>> {
+        require_same_time(context, request.observed_at)?;
+        let stat = self
+            .filesystem
+            .stat_namespace(request)
+            .map_err(AuthorisedFilesystemError::Query)?;
+        self.authorise(
+            context,
+            request.volume_id,
+            stat.object_id,
+            Rights::READ_ATTRIBUTES,
+        )?;
+        Ok(stat)
+    }
+
+    /// Lists one bounded immutable directory page after authorising the directory itself.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed context, invalid/stale cursors, denial and corrupt namespace records.
+    pub fn list_namespace(
+        &self,
+        context: FilesystemAccessContext,
+        request: &NamespaceListRequest,
+    ) -> Result<crate::NamespaceListPage, AuthorisedFilesystemError<A::Error>> {
+        require_same_time(context, request.observed_at)?;
+        let target = self
+            .filesystem
+            .list_authority_target(request)
+            .map_err(AuthorisedFilesystemError::Query)?;
+        self.authorise(context, request.volume_id, target.object, Rights::LIST)?;
+        self.filesystem
+            .list_namespace(request)
+            .map_err(AuthorisedFilesystemError::Query)
+    }
+
     /// Renames within a volume after proving source rename and destination creation authority.
     ///
     /// # Errors
@@ -663,6 +709,9 @@ pub enum AuthorisedFilesystemError<E> {
     /// Verified handle read failed after authority admission.
     #[error("authorised filesystem read failed")]
     Read(#[source] HandleReadError),
+    /// Immutable namespace query failed before any record was returned.
+    #[error("authorised filesystem namespace query failed")]
+    Query(#[source] NamespaceQueryError),
 }
 
 #[cfg(test)]

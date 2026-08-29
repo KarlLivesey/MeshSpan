@@ -894,6 +894,37 @@ impl VersionPublicationStore {
         namespace::load_head(&self.connection, branch_id, volume_id)
     }
 
+    /// Resolves immutable attributes for one exact current logical path.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent paths and malformed, corrupt or unverifiable namespace records.
+    pub fn stat_namespace(
+        &self,
+        request: &crate::NamespaceStatRequest,
+    ) -> Result<crate::NamespaceObjectStat, crate::NamespaceQueryError> {
+        crate::namespace_query::stat(&self.connection, request)
+    }
+
+    /// Lists one deterministic bounded page from an immutable current directory revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid limits, stale cursors and malformed, corrupt or unverifiable records.
+    pub fn list_namespace(
+        &self,
+        request: &crate::NamespaceListRequest,
+    ) -> Result<crate::NamespaceListPage, crate::NamespaceQueryError> {
+        crate::namespace_query::list(&self.connection, request)
+    }
+
+    pub(crate) fn list_authority_target(
+        &self,
+        request: &crate::NamespaceListRequest,
+    ) -> Result<crate::namespace_query::ResolvedDirectory, crate::NamespaceQueryError> {
+        crate::namespace_query::list_target(&self.connection, request)
+    }
+
     /// Atomically resolves and opens one existing file under authority-owned share modes.
     ///
     /// # Errors
