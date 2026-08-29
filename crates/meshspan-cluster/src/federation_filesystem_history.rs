@@ -5,7 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use meshspan_domain::{DurationMicros, FederationResourceScope, UnixMicros, VolumeId};
-use meshspan_filesystem::{NamespaceHistoryPageRequest, PublicationError, VersionPublicationStore};
+use meshspan_filesystem::{
+    NamespaceHistoryObjectRequest, NamespaceHistoryPageRequest, PublicationError,
+    VersionPublicationStore,
+};
 use meshspan_protocol::v1::VersionedPayload;
 use sha2::{Digest, Sha256};
 
@@ -14,6 +17,8 @@ use crate::federation_resource_wire::version_federation_resource_scope;
 use crate::{
     EffectiveFederationGrantAuthority, FederationBranchPageFuture, FederationBranchPageQuery,
     FederationBranchPageRecords, FederationBranchPageSource, FederationBranchPageSourceError,
+    FederationHistoryObject, FederationHistoryObjectFuture, FederationHistoryObjectQuery,
+    FederationHistoryObjectSource, FederationHistoryObjectSourceError,
 };
 
 const HISTORY_RECORD_FORMAT_VERSION: u32 = 1;
@@ -53,6 +58,20 @@ impl FederationBranchPageSource for FilesystemFederationHistorySource {
     }
 }
 
+impl FederationHistoryObjectSource for FilesystemFederationHistorySource {
+    fn history_object(
+        &self,
+        query: FederationHistoryObjectQuery,
+    ) -> FederationHistoryObjectFuture<'_> {
+        let state_directory = self.state_directory.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || load_object(&state_directory, &query))
+                .await
+                .map_err(|_| FederationHistoryObjectSourceError::Unavailable)?
+        })
+    }
+}
+
 fn load_page(
     state_directory: &Path,
     query: FederationBranchPageQuery,
@@ -87,6 +106,28 @@ fn load_page(
             .collect(),
         immutable_object_digests: page.immutable_object_digests,
         next_cursor: page.next_cursor,
+    })
+}
+
+fn load_object(
+    state_directory: &Path,
+    query: &FederationHistoryObjectQuery,
+) -> Result<FederationHistoryObject, FederationHistoryObjectSourceError> {
+    validate_authority(query.authority, query.resource, query.now)
+        .map_err(map_page_error_to_object)?;
+    volume_scope(query.resource).map_err(map_page_error_to_object)?;
+    let store = VersionPublicationStore::open(state_directory, query.now)
+        .map_err(|error| map_publication_object_error(&error))?;
+    let record = store
+        .namespace_history_object(NamespaceHistoryObjectRequest {
+            scope_binding: authority_binding(query.authority, query.resource),
+            export_token: query.export_token,
+            object_digest: query.object_digest,
+            now: query.now,
+        })
+        .map_err(|error| map_publication_object_error(&error))?;
+    Ok(FederationHistoryObject {
+        canonical_bytes: record.canonical_bytes().to_vec(),
     })
 }
 
@@ -186,6 +227,34 @@ const fn map_publication_error(error: &PublicationError) -> FederationBranchPage
         | PublicationError::CleanupFenced
         | PublicationError::Corrupt
         | PublicationError::Directory(_) => FederationBranchPageSourceError::Corrupt,
+    }
+}
+
+const fn map_page_error_to_object(
+    error: FederationBranchPageSourceError,
+) -> FederationHistoryObjectSourceError {
+    match error {
+        FederationBranchPageSourceError::InvalidQuery => {
+            FederationHistoryObjectSourceError::InvalidQuery
+        }
+        FederationBranchPageSourceError::Unavailable => {
+            FederationHistoryObjectSourceError::Unavailable
+        }
+        FederationBranchPageSourceError::Corrupt => FederationHistoryObjectSourceError::Corrupt,
+    }
+}
+
+const fn map_publication_object_error(
+    error: &PublicationError,
+) -> FederationHistoryObjectSourceError {
+    match map_publication_error(error) {
+        FederationBranchPageSourceError::InvalidQuery => {
+            FederationHistoryObjectSourceError::InvalidQuery
+        }
+        FederationBranchPageSourceError::Unavailable => {
+            FederationHistoryObjectSourceError::Unavailable
+        }
+        FederationBranchPageSourceError::Corrupt => FederationHistoryObjectSourceError::Corrupt,
     }
 }
 

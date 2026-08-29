@@ -11,7 +11,8 @@ use meshspan_cluster::{
     FederationBranchAuthoritySource, FederationBranchFetchRequest, FederationBranchPageFuture,
     FederationBranchPageQuery, FederationBranchPageRecords, FederationBranchPageServeRequest,
     FederationBranchPageServices, FederationBranchPageSource, FederationBranchPageSourceError,
-    FederationSessionError, FilesystemFederationHistorySource,
+    FederationHistoryObjectFetchRequest, FederationHistoryObjectServeRequest,
+    FederationHistoryObjectServices, FederationSessionError, FilesystemFederationHistorySource,
 };
 use meshspan_domain::{
     BranchId, ContentManifestId, FederatedPrincipal, FederationAccess, FederationGrant,
@@ -84,7 +85,58 @@ async fn prove_filesystem_backed_exchange(
     )?;
     assert_eq!(served.record_count, 1);
     assert!(served.has_next_page);
+
+    let first_cursor = page.next_cursor().to_vec();
+    let mut next_request = fixture.request(136)?;
+    next_request.requested_heads = vec![publication.namespace_commit_id];
+    next_request.known_commits.clear();
+    next_request.cursor = first_cursor;
+    next_request.limit = 1;
+    let next_fetch = proof.client_runtime.fetch_branch_page(
+        proof.client_connection,
+        proof.client_authority,
+        &client_grants,
+        next_request,
+        &mut client_replay,
+    );
+    let next_serve = proof.server_runtime.serve_branch_page(
+        proof.server_connection,
+        FederationBranchPageServices::new(proof.server_authority, &server_grants, &source),
+        FederationBranchPageServeRequest {
+            response_replay_nonce: [141; 32],
+            now: NOW,
+        },
+        &mut server_replay,
+    );
+    let (next_page, _) = tokio::try_join!(next_fetch, next_serve)?;
+    assert_eq!(next_page.immutable_object_digests().len(), 1);
+    let export_token = exact_digest(next_page.export_token())?;
+    let object_digest = exact_digest(&next_page.immutable_object_digests()[0])?;
+    let object_fetch = proof.client_runtime.fetch_history_object(
+        proof.client_connection,
+        proof.client_authority,
+        &client_grants,
+        fixture.object_request(142, export_token, object_digest)?,
+        &mut client_replay,
+    );
+    let object_serve = proof.server_runtime.serve_history_object(
+        proof.server_connection,
+        FederationHistoryObjectServices::new(proof.server_authority, &server_grants, &source),
+        FederationHistoryObjectServeRequest {
+            response_replay_nonce: [147; 32],
+            now: NOW,
+        },
+        &mut server_replay,
+    );
+    let (object, object_served) = tokio::try_join!(object_fetch, object_serve)?;
+    assert_eq!(object.digest(), object_digest);
+    assert_eq!(object_served.byte_count, object.canonical_bytes().len());
+    assert!(object_served.frame_count > 0);
     Ok(())
+}
+
+fn exact_digest(bytes: &[u8]) -> Result<[u8; 32], Box<dyn Error>> {
+    bytes.try_into().map_err(|_| "invalid digest".into())
 }
 
 async fn prove_authorised_exchange(
@@ -259,6 +311,30 @@ impl BranchFixture {
             known_commits: vec![NamespaceCommitId::from_bytes([12; 16])?],
             cursor: vec![12; 16],
             limit: 2,
+            context: FederationExchangeContext::new(
+                ProtocolVersion { major: 1, minor: 1 },
+                [seed; 16],
+                [seed.saturating_add(1); 16],
+                [seed.saturating_add(2); 16],
+                UnixMicros::new(2_000_000),
+                [seed.saturating_add(3); 32],
+            )?,
+            now: NOW,
+        })
+    }
+
+    fn object_request(
+        self,
+        seed: u8,
+        export_token: [u8; 32],
+        object_digest: [u8; 32],
+    ) -> Result<FederationHistoryObjectFetchRequest, Box<dyn Error>> {
+        Ok(FederationHistoryObjectFetchRequest {
+            relationship_id: self.relationship_id,
+            grant_id: self.grant_id,
+            resource: self.resource,
+            export_token,
+            object_digest,
             context: FederationExchangeContext::new(
                 ProtocolVersion { major: 1, minor: 1 },
                 [seed; 16],
