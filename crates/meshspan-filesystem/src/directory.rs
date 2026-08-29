@@ -595,6 +595,17 @@ pub struct DirectoryNodeRecord {
     pub(crate) node: DirectoryNode,
 }
 
+pub(crate) enum DirectoryNodeView {
+    Internal {
+        depth: u8,
+        children: Vec<(u8, DirectoryNodeDigest)>,
+    },
+    Leaf {
+        key_hash: [u8; 32],
+        entries: Vec<DirectoryEntry>,
+    },
+}
+
 impl DirectoryNodeRecord {
     /// Content digest binding the complete node encoding.
     #[must_use]
@@ -645,6 +656,23 @@ impl DirectoryNodeRecord {
                 Ok(None)
             }
             _ => Err(DirectoryTrieError::Corrupt),
+        }
+    }
+
+    pub(crate) fn view(&self) -> DirectoryNodeView {
+        match &self.node {
+            DirectoryNode::Internal(internal) => DirectoryNodeView::Internal {
+                depth: internal.depth,
+                children: internal
+                    .children
+                    .iter()
+                    .map(|(slot, child)| (*slot, *child))
+                    .collect(),
+            },
+            DirectoryNode::Leaf(leaf) => DirectoryNodeView::Leaf {
+                key_hash: leaf.key_hash,
+                entries: leaf.entries.clone(),
+            },
         }
     }
 
@@ -741,6 +769,10 @@ fn name_hash(canonical: &str) -> [u8; 32] {
     digest.update(b"meshspan.filesystem.directory-name.v1\0");
     digest.update(canonical.as_bytes());
     digest.finalize().into()
+}
+
+pub(crate) fn directory_name_hash(name: &NamespaceComponent) -> [u8; 32] {
+    name_hash(name.canonical())
 }
 
 fn nibble(hash: &[u8; 32], depth: usize) -> u8 {

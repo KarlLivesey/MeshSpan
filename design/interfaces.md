@@ -333,6 +333,13 @@ stage part in mutation order and returns a short result at logical EOF. One read
 is capped at 8 MiB and never allocates in proportion to file size. Unflushed
 bytes remain visible only through their owning handle.
 
+Namespace `stat` resolves one immutable object revision and revalidates
+`READ_ATTRIBUTES` before returning its verified kind, version and logical
+length. Directory listing revalidates `LIST` before traversing the immutable
+directory root and returns at most 1,024 minimal child records. Its continuation
+binds the namespace commit, directory object/revision and last canonical name;
+a changed head makes continuation explicitly stale instead of mixing views.
+
 ## Access adapter
 
 **Owns:** one public protocol's negotiation, authentication mapping, request

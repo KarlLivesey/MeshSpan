@@ -14,9 +14,10 @@ use crate::{
     ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
     CreateDisposition, DurableContentPublisher, DurableContentReader, FilePublication,
     FilesystemHandleOpenRequest, FilesystemHandleReadRequest, FilesystemHandleWriteRequest,
-    HandleShare, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
-    OpenHandleRequest, PublicationDisposition, PublishedContentReference, RootFilePublication,
-    StageWrite, StageWriteOutcome, VersionPublicationStore,
+    HandleShare, ManifestPublication, NamespaceLimits, NamespaceListRequest, NamespacePath,
+    NamespacePublicationPath, NamespaceQueryError, NamespaceStatRequest, OpenHandleRequest,
+    PublicationDisposition, PublishedContentReference, RootFilePublication, StageWrite,
+    StageWriteOutcome, VersionPublicationStore,
 };
 
 #[test]
@@ -155,6 +156,108 @@ fn writable_handle_reads_its_private_overlay_while_another_handle_reads_publishe
             context(UnixMicros::new(30))?,
             read_request(27, &writer, 0, 7)?,
         ),
+        Err(AuthorisedFilesystemError::Authority(TestAuthorityError))
+    ));
+    Ok(())
+}
+
+#[test]
+fn stat_returns_verified_immutable_attributes_only_with_current_attribute_access()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let allowed = Rc::new(Cell::new(true));
+    let authority = TestAuthority::new(Rc::clone(&allowed), PrincipalId::from_bytes([18; 16])?);
+    let service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+    let service = AuthorisedFilesystemService::new(service, authority);
+    let request = NamespaceStatRequest {
+        branch_id: BranchId::from_bytes([11; 16])?,
+        volume_id: VolumeId::from_bytes([12; 16])?,
+        path: NamespacePath::from_components(["report"], NamespaceLimits::PORTABLE)?,
+        observed_at: UnixMicros::new(30),
+    };
+
+    let stat = service.stat_namespace(context(request.observed_at)?, &request)?;
+    assert_eq!(stat.object_id, ObjectId::from_bytes([13; 16])?);
+    assert_eq!(
+        stat.file_version_id,
+        Some(FileVersionId::from_bytes([14; 16])?)
+    );
+    assert_eq!(stat.logical_length, Some(7));
+    assert_eq!(stat.name.display(), "Report");
+    assert_eq!(stat.entry_generation, 1);
+    let observed = service
+        .authority
+        .last_request
+        .get()
+        .ok_or_else(|| std::io::Error::other("authority did not record stat"))?;
+    assert_eq!(observed.requested_rights, Rights::READ_ATTRIBUTES);
+
+    allowed.set(false);
+    assert!(matches!(
+        service.stat_namespace(context(request.observed_at)?, &request),
+        Err(AuthorisedFilesystemError::Authority(TestAuthorityError))
+    ));
+    Ok(())
+}
+
+#[test]
+fn directory_pages_are_immutable_bounded_and_reauthorised_before_each_page()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    publish_additional_file(directory.path(), "Alpha", 30, 5, 35, 34)?;
+    let allowed = Rc::new(Cell::new(true));
+    let authority = TestAuthority::new(Rc::clone(&allowed), PrincipalId::from_bytes([18; 16])?);
+    let service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+    let service = AuthorisedFilesystemService::new(service, authority);
+    let mut request = NamespaceListRequest {
+        branch_id: BranchId::from_bytes([11; 16])?,
+        volume_id: VolumeId::from_bytes([12; 16])?,
+        directory_path: None,
+        cursor: None,
+        maximum_results: 1,
+        observed_at: UnixMicros::new(30),
+    };
+
+    let first = service.list_namespace(context(request.observed_at)?, &request)?;
+    assert_eq!(first.entries.len(), 1);
+    let first_cursor = first
+        .next_cursor
+        .clone()
+        .ok_or_else(|| std::io::Error::other("first page omitted continuation"))?;
+    request.cursor = Some(first_cursor.clone());
+    let second = service.list_namespace(context(request.observed_at)?, &request)?;
+    assert_eq!(second.entries.len(), 1);
+    assert!(second.next_cursor.is_none());
+    let mut names = [
+        first.entries[0].name.display().to_owned(),
+        second.entries[0].name.display().to_owned(),
+    ];
+    names.sort();
+    assert_eq!(names, ["Alpha", "Report"]);
+    let observed = service
+        .authority
+        .last_request
+        .get()
+        .ok_or_else(|| std::io::Error::other("authority did not record list"))?;
+    assert_eq!(observed.object_id, ObjectId::from_bytes([2; 16])?);
+    assert_eq!(observed.requested_rights, Rights::LIST);
+
+    publish_additional_file(directory.path(), "Zulu", 40, 35, 45, 44)?;
+    request.cursor = Some(first_cursor);
+    assert!(matches!(
+        service.list_namespace(context(request.observed_at)?, &request),
+        Err(AuthorisedFilesystemError::Query(
+            NamespaceQueryError::StaleCursor
+        ))
+    ));
+    request.cursor = None;
+    allowed.set(false);
+    assert!(matches!(
+        service.list_namespace(context(request.observed_at)?, &request),
         Err(AuthorisedFilesystemError::Authority(TestAuthorityError))
     ));
     Ok(())
@@ -334,6 +437,59 @@ fn publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
         )?,
         entry_generation: 1,
     })
+}
+
+fn publish_additional_file(
+    state: &std::path::Path,
+    name: &str,
+    identity: u8,
+    expected_commit: u8,
+    namespace_commit: u8,
+    root_revision: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = VersionPublicationStore::open(state, UnixMicros::new(2))?;
+    let publication = RootFilePublication {
+        file: FilePublication {
+            operation_id: OperationId::from_bytes([identity; 16])?,
+            branch_id: BranchId::from_bytes([11; 16])?,
+            volume_id: VolumeId::from_bytes([12; 16])?,
+            object_id: ObjectId::from_bytes([identity + 1; 16])?,
+            expected_current_version_id: None,
+            version_id: FileVersionId::from_bytes([identity + 2; 16])?,
+            parent_version_id: None,
+            retain_superseded_history: true,
+            retention_policy_sequence: 1,
+            manifest: ManifestPublication {
+                manifest_id: ContentManifestId::from_bytes([identity + 3; 16])?,
+                format_version: 1,
+                logical_length: 0,
+                content_digest: blake3::hash(&[]).into(),
+                root_digest: [identity + 4; 32],
+            },
+            created_by: PrincipalId::from_bytes([18; 16])?,
+            created_at: UnixMicros::new(i64::from(identity)),
+        },
+        root_object_id: ObjectId::from_bytes([2; 16])?,
+        expected_namespace_commit_id: Some(NamespaceCommitId::from_bytes([expected_commit; 16])?),
+        expected_file_object_revision_id: None,
+        file_object_revision_id: ObjectRevisionId::from_bytes([identity + 5; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([root_revision; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([namespace_commit; 16])?,
+        path: NamespacePublicationPath::new(
+            NamespacePath::from_components([name], NamespaceLimits::PORTABLE)?,
+            Vec::new(),
+        )?,
+        entry_generation: 1,
+    };
+    let head = store.namespace_head(
+        BranchId::from_bytes([11; 16])?,
+        VolumeId::from_bytes([12; 16])?,
+    )?;
+    if head.is_none() {
+        return Err(std::io::Error::other("missing seed head").into());
+    }
+    store.publish_root_file(&publication)?;
+    Ok(())
 }
 
 struct UnusedPublisher;
