@@ -20,6 +20,8 @@ mod federation_filesystem_history;
 mod federation_grant_authority;
 mod federation_history_object_exchange;
 mod federation_history_object_source;
+mod federation_history_receiver;
+mod federation_history_sync;
 mod federation_resource_wire;
 mod federation_session;
 mod filesystem_authority;
@@ -106,6 +108,12 @@ pub use federation_history_object_exchange::{
 pub use federation_history_object_source::{
     FederationHistoryObject, FederationHistoryObjectFuture, FederationHistoryObjectQuery,
     FederationHistoryObjectSource, FederationHistoryObjectSourceError,
+};
+pub use federation_history_receiver::{
+    FederationHistoryReceiveError, FederationHistoryReceiveFuture, FederationHistoryReceiver,
+};
+pub use federation_history_sync::{
+    FederationHistorySyncError, FederationHistorySyncOutcome, FederationHistorySyncRequest,
 };
 pub use federation_resource_wire::{
     FederationResourceWireError, version_federation_resource_scope,
