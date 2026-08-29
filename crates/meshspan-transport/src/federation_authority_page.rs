@@ -6,12 +6,13 @@ use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use meshspan_domain::UnixMicros;
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
-    FederationAuthorityPage, FederationEnvelope, FederationHeader, ProtocolVersion,
-    VersionedPayload,
+    FederationAuthorityPage, FederationEnvelope, FederationHeader, FetchFederationAuthority,
+    ProtocolVersion, VersionedPayload,
 };
 use meshspan_protocol::{
     ValidatedFederationEnvelope, WireLimits, encode_federation_frame,
-    federation_authority_page_digest_payload, federation_authority_page_signing_payload,
+    federation_authority_fetch_signing_payload, federation_authority_page_digest_payload,
+    federation_authority_page_signing_payload,
 };
 use sha2::{Digest, Sha256};
 
@@ -20,25 +21,153 @@ use crate::{
     FederationReplayGuard, TransportError,
 };
 
-/// Fresh correlation and anti-replay fields for one authority-page response.
+/// Correlation, deadline and one side's anti-replay value for an authority exchange.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FederationAuthorityPageContext {
+pub struct FederationAuthorityContext {
     /// Negotiated exact protocol version.
     pub version: ProtocolVersion,
-    /// Request correlation identity copied from the fetch request.
+    /// Request correlation identity shared by both sides.
     pub request_id: [u8; 16],
-    /// Idempotent fetch operation identity copied from the request.
+    /// Idempotent fetch operation identity shared by both sides.
     pub operation_id: [u8; 16],
     /// End-to-end trace identity copied from the request.
     pub trace_id: [u8; 16],
     /// Authoritative deadline shared with the request.
     pub deadline: UnixMicros,
-    /// Fresh response nonce consumed independently from the request nonce.
+    /// Fresh nonce for this individual envelope.
     pub replay_nonce: [u8; 32],
 }
 
-impl FederationAuthorityPageContext {
-    /// Constructs a complete response context.
+/// Signed authority fetch plus the exact state needed to authenticate its response.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutboundFederationAuthorityFetch {
+    envelope: FederationEnvelope,
+    expectation: FederationAuthorityPageExpectation,
+}
+
+impl OutboundFederationAuthorityFetch {
+    /// Returns the exact signed wire request.
+    #[must_use]
+    pub const fn envelope(&self) -> &FederationEnvelope {
+        &self.envelope
+    }
+
+    /// Returns the exact local expectation for the corresponding page.
+    #[must_use]
+    pub const fn expectation(&self) -> FederationAuthorityPageExpectation {
+        self.expectation
+    }
+}
+
+/// Authority fetch whose TLS peer, relationship fence, signature and nonce all agree.
+#[derive(Clone, Debug)]
+pub struct AuthenticatedFederationAuthorityFetch {
+    binding: crate::FederationPeerBinding,
+    header: FederationHeader,
+    request: FetchFederationAuthority,
+}
+
+impl AuthenticatedFederationAuthorityFetch {
+    /// Returns the exact admitted relationship.
+    #[must_use]
+    pub const fn relationship_id(&self) -> meshspan_domain::FederationRelationshipId {
+        self.binding.relationship_id
+    }
+
+    /// Returns the certificate-authenticated requesting swarm.
+    #[must_use]
+    pub const fn remote_mesh_id(&self) -> meshspan_domain::MeshId {
+        self.binding.remote_mesh_id
+    }
+
+    /// Returns the peer's last applied authority revision; zero requests an initial snapshot.
+    #[must_use]
+    pub const fn after_revision(&self) -> u64 {
+        self.request.after_revision
+    }
+
+    /// Returns the opaque continuation supplied by the peer.
+    #[must_use]
+    pub fn cursor(&self) -> &[u8] {
+        &self.request.cursor
+    }
+
+    /// Returns the peer's requested positive page bound.
+    #[must_use]
+    pub const fn limit(&self) -> u32 {
+        self.request.limit
+    }
+
+    /// Constructs an exactly correlated response context with a fresh responder nonce.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero or reflected response nonce.
+    pub fn response_context(
+        &self,
+        replay_nonce: [u8; 32],
+    ) -> Result<FederationAuthorityContext, TransportError> {
+        if replay_nonce == exact::<32>(&self.header.replay_nonce)? {
+            return Err(TransportError::InvalidConfiguration);
+        }
+        FederationAuthorityContext::new(
+            self.header
+                .version
+                .ok_or(TransportError::InvalidConfiguration)?,
+            exact(&self.header.request_id)?,
+            exact(&self.header.operation_id)?,
+            exact(&self.header.trace_id)?,
+            UnixMicros::new(self.header.deadline_unix_micros),
+            replay_nonce,
+        )
+    }
+}
+
+/// Constructs and signs one bounded authority fetch from current committed local identity.
+///
+/// # Errors
+///
+/// Rejects stale deadlines, invalid page bounds or an envelope exceeding wire limits.
+pub fn signed_federation_authority_fetch(
+    identity: &FederationLocalIdentity<'_>,
+    context: FederationAuthorityContext,
+    after_revision: u64,
+    cursor: Vec<u8>,
+    limit: u32,
+    limits: WireLimits,
+    now: UnixMicros,
+) -> Result<OutboundFederationAuthorityFetch, TransportError> {
+    let binding = identity.binding();
+    if context.deadline <= now || context.deadline > binding.valid_until {
+        return Err(TransportError::InvalidConfiguration);
+    }
+    let header = authority_header(binding, context);
+    let mut request = FetchFederationAuthority {
+        after_revision,
+        cursor,
+        limit,
+        signature: Vec::new(),
+    };
+    request.signature = identity
+        .signing_key()
+        .sign(&federation_authority_fetch_signing_payload(
+            &header, &request,
+        ))
+        .to_bytes()
+        .to_vec();
+    let envelope = FederationEnvelope {
+        header: Some(header),
+        message: Some(Message::FetchAuthority(request)),
+    };
+    encode_federation_frame(&envelope, limits)?;
+    Ok(OutboundFederationAuthorityFetch {
+        envelope,
+        expectation: FederationAuthorityPageExpectation::new(binding, context, after_revision),
+    })
+}
+
+impl FederationAuthorityContext {
+    /// Constructs a complete request or response context.
     ///
     /// # Errors
     ///
@@ -76,7 +205,7 @@ impl FederationAuthorityPageContext {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FederationAuthorityPageExpectation {
     local_identity: FederationLocalIdentityBinding,
-    context: FederationAuthorityPageContext,
+    request_context: FederationAuthorityContext,
     minimum_authority_revision: u64,
 }
 
@@ -85,12 +214,12 @@ impl FederationAuthorityPageExpectation {
     #[must_use]
     pub const fn new(
         local_identity: FederationLocalIdentityBinding,
-        context: FederationAuthorityPageContext,
+        request_context: FederationAuthorityContext,
         minimum_authority_revision: u64,
     ) -> Self {
         Self {
             local_identity,
-            context,
+            request_context,
             minimum_authority_revision,
         }
     }
@@ -143,7 +272,7 @@ impl AuthenticatedFederationAuthorityPage {
 /// Rejects stale deadlines, zero revisions or any page exceeding the declared wire bounds.
 pub fn signed_federation_authority_page(
     identity: &FederationLocalIdentity<'_>,
-    context: FederationAuthorityPageContext,
+    context: FederationAuthorityContext,
     authority_revision: u64,
     records: Vec<VersionedPayload>,
     next_cursor: Vec<u8>,
@@ -155,18 +284,7 @@ pub fn signed_federation_authority_page(
     {
         return Err(TransportError::InvalidConfiguration);
     }
-    let header = FederationHeader {
-        version: Some(context.version),
-        relationship_id: binding.relationship_id.as_bytes().to_vec(),
-        sender_mesh_id: binding.local_mesh_id.as_bytes().to_vec(),
-        recipient_mesh_id: binding.remote_mesh_id.as_bytes().to_vec(),
-        request_id: context.request_id.to_vec(),
-        operation_id: context.operation_id.to_vec(),
-        authority_epoch: binding.authority_epoch,
-        deadline_unix_micros: context.deadline.get(),
-        trace_id: context.trace_id.to_vec(),
-        replay_nonce: context.replay_nonce.to_vec(),
-    };
+    let header = authority_header(binding, context);
     let mut page = FederationAuthorityPage {
         authority_revision,
         records,
@@ -188,7 +306,61 @@ pub fn signed_federation_authority_page(
     Ok(OutboundFederationAuthorityPage { envelope })
 }
 
+fn authority_header(
+    binding: FederationLocalIdentityBinding,
+    context: FederationAuthorityContext,
+) -> FederationHeader {
+    FederationHeader {
+        version: Some(context.version),
+        relationship_id: binding.relationship_id.as_bytes().to_vec(),
+        sender_mesh_id: binding.local_mesh_id.as_bytes().to_vec(),
+        recipient_mesh_id: binding.remote_mesh_id.as_bytes().to_vec(),
+        request_id: context.request_id.to_vec(),
+        operation_id: context.operation_id.to_vec(),
+        authority_epoch: binding.authority_epoch,
+        deadline_unix_micros: context.deadline.get(),
+        trace_id: context.trace_id.to_vec(),
+        replay_nonce: context.replay_nonce.to_vec(),
+    }
+}
+
 impl FederationPeerRegistry {
+    /// Authenticates one signed authority fetch against current TLS and relationship authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale authority, route substitution, invalid signatures or replay.
+    pub fn authenticate_authority_fetch(
+        &self,
+        connection: &quinn::Connection,
+        envelope: &ValidatedFederationEnvelope,
+        now: UnixMicros,
+        replay: &mut FederationReplayGuard,
+    ) -> Result<AuthenticatedFederationAuthorityFetch, TransportError> {
+        let (binding, _) = self.connection_binding(connection, now)?;
+        let envelope = envelope.as_inner();
+        let header = envelope
+            .header
+            .as_ref()
+            .ok_or(TransportError::UntrustedFederationPeer)?;
+        let Message::FetchAuthority(request) = envelope
+            .message
+            .as_ref()
+            .ok_or(TransportError::UntrustedFederationPeer)?
+        else {
+            return Err(TransportError::UntrustedFederationPeer);
+        };
+        verify_authority_fetch_shape(binding, header)?;
+        replay.check(binding.relationship_id, header, now)?;
+        verify_authority_fetch_signature(binding.verifying_key, header, request)?;
+        replay.record(binding.relationship_id, header)?;
+        Ok(AuthenticatedFederationAuthorityFetch {
+            binding,
+            header: header.clone(),
+            request: request.clone(),
+        })
+    }
+
     /// Authenticates one authority page against current TLS and relationship authority.
     ///
     /// # Errors
@@ -224,6 +396,36 @@ impl FederationPeerRegistry {
     }
 }
 
+fn verify_authority_fetch_shape(
+    binding: crate::FederationPeerBinding,
+    header: &FederationHeader,
+) -> Result<(), TransportError> {
+    let valid = header.relationship_id == binding.relationship_id.as_bytes()
+        && header.sender_mesh_id == binding.remote_mesh_id.as_bytes()
+        && header.recipient_mesh_id == binding.local_mesh_id.as_bytes()
+        && header.authority_epoch == binding.authority_epoch;
+    if valid {
+        Ok(())
+    } else {
+        Err(TransportError::UntrustedFederationPeer)
+    }
+}
+
+fn verify_authority_fetch_signature(
+    verifying_key: [u8; 32],
+    header: &FederationHeader,
+    request: &FetchFederationAuthority,
+) -> Result<(), TransportError> {
+    let signature = exact::<64>(&request.signature)?;
+    VerifyingKey::from_bytes(&verifying_key)
+        .map_err(|_| TransportError::UntrustedFederationPeer)?
+        .verify_strict(
+            &federation_authority_fetch_signing_payload(header, request),
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| TransportError::UntrustedFederationPeer)
+}
+
 fn verify_authority_page_shape(
     binding: crate::FederationPeerBinding,
     header: &FederationHeader,
@@ -231,7 +433,7 @@ fn verify_authority_page_shape(
     expected: FederationAuthorityPageExpectation,
 ) -> Result<(), TransportError> {
     let local = expected.local_identity;
-    let context = expected.context;
+    let context = expected.request_context;
     let valid = binding.relationship_id == local.relationship_id
         && binding.local_mesh_id == local.local_mesh_id
         && binding.remote_mesh_id == local.remote_mesh_id
@@ -245,7 +447,7 @@ fn verify_authority_page_shape(
         && exact::<16>(&header.operation_id).ok() == Some(context.operation_id)
         && exact::<16>(&header.trace_id).ok() == Some(context.trace_id)
         && header.deadline_unix_micros == context.deadline.get()
-        && exact::<32>(&header.replay_nonce).ok() == Some(context.replay_nonce)
+        && exact::<32>(&header.replay_nonce).is_ok_and(|nonce| nonce != context.replay_nonce)
         && page.authority_revision >= expected.minimum_authority_revision;
     if valid {
         Ok(())

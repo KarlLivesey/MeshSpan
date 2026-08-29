@@ -4,12 +4,21 @@
 
 use prost::Message;
 
-use crate::v1::{FederationAuthorityPage, FederationHeader, FederationHello, FederationWelcome};
+use crate::v1::{
+    FederationAuthorityPage, FederationHeader, FederationHello, FederationWelcome,
+    FetchFederatedBranchPage, FetchFederatedStorageInventory, FetchFederationAuthority,
+    RequestFederatedStorageCapability,
+};
 
 const HELLO_DOMAIN: &[u8] = b"meshspan.federation.hello.v1\0";
 const WELCOME_DOMAIN: &[u8] = b"meshspan.federation.welcome.v1\0";
 const AUTHORITY_PAGE_DOMAIN: &[u8] = b"meshspan.federation.authority-page.v1\0";
 const AUTHORITY_PAGE_DIGEST_DOMAIN: &[u8] = b"meshspan.federation.authority-page-digest.v1\0";
+const AUTHORITY_FETCH_DOMAIN: &[u8] = b"meshspan.federation.authority-fetch.v1\0";
+const BRANCH_FETCH_DOMAIN: &[u8] = b"meshspan.federation.branch-fetch.v1\0";
+const STORAGE_CAPABILITY_REQUEST_DOMAIN: &[u8] =
+    b"meshspan.federation.storage-capability-request.v1\0";
+const STORAGE_INVENTORY_FETCH_DOMAIN: &[u8] = b"meshspan.federation.storage-inventory-fetch.v1\0";
 
 /// Returns the exact bytes signed by a federation hello identity.
 #[must_use]
@@ -60,6 +69,50 @@ pub fn federation_authority_page_digest_payload(page: &FederationAuthorityPage) 
     payload.extend_from_slice(AUTHORITY_PAGE_DIGEST_DOMAIN);
     append_part(&mut payload, &encoded);
     payload
+}
+
+/// Returns the exact bytes signed by an authority fetch identity.
+#[must_use]
+pub fn federation_authority_fetch_signing_payload(
+    header: &FederationHeader,
+    request: &FetchFederationAuthority,
+) -> Vec<u8> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    signing_payload(AUTHORITY_FETCH_DOMAIN, header, &unsigned)
+}
+
+/// Returns the exact bytes signed by a federated branch-page fetch identity.
+#[must_use]
+pub fn federation_branch_fetch_signing_payload(
+    header: &FederationHeader,
+    request: &FetchFederatedBranchPage,
+) -> Vec<u8> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    signing_payload(BRANCH_FETCH_DOMAIN, header, &unsigned)
+}
+
+/// Returns the exact bytes signed by a remote-storage capability requester.
+#[must_use]
+pub fn federation_storage_capability_request_signing_payload(
+    header: &FederationHeader,
+    request: &RequestFederatedStorageCapability,
+) -> Vec<u8> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    signing_payload(STORAGE_CAPABILITY_REQUEST_DOMAIN, header, &unsigned)
+}
+
+/// Returns the exact bytes signed by a remote-storage inventory fetch identity.
+#[must_use]
+pub fn federation_storage_inventory_fetch_signing_payload(
+    header: &FederationHeader,
+    request: &FetchFederatedStorageInventory,
+) -> Vec<u8> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    signing_payload(STORAGE_INVENTORY_FETCH_DOMAIN, header, &unsigned)
 }
 
 fn signing_payload(domain: &[u8], header: &FederationHeader, message: &impl Message) -> Vec<u8> {
