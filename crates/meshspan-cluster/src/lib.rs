@@ -10,6 +10,7 @@ mod convergence;
 mod driver;
 mod federation_authority;
 mod federation_authority_exchange;
+mod federation_authority_page_source;
 mod federation_session;
 mod filesystem_authority;
 mod filesystem_convergence;
@@ -58,9 +59,12 @@ pub use federation_authority::{
     FederationAuthorityError, FederationConnectionAuthority, federation_connection_authority,
 };
 pub use federation_authority_exchange::{
-    FederationAuthorityFetchRequest, FederationAuthorityPageQuery, FederationAuthorityPageRecords,
-    FederationAuthorityPageServeRequest, FederationAuthorityPageSource,
-    FederationAuthorityPageSourceError, ServedFederationAuthorityPage,
+    FederationAuthorityFetchRequest, FederationAuthorityPageServeRequest,
+    ServedFederationAuthorityPage,
+};
+pub use federation_authority_page_source::{
+    FederationAuthorityPageQuery, FederationAuthorityPageRecords, FederationAuthorityPageSource,
+    FederationAuthorityPageSourceError,
 };
 pub use federation_session::{
     FederationAcceptRequest, FederationAuthoritySource, FederationDialRequest,
