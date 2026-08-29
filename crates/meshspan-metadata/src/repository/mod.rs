@@ -22,6 +22,7 @@ mod federation_grant;
 mod federation_grant_cursor;
 mod federation_grant_evidence;
 mod federation_grant_page;
+mod federation_grant_record;
 #[cfg(test)]
 mod federation_grant_tests;
 mod federation_principal;
@@ -97,6 +98,7 @@ pub use federation_grant_evidence::{
     FederationGrantRecord, FederationGrantState, FederationGrantTermination,
     FederationGrantTerminationKind,
 };
+pub use federation_grant_record::FederationGrantRecordCodecError;
 pub use federation_principal::FederatedPrincipalProjectionRecord;
 pub use federation_quarantine::{FederationQuarantineRecord, FederationQuarantineState};
 pub use federation_query::{
