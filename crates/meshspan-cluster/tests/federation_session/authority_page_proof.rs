@@ -25,6 +25,7 @@ use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_transport::{FederationExchangeContext, FederationReplayGuard};
 use tempfile::tempdir;
 
+use super::branch_page_proof::prove_branch_page_service;
 use super::{NOW, SessionProof, prove_admitted_session, replay_guard};
 
 struct CompleteAuthorityStream {
@@ -71,6 +72,7 @@ pub(super) async fn prove_initial_authority(
     assert_eq!(snapshot.relationship.relationship.authority_epoch, 1);
     assert_eq!(snapshot.relationship.local_identity.identity.generation, 1);
     assert!(page.next_cursor().is_empty());
+    prove_branch_page_service(proof).await?;
     Ok(())
 }
 
