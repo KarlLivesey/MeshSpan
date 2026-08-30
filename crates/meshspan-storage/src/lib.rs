@@ -23,15 +23,3 @@ pub use provider::{
     FolderShardStore, FolderShardStoreError, RecoveryPage, StoragePermitVerifier,
     TombstoneRecoveryPage,
 };
-
-use meshspan_domain::{EntropyError, RandomSource};
-
-/// Operating-system cryptographic entropy for production marker and permit material.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct OperatingSystemRandom;
-
-impl RandomSource for OperatingSystemRandom {
-    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
-        getrandom::fill(destination).map_err(|_| EntropyError)
-    }
-}
