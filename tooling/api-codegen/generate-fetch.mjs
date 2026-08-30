@@ -346,10 +346,22 @@ function readRequiredRoutes(document) {
 }
 
 function readSessionOperation(operation) {
-  const responses = requireRecord(operation.operation.responses, "createSession.responses");
-  const created = requireRecord(responses["201"], "createSession.responses.201");
-  const headers = requireRecord(created.headers, "createSession.responses.201.headers");
-  const csrf = requireRecord(headers["MeshSpan-CSRF-Token"], "createSession CSRF header");
+  const responses = requireRecord(
+    operation.operation.responses,
+    "createSession.responses",
+  );
+  const created = requireRecord(
+    responses["201"],
+    "createSession.responses.201",
+  );
+  const headers = requireRecord(
+    created.headers,
+    "createSession.responses.201.headers",
+  );
+  const csrf = requireRecord(
+    headers["MeshSpan-CSRF-Token"],
+    "createSession CSRF header",
+  );
   const schema = requireRecord(csrf.schema, "createSession CSRF header schema");
   if (typeof schema.pattern !== "string" || schema.pattern.length > 256) {
     throw new Error("createSession CSRF header requires one bounded pattern");
