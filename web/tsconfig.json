@@ -3,7 +3,7 @@
     "allowImportingTsExtensions": false,
     "exactOptionalPropertyTypes": true,
     "isolatedModules": true,
-    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "lib": ["ES2024", "ESNext.Temporal", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleDetection": "force",
     "moduleResolution": "Bundler",

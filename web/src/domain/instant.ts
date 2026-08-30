@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { Temporal } from "@js-temporal/polyfill";
-
 /** Converts one validated API epoch-microsecond value into a Temporal instant. */
 export function instantFromEpochMicroseconds(
   epochMicroseconds: number,
