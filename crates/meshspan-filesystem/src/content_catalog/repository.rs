@@ -120,6 +120,21 @@ pub(super) fn load_request(
         .map_err(Into::into)
 }
 
+pub(super) fn committed_operation_for_manifest(
+    connection: &Connection,
+    manifest_id: ContentManifestId,
+) -> Result<Option<OperationId>, ContentCatalogError> {
+    connection
+        .query_row(
+            "SELECT operation_id FROM content_publications
+             WHERE manifest_id = ?1 AND state = 2",
+            [manifest_id.as_bytes().as_slice()],
+            |row| decode_operation(&row.get::<_, Vec<u8>>(0)?),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
 pub(super) fn layout_is_sealed(
     connection: &Connection,
     operation_id: OperationId,
@@ -393,7 +408,7 @@ pub(super) fn load_content_layout_page(
     } else {
         None
     };
-    ContentLayoutTransferPage::new(chunks, next_index).map_err(|error| match error {
+    ContentLayoutTransferPage::from_untrusted(chunks, next_index).map_err(|error| match error {
         crate::ContentLayoutTransferError::BoundsExceeded => ContentCatalogError::InvalidInput,
         crate::ContentLayoutTransferError::Invalid => ContentCatalogError::Corrupt,
     })

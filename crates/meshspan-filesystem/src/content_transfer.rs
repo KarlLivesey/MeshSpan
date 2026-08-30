@@ -90,6 +90,28 @@ pub struct ContentLayoutTransferHeader {
 }
 
 impl ContentLayoutTransferHeader {
+    /// Revalidates one untrusted portable layout header before persistence or key use.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed geometry, missing versions and a receiver envelope not bound to the
+    /// advertised manifest.
+    pub fn from_untrusted(
+        manifest: ManifestPublication,
+        chunk_bytes: u64,
+        chunk_count: u64,
+        wrapped_key: WrappedContentKey,
+    ) -> Result<Self, ContentLayoutTransferError> {
+        let header = Self {
+            manifest,
+            chunk_bytes,
+            chunk_count,
+            wrapped_key,
+        };
+        header.validate()?;
+        Ok(header)
+    }
+
     pub(crate) const fn valid_shape(self) -> bool {
         self.manifest.format_version != 0
             && self.chunk_bytes != 0
@@ -134,7 +156,12 @@ pub struct ContentLayoutTransferPage {
 }
 
 impl ContentLayoutTransferPage {
-    pub(crate) fn new(
+    /// Revalidates one untrusted bounded page before it enters durable recovery state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty, excessive, discontinuous, malformed or contradictory page fields.
+    pub fn from_untrusted(
         chunks: Vec<ContentLayoutChunk>,
         next_index: Option<u64>,
     ) -> Result<Self, ContentLayoutTransferError> {

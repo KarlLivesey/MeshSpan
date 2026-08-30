@@ -16,6 +16,10 @@ mod federation_authority_sync;
 mod federation_branch_authority;
 mod federation_branch_exchange;
 mod federation_branch_page_source;
+mod federation_content_layout_exchange;
+mod federation_content_layout_source;
+mod federation_content_layout_wire;
+mod federation_filesystem_content;
 mod federation_filesystem_history;
 mod federation_grant_authority;
 mod federation_history_admission;
@@ -103,6 +107,21 @@ pub use federation_branch_page_source::{
     FederationBranchPageFuture, FederationBranchPageQuery, FederationBranchPageRecords,
     FederationBranchPageSource, FederationBranchPageSourceError,
 };
+pub use federation_content_layout_exchange::{
+    FederationContentLayoutFetchRequest, FederationContentLayoutFetchServices,
+    FederationContentLayoutServeRequest, FederationContentLayoutServices,
+    ReceivedFederationContentLayoutPage, ServedFederationContentLayoutPage,
+};
+pub use federation_content_layout_source::{
+    FederationContentLayoutFuture, FederationContentLayoutQuery, FederationContentLayoutRecords,
+    FederationContentLayoutSource, FederationContentLayoutSourceError,
+};
+pub use federation_content_layout_wire::{
+    FederationContentLayoutWireError, decode_federated_content_layout_chunk,
+    decode_federated_content_layout_header, version_federated_content_layout_chunk,
+    version_federated_content_layout_header,
+};
+pub use federation_filesystem_content::FilesystemFederationContentSource;
 pub use federation_filesystem_history::FilesystemFederationHistorySource;
 pub use federation_grant_authority::{
     EffectiveFederationGrantAuthority, EffectiveFederationGrantAuthorityError,

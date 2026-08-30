@@ -363,7 +363,7 @@ fn imported_layout_rejects_page_and_header_substitution() -> Result<(), Box<dyn 
     receiver.begin_layout_import(receiver_request, header)?;
     let mut substituted = page.chunks().to_vec();
     substituted[1].ciphertext_digest[0] ^= 1;
-    let substituted = ContentLayoutTransferPage::new(substituted, None)?;
+    let substituted = ContentLayoutTransferPage::from_untrusted(substituted, None)?;
     receiver.append_layout_import_page(receiver_request, header, &substituted)?;
     assert!(matches!(
         receiver.seal_layout_import(receiver_request, header),
@@ -381,7 +381,54 @@ fn imported_layout_rejects_page_and_header_substitution() -> Result<(), Box<dyn 
         ContentLayoutChunk::from(chunks[0]),
         ContentLayoutChunk::from(chunks[2]),
     ];
-    assert!(ContentLayoutTransferPage::new(discontinuous, None).is_err());
+    assert!(ContentLayoutTransferPage::from_untrusted(discontinuous, None).is_err());
+    Ok(())
+}
+
+#[test]
+fn committed_manifest_lookup_hides_incomplete_state_and_reconstructs_exact_reference()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let request = request()?;
+    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+    assert_eq!(
+        catalog.committed_content_by_manifest(request.manifest_id)?,
+        None
+    );
+    catalog.begin(request)?;
+    assert_eq!(
+        catalog.committed_content_by_manifest(request.manifest_id)?,
+        None
+    );
+    let chunks = chunks()?;
+    catalog.append_chunks(request, &chunks)?;
+    let manifest = catalog.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 6,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for chunk in chunks {
+        catalog.record_receipt(
+            request,
+            chunk.chunk_index,
+            receipt(chunk, manifest.root_digest)?,
+            UnixMicros::new(4),
+        )?;
+    }
+    catalog.finish(request, UnixMicros::new(5))?;
+    assert_eq!(
+        catalog.committed_content_by_manifest(request.manifest_id)?,
+        Some(PublishedContentReference {
+            publication_operation_id: request.operation_id,
+            manifest,
+        })
+    );
+    let unknown = meshspan_domain::ContentManifestId::from_bytes([99; 16])?;
+    assert_eq!(catalog.committed_content_by_manifest(unknown)?, None);
     Ok(())
 }
 

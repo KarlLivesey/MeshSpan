@@ -5,11 +5,11 @@
 use prost::Message;
 
 use crate::v1::{
-    FederatedBranchPage, FederatedHistoryObjectHeader, FederatedStorageCapability,
-    FederatedStorageInventoryPage, FederatedStorageReceipt, FederationAuthorityPage,
-    FederationHeader, FederationHello, FederationWelcome, FetchFederatedBranchPage,
-    FetchFederatedHistoryObject, FetchFederatedStorageInventory, FetchFederationAuthority,
-    RequestFederatedStorageCapability,
+    FederatedBranchPage, FederatedContentLayoutPage, FederatedHistoryObjectHeader,
+    FederatedStorageCapability, FederatedStorageInventoryPage, FederatedStorageReceipt,
+    FederationAuthorityPage, FederationHeader, FederationHello, FederationWelcome,
+    FetchFederatedBranchPage, FetchFederatedContentLayout, FetchFederatedHistoryObject,
+    FetchFederatedStorageInventory, FetchFederationAuthority, RequestFederatedStorageCapability,
 };
 
 const HELLO_DOMAIN: &[u8] = b"meshspan.federation.hello.v1\0";
@@ -22,6 +22,10 @@ const BRANCH_PAGE_DOMAIN: &[u8] = b"meshspan.federation.branch-page.v1\0";
 const BRANCH_PAGE_DIGEST_DOMAIN: &[u8] = b"meshspan.federation.branch-page-digest.v1\0";
 const HISTORY_OBJECT_FETCH_DOMAIN: &[u8] = b"meshspan.federation.history-object-fetch.v1\0";
 const HISTORY_OBJECT_HEADER_DOMAIN: &[u8] = b"meshspan.federation.history-object-header.v1\0";
+const CONTENT_LAYOUT_FETCH_DOMAIN: &[u8] = b"meshspan.federation.content-layout-fetch.v1\0";
+const CONTENT_LAYOUT_PAGE_DOMAIN: &[u8] = b"meshspan.federation.content-layout-page.v1\0";
+const CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN: &[u8] =
+    b"meshspan.federation.content-layout-page-digest.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DOMAIN: &[u8] =
     b"meshspan.federation.storage-capability-request.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DIGEST_DOMAIN: &[u8] =
@@ -159,6 +163,46 @@ pub fn federation_history_object_header_signing_payload(
     signing_payload(HISTORY_OBJECT_HEADER_DOMAIN, header, &unsigned)
 }
 
+/// Returns the exact bytes signed by one federated content-layout requester.
+#[must_use]
+pub fn federation_content_layout_fetch_signing_payload(
+    header: &FederationHeader,
+    request: &FetchFederatedContentLayout,
+) -> Vec<u8> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    signing_payload(CONTENT_LAYOUT_FETCH_DOMAIN, header, &unsigned)
+}
+
+/// Returns the exact bytes signed by one federated content-layout page issuer.
+#[must_use]
+pub fn federation_content_layout_page_signing_payload(
+    header: &FederationHeader,
+    page: &FederatedContentLayoutPage,
+) -> Vec<u8> {
+    let mut unsigned = page.clone();
+    unsigned.signature.clear();
+    signing_payload(CONTENT_LAYOUT_PAGE_DOMAIN, header, &unsigned)
+}
+
+/// Returns canonical domain-separated layout-page content for the embedded digest.
+#[must_use]
+pub fn federation_content_layout_page_digest_payload(page: &FederatedContentLayoutPage) -> Vec<u8> {
+    let mut unsigned = page.clone();
+    unsigned.page_digest.clear();
+    unsigned.signature.clear();
+    let encoded = unsigned.encode_to_vec();
+    let mut payload = Vec::with_capacity(
+        CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN
+            .len()
+            .saturating_add(8)
+            .saturating_add(encoded.len()),
+    );
+    payload.extend_from_slice(CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN);
+    append_part(&mut payload, &encoded);
+    payload
+}
+
 /// Returns the exact bytes signed by a remote-storage capability requester.
 #[must_use]
 pub fn federation_storage_capability_request_signing_payload(
@@ -294,16 +338,18 @@ fn append_part(payload: &mut Vec<u8>, part: &[u8]) {
 #[cfg(test)]
 mod tests {
     use crate::v1::{
-        FederatedBranchPage, FederatedStorageCapability, FederatedStorageInventoryPage,
-        FederatedStorageReceipt, FederationAuthorityPage, FederationHeader, FederationHello,
-        ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability, ShardIdentity,
-        VersionedPayload,
+        FederatedBranchPage, FederatedContentLayoutPage, FederatedStorageCapability,
+        FederatedStorageInventoryPage, FederatedStorageReceipt, FederationAuthorityPage,
+        FederationHeader, FederationHello, ProtocolVersion, RemoteShardAction,
+        RequestFederatedStorageCapability, ShardIdentity, VersionedPayload,
     };
 
     use super::{
         federation_authority_page_digest_payload, federation_authority_page_signing_payload,
         federation_branch_page_digest_payload, federation_branch_page_signing_payload,
-        federation_hello_signing_payload, federation_storage_capability_digest_payload,
+        federation_content_layout_page_digest_payload,
+        federation_content_layout_page_signing_payload, federation_hello_signing_payload,
+        federation_storage_capability_digest_payload,
         federation_storage_capability_request_digest_payload,
         federation_storage_capability_request_signing_payload,
         federation_storage_capability_signing_payload,
@@ -450,6 +496,51 @@ mod tests {
         page.immutable_object_digests[0][0] ^= 1;
         page.export_token[0] ^= 1;
         assert_ne!(federation_branch_page_digest_payload(&page), digest);
+    }
+
+    #[test]
+    fn content_layout_digest_and_signature_bind_header_chunks_and_manifest() {
+        let header = storage_header();
+        let mut page = FederatedContentLayoutPage {
+            grant_id: vec![30; 16],
+            resource_scope: Some(VersionedPayload {
+                format_version: 1,
+                canonical_bytes: vec![31],
+            }),
+            manifest_id: vec![32; 16],
+            export_token: vec![38; 32],
+            manifest_object_digest: vec![39; 32],
+            layout_header: Some(VersionedPayload {
+                format_version: 1,
+                canonical_bytes: vec![33],
+            }),
+            chunks: vec![VersionedPayload {
+                format_version: 1,
+                canonical_bytes: vec![34],
+            }],
+            next_cursor: vec![35; 16],
+            page_digest: vec![36; 32],
+            signature: vec![37; 64],
+        };
+        let digest = federation_content_layout_page_digest_payload(&page);
+        let signing = federation_content_layout_page_signing_payload(&header, &page);
+        page.signature[0] ^= 1;
+        assert_eq!(federation_content_layout_page_digest_payload(&page), digest);
+        assert_eq!(
+            federation_content_layout_page_signing_payload(&header, &page),
+            signing
+        );
+        page.page_digest[0] ^= 1;
+        assert_eq!(federation_content_layout_page_digest_payload(&page), digest);
+        assert_ne!(
+            federation_content_layout_page_signing_payload(&header, &page),
+            signing
+        );
+        page.chunks[0].canonical_bytes[0] ^= 1;
+        assert_ne!(federation_content_layout_page_digest_payload(&page), digest);
+        page.chunks[0].canonical_bytes[0] ^= 1;
+        page.manifest_id[0] ^= 1;
+        assert_ne!(federation_content_layout_page_digest_payload(&page), digest);
     }
 
     fn storage_header() -> FederationHeader {
