@@ -104,8 +104,156 @@
       },
       "CreateSessionRequest": {
         "additionalProperties": false,
-        "description": "Input for the initial password authentication ceremony.",
+        "description": "Input for exchanging accepted authentication proofs for a session.",
         "properties": {
+          "additional_factor": {
+            "anyOf": [
+              {
+                "description": "Optional recovery or step-up proof supplied beside the primary method.",
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "description": "Current time-based one-time code.",
+                    "properties": {
+                      "code": {
+                        "description": "Six-to-eight digit TOTP value.",
+                        "maxLength": 8,
+                        "minLength": 6,
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "method": {
+                        "const": "totp",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "method",
+                      "code"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "description": "One single-use recovery code.",
+                    "properties": {
+                      "code": {
+                        "description": "Opaque recovery code consumed atomically on success.",
+                        "maxLength": 128,
+                        "minLength": 8,
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "method": {
+                        "const": "recovery_code",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "method",
+                      "code"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional TOTP or recovery-code proof when policy requires another factor."
+          },
+          "authentication": {
+            "description": "Primary API-key or passkey proof. It identifies the principal server-side.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "One ordinary login-capable `MeshSpan` API key.",
+                "properties": {
+                  "method": {
+                    "const": "api_key",
+                    "type": "string"
+                  },
+                  "secret": {
+                    "description": "Opaque API-key secret. The key identity and scopes are resolved server-side.",
+                    "maxLength": 512,
+                    "minLength": 16,
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "method",
+                  "secret"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One complete assertion bound to a previously issued `WebAuthn` challenge.",
+                "properties": {
+                  "authenticator_data": {
+                    "description": "Base64url-encoded authenticator data.",
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "challenge_id": {
+                    "description": "Server-issued challenge identity consumed exactly once.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "client_data_json": {
+                    "description": "Base64url-encoded `WebAuthn` client data JSON.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "credential_id": {
+                    "description": "Base64url-encoded `WebAuthn` credential identity.",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "method": {
+                    "const": "passkey",
+                    "type": "string"
+                  },
+                  "signature": {
+                    "description": "Base64url-encoded assertion signature.",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "user_handle": {
+                    "description": "Base64url-encoded user handle, null when the authenticator omitted it.",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "method",
+                  "challenge_id",
+                  "credential_id",
+                  "client_data_json",
+                  "authenticator_data",
+                  "signature"
+                ],
+                "type": "object"
+              }
+            ]
+          },
           "client_label": {
             "description": "Optional client label: omitted means unchanged and null means clear.",
             "maxLength": 80,
@@ -116,26 +264,12 @@
               "null"
             ]
           },
-          "login_name": {
-            "description": "Mesh-wide canonical login name supplied by the user.",
-            "maxLength": 254,
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
-            "type": "string"
-          },
           "operation_id": {
             "description": "Client-generated idempotency key.",
             "maxLength": 36,
             "minLength": 36,
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "type": "string"
-          },
-          "password": {
-            "description": "Secret password. It is accepted only in the request and must never be logged.",
-            "maxLength": 1024,
-            "minLength": 1,
-            "type": "string",
-            "writeOnly": true
           },
           "remember": {
             "description": "Whether the caller requests the policy's longer-lived session profile.",
@@ -144,8 +278,7 @@
         },
         "required": [
           "operation_id",
-          "login_name",
-          "password",
+          "authentication",
           "remember"
         ],
         "title": "CreateSessionRequest",

@@ -9,7 +9,8 @@ mod validation;
 
 pub use model::{
     ApiError, ApiErrorCode, AssuranceLevel, CreateSessionRequest, CreateSessionResponse,
-    HealthResponse, HealthStatus, NullableField, OperationId, SessionId,
+    HealthResponse, HealthStatus, NullableField, OperationId, SessionAdditionalFactor,
+    SessionAuthentication, SessionId,
 };
 pub use openapi::{OPENAPI_PATH, OpenApiDocument, generate_openapi};
 pub use validation::{

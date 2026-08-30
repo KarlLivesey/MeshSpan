@@ -57,14 +57,18 @@ fn shared_fixtures_match_rust_request_and_response_boundaries() {
 fn request_decoder_preserves_missing_and_explicit_null() {
     let missing = decode_request(&json!({
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "not-a-real-password",
+        "authentication": {
+            "method": "api_key",
+            "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "remember": false
     }));
     let explicit_null = decode_request(&json!({
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "not-a-real-password",
+        "authentication": {
+            "method": "api_key",
+            "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "client_label": null,
         "remember": false
     }));

@@ -57,9 +57,11 @@ describe("generated native Fetch client requests", () => {
 
     await expect(
       client.createSession({
-        login_name: "ada@example.test",
+        authentication: {
+          method: "api_key",
+          secret: "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ",
+        },
         operation_id: "not-an-operation-id",
-        password: "not-a-real-password",
         remember: false,
       }),
     ).rejects.toThrow();
@@ -105,9 +107,11 @@ describe("generated native Fetch client responses", () => {
     });
 
     const request = client.createSession({
-      login_name: "ada@example.test",
+      authentication: {
+        method: "api_key",
+        secret: "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ",
+      },
       operation_id: "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-      password: "not-a-real-password",
       remember: false,
     });
     await expect(request).rejects.toMatchObject({

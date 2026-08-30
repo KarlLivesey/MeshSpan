@@ -51,17 +51,38 @@ export type ApiError = {
 /**
  * CreateSessionRequest
  *
- * Input for the initial password authentication ceremony.
+ * Input for exchanging accepted authentication proofs for a session.
  */
 export type CreateSessionRequest = {
+  /**
+   * Optional TOTP or recovery-code proof when policy requires another factor.
+   */
+  additional_factor?:
+    | {
+        method: "totp";
+      }
+    | {
+        method: "recovery_code";
+      }
+    | null;
+  /**
+   * Primary API-key or passkey proof. It identifies the principal server-side.
+   */
+  authentication:
+    | {
+        method: "api_key";
+      }
+    | {
+        /**
+         * Server-issued challenge identity consumed exactly once.
+         */
+        challenge_id: string;
+        method: "passkey";
+      };
   /**
    * Optional client label: omitted means unchanged and null means clear.
    */
   client_label?: string | null;
-  /**
-   * Mesh-wide canonical login name supplied by the user.
-   */
-  login_name: string;
   /**
    * Client-generated idempotency key.
    */
@@ -119,25 +140,74 @@ export type HealthResponse = {
 /**
  * CreateSessionRequest
  *
- * Input for the initial password authentication ceremony.
+ * Input for exchanging accepted authentication proofs for a session.
  */
 export type CreateSessionRequestWritable = {
+  /**
+   * Optional TOTP or recovery-code proof when policy requires another factor.
+   */
+  additional_factor?:
+    | {
+        /**
+         * Six-to-eight digit TOTP value.
+         */
+        code: string;
+        method: "totp";
+      }
+    | {
+        /**
+         * Opaque recovery code consumed atomically on success.
+         */
+        code: string;
+        method: "recovery_code";
+      }
+    | null;
+  /**
+   * Primary API-key or passkey proof. It identifies the principal server-side.
+   */
+  authentication:
+    | {
+        method: "api_key";
+        /**
+         * Opaque API-key secret. The key identity and scopes are resolved server-side.
+         */
+        secret: string;
+      }
+    | {
+        /**
+         * Base64url-encoded authenticator data.
+         */
+        authenticator_data: string;
+        /**
+         * Server-issued challenge identity consumed exactly once.
+         */
+        challenge_id: string;
+        /**
+         * Base64url-encoded `WebAuthn` client data JSON.
+         */
+        client_data_json: string;
+        /**
+         * Base64url-encoded `WebAuthn` credential identity.
+         */
+        credential_id: string;
+        method: "passkey";
+        /**
+         * Base64url-encoded assertion signature.
+         */
+        signature: string;
+        /**
+         * Base64url-encoded user handle, null when the authenticator omitted it.
+         */
+        user_handle?: string | null;
+      };
   /**
    * Optional client label: omitted means unchanged and null means clear.
    */
   client_label?: string | null;
   /**
-   * Mesh-wide canonical login name supplied by the user.
-   */
-  login_name: string;
-  /**
    * Client-generated idempotency key.
    */
   operation_id: string;
-  /**
-   * Secret password. It is accepted only in the request and must never be logged.
-   */
-  password: string;
   /**
    * Whether the caller requests the policy's longer-lived session profile.
    */
