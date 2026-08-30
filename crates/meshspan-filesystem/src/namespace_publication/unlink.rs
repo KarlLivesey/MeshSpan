@@ -17,8 +17,8 @@ use super::{
     persist_directory_node, remove_namespace_path,
 };
 use crate::{
-    BranchMutation, BranchMutationIntent, DirectoryEntryKind, HandleError,
-    NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,
+    BranchMutation, BranchMutationIntent, DirectoryEntryKind, FederatedNamespaceMutationProposal,
+    HandleError, NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,
     PublicationDisposition, PublicationError,
 };
 
@@ -105,6 +105,13 @@ pub(super) fn federated_mutation_digest(
     connection: &Connection,
     publication: &NamespaceUnlinkPublication,
 ) -> Result<[u8; 32], HandleError> {
+    Ok(federated_mutation_proposal(connection, publication)?.payload_digest())
+}
+
+pub(super) fn federated_mutation_proposal(
+    connection: &Connection,
+    publication: &NamespaceUnlinkPublication,
+) -> Result<FederatedNamespaceMutationProposal, HandleError> {
     validate_shape(publication)?;
     let (current_root, _) = load_expected_head(connection, publication)?;
     let directories = load_path_directories(
@@ -129,7 +136,7 @@ pub(super) fn federated_mutation_digest(
         created_by: publication.created_by,
         created_at: publication.created_at,
     };
-    Ok(super::federated_mutation::mutation_digest(
+    Ok(super::federated_mutation::mutation_proposal(
         namespace,
         super::digest::unlink_request(publication),
         intent,

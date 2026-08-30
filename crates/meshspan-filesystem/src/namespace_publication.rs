@@ -59,7 +59,8 @@ pub use history_import::{
     NamespaceHistoryReceiveStatus,
 };
 pub use history_records::{
-    NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
+    FederatedNamespaceMutationProposal, NamespaceHistoryCommitRecord,
+    NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
     NamespaceHistoryMutationAuthority, NamespaceHistoryRecordError,
 };
 use repository::{
@@ -362,6 +363,17 @@ pub(super) fn file_federated_mutation_digest(
     )
 }
 
+pub(super) fn file_federated_mutation_proposal(
+    publication: &RootFilePublication,
+) -> Result<crate::FederatedNamespaceMutationProposal, PublicationError> {
+    validate(publication)?;
+    federated_mutation::mutation_proposal(
+        NamespaceIntent::from_file(publication),
+        request_digest(publication),
+        repository::file_intent(publication),
+    )
+}
+
 pub(super) fn publish_and_open(
     connection: &mut Connection,
     publication: &RootFilePublication,
@@ -491,6 +503,17 @@ pub(super) fn directory_federated_mutation_digest(
 ) -> Result<[u8; 32], PublicationError> {
     validate_directory_publication(publication)?;
     federated_mutation::mutation_digest(
+        NamespaceIntent::from_directory(publication),
+        directory_request_digest(publication),
+        repository::directory_intent(publication),
+    )
+}
+
+pub(super) fn directory_federated_mutation_proposal(
+    publication: &DirectoryPublication,
+) -> Result<crate::FederatedNamespaceMutationProposal, PublicationError> {
+    validate_directory_publication(publication)?;
+    federated_mutation::mutation_proposal(
         NamespaceIntent::from_directory(publication),
         directory_request_digest(publication),
         repository::directory_intent(publication),
@@ -682,6 +705,13 @@ pub(super) fn rename_federated_mutation_digest(
     rename::federated_mutation_digest(connection, publication)
 }
 
+pub(super) fn rename_federated_mutation_proposal(
+    connection: &Connection,
+    publication: &super::NamespaceRenamePublication,
+) -> Result<FederatedNamespaceMutationProposal, crate::HandleError> {
+    rename::federated_mutation_proposal(connection, publication)
+}
+
 pub(super) fn load_rename(
     connection: &Connection,
     operation_id: OperationId,
@@ -710,6 +740,13 @@ pub(super) fn unlink_federated_mutation_digest(
     publication: &super::NamespaceUnlinkPublication,
 ) -> Result<[u8; 32], crate::HandleError> {
     unlink::federated_mutation_digest(connection, publication)
+}
+
+pub(super) fn unlink_federated_mutation_proposal(
+    connection: &Connection,
+    publication: &super::NamespaceUnlinkPublication,
+) -> Result<FederatedNamespaceMutationProposal, crate::HandleError> {
+    unlink::federated_mutation_proposal(connection, publication)
 }
 
 pub(super) fn load_unlink(

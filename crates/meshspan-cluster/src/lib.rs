@@ -31,6 +31,7 @@ mod federation_history_object_exchange;
 mod federation_history_object_source;
 mod federation_history_receiver;
 mod federation_history_sync;
+mod federation_mutation_acceptance;
 mod federation_mutation_admission;
 mod federation_resource_wire;
 mod federation_session;
@@ -172,6 +173,12 @@ pub use federation_history_receiver::{
 };
 pub use federation_history_sync::{
     FederationHistorySyncError, FederationHistorySyncOutcome, FederationHistorySyncRequest,
+};
+pub use federation_mutation_acceptance::{
+    AdmittedFederationMutation, FederationMutationAcceptanceAuthority,
+    FederationMutationAcceptanceError, FederationMutationAcceptanceRequest,
+    FederationMutationAcceptor, MetadataFederationMutationAcceptanceAuthority,
+    MetadataFederationMutationAcceptanceError,
 };
 pub use federation_mutation_admission::{
     FederatedHistoryMutationAdmission, FederatedHistoryMutationAdmissionError,

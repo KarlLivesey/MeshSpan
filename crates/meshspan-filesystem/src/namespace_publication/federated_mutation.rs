@@ -15,7 +15,8 @@ use super::repository::{StoredCommit, stored_commit_digest};
 use super::transfer::TransferredMutationCommit;
 use super::transfer::export::load_bare_commit_record;
 use crate::{
-    BranchMutationIntent, PublicationError, ReconciliationCommit, ReconciliationCommitPayload,
+    BranchMutationIntent, FederatedNamespaceMutationProposal, PublicationError,
+    ReconciliationCommit, ReconciliationCommitPayload,
 };
 
 pub(super) fn mutation_digest(
@@ -23,6 +24,14 @@ pub(super) fn mutation_digest(
     request_digest: [u8; 32],
     intent: BranchMutationIntent,
 ) -> Result<[u8; 32], PublicationError> {
+    Ok(mutation_proposal(namespace, request_digest, intent)?.payload_digest())
+}
+
+pub(super) fn mutation_proposal(
+    namespace: NamespaceIntent<'_>,
+    request_digest: [u8; 32],
+    intent: BranchMutationIntent,
+) -> Result<FederatedNamespaceMutationProposal, PublicationError> {
     let stored = StoredCommit {
         commit_id: namespace.commit_id,
         branch_id: namespace.branch_id,
@@ -54,8 +63,9 @@ pub(super) fn mutation_digest(
         intent,
         acknowledgement: None,
     };
-    NamespaceHistoryCommitRecord::from_commit(&record)
-        .map(|record| record.digest())
+    let record = NamespaceHistoryCommitRecord::from_commit(&record)
+        .map_err(|_| PublicationError::InvalidInput)?;
+    FederatedNamespaceMutationProposal::from_record(&record)
         .map_err(|_| PublicationError::InvalidInput)
 }
 

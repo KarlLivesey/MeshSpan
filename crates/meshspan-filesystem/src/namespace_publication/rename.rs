@@ -18,8 +18,8 @@ use super::{
 };
 use crate::{
     BranchMutation, BranchMutationIntent, BranchRenameIntent, DirectoryEntry, DirectoryEntryKind,
-    HandleError, NamespaceRenamePublication, NamespaceRenameReceipt, PublicationDisposition,
-    PublicationError,
+    FederatedNamespaceMutationProposal, HandleError, NamespaceRenamePublication,
+    NamespaceRenameReceipt, PublicationDisposition, PublicationError,
 };
 
 pub(super) fn apply(
@@ -96,6 +96,13 @@ pub(super) fn federated_mutation_digest(
     connection: &Connection,
     publication: &NamespaceRenamePublication,
 ) -> Result<[u8; 32], HandleError> {
+    Ok(federated_mutation_proposal(connection, publication)?.payload_digest())
+}
+
+pub(super) fn federated_mutation_proposal(
+    connection: &Connection,
+    publication: &NamespaceRenamePublication,
+) -> Result<FederatedNamespaceMutationProposal, HandleError> {
     validate_shape(publication)?;
     let (current_root, _) = load_expected_head(connection, publication)?;
     let directories = load_path_directories(
@@ -121,7 +128,7 @@ pub(super) fn federated_mutation_digest(
         created_by: publication.created_by,
         created_at: publication.created_at,
     };
-    Ok(super::federated_mutation::mutation_digest(
+    Ok(super::federated_mutation::mutation_proposal(
         namespace,
         super::digest::rename_request(publication),
         intent,
