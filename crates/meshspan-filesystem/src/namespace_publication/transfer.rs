@@ -17,7 +17,7 @@ use meshspan_domain::{
 use crate::{BranchMutationIntent, ReconciliationCommit};
 
 pub(in crate::publication) use export::export_history;
-pub(in crate::publication) use import::import_history;
+pub(in crate::publication) use import::{import_federated_history, import_history};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::publication) struct TransferredFileVersion {

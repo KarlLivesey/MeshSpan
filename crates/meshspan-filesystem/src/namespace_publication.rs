@@ -4,6 +4,8 @@
 
 #[path = "namespace_publication/digest.rs"]
 mod digest;
+#[path = "namespace_publication/federated_admission.rs"]
+pub(super) mod federated_admission;
 #[path = "namespace_publication/federated_mutation.rs"]
 mod federated_mutation;
 #[path = "namespace_publication/history_export.rs"]
@@ -52,7 +54,8 @@ pub use history_export::{
     NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
 };
 pub use history_import::{
-    NamespaceHistoryReceiveCompletion, NamespaceHistoryReceiveRequest,
+    NamespaceHistoryMutationDecision, NamespaceHistoryReceiveCompletion,
+    NamespaceHistoryReceivePreparation, NamespaceHistoryReceiveRequest,
     NamespaceHistoryReceiveStatus,
 };
 pub use history_records::{
@@ -115,7 +118,24 @@ pub(super) fn complete_namespace_history_receive(
     session_id: [u8; 32],
     now: meshspan_domain::UnixMicros,
 ) -> Result<NamespaceHistoryReceiveCompletion, PublicationError> {
-    history_import::complete(connection, session_id, now)
+    history_import::complete(connection, session_id, now, None)
+}
+
+pub(super) fn prepare_namespace_history_receive(
+    connection: &Connection,
+    session_id: [u8; 32],
+    now: meshspan_domain::UnixMicros,
+) -> Result<NamespaceHistoryReceivePreparation, PublicationError> {
+    history_import::prepare(connection, session_id, now)
+}
+
+pub(super) fn complete_federated_namespace_history_receive(
+    connection: &mut Connection,
+    session_id: [u8; 32],
+    decisions: &[NamespaceHistoryMutationDecision],
+    now: meshspan_domain::UnixMicros,
+) -> Result<NamespaceHistoryReceiveCompletion, PublicationError> {
+    history_import::complete(connection, session_id, now, Some(decisions))
 }
 
 pub(super) fn prepare_snapshot_restore(

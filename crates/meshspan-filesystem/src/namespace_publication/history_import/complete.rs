@@ -5,13 +5,17 @@
 use meshspan_domain::UnixMicros;
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
+use super::super::federated_admission;
 use super::super::history_records::immutable::Decoded;
 use super::super::history_records::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableRecord,
 };
 use super::super::transfer::import::import_history_transaction;
 use super::repository::{integer, load_heads, load_session};
-use super::{NamespaceHistoryReceiveCompletion, RECORD_COMMIT, RECORD_IMMUTABLE};
+use super::{
+    NamespaceHistoryMutationDecision, NamespaceHistoryReceiveCompletion,
+    NamespaceHistoryReceivePreparation, RECORD_COMMIT, RECORD_IMMUTABLE,
+};
 use crate::{
     NamespaceHistoryBundle, NamespaceHistoryImport, PublicationDisposition, PublicationError,
 };
@@ -20,31 +24,66 @@ pub(super) fn run(
     connection: &mut Connection,
     session_id: [u8; 32],
     now: UnixMicros,
+    decisions: Option<&[NamespaceHistoryMutationDecision]>,
 ) -> Result<NamespaceHistoryReceiveCompletion, PublicationError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let session = load_session(&transaction, session_id)?.ok_or(PublicationError::InvalidInput)?;
+    let admission_digest = decisions
+        .map(federated_admission::decision_set_digest)
+        .transpose()?;
     if let Some(import) = session.completion {
+        if session.admission_digest != admission_digest {
+            return Err(PublicationError::OperationConflict);
+        }
         transaction.commit()?;
         return Ok(NamespaceHistoryReceiveCompletion {
             disposition: PublicationDisposition::Replayed,
             import,
         });
     }
-    if now.get() >= session.expires_at.get()
-        || !session.terminal
-        || session.export_token.is_none()
-        || has_missing_objects(&transaction, session_id)?
-    {
-        return Err(PublicationError::InvalidInput);
-    }
+    require_ready(&transaction, session_id, now)?;
     let bundle = assemble(&transaction, session_id, session.volume_id)?;
-    let import = import_history_transaction(&transaction, &bundle, session.limits)?;
-    store_receipt(&transaction, session_id, now, import)?;
+    let import = import_history_transaction(&transaction, &bundle, session.limits, decisions)?;
+    store_receipt(&transaction, session_id, now, import, admission_digest)?;
     transaction.commit()?;
     Ok(NamespaceHistoryReceiveCompletion {
         disposition: PublicationDisposition::Applied,
         import,
     })
+}
+
+pub(super) fn prepare(
+    connection: &Connection,
+    session_id: [u8; 32],
+    now: UnixMicros,
+) -> Result<NamespaceHistoryReceivePreparation, PublicationError> {
+    let session = load_session(connection, session_id)?.ok_or(PublicationError::InvalidInput)?;
+    if session.completion.is_none() {
+        require_ready(connection, session_id, now)?;
+    }
+    let bundle = assemble(connection, session_id, session.volume_id)?;
+    Ok(NamespaceHistoryReceivePreparation::new(
+        bundle
+            .commit_records()
+            .map_err(|_| PublicationError::Corrupt)?,
+    ))
+}
+
+fn require_ready(
+    connection: &Connection,
+    session_id: [u8; 32],
+    now: UnixMicros,
+) -> Result<(), PublicationError> {
+    let session = load_session(connection, session_id)?.ok_or(PublicationError::InvalidInput)?;
+    if now.get() >= session.expires_at.get()
+        || !session.terminal
+        || session.export_token.is_none()
+        || has_missing_objects(connection, session_id)?
+    {
+        Err(PublicationError::InvalidInput)
+    } else {
+        Ok(())
+    }
 }
 
 fn has_missing_objects(
@@ -134,18 +173,20 @@ fn store_receipt(
     session_id: [u8; 32],
     now: UnixMicros,
     import: NamespaceHistoryImport,
+    admission_digest: Option<[u8; 32]>,
 ) -> Result<(), PublicationError> {
     let changed = transaction.execute(
         "UPDATE namespace_history_imports
          SET completed_at = ?2, imported_commits = ?3, supplied_commits = ?4,
-             immutable_records = ?5
+             immutable_records = ?5, admission_digest = ?6
          WHERE session_id = ?1 AND completed_at IS NULL",
         params![
             session_id.as_slice(),
             now.get(),
             integer(import.imported_commits)?,
             integer(import.supplied_commits)?,
-            integer(import.immutable_records)?
+            integer(import.immutable_records)?,
+            admission_digest.as_ref().map(<[u8; 32]>::as_slice)
         ],
     )?;
     if changed == 1 {

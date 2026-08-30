@@ -2,7 +2,7 @@
 
 //! Canonical digest for exact namespace replay plans.
 
-use meshspan_domain::{FileVersionId, ObjectRevisionId, OperationId};
+use meshspan_domain::{FileVersionId, NamespaceCommitId, ObjectRevisionId, OperationId};
 
 use super::naming::path_key;
 use super::{
@@ -14,10 +14,11 @@ pub(super) fn replay_digest(
     causal_digest: [u8; 32],
     base: &NamespaceReplayBase,
     actions: &[NamespaceReplayAction],
+    quarantined_commits: &[NamespaceCommitId],
     final_root: Option<ObjectRevisionId>,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.namespace-replay-plan.v4\0");
+    digest.update(b"meshspan.filesystem.namespace-replay-plan.v5\0");
     digest.update(&causal_digest);
     update_optional_revision(&mut digest, base.root_object_revision_id);
     let mut entries = base.entries.iter().collect::<Vec<_>>();
@@ -38,6 +39,10 @@ pub(super) fn replay_digest(
     update_count(&mut digest, actions.len());
     for action in actions {
         update_action(&mut digest, action);
+    }
+    update_count(&mut digest, quarantined_commits.len());
+    for commit_id in quarantined_commits {
+        digest.update(&commit_id.as_bytes());
     }
     update_optional_revision(&mut digest, final_root);
     digest.finalize().into()

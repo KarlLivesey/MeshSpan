@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use meshspan_domain::{NamespaceCommitId, UnixMicros, VolumeId};
+use meshspan_domain::{FederatedMutationAdmission, NamespaceCommitId, UnixMicros, VolumeId};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::history_export::NamespaceHistoryPage;
@@ -74,6 +74,68 @@ pub struct NamespaceHistoryReceiveCompletion {
     pub disposition: PublicationDisposition,
     /// Exact original import counts, including on replay after restart.
     pub import: NamespaceHistoryImport,
+}
+
+/// One owner-side decision for an exact signed federated namespace commit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NamespaceHistoryMutationDecision {
+    commit_id: NamespaceCommitId,
+    admission: FederatedMutationAdmission,
+    classified_at: UnixMicros,
+}
+
+impl NamespaceHistoryMutationDecision {
+    /// Binds one authoritative classification to its exact immutable commit.
+    #[must_use]
+    pub const fn new(
+        commit_id: NamespaceCommitId,
+        admission: FederatedMutationAdmission,
+        classified_at: UnixMicros,
+    ) -> Self {
+        Self {
+            commit_id,
+            admission,
+            classified_at,
+        }
+    }
+
+    /// Returns the exact commit which was classified.
+    #[must_use]
+    pub const fn commit_id(self) -> NamespaceCommitId {
+        self.commit_id
+    }
+
+    /// Returns whether the commit may affect namespace state or remains quarantined.
+    #[must_use]
+    pub const fn admission(self) -> FederatedMutationAdmission {
+        self.admission
+    }
+
+    /// Returns the authoritative mesh time used for classification.
+    #[must_use]
+    pub const fn classified_at(self) -> UnixMicros {
+        self.classified_at
+    }
+}
+
+/// Complete, validated commit records awaiting owner-side federation admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespaceHistoryReceivePreparation {
+    commits: Vec<super::history_records::NamespaceHistoryCommitRecord>,
+}
+
+impl NamespaceHistoryReceivePreparation {
+    /// Returns every exact signed mutation which must receive one decision.
+    #[must_use]
+    pub fn commits(&self) -> &[super::history_records::NamespaceHistoryCommitRecord] {
+        &self.commits
+    }
+
+    pub(super) const fn new(
+        commits: Vec<super::history_records::NamespaceHistoryCommitRecord>,
+    ) -> Self {
+        Self { commits }
+    }
 }
 
 pub(super) fn begin(
@@ -193,8 +255,17 @@ pub(super) fn complete(
     connection: &mut Connection,
     session_id: [u8; 32],
     now: UnixMicros,
+    decisions: Option<&[NamespaceHistoryMutationDecision]>,
 ) -> Result<NamespaceHistoryReceiveCompletion, PublicationError> {
-    complete::run(connection, session_id, now)
+    complete::run(connection, session_id, now, decisions)
+}
+
+pub(super) fn prepare(
+    connection: &Connection,
+    session_id: [u8; 32],
+    now: UnixMicros,
+) -> Result<NamespaceHistoryReceivePreparation, PublicationError> {
+    complete::prepare(connection, session_id, now)
 }
 
 fn validate_request(request: &NamespaceHistoryReceiveRequest) -> Result<(), PublicationError> {

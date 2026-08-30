@@ -66,9 +66,18 @@ fn federated_file_publication_persists_and_transfers_its_exact_signed_proof()
     assert_eq!(record.federated_acknowledgement()?, Some(acknowledgement));
 
     let mut target = VersionPublicationStore::open(target_directory.path(), UnixMicros::new(2))?;
+    let decisions = [super::NamespaceHistoryMutationDecision::new(
+        publication.namespace_commit_id,
+        meshspan_domain::FederatedMutationAdmission::Admitted,
+        UnixMicros::new(100),
+    )];
     assert_eq!(
         target
-            .import_namespace_history(&bundle, NamespaceHistoryLimits::DEFAULT)?
+            .import_federated_namespace_history(
+                &bundle,
+                NamespaceHistoryLimits::DEFAULT,
+                &decisions,
+            )?
             .imported_commits,
         1
     );
@@ -79,6 +88,15 @@ fn federated_file_publication_persists_and_transfers_its_exact_signed_proof()
         NamespaceHistoryLimits::DEFAULT,
     )?;
     assert_eq!(imported.commit_records()?, vec![record]);
+    let prepared = target.prepare_namespace_reconciliation(
+        &ReconciliationFrontier {
+            converged_head: None,
+            eligible_heads: vec![publication.namespace_commit_id],
+        },
+        ReconciliationLimits::DEFAULT,
+    )?;
+    assert_eq!(prepared.replay_plan().actions().len(), 1);
+    assert!(prepared.replay_plan().quarantined_commits().is_empty());
     Ok(())
 }
 
@@ -183,6 +201,179 @@ fn federated_acknowledgement_rolls_back_with_an_injected_publication_fault()
     )?;
     assert_eq!(durable, 0);
     Ok(())
+}
+
+#[test]
+fn federated_receive_retains_quarantine_without_replaying_its_namespace_effect()
+-> Result<(), Box<dyn std::error::Error>> {
+    let FederatedReceiveFixture {
+        target_directory,
+        mut target,
+        publication,
+        request,
+        commit_records,
+    } = stage_complete_federated_receive()?;
+    let prepared =
+        target.prepare_namespace_history_receive(request.session_id, UnixMicros::new(100))?;
+    assert_eq!(prepared.commits(), commit_records);
+    assert!(matches!(
+        target.complete_namespace_history_receive(request.session_id, UnixMicros::new(100)),
+        Err(PublicationError::InvalidInput)
+    ));
+
+    let decision = super::NamespaceHistoryMutationDecision::new(
+        publication.namespace_commit_id,
+        meshspan_domain::FederatedMutationAdmission::Quarantined(
+            meshspan_domain::QuarantineReason::Revoked,
+        ),
+        UnixMicros::new(100),
+    );
+    let completion = target.complete_federated_namespace_history_receive(
+        request.session_id,
+        &[decision],
+        UnixMicros::new(100),
+    )?;
+    assert_eq!(completion.disposition, PublicationDisposition::Applied);
+    assert!(commit_exists(
+        &target.connection,
+        publication.namespace_commit_id
+    )?);
+
+    let frontier = ReconciliationFrontier {
+        converged_head: None,
+        eligible_heads: vec![publication.namespace_commit_id],
+    };
+    let replay = target
+        .prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?
+        .replay_plan()
+        .clone();
+    assert!(replay.actions().is_empty());
+    assert_eq!(
+        replay.quarantined_commits(),
+        [publication.namespace_commit_id]
+    );
+    assert_eq!(replay.final_root_object_revision_id(), None);
+
+    drop(target);
+    let mut restarted = VersionPublicationStore::open(target_directory.path(), UnixMicros::new(3))?;
+    assert_eq!(
+        restarted
+            .complete_federated_namespace_history_receive(
+                request.session_id,
+                &[decision],
+                UnixMicros::new(300),
+            )?
+            .disposition,
+        PublicationDisposition::Replayed
+    );
+    let changed = super::NamespaceHistoryMutationDecision::new(
+        publication.namespace_commit_id,
+        meshspan_domain::FederatedMutationAdmission::Admitted,
+        UnixMicros::new(100),
+    );
+    assert!(matches!(
+        restarted.complete_federated_namespace_history_receive(
+            request.session_id,
+            &[changed],
+            UnixMicros::new(300),
+        ),
+        Err(PublicationError::OperationConflict)
+    ));
+    Ok(())
+}
+
+#[test]
+fn incomplete_federated_receive_rejects_a_forged_admission_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    let FederatedReceiveFixture {
+        target, request, ..
+    } = stage_complete_federated_receive()?;
+    target.connection.execute(
+        "UPDATE namespace_history_imports SET admission_digest = zeroblob(32)
+         WHERE session_id = ?1",
+        [request.session_id.as_slice()],
+    )?;
+
+    assert!(matches!(
+        target.prepare_namespace_history_receive(request.session_id, UnixMicros::new(100)),
+        Err(PublicationError::Corrupt)
+    ));
+    Ok(())
+}
+
+struct FederatedReceiveFixture {
+    target_directory: TempDir,
+    target: VersionPublicationStore,
+    publication: RootFilePublication,
+    request: NamespaceHistoryReceiveRequest,
+    commit_records: Vec<super::NamespaceHistoryCommitRecord>,
+}
+
+fn stage_complete_federated_receive() -> Result<FederatedReceiveFixture, Box<dyn std::error::Error>>
+{
+    let source_directory = tempdir()?;
+    let target_directory = tempdir()?;
+    let publication = initial_root_publication()?;
+    let acknowledgement = mutation_acknowledgement(
+        publication.file.operation_id,
+        publication.file.created_by,
+        publication.file.volume_id,
+        publication.file.created_at,
+        Rights::TRAVERSE
+            .union(Rights::CREATE_CHILD)
+            .union(Rights::WRITE_DATA),
+        VersionPublicationStore::root_file_federated_mutation_digest(&publication)?,
+    )?;
+    let mut source = VersionPublicationStore::open(source_directory.path(), UnixMicros::new(1))?;
+    source.publish_federated_root_file(&publication, &acknowledgement)?;
+    let bundle = source.export_namespace_history(
+        publication.file.volume_id,
+        &[publication.namespace_commit_id],
+        &[],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+    assert!(matches!(
+        VersionPublicationStore::open(target_directory.path(), UnixMicros::new(1))?
+            .import_namespace_history(&bundle, NamespaceHistoryLimits::DEFAULT),
+        Err(PublicationError::InvalidInput)
+    ));
+    let request = NamespaceHistoryReceiveRequest {
+        session_id: [25; 32],
+        scope_binding: [26; 32],
+        volume_id: publication.file.volume_id,
+        requested_heads: vec![publication.namespace_commit_id],
+        limits: NamespaceHistoryLimits::DEFAULT,
+        now: UnixMicros::new(70),
+        expires_at: UnixMicros::new(200),
+    };
+    let commit_records = bundle.commit_records()?;
+    let immutable_records = bundle.immutable_records()?;
+    let mut target = VersionPublicationStore::open(target_directory.path(), UnixMicros::new(2))?;
+    target.begin_namespace_history_receive(&request)?;
+    target.receive_namespace_history_page(
+        request.session_id,
+        &[],
+        &super::NamespaceHistoryPage {
+            export_token: [27; 32],
+            commits: commit_records.clone(),
+            immutable_object_digests: immutable_records
+                .iter()
+                .map(super::NamespaceHistoryImmutableRecord::digest)
+                .collect(),
+            next_cursor: Vec::new(),
+        },
+        UnixMicros::new(80),
+    )?;
+    for record in &immutable_records {
+        target.receive_namespace_history_object(request.session_id, record, UnixMicros::new(90))?;
+    }
+    Ok(FederatedReceiveFixture {
+        target_directory,
+        target,
+        publication,
+        request,
+        commit_records,
+    })
 }
 
 fn prove_federated_directory_publication() -> Result<(), Box<dyn std::error::Error>> {

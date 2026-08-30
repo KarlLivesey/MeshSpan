@@ -19,6 +19,7 @@ pub(super) struct StoredSession {
     pub(super) limits: NamespaceHistoryLimits,
     pub(super) expires_at: UnixMicros,
     pub(super) completion: Option<NamespaceHistoryImport>,
+    pub(super) admission_digest: Option<[u8; 32]>,
 }
 
 struct StoredSessionRow {
@@ -34,6 +35,7 @@ struct StoredSessionRow {
     imported_commits: Option<i64>,
     supplied_commits: Option<i64>,
     immutable_records: Option<i64>,
+    admission_digest: Option<Vec<u8>>,
 }
 
 pub(super) fn load_session(
@@ -44,7 +46,7 @@ pub(super) fn load_session(
         .query_row(
             "SELECT scope_binding, export_token, volume_id, current_cursor, terminal,
                     maximum_heads, maximum_commits, maximum_immutable_records, expires_at,
-                    imported_commits, supplied_commits, immutable_records
+                    imported_commits, supplied_commits, immutable_records, admission_digest
              FROM namespace_history_imports WHERE session_id = ?1",
             [session_id.as_slice()],
             |row| {
@@ -61,6 +63,7 @@ pub(super) fn load_session(
                     imported_commits: row.get(9)?,
                     supplied_commits: row.get(10)?,
                     immutable_records: row.get(11)?,
+                    admission_digest: row.get(12)?,
                 })
             },
         )
@@ -184,6 +187,9 @@ fn decode_session(row: StoredSessionRow) -> Result<StoredSession, PublicationErr
         }),
         _ => return Err(PublicationError::Corrupt),
     };
+    if completion.is_none() && row.admission_digest.is_some() {
+        return Err(PublicationError::Corrupt);
+    }
     Ok(StoredSession {
         scope_binding: copy_array(&row.scope_binding)?,
         export_token: row.export_token.as_deref().map(copy_array).transpose()?,
@@ -197,6 +203,11 @@ fn decode_session(row: StoredSessionRow) -> Result<StoredSession, PublicationErr
         },
         expires_at: UnixMicros::new(row.expires_at),
         completion,
+        admission_digest: row
+            .admission_digest
+            .as_deref()
+            .map(copy_array)
+            .transpose()?,
     })
 }
 
