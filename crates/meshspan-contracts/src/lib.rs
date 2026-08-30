@@ -42,10 +42,11 @@ pub use data::{
     PlacementRequest, ReconstructionRequest,
 };
 pub use federation_storage::{
-    FederatedShardPermit, FederatedStoragePermitMacKey, federated_provider_shard_identity,
-    federated_shard_permit_mac, federated_shard_read_result_digest,
-    federated_shard_reclamation_result_digest, federated_shard_retirement_result_digest,
-    federated_shard_scrub_result_digest, federated_shard_write_result_digest,
+    FederatedShardPermit, FederatedStorageInventoryRecord, FederatedStoragePermitMacKey,
+    federated_provider_shard_identity, federated_shard_permit_mac,
+    federated_shard_read_result_digest, federated_shard_reclamation_result_digest,
+    federated_shard_retirement_result_digest, federated_shard_scrub_result_digest,
+    federated_shard_write_result_digest, validate_federated_storage_inventory_record,
     verify_federated_shard_permit_mac,
 };
 pub use filesystem::{

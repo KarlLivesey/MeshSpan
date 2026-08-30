@@ -14,6 +14,7 @@ mod federation_schema_tests;
 mod federation_storage_admission;
 mod federation_storage_capability_ledger;
 mod federation_storage_command;
+mod federation_storage_inventory;
 mod federation_storage_lifecycle;
 mod federation_storage_quota;
 mod federation_storage_scrub;
@@ -71,6 +72,10 @@ pub use federation_storage_capability_ledger::{
 };
 pub use federation_storage_command::{
     IssueFederationStorageAllocation, RevokeFederationStorageAllocation,
+};
+pub use federation_storage_inventory::{
+    FederationStorageInventoryCursor, FederationStorageInventoryError,
+    FederationStorageInventoryPage, MAXIMUM_FEDERATED_STORAGE_INVENTORY_ITEMS,
 };
 pub use federation_storage_lifecycle::{
     FederationStorageLifecycle, FederationStorageLifecycleDisposition,

@@ -8,7 +8,9 @@ use std::fs;
 use meshspan_cluster::{
     FederationShardServeRequest, FederationStorageCapabilityProvider,
     FederationStorageCapabilityRequest, FederationStorageCapabilityServeRequest,
-    FederationStorageReceiptReceiveRequest, ServedFederationStorageCapability,
+    FederationStorageInventoryFetchRequest, FederationStorageInventoryProvider,
+    FederationStorageInventoryServeRequest, FederationStorageReceiptReceiveRequest,
+    ServedFederationStorageCapability,
 };
 use meshspan_contracts::{
     BoundedBytes, FederatedShardPermit, FederatedStoragePermitMacKey, ReclamationReceipt,
@@ -26,8 +28,8 @@ use meshspan_domain::{
 use meshspan_metadata::{FederationStorageQuotaDisposition, FederationStorageUsage, LocalDatabase};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::{
-    ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability, RequestHeader,
-    ShardIdentity,
+    FetchFederatedStorageInventory, ProtocolVersion, RemoteShardAction,
+    RequestFederatedStorageCapability, RequestHeader, ShardIdentity,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -122,17 +124,121 @@ pub(super) async fn prove_storage_capability_exchange(
     prove_federated_lifecycle(
         proof,
         &mut local,
-        &mut service,
+        service,
         &permit_key,
         allocation,
+        provider_node_id,
+        directory.path(),
         &issued,
         &payload,
         &mut client_replay,
         &mut server_replay,
     )
     .await?;
-    let inventory = service.into_provider().inventory(None, 2)?;
-    assert!(inventory.entries.is_empty());
+    Ok(())
+}
+
+pub(super) async fn prove_revoked_storage_inventory_fails_closed(
+    proof: &SessionProof<'_>,
+    allocation: FederationStorageAllocation,
+    provider_node_id: NodeId,
+) -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let local = LocalDatabase::open(
+        &directory.path().join("revoked-local.sqlite3"),
+        provider_node_id,
+        NOW,
+    )?;
+    let service = shard_service(directory.path(), proof, allocation, provider_node_id)?;
+    let mut client_replay = replay_guard()?;
+    let mut server_replay = replay_guard()?;
+    let context = FederationExchangeContext::new(
+        ProtocolVersion { major: 1, minor: 1 },
+        [201; 16],
+        [202; 16],
+        [203; 16],
+        UnixMicros::new(1_900_000),
+        [204; 32],
+    )?;
+    let fetch = proof.client_runtime.request_storage_inventory(
+        proof.client_connection,
+        proof.client_authority,
+        FederationStorageInventoryFetchRequest {
+            relationship_id: proof.relationship_id,
+            inventory: FetchFederatedStorageInventory {
+                grant_id: allocation.grant_id().as_bytes().to_vec(),
+                target_id: allocation.target_id().as_bytes().to_vec(),
+                target_generation: allocation.target_generation(),
+                cursor: Vec::new(),
+                limit: 1,
+                signature: Vec::new(),
+            },
+            context,
+            now: NOW,
+        },
+        &mut client_replay,
+    );
+    let serve = proof.server_runtime.serve_storage_inventory(
+        proof.server_connection,
+        FederationStorageInventoryProvider {
+            repository: proof.server_authority,
+            local_database: &local,
+            provider: service.provider(),
+        },
+        FederationStorageInventoryServeRequest {
+            response_replay_nonce: [205; 32],
+            now: NOW,
+        },
+        &mut server_replay,
+    );
+    let (fetch_result, serve_result) = tokio::join!(fetch, serve);
+    assert!(fetch_result.is_err());
+    assert!(matches!(
+        serve_result,
+        Err(meshspan_cluster::FederationSessionError::AuthorityUnavailable)
+    ));
+    Ok(())
+}
+
+pub(super) async fn prove_protection_only_read_fails_closed(
+    proof: &SessionProof<'_>,
+    allocation: FederationStorageAllocation,
+    provider_node_id: NodeId,
+) -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut local = LocalDatabase::open(
+        &directory.path().join("protection-only-local.sqlite3"),
+        provider_node_id,
+        NOW,
+    )?;
+    let permit_key = FederatedStoragePermitMacKey::from_bytes([207; 32])?;
+    let mut client_replay = replay_guard()?;
+    let mut server_replay = replay_guard()?;
+    let denied = exchange(
+        proof,
+        &mut local,
+        &permit_key,
+        request(allocation, FederationStorageAction::Get),
+        exchange_values(208, 209, NOW, UnixMicros::new(1_850_000))?,
+        &mut client_replay,
+        &mut server_replay,
+    )
+    .await;
+    assert!(
+        matches!(
+            &denied,
+            Err(meshspan_cluster::FederationSessionError::StorageCapability(
+                meshspan_cluster::FederationStorageCapabilityIssuerError::AuthorityUnavailable
+            ))
+        ),
+        "unexpected protection-only read result: {:?}",
+        denied.as_ref().err()
+    );
+    assert!(
+        local
+            .federated_storage_capability_for_operation(OperationId::from_bytes([209; 16])?)?
+            .is_none()
+    );
     Ok(())
 }
 
@@ -143,9 +249,11 @@ pub(super) async fn prove_storage_capability_exchange(
 async fn prove_federated_lifecycle(
     proof: &SessionProof<'_>,
     local: &mut LocalDatabase,
-    service: &mut RemoteShardService<FolderShardStore>,
+    mut service: RemoteShardService<FolderShardStore>,
     permit_key: &FederatedStoragePermitMacKey,
     allocation: FederationStorageAllocation,
+    provider_node_id: NodeId,
+    root: &std::path::Path,
     issued: &IssuedWriteCapability,
     payload: &BoundedBytes,
     client_replay: &mut FederationReplayGuard,
@@ -154,7 +262,7 @@ async fn prove_federated_lifecycle(
     prove_federated_read(
         proof,
         local,
-        service,
+        &mut service,
         permit_key,
         allocation,
         client_replay,
@@ -164,7 +272,7 @@ async fn prove_federated_lifecycle(
     prove_federated_repair(
         proof,
         local,
-        service,
+        &mut service,
         permit_key,
         allocation,
         payload,
@@ -175,9 +283,39 @@ async fn prove_federated_lifecycle(
     prove_federated_scrub(
         proof,
         local,
-        service,
+        &mut service,
         permit_key,
         allocation,
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    prove_federated_inventory(
+        proof,
+        local,
+        &service,
+        allocation,
+        181,
+        UnixMicros::new(NOW.get() + 6),
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    service = reopen_shard_service(
+        service,
+        root,
+        proof,
+        allocation,
+        provider_node_id,
+        UnixMicros::new(NOW.get() + 7),
+    )?;
+    prove_federated_inventory(
+        proof,
+        local,
+        &service,
+        allocation,
+        191,
+        UnixMicros::new(NOW.get() + 7),
         client_replay,
         server_replay,
     )
@@ -185,7 +323,7 @@ async fn prove_federated_lifecycle(
     Box::pin(prove_federated_retire_and_reclaim(
         proof,
         local,
-        service,
+        &mut service,
         permit_key,
         allocation,
         &issued.presented.permit,
@@ -193,6 +331,73 @@ async fn prove_federated_lifecycle(
         server_replay,
     ))
     .await?;
+    let inventory = service.into_provider().inventory(None, 2)?;
+    assert!(inventory.entries.is_empty());
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the inventory proof keeps signed context and both replay guards explicit"
+)]
+async fn prove_federated_inventory(
+    proof: &SessionProof<'_>,
+    local: &LocalDatabase,
+    service: &RemoteShardService<FolderShardStore>,
+    allocation: FederationStorageAllocation,
+    seed: u8,
+    now: UnixMicros,
+    client_replay: &mut FederationReplayGuard,
+    server_replay: &mut FederationReplayGuard,
+) -> Result<(), Box<dyn Error>> {
+    let context = FederationExchangeContext::new(
+        ProtocolVersion { major: 1, minor: 1 },
+        [seed; 16],
+        [seed.saturating_add(1); 16],
+        [seed.saturating_add(2); 16],
+        UnixMicros::new(1_900_000),
+        [seed.saturating_add(3); 32],
+    )?;
+    let fetch = proof.client_runtime.request_storage_inventory(
+        proof.client_connection,
+        proof.client_authority,
+        FederationStorageInventoryFetchRequest {
+            relationship_id: proof.relationship_id,
+            inventory: FetchFederatedStorageInventory {
+                grant_id: allocation.grant_id().as_bytes().to_vec(),
+                target_id: allocation.target_id().as_bytes().to_vec(),
+                target_generation: allocation.target_generation(),
+                cursor: Vec::new(),
+                limit: 1,
+                signature: Vec::new(),
+            },
+            context,
+            now,
+        },
+        client_replay,
+    );
+    let serve = proof.server_runtime.serve_storage_inventory(
+        proof.server_connection,
+        FederationStorageInventoryProvider {
+            repository: proof.server_authority,
+            local_database: local,
+            provider: service.provider(),
+        },
+        FederationStorageInventoryServeRequest {
+            response_replay_nonce: [seed.saturating_add(4); 32],
+            now,
+        },
+        server_replay,
+    );
+    let (page, served) = tokio::try_join!(fetch, serve)?;
+    assert_eq!(served.record_count, 1);
+    assert!(!served.has_more);
+    assert_eq!(page.records.len(), 1);
+    assert!(page.next_cursor.is_none());
+    let record = page.records.as_slice()[0];
+    assert_eq!(record.allocation_id, allocation.allocation_id());
+    let expected_digest: [u8; 32] = blake3::hash(PAYLOAD).into();
+    assert_eq!(record.digest, expected_digest);
     Ok(())
 }
 
@@ -318,7 +523,7 @@ async fn prove_federated_retirement(
     client_replay: &mut FederationReplayGuard,
     server_replay: &mut FederationReplayGuard,
 ) -> Result<SignedRetirement, Box<dyn Error>> {
-    let retire_now = UnixMicros::new(NOW.get() + 6);
+    let retire_now = UnixMicros::new(NOW.get() + 8);
     let retire_capability = presented_capability(
         proof,
         local,
@@ -360,7 +565,7 @@ async fn prove_federated_retirement(
         )
     );
 
-    let retire_retry_now = UnixMicros::new(NOW.get() + 7);
+    let retire_retry_now = UnixMicros::new(NOW.get() + 9);
     let retry_capability = presented_capability(
         proof,
         local,
@@ -401,7 +606,7 @@ async fn prove_federated_reclamation(
     client_replay: &mut FederationReplayGuard,
     server_replay: &mut FederationReplayGuard,
 ) -> Result<(), Box<dyn Error>> {
-    let reclaim_now = UnixMicros::new(NOW.get() + 8);
+    let reclaim_now = UnixMicros::new(NOW.get() + 10);
     let reclaim_capability = presented_capability(
         proof,
         local,
@@ -427,7 +632,7 @@ async fn prove_federated_reclamation(
     assert_eq!(reclaimed.receipt.reclaimed_bytes, PAYLOAD.len() as u64);
     assert_usage(local, allocation, 0, 0)?;
 
-    let reclaim_retry_now = UnixMicros::new(NOW.get() + 9);
+    let reclaim_retry_now = UnixMicros::new(NOW.get() + 11);
     let retry_capability = presented_capability(
         proof,
         local,
@@ -677,6 +882,54 @@ fn shard_service(
             StoragePermitMacKey::from_bytes(PROVIDER_PERMIT_KEY)?,
         )?,
         NOW,
+        &mut random,
+    )?;
+    Ok(RemoteShardService::new(
+        provider,
+        StoragePermitMacKey::from_bytes(PROVIDER_PERMIT_KEY)?,
+        proof.server_mesh,
+        provider_node_id,
+        allocation.target_id(),
+        allocation.target_generation(),
+        1_024,
+    )?)
+}
+
+fn reopen_shard_service(
+    service: RemoteShardService<FolderShardStore>,
+    root: &std::path::Path,
+    proof: &SessionProof<'_>,
+    allocation: FederationStorageAllocation,
+    provider_node_id: NodeId,
+    opened_at: UnixMicros,
+) -> Result<RemoteShardService<FolderShardStore>, Box<dyn Error>> {
+    let provider = service.into_provider();
+    let fingerprint = provider.target_marker().fingerprint();
+    drop(provider);
+    let registration = FolderRegistration {
+        mesh_id: proof.server_mesh,
+        target_id: allocation.target_id(),
+        generation: allocation.target_generation(),
+        usage_limit: UsageLimit::bytes(4_096)?,
+    };
+    let folder =
+        RegisteredFolder::reopen(&root.join("provider-storage"), registration, fingerprint)?;
+    let mut random = FixedRandom;
+    let provider = FolderShardStore::open(
+        folder,
+        &root.join("provider-state"),
+        CapacityPolicy {
+            usage_limit: UsageLimit::bytes(4_096)?,
+            repair_reserve_bytes: 0,
+            revision: Revision::new(1),
+        },
+        StoragePermitVerifier::new(
+            proof.server_mesh,
+            9,
+            Revision::new(3),
+            StoragePermitMacKey::from_bytes(PROVIDER_PERMIT_KEY)?,
+        )?,
+        opened_at,
         &mut random,
     )?;
     Ok(RemoteShardService::new(

@@ -542,6 +542,19 @@ pub trait StorageProvider {
         limit: usize,
     ) -> Result<InventoryPage, ContractError>;
 
+    /// Resolves one exact provider-catalogue entry without scanning unrelated tenant records.
+    ///
+    /// This proves only journal-confirmed presence. Reads and scrubs still independently verify
+    /// complete bytes before reporting usable or healthy data.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed identities or unavailable/corrupt provider catalogue state.
+    fn inventory_exact(
+        &self,
+        shard: ShardIdentity,
+    ) -> Result<Option<InventoryEntry>, ContractError>;
+
     /// Independently verifies one exact committed shard without paging unrelated inventory.
     ///
     /// The expected entry must come from an independently authorised catalogue. The provider

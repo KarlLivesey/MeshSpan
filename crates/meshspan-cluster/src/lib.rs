@@ -27,6 +27,8 @@ mod federation_session;
 mod federation_shard_authority;
 mod federation_storage_capability;
 mod federation_storage_exchange;
+mod federation_storage_inventory_exchange;
+mod federation_storage_inventory_wire;
 mod filesystem_authority;
 mod filesystem_convergence;
 mod membership;
@@ -135,6 +137,15 @@ pub use federation_storage_exchange::{
     FederationStorageCapabilityRequest, FederationStorageCapabilityServeRequest,
     FederationStorageReceiptReceiveRequest, ServedFederatedShard,
     ServedFederationStorageCapability,
+};
+pub use federation_storage_inventory_exchange::{
+    FederationStorageInventoryExchangeError, FederationStorageInventoryFetchRequest,
+    FederationStorageInventoryProvider, FederationStorageInventoryServeRequest,
+    ReceivedFederationStorageInventoryPage, ServedFederationStorageInventoryPage,
+};
+pub use federation_storage_inventory_wire::{
+    FederationStorageInventoryWireError, decode_federated_storage_inventory_record,
+    version_federated_storage_inventory_record,
 };
 pub use filesystem_authority::{MetadataFilesystemAuthority, MetadataFilesystemAuthorityError};
 pub use filesystem_convergence::{

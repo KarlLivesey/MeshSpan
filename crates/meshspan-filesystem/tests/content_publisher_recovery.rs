@@ -361,6 +361,13 @@ impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
         self.inner.inventory(cursor, limit)
     }
 
+    fn inventory_exact(
+        &self,
+        shard: meshspan_contracts::ShardIdentity,
+    ) -> Result<Option<InventoryEntry>, ContractError> {
+        self.inner.inventory_exact(shard)
+    }
+
     fn scrub_exact(
         &mut self,
         expected: InventoryEntry,

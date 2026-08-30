@@ -129,6 +129,12 @@ impl StoragePermitVerifier {
 }
 
 impl FolderShardStore {
+    /// Returns the exact durable target marker bound to this open provider.
+    #[must_use]
+    pub const fn target_marker(&self) -> crate::TargetMarker {
+        self.folder.marker()
+    }
+
     /// Opens an identity-bound local journal and packed-byte segment for one registered folder.
     ///
     /// # Errors
@@ -381,6 +387,18 @@ impl FolderShardStore {
         self.journal.inventory(cursor, limit).map_err(Into::into)
     }
 
+    /// Resolves one exact journal-confirmed shard without scanning other tenant namespaces.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed identity or unavailable/corrupt journal state.
+    pub fn inventory_exact(
+        &self,
+        shard: meshspan_contracts::ShardIdentity,
+    ) -> Result<Option<meshspan_contracts::InventoryEntry>, FolderShardStoreError> {
+        self.journal.inventory_entry(shard).map_err(Into::into)
+    }
+
     /// Independently rereads one exact committed shard and returns evidence only.
     ///
     /// # Errors
@@ -585,6 +603,13 @@ impl StorageProvider for FolderShardStore {
         limit: usize,
     ) -> Result<InventoryPage, ContractError> {
         FolderShardStore::inventory(self, cursor, limit).map_err(contract_error)
+    }
+
+    fn inventory_exact(
+        &self,
+        shard: meshspan_contracts::ShardIdentity,
+    ) -> Result<Option<meshspan_contracts::InventoryEntry>, ContractError> {
+        FolderShardStore::inventory_exact(self, shard).map_err(contract_error)
     }
 
     fn scrub_exact(

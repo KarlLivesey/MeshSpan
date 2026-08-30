@@ -237,6 +237,9 @@ pub enum FederationSessionError {
     /// Durable capability-presentation evidence was missing, conflicting or corrupt.
     #[error("federation storage capability evidence failed")]
     StorageCapabilityLedger(#[from] meshspan_metadata::FederationStorageCapabilityLedgerError),
+    /// Bounded remote provider inventory could not be authorised or reconciled safely.
+    #[error("federation storage inventory exchange failed")]
+    StorageInventory(#[from] crate::FederationStorageInventoryExchangeError),
     /// The advertised immutable history body could not be produced safely.
     #[error("federation history object could not be produced")]
     HistoryObject(#[from] crate::FederationHistoryObjectSourceError),

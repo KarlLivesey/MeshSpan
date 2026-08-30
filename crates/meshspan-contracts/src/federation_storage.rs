@@ -7,7 +7,10 @@ use meshspan_domain::{
     FederationStorageAllocationId, MeshId, NodeId, OperationId, Revision, TargetId, UnixMicros,
 };
 
-use crate::{ContractError, ReclamationReceipt, ShardIdentity, ShardReceipt, TombstoneReceipt};
+use crate::{
+    ContractError, InventoryEntry, ReclamationReceipt, ShardIdentity, ShardReceipt,
+    TombstoneReceipt,
+};
 use crate::{ScrubObservation, ScrubOutcome};
 
 const PERMIT_DOMAIN: &[u8] = b"meshspan.federation.shard-permit.v1";
@@ -79,6 +82,57 @@ pub struct FederatedShardPermit {
     pub request_digest: [u8; 32],
     /// Domain-separated keyed digest over every preceding field.
     pub permit_digest: [u8; 32],
+}
+
+/// One active encrypted shard in a provider's tenant-scoped federation catalogue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FederatedStorageInventoryRecord {
+    /// Opaque owning scope digest; no filename or user metadata crosses the relationship.
+    pub scope_digest: [u8; 32],
+    /// Exact bilateral capacity allocation still owning the charge.
+    pub allocation_id: FederationStorageAllocationId,
+    /// Remote swarm's logical immutable shard identity.
+    pub shard: ShardIdentity,
+    /// Exact journal-confirmed physical byte length.
+    pub length: u64,
+    /// Exact journal-confirmed encrypted-byte digest.
+    pub digest: [u8; 32],
+    /// Original provider-local durable commit instant.
+    pub committed_at: UnixMicros,
+}
+
+impl FederatedStorageInventoryRecord {
+    /// Converts this logical record into its isolated provider catalogue identity.
+    #[must_use]
+    pub fn provider_entry(self, remote_mesh_id: MeshId) -> InventoryEntry {
+        InventoryEntry {
+            shard: federated_provider_shard_identity(remote_mesh_id, self.scope_digest, self.shard),
+            length: self.length,
+            digest: self.digest,
+            bytes_verified: false,
+        }
+    }
+}
+
+/// Validates one exact active remote-storage inventory record.
+///
+/// # Errors
+///
+/// Rejects sentinel identities, absent byte evidence or a non-positive commit instant.
+pub fn validate_federated_storage_inventory_record(
+    record: FederatedStorageInventoryRecord,
+) -> Result<(), ContractError> {
+    if record.scope_digest != [0; 32]
+        && record.shard.manifest_digest != [0; 32]
+        && record.shard.generation > 0
+        && record.length > 0
+        && record.digest != [0; 32]
+        && record.committed_at.get() > 0
+    {
+        Ok(())
+    } else {
+        Err(ContractError::InvalidInput)
+    }
 }
 
 /// Calculates the provider-only keyed digest for one exact federated shard permit.

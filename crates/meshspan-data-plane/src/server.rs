@@ -145,6 +145,12 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         self.provider
     }
 
+    /// Borrows the provider for non-mutating catalogue reconciliation.
+    #[must_use]
+    pub const fn provider(&self) -> &Provider {
+        &self.provider
+    }
+
     async fn serve_put(
         &mut self,
         stream: &mut AcceptedStream,

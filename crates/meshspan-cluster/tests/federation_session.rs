@@ -50,7 +50,10 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use authority_page_proof::{
     prove_initial_authority, prove_rotated_authority, storage_grant_command,
 };
-use storage_capability_proof::prove_storage_capability_exchange;
+use storage_capability_proof::{
+    prove_protection_only_read_fails_closed, prove_revoked_storage_inventory_fails_closed,
+    prove_storage_capability_exchange,
+};
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
 const NOW: UnixMicros = UnixMicros::new(1_500_000);
@@ -95,7 +98,7 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
     ))
     .await?;
     authorities.rotate_local(55, &certificates.rotated_client, &rotated_client_key)?;
-    let expected_grants = authorities.issue_server_grants(70, 2)?;
+    let expected_grants = authorities.issue_server_grants(70, &[true, false])?;
     let rotated_client_runtime = runtime(
         &certificates.rotated_client,
         &rotated_client_key,
@@ -117,20 +120,14 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
         );
         prove_rotated_authority(&rotated_proof, &expected_grants).await?
     };
-    let (allocation, provider_node_id) =
-        authorities.issue_server_storage_allocation(75, expected_grants[0])?;
-    let storage_proof = authorities.proof(
+    let (allocation, provider_node_id) = prove_server_storage(
+        &mut authorities,
         rotated_runtimes,
         &rotated_connections,
-        SessionExpectation::new(76, 7, 2),
-    );
-    Box::pin(prove_storage_capability_exchange(
-        &storage_proof,
-        allocation,
-        provider_node_id,
-    ))
+        &expected_grants,
+    )
     .await?;
-    authorities.issue_server_grants(80, 1)?;
+    authorities.issue_server_grants(80, &[true])?;
     assert!(matches!(
         authorities
             .server
@@ -144,18 +141,61 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
             }),
         Err(FederationAuthorityPageSourceError::Unavailable)
     ));
-    authorities.revoke(60)?;
-    prove_revoked_session_fails_closed(&authorities.proof(
+    revoke_and_prove_fencing(
+        &mut authorities,
         rotated_runtimes,
         &rotated_connections,
-        SessionExpectation::new(18, 8, 2),
-    ))
+        allocation,
+        provider_node_id,
+    )
     .await?;
 
     initial_connections.close_and_wait().await;
     rotated_connections.close_and_wait().await;
     server.wait_idle().await;
     Ok(())
+}
+
+async fn prove_server_storage(
+    authorities: &mut MetadataAuthorities,
+    runtimes: SessionRuntimes<'_>,
+    connections: &ConnectionPair,
+    grants: &[FederationGrantId],
+) -> Result<(FederationStorageAllocation, NodeId), Box<dyn Error>> {
+    let [read_grant, protection_grant] = grants else {
+        return Err("storage proof requires exactly two grants".into());
+    };
+    let (allocation, provider_node_id) =
+        authorities.issue_server_storage_allocation(75, *read_grant, Revision::new(5))?;
+    let (protection_only_allocation, protection_provider_node_id) =
+        authorities.issue_server_storage_allocation(78, *protection_grant, Revision::new(6))?;
+    let proof = authorities.proof(runtimes, connections, SessionExpectation::new(76, 8, 2));
+    Box::pin(prove_storage_capability_exchange(
+        &proof,
+        allocation,
+        provider_node_id,
+    ))
+    .await?;
+    prove_protection_only_read_fails_closed(
+        &proof,
+        protection_only_allocation,
+        protection_provider_node_id,
+    )
+    .await?;
+    Ok((allocation, provider_node_id))
+}
+
+async fn revoke_and_prove_fencing(
+    authorities: &mut MetadataAuthorities,
+    runtimes: SessionRuntimes<'_>,
+    connections: &ConnectionPair,
+    allocation: FederationStorageAllocation,
+    provider_node_id: NodeId,
+) -> Result<(), Box<dyn Error>> {
+    authorities.revoke(60)?;
+    let proof = authorities.proof(runtimes, connections, SessionExpectation::new(18, 8, 2));
+    prove_revoked_storage_inventory_fails_closed(&proof, allocation, provider_node_id).await?;
+    prove_revoked_session_fails_closed(&proof).await
 }
 
 #[derive(Clone, Copy)]
@@ -332,18 +372,24 @@ impl MetadataAuthorities {
     fn issue_server_grants(
         &mut self,
         seed: u8,
-        count: u8,
+        read_participation: &[bool],
     ) -> Result<Vec<FederationGrantId>, Box<dyn Error>> {
-        self.server
-            .issue_storage_grants(seed, count, self.client_mesh, self.server_mesh)
+        self.server.issue_storage_grants(
+            seed,
+            read_participation,
+            self.client_mesh,
+            self.server_mesh,
+        )
     }
 
     fn issue_server_storage_allocation(
         &mut self,
         seed: u8,
         grant_id: FederationGrantId,
+        expected_grant_revision: Revision,
     ) -> Result<(FederationStorageAllocation, NodeId), Box<dyn Error>> {
-        self.server.issue_storage_allocation(seed, grant_id)
+        self.server
+            .issue_storage_allocation(seed, grant_id, expected_grant_revision)
     }
 }
 
@@ -529,12 +575,14 @@ impl MetadataAuthority {
     fn issue_storage_grants(
         &mut self,
         seed: u8,
-        count: u8,
+        read_participation: &[bool],
         consumer_mesh_id: MeshId,
         provider_mesh_id: MeshId,
     ) -> Result<Vec<FederationGrantId>, Box<dyn Error>> {
-        let mut grant_ids = Vec::with_capacity(usize::from(count));
-        for offset in 0..count {
+        let mut grant_ids = Vec::with_capacity(read_participation.len());
+        let grant_count = u8::try_from(read_participation.len())?;
+        for (index, serves_reads) in read_participation.iter().copied().enumerate() {
+            let offset = u8::try_from(index)?;
             let grant_id = FederationGrantId::from_bytes([seed.saturating_add(offset); 16])?;
             let current = self.repository.current_revision()?;
             let next = current.next()?;
@@ -542,7 +590,7 @@ impl MetadataAuthority {
                 &mut self.repository,
                 next.get(),
                 context(
-                    seed.saturating_add(count).saturating_add(offset),
+                    seed.saturating_add(grant_count).saturating_add(offset),
                     self.administrator_id,
                     next.get(),
                     current.get(),
@@ -552,6 +600,7 @@ impl MetadataAuthority {
                     self.relationship_id,
                     consumer_mesh_id,
                     provider_mesh_id,
+                    serves_reads,
                 )?,
             )?;
             grant_ids.push(grant_id);
@@ -563,6 +612,7 @@ impl MetadataAuthority {
         &mut self,
         seed: u8,
         grant_id: FederationGrantId,
+        expected_grant_revision: Revision,
     ) -> Result<(FederationStorageAllocation, NodeId), Box<dyn Error>> {
         let allocation = FederationStorageAllocation::new(
             FederationStorageAllocationId::from_bytes([seed; 16])?,
@@ -588,7 +638,7 @@ impl MetadataAuthority {
             &AuthoritativeCommand::IssueFederationStorageAllocation(
                 IssueFederationStorageAllocation {
                     allocation,
-                    expected_grant_revision: Revision::new(5),
+                    expected_grant_revision,
                 },
             ),
         )?;
