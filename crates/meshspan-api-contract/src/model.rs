@@ -21,6 +21,14 @@ pub struct OperationId(
     String,
 );
 
+impl OperationId {
+    /// Returns the validated canonical UUID text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A durable authenticated-session identifier.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]

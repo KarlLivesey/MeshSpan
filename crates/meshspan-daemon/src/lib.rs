@@ -6,6 +6,9 @@ mod claim_file;
 mod claim_service;
 #[cfg(test)]
 mod claim_service_tests;
+mod create_mesh_setup;
+#[cfg(test)]
+mod create_mesh_setup_tests;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
@@ -14,6 +17,10 @@ pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,
     FirstBootClaimError, FirstBootClaimService,
+};
+pub use create_mesh_setup::{
+    BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, CreateMeshSetupError,
+    CreateMeshSetupService,
 };
 pub use setup_api::{
     SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, setup_api_router,

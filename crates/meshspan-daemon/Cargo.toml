@@ -17,6 +17,7 @@ meshspan-api-contract = { path = "../meshspan-api-contract" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-metadata = { path = "../meshspan-metadata" }
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
