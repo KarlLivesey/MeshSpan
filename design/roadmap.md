@@ -205,8 +205,8 @@ SCL-011–014.
 
 **Depends on:** Stage 3.
 
-**Status:** reopened for federation. The local registered-folder provider remains complete; remote
-partner capacity and its lifecycle evidence are missing.
+**Status:** complete, including capability-scoped federated partner capacity. See
+[`stage-4-evidence.md`](stage-4-evidence.md).
 
 Build:
 
