@@ -170,6 +170,10 @@ define_identifier!(
 );
 define_identifier!(SessionId, "Stable identity of one authentication session.");
 define_identifier!(
+    AuthenticationChallengeId,
+    "Stable identity of one short-lived authentication challenge."
+);
+define_identifier!(
     ActivationPolicyId,
     "Stable identity of one access-activation policy."
 );

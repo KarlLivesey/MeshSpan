@@ -21,6 +21,9 @@ mod federation_storage_lifecycle;
 mod federation_storage_quota;
 mod federation_storage_scrub;
 mod federation_succession_command;
+mod local_authentication_ceremony;
+#[cfg(test)]
+mod local_authentication_ceremony_tests;
 mod local_claim;
 #[cfg(test)]
 mod local_claim_tests;
@@ -109,6 +112,12 @@ pub use federation_storage_scrub::{
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,
     FederationSuccessionEdge, RevokeFederationSuccessorDesignation,
+};
+pub use local_authentication_ceremony::{
+    AuthenticationCeremonyDisposition, AuthenticationCeremonyError, AuthenticationCeremonyKind,
+    AuthenticationCeremonyRecord, AuthenticationCeremonyState,
+    MAXIMUM_AUTHENTICATION_CEREMONY_LIFETIME_MICROS, NewAuthenticationCeremony,
+    ProtectedAuthenticationState,
 };
 pub use local_claim::{
     LocalClaimError, LocalClaimMutationDisposition, LocalClaimRecord, LocalClaimState,
