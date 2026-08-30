@@ -103,8 +103,7 @@ pub enum AccessDecision {
 pub(super) struct Session {
     id: SessionId,
     principal_id: PrincipalId,
-    assurance: AssuranceLevel,
-    latest_authenticated_at: UnixMicros,
+    factor_state: super::session::SessionFactorState,
     identity_revision: Revision,
     expires_at: UnixMicros,
 }
@@ -157,11 +156,11 @@ pub(super) fn evaluate(
         return Ok(AccessDecision::Denied(AccessDenial::StaleIdentity));
     }
     if !super::session::meets_assurance(
-        session.assurance,
-        session.latest_authenticated_at,
+        database.connection(),
+        session.factor_state,
         request.required_assurance,
         request.now,
-    ) {
+    )? {
         return Ok(AccessDecision::Denied(AccessDenial::InsufficientAssurance));
     }
     if revisions.gateway == Revision::ZERO {

@@ -80,12 +80,69 @@ pub(crate) fn check_method_shapes(connection: &Connection) -> Result<(), Metadat
     )?;
     let invalid_session = invalid_session_shape(connection)?;
     let invalid_factor = invalid_session_factor(connection)?;
-    if invalid_subtype == 0 && invalid_lifecycle == 0 && invalid_session == 0 && invalid_factor == 0
+    let invalid_policy = invalid_authentication_policy(connection)?;
+    if invalid_subtype == 0
+        && invalid_lifecycle == 0
+        && invalid_session == 0
+        && invalid_factor == 0
+        && invalid_policy == 0
     {
         Ok(())
     } else {
         Err(MetadataStoreError::IntegrityFailed)
     }
+}
+
+fn invalid_authentication_policy(connection: &Connection) -> Result<i64, rusqlite::Error> {
+    connection.query_row(
+        "SELECT
+            CASE
+                WHEN (SELECT count(*) FROM meshes) = 0 THEN
+                    (SELECT count(*) FROM authentication_policy_revisions) <> 0
+                WHEN (SELECT count(*) FROM meshes) <> 1 THEN 1
+                WHEN (SELECT count(*) FROM (
+                    SELECT service, operation_class
+                    FROM authentication_policy_revisions
+                    GROUP BY service, operation_class
+                )) <> 12 THEN 1
+                WHEN EXISTS(
+                    SELECT 1
+                    FROM authentication_policy_revisions AS policy
+                    WHERE policy.allowed_factor_classes < 1
+                       OR policy.allowed_factor_classes > 15
+                       OR (policy.allowed_factor_classes & 9) = 0
+                       OR policy.minimum_factor_count NOT BETWEEN 1 AND 8
+                       OR policy.maximum_session_duration_micros <= 0
+                       OR (
+                           policy.operation_class IN (1, 2)
+                           AND policy.maximum_step_up_age_micros IS NOT NULL
+                       )
+                       OR (
+                           policy.operation_class IN (3, 4)
+                           AND (
+                               policy.maximum_step_up_age_micros IS NULL
+                               OR policy.maximum_step_up_age_micros <= 0
+                               OR policy.maximum_step_up_age_micros
+                                  > policy.maximum_session_duration_micros
+                           )
+                       )
+                ) THEN 1
+                WHEN EXISTS(
+                    SELECT 1 FROM (
+                        SELECT service, operation_class,
+                               min(policy_sequence) AS first_sequence,
+                               max(policy_sequence) AS last_sequence,
+                               count(*) AS revision_count
+                        FROM authentication_policy_revisions
+                        GROUP BY service, operation_class
+                    )
+                    WHERE first_sequence <> 1 OR last_sequence <> revision_count
+                ) THEN 1
+                ELSE 0
+            END",
+        [],
+        |row| row.get(0),
+    )
 }
 
 fn invalid_session_shape(connection: &Connection) -> Result<i64, rusqlite::Error> {

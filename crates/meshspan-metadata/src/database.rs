@@ -253,6 +253,7 @@ mod tests {
         partition_active_quorum_plan_migration_digest,
         partition_authentication_credential_constraints_migration_digest,
         partition_authentication_method_events_migration_digest,
+        partition_authentication_policy_migration_digest,
         partition_authentication_session_factors_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
@@ -299,7 +300,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 45);
+        assert_eq!(database.check_integrity()?.schema_version, 46);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -349,7 +350,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            45
+            46
         );
         Ok(())
     }
@@ -1292,6 +1293,87 @@ mod tests {
     }
 
     #[test]
+    fn authentication_policy_migration_digest_is_committed() {
+        assert_eq!(
+            partition_authentication_policy_migration_digest(),
+            [
+                0x96, 0xd6, 0x98, 0x96, 0xc1, 0xc2, 0x65, 0x70, 0x53, 0xb0, 0x9f, 0x19, 0xa8, 0x42,
+                0x8b, 0xda, 0x05, 0x4c, 0xff, 0xb7, 0xff, 0xae, 0x3a, 0x2e, 0xb5, 0xbf, 0x38, 0xe5,
+                0x38, 0x2e, 0x33, 0xac,
+            ]
+        );
+    }
+
+    #[test]
+    fn authentication_policy_migration_seeds_complete_existing_mesh_defaults()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory
+            .path()
+            .join("legacy-authentication-policy.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 45, 10)?;
+        let principal = [90_u8; 16];
+        let mesh = [91_u8; 16];
+        let role = [92_u8; 16];
+        connection.execute(
+            "INSERT INTO principals(
+                principal_id, principal_kind, display_name, canonical_name,
+                state, created_at, revision
+             ) VALUES (?1, 1, 'Administrator', 'administrator', 1, 10, 1)",
+            [principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO users(principal_id, primary_email) VALUES (?1, NULL)",
+            [principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO meshes(
+                mesh_id, display_name, canonical_name, created_at,
+                configuration_revision, identity_revision, namespace_revision, revision
+             ) VALUES (?1, 'Existing mesh', 'existing mesh', 10, 1, 1, 1, 1)",
+            [mesh.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO roles(
+                role_id, display_name, canonical_name, system_rights, created_at, revision
+             ) VALUES (?1, 'System administrators', 'system administrators', 255, 10, 1)",
+            [role.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO role_grants(
+                role_id, principal_id, valid_from, valid_until, activation_policy_id,
+                created_by, created_at, revision
+             ) VALUES (?1, ?2, NULL, NULL, NULL, ?2, 10, 1)",
+            params![role.as_slice(), principal.as_slice()],
+        )?;
+
+        migrate_partition(&mut connection, 20)?;
+        let count: i64 = connection.query_row(
+            "SELECT count(*) FROM authentication_policy_revisions",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 12);
+        let policy_id: Vec<u8> = connection.query_row(
+            "SELECT policy_id FROM authentication_policy_revisions
+             WHERE service = 1 AND operation_class = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut expected = [0_u8; 16];
+        expected[0] = 0xa6;
+        expected[14] = 1;
+        expected[15] = 1;
+        assert_eq!(policy_id, expected);
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            46
+        );
+        Ok(())
+    }
+
+    #[test]
     fn authentication_session_migration_revokes_unbound_legacy_sessions_atomically()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;
@@ -1330,7 +1412,7 @@ mod tests {
         assert_eq!(sessions, 0);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            45
+            46
         );
         Ok(())
     }

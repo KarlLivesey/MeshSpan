@@ -8,6 +8,7 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
+use super::authentication_policy::{self, SessionPolicyEvidence};
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{
     CommandContext, IssueAuthenticationSession, RevokeAuthenticationSession,
@@ -17,7 +18,6 @@ use crate::{
 const ACTIVE: i64 = 1;
 const MAXIMUM_FACTORS: usize = 8;
 const MICROS_PER_SECOND: i64 = 1_000_000;
-const DEFAULT_RECENT_STEP_UP_MICROS: i64 = 15 * 60 * MICROS_PER_SECOND;
 
 pub(super) fn issue(
     transaction: &Transaction<'_>,
@@ -31,6 +31,13 @@ pub(super) fn issue(
     if !admitted.iter().any(|factor| factor.kind.is_primary()) {
         return Err(RepositoryError::InvalidCommand);
     }
+    authentication_policy::validate_session_establishment(
+        transaction,
+        command.service,
+        admitted.iter().map(|factor| factor.kind),
+        context.occurred_at,
+        command.expires_at,
+    )?;
     reject_duplicate_session(transaction, command)?;
     let identity_revision = current_identity_revision(transaction)?;
     let session = command.session_id.as_bytes();
@@ -628,6 +635,14 @@ fn credential_reference(factor: &SessionAuthenticationFactor) -> Vec<u8> {
 pub(super) struct SessionFactorState {
     /// Assurance derived from current typed factor classes.
     pub(super) assurance: AssuranceLevel,
+    /// Connector family bound to the session.
+    pub(super) service: AuthenticationService,
+    /// Union of exact current factor classes.
+    pub(super) factor_classes: u8,
+    /// Number of distinct current methods retained by the session.
+    pub(super) factor_count: u8,
+    /// Authoritative session-creation instant.
+    pub(super) issued_at: UnixMicros,
     /// Instant of the most recently accepted factor.
     pub(super) latest_authenticated_at: UnixMicros,
 }
@@ -705,6 +720,7 @@ fn validate_current_factors(
     }
     let mut has_primary = false;
     let mut has_additional = false;
+    let mut factor_classes = 0_u8;
     let mut latest = i64::MIN;
     for (index, factor) in factors.iter().enumerate() {
         let expected_sequence =
@@ -715,6 +731,7 @@ fn validate_current_factors(
         }
         has_primary |= kind.is_primary();
         has_additional |= !kind.is_primary();
+        factor_classes |= kind.class_bit();
         latest = latest.max(factor.authenticated_at);
     }
     if !has_primary || latest == i64::MIN {
@@ -726,6 +743,10 @@ fn validate_current_factors(
         } else {
             AssuranceLevel::SingleFactor
         },
+        service: parse_service(factors[0].service)?,
+        factor_classes,
+        factor_count: u8::try_from(factors.len()).map_err(|_| RepositoryError::CorruptState)?,
+        issued_at: UnixMicros::new(factors[0].issued_at),
         latest_authenticated_at: UnixMicros::new(latest),
     }))
 }
@@ -866,21 +887,34 @@ fn validate_current_credential(
     }
 }
 
-/// Applies the initial recent-step-up window until policy-specific limits replace it.
+/// Applies current service/operation policy to exact session evidence.
 pub(super) fn meets_assurance(
-    actual: AssuranceLevel,
-    latest_authenticated_at: UnixMicros,
+    connection: &Connection,
+    factors: SessionFactorState,
     required: AssuranceLevel,
     now: UnixMicros,
-) -> bool {
-    match required {
-        AssuranceLevel::SingleFactor => actual >= AssuranceLevel::SingleFactor,
-        AssuranceLevel::MultiFactor => actual >= AssuranceLevel::MultiFactor,
-        AssuranceLevel::RecentStepUp => {
-            actual >= AssuranceLevel::MultiFactor
-                && now.get() >= latest_authenticated_at.get()
-                && now.get() - latest_authenticated_at.get() <= DEFAULT_RECENT_STEP_UP_MICROS
-        }
+) -> Result<bool, RepositoryError> {
+    authentication_policy::permits_operation(
+        connection,
+        factors.service,
+        required,
+        SessionPolicyEvidence {
+            assurance: factors.assurance,
+            factor_classes: factors.factor_classes,
+            factor_count: factors.factor_count,
+            issued_at: factors.issued_at,
+            latest_authenticated_at: factors.latest_authenticated_at,
+        },
+        now,
+    )
+}
+
+fn parse_service(value: i64) -> Result<AuthenticationService, RepositoryError> {
+    match value {
+        1 => Ok(AuthenticationService::Https),
+        2 => Ok(AuthenticationService::HeadlessApi),
+        4 => Ok(AuthenticationService::Smb),
+        _ => Err(RepositoryError::CorruptState),
     }
 }
 
@@ -906,35 +940,5 @@ fn parse_boolean(value: i64) -> Result<bool, RepositoryError> {
         0 => Ok(false),
         1 => Ok(true),
         _ => Err(RepositoryError::CorruptState),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use meshspan_domain::{AssuranceLevel, UnixMicros};
-
-    use super::{DEFAULT_RECENT_STEP_UP_MICROS, meets_assurance};
-
-    #[test]
-    fn recent_step_up_is_derived_from_multifactor_recency_not_a_claimed_level() {
-        let authenticated_at = UnixMicros::new(100);
-        assert!(meets_assurance(
-            AssuranceLevel::MultiFactor,
-            authenticated_at,
-            AssuranceLevel::RecentStepUp,
-            UnixMicros::new(100 + DEFAULT_RECENT_STEP_UP_MICROS),
-        ));
-        assert!(!meets_assurance(
-            AssuranceLevel::MultiFactor,
-            authenticated_at,
-            AssuranceLevel::RecentStepUp,
-            UnixMicros::new(101 + DEFAULT_RECENT_STEP_UP_MICROS),
-        ));
-        assert!(!meets_assurance(
-            AssuranceLevel::SingleFactor,
-            authenticated_at,
-            AssuranceLevel::RecentStepUp,
-            UnixMicros::new(101),
-        ));
     }
 }

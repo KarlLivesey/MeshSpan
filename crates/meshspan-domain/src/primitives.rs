@@ -155,6 +155,10 @@ define_identifier!(
     AuthenticationMethodId,
     "Stable identity of one user authentication method."
 );
+define_identifier!(
+    AuthenticationPolicyId,
+    "Stable identity of one immutable authentication-policy revision."
+);
 define_identifier!(ApiKeyId, "Stable public identity of one API key.");
 define_identifier!(
     RecoveryCodeId,

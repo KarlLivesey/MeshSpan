@@ -11,6 +11,9 @@ mod authentication_method_creation;
 mod authentication_method_creation_tests;
 #[cfg(test)]
 mod authentication_method_tests;
+mod authentication_policy;
+#[cfg(test)]
+mod authentication_policy_tests;
 mod backup;
 mod bootstrap;
 mod cleanup_attestation;
@@ -94,6 +97,7 @@ pub use access_query::{
     PermissionGrantRecord, ScopedGrantCursor, SubjectGrantCursor,
 };
 pub use authentication_method::ApiKeyAuthentication;
+pub use authentication_policy::AuthenticationPolicy;
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -543,6 +547,19 @@ impl AuthoritativeRepository {
             required_scopes,
             now,
         )
+    }
+
+    /// Returns the current immutable authentication policy for one service and operation class.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if policy history is missing, discontinuous or structurally invalid.
+    pub fn authentication_policy(
+        &self,
+        service: AuthenticationService,
+        operation_class: meshspan_domain::AuthenticationOperationClass,
+    ) -> Result<AuthenticationPolicy, RepositoryError> {
+        authentication_policy::load(&self.database, service, operation_class)
     }
 
     /// Returns a stable bounded page from one object's current immutable owner set.
@@ -996,6 +1013,9 @@ pub enum RepositoryError {
     /// A per-volume immutable retention-policy sequence is stale.
     #[error("expected version-retention policy is stale")]
     StaleRetentionPolicy,
+    /// A service/operation authentication-policy sequence is stale.
+    #[error("expected authentication policy is stale")]
+    StaleAuthenticationPolicy,
     /// A snapshot-specific compare-and-swap revision is stale.
     #[error("expected volume snapshot revision is stale")]
     StaleSnapshot,

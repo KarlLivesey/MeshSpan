@@ -212,6 +212,7 @@ fn map_repository_error(error: &RepositoryError) -> FederationAuthorityPageSourc
         | RepositoryError::InvalidLogPosition
         | RepositoryError::StaleVolumeHead
         | RepositoryError::StaleRetentionPolicy
+        | RepositoryError::StaleAuthenticationPolicy
         | RepositoryError::StaleSnapshot
         | RepositoryError::StaleSnapshotSchedule
         | RepositoryError::InvalidCommand

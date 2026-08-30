@@ -215,6 +215,28 @@ impl AuthenticationService {
     }
 }
 
+/// Stable operation families governed by authentication policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AuthenticationOperationClass {
+    /// Creation of a new service-bound session.
+    SessionEstablishment = 1,
+    /// Ordinary authenticated file and account operations.
+    Ordinary = 2,
+    /// Security-sensitive administration or permission changes.
+    Privileged = 3,
+    /// Explicit recovery operations with separately audited authority.
+    Recovery = 4,
+}
+
+impl AuthenticationOperationClass {
+    /// Returns the stable storage and wire code.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+}
+
 /// Typed authentication-method family retained as session evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -235,6 +257,54 @@ impl AuthenticationMethodKind {
     pub const fn is_primary(self) -> bool {
         matches!(self, Self::Passkey | Self::ApiKey)
     }
+
+    /// Returns this method's bit in an authentication-policy class set.
+    #[must_use]
+    pub const fn class_bit(self) -> u8 {
+        1 << (self as u8 - 1)
+    }
+}
+
+/// Non-empty, closed set of authentication-method classes allowed by policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticationFactorClasses(u8);
+
+impl AuthenticationFactorClasses {
+    /// Every method class implemented by the initial authentication model.
+    pub const ALL: Self = Self(0b1111);
+
+    /// Validates a non-empty class bitset with no unknown bits.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty set or any bit not assigned to a method class.
+    pub const fn new(bits: u8) -> Result<Self, AuthenticationFactorClassesError> {
+        if bits == 0 || bits & !Self::ALL.0 != 0 {
+            Err(AuthenticationFactorClassesError::InvalidBits)
+        } else {
+            Ok(Self(bits))
+        }
+    }
+
+    /// Returns the stable storage and wire bitset.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Reports whether this set permits one exact method class.
+    #[must_use]
+    pub const fn contains(self, kind: AuthenticationMethodKind) -> bool {
+        self.0 & kind.class_bit() != 0
+    }
+}
+
+/// Rejection of an authentication-policy class bitset.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum AuthenticationFactorClassesError {
+    /// The bitset is empty or contains an unknown method class.
+    #[error("authentication factor classes are empty or contain unknown bits")]
+    InvalidBits,
 }
 
 /// Exact pre-authorised object whose rights require activation.

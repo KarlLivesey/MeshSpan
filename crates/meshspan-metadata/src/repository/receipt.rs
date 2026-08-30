@@ -98,6 +98,8 @@ pub enum EntityKind {
     FederationMutationAdmission = 31,
     /// One user authentication method.
     AuthenticationMethod = 32,
+    /// One immutable service/operation authentication-policy revision.
+    AuthenticationPolicy = 33,
 }
 
 impl EntityKind {
@@ -135,6 +137,7 @@ impl EntityKind {
             30 => Ok(Self::FederationStorageAllocation),
             31 => Ok(Self::FederationMutationAdmission),
             32 => Ok(Self::AuthenticationMethod),
+            33 => Ok(Self::AuthenticationPolicy),
             _ => Err(RepositoryError::CorruptState),
         }
     }
