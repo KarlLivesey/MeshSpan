@@ -183,9 +183,17 @@ fn prove_hostile_receipts(
     excessive.affected_bytes = 1_025;
     let mut wrong_action = receipt(expectation.capability_digest());
     wrong_action.action = RemoteShardAction::Get.into();
+    let mut wrong_allocation = receipt(expectation.capability_digest());
+    wrong_allocation.allocation_id = vec![122; 16];
     let mut predates_issue = receipt(expectation.capability_digest());
     predates_issue.completed_at_unix_micros = 1_499_999;
-    for hostile in [wrong_capability, excessive, wrong_action, predates_issue] {
+    for hostile in [
+        wrong_capability,
+        excessive,
+        wrong_action,
+        wrong_allocation,
+        predates_issue,
+    ] {
         let signed = signed_federation_storage_receipt(
             proof.server_identity,
             context,
@@ -217,9 +225,11 @@ fn prove_signed_hostile_capabilities(
     excessive.maximum_bytes = 2_049;
     let mut wrong_action = capability();
     wrong_action.action = RemoteShardAction::Get.into();
+    let mut wrong_allocation = capability();
+    wrong_allocation.allocation_id = vec![122; 16];
     let mut reflected_nonce = capability();
     reflected_nonce.capability_nonce = vec![114; 32];
-    for hostile in [excessive, wrong_action, reflected_nonce] {
+    for hostile in [excessive, wrong_action, wrong_allocation, reflected_nonce] {
         let signed = signed_federation_storage_capability(
             proof.server_identity,
             response_context,
@@ -278,6 +288,24 @@ fn reject_tampered_request(
         ),
         Err(TransportError::UntrustedFederationPeer)
     ));
+    let mut substituted = original.clone();
+    let Some(meshspan_protocol::v1::federation_envelope::Message::RequestStorageCapability(
+        request,
+    )) = substituted.message.as_mut()
+    else {
+        unreachable!("fixture storage request")
+    };
+    request.allocation_id = vec![122; 16];
+    let mut replay = federation_replay()?;
+    assert!(matches!(
+        registry.authenticate_storage_capability_request(
+            connection,
+            &validated_federation(&substituted, limits)?,
+            UnixMicros::new(1_500_000),
+            &mut replay,
+        ),
+        Err(TransportError::UntrustedFederationPeer)
+    ));
     Ok(())
 }
 
@@ -322,6 +350,7 @@ fn exchange_context(
 fn capability_request() -> RequestFederatedStorageCapability {
     RequestFederatedStorageCapability {
         grant_id: vec![101; 16],
+        allocation_id: vec![121; 16],
         target_id: vec![102; 16],
         target_generation: 7,
         shard: Some(shard()),
@@ -335,6 +364,7 @@ fn capability_request() -> RequestFederatedStorageCapability {
 fn capability() -> FederatedStorageCapability {
     FederatedStorageCapability {
         grant_id: vec![101; 16],
+        allocation_id: vec![121; 16],
         target_id: vec![102; 16],
         target_generation: 7,
         shard: Some(shard()),
@@ -350,6 +380,7 @@ fn capability() -> FederatedStorageCapability {
 fn receipt(capability_digest: [u8; 32]) -> FederatedStorageReceipt {
     FederatedStorageReceipt {
         grant_id: vec![101; 16],
+        allocation_id: vec![121; 16],
         target_id: vec![102; 16],
         target_generation: 7,
         shard: Some(shard()),

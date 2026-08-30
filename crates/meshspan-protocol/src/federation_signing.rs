@@ -457,6 +457,7 @@ mod tests {
         let header = storage_header();
         let mut capability = FederatedStorageCapability {
             grant_id: vec![12; 16],
+            allocation_id: vec![21; 16],
             target_id: vec![13; 16],
             target_generation: 14,
             shard: Some(storage_shard()),
@@ -491,6 +492,7 @@ mod tests {
         let header = storage_header();
         let mut receipt = FederatedStorageReceipt {
             grant_id: vec![12; 16],
+            allocation_id: vec![21; 16],
             target_id: vec![13; 16],
             target_generation: 14,
             shard: Some(storage_shard()),

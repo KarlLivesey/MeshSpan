@@ -135,6 +135,7 @@ message RequestFederatedStorageCapability {
   uint64 maximum_bytes = 6;
   bytes scope_digest = 7;
   bytes signature = 8;
+  bytes allocation_id = 9;
 }
 
 message FederatedStorageCapability {
@@ -148,6 +149,7 @@ message FederatedStorageCapability {
   bytes capability_nonce = 8;
   bytes canonical_capability = 9;
   bytes signature = 10;
+  bytes allocation_id = 11;
 }
 
 message FederatedStorageReceipt {
@@ -161,6 +163,7 @@ message FederatedStorageReceipt {
   bytes capability_digest = 8;
   bytes result_digest = 9;
   bytes signature = 10;
+  bytes allocation_id = 11;
 }
 
 message FetchFederatedStorageInventory {

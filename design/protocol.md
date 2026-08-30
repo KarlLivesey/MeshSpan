@@ -138,9 +138,10 @@ swarms. Its bounded Protobuf catalogue is:
   evidence and an outcome which separately represents accepting-swarm
   durability, owner-history acceptance, protection satisfaction or quarantine;
 - `RequestFederatedStorageCapability` / `FederatedStorageCapability` for an
-  exact grant, target generation, shard, action, byte ceiling, expiry and nonce;
-- `FederatedStorageReceipt` for the exact capability/result digests, affected
-  bytes, completion instant and provider signature; and
+  exact grant allocation, target generation, shard, action, byte ceiling,
+  expiry and nonce;
+- `FederatedStorageReceipt` for the exact allocation, capability/result
+  digests, affected bytes, completion instant and provider signature; and
 - `FetchFederatedStorageInventory` / `FederatedStorageInventoryPage` for bounded
   reconciliation of remotely retained encrypted shards.
 

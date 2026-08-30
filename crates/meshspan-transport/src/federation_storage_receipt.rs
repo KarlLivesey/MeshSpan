@@ -140,6 +140,7 @@ fn verify_receipt_shape(
     let valid_until = UnixMicros::new(capability.valid_until_unix_micros);
     let valid = exact::<32>(&header.replay_nonce)? != expected.capability_response_nonce
         && receipt.grant_id == capability.grant_id
+        && receipt.allocation_id == capability.allocation_id
         && receipt.target_id == capability.target_id
         && receipt.target_generation == capability.target_generation
         && receipt.shard == capability.shard

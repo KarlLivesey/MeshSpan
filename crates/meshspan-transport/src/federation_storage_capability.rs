@@ -435,6 +435,7 @@ fn verify_capability_response_shape(
     let capability_nonce = exact::<32>(&capability.capability_nonce)?;
     let response_nonce = exact::<32>(&header.replay_nonce)?;
     let valid = capability.grant_id == request.grant_id
+        && capability.allocation_id == request.allocation_id
         && capability.target_id == request.target_id
         && capability.target_generation == request.target_generation
         && capability.shard == request.shard
