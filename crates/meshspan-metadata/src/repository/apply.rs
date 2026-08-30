@@ -268,6 +268,21 @@ fn authorise(
             Err(RepositoryError::InvalidCommand)
         };
     }
+    if let AuthoritativeCommand::BootstrapAppliance(value) = command {
+        let existing: i64 = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM principals LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        return if existing == 0
+            && context.actor_principal_id == value.mesh.administrator_id
+            && value.authentication.principal_id == value.mesh.administrator_id
+        {
+            Ok(())
+        } else {
+            Err(RepositoryError::InvalidCommand)
+        };
+    }
     let self_activation_principal = match command {
         AuthoritativeCommand::ActivateGrant(value) => Some(value.principal_id),
         AuthoritativeCommand::ActivateGroup(value) => Some(value.principal_id),
@@ -386,6 +401,9 @@ fn execute(
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
             bootstrap::bootstrap(transaction, partition_id, context, value, revision)
+        }
+        AuthoritativeCommand::BootstrapAppliance(value) => {
+            bootstrap::bootstrap_appliance(transaction, partition_id, context, value, revision)
         }
         AuthoritativeCommand::CreateVolume(value) => {
             namespace::create_volume(transaction, context, value, revision)
@@ -833,7 +851,7 @@ fn advance_applied_position(
 
 fn command_kind(command: &AuthoritativeCommand) -> u8 {
     match command {
-        AuthoritativeCommand::BootstrapMesh(_) => 1,
+        AuthoritativeCommand::BootstrapMesh(_) | AuthoritativeCommand::BootstrapAppliance(_) => 1,
         AuthoritativeCommand::CreateUser(_) => 2,
         AuthoritativeCommand::CreateGroup(_) => 3,
         AuthoritativeCommand::AddGroupMember(_) => 4,
