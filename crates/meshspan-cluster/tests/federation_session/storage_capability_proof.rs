@@ -140,6 +140,70 @@ pub(super) async fn prove_storage_capability_exchange(
         &mut server_replay,
     )
     .await?;
+    prove_federated_repair(
+        proof,
+        &mut local,
+        &mut service,
+        &permit_key,
+        allocation,
+        &payload,
+        &mut client_replay,
+        &mut server_replay,
+    )
+    .await?;
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the integration boundary keeps every independently authenticated runtime input explicit"
+)]
+async fn prove_federated_repair(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    service: &mut RemoteShardService<FolderShardStore>,
+    permit_key: &FederatedStoragePermitMacKey,
+    allocation: FederationStorageAllocation,
+    payload: &BoundedBytes,
+    client_replay: &mut FederationReplayGuard,
+    server_replay: &mut FederationReplayGuard,
+) -> Result<(), Box<dyn Error>> {
+    let repair_now = UnixMicros::new(NOW.get() + 3);
+    let (repair_capability, repair_served) = exchange(
+        proof,
+        local,
+        permit_key,
+        request(allocation, FederationStorageAction::Repair),
+        exchange_values(241, 214, repair_now, UnixMicros::new(1_850_000))?,
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    assert_eq!(repair_served.action, FederationStorageAction::Repair);
+    assert_eq!(
+        repair_served.quota_disposition,
+        Some(FederationStorageQuotaDisposition::Applied)
+    );
+    assert_usage(local, allocation, PAYLOAD.len() as u64, 20)?;
+    let repair_permit =
+        decode_federated_shard_permit(&repair_capability.capability().canonical_capability)?;
+    let repair_presented = PresentedPermit {
+        permit: repair_permit,
+        capability: repair_capability,
+    };
+    let repaired = put_cycle(
+        proof,
+        local,
+        service,
+        permit_key,
+        &repair_presented,
+        payload,
+        repair_now,
+    )
+    .await?;
+    assert_eq!(repaired.shard_receipt.length, PAYLOAD.len() as u64);
+    assert_ne!(repaired.result_digest, [0; 32]);
+    assert_usage(local, allocation, PAYLOAD.len() as u64, 0)?;
     Ok(())
 }
 
