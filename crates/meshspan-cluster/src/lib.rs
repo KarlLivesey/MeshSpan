@@ -54,6 +54,8 @@ mod access_administration_tests;
 #[cfg(test)]
 mod convergence_tests;
 #[cfg(test)]
+mod federation_mutation_relay_tests;
+#[cfg(test)]
 mod filesystem_convergence_tests;
 #[cfg(test)]
 mod handoff_tests;
