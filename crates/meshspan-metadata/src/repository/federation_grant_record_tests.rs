@@ -170,9 +170,13 @@ fn storage_record() -> Result<FederationGrantRecord, Box<dyn std::error::Error>>
     })
 }
 
-fn namespace_policy(rights: Rights, manage_sharing: bool, offline_micros: u64) -> FederationPolicy {
+fn namespace_policy(
+    rights: Rights,
+    allows_downstream_delegation: bool,
+    offline_micros: u64,
+) -> FederationPolicy {
     FederationPolicy::Namespace(NamespaceFederationPolicy::new(
-        FederationAccess::new(rights, manage_sharing),
+        FederationAccess::new(rights, allows_downstream_delegation),
         Some(DurationMicros::new(offline_micros)),
     ))
 }

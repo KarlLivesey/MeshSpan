@@ -53,7 +53,7 @@ fn grant_policy_shapes_and_quarantine_evidence_fail_closed()
 
     let mixed_policy = fixture.database.connection().execute(
         "INSERT INTO federation_grant_restrictions(
-            grant_id, imposing_mesh_id, policy_kind, rights, manage_sharing,
+            grant_id, imposing_mesh_id, policy_kind, rights, allows_downstream_delegation,
             maximum_storage_bytes, counts_towards_protection, serves_reads,
             maximum_offline_micros, policy_digest, revision
          ) VALUES (?1, ?2, 2, 1, NULL, 100, 1, 1, 10, ?3, 1)",
@@ -63,7 +63,7 @@ fn grant_policy_shapes_and_quarantine_evidence_fail_closed()
 
     fixture.database.connection().execute(
         "INSERT INTO federation_grant_restrictions(
-            grant_id, imposing_mesh_id, policy_kind, rights, manage_sharing,
+            grant_id, imposing_mesh_id, policy_kind, rights, allows_downstream_delegation,
             maximum_storage_bytes, counts_towards_protection, serves_reads,
             maximum_offline_micros, policy_digest, revision
          ) VALUES (?1, ?2, 2, NULL, NULL, 100, 1, 0, 10, ?3, 1)",

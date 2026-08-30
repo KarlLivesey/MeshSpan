@@ -105,7 +105,7 @@ pub enum FederationPreset {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FederationAccess {
     rights: Rights,
-    manage_sharing: bool,
+    allows_downstream_delegation: bool,
 }
 
 impl FederationAccess {
@@ -118,7 +118,7 @@ impl FederationAccess {
                     .union(Rights::LIST)
                     .union(Rights::READ_DATA)
                     .union(Rights::READ_ATTRIBUTES),
-                manage_sharing: false,
+                allows_downstream_delegation: false,
             },
             FederationPreset::Edit => Self {
                 rights: Rights::TRAVERSE
@@ -131,21 +131,21 @@ impl FederationAccess {
                     .union(Rights::DELETE)
                     .union(Rights::READ_ATTRIBUTES)
                     .union(Rights::WRITE_ATTRIBUTES),
-                manage_sharing: false,
+                allows_downstream_delegation: false,
             },
             FederationPreset::Manage => Self {
                 rights: Rights::ALL,
-                manage_sharing: true,
+                allows_downstream_delegation: true,
             },
         }
     }
 
     /// Constructs an advanced exact authority without storing a preset label.
     #[must_use]
-    pub const fn new(rights: Rights, manage_sharing: bool) -> Self {
+    pub const fn new(rights: Rights, allows_downstream_delegation: bool) -> Self {
         Self {
             rights,
-            manage_sharing,
+            allows_downstream_delegation,
         }
     }
 
@@ -157,8 +157,8 @@ impl FederationAccess {
 
     /// Reports whether this authority may grant the resource to another swarm.
     #[must_use]
-    pub const fn may_manage_sharing(self) -> bool {
-        self.manage_sharing
+    pub const fn allows_downstream_delegation(self) -> bool {
+        self.allows_downstream_delegation
     }
 
     /// Applies two independent restrictions without allowing either to broaden the other.
@@ -166,7 +166,8 @@ impl FederationAccess {
     pub const fn intersection(self, other: Self) -> Self {
         Self {
             rights: self.rights.intersection(other.rights),
-            manage_sharing: self.manage_sharing && other.manage_sharing,
+            allows_downstream_delegation: self.allows_downstream_delegation
+                && other.allows_downstream_delegation,
         }
     }
 }

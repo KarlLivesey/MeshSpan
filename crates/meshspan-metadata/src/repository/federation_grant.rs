@@ -350,7 +350,7 @@ fn persist_restriction(
     match restriction.policy {
         FederationPolicy::Namespace(policy) => transaction.execute(
             "INSERT INTO federation_grant_restrictions(
-                grant_id, imposing_mesh_id, policy_kind, rights, manage_sharing,
+                grant_id, imposing_mesh_id, policy_kind, rights, allows_downstream_delegation,
                 maximum_storage_bytes, counts_towards_protection, serves_reads,
                 maximum_offline_micros, policy_digest, revision
              ) VALUES (?1, ?2, 1, ?3, ?4, NULL, NULL, NULL, ?5, ?6, ?7)",
@@ -358,7 +358,7 @@ fn persist_restriction(
                 grant_id.as_bytes().as_slice(),
                 restriction.imposing_mesh_id.as_bytes().as_slice(),
                 policy.access().rights().bits(),
-                policy.access().may_manage_sharing(),
+                policy.access().allows_downstream_delegation(),
                 optional_duration(policy.maximum_offline_duration())?,
                 digest.as_slice(),
                 to_i64(revision.get())?,
@@ -366,7 +366,7 @@ fn persist_restriction(
         )?,
         FederationPolicy::Storage(policy) => transaction.execute(
             "INSERT INTO federation_grant_restrictions(
-                grant_id, imposing_mesh_id, policy_kind, rights, manage_sharing,
+                grant_id, imposing_mesh_id, policy_kind, rights, allows_downstream_delegation,
                 maximum_storage_bytes, counts_towards_protection, serves_reads,
                 maximum_offline_micros, policy_digest, revision
              ) VALUES (?1, ?2, 2, NULL, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -473,7 +473,7 @@ pub(super) fn load_restrictions(
     grant_id: FederationGrantId,
 ) -> Result<Vec<FederationGrantRestriction>, RepositoryError> {
     let mut statement = connection.prepare(
-        "SELECT imposing_mesh_id, policy_kind, rights, manage_sharing, maximum_storage_bytes,
+        "SELECT imposing_mesh_id, policy_kind, rights, allows_downstream_delegation, maximum_storage_bytes,
                 counts_towards_protection, serves_reads, maximum_offline_micros,
                 policy_digest
          FROM federation_grant_restrictions WHERE grant_id = ?1 ORDER BY imposing_mesh_id",
@@ -544,7 +544,8 @@ pub(super) fn policy_is_no_broader(next: FederationPolicy, prior: FederationPoli
     match (next, prior) {
         (FederationPolicy::Namespace(next), FederationPolicy::Namespace(prior)) => {
             next.access().rights().intersection(prior.access().rights()) == next.access().rights()
-                && (!next.access().may_manage_sharing() || prior.access().may_manage_sharing())
+                && (!next.access().allows_downstream_delegation()
+                    || prior.access().allows_downstream_delegation())
                 && duration_is_no_broader(
                     next.maximum_offline_duration(),
                     prior.maximum_offline_duration(),
@@ -622,7 +623,7 @@ fn resource_columns(
 fn parse_policy(
     kind: i64,
     rights: Option<i64>,
-    manage_sharing: Option<i64>,
+    allows_downstream_delegation: Option<i64>,
     maximum_storage_bytes: Option<i64>,
     counts_towards_protection: Option<i64>,
     serves_reads: Option<i64>,
@@ -638,9 +639,9 @@ fn parse_policy(
                 .map_err(|_| RepositoryError::CorruptState)?;
             let rights = meshspan_domain::Rights::from_bits(bits)
                 .map_err(|_| RepositoryError::CorruptState)?;
-            let manage = parse_bool(manage_sharing)?;
+            let allows_downstream_delegation = parse_bool(allows_downstream_delegation)?;
             Ok(FederationPolicy::Namespace(NamespaceFederationPolicy::new(
-                FederationAccess::new(rights, manage),
+                FederationAccess::new(rights, allows_downstream_delegation),
                 offline,
             )))
         }
