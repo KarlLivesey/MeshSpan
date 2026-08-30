@@ -24,6 +24,9 @@ mod federation_succession_command;
 mod local_claim;
 #[cfg(test)]
 mod local_claim_tests;
+mod local_setup;
+#[cfg(test)]
+mod local_setup_tests;
 mod migration;
 mod name;
 mod repository;
@@ -108,6 +111,10 @@ pub use federation_succession_command::{
 pub use local_claim::{
     LocalClaimError, LocalClaimMutationDisposition, LocalClaimRecord, LocalClaimState,
     NewLocalClaim,
+};
+pub use local_setup::{
+    LocalSetupDisposition, LocalSetupError, LocalSetupKind, LocalSetupRecord, LocalSetupState,
+    NewLocalSetup,
 };
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};

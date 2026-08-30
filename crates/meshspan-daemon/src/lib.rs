@@ -15,7 +15,9 @@ pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,
     FirstBootClaimError, FirstBootClaimService,
 };
-pub use setup_api::{SetupApiError, SetupStateSnapshot, SetupStatusSource, setup_api_router};
+pub use setup_api::{
+    SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, setup_api_router,
+};
 
 use meshspan_domain::{EntropyError, RandomSource};
 

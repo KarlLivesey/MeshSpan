@@ -14,6 +14,9 @@ use axum::routing::get;
 use meshspan_api_contract::{
     SetupState, SetupStatusResponse, encode_setup_status_response, generate_openapi,
 };
+use meshspan_metadata::{
+    LocalClaimError, LocalClaimState, LocalDatabase, LocalSetupError, LocalSetupState,
+};
 use thiserror::Error;
 
 const CLAIM_REQUIRED: u8 = 1;
@@ -45,6 +48,39 @@ impl SetupStateSnapshot {
     /// Publishes one lifecycle transition for subsequent API reads.
     pub fn store(&self, state: SetupState) {
         self.state.store(encode_state(state), Ordering::Release);
+    }
+
+    /// Verifies durable claim/setup evidence and publishes the resulting lifecycle state.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if local evidence is unreadable or its claim and setup states disagree.
+    pub fn reconcile(&self, database: &LocalDatabase) -> Result<SetupState, SetupLifecycleError> {
+        let setup = database.local_setup()?;
+        let next = if let Some(setup) = setup {
+            let claim = database
+                .local_claim_record(setup.claim_id)?
+                .ok_or(SetupLifecycleError::Inconsistent)?;
+            match setup.state {
+                LocalSetupState::Prepared | LocalSetupState::AuthorityCommitted
+                    if claim.state == LocalClaimState::Active =>
+                {
+                    SetupState::Configuring
+                }
+                LocalSetupState::Configured if claim.state == LocalClaimState::Consumed => {
+                    SetupState::Configured
+                }
+                LocalSetupState::Prepared
+                | LocalSetupState::AuthorityCommitted
+                | LocalSetupState::Configured => return Err(SetupLifecycleError::Inconsistent),
+            }
+        } else if database.active_local_claim()?.is_some() {
+            SetupState::ClaimRequired
+        } else {
+            return Err(SetupLifecycleError::Inconsistent);
+        };
+        self.store(next);
+        Ok(next)
     }
 }
 
@@ -137,4 +173,18 @@ pub enum SetupApiError {
     /// The generated schema digest could not be represented as an HTTP header.
     #[error("public API schema digest is invalid")]
     Header(#[from] axum::http::header::InvalidHeaderValue),
+}
+
+/// Failure to derive public setup state from durable local evidence.
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum SetupLifecycleError {
+    /// Setup journal persistence or validation failed.
+    #[error("local setup state is unavailable")]
+    Setup(#[from] LocalSetupError),
+    /// Claim persistence or validation failed.
+    #[error("local claim state is unavailable")]
+    Claim(#[from] LocalClaimError),
+    /// Individually valid claim and setup records disagree.
+    #[error("local claim and setup state are inconsistent")]
+    Inconsistent,
 }

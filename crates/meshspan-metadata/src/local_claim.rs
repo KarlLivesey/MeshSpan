@@ -197,40 +197,12 @@ impl LocalDatabase {
         let transaction = self
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let record = load_by_id(&transaction, claim_id)?.ok_or(LocalClaimError::Rejected)?;
-        if !digests_match(record.secret_digest, presented_secret_digest) {
-            return Err(LocalClaimError::Rejected);
+        let disposition =
+            consume_in_transaction(&transaction, claim_id, presented_secret_digest, consumed_at)?;
+        if disposition == LocalClaimMutationDisposition::Applied {
+            transaction.commit()?;
         }
-        match record.state {
-            LocalClaimState::Active => {
-                if consumed_at < record.created_at {
-                    return Err(LocalClaimError::Invalid);
-                }
-                let revision = next_revision(record.revision)?;
-                let changed = transaction.execute(
-                    "UPDATE local_claim_bundles
-                     SET state = ?1, consumed_at = ?2, revision = ?3
-                     WHERE claim_id = ?4 AND state = ?5 AND revision = ?6",
-                    params![
-                        CONSUMED,
-                        consumed_at.get(),
-                        revision_i64(revision)?,
-                        claim_id.as_bytes().as_slice(),
-                        ACTIVE,
-                        revision_i64(record.revision)?,
-                    ],
-                )?;
-                if changed != 1 {
-                    return Err(LocalClaimError::Conflict);
-                }
-                transaction.commit()?;
-                Ok(LocalClaimMutationDisposition::Applied)
-            }
-            LocalClaimState::Consumed if record.consumed_at == Some(consumed_at) => {
-                Ok(LocalClaimMutationDisposition::Replayed)
-            }
-            LocalClaimState::Consumed | LocalClaimState::Rotated => Err(LocalClaimError::Rejected),
-        }
+        Ok(disposition)
     }
 
     /// Loads and independently validates the current active claim, if one exists.
@@ -363,7 +335,7 @@ fn load_active(
     record.map(validate_record).transpose()
 }
 
-fn load_by_id(
+pub(crate) fn load_by_id(
     connection: &rusqlite::Connection,
     claim_id: ClaimId,
 ) -> Result<Option<LocalClaimRecord>, LocalClaimError> {
@@ -454,7 +426,7 @@ fn matches_new(record: LocalClaimRecord, claim: NewLocalClaim) -> bool {
         && record.rotated_at.is_none()
 }
 
-fn digests_match(expected: [u8; 32], presented: [u8; 32]) -> bool {
+pub(crate) fn digests_match(expected: [u8; 32], presented: [u8; 32]) -> bool {
     expected
         .iter()
         .zip(presented)
@@ -462,4 +434,48 @@ fn digests_match(expected: [u8; 32], presented: [u8; 32]) -> bool {
             difference | (expected ^ presented)
         })
         == 0
+}
+
+pub(crate) fn consume_in_transaction(
+    transaction: &Transaction<'_>,
+    claim_id: ClaimId,
+    presented_secret_digest: [u8; 32],
+    consumed_at: UnixMicros,
+) -> Result<LocalClaimMutationDisposition, LocalClaimError> {
+    if presented_secret_digest == [0; 32] {
+        return Err(LocalClaimError::Rejected);
+    }
+    let record = load_by_id(transaction, claim_id)?.ok_or(LocalClaimError::Rejected)?;
+    if !digests_match(record.secret_digest, presented_secret_digest) {
+        return Err(LocalClaimError::Rejected);
+    }
+    match record.state {
+        LocalClaimState::Active => {
+            if consumed_at < record.created_at {
+                return Err(LocalClaimError::Invalid);
+            }
+            let revision = next_revision(record.revision)?;
+            let changed = transaction.execute(
+                "UPDATE local_claim_bundles
+                 SET state = ?1, consumed_at = ?2, revision = ?3
+                 WHERE claim_id = ?4 AND state = ?5 AND revision = ?6",
+                params![
+                    CONSUMED,
+                    consumed_at.get(),
+                    revision_i64(revision)?,
+                    claim_id.as_bytes().as_slice(),
+                    ACTIVE,
+                    revision_i64(record.revision)?,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(LocalClaimError::Conflict);
+            }
+            Ok(LocalClaimMutationDisposition::Applied)
+        }
+        LocalClaimState::Consumed if record.consumed_at == Some(consumed_at) => {
+            Ok(LocalClaimMutationDisposition::Replayed)
+        }
+        LocalClaimState::Consumed | LocalClaimState::Rotated => Err(LocalClaimError::Rejected),
+    }
 }

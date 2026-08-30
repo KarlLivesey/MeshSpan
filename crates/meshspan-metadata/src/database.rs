@@ -246,8 +246,9 @@ mod tests {
         local_federation_storage_capability_migration_digest,
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
-        local_federation_storage_scrub_migration_digest, local_migration_digest, migrate_local,
-        migrate_local_through, migrate_partition, migrate_partition_through,
+        local_federation_storage_scrub_migration_digest, local_migration_digest,
+        local_setup_operation_migration_digest, migrate_local, migrate_local_through,
+        migrate_partition, migrate_partition_through,
         partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
@@ -592,7 +593,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 7);
+        assert_eq!(database.schema_version(), 8);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -673,7 +674,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(database.check_integrity()?.schema_version, 7);
+        assert_eq!(database.check_integrity()?.schema_version, 8);
         Ok(())
     }
 
@@ -962,6 +963,14 @@ mod tests {
                 0x7c, 0xd7, 0x7b, 0x8e, 0x91, 0x06, 0xc7, 0x88, 0x36, 0xa8, 0xec, 0x0d, 0xc3, 0xad,
                 0xe2, 0x65, 0xc8, 0xab, 0x35, 0x69, 0x5f, 0x45, 0x9a, 0x6a, 0xed, 0x9f, 0xef, 0x1e,
                 0x06, 0x01, 0x10, 0x90,
+            ]
+        );
+        assert_eq!(
+            local_setup_operation_migration_digest(),
+            [
+                0xeb, 0xb2, 0xed, 0x6b, 0x07, 0x6e, 0xd1, 0xa5, 0xb5, 0xf2, 0xd0, 0x9d, 0xb1, 0x14,
+                0xd2, 0x19, 0x89, 0xe6, 0x78, 0x84, 0x62, 0x80, 0xf9, 0xbd, 0x3f, 0x28, 0xa4, 0xcb,
+                0xf4, 0xd4, 0xfe, 0x87,
             ]
         );
     }
