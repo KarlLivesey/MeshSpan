@@ -8,6 +8,7 @@ mod federation;
 mod federation_access;
 mod federation_graph;
 mod federation_mutation;
+mod federation_route;
 mod federation_storage;
 mod lifecycle;
 mod operation;
@@ -36,6 +37,9 @@ pub use federation_access::{
 };
 pub use federation_graph::{FederationGraph, FederationGraphError, FederationRelationshipKind};
 pub use federation_mutation::FederatedMutationAcknowledgement;
+pub use federation_route::{
+    FederationGrantRoute, FederationGrantRouteError, MAXIMUM_FEDERATION_ROUTE_MESHES,
+};
 pub use federation_storage::{
     FederationStorageAction, FederationStorageActionError, FederationStorageAllocation,
     FederationStorageAllocationError,
