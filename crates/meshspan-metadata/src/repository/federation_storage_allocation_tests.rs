@@ -14,14 +14,14 @@ use tempfile::tempdir;
 use super::apply::ApplyFaultPoint;
 use super::{
     ApplyDisposition, AuthoritativeRepository, EntityKind, FederationStorageAllocationState,
-    InvariantKind, LogPosition, PageLimit, RepositoryError,
+    FederationStorageAuthorityRequest, InvariantKind, LogPosition, PageLimit, RepositoryError,
 };
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
     FederationGovernanceDirection, FederationGrantRestriction, FederationTrustIdentity,
     IssueFederationGrant, IssueFederationStorageAllocation, PartitionDatabase,
-    ProposeFederationRelationship, RecordName, RevokeFederationRelationship,
-    RevokeFederationStorageAllocation,
+    ProposeFederationRelationship, RecordName, RestrictFederationRelationship,
+    RevokeFederationRelationship, RevokeFederationStorageAllocation,
 };
 
 #[test]
@@ -40,6 +40,7 @@ fn bilateral_quota_is_disjoint_reusable_and_durable() -> Result<(), Box<dyn std:
         EntityKind::FederationStorageAllocation
     );
     apply_allocation(&mut repository, 6, 35, ids, second)?;
+    assert_active_authority(&repository, ids, first)?;
 
     let over_limit = allocation(ids, 36, 37, 1, 1, 15, 19)?;
     assert!(matches!(
@@ -95,6 +96,11 @@ fn bilateral_quota_is_disjoint_reusable_and_durable() -> Result<(), Box<dyn std:
     assert_eq!(revoked.state, FederationStorageAllocationState::Revoked);
     assert_eq!(revoked.revoked_at, Some(UnixMicros::new(25)));
     assert_eq!(revoked.revision, Revision::new(8));
+    assert!(
+        repository
+            .active_federation_storage_allocation_authority(authority_request(ids, reused, 1, 25,))?
+            .is_none()
+    );
     drop(repository);
 
     let reopened = AuthoritativeRepository::new(PartitionDatabase::open(
@@ -119,12 +125,36 @@ fn bilateral_quota_is_disjoint_reusable_and_durable() -> Result<(), Box<dyn std:
     Ok(())
 }
 
+fn assert_active_authority(
+    repository: &AuthoritativeRepository,
+    ids: FixtureIds,
+    allocation: FederationStorageAllocation,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let authority = repository
+        .active_federation_storage_allocation_authority(authority_request(ids, allocation, 20, 15))?
+        .ok_or("active allocation authority missing")?;
+    assert_eq!(authority.allocation(), allocation);
+    assert_eq!(authority.remote_mesh_id(), ids.remote_mesh);
+    assert_eq!(authority.requested_bytes(), 20);
+    assert!(authority.participation().serves_reads());
+    assert!(
+        repository
+            .active_federation_storage_allocation_authority(FederationStorageAuthorityRequest {
+                remote_mesh_id: ids.local_mesh,
+                ..authority_request(ids, allocation, 20, 15)
+            })?
+            .is_none()
+    );
+    Ok(())
+}
+
 #[test]
 fn issuance_revalidates_every_authority_fence() -> Result<(), Box<dyn std::error::Error>> {
     reject_stale_grant_revision()?;
     reject_unknown_provider_node()?;
     reject_outside_grant_interval()?;
     reject_non_provider_mesh_grant()?;
+    reject_restricted_relationship_epoch()?;
     reject_revoked_relationship()
 }
 
@@ -298,6 +328,39 @@ fn reject_revoked_relationship() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn reject_restricted_relationship_epoch() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let ids = fixture.ids;
+    let mut repository = fixture.repository;
+    prepare_storage_authority(&mut repository, ids)?;
+    apply(
+        &mut repository,
+        5,
+        context(84, ids.administrator, 6, 4)?,
+        &AuthoritativeCommand::RestrictFederationRelationship(RestrictFederationRelationship {
+            relationship_id: ids.relationship,
+            expected_authority_epoch: 1,
+            authority_epoch: 2,
+            reason: "Capacity authority narrowed".to_owned(),
+        }),
+    )?;
+    let value = allocation(ids, 85, 86, 1, 10, 10, 20)?;
+    assert!(matches!(
+        repository.apply_committed(
+            position(6),
+            context(87, ids.administrator, 7, 5)?,
+            &issue(value),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert!(
+        repository
+            .active_federation_storage_allocation_authority(authority_request(ids, value, 1, 15))?
+            .is_none()
+    );
+    Ok(())
+}
+
 fn assert_invalid_without_revision(
     repository: &mut AuthoritativeRepository,
     ids: FixtureIds,
@@ -441,6 +504,25 @@ fn allocation(
         UnixMicros::new(valid_from),
         UnixMicros::new(valid_until),
     )?)
+}
+
+const fn authority_request(
+    ids: FixtureIds,
+    allocation: FederationStorageAllocation,
+    requested_bytes: u64,
+    observed_at: i64,
+) -> FederationStorageAuthorityRequest {
+    FederationStorageAuthorityRequest {
+        relationship_id: ids.relationship,
+        remote_mesh_id: ids.remote_mesh,
+        provider_node_id: ids.provider_node,
+        allocation_id: allocation.allocation_id(),
+        grant_id: ids.grant,
+        target_id: allocation.target_id(),
+        target_generation: allocation.target_generation(),
+        requested_bytes,
+        observed_at: UnixMicros::new(observed_at),
+    }
 }
 
 const fn issue(allocation: FederationStorageAllocation) -> AuthoritativeCommand {

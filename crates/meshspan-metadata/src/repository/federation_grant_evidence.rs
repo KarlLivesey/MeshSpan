@@ -115,13 +115,20 @@ pub(super) fn active_grant(
     database: &PartitionDatabase,
     grant_id: FederationGrantId,
 ) -> Result<Option<FederationGrantRecord>, RepositoryError> {
-    let Some(record) = load_verified(database.connection(), grant_id)? else {
+    load_active_verified(database.connection(), grant_id)
+}
+
+pub(super) fn load_active_verified(
+    connection: &Connection,
+    grant_id: FederationGrantId,
+) -> Result<Option<FederationGrantRecord>, RepositoryError> {
+    let Some(record) = load_verified(connection, grant_id)? else {
         return Ok(None);
     };
     if record.state == FederationGrantState::Revoked {
         return Ok(None);
     }
-    if is_current_authority(database.connection(), &record)? {
+    if is_current_authority(connection, &record)? {
         Ok(Some(record))
     } else {
         Ok(None)
