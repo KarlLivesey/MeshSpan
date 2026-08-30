@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use super::{AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository, LogPosition};
+use super::{
+    AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository,
+    BrowserSessionAccessRequest, BrowserSessionProtection, LogPosition, SessionAccessDecision,
+    SessionAccessDenial, SessionAccessRequest,
+};
 use crate::{
     ActivateGrant, AddGroupMember, AuthoritativeCommand, BootstrapMesh, CommandContext,
     CreateActivationPolicy, CreateAuthenticationMethod, CreateGroup, CreateObject, CreateUser,
@@ -80,6 +84,63 @@ fn nested_inherited_grant_is_bounded_and_admin_role_is_not_file_authority()
             .evaluate_access(request(&fixture, [43; 32], Rights::READ_DATA, 200,))?,
         AccessDecision::Denied(AccessDenial::MissingRights)
     );
+    Ok(())
+}
+
+#[test]
+fn browser_session_access_binds_cookie_identity_and_csrf_for_mutations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = build_fixture(false)?;
+    let session_id = SessionId::from_bytes([47; 16])?;
+    let user = fixture.user;
+    issue_session(&mut fixture, user, session_id, [48; 32])?;
+    let session = SessionAccessRequest {
+        token_digest: [48; 32],
+        required_assurance: AssuranceLevel::SingleFactor,
+        gateway_node_id: fixture.gateway,
+        gateway_incarnation: 1,
+        now: UnixMicros::new(200),
+    };
+    let read = BrowserSessionAccessRequest {
+        expected_session_id: session_id,
+        session,
+        protection: BrowserSessionProtection::Read,
+    };
+    assert!(matches!(
+        fixture.repository.evaluate_browser_session_access(read)?,
+        SessionAccessDecision::Granted(_)
+    ));
+    let mutation = BrowserSessionAccessRequest {
+        protection: BrowserSessionProtection::Mutation {
+            csrf_digest: [50; 32],
+        },
+        ..read
+    };
+    assert!(matches!(
+        fixture
+            .repository
+            .evaluate_browser_session_access(mutation)?,
+        SessionAccessDecision::Granted(_)
+    ));
+    for rejected in [
+        BrowserSessionAccessRequest {
+            protection: BrowserSessionProtection::Mutation {
+                csrf_digest: [51; 32],
+            },
+            ..read
+        },
+        BrowserSessionAccessRequest {
+            expected_session_id: SessionId::from_bytes([52; 16])?,
+            ..read
+        },
+    ] {
+        assert_eq!(
+            fixture
+                .repository
+                .evaluate_browser_session_access(rejected)?,
+            SessionAccessDecision::Denied(SessionAccessDenial::Unavailable)
+        );
+    }
     Ok(())
 }
 
