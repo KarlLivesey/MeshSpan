@@ -162,6 +162,12 @@ impl AuthenticatedFederationContentLayoutPage {
         &self.page.chunks
     }
 
+    /// Returns one signed exact provider route for each portable chunk record.
+    #[must_use]
+    pub fn shard_routes(&self) -> &[meshspan_protocol::v1::FederatedContentShardRoute] {
+        &self.page.shard_routes
+    }
+
     /// Returns the opaque signed continuation, empty only at the end.
     #[must_use]
     pub fn next_cursor(&self) -> &[u8] {

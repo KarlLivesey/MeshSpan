@@ -8,21 +8,26 @@ use std::io::Write;
 use std::time::Duration;
 
 use meshspan_cluster::{
-    FederationContentLayoutFetchRequest, FederationContentLayoutServeRequest,
-    FederationContentLayoutServices, FederationHistoryObjectServeRequest,
-    FederationHistoryObjectServices, FederationSessionError, FilesystemFederationContentSource,
-    FilesystemFederationHistorySource,
+    FederationContentHealingRequest, FederationContentLayoutFetchRequest,
+    FederationContentLayoutServeRequest, FederationContentLayoutServices,
+    FederationContentLayoutSourceError, FederationContentRouteSource,
+    FederationContentShardFetchRequest, FederationContentShardFetchServices,
+    FederationContentShardProviderBinding, FederationContentShardServeRequest,
+    FederationContentShardServices, FederationHistoryObjectServeRequest,
+    FederationHistoryObjectServices, FederationSessionError,
+    FilesystemFederationContentShardSource, FilesystemFederationContentSource,
+    FilesystemFederationHistorySource, heal_federated_content_shard,
 };
 use meshspan_contracts::StoragePermitMacKey;
 use meshspan_domain::{
-    ContentManifestId, DurationMicros, EntropyError, MeshId, OperationId, RandomSource, Revision,
-    TargetId, UnixMicros,
+    ContentManifestId, DurationMicros, EntropyError, MeshId, NodeId, OperationId, RandomSource,
+    Revision, TargetId, UnixMicros,
 };
 use meshspan_filesystem::{
-    CompletedStage, ContentChunkLimits, ContentKeyEnvelopeCipher, ContentPublicationRequest,
-    DurableContentPublisher, NamespaceHistoryImmutableRecord, PublishedContentReference,
-    UnprotectedContentAccess, UnprotectedContentPublisher, VersionPublicationStore,
-    VolumeKeyEncryptionKey,
+    CompletedStage, ContentChunkLimits, ContentKeyEnvelopeCipher, ContentPublicationError,
+    ContentPublicationRequest, ContentReadRequest, DurableContentPublisher, DurableContentReader,
+    NamespaceHistoryImmutableRecord, PublishedContentReference, UnprotectedContentAccess,
+    UnprotectedContentPublisher, VersionPublicationStore, VolumeKeyEncryptionKey,
 };
 use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_storage::{
@@ -46,8 +51,8 @@ pub(super) async fn prove_federated_content_layout(
     let root = tempdir()?;
     let source_state = root.path().join("source-filesystem");
     let registration = registration(proof.server_mesh)?;
-    let provider = provider(root.path(), registration)?;
-    let content = publish_content(&source_state, provider, registration)?;
+    let provider = provider(root.path(), "source", registration)?;
+    let (content, provider) = publish_content(&source_state, provider, registration)?;
     publish_namespace(&source_state, content)?;
 
     let history = FilesystemFederationHistorySource::new(&source_state);
@@ -65,16 +70,73 @@ pub(super) async fn prove_federated_content_layout(
     .map_err(|error| format!("manifest advertisement proof failed: {error}"))?;
 
     let source = FilesystemFederationContentSource::new(&source_state);
+    let routes = StaticContentRoutes {
+        node_id: NodeId::from_bytes([211; 16])?,
+        target_id: registration.target_id,
+        target_generation: registration.generation,
+    };
     let source_keys = source_key_cipher()?;
     let target_keys = target_key_cipher()?;
-    let first = fetch_page(
+    prove_advertised_content_layout(
         proof,
         fixture,
         &source,
+        &routes,
         &client_grants,
         &server_grants,
         &source_keys,
         &target_keys,
+        &source_state,
+        provider,
+        registration,
+        root.path(),
+        content,
+        export_token,
+        manifest_object_digest,
+    )
+    .await?;
+    prove_unadvertised_manifest_fails_closed(
+        proof,
+        fixture,
+        &source,
+        &routes,
+        &client_grants,
+        &server_grants,
+        &source_keys,
+        &target_keys,
+        content,
+        manifest_object_digest,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prove_advertised_content_layout(
+    proof: &SessionProof<'_>,
+    fixture: &BranchFixture,
+    source: &FilesystemFederationContentSource,
+    routes: &StaticContentRoutes,
+    client_grants: &StaticBranchAuthority,
+    server_grants: &StaticBranchAuthority,
+    source_keys: &ContentKeyEnvelopeCipher,
+    target_keys: &ContentKeyEnvelopeCipher,
+    source_state: &std::path::Path,
+    provider: FolderShardStore,
+    registration: FolderRegistration,
+    root: &std::path::Path,
+    content: PublishedContentReference,
+    export_token: [u8; 32],
+    manifest_object_digest: [u8; 32],
+) -> Result<(), Box<dyn Error>> {
+    let first = fetch_page(
+        proof,
+        fixture,
+        source,
+        routes,
+        client_grants,
+        server_grants,
+        source_keys,
+        target_keys,
         content,
         export_token,
         manifest_object_digest,
@@ -90,25 +152,20 @@ pub(super) async fn prove_federated_content_layout(
         first.received.header.wrapped_key,
     )?;
     let first_page = first.received.page.as_ref().ok_or("missing first page")?;
-    assert_eq!(
-        first_page
-            .chunks()
-            .iter()
-            .map(|chunk| chunk.chunk_index)
-            .collect::<Vec<_>>(),
-        vec![0, 1]
-    );
+    assert_eq!(chunk_indexes(first_page), vec![0, 1]);
     assert_eq!(first.served.chunk_count, 2);
     assert!(first.served.has_next_page);
+    assert_eq!(first.received.routes.len(), 2);
 
     let second = fetch_page(
         proof,
         fixture,
-        &source,
-        &client_grants,
-        &server_grants,
-        &source_keys,
-        &target_keys,
+        source,
+        routes,
+        client_grants,
+        server_grants,
+        source_keys,
+        target_keys,
         content,
         export_token,
         manifest_object_digest,
@@ -120,28 +177,52 @@ pub(super) async fn prove_federated_content_layout(
     .map_err(|error| format!("continuation content layout page failed: {error}"))?;
     assert_eq!(second.received.header, first.received.header);
     let second_page = second.received.page.as_ref().ok_or("missing final page")?;
-    assert_eq!(
-        second_page
-            .chunks()
-            .iter()
-            .map(|chunk| chunk.chunk_index)
-            .collect::<Vec<_>>(),
-        vec![2]
-    );
+    assert_eq!(chunk_indexes(second_page), vec![2]);
     assert!(second.received.next_cursor.is_empty());
     assert!(!second.served.has_next_page);
-    prove_unadvertised_manifest_fails_closed(
+    let shard_source = FilesystemFederationContentShardSource::new(
+        source_state,
+        provider,
+        FederationContentShardProviderBinding {
+            mesh_id: registration.mesh_id,
+            provider_node_id: routes.node_id,
+            target_id: registration.target_id,
+            target_generation: registration.generation,
+            maximum_shard_bytes: 1_024,
+        },
+        StoragePermitMacKey::from_bytes(STORAGE_PERMIT_KEY)?,
+    )?;
+    let shard_routes = first
+        .received
+        .routes
+        .as_slice()
+        .iter()
+        .chain(second.received.routes.as_slice())
+        .copied()
+        .collect::<Vec<_>>();
+    prove_content_healing(
         proof,
         fixture,
-        &source,
-        &client_grants,
-        &server_grants,
-        &source_keys,
-        &target_keys,
+        client_grants,
+        server_grants,
+        &shard_source,
+        root,
         content,
+        export_token,
         manifest_object_digest,
+        first.received.header,
+        &[first_page.clone(), second_page.clone()],
+        &shard_routes,
     )
-    .await
+    .await?;
+    Ok(())
+}
+
+fn chunk_indexes(page: &meshspan_filesystem::ContentLayoutTransferPage) -> Vec<u64> {
+    page.chunks()
+        .iter()
+        .map(|chunk| chunk.chunk_index)
+        .collect()
 }
 
 struct PageExchange {
@@ -149,11 +230,31 @@ struct PageExchange {
     served: meshspan_cluster::ServedFederationContentLayoutPage,
 }
 
+struct StaticContentRoutes {
+    node_id: NodeId,
+    target_id: TargetId,
+    target_generation: u64,
+}
+
+impl FederationContentRouteSource for StaticContentRoutes {
+    fn provider_node(
+        &self,
+        target_id: TargetId,
+        target_generation: u64,
+    ) -> Result<Option<NodeId>, FederationContentLayoutSourceError> {
+        Ok(
+            (target_id == self.target_id && target_generation == self.target_generation)
+                .then_some(self.node_id),
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn fetch_page(
     proof: &SessionProof<'_>,
     fixture: &BranchFixture,
     source: &FilesystemFederationContentSource,
+    routes: &StaticContentRoutes,
     client_grants: &StaticBranchAuthority,
     server_grants: &StaticBranchAuthority,
     source_keys: &ContentKeyEnvelopeCipher,
@@ -195,6 +296,7 @@ async fn fetch_page(
             proof.server_authority,
             server_grants,
             source,
+            routes,
             source_keys,
             &mut server_random,
         ),
@@ -239,6 +341,7 @@ async fn prove_unadvertised_manifest_fails_closed(
     proof: &SessionProof<'_>,
     fixture: &BranchFixture,
     source: &FilesystemFederationContentSource,
+    routes: &StaticContentRoutes,
     client_grants: &StaticBranchAuthority,
     server_grants: &StaticBranchAuthority,
     source_keys: &ContentKeyEnvelopeCipher,
@@ -279,6 +382,7 @@ async fn prove_unadvertised_manifest_fails_closed(
                     proof.server_authority,
                     server_grants,
                     source,
+                    routes,
                     source_keys,
                     &mut server_random,
                 ),
@@ -454,11 +558,179 @@ fn page_replay_nonce(domain: u8, sequence: u8) -> [u8; 32] {
     nonce
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn prove_content_healing(
+    proof: &SessionProof<'_>,
+    fixture: &BranchFixture,
+    client_grants: &StaticBranchAuthority,
+    server_grants: &StaticBranchAuthority,
+    source: &FilesystemFederationContentShardSource<FolderShardStore>,
+    root: &std::path::Path,
+    content: PublishedContentReference,
+    export_token: [u8; 32],
+    manifest_object_digest: [u8; 32],
+    header: meshspan_filesystem::ContentLayoutTransferHeader,
+    pages: &[meshspan_filesystem::ContentLayoutTransferPage],
+    routes: &[meshspan_cluster::FederationContentShardRoute],
+) -> Result<(), Box<dyn Error>> {
+    if routes.len() != 3 || pages.len() != 2 {
+        return Err("incomplete recovery fixture".into());
+    }
+    let registration = target_registration(proof.client_mesh)?;
+    let target_provider = provider(root, "target", registration)?;
+    let fingerprint = target_provider.target_marker().fingerprint();
+    let target_state = root.join("target-filesystem");
+    let local_request = recovery_request(content, NOW)?;
+    let mut receiver = open_receiver(&target_state, target_provider, registration, NOW, 170)?;
+    receiver.begin_content_recovery(local_request, header)?;
+    for page in pages {
+        receiver.append_content_recovery_layout(local_request, header, page)?;
+    }
+    assert_eq!(
+        receiver.seal_content_recovery_layout(local_request, header)?,
+        content.manifest
+    );
+    heal_route(
+        proof,
+        fixture,
+        client_grants,
+        server_grants,
+        source,
+        &mut receiver,
+        local_request,
+        content,
+        export_token,
+        manifest_object_digest,
+        routes[0],
+        210,
+    )
+    .await?;
+    assert!(matches!(
+        receiver.finish_content_recovery(local_request),
+        Err(ContentPublicationError::Unavailable)
+    ));
+
+    drop(receiver.into_provider());
+    let resumed_at = UnixMicros::new(NOW.get() + 10);
+    let resumed_request = ContentPublicationRequest {
+        observed_at: resumed_at,
+        ..local_request
+    };
+    let target_provider = reopen_provider(root, "target", registration, fingerprint, resumed_at)?;
+    let mut receiver = open_receiver(
+        &target_state,
+        target_provider,
+        registration,
+        resumed_at,
+        171,
+    )?;
+    receiver.begin_content_recovery(resumed_request, header)?;
+    for page in pages {
+        receiver.append_content_recovery_layout(resumed_request, header, page)?;
+    }
+    assert_eq!(
+        receiver
+            .pending_content_recovery(resumed_request, None, 10)?
+            .chunks
+            .len(),
+        2
+    );
+    for (route, seed) in routes[1..].iter().copied().zip([220, 230]) {
+        heal_route(
+            proof,
+            fixture,
+            client_grants,
+            server_grants,
+            source,
+            &mut receiver,
+            resumed_request,
+            content,
+            export_token,
+            manifest_object_digest,
+            route,
+            seed,
+        )
+        .await?;
+    }
+    assert_eq!(
+        receiver.finish_content_recovery(resumed_request)?,
+        content.manifest
+    );
+    assert_eq!(
+        read_exact(&mut receiver, resumed_request, content)?,
+        b"helloworld"
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn heal_route(
+    proof: &SessionProof<'_>,
+    fixture: &BranchFixture,
+    client_grants: &StaticBranchAuthority,
+    server_grants: &StaticBranchAuthority,
+    source: &FilesystemFederationContentShardSource<FolderShardStore>,
+    receiver: &mut UnprotectedContentPublisher<FolderShardStore, FixedRandom>,
+    local_request: ContentPublicationRequest,
+    content: PublishedContentReference,
+    export_token: [u8; 32],
+    manifest_object_digest: [u8; 32],
+    route: meshspan_cluster::FederationContentShardRoute,
+    seed: u8,
+) -> Result<(), Box<dyn Error>> {
+    let mut client_replay = replay_guard()?;
+    let mut server_replay = replay_guard()?;
+    let remote = FederationContentShardFetchRequest {
+        relationship_id: proof.relationship_id,
+        grant_id: fixture.grant_id,
+        resource: fixture.resource,
+        manifest_id: content.manifest.manifest_id,
+        export_token,
+        manifest_object_digest,
+        provider_node_id: route.provider_node_id,
+        target_id: route.target_id,
+        target_generation: route.target_generation,
+        shard: route.shard,
+        expected_length: route.expected_length,
+        expected_digest: route.expected_digest,
+        maximum_shard_bytes: 1_024,
+        context: exchange_context(seed)?,
+        now: NOW,
+    };
+    let heal = heal_federated_content_shard(
+        proof.client_runtime,
+        proof.client_connection,
+        FederationContentShardFetchServices::new(proof.client_authority, client_grants),
+        &mut client_replay,
+        receiver,
+        FederationContentHealingRequest {
+            remote,
+            local: local_request,
+        },
+    );
+    let serve = proof.server_runtime.serve_content_shard(
+        proof.server_connection,
+        FederationContentShardServices::new(proof.server_authority, server_grants, source),
+        FederationContentShardServeRequest {
+            response_replay_nonce: [seed.saturating_add(5); 32],
+            now: NOW,
+        },
+        &mut server_replay,
+    );
+    let (healed, served) = tokio::join!(heal, serve);
+    let healed = healed?;
+    let served = served?;
+    assert_eq!(healed.chunk_index, route.shard.stripe_index);
+    assert_eq!(healed.byte_count, usize::try_from(route.expected_length)?);
+    assert_eq!(served.byte_count, healed.byte_count);
+    Ok(())
+}
+
 fn publish_content(
     state_directory: &std::path::Path,
     provider: FolderShardStore,
     registration: FolderRegistration,
-) -> Result<PublishedContentReference, Box<dyn Error>> {
+) -> Result<(PublishedContentReference, FolderShardStore), Box<dyn Error>> {
     let request = content_request()?;
     let mut publisher = UnprotectedContentPublisher::open(
         state_directory,
@@ -484,11 +756,14 @@ fn publish_content(
             content_digest: blake3::hash(b"helloworld").into(),
         },
     )?;
-    drop(publisher.into_provider());
-    Ok(PublishedContentReference {
-        publication_operation_id: request.operation_id,
-        manifest,
-    })
+    let provider = publisher.into_provider();
+    Ok((
+        PublishedContentReference {
+            publication_operation_id: request.operation_id,
+            manifest,
+        },
+        provider,
+    ))
 }
 
 fn publish_namespace(
@@ -531,12 +806,22 @@ fn registration(mesh_id: MeshId) -> Result<FolderRegistration, Box<dyn Error>> {
     })
 }
 
+fn target_registration(mesh_id: MeshId) -> Result<FolderRegistration, Box<dyn Error>> {
+    Ok(FolderRegistration {
+        mesh_id,
+        target_id: TargetId::from_bytes([174; 16])?,
+        generation: 1,
+        usage_limit: UsageLimit::DEFAULT,
+    })
+}
+
 fn provider(
     root: &std::path::Path,
+    label: &str,
     registration: FolderRegistration,
 ) -> Result<FolderShardStore, Box<dyn Error>> {
-    let storage_directory = root.join("source-storage");
-    let provider_state = root.join("source-provider-state");
+    let storage_directory = root.join(format!("{label}-storage"));
+    let provider_state = root.join(format!("{label}-provider-state"));
     fs::create_dir(&storage_directory)?;
     let folder =
         RegisteredFolder::register_new(&storage_directory, registration, &mut FixedRandom(165))?;
@@ -557,6 +842,98 @@ fn provider(
         UnixMicros::new(1),
         &mut FixedRandom(166),
     )?)
+}
+
+fn reopen_provider(
+    root: &std::path::Path,
+    label: &str,
+    registration: FolderRegistration,
+    fingerprint: meshspan_storage::MarkerFingerprint,
+    opened_at: UnixMicros,
+) -> Result<FolderShardStore, Box<dyn Error>> {
+    let storage_directory = root.join(format!("{label}-storage"));
+    let provider_state = root.join(format!("{label}-provider-state"));
+    let folder = RegisteredFolder::reopen(&storage_directory, registration, fingerprint)?;
+    Ok(FolderShardStore::open(
+        folder,
+        &provider_state,
+        CapacityPolicy {
+            usage_limit: UsageLimit::DEFAULT,
+            repair_reserve_bytes: 0,
+            revision: Revision::new(1),
+        },
+        StoragePermitVerifier::new(
+            registration.mesh_id,
+            1,
+            Revision::new(1),
+            StoragePermitMacKey::from_bytes(STORAGE_PERMIT_KEY)?,
+        )?,
+        opened_at,
+        &mut FixedRandom(176),
+    )?)
+}
+
+fn open_receiver(
+    state_directory: &std::path::Path,
+    provider: FolderShardStore,
+    registration: FolderRegistration,
+    opened_at: UnixMicros,
+    random_seed: u8,
+) -> Result<UnprotectedContentPublisher<FolderShardStore, FixedRandom>, Box<dyn Error>> {
+    Ok(UnprotectedContentPublisher::open(
+        state_directory,
+        opened_at,
+        provider,
+        FixedRandom(random_seed),
+        target_key_cipher()?,
+        ContentChunkLimits::new(4)?,
+        UnprotectedContentAccess::new(
+            registration.mesh_id,
+            registration.target_id,
+            registration.generation,
+            StoragePermitMacKey::from_bytes(STORAGE_PERMIT_KEY)?,
+        )?,
+    )?)
+}
+
+fn recovery_request(
+    content: PublishedContentReference,
+    observed_at: UnixMicros,
+) -> Result<ContentPublicationRequest, Box<dyn Error>> {
+    Ok(ContentPublicationRequest {
+        operation_id: OperationId::from_bytes([177; 16])?,
+        request_digest: [178; 32],
+        manifest_id: content.manifest.manifest_id,
+        format_version: content.manifest.format_version,
+        logical_length: content.manifest.logical_length,
+        authorization_revision: Revision::new(10),
+        deadline: UnixMicros::new(3_000_000),
+        observed_at,
+    })
+}
+
+fn read_exact(
+    receiver: &mut UnprotectedContentPublisher<FolderShardStore, FixedRandom>,
+    request: ContentPublicationRequest,
+    content: PublishedContentReference,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut bytes = Vec::new();
+    receiver.stream_range(
+        ContentReadRequest {
+            operation_id: OperationId::from_bytes([179; 16])?,
+            content: PublishedContentReference {
+                publication_operation_id: request.operation_id,
+                ..content
+            },
+            offset: 0,
+            length: content.manifest.logical_length,
+            authorization_revision: request.authorization_revision,
+            deadline: request.deadline,
+            observed_at: request.observed_at,
+        },
+        &mut bytes,
+    )?;
+    Ok(bytes)
 }
 
 fn source_key_cipher() -> Result<ContentKeyEnvelopeCipher, Box<dyn Error>> {

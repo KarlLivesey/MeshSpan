@@ -8,12 +8,13 @@ use crate::framing::{WireContractError, WireLimits};
 use crate::v1::federation_envelope::Message;
 use crate::v1::{
     FederatedBranchPage, FederatedBranchResult, FederatedContentLayoutPage,
-    FederatedContentShardHeader, FederatedHistoryObjectHeader, FederatedStorageCapability,
-    FederatedStorageInventoryPage, FederatedStorageReceipt, FederationAuthorityPage,
-    FederationEnvelope, FederationHeader, FederationHello, FederationWelcome,
-    FetchFederatedBranchPage, FetchFederatedContentLayout, FetchFederatedContentShard,
-    FetchFederatedHistoryObject, FetchFederatedStorageInventory, FetchFederationAuthority,
-    OperationOutcome, ProposeFederatedBranch, RemoteShardAction, RequestFederatedStorageCapability,
+    FederatedContentShardHeader, FederatedContentShardRoute, FederatedHistoryObjectHeader,
+    FederatedStorageCapability, FederatedStorageInventoryPage, FederatedStorageReceipt,
+    FederationAuthorityPage, FederationEnvelope, FederationHeader, FederationHello,
+    FederationWelcome, FetchFederatedBranchPage, FetchFederatedContentLayout,
+    FetchFederatedContentShard, FetchFederatedHistoryObject, FetchFederatedStorageInventory,
+    FetchFederationAuthority, OperationOutcome, ProposeFederatedBranch, RemoteShardAction,
+    RequestFederatedStorageCapability,
 };
 
 use super::{
@@ -242,6 +243,13 @@ fn content_layout_page(
     valid_digest(&value.manifest_object_digest)?;
     validate_payload(value.layout_header.as_ref(), limits)?;
     validate_payloads(&value.chunks, limits, true)?;
+    valid_count(value.shard_routes.len(), limits, true)?;
+    for route in &value.shard_routes {
+        content_shard_route(route)?;
+    }
+    if value.shard_routes.len() != value.chunks.len() {
+        return Err(WireContractError::InvalidMessage);
+    }
     valid_optional_bytes(&value.next_cursor, limits.maximum_control_bytes())?;
     terminal_if_empty(value.chunks.is_empty(), &value.next_cursor)?;
     valid_digest(&value.page_digest)?;
@@ -257,7 +265,8 @@ fn fetch_content_shard(
     valid_identifier(&value.manifest_id)?;
     valid_digest(&value.export_token)?;
     valid_digest(&value.manifest_object_digest)?;
-    content_shard_route(
+    valid_identifier(&value.provider_node_id)?;
+    content_shard_route_fields(
         &value.target_id,
         value.target_generation,
         value.shard.as_ref(),
@@ -276,7 +285,8 @@ fn content_shard_header(
     valid_identifier(&value.manifest_id)?;
     valid_digest(&value.export_token)?;
     valid_digest(&value.manifest_object_digest)?;
-    content_shard_route(
+    valid_identifier(&value.provider_node_id)?;
+    content_shard_route_fields(
         &value.target_id,
         value.target_generation,
         value.shard.as_ref(),
@@ -294,7 +304,7 @@ fn content_shard_header(
     valid_signature(&value.signature, limits)
 }
 
-fn content_shard_route(
+fn content_shard_route_fields(
     target_id: &[u8],
     target_generation: u64,
     shard: Option<&crate::v1::ShardIdentity>,
@@ -309,6 +319,17 @@ fn content_shard_route(
     } else {
         Ok(())
     }
+}
+
+fn content_shard_route(value: &FederatedContentShardRoute) -> Result<(), WireContractError> {
+    valid_identifier(&value.provider_node_id)?;
+    content_shard_route_fields(
+        &value.target_id,
+        value.target_generation,
+        value.shard.as_ref(),
+        value.expected_length,
+        &value.expected_digest,
+    )
 }
 
 fn propose_branch(

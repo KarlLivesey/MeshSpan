@@ -66,6 +66,12 @@ impl AuthenticatedFederationContentShardFetch {
             .map_err(|_| TransportError::UntrustedFederationPeer)
     }
 
+    /// Returns the exclusive signed request deadline.
+    #[must_use]
+    pub const fn deadline(&self) -> UnixMicros {
+        UnixMicros::new(self.header.deadline_unix_micros)
+    }
+
     /// Returns the structurally validated request.
     #[must_use]
     pub const fn request(&self) -> &FetchFederatedContentShard {
@@ -368,6 +374,7 @@ fn verify_response_shape(
         && response.manifest_id == request.manifest_id
         && response.export_token == request.export_token
         && response.manifest_object_digest == request.manifest_object_digest
+        && response.provider_node_id == request.provider_node_id
         && response.target_id == request.target_id
         && response.target_generation == request.target_generation
         && response.shard == request.shard

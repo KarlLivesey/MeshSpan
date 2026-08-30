@@ -5,12 +5,12 @@
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
     ErrorCode, FederatedBranchResult, FederatedContentLayoutPage, FederatedContentShardHeader,
-    FederatedHistoryObjectHeader, FederatedStorageCapability, FederationAuthorityPage,
-    FederationEnvelope, FederationHeader, FederationHello, FetchFederatedBranchPage,
-    FetchFederatedContentLayout, FetchFederatedContentShard, FetchFederatedHistoryObject,
-    FetchFederatedStorageInventory, FetchFederationAuthority, ProposeFederatedBranch,
-    ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability, ShardIdentity,
-    VersionedPayload, WireError,
+    FederatedContentShardRoute, FederatedHistoryObjectHeader, FederatedStorageCapability,
+    FederationAuthorityPage, FederationEnvelope, FederationHeader, FederationHello,
+    FetchFederatedBranchPage, FetchFederatedContentLayout, FetchFederatedContentShard,
+    FetchFederatedHistoryObject, FetchFederatedStorageInventory, FetchFederationAuthority,
+    ProposeFederatedBranch, ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability,
+    ShardIdentity, VersionedPayload, WireError,
 };
 use meshspan_protocol::{
     WireContractError, WireLimits, decode_federation_frame, encode_federation_frame,
@@ -199,6 +199,7 @@ fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::
             manifest_id: vec![2; 16],
             export_token: vec![3; 32],
             manifest_object_digest: vec![4; 32],
+            provider_node_id: vec![7; 16],
             target_id: vec![5; 16],
             target_generation: 1,
             shard: Some(shard()),
@@ -245,6 +246,7 @@ fn content_shard_header_binds_exact_route_shape_and_frame_bound()
         manifest_id: vec![2; 16],
         export_token: vec![3; 32],
         manifest_object_digest: vec![4; 32],
+        provider_node_id: vec![9; 16],
         target_id: vec![5; 16],
         target_generation: 1,
         shard: Some(shard()),
@@ -281,6 +283,16 @@ fn content_shard_header_binds_exact_route_shape_and_frame_bound()
 fn content_layout_pages_are_bounded_and_terminal_shape_is_unambiguous()
 -> Result<(), Box<dyn std::error::Error>> {
     let page = |chunks: Vec<VersionedPayload>, next_cursor: Vec<u8>| {
+        let shard_routes = (0..chunks.len())
+            .map(|_| FederatedContentShardRoute {
+                provider_node_id: vec![7; 16],
+                target_id: vec![8; 16],
+                target_generation: 1,
+                shard: Some(shard()),
+                expected_length: 16,
+                expected_digest: vec![9; 32],
+            })
+            .collect();
         federation_envelope(Message::ContentLayoutPage(FederatedContentLayoutPage {
             grant_id: vec![1; 16],
             resource_scope: Some(payload()),
@@ -292,6 +304,7 @@ fn content_layout_pages_are_bounded_and_terminal_shape_is_unambiguous()
             next_cursor,
             page_digest: vec![3; 32],
             signature: vec![4; 64],
+            shard_routes,
         }))
     };
     let small_limits = WireLimits::new(4_096, 1_024, 2, 64)?;

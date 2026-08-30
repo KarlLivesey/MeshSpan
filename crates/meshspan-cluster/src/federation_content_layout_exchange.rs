@@ -2,15 +2,19 @@
 
 //! Bilaterally authorised portable encrypted-content layouts over signed Quinn control streams.
 
+use meshspan_contracts::{BoundedItems, ShardIdentity};
 use meshspan_domain::{
     ContentManifestId, FederationGrantId, FederationRelationshipId, FederationResourceScope,
-    RandomSource, UnixMicros,
+    NodeId, RandomSource, TargetId, UnixMicros,
 };
 use meshspan_filesystem::{
     ContentKeyEnvelopeCipher, ContentKeyTransitCipher, ContentLayoutTransferHeader,
     ContentLayoutTransferPage, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS,
 };
-use meshspan_protocol::v1::{FederatedContentLayoutPage, FetchFederatedContentLayout};
+use meshspan_protocol::v1::{
+    FederatedContentLayoutPage, FederatedContentShardRoute as WireContentShardRoute,
+    FetchFederatedContentLayout,
+};
 use meshspan_transport::{
     FederationExchangeContext, FederationReplayGuard, StreamKind, TransportError, accept_stream,
     open_stream, receive_federation, send_federation, signed_federation_content_layout_fetch,
@@ -27,10 +31,10 @@ use crate::federation_resource_wire::{
 use crate::federation_session::{envelope_relationship, load_authority};
 use crate::{
     FederationAuthoritySource, FederationBranchAuthoritySource, FederationContentLayoutQuery,
-    FederationContentLayoutRecords, FederationContentLayoutSource, FederationSessionError,
-    FederationSessionRuntime, decode_federated_content_layout_chunk,
-    decode_federated_content_layout_header, version_federated_content_layout_chunk,
-    version_federated_content_layout_header,
+    FederationContentLayoutRecords, FederationContentLayoutSource, FederationContentRouteSource,
+    FederationContentShardRoute, FederationSessionError, FederationSessionRuntime,
+    decode_federated_content_layout_chunk, decode_federated_content_layout_header,
+    version_federated_content_layout_chunk, version_federated_content_layout_header,
 };
 
 const CONTENT_KEY_EXPORTER_LABEL: &[u8] = b"EXPORTER-MeshSpan-Federated-Content-Key-v1";
@@ -102,6 +106,7 @@ pub struct FederationContentLayoutServices<'a, R: RandomSource> {
     connection_authority: &'a dyn FederationAuthoritySource,
     grant_authority: &'a dyn FederationBranchAuthoritySource,
     content: &'a dyn FederationContentLayoutSource,
+    routes: &'a dyn FederationContentRouteSource,
     source_keys: &'a ContentKeyEnvelopeCipher,
     random: &'a mut R,
 }
@@ -113,6 +118,7 @@ impl<'a, R: RandomSource> FederationContentLayoutServices<'a, R> {
         connection_authority: &'a dyn FederationAuthoritySource,
         grant_authority: &'a dyn FederationBranchAuthoritySource,
         content: &'a dyn FederationContentLayoutSource,
+        routes: &'a dyn FederationContentRouteSource,
         source_keys: &'a ContentKeyEnvelopeCipher,
         random: &'a mut R,
     ) -> Self {
@@ -120,6 +126,7 @@ impl<'a, R: RandomSource> FederationContentLayoutServices<'a, R> {
             connection_authority,
             grant_authority,
             content,
+            routes,
             source_keys,
             random,
         }
@@ -133,6 +140,8 @@ pub struct ReceivedFederationContentLayoutPage {
     pub header: ContentLayoutTransferHeader,
     /// Provider-neutral identities, absent only for a valid empty file.
     pub page: Option<ContentLayoutTransferPage>,
+    /// Exact source-worker routes corresponding one-for-one with the portable chunks.
+    pub routes: BoundedItems<FederationContentShardRoute>,
     /// Exact signed continuation, empty only at the end.
     pub next_cursor: Vec<u8>,
 }
@@ -258,7 +267,7 @@ impl FederationSessionRuntime<'_> {
         let response = signed_federation_content_layout_page(
             &local_identity,
             fetch.response_context(request.response_replay_nonce)?,
-            response_page(fetch.request(), records, transit_key)?,
+            response_page(fetch.request(), records, transit_key, services.routes)?,
             self.negotiation_config.wire_limits(),
             request.now,
         )?;
@@ -323,7 +332,9 @@ fn response_page(
     request: &FetchFederatedContentLayout,
     records: FederationContentLayoutRecords,
     transit_key: meshspan_filesystem::TransitWrappedContentKey,
+    routes: &dyn FederationContentRouteSource,
 ) -> Result<FederatedContentLayoutPage, FederationSessionError> {
+    let shard_routes = wire_shard_routes(&records, routes)?;
     let (chunks, next_cursor) = match records.page {
         Some(page) => {
             let chunks = page
@@ -353,6 +364,7 @@ fn response_page(
         next_cursor,
         page_digest: Vec::new(),
         signature: Vec::new(),
+        shard_routes,
     })
 }
 
@@ -377,6 +389,14 @@ fn decode_received_page<R: RandomSource>(
         .map(decode_federated_content_layout_chunk)
         .collect::<Result<Vec<_>, _>>()?;
     let next_index = decode_content_layout_cursor(page.next_cursor())?;
+    let routes = page
+        .shard_routes()
+        .iter()
+        .zip(&chunks)
+        .map(|(route, chunk)| decode_shard_route(route, header, *chunk))
+        .collect::<Result<Vec<_>, _>>()?;
+    let routes = BoundedItems::new(routes, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS)
+        .map_err(|_| FederationSessionError::InvalidEnvelope)?;
     let layout_page = if chunks.is_empty() {
         if header.chunk_count != 0 || next_index.is_some() || !request.cursor.is_empty() {
             return Err(FederationSessionError::InvalidEnvelope);
@@ -391,6 +411,7 @@ fn decode_received_page<R: RandomSource>(
     Ok(ReceivedFederationContentLayoutPage {
         header,
         page: layout_page,
+        routes,
         next_cursor: page.next_cursor().to_vec(),
     })
 }
@@ -472,10 +493,97 @@ fn validate_source_records(
         return Err(FederationSessionError::InvalidEnvelope);
     }
     match &records.page {
-        None if records.header.chunk_count == 0 && request.cursor.is_empty() => Ok(()),
-        Some(page) => validate_page_position(&request.cursor, records.header, page),
-        None => Err(FederationSessionError::InvalidEnvelope),
+        None if records.header.chunk_count == 0
+            && request.cursor.is_empty()
+            && records.placements.is_empty() =>
+        {
+            Ok(())
+        }
+        Some(page) if records.placements.len() == page.chunks().len() => {
+            validate_page_position(&request.cursor, records.header, page)
+        }
+        None | Some(_) => Err(FederationSessionError::InvalidEnvelope),
     }
+}
+
+fn wire_shard_routes(
+    records: &FederationContentLayoutRecords,
+    routes: &dyn FederationContentRouteSource,
+) -> Result<Vec<WireContentShardRoute>, FederationSessionError> {
+    records
+        .placements
+        .as_slice()
+        .iter()
+        .map(|receipt| {
+            let provider_node_id = routes
+                .provider_node(receipt.target_id, receipt.target_generation)?
+                .ok_or(FederationSessionError::AuthorityUnavailable)?;
+            Ok(WireContentShardRoute {
+                provider_node_id: provider_node_id.as_bytes().to_vec(),
+                target_id: receipt.target_id.as_bytes().to_vec(),
+                target_generation: receipt.target_generation,
+                shard: Some(wire_shard(receipt.shard)),
+                expected_length: receipt.length,
+                expected_digest: receipt.digest.to_vec(),
+            })
+        })
+        .collect()
+}
+
+fn decode_shard_route(
+    route: &WireContentShardRoute,
+    header: ContentLayoutTransferHeader,
+    chunk: meshspan_filesystem::ContentLayoutChunk,
+) -> Result<FederationContentShardRoute, FederationSessionError> {
+    let shard = decode_shard(route.shard.as_ref())?;
+    let expected_digest = digest(&route.expected_digest)?;
+    let valid = shard.manifest_digest == header.manifest.root_digest
+        && shard.stripe_index == chunk.chunk_index
+        && shard.shard_index == 0
+        && shard.generation == 1
+        && route.expected_length == chunk.ciphertext_length
+        && expected_digest == chunk.ciphertext_digest;
+    if !valid {
+        return Err(FederationSessionError::InvalidEnvelope);
+    }
+    Ok(FederationContentShardRoute {
+        provider_node_id: NodeId::from_bytes(identifier(&route.provider_node_id)?)
+            .map_err(|_| FederationSessionError::InvalidEnvelope)?,
+        target_id: TargetId::from_bytes(identifier(&route.target_id)?)
+            .map_err(|_| FederationSessionError::InvalidEnvelope)?,
+        target_generation: route.target_generation,
+        shard,
+        expected_length: route.expected_length,
+        expected_digest,
+    })
+}
+
+fn decode_shard(
+    shard: Option<&meshspan_protocol::v1::ShardIdentity>,
+) -> Result<ShardIdentity, FederationSessionError> {
+    let shard = shard.ok_or(FederationSessionError::InvalidEnvelope)?;
+    Ok(ShardIdentity {
+        manifest_digest: digest(&shard.manifest_digest)?,
+        stripe_index: shard.stripe_index,
+        shard_index: u16::try_from(shard.shard_index)
+            .map_err(|_| FederationSessionError::InvalidEnvelope)?,
+        generation: shard.generation,
+    })
+}
+
+fn wire_shard(shard: ShardIdentity) -> meshspan_protocol::v1::ShardIdentity {
+    meshspan_protocol::v1::ShardIdentity {
+        manifest_digest: shard.manifest_digest.to_vec(),
+        stripe_index: shard.stripe_index,
+        shard_index: u32::from(shard.shard_index),
+        generation: shard.generation,
+    }
+}
+
+fn identifier(bytes: &[u8]) -> Result<[u8; 16], FederationSessionError> {
+    bytes
+        .try_into()
+        .map_err(|_| FederationSessionError::InvalidEnvelope)
 }
 
 fn transit_cipher(

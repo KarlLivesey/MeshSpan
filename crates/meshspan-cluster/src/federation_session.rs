@@ -249,6 +249,9 @@ pub enum FederationSessionError {
     /// Portable content-layout fields or connection-bound key material were invalid.
     #[error("federation content layout wire evidence failed")]
     ContentLayoutWire(#[from] crate::FederationContentLayoutWireError),
+    /// The advertised encrypted content shard could not be produced safely.
+    #[error("federation content shard could not be produced")]
+    ContentShard(#[from] crate::FederationContentShardSourceError),
     /// The signed resource scope was not the exact canonical typed form.
     #[error("federation resource scope is invalid")]
     ResourceScope(#[from] crate::FederationResourceWireError),
