@@ -2,7 +2,7 @@
 
 //! Signed acknowledgement of one remotely accepted federated mutation.
 
-use meshspan_domain::{FederatedMutationEvidence, OperationId};
+use crate::{FederatedMutationEvidence, FederationResourceScope, OperationId};
 
 /// Durable proof that a principal's home swarm accepted one exact immutable mutation.
 ///
@@ -49,9 +49,7 @@ fn append_evidence(payload: &mut Vec<u8>, evidence: FederatedMutationEvidence) {
     payload.extend_from_slice(&evidence.storage_bytes().to_be_bytes());
 }
 
-fn append_resource(payload: &mut Vec<u8>, resource: meshspan_domain::FederationResourceScope) {
-    use meshspan_domain::FederationResourceScope;
-
+fn append_resource(payload: &mut Vec<u8>, resource: FederationResourceScope) {
     match resource {
         FederationResourceScope::Volume {
             owner_mesh_id,

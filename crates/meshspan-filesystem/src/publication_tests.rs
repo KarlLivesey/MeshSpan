@@ -1,10 +1,246 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, DurationMicros, FileVersionId, HandleId, NamespaceCommitId,
-    NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, SnapshotId, UnixMicros,
-    VolumeId,
+    BranchId, ContentManifestId, DurationMicros, FederatedMutationAcknowledgement,
+    FederatedMutationEvidence, FederatedPrincipal, FederationGrantId, FederationRelationshipId,
+    FederationResourceScope, FileVersionId, HandleId, MeshId, NamespaceCommitId, NodeId, ObjectId,
+    ObjectRevisionId, OperationId, PrincipalId, Revision, Rights, SnapshotId, UnixMicros, VolumeId,
 };
+
+#[test]
+fn federated_file_publication_persists_and_transfers_its_exact_signed_proof()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source_directory = tempdir()?;
+    let target_directory = tempdir()?;
+    let publication = initial_root_publication()?;
+    let digest = VersionPublicationStore::root_file_federated_mutation_digest(&publication)?;
+    let acknowledgement = mutation_acknowledgement(
+        publication.file.operation_id,
+        publication.file.created_by,
+        publication.file.volume_id,
+        publication.file.created_at,
+        Rights::TRAVERSE
+            .union(Rights::CREATE_CHILD)
+            .union(Rights::WRITE_DATA),
+        digest,
+    )?;
+
+    let mut source = VersionPublicationStore::open(source_directory.path(), UnixMicros::new(1))?;
+    assert_eq!(
+        source
+            .publish_federated_root_file(&publication, &acknowledgement)?
+            .disposition,
+        PublicationDisposition::Applied
+    );
+    assert_eq!(
+        source
+            .publish_federated_root_file(&publication, &acknowledgement)?
+            .disposition,
+        PublicationDisposition::Replayed
+    );
+    assert!(matches!(
+        source.publish_root_file(&publication),
+        Err(PublicationError::OperationConflict)
+    ));
+    let mut substituted = acknowledgement;
+    substituted.signature[0] ^= 1;
+    assert!(matches!(
+        source.publish_federated_root_file(&publication, &substituted),
+        Err(PublicationError::OperationConflict)
+    ));
+
+    drop(source);
+    let source = VersionPublicationStore::open(source_directory.path(), UnixMicros::new(2))?;
+    let bundle = source.export_namespace_history(
+        publication.file.volume_id,
+        &[publication.namespace_commit_id],
+        &[],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+    let record = bundle
+        .commit_records()?
+        .into_iter()
+        .next()
+        .ok_or("federated history record missing")?;
+    assert_eq!(record.mutation_digest()?, digest);
+    assert_eq!(record.federated_acknowledgement()?, Some(acknowledgement));
+
+    let mut target = VersionPublicationStore::open(target_directory.path(), UnixMicros::new(2))?;
+    assert_eq!(
+        target
+            .import_namespace_history(&bundle, NamespaceHistoryLimits::DEFAULT)?
+            .imported_commits,
+        1
+    );
+    let imported = target.export_namespace_history(
+        publication.file.volume_id,
+        &[publication.namespace_commit_id],
+        &[],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+    assert_eq!(imported.commit_records()?, vec![record]);
+    Ok(())
+}
+
+#[test]
+fn every_federated_namespace_mutation_shape_binds_the_required_rights()
+-> Result<(), Box<dyn std::error::Error>> {
+    prove_federated_directory_publication()?;
+
+    let directory = tempdir()?;
+    let file = initial_root_publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    let file_acknowledgement = mutation_acknowledgement(
+        file.file.operation_id,
+        file.file.created_by,
+        file.file.volume_id,
+        file.file.created_at,
+        Rights::TRAVERSE
+            .union(Rights::CREATE_CHILD)
+            .union(Rights::WRITE_DATA),
+        VersionPublicationStore::root_file_federated_mutation_digest(&file)?,
+    )?;
+    store.publish_federated_root_file(&file, &file_acknowledgement)?;
+
+    let rename = root_file_rename(&file, "renamed")?;
+    let rename_acknowledgement = mutation_acknowledgement(
+        rename.operation_id,
+        rename.created_by,
+        rename.volume_id,
+        rename.created_at,
+        Rights::TRAVERSE
+            .union(Rights::RENAME)
+            .union(Rights::CREATE_CHILD),
+        store.rename_federated_mutation_digest(&rename)?,
+    )?;
+    store.rename_federated_namespace(&rename, &rename_acknowledgement)?;
+
+    let mut unlink = root_file_unlink(&file)?;
+    unlink.expected_namespace_commit_id = rename.namespace_commit_id;
+    unlink.path = rename.target.clone();
+    let unlink_acknowledgement = mutation_acknowledgement(
+        unlink.operation_id,
+        unlink.created_by,
+        unlink.volume_id,
+        unlink.created_at,
+        Rights::TRAVERSE.union(Rights::DELETE),
+        store.unlink_federated_mutation_digest(&unlink)?,
+    )?;
+    store.unlink_federated_namespace(&unlink, &unlink_acknowledgement)?;
+
+    let records = store
+        .export_namespace_history(
+            file.file.volume_id,
+            &[unlink.namespace_commit_id],
+            &[],
+            NamespaceHistoryLimits::DEFAULT,
+        )?
+        .commit_records()?;
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().all(|record| {
+        record
+            .federated_acknowledgement()
+            .is_ok_and(|acknowledgement| acknowledgement.is_some())
+    }));
+    Ok(())
+}
+
+#[test]
+fn federated_acknowledgement_rolls_back_with_an_injected_publication_fault()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let publication = initial_root_publication()?;
+    let acknowledgement = mutation_acknowledgement(
+        publication.file.operation_id,
+        publication.file.created_by,
+        publication.file.volume_id,
+        publication.file.created_at,
+        Rights::TRAVERSE
+            .union(Rights::CREATE_CHILD)
+            .union(Rights::WRITE_DATA),
+        VersionPublicationStore::root_file_federated_mutation_digest(&publication)?,
+    )?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    assert!(matches!(
+        super::namespace::publish_federated_with_fault(
+            &mut store.connection,
+            &publication,
+            &acknowledgement,
+            super::namespace::NamespaceFaultPoint::Operation,
+        ),
+        Err(PublicationError::InjectedFault)
+    ));
+    let durable: i64 = store.connection.query_row(
+        "SELECT (
+            EXISTS(SELECT 1 FROM namespace_commits WHERE namespace_commit_id = ?1)
+          + EXISTS(
+                SELECT 1 FROM federated_namespace_mutation_acknowledgements
+                WHERE namespace_commit_id = ?1
+            )
+         )",
+        [publication.namespace_commit_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(durable, 0);
+    Ok(())
+}
+
+fn prove_federated_directory_publication() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let publication = initial_directory_publication()?;
+    let acknowledgement = mutation_acknowledgement(
+        publication.operation_id,
+        publication.created_by,
+        publication.volume_id,
+        publication.created_at,
+        Rights::TRAVERSE.union(Rights::CREATE_CHILD),
+        VersionPublicationStore::directory_federated_mutation_digest(&publication)?,
+    )?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.create_federated_directory(&publication, &acknowledgement)?;
+    let record = store
+        .export_namespace_history(
+            publication.volume_id,
+            &[publication.namespace_commit_id],
+            &[],
+            NamespaceHistoryLimits::DEFAULT,
+        )?
+        .commit_records()?
+        .into_iter()
+        .next()
+        .ok_or("federated directory history record missing")?;
+    assert_eq!(record.federated_acknowledgement()?, Some(acknowledgement));
+    Ok(())
+}
+
+fn mutation_acknowledgement(
+    operation_id: OperationId,
+    principal_id: PrincipalId,
+    volume_id: VolumeId,
+    accepted_at: UnixMicros,
+    rights: Rights,
+    payload_digest: [u8; 32],
+) -> Result<FederatedMutationAcknowledgement, Box<dyn std::error::Error>> {
+    Ok(FederatedMutationAcknowledgement {
+        source_operation_id: operation_id,
+        evidence: FederatedMutationEvidence::new(
+            FederationGrantId::from_bytes([20; 16])?,
+            FederationRelationshipId::from_bytes([21; 16])?,
+            FederatedPrincipal::new(MeshId::from_bytes([22; 16])?, principal_id),
+            FederationResourceScope::Volume {
+                owner_mesh_id: MeshId::from_bytes([23; 16])?,
+                volume_id,
+            },
+            1,
+            accepted_at,
+            rights,
+            0,
+        ),
+        payload_digest,
+        signer_generation: 1,
+        signature: [24; 64],
+    })
+}
 use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::{TempDir, tempdir};
 

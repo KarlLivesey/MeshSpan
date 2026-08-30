@@ -3,14 +3,17 @@
 //! Bounded decoder and semantic verifier for canonical mutation commit records.
 
 use meshspan_domain::{
-    BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId,
-    PrincipalId, UnixMicros, VolumeId,
+    BranchId, FederatedMutationAcknowledgement, FederatedMutationEvidence, FederatedPrincipal,
+    FederationGrantId, FederationRelationshipId, FederationResourceScope, FileVersionId, MeshId,
+    NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Rights, UnixMicros,
+    VolumeId,
 };
 
 use super::super::repository::{StoredCommit, stored_commit_digest};
 use super::super::transfer::TransferredMutationCommit;
 use super::{
-    COMMIT_DOMAIN, COMMIT_FORMAT_VERSION, MAXIMUM_COMMIT_RECORD_BYTES, NamespaceHistoryRecordError,
+    COMMIT_DOMAIN, FEDERATED_COMMIT_FORMAT_VERSION, LOCAL_COMMIT_FORMAT_VERSION,
+    MAXIMUM_COMMIT_RECORD_BYTES, NamespaceHistoryRecordError,
 };
 use crate::{
     BranchMutation, BranchMutationIntent, BranchRenameIntent, DirectoryRevisionTransition,
@@ -29,7 +32,11 @@ pub(super) fn decode_commit(
     }
     let mut decoder = Decoder::new(bytes);
     decoder.expect(COMMIT_DOMAIN)?;
-    if decoder.byte()? != COMMIT_FORMAT_VERSION {
+    let format_version = decoder.byte()?;
+    if !matches!(
+        format_version,
+        LOCAL_COMMIT_FORMAT_VERSION | FEDERATED_COMMIT_FORMAT_VERSION
+    ) {
         return Err(NamespaceHistoryRecordError::Invalid);
     }
     let commit_id = decoder.identifier(NamespaceCommitId::from_bytes)?;
@@ -48,6 +55,11 @@ pub(super) fn decode_commit(
     let created_at = UnixMicros::new(decoder.signed()?);
     let commit_digest = decoder.digest()?;
     let intent = decode_intent(&mut decoder)?;
+    let acknowledgement = if format_version == FEDERATED_COMMIT_FORMAT_VERSION {
+        Some(decode_acknowledgement(&mut decoder)?)
+    } else {
+        None
+    };
     decoder.finish()?;
     let commit = ReconciliationCommit {
         commit_id,
@@ -61,13 +73,85 @@ pub(super) fn decode_commit(
         payload: ReconciliationCommitPayload::Mutation { intent_digest },
     };
     validate_record(&commit, &intent, created_by, created_at, commit_digest)?;
-    Ok(TransferredMutationCommit {
+    let record = TransferredMutationCommit {
         commit,
         created_by,
         created_at,
         commit_digest,
         intent,
+        acknowledgement,
+    };
+    if let Some(acknowledgement) = record.acknowledgement {
+        let mut bare = record.clone();
+        bare.acknowledgement = None;
+        let mutation_digest = blake3::hash(&super::encode_commit(&bare)?).into();
+        super::validate_acknowledgement(&record, &acknowledgement, mutation_digest)?;
+    }
+    Ok(record)
+}
+
+fn decode_acknowledgement(
+    decoder: &mut Decoder<'_>,
+) -> Result<FederatedMutationAcknowledgement, NamespaceHistoryRecordError> {
+    let source_operation_id = decoder.identifier(OperationId::from_bytes)?;
+    let grant_id = decoder.identifier(FederationGrantId::from_bytes)?;
+    let relationship_id = decoder.identifier(FederationRelationshipId::from_bytes)?;
+    let subject = FederatedPrincipal::new(
+        decoder.identifier(MeshId::from_bytes)?,
+        decoder.identifier(PrincipalId::from_bytes)?,
+    );
+    let resource = decode_resource(decoder)?;
+    let authority_epoch = decoder.unsigned()?;
+    let accepted_at = UnixMicros::new(decoder.signed()?);
+    let required_rights = Rights::from_bits(u32::from_be_bytes(decoder.array()?))
+        .map_err(|_| NamespaceHistoryRecordError::Invalid)?;
+    let storage_bytes = decoder.unsigned()?;
+    let payload_digest = decoder.digest()?;
+    let signer_generation = decoder.unsigned()?;
+    let signature = decoder.array()?;
+    Ok(FederatedMutationAcknowledgement {
+        source_operation_id,
+        evidence: FederatedMutationEvidence::new(
+            grant_id,
+            relationship_id,
+            subject,
+            resource,
+            authority_epoch,
+            accepted_at,
+            required_rights,
+            storage_bytes,
+        ),
+        payload_digest,
+        signer_generation,
+        signature,
     })
+}
+
+fn decode_resource(
+    decoder: &mut Decoder<'_>,
+) -> Result<FederationResourceScope, NamespaceHistoryRecordError> {
+    let kind = decoder.byte()?;
+    let authority = decoder.identifier(MeshId::from_bytes)?;
+    match kind {
+        1 => Ok(FederationResourceScope::Volume {
+            owner_mesh_id: authority,
+            volume_id: decoder.identifier(VolumeId::from_bytes)?,
+        }),
+        2 => Ok(FederationResourceScope::Subtree {
+            owner_mesh_id: authority,
+            volume_id: decoder.identifier(VolumeId::from_bytes)?,
+            root_object_id: decoder.identifier(ObjectId::from_bytes)?,
+        }),
+        3 => Ok(FederationResourceScope::File {
+            owner_mesh_id: authority,
+            volume_id: decoder.identifier(VolumeId::from_bytes)?,
+            object_id: decoder.identifier(ObjectId::from_bytes)?,
+        }),
+        4 => Ok(FederationResourceScope::StorageCapacity {
+            provider_mesh_id: authority,
+        }),
+        _ => Err(NamespaceHistoryRecordError::Invalid),
+    }
 }
 
 fn validate_record(

@@ -10,8 +10,8 @@ pub(in crate::publication) mod export_graph;
 pub(in crate::publication) mod import;
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, OperationId,
-    PrincipalId, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, FederatedMutationAcknowledgement, FileVersionId,
+    NamespaceCommitId, ObjectId, OperationId, PrincipalId, UnixMicros, VolumeId,
 };
 
 use crate::{BranchMutationIntent, ReconciliationCommit};
@@ -41,6 +41,7 @@ pub(in crate::publication) struct TransferredMutationCommit {
     pub(in crate::publication) created_at: UnixMicros,
     pub(in crate::publication) commit_digest: [u8; 32],
     pub(in crate::publication) intent: BranchMutationIntent,
+    pub(in crate::publication) acknowledgement: Option<FederatedMutationAcknowledgement>,
 }
 
 pub(super) fn imported_evidence_digest(

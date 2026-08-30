@@ -93,6 +93,16 @@ pub(in crate::publication) fn load_commit_record(
     volume_id: VolumeId,
     commit_id: NamespaceCommitId,
 ) -> Result<TransferredMutationCommit, PublicationError> {
+    let mut record = load_bare_commit_record(connection, volume_id, commit_id)?;
+    record.acknowledgement = super::super::federated_mutation::load(connection, commit_id)?;
+    Ok(record)
+}
+
+pub(in crate::publication) fn load_bare_commit_record(
+    connection: &Connection,
+    volume_id: VolumeId,
+    commit_id: NamespaceCommitId,
+) -> Result<TransferredMutationCommit, PublicationError> {
     let commit =
         load_reconciliation_commit(connection, commit_id)?.ok_or(PublicationError::InvalidInput)?;
     let ReconciliationCommitPayload::Mutation { intent_digest } = commit.payload else {
@@ -112,6 +122,7 @@ pub(in crate::publication) fn load_commit_record(
         created_at,
         commit_digest,
         intent,
+        acknowledgement: None,
     })
 }
 

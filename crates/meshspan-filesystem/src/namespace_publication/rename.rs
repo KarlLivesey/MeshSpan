@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use meshspan_domain::{ObjectRevisionId, OperationId};
+use meshspan_domain::{FederatedMutationAcknowledgement, ObjectRevisionId, OperationId};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::super::load_file_head;
@@ -25,6 +25,7 @@ use crate::{
 pub(super) fn apply(
     connection: &mut Connection,
     publication: &NamespaceRenamePublication,
+    acknowledgement: Option<&FederatedMutationAcknowledgement>,
     fault: Option<NamespaceFaultPoint>,
 ) -> Result<NamespaceRenameReceipt, HandleError> {
     validate_shape(publication)?;
@@ -37,6 +38,11 @@ pub(super) fn apply(
     )? {
         let receipt = validate_receipt(&transaction, receipt)?;
         return if receipt.request_digest == request_digest {
+            super::federated_mutation::ensure_exact(
+                &transaction,
+                publication.namespace_commit_id,
+                acknowledgement,
+            )?;
             Ok(receipt)
         } else {
             Err(HandleError::OperationConflict)
@@ -74,9 +80,52 @@ pub(super) fn apply(
     inject(fault, NamespaceFaultPoint::RenameHandles)?;
     let receipt =
         rename_operation::persist(&transaction, publication, request_digest, head_sequence)?;
+    if let Some(acknowledgement) = acknowledgement {
+        super::federated_mutation::persist(
+            &transaction,
+            publication.namespace_commit_id,
+            acknowledgement,
+        )?;
+    }
     inject(fault, NamespaceFaultPoint::RenameOperation)?;
     transaction.commit()?;
     Ok(receipt)
+}
+
+pub(super) fn federated_mutation_digest(
+    connection: &Connection,
+    publication: &NamespaceRenamePublication,
+) -> Result<[u8; 32], HandleError> {
+    validate_shape(publication)?;
+    let (current_root, _) = load_expected_head(connection, publication)?;
+    let directories = load_path_directories(
+        connection,
+        publication.volume_id,
+        publication.root_object_id,
+        current_root,
+        publication.intermediate_root_object_revision_id,
+        &publication.source,
+    )?;
+    let revision = validate_source(connection, publication, &directories)?;
+    reject_cycle(publication, revision.kind)?;
+    let intent = rename_intent(publication, &revision)?;
+    let namespace = NamespaceIntent {
+        operation_id: publication.operation_id,
+        branch_id: publication.branch_id,
+        volume_id: publication.volume_id,
+        root_object_id: publication.root_object_id,
+        expected_commit_id: Some(publication.expected_namespace_commit_id),
+        root_revision_id: publication.root_object_revision_id,
+        commit_id: publication.namespace_commit_id,
+        path: &publication.target,
+        created_by: publication.created_by,
+        created_at: publication.created_at,
+    };
+    Ok(super::federated_mutation::mutation_digest(
+        namespace,
+        super::digest::rename_request(publication),
+        intent,
+    )?)
 }
 
 fn persist_namespace_move(
@@ -207,7 +256,7 @@ fn validate_shape(publication: &NamespaceRenamePublication) -> Result<(), Public
 }
 
 fn load_expected_head(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     publication: &NamespaceRenamePublication,
 ) -> Result<(ObjectRevisionId, u64), PublicationError> {
     let head = load_head(transaction, publication.branch_id, publication.volume_id)?
@@ -225,7 +274,7 @@ fn load_expected_head(
 }
 
 fn validate_source(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     publication: &NamespaceRenamePublication,
     directories: &[super::LoadedDirectory],
 ) -> Result<super::repository::ObjectRevisionInsert, HandleError> {
@@ -312,7 +361,7 @@ fn persist_path_mutation(
     )
 }
 
-fn rename_intent(
+pub(super) fn rename_intent(
     publication: &NamespaceRenamePublication,
     revision: &super::repository::ObjectRevisionInsert,
 ) -> Result<BranchMutationIntent, PublicationError> {

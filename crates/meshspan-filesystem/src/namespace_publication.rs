@@ -4,6 +4,8 @@
 
 #[path = "namespace_publication/digest.rs"]
 mod digest;
+#[path = "namespace_publication/federated_mutation.rs"]
+mod federated_mutation;
 #[path = "namespace_publication/history_export.rs"]
 mod history_export;
 #[path = "namespace_publication/history_import.rs"]
@@ -28,7 +30,8 @@ mod unlink;
 use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{
-    BranchId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, VolumeId,
+    BranchId, FederatedMutationAcknowledgement, NamespaceCommitId, ObjectId, ObjectRevisionId,
+    OperationId, VolumeId,
 };
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
@@ -286,7 +289,7 @@ pub(super) fn publish(
     publication: &RootFilePublication,
     fault: Option<NamespaceFaultPoint>,
 ) -> Result<NamespacePublicationReceipt, PublicationError> {
-    publish_inner(connection, publication, None, fault)
+    publish_inner(connection, publication, None, None, fault)
         .map(|result| result.0)
         .map_err(|error| match error {
             crate::HandleError::Namespace(error) => error,
@@ -294,12 +297,57 @@ pub(super) fn publish(
         })
 }
 
+pub(super) fn publish_federated(
+    connection: &mut Connection,
+    publication: &RootFilePublication,
+    acknowledgement: &FederatedMutationAcknowledgement,
+) -> Result<NamespacePublicationReceipt, PublicationError> {
+    publish_inner(connection, publication, None, Some(acknowledgement), None)
+        .map(|result| result.0)
+        .map_err(|error| match error {
+            crate::HandleError::Namespace(error) => error,
+            _ => PublicationError::Corrupt,
+        })
+}
+
+#[cfg(test)]
+pub(super) fn publish_federated_with_fault(
+    connection: &mut Connection,
+    publication: &RootFilePublication,
+    acknowledgement: &FederatedMutationAcknowledgement,
+    fault: NamespaceFaultPoint,
+) -> Result<NamespacePublicationReceipt, PublicationError> {
+    publish_inner(
+        connection,
+        publication,
+        None,
+        Some(acknowledgement),
+        Some(fault),
+    )
+    .map(|result| result.0)
+    .map_err(|error| match error {
+        crate::HandleError::Namespace(error) => error,
+        _ => PublicationError::Corrupt,
+    })
+}
+
+pub(super) fn file_federated_mutation_digest(
+    publication: &RootFilePublication,
+) -> Result<[u8; 32], PublicationError> {
+    validate(publication)?;
+    federated_mutation::mutation_digest(
+        NamespaceIntent::from_file(publication),
+        request_digest(publication),
+        repository::file_intent(publication),
+    )
+}
+
 pub(super) fn publish_and_open(
     connection: &mut Connection,
     publication: &RootFilePublication,
     open: &crate::OpenHandleRequest,
 ) -> Result<(NamespacePublicationReceipt, crate::OpenHandleReceipt), crate::HandleError> {
-    let (namespace, handle) = publish_inner(connection, publication, Some(open), None)?;
+    let (namespace, handle) = publish_inner(connection, publication, Some(open), None, None)?;
     Ok((namespace, handle.ok_or(crate::HandleError::Corrupt)?))
 }
 
@@ -307,6 +355,7 @@ fn publish_inner(
     connection: &mut Connection,
     publication: &RootFilePublication,
     open: Option<&crate::OpenHandleRequest>,
+    acknowledgement: Option<&FederatedMutationAcknowledgement>,
     fault: Option<NamespaceFaultPoint>,
 ) -> Result<
     (
@@ -325,6 +374,11 @@ fn publish_inner(
         PublicationDisposition::Replayed,
     )? {
         return if receipt.request_digest == request_digest {
+            federated_mutation::ensure_exact(
+                &transaction,
+                publication.namespace_commit_id,
+                acknowledgement,
+            )?;
             let handle = open
                 .map(|request| {
                     crate::handles::load_open_receipt(
@@ -384,6 +438,13 @@ fn publish_inner(
         .transpose()?;
     let receipt =
         persist_namespace_operation(&transaction, publication, request_digest, head_sequence)?;
+    if let Some(acknowledgement) = acknowledgement {
+        federated_mutation::persist(
+            &transaction,
+            publication.namespace_commit_id,
+            acknowledgement,
+        )?;
+    }
     inject(fault, NamespaceFaultPoint::Operation)?;
     transaction.commit()?;
     Ok((receipt, handle))
@@ -392,6 +453,34 @@ fn publish_inner(
 pub(super) fn create_directory(
     connection: &mut Connection,
     publication: &DirectoryPublication,
+    fault: Option<NamespaceFaultPoint>,
+) -> Result<DirectoryPublicationReceipt, PublicationError> {
+    create_directory_inner(connection, publication, None, fault)
+}
+
+pub(super) fn create_federated_directory(
+    connection: &mut Connection,
+    publication: &DirectoryPublication,
+    acknowledgement: &FederatedMutationAcknowledgement,
+) -> Result<DirectoryPublicationReceipt, PublicationError> {
+    create_directory_inner(connection, publication, Some(acknowledgement), None)
+}
+
+pub(super) fn directory_federated_mutation_digest(
+    publication: &DirectoryPublication,
+) -> Result<[u8; 32], PublicationError> {
+    validate_directory_publication(publication)?;
+    federated_mutation::mutation_digest(
+        NamespaceIntent::from_directory(publication),
+        directory_request_digest(publication),
+        repository::directory_intent(publication),
+    )
+}
+
+fn create_directory_inner(
+    connection: &mut Connection,
+    publication: &DirectoryPublication,
+    acknowledgement: Option<&FederatedMutationAcknowledgement>,
     fault: Option<NamespaceFaultPoint>,
 ) -> Result<DirectoryPublicationReceipt, PublicationError> {
     validate_directory_publication(publication)?;
@@ -404,6 +493,11 @@ pub(super) fn create_directory(
         PublicationDisposition::Replayed,
     )? {
         return if receipt.request_digest == request_digest {
+            federated_mutation::ensure_exact(
+                &transaction,
+                publication.namespace_commit_id,
+                acknowledgement,
+            )?;
             Ok(receipt)
         } else {
             Err(PublicationError::OperationConflict)
@@ -467,6 +561,13 @@ pub(super) fn create_directory(
     inject(fault, NamespaceFaultPoint::Heads)?;
     let receipt =
         persist_directory_operation(&transaction, publication, request_digest, head_sequence)?;
+    if let Some(acknowledgement) = acknowledgement {
+        federated_mutation::persist(
+            &transaction,
+            publication.namespace_commit_id,
+            acknowledgement,
+        )?;
+    }
     inject(fault, NamespaceFaultPoint::Operation)?;
     transaction.commit()?;
     Ok(receipt)
@@ -543,7 +644,22 @@ pub(super) fn rename_namespace(
     publication: &super::NamespaceRenamePublication,
     fault: Option<NamespaceFaultPoint>,
 ) -> Result<super::NamespaceRenameReceipt, crate::HandleError> {
-    rename::apply(connection, publication, fault)
+    rename::apply(connection, publication, None, fault)
+}
+
+pub(super) fn rename_federated_namespace(
+    connection: &mut Connection,
+    publication: &super::NamespaceRenamePublication,
+    acknowledgement: &FederatedMutationAcknowledgement,
+) -> Result<super::NamespaceRenameReceipt, crate::HandleError> {
+    rename::apply(connection, publication, Some(acknowledgement), None)
+}
+
+pub(super) fn rename_federated_mutation_digest(
+    connection: &Connection,
+    publication: &super::NamespaceRenamePublication,
+) -> Result<[u8; 32], crate::HandleError> {
+    rename::federated_mutation_digest(connection, publication)
 }
 
 pub(super) fn load_rename(
@@ -558,7 +674,22 @@ pub(super) fn unlink_namespace(
     publication: &super::NamespaceUnlinkPublication,
     fault: Option<NamespaceFaultPoint>,
 ) -> Result<super::NamespaceUnlinkReceipt, crate::HandleError> {
-    unlink::apply(connection, publication, fault)
+    unlink::apply(connection, publication, None, fault)
+}
+
+pub(super) fn unlink_federated_namespace(
+    connection: &mut Connection,
+    publication: &super::NamespaceUnlinkPublication,
+    acknowledgement: &FederatedMutationAcknowledgement,
+) -> Result<super::NamespaceUnlinkReceipt, crate::HandleError> {
+    unlink::apply(connection, publication, Some(acknowledgement), None)
+}
+
+pub(super) fn unlink_federated_mutation_digest(
+    connection: &Connection,
+    publication: &super::NamespaceUnlinkPublication,
+) -> Result<[u8; 32], crate::HandleError> {
+    unlink::federated_mutation_digest(connection, publication)
 }
 
 pub(super) fn load_unlink(

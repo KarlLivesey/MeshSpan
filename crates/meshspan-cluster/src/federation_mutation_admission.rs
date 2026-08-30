@@ -3,14 +3,13 @@
 //! Fail-closed admission of signed remote mutation history before filesystem import.
 
 use meshspan_domain::{
-    FederatedMutationAdmission, FederatedPrincipal, NamespaceCommitId, UnixMicros,
+    FederatedMutationAcknowledgement, FederatedMutationAdmission, FederatedPrincipal,
+    NamespaceCommitId, UnixMicros,
 };
 use meshspan_filesystem::{
     NamespaceHistoryCommitRecord, NamespaceHistoryMutationAuthority, NamespaceHistoryRecordError,
 };
-use meshspan_metadata::{
-    AuthoritativeRepository, FederatedMutationAcknowledgement, RepositoryError,
-};
+use meshspan_metadata::{AuthoritativeRepository, RepositoryError};
 use thiserror::Error;
 
 /// A structurally bound remote mutation and its authoritative admission decision.
@@ -74,7 +73,7 @@ fn validate_binding(
 ) -> Result<(), FederatedHistoryMutationAdmissionError> {
     let evidence = acknowledgement.evidence;
     if acknowledgement.source_operation_id != authority.operation_id()
-        || acknowledgement.payload_digest != record.digest()
+        || acknowledgement.payload_digest != record.mutation_digest()?
         || evidence.subject().principal_id() != authority.created_by()
         || evidence.accepted_at() < authority.created_at()
         || evidence.accepted_at() > now
@@ -104,16 +103,15 @@ pub enum FederatedHistoryMutationAdmissionError {
 #[cfg(test)]
 mod tests {
     use meshspan_domain::{
-        BranchId, ContentManifestId, FederatedMutationEvidence, FederatedPrincipal,
-        FederationGrantId, FederationRelationshipId, FederationResourceScope, FileVersionId,
-        MeshId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Rights,
-        UnixMicros, VolumeId,
+        BranchId, ContentManifestId, FederatedMutationAcknowledgement, FederatedMutationEvidence,
+        FederatedPrincipal, FederationGrantId, FederationRelationshipId, FederationResourceScope,
+        FileVersionId, MeshId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId,
+        PrincipalId, Rights, UnixMicros, VolumeId,
     };
     use meshspan_filesystem::{
         FilePublication, ManifestPublication, NamespaceHistoryLimits, NamespaceLimits,
         NamespacePath, NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
     };
-    use meshspan_metadata::FederatedMutationAcknowledgement;
     use tempfile::tempdir;
 
     use super::{FederatedHistoryMutationAdmissionError, validate_binding};

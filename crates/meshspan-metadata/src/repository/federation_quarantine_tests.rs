@@ -496,7 +496,7 @@ impl Fixture {
             Rights::default(),
             storage_bytes,
         );
-        let mut acknowledgement = crate::FederatedMutationAcknowledgement {
+        let mut acknowledgement = meshspan_domain::FederatedMutationAcknowledgement {
             source_operation_id: OperationId::from_bytes([source_operation; 16])?,
             evidence,
             payload_digest: [quarantine.wrapping_add(1); 32],

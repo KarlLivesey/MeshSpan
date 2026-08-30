@@ -3,8 +3,8 @@
 //! Reconstruction and independent verification of persisted quarantine proof chains.
 
 use meshspan_domain::{
-    FederatedMutationAdmission, FederatedMutationEvidence, FederatedPrincipal, MeshId,
-    QuarantineId, Revision, UnixMicros,
+    FederatedMutationAcknowledgement, FederatedMutationAdmission, FederatedMutationEvidence,
+    FederatedPrincipal, MeshId, QuarantineId, Revision, UnixMicros,
 };
 use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -19,10 +19,7 @@ use super::federation_quarantine_transition::{
     QUARANTINE_DISCARDED, QUARANTINE_RESTORED, QUARANTINE_RETAINED, QUARANTINE_SURFACED,
 };
 use super::{RepositoryError, federation_mutation_admission};
-use crate::{
-    FederatedMutationAcknowledgement, FederationQuarantineResolution,
-    RetainFederatedMutationQuarantine,
-};
+use crate::{FederationQuarantineResolution, RetainFederatedMutationQuarantine};
 
 pub(super) struct StoredQuarantine {
     pub(super) record: FederationQuarantineRecord,
