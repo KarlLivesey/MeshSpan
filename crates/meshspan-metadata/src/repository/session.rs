@@ -3,7 +3,8 @@
 //! Mesh-wide authentication-session issuance, factor consumption and revocation.
 
 use meshspan_domain::{
-    AssuranceLevel, AuthenticationMethodKind, AuthenticationService, Revision, UnixMicros,
+    ApiKeyId, AssuranceLevel, AuthenticationMethodId, AuthenticationMethodKind,
+    AuthenticationService, OperationId, PrincipalId, Revision, SessionId, UnixMicros,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -19,6 +20,138 @@ const ACTIVE: i64 = 1;
 const MAXIMUM_FACTORS: usize = 8;
 const MAXIMUM_CLIENT_LABEL_CHARACTERS: usize = 80;
 const MICROS_PER_SECOND: i64 = 1_000_000;
+
+/// Exact durable facts needed to reproduce one API-key session response safely.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApiKeySessionReplay {
+    /// Digest of the original authoritative result receipt.
+    pub result_digest: [u8; 32],
+    /// Stable session identity bound to the operation.
+    pub session_id: SessionId,
+    /// User which authenticated the original operation.
+    pub principal_id: PrincipalId,
+    /// Stored bearer verifier.
+    pub token_digest: [u8; 32],
+    /// Stored CSRF verifier.
+    pub csrf_digest: [u8; 32],
+    /// Exact missing, null or value label intent.
+    pub client_label: SessionClientLabel,
+    /// Exact cookie-persistence intent.
+    pub persistent_cookie: bool,
+    /// Connector family bound to the session.
+    pub service: AuthenticationService,
+    /// Original exclusive expiry returned to the caller.
+    pub expires_at: UnixMicros,
+    /// Explicit revocation instant, when the original session has since been fenced.
+    pub revoked_at: Option<UnixMicros>,
+    /// Authentication method used by the original operation.
+    pub method_id: AuthenticationMethodId,
+    /// Credential generation used by the original operation.
+    pub credential_generation: u64,
+    /// API-key identity used by the original operation.
+    pub key_id: ApiKeyId,
+}
+
+/// Resolves one already-committed, single-factor API-key session operation.
+pub(super) fn resolve_api_key_replay(
+    database: &crate::PartitionDatabase,
+    operation_id: OperationId,
+) -> Result<Option<ApiKeySessionReplay>, RepositoryError> {
+    let Some(receipt) = super::receipt::resolve_operation(database, operation_id)? else {
+        return Ok(None);
+    };
+    if receipt.entity.kind != EntityKind::AuthenticationSession {
+        return Err(RepositoryError::OperationConflict);
+    }
+    let session_id = receipt.entity.id;
+    let row = database.connection().query_row(
+        "SELECT session.user_principal_id, session.token_digest, session.csrf_digest,
+                session.client_label_state, session.client_label, session.persistent_cookie,
+                session.service, session.expires_at, session.revoked_at, factor.method_id,
+                factor.method_kind,
+                factor.credential_generation, factor.credential_reference,
+                (SELECT COUNT(*) FROM authentication_session_factors AS counted
+                 WHERE counted.session_id = session.session_id)
+         FROM authentication_sessions AS session
+         JOIN authentication_session_factors AS factor
+           ON factor.session_id = session.session_id AND factor.factor_sequence = 1
+         WHERE session.session_id = ?1",
+        [session_id.as_slice()],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, Vec<u8>>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, i64>(11)?,
+                row.get::<_, Vec<u8>>(12)?,
+                row.get::<_, i64>(13)?,
+            ))
+        },
+    )?;
+    let (
+        principal_id,
+        token_digest,
+        csrf_digest,
+        label_state,
+        label,
+        persistent_cookie,
+        service,
+        expires_at,
+        revoked_at,
+        method_id,
+        method_kind,
+        credential_generation,
+        key_id,
+        factor_count,
+    ) = row;
+    if factor_count != 1 || method_kind != AuthenticationMethodKind::ApiKey as i64 {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(Some(ApiKeySessionReplay {
+        result_digest: receipt.result_digest,
+        session_id: SessionId::from_bytes(session_id).map_err(|_| RepositoryError::CorruptState)?,
+        principal_id: PrincipalId::from_bytes(fixed_bytes(principal_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        token_digest: fixed_bytes(token_digest)?,
+        csrf_digest: fixed_bytes(csrf_digest)?,
+        client_label: parse_client_label(label_state, label)?,
+        persistent_cookie: parse_boolean(persistent_cookie)?,
+        service: parse_service(service)?,
+        expires_at: UnixMicros::new(expires_at),
+        revoked_at: revoked_at.map(UnixMicros::new),
+        method_id: AuthenticationMethodId::from_bytes(fixed_bytes(method_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        credential_generation: parse_positive(credential_generation)?,
+        key_id: ApiKeyId::from_bytes(fixed_bytes(key_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+    }))
+}
+
+fn parse_client_label(
+    state: i64,
+    value: Option<String>,
+) -> Result<SessionClientLabel, RepositoryError> {
+    match (state, value) {
+        (1, None) => Ok(SessionClientLabel::Missing),
+        (2, None) => Ok(SessionClientLabel::Null),
+        (3, Some(value)) if !value.is_empty() && value.chars().count() <= 80 => {
+            Ok(SessionClientLabel::Value(value))
+        }
+        _ => Err(RepositoryError::CorruptState),
+    }
+}
+
+fn fixed_bytes<const N: usize>(value: Vec<u8>) -> Result<[u8; N], RepositoryError> {
+    value.try_into().map_err(|_| RepositoryError::CorruptState)
+}
 
 pub(super) fn issue(
     transaction: &Transaction<'_>,

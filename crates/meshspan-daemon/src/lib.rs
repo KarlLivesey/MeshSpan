@@ -9,6 +9,9 @@ mod claim_service_tests;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;
+mod create_session;
+#[cfg(test)]
+mod create_session_tests;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
@@ -21,6 +24,10 @@ pub use claim_service::{
 pub use create_mesh_setup::{
     BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, CreateMeshSetupError,
     CreateMeshSetupService,
+};
+pub use create_session::{
+    CreateSessionError, CreateSessionResult, CreateSessionService, SessionAuthority,
+    SessionAuthorityError, SessionCommit,
 };
 pub use setup_api::{
     CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,

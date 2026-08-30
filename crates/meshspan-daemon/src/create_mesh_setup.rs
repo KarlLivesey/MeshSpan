@@ -247,7 +247,7 @@ fn append_name(digest: &mut Sha256, name: &RecordName) {
     }
 }
 
-fn parse_uuid(value: &str) -> Result<[u8; 16], CreateMeshSetupError> {
+pub(crate) fn parse_uuid(value: &str) -> Result<[u8; 16], CreateMeshSetupError> {
     if value.len() != 36 {
         return Err(CreateMeshSetupError::InvalidUuid);
     }
