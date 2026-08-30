@@ -19,6 +19,7 @@ mod primitives;
 mod routing;
 mod seams;
 mod secret_text;
+mod session_token;
 mod topology;
 
 pub use access::{
@@ -70,6 +71,9 @@ pub use primitives::{
 };
 pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};
+pub use session_token::{
+    ENCODED_SESSION_TOKEN_LENGTH, SessionTokenBundle, SessionTokenBundleError,
+};
 pub use topology::{
     FailureScenario, FailureTerm, FaultGroupMember, ProtectionError, ProtectionLayout,
     ProtectionProof, Topology, prove_protection,
