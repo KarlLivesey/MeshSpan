@@ -1,6 +1,6 @@
 # Stage 1–3 implementation audit
 
-Status: federation retrofits through Stage 2 complete on 2026-08-29; Stage 3 remains reopened.
+Status: Stages 1–3 complete after the Stage 3 federation closure on 2026-08-30.
 
 This audit checks roadmap claims against production code and behavioural tests.
 Schemas, message shapes, design prose and unused helpers are not implementation
@@ -10,9 +10,9 @@ passes locally.
 The accepted autonomous-swarm federation contract adds work which this evidence
 never claimed to prove. Stage 1's previously missing federation-qualified
 identities, rights, restriction/delegation transitions and contract fixtures now
-pass. Stage 2's authoritative federation records, transitions and evidence now
-pass. Stage 3 lacks mutually approved swarm authentication and bounded signed federation
-exchange over Quinn. See [`federation.md`](federation.md) and the reopened gates in
+pass. Stage 2's authoritative federation records, transitions and evidence pass. Stage 3 now
+mutually authenticates autonomous swarms and transfers bounded signed history over Quinn into one
+durable, atomic receiver. See [`federation.md`](federation.md) and
 [`roadmap.md`](roadmap.md).
 
 ## Stage 1
@@ -93,6 +93,16 @@ different orders; every real scoped proposal is admitted by at most one
 authority. The consolidated adversarial gate also passes with exact non-empty
 test selection.
 
+Autonomous swarms now connect through relationship-bound mTLS identities without becoming local
+nodes, voters or principals. Signed authority pages survive identity rotation and reject
+revocation, stale epochs and replay. Namespace history is materialised incrementally into durable
+cursor pages; independently framed immutable objects remain bound to the exact export and current
+bilateral grant. The receiver persists every accepted page and object without a network-spanning
+transaction, resumes the oldest missing object after restart, validates the complete cross-record
+graph and publishes it in one SQLite transaction. A real Quinn proof deliberately stops after its
+first non-empty page, resumes from disk, transfers the remaining objects and proves the receiving
+store can export the imported commit.
+
 ### Stage 3 closure gates
 
 1. [x] Persist the canonical active stable or joint quorum plan with its proof,
@@ -110,8 +120,19 @@ test selection.
    accepted by at most one authority throughout the handoff.
 6. [x] Re-run multi-way partition, stale-incarnation, corrupt-snapshot, saturated
    bulk-stream and complete local gates with exact expected outcomes.
+7. [x] Mutually authenticate autonomous swarms from current relationship metadata, rotate both
+   identities and fail closed after committed relationship revocation without admitting either
+   swarm to local membership or consensus authority.
+8. [x] Synchronise bounded signed remote-authority pages and reject stale cursors, changed
+   authority, replay, excessive pages and incomplete snapshots without exposing partial state.
+9. [x] Transfer canonical namespace commits and separately framed immutable bodies over mTLS
+   Quinn, with exact grant/resource/export/digest binding and fresh replay-protected contexts.
+10. [x] Stop a non-empty history transfer after page one, reopen durable receiver state, resume its
+    exact cursor and missing-object sequence, atomically import the complete graph and retain the
+    exact completion receipt across restart.
 
-The original Stages 1–3 closure gates remain proved, and the federation retrofits
-through Stage 2 are now closed. Stage 3 remains reopened until its roadmap federation
-evidence passes. `npm run check:stage3-adversarial` also prevents an exact test
-filter from silently succeeding with zero tests.
+All original and federation closure gates now pass. On 2026-08-30,
+`npm run check:stage3-adversarial` passed all four non-empty lanes in 9.00 seconds and the complete
+four-worker `npm run check` gate passed in 109.90 seconds. Stage 3 is complete; remote shard
+placement remains Stage 4, while remote-principal multi-writer reconciliation and quarantine
+remain Stage 5.
