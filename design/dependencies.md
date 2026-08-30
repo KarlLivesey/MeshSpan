@@ -38,6 +38,7 @@ source/advisory policy automation arrive before a release artefact is built.
 
 | Rust dependency                    | Resolved version | Declared licence           |
 | ---------------------------------- | ---------------: | -------------------------- |
+| `axum`                             |            0.8.9 | `MIT`                      |
 | `jsonschema`                       |           0.52.0 | `MIT`                      |
 | `prost`                            |           0.14.4 | `Apache-2.0`               |
 | `prost-build` (build only)         |           0.14.4 | `Apache-2.0`               |
@@ -57,6 +58,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `rcgen`                            |           0.14.9 | `MIT OR Apache-2.0`        |
 | `rustls`                           |          0.23.43 | `Apache-2.0 OR ISC OR MIT` |
 | `tokio`                            |           1.53.1 | `MIT`                      |
+| `tower`                            |            0.5.3 | `MIT`                      |
 | `zeroize`                          |            1.9.0 | `Apache-2.0 OR MIT`        |
 
 | Web/runtime dependency  | Version | Declared licence |
@@ -100,10 +102,10 @@ MeshSpan-owned core.
 | `base64`          | Strict URL-safe token and wire encodings where the protocol requires them           |
 
 Rust boundary types and structural constraints generate OpenAPI 3.1 and drive
-runtime request/response validation. The exact Rust schema crates remain gated
-on one focused round-trip proof: the same declared constraint must appear in
-runtime validation, OpenAPI and hostile fixtures without a second hand-written
-model. Candidate selection happens before the first public route is scaffolded.
+runtime request/response validation through the admitted `schemars` and
+`jsonschema` boundary. Every public route must prove that the same declared
+constraint appears in runtime validation, OpenAPI and hostile fixtures without
+a second hand-written model.
 
 Private Protobuf generation uses `prost-build` with the exact platform-specific
 `protoc` selected by `protoc-bin-vendored`. Both are build-only dependencies;

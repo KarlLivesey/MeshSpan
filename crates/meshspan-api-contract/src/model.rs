@@ -21,6 +21,14 @@ pub struct OperationId(
     String,
 );
 
+impl OperationId {
+    /// Returns the validated canonical UUID text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A durable authenticated-session identifier.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -216,6 +224,106 @@ pub struct HealthResponse {
     /// Digest of the exact `OpenAPI` document served by this process.
     #[schemars(length(equal = 71), pattern(r"^sha256:[0-9a-f]{64}$"))]
     pub schema_digest: String,
+}
+
+/// Public first-start lifecycle state containing no claim or identity material.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupState {
+    /// A locally presented claim bundle is required to create or join a swarm.
+    ClaimRequired,
+    /// A claimed create/join operation is durably incomplete and will resume.
+    Configuring,
+    /// Initial swarm creation or enrolment has completed.
+    Configured,
+}
+
+/// Cheap anonymous first-start status safe for local-network discovery.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupStatusResponse {
+    /// Current coarse setup state; this response never includes claim material.
+    pub state: SetupState,
+}
+
+/// Exact first-boot claim bundle accepted only by setup mutations.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SetupClaim(
+    #[schemars(
+        length(equal = 115),
+        pattern(r"^meshspan-claim-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$"),
+        extend("writeOnly" = true)
+    )]
+    String,
+);
+
+impl SetupClaim {
+    /// Exposes the claim only to the server-side verifier.
+    #[must_use]
+    pub fn expose_for_verification(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Bounded setup display name; canonical domain validation still runs server-side.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SetupName(
+    #[schemars(length(min = 1, max = 128), pattern(r"^[^\x00-\x1f\x2f\x7f\\]+$"))] String,
+);
+
+impl SetupName {
+    /// Returns the untrusted display-name candidate for domain validation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One exact request to create the first mesh on an unclaimed daemon.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateMeshSetupRequest {
+    /// Client-generated idempotency identity.
+    pub operation_id: OperationId,
+    /// High-entropy single-use claim printed or written by the local daemon.
+    pub claim: SetupClaim,
+    /// Human-readable mesh name.
+    pub mesh_name: SetupName,
+    /// Human-readable first administrator name.
+    pub administrator_name: SetupName,
+    /// Human-readable physical host name.
+    pub host_name: SetupName,
+    /// Human-readable daemon-node name.
+    pub node_name: SetupName,
+}
+
+/// Successful, committed first-mesh creation result.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateMeshSetupResponse {
+    /// Exact idempotency identity whose result was resolved.
+    pub operation_id: OperationId,
+    /// Stable UUID of the created mesh.
+    #[schemars(
+        length(equal = 36),
+        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    pub mesh_id: String,
+    /// Stable UUID of the first daemon node.
+    #[schemars(
+        length(equal = 36),
+        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    pub node_id: String,
+    /// One-time presentation of the first administrator's ordinary API key.
+    #[schemars(
+        length(equal = 113),
+        pattern(r"^meshspan-key-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$"),
+        extend("x-meshspan-sensitive" = true)
+    )]
+    pub api_key: String,
 }
 
 /// Stable public error category.

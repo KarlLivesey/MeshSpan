@@ -6,16 +6,12 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::secret_text::{SECRET_BYTES, decode, encode};
 use crate::{ClaimId, RandomSource};
 
 const PREFIX: &str = "meshspan-claim-v1.";
-const SECRET_BYTES: usize = 32;
-const SECRET_HEX_LENGTH: usize = SECRET_BYTES * 2;
-const IDENTIFIER_HEX_LENGTH: usize = 32;
-
 /// Exact byte length of one canonical encoded claim bundle.
-pub const ENCODED_CLAIM_BUNDLE_LENGTH: usize =
-    PREFIX.len() + IDENTIFIER_HEX_LENGTH + 1 + SECRET_HEX_LENGTH;
+pub const ENCODED_CLAIM_BUNDLE_LENGTH: usize = PREFIX.len() + 97;
 
 /// Secret-bearing single-use claim material.
 ///
@@ -57,20 +53,10 @@ impl ClaimBundle {
     /// Rejects another version, whitespace, uppercase/non-hex bytes, nil identity,
     /// zero secret, extra fields or an incorrect exact length.
     pub fn parse(value: &str) -> Result<Self, ClaimBundleError> {
-        if value.len() != ENCODED_CLAIM_BUNDLE_LENGTH {
-            return Err(ClaimBundleError::InvalidEncoding);
-        }
-        let body = value
-            .strip_prefix(PREFIX)
-            .ok_or(ClaimBundleError::InvalidEncoding)?;
-        let (claim_id, secret) = body
-            .split_once('.')
-            .ok_or(ClaimBundleError::InvalidEncoding)?;
-        if claim_id.len() != IDENTIFIER_HEX_LENGTH || secret.len() != SECRET_HEX_LENGTH {
-            return Err(ClaimBundleError::InvalidEncoding);
-        }
-        let claim_id = ClaimId::parse(claim_id).map_err(|_| ClaimBundleError::InvalidEncoding)?;
-        let secret = Zeroizing::new(decode_secret(secret)?);
+        let (claim_id, secret) = decode(value, PREFIX).ok_or(ClaimBundleError::InvalidEncoding)?;
+        let claim_id =
+            ClaimId::from_bytes(claim_id).map_err(|_| ClaimBundleError::InvalidEncoding)?;
+        let secret = Zeroizing::new(secret);
         if secret.as_ref() == [0; SECRET_BYTES] {
             return Err(ClaimBundleError::InvalidEncoding);
         }
@@ -95,12 +81,13 @@ impl ClaimBundle {
     /// an error, stored in metadata or sent through an unauthenticated discovery response.
     #[must_use]
     pub fn expose_encoded(&self) -> Zeroizing<String> {
-        let mut encoded = Zeroizing::new(String::with_capacity(ENCODED_CLAIM_BUNDLE_LENGTH));
-        encoded.push_str(PREFIX);
-        append_hex(&mut encoded, &self.claim_id.as_bytes());
-        encoded.push('.');
-        append_hex(&mut encoded, self.secret.as_ref());
-        encoded
+        encode(PREFIX, &self.claim_id.as_bytes(), &self.secret)
+    }
+
+    /// Exposes the fixed secret only to sibling domain-separated credential derivations.
+    #[must_use]
+    pub(crate) fn secret_bytes(&self) -> &[u8; SECRET_BYTES] {
+        &self.secret
     }
 }
 
@@ -116,36 +103,6 @@ pub enum ClaimBundleError {
     /// The supplied claim is not the exact supported canonical encoding.
     #[error("claim bundle encoding is invalid")]
     InvalidEncoding,
-}
-
-fn append_hex(output: &mut String, bytes: &[u8]) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for byte in bytes {
-        output.push(char::from(HEX[usize::from(byte >> 4)]));
-        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-}
-
-fn decode_secret(value: &str) -> Result<[u8; SECRET_BYTES], ClaimBundleError> {
-    let mut decoded = [0_u8; SECRET_BYTES];
-    let (pairs, remainder) = value.as_bytes().as_chunks::<2>();
-    if !remainder.is_empty() || pairs.len() != SECRET_BYTES {
-        return Err(ClaimBundleError::InvalidEncoding);
-    }
-    for (destination, pair) in decoded.iter_mut().zip(pairs) {
-        let high = decode_hex(pair[0]).ok_or(ClaimBundleError::InvalidEncoding)?;
-        let low = decode_hex(pair[1]).ok_or(ClaimBundleError::InvalidEncoding)?;
-        *destination = (high << 4) | low;
-    }
-    Ok(decoded)
-}
-
-const fn decode_hex(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

@@ -9,9 +9,12 @@
 )]
 
 use meshspan_api_contract::{
-    CreateSessionResponse, NullableField, decode_create_session_request,
-    encode_create_session_response, generate_openapi, validate_create_session_request_value,
-    validate_create_session_response_value,
+    ApiError, ApiErrorCode, CreateMeshSetupResponse, CreateSessionResponse, NullableField,
+    OperationId, SetupState, SetupStatusResponse, decode_create_mesh_setup_request,
+    decode_create_session_request, encode_api_error, encode_create_mesh_setup_response,
+    encode_create_session_response, encode_setup_status_response, generate_openapi,
+    validate_create_mesh_setup_request_value, validate_create_session_request_value,
+    validate_create_session_response_value, validate_setup_status_response_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -95,9 +98,93 @@ fn accepted_response_passes_the_outgoing_encoder() {
 }
 
 #[test]
+fn public_error_passes_the_same_outgoing_contract_gate() {
+    let error = ApiError {
+        code: ApiErrorCode::InvalidRequest,
+        message: "request does not satisfy the public contract".to_owned(),
+        request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+        operation_id: None,
+        issues: vec![],
+    };
+    let encoded = encode_api_error(&error).expect("public error must validate");
+    assert_eq!(
+        serde_json::from_slice::<ApiError>(&encoded).expect("public error must decode"),
+        error
+    );
+}
+
+#[test]
 fn decoder_rejects_malformed_and_oversized_bodies_before_domain_work() {
     assert!(decode_create_session_request(b"{").is_err());
     assert!(decode_create_session_request(&vec![b' '; 2_049]).is_err());
+}
+
+#[test]
+fn anonymous_setup_status_has_only_the_closed_lifecycle_state() {
+    let encoded = encode_setup_status_response(&SetupStatusResponse {
+        state: SetupState::ClaimRequired,
+    })
+    .expect("setup state must encode");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&encoded).expect("setup response must be JSON"),
+        json!({ "state": "claim_required" })
+    );
+    assert!(
+        validate_setup_status_response_value(&json!({
+            "state": "claim_required",
+            "claim_id": "must-not-leak"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn first_mesh_setup_is_exact_bounded_and_keeps_claim_out_of_debug_boundaries() {
+    let operation = "00000000-0000-4000-8000-000000000001";
+    let claim = format!("meshspan-claim-v1.{}.{}", "1".repeat(32), "2".repeat(64));
+    let request = json!({
+        "operation_id": operation,
+        "claim": claim,
+        "mesh_name": "Home storage",
+        "administrator_name": "Administrator",
+        "host_name": "Hall cupboard",
+        "node_name": "Storage node"
+    });
+    let request_bytes = serde_json::to_vec(&request).expect("setup request must encode");
+    let decoded =
+        decode_create_mesh_setup_request(&request_bytes).expect("valid setup request must decode");
+    assert_eq!(decoded.mesh_name.as_str(), "Home storage");
+    assert!(
+        decoded
+            .claim
+            .expose_for_verification()
+            .starts_with("meshspan-claim-v1.")
+    );
+
+    let mut leaked = request.clone();
+    leaked["unexpected"] = json!(true);
+    assert!(validate_create_mesh_setup_request_value(&leaked).is_err());
+    let mut uppercase_claim = request;
+    uppercase_claim["claim"] = json!(format!(
+        "meshspan-claim-v1.{}.{}",
+        "A".repeat(32),
+        "2".repeat(64)
+    ));
+    assert!(validate_create_mesh_setup_request_value(&uppercase_claim).is_err());
+
+    let response = CreateMeshSetupResponse {
+        operation_id: serde_json::from_value::<OperationId>(json!(operation))
+            .expect("operation identifier must decode"),
+        mesh_id: "00000000-0000-4000-8000-000000000002".to_owned(),
+        node_id: "00000000-0000-4000-8000-000000000003".to_owned(),
+        api_key: format!("meshspan-key-v1.{}.{}", "4".repeat(32), "5".repeat(64)),
+    };
+    let encoded = encode_create_mesh_setup_response(&response).expect("response must validate");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&encoded).expect("setup response must decode")["api_key"],
+        json!(response.api_key)
+    );
+    assert!(decode_create_mesh_setup_request(&vec![b' '; 2_049]).is_err());
 }
 
 #[test]

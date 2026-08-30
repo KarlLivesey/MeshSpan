@@ -16,6 +16,8 @@ mod authentication_policy;
 mod authentication_policy_tests;
 mod backup;
 mod bootstrap;
+#[cfg(test)]
+mod bootstrap_appliance_tests;
 mod cleanup_attestation;
 mod cleanup_completion;
 mod cleanup_inventory;

@@ -7,7 +7,7 @@ use rusqlite::{Transaction, params};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, authentication_policy, identity};
-use crate::{BootstrapMesh, CommandContext};
+use crate::{BootstrapAppliance, BootstrapMesh, CommandContext};
 
 const PRINCIPAL_USER: u8 = 1;
 const ALL_SYSTEM_RIGHTS: u16 = 255;
@@ -45,6 +45,26 @@ pub(super) fn bootstrap(
         kind: EntityKind::Mesh,
         id: mesh,
     })
+}
+
+pub(super) fn bootstrap_appliance(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    context: CommandContext,
+    command: &BootstrapAppliance,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    if command.authentication.principal_id != command.mesh.administrator_id {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let mesh = bootstrap(transaction, partition_id, context, &command.mesh, revision)?;
+    super::authentication_method_creation::create(
+        transaction,
+        context,
+        &command.authentication,
+        revision,
+    )?;
+    Ok(mesh)
 }
 
 fn persist_mesh(

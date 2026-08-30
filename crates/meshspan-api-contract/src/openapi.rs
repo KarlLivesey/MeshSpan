@@ -5,7 +5,10 @@
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{ApiError, CreateSessionRequest, CreateSessionResponse, HealthResponse, schema};
+use crate::{
+    ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
+    CreateSessionResponse, HealthResponse, SetupStatusResponse, schema,
+};
 
 /// Repository path of the committed rolling `OpenAPI` document.
 pub const OPENAPI_PATH: &str = "contracts/openapi/latest.json";
@@ -63,9 +66,12 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
         "components": {
             "schemas": {
                 "ApiError": response_component::<ApiError>(),
+                "CreateMeshSetupRequest": request_component::<CreateMeshSetupRequest>(),
+                "CreateMeshSetupResponse": response_component::<CreateMeshSetupResponse>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
-                "HealthResponse": response_component::<HealthResponse>()
+                "HealthResponse": response_component::<HealthResponse>(),
+                "SetupStatusResponse": response_component::<SetupStatusResponse>()
             }
         }
     });
@@ -108,6 +114,35 @@ fn paths() -> Value {
                 }
             }
         },
+        "/setup/status": {
+            "get": {
+                "operationId": "getSetupStatus",
+                "summary": "Read first-start state without exposing claim material",
+                "x-meshspan-access": "anonymous",
+                "responses": {
+                    "200": json_response("First-start state", "#/components/schemas/SetupStatusResponse"),
+                    "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
+                }
+            }
+        },
+        "/setup/meshes": {
+            "post": {
+                "operationId": "createMeshSetup",
+                "summary": "Create the first mesh using the node's single-use claim",
+                "x-meshspan-access": "claim",
+                "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+                "requestBody": json_request("First-mesh setup", "#/components/schemas/CreateMeshSetupRequest"),
+                "responses": {
+                    "201": json_response("Committed first mesh", "#/components/schemas/CreateMeshSetupResponse"),
+                    "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                    "401": json_response("First-boot claim rejected", "#/components/schemas/ApiError"),
+                    "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
+                    "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                    "503": json_response("Bootstrap authority temporarily unavailable", "#/components/schemas/ApiError"),
+                    "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
+                }
+            }
+        },
         "/sessions": {
             "post": {
                 "operationId": "createSession",
@@ -130,6 +165,18 @@ fn paths() -> Value {
                     "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
                     "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
                 }
+            }
+        }
+    })
+}
+
+fn json_request(description: &str, schema_reference: &str) -> Value {
+    json!({
+        "description": description,
+        "required": true,
+        "content": {
+            "application/json": {
+                "schema": { "$ref": schema_reference }
             }
         }
     })

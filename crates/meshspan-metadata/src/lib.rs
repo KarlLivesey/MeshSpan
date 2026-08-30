@@ -24,6 +24,9 @@ mod federation_succession_command;
 mod local_claim;
 #[cfg(test)]
 mod local_claim_tests;
+mod local_setup;
+#[cfg(test)]
+mod local_setup_tests;
 mod migration;
 mod name;
 mod repository;
@@ -31,17 +34,18 @@ mod repository;
 pub use command::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
     AppendVersionCleanupItems, AssignComponent, AttachTag, AttestVersionCleanup,
-    AuthoriseVersionCleanup, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh,
-    CancelVersionCleanup, ChangePrincipalState, CommandContext, CommitConvergedVolumeHead,
-    CompleteVersionCleanupItem, ConfigureAuthenticationPolicy, ConfigureComponent,
-    ConfigureSnapshotSchedule, ConfigureVersionRetention, ConfirmVersionCleanupReclamation,
-    ConsumeJoinGrant, ConvergedHeadEvidence, CreateActivationPolicy, CreateAuthenticationMethod,
-    CreateComponent, CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute,
-    CreateTag, CreateUser, CreateVolume, CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff,
-    GrantInheritance, GrantPermission, InstallScopeRouteProjection, IssueAuthenticationSession,
-    IssueJoinGrant, IssueVersionCleanupPermit, JoinRoles, NamespaceObjectKind,
-    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, PrincipalLifecycleState,
-    ProposeVersionCleanup, RegisterCleanupAttestationKey, RegisterRoutingSigner, RemoveGroupMember,
+    AuthoriseVersionCleanup, AuthoritativeCommand, BeginScopeHandoff, BootstrapAppliance,
+    BootstrapMesh, CancelVersionCleanup, ChangePrincipalState, CommandContext,
+    CommitConvergedVolumeHead, CompleteVersionCleanupItem, ConfigureAuthenticationPolicy,
+    ConfigureComponent, ConfigureSnapshotSchedule, ConfigureVersionRetention,
+    ConfirmVersionCleanupReclamation, ConsumeJoinGrant, ConvergedHeadEvidence,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent, CreateGroup,
+    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
+    CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission,
+    InstallScopeRouteProjection, IssueAuthenticationSession, IssueJoinGrant,
+    IssueVersionCleanupPermit, JoinRoles, NamespaceObjectKind, NewAuthenticationCredential,
+    NewRecoveryCode, PermissionScope, PrincipalLifecycleState, ProposeVersionCleanup,
+    RegisterCleanupAttestationKey, RegisterRoutingSigner, RemoveGroupMember,
     RemoveVolumeSnapshotRoot, ReplaceObjectOwners, RepositoryCommandError,
     RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode,
     RevokeAccessActivation, RevokeAuthenticationMethod, RevokeAuthenticationSession,
@@ -108,6 +112,10 @@ pub use federation_succession_command::{
 pub use local_claim::{
     LocalClaimError, LocalClaimMutationDisposition, LocalClaimRecord, LocalClaimState,
     NewLocalClaim,
+};
+pub use local_setup::{
+    LocalSetupDisposition, LocalSetupError, LocalSetupKind, LocalSetupRecord, LocalSetupState,
+    NewLocalSetup,
 };
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};

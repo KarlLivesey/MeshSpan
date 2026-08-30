@@ -4,6 +4,14 @@
 export type {
   ApiError,
   ClientOptions,
+  CreateMeshSetupData,
+  CreateMeshSetupError,
+  CreateMeshSetupErrors,
+  CreateMeshSetupRequest,
+  CreateMeshSetupRequestWritable,
+  CreateMeshSetupResponse,
+  CreateMeshSetupResponse2,
+  CreateMeshSetupResponses,
   CreateSessionData,
   CreateSessionError,
   CreateSessionErrors,
@@ -20,6 +28,12 @@ export type {
   GetOpenApiData,
   GetOpenApiResponse,
   GetOpenApiResponses,
+  GetSetupStatusData,
+  GetSetupStatusError,
+  GetSetupStatusErrors,
+  GetSetupStatusResponse,
+  GetSetupStatusResponses,
   HealthResponse,
+  SetupStatusResponse,
 } from "./types.gen";
 export * from "./fetch.gen";

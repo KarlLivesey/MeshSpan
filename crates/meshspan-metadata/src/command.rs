@@ -59,6 +59,8 @@ pub struct CommandContext {
 pub enum AuthoritativeCommand {
     /// Creates the first mesh, administrator, host, node and partition records.
     BootstrapMesh(BootstrapMesh),
+    /// Atomically bootstraps the first mesh and its administrator's usable login method.
+    BootstrapAppliance(BootstrapAppliance),
     /// Creates one user principal.
     CreateUser(CreateUser),
     /// Creates one group principal.
@@ -236,6 +238,7 @@ impl AuthoritativeCommand {
     fn update_digest(&self, digest: &mut CanonicalDigest) {
         match self {
             Self::BootstrapMesh(value) => value.update_digest(digest),
+            Self::BootstrapAppliance(value) => value.update_digest(digest),
             Self::CreateUser(value) => value.update_digest(digest),
             Self::CreateGroup(value) => value.update_digest(digest),
             Self::ChangePrincipalState(value) => value.update_digest(digest),
@@ -342,6 +345,15 @@ pub struct BootstrapMesh {
     pub node_name: RecordName,
     /// Display/canonical name of the already identity-bound partition.
     pub partition_name: RecordName,
+}
+
+/// Atomic first-appliance bootstrap with no default or temporarily missing credential.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BootstrapAppliance {
+    /// First mesh, administrator and one-node authority records.
+    pub mesh: BootstrapMesh,
+    /// Initial login-capable passkey or API key owned by the first administrator.
+    pub authentication: CreateAuthenticationMethod,
 }
 
 /// New user record.
@@ -1642,6 +1654,14 @@ digest_simple_record!(BootstrapMesh, b"bootstrap", |value, digest| {
     digest.name(&value.node_name);
     digest.name(&value.partition_name);
 });
+digest_simple_record!(
+    BootstrapAppliance,
+    b"bootstrap-appliance",
+    |value, digest| {
+        value.mesh.update_digest(digest);
+        value.authentication.update_digest(digest);
+    }
+);
 digest_simple_record!(CreateUser, b"create-user", |value, digest| {
     digest.identifier(value.principal_id.as_bytes());
     digest.name(&value.name);
