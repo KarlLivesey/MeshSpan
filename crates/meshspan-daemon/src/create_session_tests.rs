@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode};
 use meshspan_api_contract::{CreateSessionRequest, decode_create_session_request};
 use meshspan_domain::{
     AuthenticationOperationClass, AuthenticationService, ClaimBundle, EntropyError,
@@ -12,10 +14,11 @@ use meshspan_metadata::{
     RecordName, RepositoryError,
 };
 use tempfile::tempdir;
+use tower::ServiceExt;
 
 use crate::{
     CreateSessionError, CreateSessionService, SessionAuthority, SessionAuthorityError,
-    SessionCommit,
+    SessionCommit, session_api_router,
 };
 
 const OPERATION_TEXT: &str = "00000000-0000-4000-8000-000000000011";
@@ -55,6 +58,61 @@ fn api_key_session_commits_exact_delivery_intent_and_changed_retry_conflicts()
             SessionAuthorityError::Conflict
         ))
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_http_session_round_trip_commits_and_replays_real_sqlite_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
+    let bootstrap_operation = OperationId::from_bytes([8; 16])?;
+    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let directory = tempdir()?;
+    let database = PartitionDatabase::open(
+        &directory.path().join("root.sqlite3"),
+        material.partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut authority = RepositorySessionAuthority {
+        repository: AuthoritativeRepository::new(database),
+        next_index: 1,
+    };
+    bootstrap(&mut authority, &material, bootstrap_operation)?;
+    let api_key = material.api_key.expose_encoded();
+    let router = session_api_router(CreateSessionService::new(authority))?;
+    let first = router
+        .clone()
+        .oneshot(http_request(&api_key, false)?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let first_cookie = first
+        .headers()
+        .get("set-cookie")
+        .ok_or("session cookie missing")?
+        .clone();
+    let first_csrf = first
+        .headers()
+        .get("meshspan-csrf-token")
+        .ok_or("CSRF token missing")?
+        .clone();
+    let first_body = to_bytes(first.into_body(), 2_048).await?;
+
+    let replay = router
+        .clone()
+        .oneshot(http_request(&api_key, false)?)
+        .await?;
+    assert_eq!(replay.status(), StatusCode::CREATED);
+    assert_eq!(replay.headers().get("set-cookie"), Some(&first_cookie));
+    assert_eq!(
+        replay.headers().get("meshspan-csrf-token"),
+        Some(&first_csrf)
+    );
+    assert_eq!(to_bytes(replay.into_body(), 2_048).await?, first_body);
+
+    let changed = router.oneshot(http_request(&api_key, true)?).await?;
+    assert_eq!(changed.status(), StatusCode::CONFLICT);
+    assert!(changed.headers().get("set-cookie").is_none());
+    assert!(changed.headers().get("meshspan-csrf-token").is_none());
     Ok(())
 }
 
@@ -116,6 +174,21 @@ fn request(
         "remember": remember
     });
     Ok(decode_create_session_request(&serde_json::to_vec(&value)?)?)
+}
+
+fn http_request(
+    api_key: &str,
+    remember: bool,
+) -> Result<Request<Body>, Box<dyn std::error::Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": OPERATION_TEXT,
+        "authentication": { "method": "api_key", "secret": api_key },
+        "client_label": null,
+        "remember": remember
+    }))?;
+    Ok(Request::post("/api/latest/sessions")
+        .header("content-type", "application/json")
+        .body(Body::from(body))?)
 }
 
 struct RepositorySessionAuthority {

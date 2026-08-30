@@ -158,12 +158,14 @@ fn paths() -> Value {
                     }
                 },
                 "responses": {
-                    "201": json_response("Authenticated session created", "#/components/schemas/CreateSessionResponse"),
+                    "201": session_response(),
                     "400": json_response("Malformed or structurally invalid request", "#/components/schemas/ApiError"),
                     "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
                     "409": json_response("Operation identifier conflict", "#/components/schemas/ApiError"),
+                    "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                     "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
-                    "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
+                    "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                    "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
                 }
             }
         }
@@ -189,6 +191,40 @@ fn json_response(description: &str, schema_reference: &str) -> Value {
         "content": {
             "application/json": {
                 "schema": { "$ref": schema_reference }
+            }
+        }
+    })
+}
+
+fn session_response() -> Value {
+    let mut headers = response_headers();
+    if let Some(headers) = headers.as_object_mut() {
+        headers.insert(
+            "Set-Cookie".to_owned(),
+            json!({
+                "required": true,
+                "schema": { "type": "string", "minLength": 1 },
+                "x-meshspan-sensitive": true
+            }),
+        );
+        headers.insert(
+            "MeshSpan-CSRF-Token".to_owned(),
+            json!({
+                "required": true,
+                "schema": {
+                    "type": "string",
+                    "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$"
+                },
+                "x-meshspan-sensitive": true
+            }),
+        );
+    }
+    json!({
+        "description": "Authenticated session created",
+        "headers": headers,
+        "content": {
+            "application/json": {
+                "schema": { "$ref": "#/components/schemas/CreateSessionResponse" }
             }
         }
     })

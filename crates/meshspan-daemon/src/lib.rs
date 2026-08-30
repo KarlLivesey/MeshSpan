@@ -2,6 +2,10 @@
 
 //! Daemon process composition, configuration and local secret presentation.
 
+mod api_http;
+mod auth_api;
+#[cfg(test)]
+mod auth_api_tests;
 mod claim_file;
 mod claim_service;
 #[cfg(test)]
@@ -16,6 +20,7 @@ mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 
+pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
 pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,
