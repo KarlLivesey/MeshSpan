@@ -8,6 +8,7 @@ mod common;
 mod component;
 mod conformance;
 mod data;
+mod federation_storage;
 mod filesystem;
 mod observability;
 mod security;
@@ -40,6 +41,14 @@ pub use data::{
     CodingLayout, CodingLayoutError, CodingScheme, PlacementPlan, PlacementPolicy,
     PlacementRequest, ReconstructionRequest,
 };
+pub use federation_storage::{
+    FederatedShardPermit, FederatedStorageInventoryRecord, FederatedStoragePermitMacKey,
+    federated_provider_shard_identity, federated_shard_permit_mac,
+    federated_shard_read_result_digest, federated_shard_reclamation_result_digest,
+    federated_shard_retirement_result_digest, federated_shard_scrub_result_digest,
+    federated_shard_write_result_digest, validate_federated_storage_inventory_record,
+    verify_federated_shard_permit_mac,
+};
 pub use filesystem::{
     namespace_reconciliation_result_digest, namespace_snapshot_restore_result_digest,
 };
@@ -49,12 +58,13 @@ pub use security::{
     CertificateChallengeKind, CertificateChallengeReceipt, CertificateChallengeRequest,
 };
 pub use storage::{
-    InventoryEntry, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalPermit,
-    ReservationClass, ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage,
-    ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit, StoragePermitMacKey,
+    InventoryEntry, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalAuthorityFence,
+    RemovalPermit, ReservationClass, ReserveStorageRequest, ScrubObservation, ScrubOutcome,
+    ScrubPage, ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit, StoragePermitMacKey,
     StorageProvider, StorageReservation, TombstoneReceipt, read_permit_mac,
     reclamation_receipt_digest, removal_permit_mac, tombstone_receipt_digest,
-    verify_read_permit_mac, verify_removal_permit_mac, verify_write_permit_mac, write_permit_mac,
+    validate_exact_scrub_observation, verify_read_permit_mac, verify_removal_permit_mac,
+    verify_write_permit_mac, write_permit_mac,
 };
 pub use suites::{
     run_access_connector_suite, run_administration_client_suite, run_authentication_handler_suite,

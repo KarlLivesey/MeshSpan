@@ -13,8 +13,9 @@ use meshspan_protocol::v1::{
 
 use crate::DataPlaneError;
 use crate::capability::{
-    decode_reclamation_receipt, decode_removal_permit, decode_shard_receipt,
-    decode_tombstone_receipt, encode_reclamation_receipt, encode_removal_permit,
+    decode_reclamation_evidence, decode_reclamation_receipt, decode_removal_permit,
+    decode_scrub_observation, decode_shard_receipt, decode_tombstone_receipt,
+    encode_reclamation_receipt, encode_removal_permit, encode_scrub_observation,
     encode_shard_receipt, encode_tombstone_receipt,
 };
 
@@ -194,6 +195,29 @@ pub(crate) fn reclamation_receipt(
 ) -> Result<ReclamationReceipt, DataPlaneError> {
     let value = versioned_payload(value)?;
     decode_reclamation_receipt(&value.canonical_bytes).map_err(Into::into)
+}
+
+pub(crate) fn federated_reclamation_evidence(
+    value: Option<&VersionedPayload>,
+) -> Result<ReclamationReceipt, DataPlaneError> {
+    let value = versioned_payload(value)?;
+    decode_reclamation_evidence(&value.canonical_bytes).map_err(Into::into)
+}
+
+pub(crate) fn scrub_observation_payload(
+    observation: meshspan_contracts::ScrubObservation,
+) -> Result<VersionedPayload, DataPlaneError> {
+    Ok(VersionedPayload {
+        format_version: RECEIPT_FORMAT_VERSION,
+        canonical_bytes: encode_scrub_observation(observation)?,
+    })
+}
+
+pub(crate) fn scrub_observation(
+    value: Option<&VersionedPayload>,
+) -> Result<meshspan_contracts::ScrubObservation, DataPlaneError> {
+    let value = versioned_payload(value)?;
+    decode_scrub_observation(&value.canonical_bytes).map_err(Into::into)
 }
 
 fn versioned_payload(

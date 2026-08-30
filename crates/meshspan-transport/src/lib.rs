@@ -33,8 +33,8 @@ pub use tls::{
 #[cfg(test)]
 mod tests;
 pub use federation::{
-    AuthenticatedFederationHello, FederationPeerBinding, FederationPeerRegistry,
-    FederationReplayGuard,
+    AuthenticatedFederationHello, AuthenticatedFederationPeer, FederationPeerBinding,
+    FederationPeerRegistry, FederationReplayGuard,
 };
 pub use federation_authority_page::{
     AuthenticatedFederationAuthorityFetch, AuthenticatedFederationAuthorityPage,

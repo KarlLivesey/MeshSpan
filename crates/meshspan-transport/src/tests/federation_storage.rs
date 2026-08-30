@@ -3,7 +3,7 @@
 use std::error::Error;
 
 use ed25519_dalek::SigningKey;
-use meshspan_domain::{DurationMicros, FederationRelationshipId, MeshId, UnixMicros};
+use meshspan_domain::{DurationMicros, FederationRelationshipId, MeshId, OperationId, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::{
     FederatedStorageCapability, FederatedStorageReceipt, RemoteShardAction,
@@ -30,6 +30,11 @@ pub(super) fn prove_signed_storage_capability_request(
     limits: WireLimits,
 ) -> Result<(), Box<dyn Error>> {
     let identity = client_identity(certificate, signing_key)?;
+    let peer = registry.authenticate_connection(connection, UnixMicros::new(1_500_000))?;
+    assert_eq!(peer.relationship_id(), identity.binding().relationship_id);
+    assert_eq!(peer.remote_mesh_id(), identity.binding().local_mesh_id);
+    assert_eq!(peer.local_mesh_id(), identity.binding().remote_mesh_id);
+    assert_eq!(peer.authority_epoch(), 1);
     let context = exchange_context(91, 92, 93, 94)?;
     let outbound = signed_federation_storage_capability_request(
         &identity,
@@ -52,6 +57,12 @@ pub(super) fn prove_signed_storage_capability_request(
     );
     assert_eq!(authenticated.request().scope_digest, vec![104; 32]);
     assert_eq!(
+        authenticated.operation_id(),
+        OperationId::from_bytes([92; 16])?
+    );
+    assert_eq!(authenticated.request_replay_nonce()?, [94; 32]);
+    assert_ne!(authenticated.request_digest(), [0; 32]);
+    assert_eq!(
         authenticated.response_context([95; 32])?.request_id,
         [91; 16]
     );
@@ -68,6 +79,28 @@ pub(super) fn prove_signed_storage_capability_request(
         ),
         Err(TransportError::ReplayedFederationMessage)
     ));
+    let retry_context = exchange_context(96, 92, 97, 98)?;
+    let retry = signed_federation_storage_capability_request(
+        &identity,
+        retry_context,
+        capability_request(),
+        limits,
+        UnixMicros::new(1_500_002),
+    )?;
+    let authenticated_retry = registry.authenticate_storage_capability_request(
+        connection,
+        &validated_federation(retry.envelope(), limits)?,
+        UnixMicros::new(1_500_002),
+        &mut replay,
+    )?;
+    assert_eq!(
+        authenticated_retry.operation_id(),
+        authenticated.operation_id()
+    );
+    assert_eq!(
+        authenticated_retry.request_digest(),
+        authenticated.request_digest()
+    );
     reject_tampered_request(registry, connection, outbound.envelope(), limits)?;
     inventory::prove_signed_storage_inventory_fetch(registry, connection, &identity, limits)
 }
@@ -186,7 +219,7 @@ fn prove_hostile_receipts(
     let mut wrong_allocation = receipt(expectation.capability_digest());
     wrong_allocation.allocation_id = vec![122; 16];
     let mut predates_issue = receipt(expectation.capability_digest());
-    predates_issue.completed_at_unix_micros = 1_499_999;
+    predates_issue.completed_at_unix_micros = 1_399_999;
     for hostile in [
         wrong_capability,
         excessive,
@@ -256,6 +289,18 @@ fn prove_signed_hostile_capabilities(
             proof.server_identity,
             response_context,
             overlong,
+            proof.limits,
+            UnixMicros::new(1_500_000),
+        ),
+        Err(TransportError::InvalidConfiguration)
+    ));
+    let mut future_issued = capability();
+    future_issued.issued_at_unix_micros = 1_500_001;
+    assert!(matches!(
+        signed_federation_storage_capability(
+            proof.server_identity,
+            response_context,
+            future_issued,
             proof.limits,
             UnixMicros::new(1_500_000),
         ),
@@ -374,6 +419,7 @@ fn capability() -> FederatedStorageCapability {
         capability_nonce: vec![116; 32],
         canonical_capability: b"exact-data-plane-permit".to_vec(),
         signature: Vec::new(),
+        issued_at_unix_micros: 1_400_000,
     }
 }
 

@@ -4,7 +4,10 @@
 
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::data_control_envelope::Message;
-use crate::v1::{GetShardHeader, OperationOutcome, PutShardReady, VersionedPayload};
+use crate::v1::{
+    GetShardHeader, OperationOutcome, PutShardReady, ScrubShardRequest, ScrubShardResult,
+    VersionedPayload,
+};
 
 use super::{
     valid_digest, valid_identifier, valid_nonempty_bytes, validate_header,
@@ -24,7 +27,8 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             validate_shard(value.shard.as_ref())?;
             nonzero(value.declared_length)?;
             valid_digest(&value.declared_digest)?;
-            valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())
+            valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())?;
+            optional_digest(&value.federation_capability_digest)
         }
         Message::PutShardReady(value) => put_ready(value, limits),
         Message::PutShardFinish(value) => {
@@ -44,10 +48,13 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             )?;
             validate_target(&value.target_id, value.target_generation)?;
             validate_shard(value.shard.as_ref())?;
-            valid_nonempty_bytes(&value.read_capability, limits.maximum_control_bytes())
+            valid_nonempty_bytes(&value.read_capability, limits.maximum_control_bytes())?;
+            optional_digest(&value.federation_capability_digest)
         }
         Message::GetShardHeader(value) => get_header(value, limits),
         Message::GetShardResult(value) => validate_operation_result(value.result.as_ref(), limits),
+        Message::ScrubShardRequest(value) => scrub_request(value, limits),
+        Message::ScrubShardResult(value) => scrub_result(value, limits),
         Message::DeleteShardRequest(value) => {
             validate_header(
                 value
@@ -57,7 +64,15 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             )?;
             validate_target(&value.target_id, value.target_generation)?;
             validate_shard(value.shard.as_ref())?;
-            validate_payload(value.removal_permit.as_ref(), limits)
+            validate_removal_authority(
+                value.removal_permit.as_ref(),
+                &value.federation_capability,
+                limits,
+            )?;
+            correlated_federation_digest(
+                &value.federation_capability,
+                &value.federation_capability_digest,
+            )
         }
         Message::DeleteShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
@@ -72,7 +87,12 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             )?;
             validate_target(&value.target_id, value.target_generation)?;
             validate_shard(value.shard.as_ref())?;
-            validate_payload(value.tombstone_receipt.as_ref(), limits)
+            validate_payload(value.tombstone_receipt.as_ref(), limits)?;
+            optional_bytes(&value.federation_capability, limits)?;
+            correlated_federation_digest(
+                &value.federation_capability,
+                &value.federation_capability_digest,
+            )
         }
         Message::ReclaimShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
@@ -90,6 +110,35 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             valid_digest(&value.permit_digest)
         }
     }
+}
+
+fn scrub_request(value: &ScrubShardRequest, limits: WireLimits) -> Result<(), WireContractError> {
+    validate_header(
+        value
+            .header
+            .as_ref()
+            .ok_or(WireContractError::InvalidMessage)?,
+    )?;
+    validate_target(&value.target_id, value.target_generation)?;
+    validate_shard(value.shard.as_ref())?;
+    valid_nonempty_bytes(&value.federation_capability, limits.maximum_control_bytes())?;
+    correlated_federation_digest(
+        &value.federation_capability,
+        &value.federation_capability_digest,
+    )
+}
+
+fn scrub_result(value: &ScrubShardResult, limits: WireLimits) -> Result<(), WireContractError> {
+    validate_operation_result(value.result.as_ref(), limits)?;
+    validate_observation(value.result.as_ref(), value.observation.as_ref(), limits)
+}
+
+fn validate_observation(
+    result: Option<&crate::v1::OperationResult>,
+    observation: Option<&VersionedPayload>,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_mutation_receipt(result, observation, limits)
 }
 
 fn validate_mutation_receipt(
@@ -158,5 +207,44 @@ const fn nonzero(value: u64) -> Result<(), WireContractError> {
         Err(WireContractError::InvalidMessage)
     } else {
         Ok(())
+    }
+}
+
+fn optional_digest(value: &[u8]) -> Result<(), WireContractError> {
+    if value.is_empty() {
+        Ok(())
+    } else {
+        valid_digest(value)
+    }
+}
+
+fn validate_removal_authority(
+    local_permit: Option<&VersionedPayload>,
+    federation_permit: &[u8],
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    match (local_permit, federation_permit.is_empty()) {
+        (Some(permit), true) => validate_payload(Some(permit), limits),
+        (None, false) => valid_nonempty_bytes(federation_permit, limits.maximum_control_bytes()),
+        _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn optional_bytes(value: &[u8], limits: WireLimits) -> Result<(), WireContractError> {
+    if value.is_empty() {
+        Ok(())
+    } else {
+        valid_nonempty_bytes(value, limits.maximum_control_bytes())
+    }
+}
+
+fn correlated_federation_digest(
+    capability: &[u8],
+    capability_digest: &[u8],
+) -> Result<(), WireContractError> {
+    if capability.is_empty() == capability_digest.is_empty() {
+        optional_digest(capability_digest)
+    } else {
+        Err(WireContractError::InvalidMessage)
     }
 }

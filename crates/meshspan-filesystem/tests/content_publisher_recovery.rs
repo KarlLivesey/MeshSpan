@@ -5,9 +5,10 @@
 use std::fs;
 
 use meshspan_contracts::{
-    BoundedBytes, ContractError, ImplementationDescriptor, InventoryPage, PutShardRequest,
-    RemovalPermit, RequestContext, ReserveStorageRequest, ScrubPage, ShardReadPermit, ShardReceipt,
-    StoragePermitMacKey, StorageProvider, StorageReservation, TombstoneReceipt, read_permit_mac,
+    BoundedBytes, ContractError, ImplementationDescriptor, InventoryEntry, InventoryPage,
+    PutShardRequest, RemovalAuthorityFence, RemovalPermit, RequestContext, ReserveStorageRequest,
+    ScrubObservation, ScrubPage, ShardReadPermit, ShardReceipt, StoragePermitMacKey,
+    StorageProvider, StorageReservation, TombstoneReceipt, read_permit_mac,
 };
 use meshspan_domain::{
     BranchId, ContentManifestId, EntropyError, FileVersionId, MeshId, NamespaceCommitId, ObjectId,
@@ -332,6 +333,10 @@ impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
         self.inner.get_exact(context, permit, observed_at)
     }
 
+    fn removal_authority_fence(&self) -> RemovalAuthorityFence {
+        self.inner.removal_authority_fence()
+    }
+
     fn tombstone(
         &mut self,
         permit: RemovalPermit,
@@ -354,6 +359,21 @@ impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
         limit: usize,
     ) -> Result<InventoryPage, ContractError> {
         self.inner.inventory(cursor, limit)
+    }
+
+    fn inventory_exact(
+        &self,
+        shard: meshspan_contracts::ShardIdentity,
+    ) -> Result<Option<InventoryEntry>, ContractError> {
+        self.inner.inventory_exact(shard)
+    }
+
+    fn scrub_exact(
+        &mut self,
+        expected: InventoryEntry,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubObservation, ContractError> {
+        self.inner.scrub_exact(expected, observed_at)
     }
 
     fn scrub(

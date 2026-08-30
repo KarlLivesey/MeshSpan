@@ -354,6 +354,7 @@ fn storage_capability_is_exactly_bound_and_bounded() -> Result<(), Box<dyn std::
         capability_nonce: vec![33; 32],
         canonical_capability: vec![34; 128],
         signature: vec![35; 64],
+        issued_at_unix_micros: 1_000_000,
     };
     let mut missing_allocation = capability.clone();
     missing_allocation.allocation_id.clear();

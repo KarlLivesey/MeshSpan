@@ -374,9 +374,10 @@ pub(super) fn storage_grant_command(
     relationship_id: FederationRelationshipId,
     consumer_mesh_id: MeshId,
     provider_mesh_id: MeshId,
+    serves_reads: bool,
 ) -> Result<AuthoritativeCommand, Box<dyn Error>> {
-    let consumer_policy = storage_policy(100, true)?;
-    let provider_policy = storage_policy(50, false)?;
+    let consumer_policy = storage_policy(100, true, serves_reads)?;
+    let provider_policy = storage_policy(50, false, serves_reads)?;
     let restrictions = ordered_restrictions(
         consumer_mesh_id,
         consumer_policy,
@@ -395,7 +396,7 @@ pub(super) fn storage_grant_command(
         FederationPolicy::intersect(&policies)?,
         1,
         UnixMicros::new(4),
-        Some(UnixMicros::new(1_000_000)),
+        Some(UnixMicros::new(3_000_000)),
     )?;
     Ok(AuthoritativeCommand::IssueFederationGrant(
         IssueFederationGrant {
@@ -428,10 +429,11 @@ fn ordered_restrictions(
 fn storage_policy(
     maximum_storage_bytes: u64,
     counts_towards_protection: bool,
+    serves_reads: bool,
 ) -> Result<FederationPolicy, Box<dyn Error>> {
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         maximum_storage_bytes,
-        StorageParticipation::new(counts_towards_protection, true),
-        Some(DurationMicros::new(1_000_000)),
+        StorageParticipation::new(counts_towards_protection, serves_reads),
+        Some(DurationMicros::new(3_000_000)),
     )?))
 }

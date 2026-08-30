@@ -168,6 +168,35 @@ impl TargetJournal {
         Ok(pack_receipt)
     }
 
+    /// Returns one exact journal-confirmed committed shard, when present.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed persisted identity, length or digest fields.
+    pub fn inventory_entry(
+        &self,
+        shard: ShardIdentity,
+    ) -> Result<Option<InventoryEntry>, TargetJournalError> {
+        let key = encode_shard(shard);
+        let row = self
+            .connection
+            .query_row(
+                "SELECT shard_identity, stored_length, stored_digest, last_verified_at
+                 FROM inventory WHERE state = ?1 AND shard_identity = ?2",
+                params![INVENTORY_COMMITTED, key.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(decode_inventory_entry).transpose()
+    }
+
     /// Returns a bounded stable page of journal-confirmed committed shards.
     ///
     /// # Errors
@@ -206,16 +235,7 @@ impl TargetJournal {
         let mut keys = Vec::with_capacity(limit.saturating_add(1));
         for row in rows {
             let row = row?;
-            let digest: [u8; 32] = row
-                .2
-                .try_into()
-                .map_err(|_| TargetJournalError::CorruptState)?;
-            entries.push(InventoryEntry {
-                shard: decode_shard(&row.0)?,
-                length: to_u64(row.1)?,
-                digest,
-                bytes_verified: row.3.is_some(),
-            });
+            entries.push(decode_inventory_entry(row.clone())?);
             keys.push(row.0);
         }
         let next_cursor = if entries.len() > limit {
@@ -329,6 +349,21 @@ impl TargetJournal {
             next_cursor,
         })
     }
+}
+
+fn decode_inventory_entry(
+    row: (Vec<u8>, i64, Vec<u8>, Option<i64>),
+) -> Result<InventoryEntry, TargetJournalError> {
+    let digest = row
+        .2
+        .try_into()
+        .map_err(|_| TargetJournalError::CorruptState)?;
+    Ok(InventoryEntry {
+        shard: decode_shard(&row.0)?,
+        length: to_u64(row.1)?,
+        digest,
+        bytes_verified: row.3.is_some(),
+    })
 }
 
 struct StoredProviderOperation {

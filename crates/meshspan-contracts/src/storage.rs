@@ -196,6 +196,15 @@ pub struct RemovalPermit {
     pub permit_digest: [u8; 32],
 }
 
+/// Provider-local fence values required when translating an authorised cleanup decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemovalAuthorityFence {
+    /// Current provider-local cleanup authority epoch.
+    pub authority_epoch: u64,
+    /// Minimum storage catalogue revision already applied by the provider.
+    pub catalogue_revision: Revision,
+}
+
 /// Calculates the canonical keyed MAC for one exact read permit.
 ///
 /// The existing `permit_digest` field is excluded and may contain any value; callers replace it
@@ -408,6 +417,48 @@ pub struct ScrubObservation {
     pub outcome: ScrubOutcome,
 }
 
+/// Validates the closed semantic shape of an exact catalogue-backed scrub observation.
+///
+/// Exact scrub always starts from committed expected metadata, cannot discover an unexpected
+/// shard, and distinguishes healthy from corrupt bytes by comparing the complete measurement.
+///
+/// # Errors
+///
+/// Rejects malformed identities, absent expected metadata, contradictory measurements and the
+/// page-scan-only [`ScrubOutcome::Unexpected`] classification.
+pub fn validate_exact_scrub_observation(
+    observation: ScrubObservation,
+) -> Result<(), ContractError> {
+    let expected = observation
+        .expected_length
+        .zip(observation.expected_digest)
+        .filter(|(length, digest)| *length > 0 && *digest != [0; 32]);
+    let observed = observation
+        .observed_length
+        .zip(observation.observed_digest)
+        .filter(|(_, digest)| *digest != [0; 32]);
+    let complete_pairs = observation.expected_length.is_some()
+        == observation.expected_digest.is_some()
+        && observation.observed_length.is_some() == observation.observed_digest.is_some();
+    let valid_outcome = match observation.outcome {
+        ScrubOutcome::Healthy => expected.is_some() && observed == expected,
+        ScrubOutcome::Corrupt => expected.is_some() && observed.is_some() && observed != expected,
+        ScrubOutcome::Missing | ScrubOutcome::Unreadable | ScrubOutcome::Deferred => {
+            expected.is_some() && observed.is_none()
+        }
+        ScrubOutcome::Unexpected => false,
+    };
+    if observation.shard.manifest_digest != [0; 32]
+        && observation.shard.generation > 0
+        && complete_pairs
+        && valid_outcome
+    {
+        Ok(())
+    } else {
+        Err(ContractError::InvalidInput)
+    }
+}
+
 /// Stable bounded page of scrub evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScrubPage {
@@ -455,6 +506,9 @@ pub trait StorageProvider {
         observed_at: UnixMicros,
     ) -> Result<BoundedBytes, ContractError>;
 
+    /// Returns the provider-local fence required by a freshly translated removal permit.
+    fn removal_authority_fence(&self) -> RemovalAuthorityFence;
+
     /// Records an irreversible tombstone before physical unlink is permitted.
     ///
     /// # Errors
@@ -487,6 +541,34 @@ pub trait StorageProvider {
         cursor: Option<&BoundedBytes>,
         limit: usize,
     ) -> Result<InventoryPage, ContractError>;
+
+    /// Resolves one exact provider-catalogue entry without scanning unrelated tenant records.
+    ///
+    /// This proves only journal-confirmed presence. Reads and scrubs still independently verify
+    /// complete bytes before reporting usable or healthy data.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed identities or unavailable/corrupt provider catalogue state.
+    fn inventory_exact(
+        &self,
+        shard: ShardIdentity,
+    ) -> Result<Option<InventoryEntry>, ContractError>;
+
+    /// Independently verifies one exact committed shard without paging unrelated inventory.
+    ///
+    /// The expected entry must come from an independently authorised catalogue. The provider
+    /// still verifies that its own committed inventory agrees before inspecting complete bytes.
+    /// Scrub evidence never grants read or removal authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent or contradictory committed inventory and target-wide IO failure.
+    fn scrub_exact(
+        &mut self,
+        expected: InventoryEntry,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubObservation, ContractError>;
 
     /// Independently verifies one bounded page of complete shard bytes.
     ///

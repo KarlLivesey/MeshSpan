@@ -6,10 +6,10 @@ use std::path::Path;
 
 use meshspan_contracts::{
     BoundedBytes, BoundedItems, ContractError, ContractKind, ContractLimits, ContractVersion,
-    ImplementationDescriptor, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalPermit,
-    RequestContext, ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage,
-    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
-    TombstoneReceipt, verify_read_permit_mac, verify_removal_permit_mac,
+    ImplementationDescriptor, InventoryPage, PutShardRequest, ReclamationReceipt,
+    RemovalAuthorityFence, RemovalPermit, RequestContext, ReserveStorageRequest, ScrubObservation,
+    ScrubOutcome, ScrubPage, ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider,
+    StorageReservation, TombstoneReceipt, verify_read_permit_mac, verify_removal_permit_mac,
 };
 use meshspan_domain::{MeshId, RandomSource, Revision, UnixMicros};
 use thiserror::Error;
@@ -119,9 +119,22 @@ impl StoragePermitVerifier {
             && permit.catalogue_revision >= self.minimum_catalogue_revision
             && verify_removal_permit_mac(&self.key, permit)
     }
+
+    const fn removal_authority_fence(&self) -> RemovalAuthorityFence {
+        RemovalAuthorityFence {
+            authority_epoch: self.current_removal_authority_epoch,
+            catalogue_revision: self.minimum_catalogue_revision,
+        }
+    }
 }
 
 impl FolderShardStore {
+    /// Returns the exact durable target marker bound to this open provider.
+    #[must_use]
+    pub const fn target_marker(&self) -> crate::TargetMarker {
+        self.folder.marker()
+    }
+
     /// Opens an identity-bound local journal and packed-byte segment for one registered folder.
     ///
     /// # Errors
@@ -374,6 +387,38 @@ impl FolderShardStore {
         self.journal.inventory(cursor, limit).map_err(Into::into)
     }
 
+    /// Resolves one exact journal-confirmed shard without scanning other tenant namespaces.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed identity or unavailable/corrupt journal state.
+    pub fn inventory_exact(
+        &self,
+        shard: meshspan_contracts::ShardIdentity,
+    ) -> Result<Option<meshspan_contracts::InventoryEntry>, FolderShardStoreError> {
+        self.journal.inventory_entry(shard).map_err(Into::into)
+    }
+
+    /// Independently rereads one exact committed shard and returns evidence only.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing or contradictory journal inventory and target-wide IO failure.
+    pub fn scrub_exact(
+        &mut self,
+        expected: meshspan_contracts::InventoryEntry,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubObservation, FolderShardStoreError> {
+        let committed = self
+            .journal
+            .inventory_entry(expected.shard)?
+            .ok_or(FolderShardStoreError::NotFound)?;
+        if committed.length != expected.length || committed.digest != expected.digest {
+            return Err(FolderShardStoreError::Corrupt);
+        }
+        self.scrub_committed(committed, observed_at)
+    }
+
     /// Independently reads and verifies one bounded page of complete shard bytes.
     ///
     /// Results are evidence only. No outcome calls or bypasses the authenticated tombstone path.
@@ -390,46 +435,53 @@ impl FolderShardStore {
         let page = self.journal.inventory(cursor, limit)?;
         let mut observations = Vec::with_capacity(page.entries.len());
         for entry in page.entries.as_slice() {
-            let observation = match self
-                .pack
-                .scrub_exact(entry.shard, entry.length, entry.digest)
-            {
-                Ok(PackScrubResult::Missing) => {
-                    scrub_observation(*entry, None, ScrubOutcome::Missing)
-                }
-                Ok(PackScrubResult::Present {
-                    observed_length,
-                    observed_digest,
-                    healthy: true,
-                }) => {
-                    self.journal.mark_shard_verified(*entry, observed_at)?;
-                    scrub_observation(
-                        *entry,
-                        Some((observed_length, observed_digest)),
-                        ScrubOutcome::Healthy,
-                    )
-                }
-                Ok(PackScrubResult::Present {
-                    observed_length,
-                    observed_digest,
-                    healthy: false,
-                }) => scrub_observation(
-                    *entry,
-                    Some((observed_length, observed_digest)),
-                    ScrubOutcome::Corrupt,
-                ),
-                Err(PackStoreError::Sqlite(_) | PackStoreError::Folder(_)) => {
-                    scrub_observation(*entry, None, ScrubOutcome::Unreadable)
-                }
-                Err(error) => return Err(map_pack(&error)),
-            };
-            observations.push(observation);
+            observations.push(self.scrub_committed(*entry, observed_at)?);
         }
         Ok(ScrubPage {
             observations: BoundedItems::new(observations, limit)
                 .map_err(|_| FolderShardStoreError::Corrupt)?,
             next_cursor: page.next_cursor,
         })
+    }
+
+    fn scrub_committed(
+        &mut self,
+        expected: meshspan_contracts::InventoryEntry,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubObservation, FolderShardStoreError> {
+        match self
+            .pack
+            .scrub_exact(expected.shard, expected.length, expected.digest)
+        {
+            Ok(PackScrubResult::Missing) => {
+                Ok(scrub_observation(expected, None, ScrubOutcome::Missing))
+            }
+            Ok(PackScrubResult::Present {
+                observed_length,
+                observed_digest,
+                healthy: true,
+            }) => {
+                self.journal.mark_shard_verified(expected, observed_at)?;
+                Ok(scrub_observation(
+                    expected,
+                    Some((observed_length, observed_digest)),
+                    ScrubOutcome::Healthy,
+                ))
+            }
+            Ok(PackScrubResult::Present {
+                observed_length,
+                observed_digest,
+                healthy: false,
+            }) => Ok(scrub_observation(
+                expected,
+                Some((observed_length, observed_digest)),
+                ScrubOutcome::Corrupt,
+            )),
+            Err(PackStoreError::Sqlite(_) | PackStoreError::Folder(_)) => {
+                Ok(scrub_observation(expected, None, ScrubOutcome::Unreadable))
+            }
+            Err(error) => Err(map_pack(&error)),
+        }
     }
 
     /// Runs one bounded page from the durable continuous-scrub checkpoint and advances it.
@@ -525,6 +577,10 @@ impl StorageProvider for FolderShardStore {
         FolderShardStore::get_exact(self, context, permit, observed_at).map_err(contract_error)
     }
 
+    fn removal_authority_fence(&self) -> RemovalAuthorityFence {
+        self.permits.removal_authority_fence()
+    }
+
     fn tombstone(
         &mut self,
         permit: RemovalPermit,
@@ -547,6 +603,21 @@ impl StorageProvider for FolderShardStore {
         limit: usize,
     ) -> Result<InventoryPage, ContractError> {
         FolderShardStore::inventory(self, cursor, limit).map_err(contract_error)
+    }
+
+    fn inventory_exact(
+        &self,
+        shard: meshspan_contracts::ShardIdentity,
+    ) -> Result<Option<meshspan_contracts::InventoryEntry>, ContractError> {
+        FolderShardStore::inventory_exact(self, shard).map_err(contract_error)
+    }
+
+    fn scrub_exact(
+        &mut self,
+        expected: meshspan_contracts::InventoryEntry,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubObservation, ContractError> {
+        FolderShardStore::scrub_exact(self, expected, observed_at).map_err(contract_error)
     }
 
     fn scrub(

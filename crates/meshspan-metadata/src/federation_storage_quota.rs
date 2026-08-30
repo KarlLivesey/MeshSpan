@@ -7,9 +7,9 @@ mod record;
 
 use meshspan_contracts::ShardIdentity;
 use meshspan_domain::{
-    FederationStorageAction, FederationStorageAllocationId, OperationId, UnixMicros,
+    FederationStorageAction, FederationStorageAllocationId, MeshId, NodeId, OperationId, UnixMicros,
 };
-use rusqlite::TransactionBehavior;
+use rusqlite::{Transaction, TransactionBehavior};
 use thiserror::Error;
 
 use crate::{FederationStorageAllocationAuthority, LocalDatabase};
@@ -32,6 +32,10 @@ const RELEASED: i64 = 3;
 pub struct FederationStorageWriteReservationRequest {
     /// Idempotency identity shared by exact retries.
     pub operation_id: OperationId,
+    /// Exact authenticated consumer swarm whose namespace owns the shard.
+    pub remote_mesh_id: MeshId,
+    /// Exact signed logical scope within the remote swarm.
+    pub scope_digest: [u8; 32],
     /// Canonical digest of the complete authenticated request.
     pub request_digest: [u8; 32],
     /// Fresh nonce returned inside the provider capability.
@@ -96,6 +100,10 @@ pub struct FederationStorageWriteReservation {
     pub operation_id: OperationId,
     /// Replicated allocation being consumed.
     pub allocation_id: FederationStorageAllocationId,
+    /// Exact authenticated consumer swarm whose namespace owns the shard.
+    pub remote_mesh_id: MeshId,
+    /// Exact signed logical scope within the remote swarm.
+    pub scope_digest: [u8; 32],
     /// Exact request digest.
     pub request_digest: [u8; 32],
     /// Exact capability nonce.
@@ -242,22 +250,40 @@ fn reserve(
     ),
     FederationStorageQuotaError,
 > {
-    validate_reservation(database, authority, request)?;
+    let node_id = database.node_id();
     let transaction = database
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(stored) = load_reservation(&transaction, request.operation_id)? {
+    let result = reserve_in_transaction(&transaction, node_id, authority, request)?;
+    transaction.commit()?;
+    Ok(result)
+}
+
+pub(crate) fn reserve_in_transaction(
+    transaction: &Transaction<'_>,
+    node_id: NodeId,
+    authority: FederationStorageAllocationAuthority,
+    request: FederationStorageWriteReservationRequest,
+) -> Result<
+    (
+        FederationStorageQuotaDisposition,
+        FederationStorageWriteReservation,
+    ),
+    FederationStorageQuotaError,
+> {
+    let stored = load_reservation(transaction, request.operation_id)?;
+    validate_reservation(node_id, authority, request, stored.is_some())?;
+    if let Some(stored) = stored {
+        install_or_validate_usage(transaction, authority, authority.observed_at())?;
         validate_reservation_replay(&stored, authority, request)?;
-        transaction.commit()?;
         return Ok((FederationStorageQuotaDisposition::Replayed, stored));
     }
-    reject_nonce_reuse(&transaction, request.capability_nonce)?;
-    install_or_validate_usage(&transaction, authority, request.issued_at)?;
-    hold_capacity(&transaction, authority, request.issued_at)?;
-    insert_reservation(&transaction, authority, request)?;
-    let stored = load_reservation(&transaction, request.operation_id)?
+    reject_nonce_reuse(transaction, request.capability_nonce)?;
+    install_or_validate_usage(transaction, authority, request.issued_at)?;
+    hold_capacity(transaction, authority, request.issued_at)?;
+    insert_reservation(transaction, authority, request)?;
+    let stored = load_reservation(transaction, request.operation_id)?
         .ok_or(FederationStorageQuotaError::CorruptState)?;
-    transaction.commit()?;
     Ok((FederationStorageQuotaDisposition::Applied, stored))
 }
 
@@ -334,9 +360,10 @@ fn release(
 }
 
 fn validate_reservation(
-    database: &LocalDatabase,
+    node_id: NodeId,
     authority: FederationStorageAllocationAuthority,
     request: FederationStorageWriteReservationRequest,
+    replay: bool,
 ) -> Result<(), FederationStorageQuotaError> {
     let allocation = authority.allocation();
     let lifetime = request
@@ -344,9 +371,15 @@ fn validate_reservation(
         .get()
         .checked_sub(request.issued_at.get())
         .and_then(|value| u64::try_from(value).ok());
-    let valid = allocation.provider_node_id() == database.node_id()
+    let valid_time = if replay {
+        request.issued_at <= authority.observed_at() && request.expires_at > authority.observed_at()
+    } else {
+        request.issued_at == authority.observed_at()
+    };
+    let valid = allocation.provider_node_id() == node_id
+        && request.remote_mesh_id == authority.remote_mesh_id()
         && request.action.reserves_capacity()
-        && request.issued_at == authority.observed_at()
+        && valid_time
         && request.issued_at.get() > 0
         && request.expires_at <= allocation.valid_until()
         && lifetime.is_some_and(|value| {
@@ -355,6 +388,7 @@ fn validate_reservation(
         && request.shard.generation > 0
         && valid_digest(request.shard.manifest_digest)
         && valid_digest(request.request_digest)
+        && valid_digest(request.scope_digest)
         && valid_digest(request.capability_nonce)
         && valid_digest(request.permit_digest);
     if valid {

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use meshspan_contracts::ShardIdentity;
+use meshspan_contracts::{FederatedShardPermit, ShardIdentity};
 use meshspan_domain::{FederationStorageAction, OperationId, UnixMicros};
 
 use super::{Fixture, allocation, apply_allocation, authority_request, prepare_storage_authority};
 use crate::{
-    AuthoritativeRepository, FederationStorageAllocationAuthority,
-    FederationStorageQuotaDisposition, FederationStorageQuotaError, FederationStorageUsage,
-    FederationStorageWriteAbsence, FederationStorageWriteCompletion,
-    FederationStorageWriteReservationRequest, FederationStorageWriteState, LocalDatabase,
+    AuthoritativeRepository, FederationStorageAdmissionError, FederationStorageAllocationAuthority,
+    FederationStorageCapabilityPresentation, FederationStorageQuotaDisposition,
+    FederationStorageQuotaError, FederationStorageUsage, FederationStorageWriteAbsence,
+    FederationStorageWriteCompletion, FederationStorageWriteReservationRequest,
+    FederationStorageWriteState, LocalDatabase,
 };
 
 #[test]
@@ -153,6 +154,41 @@ fn quota_transitions_roll_back_atomically_and_corruption_fails_closed()
     prove_completion_rollback(&mut fixture, reserved_request)?;
     prove_release_rollback(&mut fixture)?;
     prove_corrupt_evidence_fails_closed(&fixture, reserved_request)
+}
+
+#[test]
+fn capability_and_capacity_admission_roll_back_together() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut fixture = QuotaFixture::open()?;
+    let authority = fixture.authority(30)?;
+    let request = request(85, 86, authority, shard(87))?;
+    let presentation = presentation(authority, request);
+    fixture.local.connection().execute_batch(
+        "CREATE TEMP TRIGGER inject_atomic_admission_failure
+         BEFORE INSERT ON local_federation_storage_reservations
+         BEGIN SELECT RAISE(ABORT, 'injected admission failure'); END;",
+    )?;
+    assert!(matches!(
+        fixture
+            .local
+            .admit_federated_storage_write_capability(authority, request, &presentation),
+        Err(FederationStorageAdmissionError::Quota(
+            FederationStorageQuotaError::Database(_)
+        ))
+    ));
+    assert!(
+        fixture
+            .local
+            .federated_storage_usage(fixture.allocation.allocation_id())?
+            .is_none()
+    );
+    assert!(
+        fixture
+            .local
+            .federated_storage_capability_for_operation(request.operation_id)?
+            .is_none()
+    );
+    Ok(())
 }
 
 fn prove_reservation_rollback(
@@ -386,6 +422,8 @@ fn request(
 ) -> Result<FederationStorageWriteReservationRequest, meshspan_domain::IdentifierError> {
     Ok(FederationStorageWriteReservationRequest {
         operation_id: OperationId::from_bytes([operation_seed; 16])?,
+        remote_mesh_id: authority.remote_mesh_id(),
+        scope_digest: [39; 32],
         request_digest: [digest_seed; 32],
         capability_nonce: [operation_seed.saturating_add(1); 32],
         shard,
@@ -419,6 +457,46 @@ const fn completion(
         content_digest: [content_seed; 32],
         result_digest: [result_seed; 32],
         completed_at: UnixMicros::new(completed_at),
+    }
+}
+
+fn presentation(
+    authority: FederationStorageAllocationAuthority,
+    request: FederationStorageWriteReservationRequest,
+) -> FederationStorageCapabilityPresentation {
+    let allocation = authority.allocation();
+    FederationStorageCapabilityPresentation {
+        capability_digest: [88; 32],
+        permit: FederatedShardPermit {
+            operation_id: request.operation_id,
+            relationship_id: authority.relationship_id(),
+            remote_mesh_id: request.remote_mesh_id,
+            provider_mesh_id: authority.provider_mesh_id(),
+            allocation_id: allocation.allocation_id(),
+            grant_id: allocation.grant_id(),
+            provider_node_id: allocation.provider_node_id(),
+            target_id: allocation.target_id(),
+            target_generation: allocation.target_generation(),
+            shard: request.shard,
+            action: request.action,
+            maximum_bytes: authority.requested_bytes(),
+            relationship_authority_epoch: authority.relationship_authority_epoch(),
+            grant_revision: authority.grant_revision(),
+            allocation_revision: authority.allocation_revision(),
+            issued_at: request.issued_at,
+            expires_at: request.expires_at,
+            capability_nonce: request.capability_nonce,
+            scope_digest: request.scope_digest,
+            request_digest: request.request_digest,
+            permit_digest: request.permit_digest,
+        },
+        protocol_major: 1,
+        protocol_minor: 0,
+        request_id: [89; 16],
+        trace_id: [90; 16],
+        request_deadline: UnixMicros::new(25),
+        response_replay_nonce: [91; 32],
+        recorded_at: request.issued_at,
     }
 }
 

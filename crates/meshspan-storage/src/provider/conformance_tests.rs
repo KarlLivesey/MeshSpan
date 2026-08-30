@@ -145,14 +145,14 @@ fn execute_case(
         }
         ProviderCase::HealthyScrub => {
             install_shard(store)?;
-            let page = StorageProvider::scrub(store, None, 10, UnixMicros::new(30))?;
-            let outcome = page
-                .observations
+            let expected = StorageProvider::inventory(store, None, 1)?
+                .entries
                 .as_slice()
                 .first()
                 .ok_or(ContractError::InternalContract)?
-                .outcome;
-            Ok(ProviderOutput::Outcome(outcome))
+                .to_owned();
+            let observation = StorageProvider::scrub_exact(store, expected, UnixMicros::new(30))?;
+            Ok(ProviderOutput::Outcome(observation.outcome))
         }
         ProviderCase::ZeroPage => {
             StorageProvider::inventory(store, None, 0)?;

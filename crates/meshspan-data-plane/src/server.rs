@@ -2,13 +2,22 @@
 
 //! Provider-neutral server side of the authenticated shard stream state machine.
 
+mod federation;
 mod removal;
+mod scrub;
+
+pub use federation::{
+    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedScrubEvidence,
+    FederatedScrubPreparation, FederatedShardAuthority, FederatedShardOutcome,
+    FederatedWriteEvidence,
+};
 
 use meshspan_contracts::{
-    BoundedBytes, ContractError, PutShardRequest, ReserveStorageRequest, ShardWritePermit,
-    StoragePermitMacKey, StorageProvider, verify_write_permit_mac,
+    BoundedBytes, ContractError, PutShardRequest, RequestContext, ReservationClass,
+    ReserveStorageRequest, ShardIdentity, ShardReadPermit, ShardReceipt, StoragePermitMacKey,
+    StorageProvider, verify_write_permit_mac,
 };
-use meshspan_domain::{MeshId, TargetId, UnixMicros};
+use meshspan_domain::{MeshId, NodeId, TargetId, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::data_control_envelope::Message;
 use meshspan_protocol::v1::{
@@ -32,6 +41,7 @@ pub struct RemoteShardService<Provider> {
     provider: Provider,
     write_key: StoragePermitMacKey,
     mesh_id: MeshId,
+    node_id: NodeId,
     target_id: TargetId,
     target_generation: u64,
     maximum_shard_bytes: usize,
@@ -47,6 +57,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         provider: Provider,
         write_key: StoragePermitMacKey,
         mesh_id: MeshId,
+        node_id: NodeId,
         target_id: TargetId,
         target_generation: u64,
         maximum_shard_bytes: usize,
@@ -58,6 +69,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             provider,
             write_key,
             mesh_id,
+            node_id,
             target_id,
             target_generation,
             maximum_shard_bytes,
@@ -133,6 +145,12 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         self.provider
     }
 
+    /// Borrows the provider for non-mutating catalogue reconciliation.
+    #[must_use]
+    pub const fn provider(&self) -> &Provider {
+        &self.provider
+    }
+
     async fn serve_put(
         &mut self,
         stream: &mut AcceptedStream,
@@ -140,21 +158,40 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         observed_at: UnixMicros,
         begin: PutShardBegin,
     ) -> Result<(), DataPlaneError> {
-        let authorised = self.authorise_put(&begin, observed_at);
-        let (context, permit) = match authorised {
+        let prepared = match self.authorise_put(&begin, observed_at) {
             Ok(value) => value,
             Err(error) => return reject_put(stream, limits, error).await,
         };
+        self.serve_prepared_put(stream, limits, observed_at, begin, prepared, Ok)
+            .await?;
+        Ok(())
+    }
+
+    async fn serve_prepared_put<Complete>(
+        &mut self,
+        stream: &mut AcceptedStream,
+        limits: WireLimits,
+        observed_at: UnixMicros,
+        begin: PutShardBegin,
+        prepared: PreparedPut,
+        complete: Complete,
+    ) -> Result<Option<ShardReceipt>, DataPlaneError>
+    where
+        Complete: FnOnce(ShardReceipt) -> Result<ShardReceipt, ContractError>,
+    {
         let reservation = match self.provider.reserve(ReserveStorageRequest {
-            context,
+            context: prepared.context,
             target_id: self.target_id,
             target_generation: self.target_generation,
-            class: permit.reservation_class,
+            class: prepared.reservation_class,
             bytes: begin.declared_length,
             observed_at,
         }) {
             Ok(value) => value,
-            Err(error) => return reject_put(stream, limits, error).await,
+            Err(error) => {
+                reject_put(stream, limits, error).await?;
+                return Ok(None);
+            }
         };
         send_data_control(
             &mut stream.send,
@@ -192,14 +229,17 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         let bounded = BoundedBytes::copy_from(&bytes, self.maximum_shard_bytes)
             .map_err(|_| DataPlaneError::InvalidMessage)?;
         let request = PutShardRequest {
-            context,
+            context: prepared.context,
             reservation,
-            shard: permit.shard,
+            shard: prepared.shard,
             expected_length: begin.declared_length,
             expected_digest: digest,
             bytes: bounded,
         };
-        let result = self.provider.put_exact(request, observed_at);
+        let result = self
+            .provider
+            .put_exact(request, observed_at)
+            .and_then(complete);
         send_put_result(stream, limits, result).await
     }
 
@@ -237,16 +277,48 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         if !authorised {
             return reject_get(stream, limits, ContractError::Unauthorized).await;
         }
-        let bytes = match self.provider.get_exact(context, permit, observed_at) {
+        self.serve_authorised_get(
+            stream,
+            limits,
+            observed_at,
+            AuthorisedGet {
+                context,
+                permit,
+                response_shard: permit.shard,
+                maximum_bytes: self.maximum_shard_bytes,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn serve_authorised_get(
+        &self,
+        stream: &mut AcceptedStream,
+        limits: WireLimits,
+        observed_at: UnixMicros,
+        request: AuthorisedGet,
+    ) -> Result<Option<ReadEvidence>, DataPlaneError> {
+        let bytes = match self
+            .provider
+            .get_exact(request.context, request.permit, observed_at)
+        {
             Ok(value) => value,
-            Err(error) => return reject_get(stream, limits, error).await,
+            Err(error) => {
+                reject_get(stream, limits, error).await?;
+                return Ok(None);
+            }
         };
+        if bytes.len() > request.maximum_bytes {
+            reject_get(stream, limits, ContractError::ResourceExhausted).await?;
+            return Ok(None);
+        }
         let digest: [u8; 32] = blake3::hash(bytes.as_slice()).into();
         send_data_control(
             &mut stream.send,
             &DataControlEnvelope {
                 message: Some(Message::GetShardHeader(GetShardHeader {
-                    shard: Some(wire_shard(permit.shard)),
+                    shard: Some(wire_shard(request.response_shard)),
                     length: bytes.len() as u64,
                     digest: digest.to_vec(),
                     maximum_frame_bytes: limits.maximum_data_frame_bytes() as u64,
@@ -271,14 +343,17 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             .send
             .finish()
             .map_err(meshspan_transport::TransportError::from)?;
-        Ok(())
+        Ok(Some(ReadEvidence {
+            affected_bytes: bytes.len() as u64,
+            content_digest: digest,
+        }))
     }
 
     fn authorise_put(
         &self,
         begin: &PutShardBegin,
         observed_at: UnixMicros,
-    ) -> Result<(meshspan_contracts::RequestContext, ShardWritePermit), ContractError> {
+    ) -> Result<PreparedPut, ContractError> {
         let permit = decode_write_permit(&begin.write_capability)
             .map_err(|_| ContractError::Unauthorized)?;
         let header = begin.header.as_ref().ok_or(ContractError::InvalidInput)?;
@@ -303,11 +378,36 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             && permit.expires_at > observed_at
             && context.deadline > observed_at;
         if valid {
-            Ok((context, permit))
+            Ok(PreparedPut {
+                context,
+                shard: permit.shard,
+                reservation_class: permit.reservation_class,
+            })
         } else {
             Err(ContractError::Unauthorized)
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct PreparedPut {
+    context: RequestContext,
+    shard: ShardIdentity,
+    reservation_class: ReservationClass,
+}
+
+#[derive(Clone, Copy)]
+struct AuthorisedGet {
+    context: RequestContext,
+    permit: ShardReadPermit,
+    response_shard: ShardIdentity,
+    maximum_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+struct ReadEvidence {
+    pub(super) affected_bytes: u64,
+    pub(super) content_digest: [u8; 32],
 }
 
 fn validate_authenticated_sender(
@@ -432,10 +532,10 @@ async fn reject_get(
 async fn send_put_result(
     stream: &mut AcceptedStream,
     limits: WireLimits,
-    result: Result<meshspan_contracts::ShardReceipt, ContractError>,
-) -> Result<(), DataPlaneError> {
+    result: Result<ShardReceipt, ContractError>,
+) -> Result<Option<ShardReceipt>, DataPlaneError> {
     let (operation, receipt) = match result {
-        Ok(receipt) => (durable_result(), Some(receipt_payload(receipt))),
+        Ok(receipt) => (durable_result(), Some(receipt)),
         Err(error) => (rejected_result(error), None),
     };
     send_data_control(
@@ -443,7 +543,7 @@ async fn send_put_result(
         &DataControlEnvelope {
             message: Some(Message::PutShardResult(PutShardResult {
                 result: Some(operation),
-                receipt,
+                receipt: receipt.map(receipt_payload),
             })),
         },
         limits,
@@ -453,5 +553,5 @@ async fn send_put_result(
         .send
         .finish()
         .map_err(meshspan_transport::TransportError::from)?;
-    Ok(())
+    Ok(receipt)
 }

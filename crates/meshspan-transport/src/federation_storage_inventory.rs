@@ -101,6 +101,14 @@ pub struct FederationStorageInventoryPageExpectation {
     request: FetchFederatedStorageInventory,
 }
 
+impl FederationStorageInventoryPageExpectation {
+    /// Returns the exact peer-requested record ceiling.
+    #[must_use]
+    pub const fn request_limit(&self) -> u32 {
+        self.request.limit
+    }
+}
+
 /// Signed inventory page ready for bounded federation framing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutboundFederationStorageInventoryPage {

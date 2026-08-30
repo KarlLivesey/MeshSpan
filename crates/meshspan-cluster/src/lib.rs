@@ -24,6 +24,11 @@ mod federation_history_receiver;
 mod federation_history_sync;
 mod federation_resource_wire;
 mod federation_session;
+mod federation_shard_authority;
+mod federation_storage_capability;
+mod federation_storage_exchange;
+mod federation_storage_inventory_exchange;
+mod federation_storage_inventory_wire;
 mod filesystem_authority;
 mod filesystem_convergence;
 mod membership;
@@ -121,6 +126,26 @@ pub use federation_resource_wire::{
 pub use federation_session::{
     FederationAcceptRequest, FederationAuthoritySource, FederationDialRequest,
     FederationSessionError, FederationSessionRuntime,
+};
+pub use federation_shard_authority::MetadataFederatedShardAuthority;
+pub use federation_storage_capability::{
+    FederationStorageCapabilityIssueRequest, FederationStorageCapabilityIssuer,
+    FederationStorageCapabilityIssuerError, IssuedFederationStorageCapability,
+};
+pub use federation_storage_exchange::{
+    FederationShardServeRequest, FederationStorageCapabilityProvider,
+    FederationStorageCapabilityRequest, FederationStorageCapabilityServeRequest,
+    FederationStorageReceiptReceiveRequest, ServedFederatedShard,
+    ServedFederationStorageCapability,
+};
+pub use federation_storage_inventory_exchange::{
+    FederationStorageInventoryExchangeError, FederationStorageInventoryFetchRequest,
+    FederationStorageInventoryProvider, FederationStorageInventoryServeRequest,
+    ReceivedFederationStorageInventoryPage, ServedFederationStorageInventoryPage,
+};
+pub use federation_storage_inventory_wire::{
+    FederationStorageInventoryWireError, decode_federated_storage_inventory_record,
+    version_federated_storage_inventory_record,
 };
 pub use filesystem_authority::{MetadataFilesystemAuthority, MetadataFilesystemAuthorityError};
 pub use filesystem_convergence::{

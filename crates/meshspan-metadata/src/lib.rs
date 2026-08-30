@@ -11,8 +11,13 @@ mod federation_quarantine_command;
 mod federation_remote_authority;
 #[cfg(test)]
 mod federation_schema_tests;
+mod federation_storage_admission;
+mod federation_storage_capability_ledger;
 mod federation_storage_command;
+mod federation_storage_inventory;
+mod federation_storage_lifecycle;
 mod federation_storage_quota;
+mod federation_storage_scrub;
 mod federation_succession_command;
 mod migration;
 mod name;
@@ -60,14 +65,32 @@ pub use federation_remote_authority::{
     FederationRemoteAuthorityCacheDisposition, FederationRemoteAuthorityCacheError,
     FederationRemoteAuthoritySnapshot,
 };
+pub use federation_storage_admission::FederationStorageAdmissionError;
+pub use federation_storage_capability_ledger::{
+    FederationStorageCapabilityDisposition, FederationStorageCapabilityLedgerError,
+    FederationStorageCapabilityPresentation,
+};
 pub use federation_storage_command::{
     IssueFederationStorageAllocation, RevokeFederationStorageAllocation,
+};
+pub use federation_storage_inventory::{
+    FederationStorageInventoryCursor, FederationStorageInventoryError,
+    FederationStorageInventoryPage, MAXIMUM_FEDERATED_STORAGE_INVENTORY_ITEMS,
+};
+pub use federation_storage_lifecycle::{
+    FederationStorageLifecycle, FederationStorageLifecycleDisposition,
+    FederationStorageLifecycleError, FederationStorageLifecycleState,
+    FederationStorageReclamationCompletion, FederationStorageRetirementCompletion,
 };
 pub use federation_storage_quota::{
     FederationStorageQuotaDisposition, FederationStorageQuotaError, FederationStorageUsage,
     FederationStorageWriteAbsence, FederationStorageWriteCompletion,
     FederationStorageWriteReservation, FederationStorageWriteReservationRequest,
     FederationStorageWriteState, MAXIMUM_FEDERATED_STORAGE_WRITE_LIFETIME_MICROS,
+};
+pub use federation_storage_scrub::{
+    FederationStorageScrubCompletion, FederationStorageScrubError, FederationStorageScrubEvidence,
+    FederationStorageScrubPreparation,
 };
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,

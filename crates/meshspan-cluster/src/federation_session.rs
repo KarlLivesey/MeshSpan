@@ -228,6 +228,18 @@ pub enum FederationSessionError {
     /// The bounded history source rejected or could not produce an exact page.
     #[error("federation branch page could not be produced")]
     BranchPage(#[from] crate::FederationBranchPageSourceError),
+    /// Provider-side federated shard capability issuance failed closed.
+    #[error("federation storage capability could not be issued")]
+    StorageCapability(#[from] crate::FederationStorageCapabilityIssuerError),
+    /// Federated shard provider state machine or durable accounting failed.
+    #[error("federation shard data operation failed")]
+    DataPlane(#[from] meshspan_data_plane::DataPlaneError),
+    /// Durable capability-presentation evidence was missing, conflicting or corrupt.
+    #[error("federation storage capability evidence failed")]
+    StorageCapabilityLedger(#[from] meshspan_metadata::FederationStorageCapabilityLedgerError),
+    /// Bounded remote provider inventory could not be authorised or reconciled safely.
+    #[error("federation storage inventory exchange failed")]
+    StorageInventory(#[from] crate::FederationStorageInventoryExchangeError),
     /// The advertised immutable history body could not be produced safely.
     #[error("federation history object could not be produced")]
     HistoryObject(#[from] crate::FederationHistoryObjectSourceError),
