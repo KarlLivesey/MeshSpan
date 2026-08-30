@@ -343,80 +343,39 @@ fn prove_disjoint_capacity(
     grant_limit: u64,
 ) -> Result<(), RepositoryError> {
     let mut statement = transaction.prepare(
-        "SELECT maximum_bytes, valid_from, valid_until
+        "SELECT maximum_bytes
          FROM federation_storage_allocations
-         WHERE grant_id = ?1 AND state = 1
-           AND valid_from < ?2 AND valid_until > ?3
-         ORDER BY valid_from, valid_until, allocation_id
-         LIMIT ?4",
+         WHERE grant_id = ?1
+         ORDER BY allocation_id
+         LIMIT ?2",
     )?;
     let rows = statement.query_map(
         params![
             allocation.grant_id().as_bytes().as_slice(),
-            allocation.valid_until().get(),
-            allocation.valid_from().get(),
             i64::try_from(MAXIMUM_ALLOCATIONS_PER_GRANT + 1)
                 .map_err(|_| RepositoryError::CapacityExceeded)?,
         ],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        },
+        |row| row.get::<_, i64>(0),
     )?;
-    let mut intervals = Vec::new();
+    let mut allocated = 0_u128;
+    let mut count = 0_usize;
     for row in rows {
-        let row = row?;
-        intervals.push((
-            positive(row.0)?,
-            UnixMicros::new(row.1),
-            UnixMicros::new(row.2),
-        ));
+        allocated = allocated
+            .checked_add(u128::from(positive(row?)?))
+            .ok_or(RepositoryError::CapacityExceeded)?;
+        count = count.saturating_add(1);
     }
-    if intervals.len() > MAXIMUM_ALLOCATIONS_PER_GRANT {
+    if count > MAXIMUM_ALLOCATIONS_PER_GRANT {
         return Err(RepositoryError::CapacityExceeded);
     }
-    intervals.push((
-        allocation.maximum_bytes(),
-        allocation.valid_from(),
-        allocation.valid_until(),
-    ));
-    if maximum_concurrent_bytes(&intervals)? <= u128::from(grant_limit) {
+    let resulting = allocated
+        .checked_add(u128::from(allocation.maximum_bytes()))
+        .ok_or(RepositoryError::CapacityExceeded)?;
+    if resulting <= u128::from(grant_limit) {
         Ok(())
     } else {
         Err(RepositoryError::CapacityExceeded)
     }
-}
-
-fn maximum_concurrent_bytes(
-    intervals: &[(u64, UnixMicros, UnixMicros)],
-) -> Result<u128, RepositoryError> {
-    let mut events = Vec::with_capacity(intervals.len().saturating_mul(2));
-    for (bytes, start, end) in intervals {
-        if start.get() <= 0 || end <= start || *bytes == 0 {
-            return Err(RepositoryError::CorruptState);
-        }
-        events.push((end.get(), false, *bytes));
-        events.push((start.get(), true, *bytes));
-    }
-    events.sort_unstable_by_key(|event| (event.0, event.1));
-    let mut current = 0_u128;
-    let mut maximum = 0_u128;
-    for (_, starts, bytes) in events {
-        if starts {
-            current = current
-                .checked_add(u128::from(bytes))
-                .ok_or(RepositoryError::CapacityExceeded)?;
-            maximum = maximum.max(current);
-        } else {
-            current = current
-                .checked_sub(u128::from(bytes))
-                .ok_or(RepositoryError::CorruptState)?;
-        }
-    }
-    Ok(maximum)
 }
 
 fn revoke(

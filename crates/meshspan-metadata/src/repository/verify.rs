@@ -26,7 +26,7 @@ pub enum InvariantKind {
     PartitionWithoutActiveVoter,
     /// A federated storage allocation disagrees with its immutable bilateral authority.
     InvalidFederationStorageAllocation,
-    /// Concurrent live allocations exceed the exact bilateral grant ceiling.
+    /// Unreleased allocations exceed the exact bilateral grant ceiling.
     OvercommittedFederationStorageAllocation,
 }
 
@@ -192,29 +192,17 @@ fn collect_federation_storage_findings(
     )?;
     collect(
         database,
-        "WITH allocation_events AS (
-             SELECT grant_id, allocation_id, valid_from AS instant,
-                    1 AS boundary_order, maximum_bytes AS byte_delta
-             FROM federation_storage_allocations WHERE state = 1
-             UNION ALL
-             SELECT grant_id, allocation_id, valid_until AS instant,
-                    0 AS boundary_order, -maximum_bytes AS byte_delta
-             FROM federation_storage_allocations WHERE state = 1
-         ), concurrent_usage AS (
-             SELECT grant_id, allocation_id,
-                    sum(byte_delta) OVER (
-                        PARTITION BY grant_id
-                        ORDER BY instant, boundary_order, allocation_id
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    ) AS allocated_bytes
-             FROM allocation_events
+        "WITH allocation_usage AS (
+             SELECT grant_id, min(allocation_id) AS allocation_id,
+                    sum(maximum_bytes) AS allocated_bytes
+             FROM federation_storage_allocations GROUP BY grant_id
          ), grant_limits AS (
              SELECT grant_id, min(maximum_storage_bytes) AS maximum_bytes
              FROM federation_grant_restrictions
              WHERE policy_kind = 2 GROUP BY grant_id
          )
          SELECT min(u.allocation_id)
-         FROM concurrent_usage u
+         FROM allocation_usage u
          JOIN grant_limits limits ON limits.grant_id = u.grant_id
          WHERE u.allocated_bytes > limits.maximum_bytes
          GROUP BY u.grant_id
