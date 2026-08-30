@@ -10,10 +10,11 @@ mod validation;
 pub use model::{
     ApiError, ApiErrorCode, AssuranceLevel, CreateSessionRequest, CreateSessionResponse,
     HealthResponse, HealthStatus, NullableField, OperationId, SessionAdditionalFactor,
-    SessionAuthentication, SessionId,
+    SessionAuthentication, SessionId, SetupState, SetupStatusResponse,
 };
 pub use openapi::{OPENAPI_PATH, OpenApiDocument, generate_openapi};
 pub use validation::{
     BoundaryError, ValidationIssue, decode_create_session_request, encode_create_session_response,
-    validate_create_session_request_value, validate_create_session_response_value,
+    encode_setup_status_response, validate_create_session_request_value,
+    validate_create_session_response_value, validate_setup_status_response_value,
 };

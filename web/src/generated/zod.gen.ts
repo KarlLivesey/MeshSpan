@@ -156,6 +156,21 @@ export const zHealthResponse = z
   .strict();
 
 /**
+ * SetupStatusResponse
+ *
+ * Cheap anonymous first-start status safe for local-network discovery.
+ */
+export const zSetupStatusResponse = z
+  .strictObject({
+    state: z.union([
+      z.literal("claim_required"),
+      z.literal("configuring"),
+      z.literal("configured"),
+    ]),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -234,3 +249,8 @@ export const zCreateSessionBody = zCreateSessionRequestWritable;
  * Authenticated session created
  */
 export const zCreateSessionResponse2 = zCreateSessionResponse;
+
+/**
+ * First-start state
+ */
+export const zGetSetupStatusResponse = zSetupStatusResponse;

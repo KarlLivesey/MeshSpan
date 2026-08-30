@@ -138,6 +138,18 @@ export type HealthResponse = {
 };
 
 /**
+ * SetupStatusResponse
+ *
+ * Cheap anonymous first-start status safe for local-network discovery.
+ */
+export type SetupStatusResponse = {
+  /**
+   * Current coarse setup state; this response never includes claim material.
+   */
+  state: "claim_required" | "configuring" | "configured";
+};
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -298,3 +310,30 @@ export type CreateSessionResponses = {
 
 export type CreateSessionResponse2 =
   CreateSessionResponses[keyof CreateSessionResponses];
+
+export type GetSetupStatusData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/setup/status";
+};
+
+export type GetSetupStatusErrors = {
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+};
+
+export type GetSetupStatusError =
+  GetSetupStatusErrors[keyof GetSetupStatusErrors];
+
+export type GetSetupStatusResponses = {
+  /**
+   * First-start state
+   */
+  200: SetupStatusResponse;
+};
+
+export type GetSetupStatusResponse =
+  GetSetupStatusResponses[keyof GetSetupStatusResponses];

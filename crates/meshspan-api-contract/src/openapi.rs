@@ -5,7 +5,10 @@
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{ApiError, CreateSessionRequest, CreateSessionResponse, HealthResponse, schema};
+use crate::{
+    ApiError, CreateSessionRequest, CreateSessionResponse, HealthResponse, SetupStatusResponse,
+    schema,
+};
 
 /// Repository path of the committed rolling `OpenAPI` document.
 pub const OPENAPI_PATH: &str = "contracts/openapi/latest.json";
@@ -65,7 +68,8 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "ApiError": response_component::<ApiError>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
-                "HealthResponse": response_component::<HealthResponse>()
+                "HealthResponse": response_component::<HealthResponse>(),
+                "SetupStatusResponse": response_component::<SetupStatusResponse>()
             }
         }
     });
@@ -105,6 +109,17 @@ fn paths() -> Value {
                             }
                         }
                     }
+                }
+            }
+        },
+        "/setup/status": {
+            "get": {
+                "operationId": "getSetupStatus",
+                "summary": "Read first-start state without exposing claim material",
+                "x-meshspan-access": "anonymous",
+                "responses": {
+                    "200": json_response("First-start state", "#/components/schemas/SetupStatusResponse"),
+                    "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
                 }
             }
         },

@@ -26,6 +26,7 @@ rust-version = "1.98"
 version = "0.1.0"
 
 [workspace.dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 bytes = "1.12.1"
 blake3 = "1.8.7"
 cap-std = "4.0.3"
@@ -45,6 +46,7 @@ serde_json = "1.0.151"
 sha2 = "0.10.9"
 thiserror = "2.0.16"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
 unicode-normalization = "0.1.25"
 unicode-casefold = "0.2.0"
 zeroize = "1.9.0"

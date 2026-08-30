@@ -20,6 +20,12 @@ export type {
   GetOpenApiData,
   GetOpenApiResponse,
   GetOpenApiResponses,
+  GetSetupStatusData,
+  GetSetupStatusError,
+  GetSetupStatusErrors,
+  GetSetupStatusResponse,
+  GetSetupStatusResponses,
   HealthResponse,
+  SetupStatusResponse,
 } from "./types.gen";
 export * from "./fetch.gen";

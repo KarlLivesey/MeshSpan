@@ -11,13 +11,18 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+axum.workspace = true
 getrandom.workspace = true
+meshspan-api-contract = { path = "../meshspan-api-contract" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-metadata = { path = "../meshspan-metadata" }
+serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
+tower.workspace = true
 
 [lints]
 workspace = true

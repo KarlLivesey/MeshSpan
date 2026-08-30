@@ -6,6 +6,7 @@ import type {
   CreateSessionRequestWritable,
   CreateSessionResponse,
   HealthResponse,
+  SetupStatusResponse,
 } from "./types.gen";
 import {
   zApiError,
@@ -13,6 +14,7 @@ import {
   zCreateSessionResponse2,
   zGetHealthResponse,
   zGetOpenApiResponse,
+  zGetSetupStatusResponse,
 } from "./zod.gen";
 
 const MAX_JSON_RESPONSE_BYTES = 65_536;
@@ -29,6 +31,7 @@ export interface MeshSpanFetchClient {
   ): Promise<CreateSessionResponse>;
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
+  getSetupStatus(): Promise<SetupStatusResponse>;
 }
 
 export class MeshSpanApiError extends Error {
@@ -88,6 +91,14 @@ export function createMeshSpanFetchClient(
         "/openapi.json",
         { method: "GET" },
         zGetOpenApiResponse,
+      );
+    },
+    async getSetupStatus(): Promise<SetupStatusResponse> {
+      return requestJson(
+        context,
+        "/setup/status",
+        { method: "GET" },
+        zGetSetupStatusResponse,
       );
     },
   };

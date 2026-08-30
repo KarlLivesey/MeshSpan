@@ -384,6 +384,37 @@
         ],
         "title": "HealthResponse",
         "type": "object"
+      },
+      "SetupStatusResponse": {
+        "additionalProperties": false,
+        "description": "Cheap anonymous first-start status safe for local-network discovery.",
+        "properties": {
+          "state": {
+            "description": "Current coarse setup state; this response never includes claim material.",
+            "oneOf": [
+              {
+                "const": "claim_required",
+                "description": "A locally presented claim bundle is required to create or join a swarm.",
+                "type": "string"
+              },
+              {
+                "const": "configuring",
+                "description": "A claimed create/join operation is durably incomplete and will resume.",
+                "type": "string"
+              },
+              {
+                "const": "configured",
+                "description": "Initial swarm creation or enrolment has completed.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "SetupStatusResponse",
+        "type": "object"
       }
     }
   },
@@ -669,6 +700,67 @@
         "summary": "Start a bounded authentication ceremony",
         "x-meshspan-access": "anonymous",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/setup/status": {
+      "get": {
+        "operationId": "getSetupStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusResponse"
+                }
+              }
+            },
+            "description": "First-start state",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read first-start state without exposing claim material",
+        "x-meshspan-access": "anonymous"
       }
     }
   },

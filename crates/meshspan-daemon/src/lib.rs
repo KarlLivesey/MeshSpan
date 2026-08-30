@@ -6,12 +6,16 @@ mod claim_file;
 mod claim_service;
 #[cfg(test)]
 mod claim_service_tests;
+mod setup_api;
+#[cfg(test)]
+mod setup_api_tests;
 
 pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,
     FirstBootClaimError, FirstBootClaimService,
 };
+pub use setup_api::{SetupApiError, SetupStateSnapshot, SetupStatusSource, setup_api_router};
 
 use meshspan_domain::{EntropyError, RandomSource};
 

@@ -9,9 +9,10 @@
 )]
 
 use meshspan_api_contract::{
-    CreateSessionResponse, NullableField, decode_create_session_request,
-    encode_create_session_response, generate_openapi, validate_create_session_request_value,
-    validate_create_session_response_value,
+    CreateSessionResponse, NullableField, SetupState, SetupStatusResponse,
+    decode_create_session_request, encode_create_session_response, encode_setup_status_response,
+    generate_openapi, validate_create_session_request_value,
+    validate_create_session_response_value, validate_setup_status_response_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -98,6 +99,25 @@ fn accepted_response_passes_the_outgoing_encoder() {
 fn decoder_rejects_malformed_and_oversized_bodies_before_domain_work() {
     assert!(decode_create_session_request(b"{").is_err());
     assert!(decode_create_session_request(&vec![b' '; 2_049]).is_err());
+}
+
+#[test]
+fn anonymous_setup_status_has_only_the_closed_lifecycle_state() {
+    let encoded = encode_setup_status_response(&SetupStatusResponse {
+        state: SetupState::ClaimRequired,
+    })
+    .expect("setup state must encode");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&encoded).expect("setup response must be JSON"),
+        json!({ "state": "claim_required" })
+    );
+    assert!(
+        validate_setup_status_response_value(&json!({
+            "state": "claim_required",
+            "claim_id": "must-not-leak"
+        }))
+        .is_err()
+    );
 }
 
 #[test]

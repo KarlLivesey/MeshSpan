@@ -145,6 +145,38 @@ describe("generated native Fetch client responses", () => {
   });
 });
 
+describe("generated anonymous setup status", () => {
+  it("reads only the closed lifecycle state", async () => {
+    const fetchStub: typeof globalThis.fetch = async (input) => {
+      expect(readRequestUrl(input)).toBe(
+        "https://node.example/api/latest/setup/status",
+      );
+      return Promise.resolve(jsonResponse({ state: "claim_required" }));
+    };
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: fetchStub,
+    });
+
+    await expect(client.getSetupStatus()).resolves.toEqual({
+      state: "claim_required",
+    });
+  });
+
+  it("rejects leaked fields", async () => {
+    const fetchStub: typeof globalThis.fetch = async () =>
+      Promise.resolve(
+        jsonResponse({ claim_id: "must-not-leak", state: "claim_required" }),
+      );
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: fetchStub,
+    });
+
+    await expect(client.getSetupStatus()).rejects.toThrow();
+  });
+});
+
 function readRequestUrl(
   input: RequestInfo | URL | undefined,
 ): string | undefined {

@@ -218,6 +218,26 @@ pub struct HealthResponse {
     pub schema_digest: String,
 }
 
+/// Public first-start lifecycle state containing no claim or identity material.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupState {
+    /// A locally presented claim bundle is required to create or join a swarm.
+    ClaimRequired,
+    /// A claimed create/join operation is durably incomplete and will resume.
+    Configuring,
+    /// Initial swarm creation or enrolment has completed.
+    Configured,
+}
+
+/// Cheap anonymous first-start status safe for local-network discovery.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupStatusResponse {
+    /// Current coarse setup state; this response never includes claim material.
+    pub state: SetupState,
+}
+
 /// Stable public error category.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

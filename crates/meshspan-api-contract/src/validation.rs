@@ -8,12 +8,16 @@ use jsonschema::Validator;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{CreateSessionRequest, CreateSessionResponse, model::MAX_ERROR_ISSUES, schema};
+use crate::{
+    CreateSessionRequest, CreateSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES,
+    schema,
+};
 
 const MAX_CREATE_SESSION_BYTES: usize = 2_048;
 
 static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
+static SETUP_STATUS_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 
 /// One safe, bounded description of a structural contract violation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,6 +105,28 @@ pub fn validate_create_session_response_value(value: &Value) -> Result<(), Bound
     validate(response_validator()?, value)
 }
 
+/// Validates and encodes anonymous setup status before transmission.
+///
+/// # Errors
+///
+/// Returns an encoding or outgoing-contract error instead of emitting an invalid body.
+pub fn encode_setup_status_response(
+    response: &SetupStatusResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate_setup_status_response_value(&value)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
+/// Validates raw setup status against the Rust-authored response schema.
+///
+/// # Errors
+///
+/// Returns every discovered issue up to the public issue limit.
+pub fn validate_setup_status_response_value(value: &Value) -> Result<(), BoundaryError> {
+    validate(setup_status_response_validator()?, value)
+}
+
 fn request_validator() -> Result<&'static Validator, BoundaryError> {
     validator_from(
         CREATE_SESSION_REQUEST_VALIDATOR
@@ -112,6 +138,13 @@ fn response_validator() -> Result<&'static Validator, BoundaryError> {
     validator_from(
         CREATE_SESSION_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<CreateSessionResponse>())),
+    )
+}
+
+fn setup_status_response_validator() -> Result<&'static Validator, BoundaryError> {
+    validator_from(
+        SETUP_STATUS_RESPONSE_VALIDATOR
+            .get_or_init(|| compile(&schema::response_schema::<SetupStatusResponse>())),
     )
 }
 
