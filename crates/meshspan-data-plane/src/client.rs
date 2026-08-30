@@ -57,6 +57,7 @@ pub async fn put_shard(
             target_generation: permit.target_generation,
             shard: permit.shard,
             capability: encode_write_permit(permit),
+            federation_capability_digest: None,
         },
         bytes,
         limits,
@@ -74,6 +75,7 @@ pub async fn put_federated_shard(
     connection: &quinn::Connection,
     header: RequestHeader,
     permit: FederatedShardPermit,
+    capability_digest: [u8; 32],
     bytes: &BoundedBytes,
     limits: WireLimits,
 ) -> Result<ShardReceipt, DataPlaneError> {
@@ -86,6 +88,7 @@ pub async fn put_federated_shard(
     ) && header.mesh_id.as_slice() == permit.remote_mesh_id.as_bytes()
         && !bytes.is_empty()
         && bytes.len() <= maximum_bytes
+        && capability_digest != [0; 32]
         && deadline.get() > 0
         && deadline <= permit.expires_at;
     if !valid {
@@ -100,6 +103,7 @@ pub async fn put_federated_shard(
             target_generation: permit.target_generation,
             shard: permit.shard,
             capability: encode_federated_shard_permit(permit),
+            federation_capability_digest: Some(capability_digest),
         },
         bytes,
         limits,
@@ -113,6 +117,7 @@ struct PutInvocation {
     target_generation: u64,
     shard: ShardIdentity,
     capability: Vec<u8>,
+    federation_capability_digest: Option<[u8; 32]>,
 }
 
 async fn put_with_capability(
@@ -138,6 +143,9 @@ async fn put_with_capability(
                 declared_length: bytes.len() as u64,
                 declared_digest: digest.to_vec(),
                 write_capability: invocation.capability,
+                federation_capability_digest: invocation
+                    .federation_capability_digest
+                    .map_or_else(Vec::new, |digest| digest.to_vec()),
             })),
         },
         limits,
@@ -226,6 +234,7 @@ pub async fn get_shard(
             target_generation: permit.target_generation,
             shard: permit.shard,
             capability: encode_read_permit(permit),
+            federation_capability_digest: None,
             maximum_shard_bytes,
         },
         limits,
@@ -243,6 +252,7 @@ pub async fn get_federated_shard(
     connection: &quinn::Connection,
     header: RequestHeader,
     permit: FederatedShardPermit,
+    capability_digest: [u8; 32],
     maximum_shard_bytes: usize,
     limits: WireLimits,
 ) -> Result<BoundedBytes, DataPlaneError> {
@@ -253,6 +263,7 @@ pub async fn get_federated_shard(
         && header.mesh_id.as_slice() == permit.remote_mesh_id.as_bytes()
         && maximum_shard_bytes > 0
         && permit_limit > 0
+        && capability_digest != [0; 32]
         && deadline.get() > 0
         && deadline <= permit.expires_at;
     if !valid {
@@ -267,6 +278,7 @@ pub async fn get_federated_shard(
             target_generation: permit.target_generation,
             shard: permit.shard,
             capability: encode_federated_shard_permit(permit),
+            federation_capability_digest: Some(capability_digest),
             maximum_shard_bytes: maximum_shard_bytes.min(permit_limit),
         },
         limits,
@@ -280,6 +292,7 @@ struct GetInvocation {
     target_generation: u64,
     shard: ShardIdentity,
     capability: Vec<u8>,
+    federation_capability_digest: Option<[u8; 32]>,
     maximum_shard_bytes: usize,
 }
 
@@ -302,6 +315,9 @@ async fn get_with_capability(
                 target_generation: invocation.target_generation,
                 shard: Some(wire_shard(invocation.shard)),
                 read_capability: invocation.capability,
+                federation_capability_digest: invocation
+                    .federation_capability_digest
+                    .map_or_else(Vec::new, |digest| digest.to_vec()),
             })),
         },
         limits,
@@ -384,6 +400,7 @@ pub async fn tombstone_shard(
                 target_generation: permit.target_generation,
                 shard: Some(wire_shard(permit.shard)),
                 removal_permit: Some(removal_permit_payload(permit)),
+                federation_capability_digest: Vec::new(),
             })),
         },
         limits,
@@ -439,6 +456,7 @@ pub async fn reclaim_shard(
                 target_generation: tombstone.target_generation,
                 shard: Some(wire_shard(tombstone.shard)),
                 tombstone_receipt: Some(tombstone_receipt_payload(tombstone)),
+                federation_capability_digest: Vec::new(),
             })),
         },
         limits,

@@ -491,6 +491,7 @@ mod tests {
             capability_nonce: vec![17; 32],
             canonical_capability: vec![18],
             signature: vec![19; 64],
+            issued_at_unix_micros: 15,
         };
         let capability_payload =
             federation_storage_capability_signing_payload(&header, &capability);

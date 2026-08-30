@@ -146,6 +146,7 @@ impl FederationStorageCapabilityExpectation {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutboundFederationStorageCapability {
     envelope: FederationEnvelope,
+    capability_digest: [u8; 32],
 }
 
 impl OutboundFederationStorageCapability {
@@ -153,6 +154,12 @@ impl OutboundFederationStorageCapability {
     #[must_use]
     pub const fn envelope(&self) -> &FederationEnvelope {
         &self.envelope
+    }
+
+    /// Returns the exact signed capability digest required by every lifecycle receipt.
+    #[must_use]
+    pub const fn capability_digest(&self) -> [u8; 32] {
+        self.capability_digest
     }
 }
 
@@ -253,8 +260,15 @@ pub fn signed_federation_storage_capability(
 ) -> Result<OutboundFederationStorageCapability, TransportError> {
     let binding = identity.binding();
     validate_outbound_context(binding, context, now)?;
+    let issued_at = UnixMicros::new(capability.issued_at_unix_micros);
     let valid_until = UnixMicros::new(capability.valid_until_unix_micros);
-    if valid_until <= now || valid_until > context.deadline || valid_until > binding.valid_until {
+    if issued_at.get() <= 0
+        || issued_at > now
+        || valid_until <= now
+        || valid_until <= issued_at
+        || valid_until > context.deadline
+        || valid_until > binding.valid_until
+    {
         return Err(TransportError::InvalidConfiguration);
     }
     let header = federation_header(binding, context);
@@ -267,12 +281,16 @@ pub fn signed_federation_storage_capability(
         ))
         .to_bytes()
         .to_vec();
+    let capability_digest = storage_capability_digest(&capability);
     let envelope = FederationEnvelope {
         header: Some(header),
         message: Some(Message::StorageCapability(capability)),
     };
     encode_federation_frame(&envelope, limits)?;
-    Ok(OutboundFederationStorageCapability { envelope })
+    Ok(OutboundFederationStorageCapability {
+        envelope,
+        capability_digest,
+    })
 }
 
 impl FederationPeerRegistry {
@@ -361,7 +379,7 @@ impl FederationPeerRegistry {
                 capability: capability.clone(),
                 capability_digest,
                 capability_response_nonce: exact(&header.replay_nonce)?,
-                issued_at: now,
+                issued_at: UnixMicros::new(capability.issued_at_unix_micros),
             },
         })
     }
@@ -464,6 +482,7 @@ fn verify_capability_response_shape(
     )?;
     let request = &expected.request;
     let valid_until = UnixMicros::new(capability.valid_until_unix_micros);
+    let issued_at = UnixMicros::new(capability.issued_at_unix_micros);
     let capability_nonce = exact::<32>(&capability.capability_nonce)?;
     let response_nonce = exact::<32>(&header.replay_nonce)?;
     let valid = capability.grant_id == request.grant_id
@@ -473,6 +492,9 @@ fn verify_capability_response_shape(
         && capability.shard == request.shard
         && capability.action == request.action
         && capability.maximum_bytes <= request.maximum_bytes
+        && issued_at.get() > 0
+        && issued_at <= now
+        && issued_at < valid_until
         && valid_until > now
         && valid_until <= expected.request_context.deadline
         && valid_until <= binding.valid_until

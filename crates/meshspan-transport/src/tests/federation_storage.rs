@@ -219,7 +219,7 @@ fn prove_hostile_receipts(
     let mut wrong_allocation = receipt(expectation.capability_digest());
     wrong_allocation.allocation_id = vec![122; 16];
     let mut predates_issue = receipt(expectation.capability_digest());
-    predates_issue.completed_at_unix_micros = 1_499_999;
+    predates_issue.completed_at_unix_micros = 1_399_999;
     for hostile in [
         wrong_capability,
         excessive,
@@ -289,6 +289,18 @@ fn prove_signed_hostile_capabilities(
             proof.server_identity,
             response_context,
             overlong,
+            proof.limits,
+            UnixMicros::new(1_500_000),
+        ),
+        Err(TransportError::InvalidConfiguration)
+    ));
+    let mut future_issued = capability();
+    future_issued.issued_at_unix_micros = 1_500_001;
+    assert!(matches!(
+        signed_federation_storage_capability(
+            proof.server_identity,
+            response_context,
+            future_issued,
             proof.limits,
             UnixMicros::new(1_500_000),
         ),
@@ -407,6 +419,7 @@ fn capability() -> FederatedStorageCapability {
         capability_nonce: vec![116; 32],
         canonical_capability: b"exact-data-plane-permit".to_vec(),
         signature: Vec::new(),
+        issued_at_unix_micros: 1_400_000,
     }
 }
 

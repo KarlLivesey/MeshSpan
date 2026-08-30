@@ -5,7 +5,7 @@
 mod federation;
 mod removal;
 
-pub use federation::FederatedShardAuthority;
+pub use federation::{FederatedShardAuthority, FederatedShardOutcome, FederatedWriteEvidence};
 
 use meshspan_contracts::{
     BoundedBytes, ContractError, PutShardRequest, RequestContext, ReservationClass,
@@ -152,7 +152,8 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             Err(error) => return reject_put(stream, limits, error).await,
         };
         self.serve_prepared_put(stream, limits, observed_at, begin, prepared, Ok)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn serve_prepared_put<Complete>(
@@ -163,7 +164,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         begin: PutShardBegin,
         prepared: PreparedPut,
         complete: Complete,
-    ) -> Result<(), DataPlaneError>
+    ) -> Result<Option<ShardReceipt>, DataPlaneError>
     where
         Complete: FnOnce(ShardReceipt) -> Result<ShardReceipt, ContractError>,
     {
@@ -176,7 +177,10 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             observed_at,
         }) {
             Ok(value) => value,
-            Err(error) => return reject_put(stream, limits, error).await,
+            Err(error) => {
+                reject_put(stream, limits, error).await?;
+                return Ok(None);
+            }
         };
         send_data_control(
             &mut stream.send,
@@ -270,7 +274,8 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             permit,
             self.maximum_shard_bytes,
         )
-        .await
+        .await?;
+        Ok(())
     }
 
     async fn serve_authorised_get(
@@ -281,13 +286,17 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         context: RequestContext,
         permit: ShardReadPermit,
         maximum_bytes: usize,
-    ) -> Result<(), DataPlaneError> {
+    ) -> Result<Option<ReadEvidence>, DataPlaneError> {
         let bytes = match self.provider.get_exact(context, permit, observed_at) {
             Ok(value) => value,
-            Err(error) => return reject_get(stream, limits, error).await,
+            Err(error) => {
+                reject_get(stream, limits, error).await?;
+                return Ok(None);
+            }
         };
         if bytes.len() > maximum_bytes {
-            return reject_get(stream, limits, ContractError::ResourceExhausted).await;
+            reject_get(stream, limits, ContractError::ResourceExhausted).await?;
+            return Ok(None);
         }
         let digest: [u8; 32] = blake3::hash(bytes.as_slice()).into();
         send_data_control(
@@ -319,7 +328,10 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             .send
             .finish()
             .map_err(meshspan_transport::TransportError::from)?;
-        Ok(())
+        Ok(Some(ReadEvidence {
+            affected_bytes: bytes.len() as u64,
+            content_digest: digest,
+        }))
     }
 
     fn authorise_put(
@@ -367,6 +379,12 @@ struct PreparedPut {
     context: RequestContext,
     shard: ShardIdentity,
     reservation_class: ReservationClass,
+}
+
+#[derive(Clone, Copy)]
+struct ReadEvidence {
+    pub(super) affected_bytes: u64,
+    pub(super) content_digest: [u8; 32],
 }
 
 fn validate_authenticated_sender(
@@ -491,10 +509,10 @@ async fn reject_get(
 async fn send_put_result(
     stream: &mut AcceptedStream,
     limits: WireLimits,
-    result: Result<meshspan_contracts::ShardReceipt, ContractError>,
-) -> Result<(), DataPlaneError> {
+    result: Result<ShardReceipt, ContractError>,
+) -> Result<Option<ShardReceipt>, DataPlaneError> {
     let (operation, receipt) = match result {
-        Ok(receipt) => (durable_result(), Some(receipt_payload(receipt))),
+        Ok(receipt) => (durable_result(), Some(receipt)),
         Err(error) => (rejected_result(error), None),
     };
     send_data_control(
@@ -502,7 +520,7 @@ async fn send_put_result(
         &DataControlEnvelope {
             message: Some(Message::PutShardResult(PutShardResult {
                 result: Some(operation),
-                receipt,
+                receipt: receipt.map(receipt_payload),
             })),
         },
         limits,
@@ -512,5 +530,5 @@ async fn send_put_result(
         .send
         .finish()
         .map_err(meshspan_transport::TransportError::from)?;
-    Ok(())
+    Ok(receipt)
 }

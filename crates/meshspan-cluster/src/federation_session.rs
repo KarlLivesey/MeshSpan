@@ -234,6 +234,9 @@ pub enum FederationSessionError {
     /// Federated shard provider state machine or durable accounting failed.
     #[error("federation shard data operation failed")]
     DataPlane(#[from] meshspan_data_plane::DataPlaneError),
+    /// Durable capability-presentation evidence was missing, conflicting or corrupt.
+    #[error("federation storage capability evidence failed")]
+    StorageCapabilityLedger(#[from] meshspan_metadata::FederationStorageCapabilityLedgerError),
     /// The advertised immutable history body could not be produced safely.
     #[error("federation history object could not be produced")]
     HistoryObject(#[from] crate::FederationHistoryObjectSourceError),

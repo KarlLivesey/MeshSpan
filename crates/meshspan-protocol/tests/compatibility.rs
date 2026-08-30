@@ -217,6 +217,7 @@ fn shard_control_requires_bound_authority_and_round_trips() -> Result<(), Box<dy
             declared_length: 4,
             declared_digest: vec![8; 32],
             write_capability: vec![9; 32],
+            federation_capability_digest: Vec::new(),
         })),
     };
     let encoded = encode_data_control_frame(&accepted, wire_limits)?;
@@ -232,6 +233,7 @@ fn shard_control_requires_bound_authority_and_round_trips() -> Result<(), Box<dy
             target_generation: 2,
             shard: Some(valid_shard()),
             removal_permit: None,
+            federation_capability_digest: Vec::new(),
         })),
     };
     assert_eq!(
@@ -253,6 +255,7 @@ fn shard_control_requires_bound_authority_and_round_trips() -> Result<(), Box<dy
                 target_generation: 2,
                 shard: Some(valid_shard()),
                 tombstone_receipt: Some(versioned_payload()),
+                federation_capability_digest: Vec::new(),
             })),
         },
         DataControlEnvelope {

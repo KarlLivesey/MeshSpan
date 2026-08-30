@@ -11,7 +11,7 @@ use thiserror::Error;
 const MAXIMUM_MIGRATIONS: usize = 256;
 
 pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 40;
-pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 3;
+pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 4;
 
 const PARTITION_MIGRATIONS: [Migration; 40] = [
     Migration {
@@ -176,7 +176,7 @@ const PARTITION_MIGRATIONS: [Migration; 40] = [
     },
 ];
 
-const LOCAL_MIGRATIONS: [Migration; 3] = [
+const LOCAL_MIGRATIONS: [Migration; 4] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/local/001_initial.sql"),
@@ -186,8 +186,12 @@ const LOCAL_MIGRATIONS: [Migration; 3] = [
         sql: include_str!("../schema/local/002_federation_authority_cache.sql"),
     },
     Migration {
-        version: LOCAL_SCHEMA_VERSION,
+        version: 3,
         sql: include_str!("../schema/local/003_federation_storage_quota.sql"),
+    },
+    Migration {
+        version: LOCAL_SCHEMA_VERSION,
+        sql: include_str!("../schema/local/004_federation_storage_capabilities.sql"),
     },
 ];
 
@@ -582,4 +586,9 @@ pub(crate) fn local_federation_authority_cache_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn local_federation_storage_quota_migration_digest() -> [u8; 32] {
     migration_digest(LOCAL_MIGRATIONS[2].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn local_federation_storage_capability_migration_digest() -> [u8; 32] {
+    migration_digest(LOCAL_MIGRATIONS[3].sql)
 }

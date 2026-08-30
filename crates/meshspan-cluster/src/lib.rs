@@ -133,6 +133,7 @@ pub use federation_storage_capability::{
 pub use federation_storage_exchange::{
     FederationShardServeRequest, FederationStorageCapabilityProvider,
     FederationStorageCapabilityRequest, FederationStorageCapabilityServeRequest,
+    FederationStorageReceiptReceiveRequest, ServedFederatedShard,
     ServedFederationStorageCapability,
 };
 pub use filesystem_authority::{MetadataFilesystemAuthority, MetadataFilesystemAuthorityError};

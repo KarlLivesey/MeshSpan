@@ -14,6 +14,7 @@ message PutShardBegin {
   uint64 declared_length = 5;
   bytes declared_digest = 6;
   bytes write_capability = 7;
+  bytes federation_capability_digest = 8;
 }
 
 message PutShardReady {
@@ -43,6 +44,7 @@ message GetShardRequest {
   uint64 target_generation = 3;
   ShardIdentity shard = 4;
   bytes read_capability = 5;
+  bytes federation_capability_digest = 6;
 }
 
 message GetShardHeader {
@@ -63,6 +65,7 @@ message DeleteShardRequest {
   uint64 target_generation = 3;
   ShardIdentity shard = 4;
   VersionedPayload removal_permit = 5;
+  bytes federation_capability_digest = 6;
 }
 
 message DeleteShardResult {
@@ -76,6 +79,7 @@ message ReclaimShardRequest {
   uint64 target_generation = 3;
   ShardIdentity shard = 4;
   VersionedPayload tombstone_receipt = 5;
+  bytes federation_capability_digest = 6;
 }
 
 message ReclaimShardResult {

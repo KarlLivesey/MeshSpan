@@ -5,11 +5,11 @@
 use meshspan_contracts::{
     ContractError, FederatedShardPermit, ShardReceipt, federated_shard_write_result_digest,
 };
-use meshspan_data_plane::FederatedShardAuthority;
+use meshspan_data_plane::{FederatedShardAuthority, FederatedWriteEvidence};
 use meshspan_domain::{FederationStorageAction, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeRepository, FederationStorageAuthorityRequest, FederationStorageWriteCompletion,
-    FederationStorageWriteState, LocalDatabase,
+    FederationStorageWriteReservation, FederationStorageWriteState, LocalDatabase,
 };
 
 /// Revalidates replicated bilateral authority and finalises node-local quota accounting.
@@ -36,8 +36,17 @@ impl FederatedShardAuthority for MetadataFederatedShardAuthority<'_> {
     fn authorise(
         &self,
         permit: &FederatedShardPermit,
+        capability_digest: [u8; 32],
         observed_at: UnixMicros,
     ) -> Result<(), ContractError> {
+        let presentation = self
+            .local_database
+            .federated_storage_capability(capability_digest)
+            .map_err(|_| ContractError::Unavailable)?
+            .ok_or(ContractError::Unauthorized)?;
+        if presentation.capability_digest != capability_digest || presentation.permit != *permit {
+            return Err(ContractError::Unauthorized);
+        }
         let current = self
             .repository
             .active_federation_storage_allocation_authority(FederationStorageAuthorityRequest {
@@ -75,7 +84,7 @@ impl FederatedShardAuthority for MetadataFederatedShardAuthority<'_> {
         permit: &FederatedShardPermit,
         receipt: ShardReceipt,
         completed_at: UnixMicros,
-    ) -> Result<(), ContractError> {
+    ) -> Result<FederatedWriteEvidence, ContractError> {
         validate_receipt(permit, receipt)?;
         let stored = self
             .local_database
@@ -87,7 +96,7 @@ impl FederatedShardAuthority for MetadataFederatedShardAuthority<'_> {
                 && stored.affected_bytes == Some(receipt.length)
                 && stored.content_digest == Some(receipt.digest);
             return if replayed {
-                Ok(())
+                write_evidence(&stored)
             } else {
                 Err(ContractError::Conflict)
             };
@@ -95,7 +104,8 @@ impl FederatedShardAuthority for MetadataFederatedShardAuthority<'_> {
         if stored.state != FederationStorageWriteState::Reserved {
             return Err(ContractError::Stale);
         }
-        self.local_database
+        let (_, completed) = self
+            .local_database
             .commit_federated_storage_write(FederationStorageWriteCompletion {
                 operation_id: permit.operation_id,
                 permit_digest: permit.permit_digest,
@@ -104,9 +114,21 @@ impl FederatedShardAuthority for MetadataFederatedShardAuthority<'_> {
                 result_digest: federated_shard_write_result_digest(permit, receipt, completed_at),
                 completed_at,
             })
-            .map(|_| ())
-            .map_err(|_| ContractError::Unavailable)
+            .map_err(|_| ContractError::Unavailable)?;
+        write_evidence(&completed)
     }
+}
+
+fn write_evidence(
+    stored: &FederationStorageWriteReservation,
+) -> Result<FederatedWriteEvidence, ContractError> {
+    if stored.state != FederationStorageWriteState::Committed {
+        return Err(ContractError::Corrupt);
+    }
+    FederatedWriteEvidence::new(
+        stored.completed_at.ok_or(ContractError::Corrupt)?,
+        stored.result_digest.ok_or(ContractError::Corrupt)?,
+    )
 }
 
 impl MetadataFederatedShardAuthority<'_> {

@@ -19,4 +19,6 @@ pub use client::{
 };
 pub use error::DataPlaneError;
 pub use router::RemoteShardRouter;
-pub use server::{FederatedShardAuthority, RemoteShardService};
+pub use server::{
+    FederatedShardAuthority, FederatedShardOutcome, FederatedWriteEvidence, RemoteShardService,
+};

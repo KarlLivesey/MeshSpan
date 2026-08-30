@@ -10,10 +10,12 @@ use meshspan_domain::{
     FederationGrantId, FederationStorageAction, FederationStorageAllocationId, TargetId, UnixMicros,
 };
 use meshspan_metadata::{
-    AuthoritativeRepository, FederationStorageAuthorityRequest, FederationStorageQuotaDisposition,
-    FederationStorageQuotaError, FederationStorageWriteReservation,
-    FederationStorageWriteReservationRequest, FederationStorageWriteState, LocalDatabase,
-    MAXIMUM_FEDERATED_STORAGE_WRITE_LIFETIME_MICROS, RepositoryError,
+    AuthoritativeRepository, FederationStorageAuthorityRequest,
+    FederationStorageCapabilityLedgerError, FederationStorageCapabilityPresentation,
+    FederationStorageQuotaDisposition, FederationStorageQuotaError,
+    FederationStorageWriteReservation, FederationStorageWriteReservationRequest,
+    FederationStorageWriteState, LocalDatabase, MAXIMUM_FEDERATED_STORAGE_WRITE_LIFETIME_MICROS,
+    RepositoryError,
 };
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::{
@@ -185,6 +187,19 @@ impl<'a, 'identity> FederationStorageCapabilityIssuer<'a, 'identity> {
         } else {
             None
         };
+        self.local_database.record_federated_storage_capability(
+            &FederationStorageCapabilityPresentation {
+                capability_digest: outbound.capability_digest(),
+                permit,
+                protocol_major: response_context.version.major,
+                protocol_minor: response_context.version.minor,
+                request_id: response_context.request_id,
+                trace_id: response_context.trace_id,
+                request_deadline: response_context.deadline,
+                response_replay_nonce: response_context.replay_nonce,
+                recorded_at: request.observed_at,
+            },
+        )?;
         Ok(IssuedFederationStorageCapability {
             outbound,
             permit,
@@ -377,6 +392,7 @@ impl ParsedRequest {
             canonical_capability: encode_federated_shard_permit(*permit),
             signature: Vec::new(),
             allocation_id: self.allocation_id.as_bytes().to_vec(),
+            issued_at_unix_micros: permit.issued_at.get(),
         }
     }
 }
@@ -541,6 +557,9 @@ pub enum FederationStorageCapabilityIssuerError {
     /// Node-local allocation accounting rejected or could not persist the reservation.
     #[error("federated storage capability quota failed")]
     Quota(#[from] FederationStorageQuotaError),
+    /// Durable signed-capability correlation could not be recorded safely.
+    #[error("federated storage capability ledger failed")]
+    CapabilityLedger(#[from] FederationStorageCapabilityLedgerError),
     /// Signed bounded response construction failed.
     #[error("federated storage capability transport failed")]
     Transport(#[from] TransportError),

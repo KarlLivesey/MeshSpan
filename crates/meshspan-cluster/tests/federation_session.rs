@@ -124,7 +124,12 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
         &rotated_connections,
         SessionExpectation::new(76, 7, 2),
     );
-    prove_storage_capability_exchange(&storage_proof, allocation, provider_node_id).await?;
+    Box::pin(prove_storage_capability_exchange(
+        &storage_proof,
+        allocation,
+        provider_node_id,
+    ))
+    .await?;
     authorities.issue_server_grants(80, 1)?;
     assert!(matches!(
         authorities

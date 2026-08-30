@@ -148,6 +148,23 @@ pub fn federated_shard_write_result_digest(
     digest.finalize().into()
 }
 
+/// Calculates provider result evidence for one independently verified federated shard read.
+#[must_use]
+pub fn federated_shard_read_result_digest(
+    permit: &FederatedShardPermit,
+    affected_bytes: u64,
+    content_digest: [u8; 32],
+    completed_at: UnixMicros,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.federation.shard-read-result.v1");
+    digest.update(&permit.permit_digest);
+    digest.update(&affected_bytes.to_be_bytes());
+    digest.update(&content_digest);
+    digest.update(&completed_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use meshspan_domain::{
@@ -157,7 +174,8 @@ mod tests {
 
     use super::{
         FederatedShardPermit, FederatedStoragePermitMacKey, federated_shard_permit_mac,
-        federated_shard_write_result_digest, verify_federated_shard_permit_mac,
+        federated_shard_read_result_digest, federated_shard_write_result_digest,
+        verify_federated_shard_permit_mac,
     };
     use crate::{ShardIdentity, ShardReceipt};
 
@@ -237,6 +255,30 @@ mod tests {
         );
         assert_ne!(
             federated_shard_write_result_digest(&permit, receipt, UnixMicros::new(50)),
+            expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn read_result_digest_binds_permit_bytes_digest_and_completion()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let permit = FederatedShardPermit {
+            permit_digest: [51; 32],
+            ..permit()?
+        };
+        let expected =
+            federated_shard_read_result_digest(&permit, 52, [53; 32], UnixMicros::new(54));
+        assert_ne!(
+            federated_shard_read_result_digest(&permit, 55, [53; 32], UnixMicros::new(54)),
+            expected
+        );
+        assert_ne!(
+            federated_shard_read_result_digest(&permit, 52, [56; 32], UnixMicros::new(54)),
+            expected
+        );
+        assert_ne!(
+            federated_shard_read_result_digest(&permit, 52, [53; 32], UnixMicros::new(57)),
             expected
         );
         Ok(())

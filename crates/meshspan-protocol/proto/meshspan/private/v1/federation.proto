@@ -150,6 +150,7 @@ message FederatedStorageCapability {
   bytes canonical_capability = 9;
   bytes signature = 10;
   bytes allocation_id = 11;
+  sint64 issued_at_unix_micros = 12;
 }
 
 message FederatedStorageReceipt {

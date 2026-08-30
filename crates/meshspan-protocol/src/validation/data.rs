@@ -24,7 +24,8 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             validate_shard(value.shard.as_ref())?;
             nonzero(value.declared_length)?;
             valid_digest(&value.declared_digest)?;
-            valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())
+            valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())?;
+            optional_digest(&value.federation_capability_digest)
         }
         Message::PutShardReady(value) => put_ready(value, limits),
         Message::PutShardFinish(value) => {
@@ -44,7 +45,8 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             )?;
             validate_target(&value.target_id, value.target_generation)?;
             validate_shard(value.shard.as_ref())?;
-            valid_nonempty_bytes(&value.read_capability, limits.maximum_control_bytes())
+            valid_nonempty_bytes(&value.read_capability, limits.maximum_control_bytes())?;
+            optional_digest(&value.federation_capability_digest)
         }
         Message::GetShardHeader(value) => get_header(value, limits),
         Message::GetShardResult(value) => validate_operation_result(value.result.as_ref(), limits),
@@ -57,7 +59,8 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             )?;
             validate_target(&value.target_id, value.target_generation)?;
             validate_shard(value.shard.as_ref())?;
-            validate_payload(value.removal_permit.as_ref(), limits)
+            validate_payload(value.removal_permit.as_ref(), limits)?;
+            optional_digest(&value.federation_capability_digest)
         }
         Message::DeleteShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
@@ -72,7 +75,8 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             )?;
             validate_target(&value.target_id, value.target_generation)?;
             validate_shard(value.shard.as_ref())?;
-            validate_payload(value.tombstone_receipt.as_ref(), limits)
+            validate_payload(value.tombstone_receipt.as_ref(), limits)?;
+            optional_digest(&value.federation_capability_digest)
         }
         Message::ReclaimShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
@@ -158,5 +162,13 @@ const fn nonzero(value: u64) -> Result<(), WireContractError> {
         Err(WireContractError::InvalidMessage)
     } else {
         Ok(())
+    }
+}
+
+fn optional_digest(value: &[u8]) -> Result<(), WireContractError> {
+    if value.is_empty() {
+        Ok(())
+    } else {
+        valid_digest(value)
     }
 }

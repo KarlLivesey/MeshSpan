@@ -6,13 +6,18 @@ use meshspan_contracts::{FederatedStoragePermitMacKey, StorageProvider};
 use meshspan_data_plane::RemoteShardService;
 use meshspan_domain::{FederationRelationshipId, FederationStorageAction, OperationId, UnixMicros};
 use meshspan_metadata::{
-    AuthoritativeRepository, FederationStorageQuotaDisposition, LocalDatabase,
+    AuthoritativeRepository, FederationStorageCapabilityPresentation,
+    FederationStorageQuotaDisposition, LocalDatabase,
 };
-use meshspan_protocol::v1::RequestFederatedStorageCapability;
+use meshspan_protocol::v1::{
+    FederatedStorageReceipt, ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability,
+    ShardIdentity,
+};
 use meshspan_transport::{
-    AuthenticatedFederationStorageCapability, FederationExchangeContext, FederationReplayGuard,
-    StreamKind, TransportError, accept_stream, open_stream, receive_federation, send_federation,
-    signed_federation_storage_capability_request,
+    AuthenticatedFederationStorageCapability, AuthenticatedFederationStorageReceipt,
+    FederationExchangeContext, FederationReplayGuard, StreamKind, TransportError, accept_stream,
+    open_stream, receive_federation, send_federation, signed_federation_storage_capability_request,
+    signed_federation_storage_receipt,
 };
 
 use crate::federation_session::{envelope_relationship, load_authority};
@@ -55,6 +60,29 @@ pub struct FederationShardServeRequest {
     pub relationship_id: FederationRelationshipId,
     /// Current quorum-derived mesh time.
     pub now: UnixMicros,
+    /// Fresh nonce for the provider-signed lifecycle receipt.
+    pub receipt_replay_nonce: [u8; 32],
+}
+
+/// Consumer-side inputs for authenticating one provider lifecycle receipt.
+pub struct FederationStorageReceiptReceiveRequest<'a> {
+    /// Relationship through which the capability and operation were admitted.
+    pub relationship_id: FederationRelationshipId,
+    /// Exact authenticated signed capability whose result is expected.
+    pub capability: &'a AuthenticatedFederationStorageCapability,
+    /// Current quorum-derived mesh time.
+    pub now: UnixMicros,
+}
+
+/// Non-secret provider outcome after both data durability and receipt transmission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServedFederatedShard {
+    /// Exact lifecycle action completed.
+    pub action: FederationStorageAction,
+    /// Bytes transferred or durably affected.
+    pub affected_bytes: u64,
+    /// Exact signed capability presentation correlated by the receipt.
+    pub capability_digest: [u8; 32],
 }
 
 /// Mutable provider resources required to issue one capacity-safe capability.
@@ -213,13 +241,14 @@ impl FederationSessionRuntime<'_> {
         service: &mut RemoteShardService<Provider>,
         permit_key: &FederatedStoragePermitMacKey,
         request: FederationShardServeRequest,
-    ) -> Result<(), FederationSessionError> {
+    ) -> Result<Option<ServedFederatedShard>, FederationSessionError> {
         let current = load_authority(repository, request.relationship_id, request.now)?;
+        let local_identity = self.local_identity(&current, request.now)?;
         let peers = meshspan_transport::FederationPeerRegistry::new([current.peer])?;
         let peer = peers.authenticate_connection(connection, request.now)?;
         let stream = accept_stream(connection).await?;
         let mut authority = MetadataFederatedShardAuthority::new(repository, local_database);
-        service
+        let outcome = service
             .serve_federated_stream(
                 stream,
                 peer,
@@ -229,6 +258,118 @@ impl FederationSessionRuntime<'_> {
                 request.now,
             )
             .await
+            .map_err(FederationSessionError::from)?;
+        let Some(outcome) = outcome else {
+            return Ok(None);
+        };
+        let presentation = local_database
+            .federated_storage_capability(outcome.capability_digest())?
+            .ok_or(FederationSessionError::AuthorityUnavailable)?;
+        let receipt_context = receipt_context(&presentation, request.receipt_replay_nonce)?;
+        let permit = outcome.permit();
+        let signed = signed_federation_storage_receipt(
+            &local_identity,
+            receipt_context,
+            FederatedStorageReceipt {
+                grant_id: permit.grant_id.as_bytes().to_vec(),
+                target_id: permit.target_id.as_bytes().to_vec(),
+                target_generation: permit.target_generation,
+                shard: Some(wire_shard(permit.shard)),
+                action: wire_action(permit.action).into(),
+                affected_bytes: outcome.affected_bytes(),
+                completed_at_unix_micros: outcome.completed_at().get(),
+                capability_digest: outcome.capability_digest().to_vec(),
+                result_digest: outcome.result_digest().to_vec(),
+                signature: Vec::new(),
+                allocation_id: permit.allocation_id.as_bytes().to_vec(),
+            },
+            self.negotiation_config.wire_limits(),
+            request.now,
+        )?;
+        let (mut send, _receive) = open_stream(connection, StreamKind::Federation).await?;
+        send_federation(
+            &mut send,
+            signed.envelope(),
+            self.negotiation_config.wire_limits(),
+        )
+        .await?;
+        send.finish().map_err(TransportError::from)?;
+        Ok(Some(ServedFederatedShard {
+            action: permit.action,
+            affected_bytes: outcome.affected_bytes(),
+            capability_digest: outcome.capability_digest(),
+        }))
+    }
+
+    /// Accepts and authenticates one provider-signed lifecycle receipt against its capability.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale relationship authority, wrong stream class, correlation, signature, result,
+    /// time or replay substitution.
+    pub async fn receive_storage_receipt(
+        &self,
+        connection: &quinn::Connection,
+        authority: &impl FederationAuthoritySource,
+        request: FederationStorageReceiptReceiveRequest<'_>,
+        replay: &mut FederationReplayGuard,
+    ) -> Result<AuthenticatedFederationStorageReceipt, FederationSessionError> {
+        let current = load_authority(authority, request.relationship_id, request.now)?;
+        let peers = meshspan_transport::FederationPeerRegistry::new([current.peer])?;
+        let mut stream = accept_stream(connection).await?;
+        if stream.kind != StreamKind::Federation {
+            return Err(FederationSessionError::WrongStream);
+        }
+        let envelope =
+            receive_federation(&mut stream.receive, self.negotiation_config.wire_limits()).await?;
+        peers
+            .authenticate_storage_receipt(
+                connection,
+                &envelope,
+                request.capability.receipt_expectation(),
+                request.now,
+                replay,
+            )
             .map_err(Into::into)
+    }
+}
+
+fn receipt_context(
+    presentation: &FederationStorageCapabilityPresentation,
+    replay_nonce: [u8; 32],
+) -> Result<FederationExchangeContext, FederationSessionError> {
+    if replay_nonce == presentation.response_replay_nonce {
+        return Err(FederationSessionError::InvalidEnvelope);
+    }
+    Ok(FederationExchangeContext::new(
+        ProtocolVersion {
+            major: presentation.protocol_major,
+            minor: presentation.protocol_minor,
+        },
+        presentation.request_id,
+        presentation.permit.operation_id.as_bytes(),
+        presentation.trace_id,
+        presentation.request_deadline,
+        replay_nonce,
+    )?)
+}
+
+const fn wire_action(action: FederationStorageAction) -> RemoteShardAction {
+    match action {
+        FederationStorageAction::Put => RemoteShardAction::Put,
+        FederationStorageAction::Get => RemoteShardAction::Get,
+        FederationStorageAction::Scrub => RemoteShardAction::Scrub,
+        FederationStorageAction::Repair => RemoteShardAction::Repair,
+        FederationStorageAction::Retire => RemoteShardAction::Retire,
+        FederationStorageAction::Reclaim => RemoteShardAction::Reclaim,
+    }
+}
+
+fn wire_shard(shard: meshspan_contracts::ShardIdentity) -> ShardIdentity {
+    ShardIdentity {
+        manifest_digest: shard.manifest_digest.to_vec(),
+        stripe_index: shard.stripe_index,
+        shard_index: u32::from(shard.shard_index),
+        generation: shard.generation,
     }
 }

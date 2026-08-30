@@ -313,7 +313,9 @@ fn storage_capability(
         value.action,
         value.maximum_bytes,
     )?;
-    if value.valid_until_unix_micros <= 0 {
+    if value.issued_at_unix_micros <= 0
+        || value.valid_until_unix_micros <= value.issued_at_unix_micros
+    {
         return Err(WireContractError::InvalidMessage);
     }
     valid_nonce(&value.capability_nonce)?;

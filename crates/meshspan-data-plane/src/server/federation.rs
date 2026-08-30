@@ -4,8 +4,8 @@
 
 use meshspan_contracts::{
     ContractError, FederatedShardPermit, FederatedStoragePermitMacKey, ReservationClass,
-    ShardReadPermit, ShardReceipt, StorageProvider, read_permit_mac,
-    verify_federated_shard_permit_mac,
+    ShardReadPermit, ShardReceipt, StorageProvider, federated_shard_read_result_digest,
+    read_permit_mac, verify_federated_shard_permit_mac,
 };
 use meshspan_domain::{FederationStorageAction, UnixMicros};
 use meshspan_protocol::WireLimits;
@@ -20,6 +20,73 @@ use crate::DataPlaneError;
 use crate::capability::decode_federated_shard_permit;
 use crate::wire::{request_context, shard};
 
+/// Exact durable result which must receive a provider-swarm signature before acknowledgement.
+#[derive(Clone, Copy)]
+pub struct FederatedShardOutcome {
+    permit: FederatedShardPermit,
+    capability_digest: [u8; 32],
+    affected_bytes: u64,
+    result_digest: [u8; 32],
+    completed_at: UnixMicros,
+}
+
+/// Exact durable write evidence retained by provider-local accounting across retries.
+#[derive(Clone, Copy)]
+pub struct FederatedWriteEvidence {
+    completed_at: UnixMicros,
+    result_digest: [u8; 32],
+}
+
+impl FederatedWriteEvidence {
+    /// Constructs validated durable evidence loaded from the provider operation ledger.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-positive completion instant or empty result digest.
+    pub fn new(completed_at: UnixMicros, result_digest: [u8; 32]) -> Result<Self, ContractError> {
+        if completed_at.get() <= 0 || result_digest == [0; 32] {
+            Err(ContractError::Corrupt)
+        } else {
+            Ok(Self {
+                completed_at,
+                result_digest,
+            })
+        }
+    }
+}
+
+impl FederatedShardOutcome {
+    /// Returns the exact provider permit whose authority was revalidated before IO.
+    #[must_use]
+    pub const fn permit(&self) -> &FederatedShardPermit {
+        &self.permit
+    }
+
+    /// Returns the exact signed capability presentation used by the requester.
+    #[must_use]
+    pub const fn capability_digest(&self) -> [u8; 32] {
+        self.capability_digest
+    }
+
+    /// Returns bytes transferred or durably affected by the operation.
+    #[must_use]
+    pub const fn affected_bytes(&self) -> u64 {
+        self.affected_bytes
+    }
+
+    /// Returns canonical result evidence bound to the permit and durable result.
+    #[must_use]
+    pub const fn result_digest(&self) -> [u8; 32] {
+        self.result_digest
+    }
+
+    /// Returns the provider completion instant.
+    #[must_use]
+    pub const fn completed_at(&self) -> UnixMicros {
+        self.completed_at
+    }
+}
+
 /// Current-authority and durable-accounting boundary around federated provider IO.
 pub trait FederatedShardAuthority {
     /// Revalidates the exact relationship, grant, allocation, target and reservation before IO.
@@ -30,6 +97,7 @@ pub trait FederatedShardAuthority {
     fn authorise(
         &self,
         permit: &FederatedShardPermit,
+        capability_digest: [u8; 32],
         observed_at: UnixMicros,
     ) -> Result<(), ContractError>;
 
@@ -43,7 +111,7 @@ pub trait FederatedShardAuthority {
         permit: &FederatedShardPermit,
         receipt: ShardReceipt,
         completed_at: UnixMicros,
-    ) -> Result<(), ContractError>;
+    ) -> Result<FederatedWriteEvidence, ContractError>;
 }
 
 impl<Provider: StorageProvider> RemoteShardService<Provider> {
@@ -61,7 +129,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         authority: &mut Authority,
         limits: WireLimits,
         observed_at: UnixMicros,
-    ) -> Result<(), DataPlaneError> {
+    ) -> Result<Option<FederatedShardOutcome>, DataPlaneError> {
         if stream.kind != StreamKind::Data {
             return Err(DataPlaneError::InvalidMessage);
         }
@@ -106,7 +174,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         stream: &mut AcceptedStream,
         context: FederatedServeContext<'_, Authority>,
         begin: PutShardBegin,
-    ) -> Result<(), DataPlaneError> {
+    ) -> Result<Option<FederatedShardOutcome>, DataPlaneError> {
         let permit = match self.authorise_federated_put(
             context.peer,
             context.permit_key,
@@ -115,8 +183,12 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             &begin,
         ) {
             Ok(permit) => permit,
-            Err(error) => return reject_put(stream, context.limits, error).await,
+            Err(error) => {
+                reject_put(stream, context.limits, error).await?;
+                return Ok(None);
+            }
         };
+        let capability_digest = digest(&begin.federation_capability_digest)?;
         let provider_context = request_context(
             begin
                 .header
@@ -127,27 +199,45 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         let reservation_class = match permit.action {
             FederationStorageAction::Put => ReservationClass::ForegroundWrite,
             FederationStorageAction::Repair => ReservationClass::Repair,
-            _ => return reject_put(stream, context.limits, ContractError::Unauthorized).await,
+            _ => {
+                reject_put(stream, context.limits, ContractError::Unauthorized).await?;
+                return Ok(None);
+            }
         };
         let prepared = PreparedPut {
             context: provider_context,
             shard: permit.shard,
             reservation_class,
         };
-        self.serve_prepared_put(
-            stream,
-            context.limits,
-            context.observed_at,
-            begin,
-            prepared,
-            |receipt| {
-                context
-                    .authority
-                    .commit_write(&permit, receipt, context.observed_at)?;
-                Ok(receipt)
-            },
-        )
-        .await
+        let mut write_evidence = None;
+        let receipt = self
+            .serve_prepared_put(
+                stream,
+                context.limits,
+                context.observed_at,
+                begin,
+                prepared,
+                |receipt| {
+                    write_evidence = Some(context.authority.commit_write(
+                        &permit,
+                        receipt,
+                        context.observed_at,
+                    )?);
+                    Ok(receipt)
+                },
+            )
+            .await?;
+        match (receipt, write_evidence) {
+            (Some(receipt), Some(evidence)) => Ok(Some(FederatedShardOutcome {
+                permit,
+                capability_digest,
+                affected_bytes: receipt.length,
+                result_digest: evidence.result_digest,
+                completed_at: evidence.completed_at,
+            })),
+            (None, None) => Ok(None),
+            _ => Err(DataPlaneError::InvalidMessage),
+        }
     }
 
     async fn serve_federated_get<Authority: FederatedShardAuthority>(
@@ -155,7 +245,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         stream: &mut AcceptedStream,
         context: FederatedServeContext<'_, Authority>,
         request: GetShardRequest,
-    ) -> Result<(), DataPlaneError> {
+    ) -> Result<Option<FederatedShardOutcome>, DataPlaneError> {
         let permit = match self.authorise_federated_get(
             context.peer,
             context.permit_key,
@@ -164,8 +254,12 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             &request,
         ) {
             Ok(permit) => permit,
-            Err(error) => return reject_get(stream, context.limits, error).await,
+            Err(error) => {
+                reject_get(stream, context.limits, error).await?;
+                return Ok(None);
+            }
         };
+        let capability_digest = digest(&request.federation_capability_digest)?;
         let header = request
             .header
             .as_ref()
@@ -187,15 +281,28 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             .map_or(self.maximum_shard_bytes, |maximum| {
                 maximum.min(self.maximum_shard_bytes)
             });
-        self.serve_authorised_get(
-            stream,
-            context.limits,
-            context.observed_at,
-            provider_context,
-            read_permit,
-            maximum_bytes,
-        )
-        .await
+        let evidence = self
+            .serve_authorised_get(
+                stream,
+                context.limits,
+                context.observed_at,
+                provider_context,
+                read_permit,
+                maximum_bytes,
+            )
+            .await?;
+        Ok(evidence.map(|evidence| FederatedShardOutcome {
+            permit,
+            capability_digest,
+            affected_bytes: evidence.affected_bytes,
+            result_digest: federated_shard_read_result_digest(
+                &permit,
+                evidence.affected_bytes,
+                evidence.content_digest,
+                context.observed_at,
+            ),
+            completed_at: context.observed_at,
+        }))
     }
 
     fn authorise_federated_put<Authority: FederatedShardAuthority>(
@@ -214,13 +321,21 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             .as_ref()
             .ok_or(ContractError::InvalidInput)
             .and_then(|value| shard(value).map_err(|_| ContractError::InvalidInput))?;
+        let capability_digest = digest(&begin.federation_capability_digest)?;
         let context = request_context(header, permit.allocation_revision)
             .map_err(|_| ContractError::InvalidInput)?;
         let valid = matches!(
             permit.action,
             FederationStorageAction::Put | FederationStorageAction::Repair
-        ) && common_authority(self, peer, permit_key, authority, observed_at, &permit)
-            && context.operation_id == permit.operation_id
+        ) && common_authority(
+            self,
+            peer,
+            permit_key,
+            authority,
+            observed_at,
+            &permit,
+            capability_digest,
+        ) && context.operation_id == permit.operation_id
             && context.deadline > observed_at
             && context.deadline <= permit.expires_at
             && header.mesh_id.as_slice() == permit.remote_mesh_id.as_bytes()
@@ -253,10 +368,19 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             .as_ref()
             .ok_or(ContractError::InvalidInput)
             .and_then(|value| shard(value).map_err(|_| ContractError::InvalidInput))?;
+        let capability_digest = digest(&request.federation_capability_digest)?;
         let context = request_context(header, permit.allocation_revision)
             .map_err(|_| ContractError::InvalidInput)?;
         let valid = permit.action == FederationStorageAction::Get
-            && common_authority(self, peer, permit_key, authority, observed_at, &permit)
+            && common_authority(
+                self,
+                peer,
+                permit_key,
+                authority,
+                observed_at,
+                &permit,
+                capability_digest,
+            )
             && context.operation_id == permit.operation_id
             && context.deadline > observed_at
             && context.deadline <= permit.expires_at
@@ -287,6 +411,7 @@ fn common_authority<Provider: StorageProvider, Authority: FederatedShardAuthorit
     authority: &Authority,
     observed_at: UnixMicros,
     permit: &FederatedShardPermit,
+    capability_digest: [u8; 32],
 ) -> bool {
     verify_federated_shard_permit_mac(permit_key, permit)
         && permit.relationship_id == peer.relationship_id()
@@ -298,5 +423,16 @@ fn common_authority<Provider: StorageProvider, Authority: FederatedShardAuthorit
         && permit.target_id == service.target_id
         && permit.target_generation == service.target_generation
         && permit.expires_at > observed_at
-        && authority.authorise(permit, observed_at).is_ok()
+        && authority
+            .authorise(permit, capability_digest, observed_at)
+            .is_ok()
+}
+
+fn digest(value: &[u8]) -> Result<[u8; 32], ContractError> {
+    let digest = value.try_into().map_err(|_| ContractError::Unauthorized)?;
+    if digest == [0; 32] {
+        Err(ContractError::Unauthorized)
+    } else {
+        Ok(digest)
+    }
 }

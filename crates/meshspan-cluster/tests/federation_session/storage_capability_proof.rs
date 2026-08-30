@@ -8,6 +8,7 @@ use std::fs;
 use meshspan_cluster::{
     FederationShardServeRequest, FederationStorageCapabilityProvider,
     FederationStorageCapabilityRequest, FederationStorageCapabilityServeRequest,
+    FederationStorageReceiptReceiveRequest,
 };
 use meshspan_contracts::{
     BoundedBytes, FederatedShardPermit, FederatedStoragePermitMacKey, ShardReceipt,
@@ -31,7 +32,9 @@ use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
     UsageLimit,
 };
-use meshspan_transport::{FederationExchangeContext, FederationReplayGuard};
+use meshspan_transport::{
+    AuthenticatedFederationStorageCapability, FederationExchangeContext, FederationReplayGuard,
+};
 
 use super::{NOW, SessionProof, replay_guard};
 
@@ -72,18 +75,18 @@ pub(super) async fn prove_storage_capability_exchange(
 
     let payload = BoundedBytes::copy_from(PAYLOAD, 20)?;
     let mut service = shard_service(directory.path(), proof, allocation, provider_node_id)?;
-    reject_deadline_beyond_permit(proof, &issued.permit, &payload).await?;
+    reject_deadline_beyond_permit(proof, &issued.presented, &payload).await?;
     let receipt = put_cycle(
         proof,
         &mut local,
         &mut service,
         &permit_key,
-        &issued.permit,
+        &issued.presented,
         &payload,
         NOW,
     )
     .await?;
-    assert_eq!(receipt.length, PAYLOAD.len() as u64);
+    assert_eq!(receipt.shard_receipt.length, PAYLOAD.len() as u64);
     assert_usage(&local, allocation, PAYLOAD.len() as u64, 0)?;
 
     drop(local);
@@ -108,55 +111,79 @@ pub(super) async fn prove_storage_capability_exchange(
         issued.canonical_capability
     );
     let retry_permit = decode_federated_shard_permit(&retry.capability().canonical_capability)?;
-    assert_eq!(
-        put_cycle(
-            proof,
-            &mut local,
-            &mut service,
-            &permit_key,
-            &retry_permit,
-            &payload,
-            retry_now,
-        )
-        .await?,
-        receipt
-    );
+    let retry_presented = PresentedPermit {
+        permit: retry_permit,
+        capability: retry,
+    };
+    let retried = put_cycle(
+        proof,
+        &mut local,
+        &mut service,
+        &permit_key,
+        &retry_presented,
+        &payload,
+        retry_now,
+    )
+    .await?;
+    assert_eq!(retried.shard_receipt, receipt.shard_receipt);
+    assert_eq!(retried.result_digest, receipt.result_digest);
+    assert_eq!(retried.completed_at, receipt.completed_at);
     assert_usage(&local, allocation, PAYLOAD.len() as u64, 0)?;
 
+    prove_federated_read(
+        proof,
+        &mut local,
+        &mut service,
+        &permit_key,
+        allocation,
+        &mut client_replay,
+        &mut server_replay,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn prove_federated_read(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    service: &mut RemoteShardService<FolderShardStore>,
+    permit_key: &FederatedStoragePermitMacKey,
+    allocation: FederationStorageAllocation,
+    client_replay: &mut FederationReplayGuard,
+    server_replay: &mut FederationReplayGuard,
+) -> Result<(), Box<dyn Error>> {
     let read_now = UnixMicros::new(NOW.get() + 2);
     let (read_capability, read_served) = exchange(
         proof,
-        &mut local,
-        &permit_key,
+        local,
+        permit_key,
         request(allocation, FederationStorageAction::Get),
         exchange_values(231, 213, read_now, UnixMicros::new(1_850_000))?,
-        &mut client_replay,
-        &mut server_replay,
+        client_replay,
+        server_replay,
     )
     .await?;
     assert_eq!(read_served.action, FederationStorageAction::Get);
     assert_eq!(read_served.quota_disposition, None);
     let read_permit =
         decode_federated_shard_permit(&read_capability.capability().canonical_capability)?;
-    let downloaded = get_cycle(
-        proof,
-        &mut local,
-        &mut service,
-        &permit_key,
-        &read_permit,
-        read_now,
-    )
-    .await?;
-    assert_eq!(downloaded, payload);
-    assert_usage(&local, allocation, PAYLOAD.len() as u64, 0)?;
+    let read_presented = PresentedPermit {
+        permit: read_permit,
+        capability: read_capability,
+    };
+    let downloaded =
+        get_cycle(proof, local, service, permit_key, &read_presented, read_now).await?;
+    assert_eq!(downloaded.as_slice(), PAYLOAD);
+    assert_usage(local, allocation, PAYLOAD.len() as u64, 0)?;
     Ok(())
 }
 
 async fn reject_deadline_beyond_permit(
     proof: &SessionProof<'_>,
-    permit: &FederatedShardPermit,
+    presented: &PresentedPermit,
     payload: &BoundedBytes,
 ) -> Result<(), Box<dyn Error>> {
+    let permit = &presented.permit;
     let mut header = request_header(proof.client_mesh, permit.operation_id, permit.expires_at)?;
     header.deadline_unix_micros = permit.expires_at.get() + 1;
     assert!(matches!(
@@ -164,6 +191,7 @@ async fn reject_deadline_beyond_permit(
             proof.client_connection,
             header,
             *permit,
+            presented.capability.capability_digest(),
             payload,
             wire_limits()?
         )
@@ -175,7 +203,12 @@ async fn reject_deadline_beyond_permit(
 
 struct IssuedWriteCapability {
     canonical_capability: Vec<u8>,
+    presented: PresentedPermit,
+}
+
+struct PresentedPermit {
     permit: FederatedShardPermit,
+    capability: AuthenticatedFederationStorageCapability,
 }
 
 async fn issue_write_capability(
@@ -211,7 +244,7 @@ async fn issue_write_capability(
     assert_eq!(permit.provider_node_id, provider_node_id);
     Ok(IssuedWriteCapability {
         canonical_capability,
-        permit,
+        presented: PresentedPermit { permit, capability },
     })
 }
 
@@ -268,15 +301,17 @@ async fn put_cycle(
     local: &mut LocalDatabase,
     service: &mut RemoteShardService<FolderShardStore>,
     permit_key: &FederatedStoragePermitMacKey,
-    permit: &FederatedShardPermit,
+    presented: &PresentedPermit,
     payload: &BoundedBytes,
     now: UnixMicros,
-) -> Result<ShardReceipt, Box<dyn Error>> {
+) -> Result<SignedPutResult, Box<dyn Error>> {
     let limits = wire_limits()?;
+    let permit = &presented.permit;
     let put = put_federated_shard(
         proof.client_connection,
         request_header(proof.client_mesh, permit.operation_id, permit.expires_at)?,
         *permit,
+        presented.capability.capability_digest(),
         payload,
         limits,
     );
@@ -289,11 +324,36 @@ async fn put_cycle(
         FederationShardServeRequest {
             relationship_id: proof.relationship_id,
             now,
+            receipt_replay_nonce: receipt_nonce(now),
         },
     );
     let (put_result, serve_result) = tokio::join!(put, serve);
-    serve_result?;
-    Ok(put_result?)
+    let served = serve_result?.ok_or("provider did not produce a durable federation result")?;
+    assert_eq!(served.action, permit.action);
+    assert_eq!(served.affected_bytes, PAYLOAD.len() as u64);
+    let mut receipt_replay = replay_guard()?;
+    let signed = proof
+        .client_runtime
+        .receive_storage_receipt(
+            proof.client_connection,
+            proof.client_authority,
+            FederationStorageReceiptReceiveRequest {
+                relationship_id: proof.relationship_id,
+                capability: &presented.capability,
+                now,
+            },
+            &mut receipt_replay,
+        )
+        .await?;
+    let receipt = signed.receipt();
+    assert_eq!(receipt.affected_bytes, served.affected_bytes);
+    assert_eq!(receipt.capability_digest, served.capability_digest);
+    let result_digest: [u8; 32] = receipt.result_digest.as_slice().try_into()?;
+    Ok(SignedPutResult {
+        shard_receipt: put_result?,
+        result_digest,
+        completed_at: UnixMicros::new(receipt.completed_at_unix_micros),
+    })
 }
 
 async fn get_cycle(
@@ -301,14 +361,16 @@ async fn get_cycle(
     local: &mut LocalDatabase,
     service: &mut RemoteShardService<FolderShardStore>,
     permit_key: &FederatedStoragePermitMacKey,
-    permit: &FederatedShardPermit,
+    presented: &PresentedPermit,
     now: UnixMicros,
 ) -> Result<BoundedBytes, Box<dyn Error>> {
     let limits = wire_limits()?;
+    let permit = &presented.permit;
     let get = get_federated_shard(
         proof.client_connection,
         request_header(proof.client_mesh, permit.operation_id, permit.expires_at)?,
         *permit,
+        presented.capability.capability_digest(),
         1_024,
         limits,
     );
@@ -321,11 +383,40 @@ async fn get_cycle(
         FederationShardServeRequest {
             relationship_id: proof.relationship_id,
             now,
+            receipt_replay_nonce: receipt_nonce(now),
         },
     );
     let (get_result, serve_result) = tokio::join!(get, serve);
-    serve_result?;
+    let served = serve_result?.ok_or("provider did not produce a verified federation result")?;
+    let mut receipt_replay = replay_guard()?;
+    let signed = proof
+        .client_runtime
+        .receive_storage_receipt(
+            proof.client_connection,
+            proof.client_authority,
+            FederationStorageReceiptReceiveRequest {
+                relationship_id: proof.relationship_id,
+                capability: &presented.capability,
+                now,
+            },
+            &mut receipt_replay,
+        )
+        .await?;
+    assert_eq!(signed.receipt().affected_bytes, served.affected_bytes);
+    assert_eq!(signed.receipt().capability_digest, served.capability_digest);
     Ok(get_result?)
+}
+
+struct SignedPutResult {
+    shard_receipt: ShardReceipt,
+    result_digest: [u8; 32],
+    completed_at: UnixMicros,
+}
+
+fn receipt_nonce(now: UnixMicros) -> [u8; 32] {
+    let mut nonce = [244; 32];
+    nonce[..8].copy_from_slice(&now.get().to_be_bytes());
+    nonce
 }
 
 async fn exchange(
