@@ -78,6 +78,13 @@ fn rotation_is_atomic_restart_safe_and_exactly_replayable() -> Result<(), Box<dy
     assert_eq!(active.claim_id, replacement.claim_id);
     assert_eq!(active.state, LocalClaimState::Active);
     assert_eq!(active.revision, Revision::new(2));
+    let prior = reopened
+        .local_claim_record(first.claim_id)?
+        .ok_or("rotated claim history is missing")?;
+    assert_eq!(prior.state, LocalClaimState::Rotated);
+    assert_eq!(prior.rotated_at, Some(UnixMicros::new(25)));
+    assert_eq!(prior.revision, Revision::new(2));
+    assert_eq!(reopened.latest_local_claim()?, Some(active));
     assert_eq!(
         reopened.rotate_local_claim(first.claim_id, replacement, UnixMicros::new(25))?,
         LocalClaimMutationDisposition::Replayed
@@ -112,6 +119,13 @@ fn consumption_rejects_substitution_and_survives_lost_response()
         LocalClaimMutationDisposition::Applied
     );
     assert!(database.active_local_claim()?.is_none());
+    let consumed = database
+        .local_claim_record(first.claim_id)?
+        .ok_or("consumed claim history is missing")?;
+    assert_eq!(consumed.state, LocalClaimState::Consumed);
+    assert_eq!(consumed.consumed_at, Some(UnixMicros::new(30)));
+    assert_eq!(consumed.revision, Revision::new(2));
+    assert_eq!(database.latest_local_claim()?, Some(consumed));
     drop(database);
 
     let mut reopened = LocalDatabase::open(&file_path, node, UnixMicros::new(40))?;
