@@ -3,8 +3,9 @@
 //! Replicated disjoint allocation of bilateral federation storage quota.
 
 use meshspan_domain::{
-    FederationGrantId, FederationPolicy, FederationResourceScope, FederationStorageAllocation,
-    FederationStorageAllocationId, NodeId, Revision, TargetId, UnixMicros,
+    FederationGrantId, FederationPolicy, FederationRelationshipId, FederationResourceScope,
+    FederationStorageAllocation, FederationStorageAllocationId, MeshId, NodeId, Revision,
+    StorageParticipation, TargetId, UnixMicros,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -13,7 +14,7 @@ use super::{
     EntityKind, EntityReference, FederationGrantState, RepositoryError, federation_grant_evidence,
 };
 use crate::{
-    AuthoritativeCommand, CommandContext, IssueFederationStorageAllocation,
+    AuthoritativeCommand, CommandContext, IssueFederationStorageAllocation, PartitionDatabase,
     RevokeFederationStorageAllocation,
 };
 
@@ -46,6 +47,99 @@ pub struct FederationStorageAllocationRecord {
     pub revocation_reason: Option<String>,
     /// Latest authoritative record revision.
     pub revision: Revision,
+}
+
+/// Exact caller and resource dimensions that must agree before quota can be spent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FederationStorageAuthorityRequest {
+    /// mTLS-authenticated bilateral relationship.
+    pub relationship_id: FederationRelationshipId,
+    /// mTLS-authenticated requesting swarm.
+    pub remote_mesh_id: MeshId,
+    /// This daemon's authoritative node identity.
+    pub provider_node_id: NodeId,
+    /// Allocation named by the signed request.
+    pub allocation_id: FederationStorageAllocationId,
+    /// Grant named by the signed request.
+    pub grant_id: FederationGrantId,
+    /// Exact local target named by the signed request.
+    pub target_id: TargetId,
+    /// Exact local target incarnation.
+    pub target_generation: u64,
+    /// Positive byte ceiling requested for this capability.
+    pub requested_bytes: u64,
+    /// Current quorum-derived mesh time.
+    pub observed_at: UnixMicros,
+}
+
+/// Complete current authority from which one node-local quota reservation may be derived.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FederationStorageAllocationAuthority {
+    allocation: FederationStorageAllocation,
+    relationship_id: FederationRelationshipId,
+    remote_mesh_id: MeshId,
+    relationship_authority_epoch: u64,
+    participation: StorageParticipation,
+    grant_revision: Revision,
+    allocation_revision: Revision,
+    requested_bytes: u64,
+    observed_at: UnixMicros,
+}
+
+impl FederationStorageAllocationAuthority {
+    /// Returns the exact immutable allocation.
+    #[must_use]
+    pub const fn allocation(self) -> FederationStorageAllocation {
+        self.allocation
+    }
+
+    /// Returns the exact relationship carrying the authority.
+    #[must_use]
+    pub const fn relationship_id(self) -> FederationRelationshipId {
+        self.relationship_id
+    }
+
+    /// Returns the authenticated consumer swarm.
+    #[must_use]
+    pub const fn remote_mesh_id(self) -> MeshId {
+        self.remote_mesh_id
+    }
+
+    /// Returns the relationship epoch which fences earlier capabilities.
+    #[must_use]
+    pub const fn relationship_authority_epoch(self) -> u64 {
+        self.relationship_authority_epoch
+    }
+
+    /// Returns the bilateral storage participation restrictions.
+    #[must_use]
+    pub const fn participation(self) -> StorageParticipation {
+        self.participation
+    }
+
+    /// Returns the exact current grant revision.
+    #[must_use]
+    pub const fn grant_revision(self) -> Revision {
+        self.grant_revision
+    }
+
+    /// Returns the exact current allocation revision.
+    #[must_use]
+    pub const fn allocation_revision(self) -> Revision {
+        self.allocation_revision
+    }
+
+    /// Returns the positive byte ceiling requested for this operation.
+    #[must_use]
+    pub const fn requested_bytes(self) -> u64 {
+        self.requested_bytes
+    }
+
+    /// Returns the quorum-derived instant at which every authority fence was checked.
+    #[must_use]
+    pub const fn observed_at(self) -> UnixMicros {
+        self.observed_at
+    }
 }
 
 pub(super) fn is_command(command: &AuthoritativeCommand) -> bool {
@@ -105,6 +199,69 @@ pub(super) fn load(
     row.map(|row| decode_record(allocation_id, row)).transpose()
 }
 
+pub(super) fn active_authority(
+    database: &PartitionDatabase,
+    request: FederationStorageAuthorityRequest,
+) -> Result<Option<FederationStorageAllocationAuthority>, RepositoryError> {
+    let Some(allocation_record) = load(database.connection(), request.allocation_id)? else {
+        return Ok(None);
+    };
+    let Some(grant_record) = federation_grant_evidence::active_grant(database, request.grant_id)?
+    else {
+        return Ok(None);
+    };
+    let Some(relationship) =
+        super::federation_query::relationship(database, request.relationship_id)?
+    else {
+        return Ok(None);
+    };
+    let FederationPolicy::Storage(policy) = grant_record.grant.policy() else {
+        return Err(RepositoryError::CorruptState);
+    };
+    let FederationResourceScope::StorageCapacity { provider_mesh_id } =
+        grant_record.grant.resource()
+    else {
+        return Err(RepositoryError::CorruptState);
+    };
+    let allocation = allocation_record.allocation;
+    let grant = grant_record.grant;
+    let current = allocation_record.state == FederationStorageAllocationState::Active
+        && relationship.state == super::FederationRelationshipState::Active
+        && relationship.relationship_id == request.relationship_id
+        && relationship.remote_mesh_id == request.remote_mesh_id
+        && grant.relationship_id() == request.relationship_id
+        && grant.subject().home_mesh_id() == request.remote_mesh_id
+        && grant.authority_epoch() == relationship.authority_epoch
+        && provider_mesh_id == relationship.local_mesh_id
+        && allocation.allocation_id() == request.allocation_id
+        && allocation.grant_id() == request.grant_id
+        && allocation.provider_node_id() == request.provider_node_id
+        && allocation.target_id() == request.target_id
+        && allocation.target_generation() == request.target_generation
+        && request.requested_bytes > 0
+        && request.requested_bytes <= allocation.maximum_bytes()
+        && allocation.is_valid_at(request.observed_at)
+        && request.observed_at >= grant.valid_from()
+        && grant
+            .valid_until()
+            .is_none_or(|valid_until| request.observed_at < valid_until)
+        && provider_node_is_eligible(database.connection(), request.provider_node_id)?;
+    if !current {
+        return Ok(None);
+    }
+    Ok(Some(FederationStorageAllocationAuthority {
+        allocation,
+        relationship_id: relationship.relationship_id,
+        remote_mesh_id: relationship.remote_mesh_id,
+        relationship_authority_epoch: relationship.authority_epoch,
+        participation: policy.participation(),
+        grant_revision: grant_record.revision,
+        allocation_revision: allocation_record.revision,
+        requested_bytes: request.requested_bytes,
+        observed_at: request.observed_at,
+    }))
+}
+
 fn issue(
     transaction: &Transaction<'_>,
     context: CommandContext,
@@ -112,8 +269,9 @@ fn issue(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     let allocation = command.allocation;
-    let grant = federation_grant_evidence::load_verified(transaction, allocation.grant_id())?
-        .ok_or(RepositoryError::InvalidCommand)?;
+    let grant =
+        federation_grant_evidence::load_active_verified(transaction, allocation.grant_id())?
+            .ok_or(RepositoryError::InvalidCommand)?;
     let policy = validate_grant_and_target(transaction, allocation, command, &grant)?;
     prove_disjoint_capacity(transaction, allocation, policy.maximum_storage_bytes())?;
     transaction.execute(
@@ -193,80 +351,39 @@ fn prove_disjoint_capacity(
     grant_limit: u64,
 ) -> Result<(), RepositoryError> {
     let mut statement = transaction.prepare(
-        "SELECT maximum_bytes, valid_from, valid_until
+        "SELECT maximum_bytes
          FROM federation_storage_allocations
-         WHERE grant_id = ?1 AND state = 1
-           AND valid_from < ?2 AND valid_until > ?3
-         ORDER BY valid_from, valid_until, allocation_id
-         LIMIT ?4",
+         WHERE grant_id = ?1
+         ORDER BY allocation_id
+         LIMIT ?2",
     )?;
     let rows = statement.query_map(
         params![
             allocation.grant_id().as_bytes().as_slice(),
-            allocation.valid_until().get(),
-            allocation.valid_from().get(),
             i64::try_from(MAXIMUM_ALLOCATIONS_PER_GRANT + 1)
                 .map_err(|_| RepositoryError::CapacityExceeded)?,
         ],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        },
+        |row| row.get::<_, i64>(0),
     )?;
-    let mut intervals = Vec::new();
+    let mut allocated = 0_u128;
+    let mut count = 0_usize;
     for row in rows {
-        let row = row?;
-        intervals.push((
-            positive(row.0)?,
-            UnixMicros::new(row.1),
-            UnixMicros::new(row.2),
-        ));
+        allocated = allocated
+            .checked_add(u128::from(positive(row?)?))
+            .ok_or(RepositoryError::CapacityExceeded)?;
+        count = count.saturating_add(1);
     }
-    if intervals.len() > MAXIMUM_ALLOCATIONS_PER_GRANT {
+    if count > MAXIMUM_ALLOCATIONS_PER_GRANT {
         return Err(RepositoryError::CapacityExceeded);
     }
-    intervals.push((
-        allocation.maximum_bytes(),
-        allocation.valid_from(),
-        allocation.valid_until(),
-    ));
-    if maximum_concurrent_bytes(&intervals)? <= u128::from(grant_limit) {
+    let resulting = allocated
+        .checked_add(u128::from(allocation.maximum_bytes()))
+        .ok_or(RepositoryError::CapacityExceeded)?;
+    if resulting <= u128::from(grant_limit) {
         Ok(())
     } else {
         Err(RepositoryError::CapacityExceeded)
     }
-}
-
-fn maximum_concurrent_bytes(
-    intervals: &[(u64, UnixMicros, UnixMicros)],
-) -> Result<u128, RepositoryError> {
-    let mut events = Vec::with_capacity(intervals.len().saturating_mul(2));
-    for (bytes, start, end) in intervals {
-        if start.get() <= 0 || end <= start || *bytes == 0 {
-            return Err(RepositoryError::CorruptState);
-        }
-        events.push((end.get(), false, *bytes));
-        events.push((start.get(), true, *bytes));
-    }
-    events.sort_unstable_by_key(|event| (event.0, event.1));
-    let mut current = 0_u128;
-    let mut maximum = 0_u128;
-    for (_, starts, bytes) in events {
-        if starts {
-            current = current
-                .checked_add(u128::from(bytes))
-                .ok_or(RepositoryError::CapacityExceeded)?;
-            maximum = maximum.max(current);
-        } else {
-            current = current
-                .checked_sub(u128::from(bytes))
-                .ok_or(RepositoryError::CorruptState)?;
-        }
-    }
-    Ok(maximum)
 }
 
 fn revoke(
@@ -305,10 +422,10 @@ fn local_mesh(transaction: &Transaction<'_>) -> Result<meshspan_domain::MeshId, 
 }
 
 fn provider_node_is_eligible(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     node_id: NodeId,
 ) -> Result<bool, RepositoryError> {
-    transaction
+    connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM nodes WHERE node_id = ?1 AND state IN (1, 2))",
             [node_id.as_bytes().as_slice()],

@@ -12,6 +12,7 @@ mod federation_remote_authority;
 #[cfg(test)]
 mod federation_schema_tests;
 mod federation_storage_command;
+mod federation_storage_quota;
 mod federation_succession_command;
 mod migration;
 mod name;
@@ -62,6 +63,12 @@ pub use federation_remote_authority::{
 pub use federation_storage_command::{
     IssueFederationStorageAllocation, RevokeFederationStorageAllocation,
 };
+pub use federation_storage_quota::{
+    FederationStorageQuotaDisposition, FederationStorageQuotaError, FederationStorageUsage,
+    FederationStorageWriteAbsence, FederationStorageWriteCompletion,
+    FederationStorageWriteReservation, FederationStorageWriteReservationRequest,
+    FederationStorageWriteState, MAXIMUM_FEDERATED_STORAGE_WRITE_LIFETIME_MICROS,
+};
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,
     FederationSuccessionEdge, RevokeFederationSuccessorDesignation,
@@ -76,23 +83,25 @@ pub use repository::{
     FederationGrantCursor, FederationGrantCursorError, FederationGrantRecord,
     FederationGrantRecordCodecError, FederationGrantState, FederationGrantTermination,
     FederationGrantTerminationKind, FederationQuarantineRecord, FederationQuarantineState,
-    FederationRelationshipRecord, FederationRelationshipState, FederationStorageAllocationRecord,
-    FederationStorageAllocationState, FederationSuccessionRecord, FederationSuccessionState,
-    FederationTransportAuthority, FederationTrustIdentityRecord, GroupMemberCursor,
-    InvariantFinding, InvariantKind, InvariantReport, LogPosition,
-    MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, NamespaceCursor, NamespaceRecord, ObjectOwnerCursor,
-    ObjectOwnerRecord, Page, PageLimit, PartitionBackupManifest, PartitionConsensusPersistence,
-    PartitionSnapshotManifest, PermissionGrantRecord, PreservedVote, PrincipalKind,
-    PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
-    RepositoryConformanceVector, RepositoryError, RetainedNamespaceRoot,
-    RetainedNamespaceRootCursor, RetainedNamespaceRootPage, RetainedNamespaceRootSource,
-    ScopeWriteAuthority, ScopedGrantCursor, SessionAccessCapability, SessionAccessDecision,
-    SessionAccessDenial, SessionAccessRequest, SnapshotCursor, SnapshotExpiryCandidate,
-    SnapshotExpiryCursor, SnapshotSchedule, SnapshotScheduleCursor, SubjectGrantCursor,
-    VersionCleanupAttestationProgress, VersionCleanupCompletion, VersionCleanupIntent,
-    VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
-    VersionCleanupItemCompletion, VersionCleanupItemCursor, VersionCleanupItemReclamation,
-    VersionCleanupParticipant, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
-    VersionCleanupReclamation, VersionCleanupState, VersionRetentionPolicy, VolumeSnapshot,
-    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
+    FederationRelationshipRecord, FederationRelationshipState,
+    FederationStorageAllocationAuthority, FederationStorageAllocationRecord,
+    FederationStorageAllocationState, FederationStorageAuthorityRequest,
+    FederationSuccessionRecord, FederationSuccessionState, FederationTransportAuthority,
+    FederationTrustIdentityRecord, GroupMemberCursor, InvariantFinding, InvariantKind,
+    InvariantReport, LogPosition, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, NamespaceCursor,
+    NamespaceRecord, ObjectOwnerCursor, ObjectOwnerRecord, Page, PageLimit,
+    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
+    PermissionGrantRecord, PreservedVote, PrincipalKind, PrincipalRecord,
+    RepositoryConformanceCheck, RepositoryConformanceReport, RepositoryConformanceVector,
+    RepositoryError, RetainedNamespaceRoot, RetainedNamespaceRootCursor, RetainedNamespaceRootPage,
+    RetainedNamespaceRootSource, ScopeWriteAuthority, ScopedGrantCursor, SessionAccessCapability,
+    SessionAccessDecision, SessionAccessDenial, SessionAccessRequest, SnapshotCursor,
+    SnapshotExpiryCandidate, SnapshotExpiryCursor, SnapshotSchedule, SnapshotScheduleCursor,
+    SubjectGrantCursor, VersionCleanupAttestationProgress, VersionCleanupCompletion,
+    VersionCleanupIntent, VersionCleanupInventory, VersionCleanupInventoryState,
+    VersionCleanupItem, VersionCleanupItemCompletion, VersionCleanupItemCursor,
+    VersionCleanupItemReclamation, VersionCleanupParticipant, VersionCleanupPermitAttempt,
+    VersionCleanupPermitAuthority, VersionCleanupReclamation, VersionCleanupState,
+    VersionRetentionPolicy, VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
+    run_repository_conformance,
 };

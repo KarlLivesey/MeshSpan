@@ -109,7 +109,8 @@ pub use federation_query::{
     FederationTrustIdentityRecord,
 };
 pub use federation_storage_allocation::{
-    FederationStorageAllocationRecord, FederationStorageAllocationState,
+    FederationStorageAllocationAuthority, FederationStorageAllocationRecord,
+    FederationStorageAllocationState, FederationStorageAuthorityRequest,
 };
 pub use federation_succession::{FederationSuccessionRecord, FederationSuccessionState};
 pub use kernel::{
@@ -267,6 +268,18 @@ impl AuthoritativeRepository {
         allocation_id: meshspan_domain::FederationStorageAllocationId,
     ) -> Result<Option<FederationStorageAllocationRecord>, RepositoryError> {
         federation_storage_allocation::load(self.database.connection(), allocation_id)
+    }
+
+    /// Resolves one exact current bilateral allocation authority for a provider request.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when allocation, grant, relationship or node evidence is malformed.
+    pub fn active_federation_storage_allocation_authority(
+        &self,
+        request: FederationStorageAuthorityRequest,
+    ) -> Result<Option<FederationStorageAllocationAuthority>, RepositoryError> {
+        federation_storage_allocation::active_authority(&self.database, request)
     }
 
     /// Returns complete current transport authority only for an active or restricted relationship.
