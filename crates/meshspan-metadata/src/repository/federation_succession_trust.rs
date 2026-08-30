@@ -15,7 +15,7 @@ const RELATIONSHIP_RESTRICTED: i64 = 3;
 #[derive(Clone, Copy)]
 pub(super) struct Relationship {
     pub(super) local_mesh_id: MeshId,
-    remote_mesh_id: MeshId,
+    pub(super) remote_mesh_id: MeshId,
     state: i64,
     authority_epoch: u64,
 }

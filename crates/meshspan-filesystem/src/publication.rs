@@ -7,8 +7,8 @@ mod namespace;
 
 pub use namespace::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
-    NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
-    NamespaceHistoryReceiveCompletion, NamespaceHistoryReceiveRequest,
+    NamespaceHistoryMutationAuthority, NamespaceHistoryObjectRequest, NamespaceHistoryPage,
+    NamespaceHistoryPageRequest, NamespaceHistoryReceiveCompletion, NamespaceHistoryReceiveRequest,
     NamespaceHistoryReceiveStatus, NamespaceHistoryRecordError,
 };
 

@@ -262,8 +262,15 @@ pub(super) fn projection(
     relationship_id: FederationRelationshipId,
     principal: FederatedPrincipal,
 ) -> Result<Option<FederatedPrincipalProjectionRecord>, RepositoryError> {
-    let row = database
-        .connection()
+    projection_connection(database.connection(), relationship_id, principal)
+}
+
+pub(super) fn projection_connection(
+    connection: &rusqlite::Connection,
+    relationship_id: FederationRelationshipId,
+    principal: FederatedPrincipal,
+) -> Result<Option<FederatedPrincipalProjectionRecord>, RepositoryError> {
+    let row = connection
         .query_row(
             "SELECT principal_kind, display_name, canonical_name, state,
                     identity_revision, authority_epoch, projection_digest, revision
@@ -300,19 +307,18 @@ pub(super) fn projection(
             authority_epoch: positive(row.5)?,
             revision: Revision::new(positive(row.7)?),
         };
-        verify_current_history(database, &record, &row.6)?;
+        verify_current_history(connection, &record, &row.6)?;
         Ok(record)
     })
     .transpose()
 }
 
 fn verify_current_history(
-    database: &PartitionDatabase,
+    connection: &rusqlite::Connection,
     record: &FederatedPrincipalProjectionRecord,
     projection_digest: &[u8],
 ) -> Result<(), RepositoryError> {
-    let history: Option<(Vec<u8>, i64, Vec<u8>)> = database
-        .connection()
+    let history: Option<(Vec<u8>, i64, Vec<u8>)> = connection
         .query_row(
             "SELECT statement_digest, signer_generation, signature
              FROM federation_principal_projection_history
@@ -353,9 +359,28 @@ fn verify_current_history(
     if projection_digest != recomputed || history_digest.as_slice() != recomputed {
         return Err(RepositoryError::CorruptState);
     }
-    verify_relationship(database.connection(), &command)
-        .and_then(|()| verify_signature(database.connection(), &command, false))
+    verify_historical_relationship(connection, &command)
+        .and_then(|()| verify_signature(connection, &command, false))
         .map_err(|_| RepositoryError::CorruptState)
+}
+
+fn verify_historical_relationship(
+    connection: &rusqlite::Connection,
+    command: &UpsertFederatedPrincipalProjection,
+) -> Result<(), RepositoryError> {
+    let remote_mesh_id = connection
+        .query_row(
+            "SELECT remote_mesh_id FROM federation_relationships WHERE relationship_id = ?1",
+            [command.relationship_id.as_bytes().as_slice()],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?
+        .ok_or(RepositoryError::CorruptState)?;
+    if parse_mesh(&remote_mesh_id)? == command.home_mesh_id {
+        Ok(())
+    } else {
+        Err(RepositoryError::CorruptState)
+    }
 }
 
 fn parse_kind(value: i64) -> Result<FederatedPrincipalKind, RepositoryError> {

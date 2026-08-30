@@ -80,6 +80,7 @@ pub(super) const fn reason_code(reason: QuarantineReason) -> i64 {
         QuarantineReason::Revoked => 3,
         QuarantineReason::OutsideRights => 4,
         QuarantineReason::OutsideStorageLimit => 5,
+        QuarantineReason::PrincipalInactive => 6,
     }
 }
 
@@ -90,6 +91,7 @@ pub(super) fn parse_reason(value: i64) -> Result<QuarantineReason, RepositoryErr
         3 => Ok(QuarantineReason::Revoked),
         4 => Ok(QuarantineReason::OutsideRights),
         5 => Ok(QuarantineReason::OutsideStorageLimit),
+        6 => Ok(QuarantineReason::PrincipalInactive),
         _ => Err(RepositoryError::CorruptState),
     }
 }

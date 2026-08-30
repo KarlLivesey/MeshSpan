@@ -18,9 +18,11 @@ use super::federation_quarantine_codec::{
 use super::federation_quarantine_transition::{
     QUARANTINE_DISCARDED, QUARANTINE_RESTORED, QUARANTINE_RETAINED, QUARANTINE_SURFACED,
 };
-use super::federation_succession_trust::verify_side_signature;
-use super::{RepositoryError, federation_grant};
-use crate::{FederationQuarantineResolution, RetainFederatedMutationQuarantine};
+use super::{RepositoryError, federation_mutation_admission};
+use crate::{
+    FederatedMutationAcknowledgement, FederationQuarantineResolution,
+    RetainFederatedMutationQuarantine,
+};
 
 pub(super) struct StoredQuarantine {
     pub(super) record: FederationQuarantineRecord,
@@ -299,34 +301,25 @@ fn verify_stored(
     if stored.signer_mesh_id != stored.record.evidence.subject().home_mesh_id() {
         return Err(RepositoryError::CorruptState);
     }
-    let admission =
-        federation_grant::classify_persisted_mutation(connection, stored.record.evidence)
-            .map_err(|_| RepositoryError::CorruptState)?;
+    let command = RetainFederatedMutationQuarantine {
+        quarantine_id: stored.record.quarantine_id,
+        acknowledgement: FederatedMutationAcknowledgement {
+            source_operation_id: stored.record.source_operation_id,
+            evidence: stored.record.evidence,
+            payload_digest: stored.record.payload_digest,
+            signer_generation: stored.signer_generation,
+            signature: stored.signature,
+        },
+    };
+    let admission = federation_mutation_admission::classify(connection, &command.acknowledgement)
+        .map_err(|_| RepositoryError::CorruptState)?;
     if admission != FederatedMutationAdmission::Quarantined(stored.record.reason) {
         return Err(RepositoryError::CorruptState);
     }
-    let command = RetainFederatedMutationQuarantine {
-        quarantine_id: stored.record.quarantine_id,
-        source_operation_id: stored.record.source_operation_id,
-        evidence: stored.record.evidence,
-        payload_digest: stored.record.payload_digest,
-        signer_generation: stored.signer_generation,
-        signature: stored.signature,
-    };
-    let digest: [u8; 32] = Sha256::digest(command.signing_payload()).into();
+    let digest: [u8; 32] = Sha256::digest(command.acknowledgement.signing_payload()).into();
     if digest != stored.acknowledgement_digest {
         return Err(RepositoryError::CorruptState);
     }
-    verify_side_signature(
-        connection,
-        stored.record.evidence.relationship_id(),
-        stored.signer_mesh_id,
-        stored.signer_generation,
-        &command.signing_payload(),
-        stored.signature,
-        false,
-    )
-    .map_err(|_| RepositoryError::CorruptState)?;
     verify_events(connection, stored)
 }
 

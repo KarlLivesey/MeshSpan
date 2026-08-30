@@ -25,6 +25,9 @@ mod federation_grant_page;
 mod federation_grant_record;
 #[cfg(test)]
 mod federation_grant_tests;
+mod federation_mutation_admission;
+#[cfg(test)]
+mod federation_mutation_admission_tests;
 mod federation_principal;
 #[cfg(test)]
 mod federation_principal_tests;
@@ -359,6 +362,22 @@ impl AuthoritativeRepository {
         principal: meshspan_domain::FederatedPrincipal,
     ) -> Result<Option<FederatedPrincipalProjectionRecord>, RepositoryError> {
         federation_principal::projection(&self.database, relationship_id, principal)
+    }
+
+    /// Verifies one accepting-swarm signature and classifies its exact historical grant use.
+    ///
+    /// Structurally substituted acknowledgements fail closed. Authentic work accepted outside
+    /// grant validity, after revocation, beyond policy or by a now-inactive principal is returned
+    /// as quarantine rather than silently admitted or destroyed.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for absent/corrupt authority, an unknown principal, or an invalid signature.
+    pub fn classify_federated_mutation_acknowledgement(
+        &self,
+        acknowledgement: &crate::FederatedMutationAcknowledgement,
+    ) -> Result<meshspan_domain::FederatedMutationAdmission, RepositoryError> {
+        federation_mutation_admission::classify(self.database.connection(), acknowledgement)
     }
 
     /// Returns the active, locally authoritative recovery successor for one retired swarm.

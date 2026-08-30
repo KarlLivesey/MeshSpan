@@ -32,20 +32,22 @@ fn signed_quarantine_lifecycle_is_atomic_and_restart_safe() -> Result<(), Box<dy
     let admitted = fixture.retain_command(31, 32, 50)?;
     fixture.assert_rejected(5, 33, &admitted)?;
     let forged = fixture.retain_command(34, 35, 51)?;
-    let mut forged_signature = forged.signature;
+    let mut forged_signature = forged.acknowledgement.signature;
     forged_signature[0] ^= 1;
+    let mut forged_acknowledgement = forged.acknowledgement;
+    forged_acknowledgement.signature = forged_signature;
     fixture.assert_rejected(
         5,
         36,
         &RetainFederatedMutationQuarantine {
-            signature: forged_signature,
+            acknowledgement: forged_acknowledgement,
             ..forged
         },
     )?;
 
     let retained = fixture.retain_command(37, 38, 51)?;
     let quarantine_id = retained.quarantine_id;
-    let source_operation_id = retained.source_operation_id;
+    let source_operation_id = retained.acknowledgement.source_operation_id;
     let receipt = fixture.apply(
         5,
         39,
@@ -138,7 +140,7 @@ fn quarantine_proofs_are_immutable_and_corruption_fails_closed()
     fixture.prepare()?;
     let command = fixture.retain_command(51, 52, 51)?;
     let quarantine_id = command.quarantine_id;
-    let source_operation_id = command.source_operation_id;
+    let source_operation_id = command.acknowledgement.source_operation_id;
     fixture.apply(
         5,
         53,
@@ -258,7 +260,7 @@ fn every_quarantine_transition_rolls_back_its_command_rows()
     fixture.prepare()?;
     let retained = fixture.retain_command(80, 81, 51)?;
     let quarantine_id = retained.quarantine_id;
-    let source_operation_id = retained.source_operation_id;
+    let source_operation_id = retained.acknowledgement.source_operation_id;
     apply_quarantine_after_rollback(
         &mut fixture,
         5,
@@ -494,18 +496,21 @@ impl Fixture {
             Rights::default(),
             storage_bytes,
         );
-        let mut command = RetainFederatedMutationQuarantine {
-            quarantine_id: QuarantineId::from_bytes([quarantine; 16])?,
+        let mut acknowledgement = crate::FederatedMutationAcknowledgement {
             source_operation_id: OperationId::from_bytes([source_operation; 16])?,
             evidence,
             payload_digest: [quarantine.wrapping_add(1); 32],
             signer_generation: 1,
             signature: [0; 64],
         };
-        command.signature = self
+        acknowledgement.signature = self
             .local_signing_key
-            .sign(&command.signing_payload())
+            .sign(&acknowledgement.signing_payload())
             .to_bytes();
+        let command = RetainFederatedMutationQuarantine {
+            quarantine_id: QuarantineId::from_bytes([quarantine; 16])?,
+            acknowledgement,
+        };
         Ok(command)
     }
 

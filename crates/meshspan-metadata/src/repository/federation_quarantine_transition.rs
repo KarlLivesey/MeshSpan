@@ -12,8 +12,7 @@ use super::apply::to_i64;
 use super::federation_quarantine::FederationQuarantineState;
 use super::federation_quarantine_codec::{reason_code, resource_columns};
 use super::federation_quarantine_evidence::load_verified_required;
-use super::federation_succession_trust::verify_side_signature;
-use super::{RepositoryError, federation_grant};
+use super::{RepositoryError, federation_mutation_admission};
 use crate::{
     AuthoritativeCommand, CommandContext, FederationQuarantineResolution,
     ResolveFederatedMutationQuarantine, RetainFederatedMutationQuarantine,
@@ -55,24 +54,15 @@ fn retain(
     command: &RetainFederatedMutationQuarantine,
     revision: Revision,
 ) -> Result<(), RepositoryError> {
-    if command.source_operation_id == context.operation_id
-        || command.signer_generation == 0
-        || command.evidence.accepted_at() > context.occurred_at
+    let acknowledgement = command.acknowledgement;
+    if acknowledgement.source_operation_id == context.operation_id
+        || acknowledgement.evidence.accepted_at() > context.occurred_at
     {
         return Err(RepositoryError::InvalidCommand);
     }
-    let reason = classify_for_command(transaction, command.evidence)?;
-    let signer_mesh_id = command.evidence.subject().home_mesh_id();
-    verify_side_signature(
-        transaction,
-        command.evidence.relationship_id(),
-        signer_mesh_id,
-        command.signer_generation,
-        &command.signing_payload(),
-        command.signature,
-        false,
-    )?;
-    let acknowledgement_digest: [u8; 32] = Sha256::digest(command.signing_payload()).into();
+    let reason = classify_for_command(transaction, &acknowledgement)?;
+    let signer_mesh_id = acknowledgement.evidence.subject().home_mesh_id();
+    let acknowledgement_digest: [u8; 32] = Sha256::digest(acknowledgement.signing_payload()).into();
     insert_quarantine(
         transaction,
         command,
@@ -99,9 +89,9 @@ fn retain(
 
 fn classify_for_command(
     transaction: &Transaction<'_>,
-    evidence: meshspan_domain::FederatedMutationEvidence,
+    acknowledgement: &crate::FederatedMutationAcknowledgement,
 ) -> Result<QuarantineReason, RepositoryError> {
-    match federation_grant::classify_persisted_mutation(transaction, evidence)? {
+    match federation_mutation_admission::classify(transaction, acknowledgement)? {
         FederatedMutationAdmission::Quarantined(reason) => Ok(reason),
         FederatedMutationAdmission::Admitted => Err(RepositoryError::InvalidCommand),
     }
@@ -114,6 +104,8 @@ fn insert_quarantine(
     acknowledgement_digest: [u8; 32],
     revision: Revision,
 ) -> Result<(), RepositoryError> {
+    let acknowledgement = command.acknowledgement;
+    let evidence = acknowledgement.evidence;
     transaction.execute(
         "INSERT INTO federation_quarantine(
             quarantine_id, relationship_id, operation_id, grant_id,
@@ -124,24 +116,26 @@ fn insert_quarantine(
                    NULL, NULL, NULL, NULL, ?12)",
         params![
             command.quarantine_id.as_bytes().as_slice(),
-            command.evidence.relationship_id().as_bytes().as_slice(),
-            command.source_operation_id.as_bytes().as_slice(),
-            command.evidence.grant_id().as_bytes().as_slice(),
+            evidence.relationship_id().as_bytes().as_slice(),
+            acknowledgement.source_operation_id.as_bytes().as_slice(),
+            evidence.grant_id().as_bytes().as_slice(),
             command
+                .acknowledgement
                 .evidence
                 .subject()
                 .home_mesh_id()
                 .as_bytes()
                 .as_slice(),
             command
+                .acknowledgement
                 .evidence
                 .subject()
                 .principal_id()
                 .as_bytes()
                 .as_slice(),
-            command.evidence.accepted_at().get(),
+            evidence.accepted_at().get(),
             reason_code(reason),
-            command.payload_digest.as_slice(),
+            acknowledgement.payload_digest.as_slice(),
             acknowledgement_digest.as_slice(),
             QUARANTINE_RETAINED,
             to_i64(revision.get())?,
@@ -157,8 +151,10 @@ fn insert_acknowledgement(
     acknowledgement_digest: [u8; 32],
     revision: Revision,
 ) -> Result<(), RepositoryError> {
-    let (kind, authority, volume, object) = resource_columns(command.evidence.resource());
-    let recomputed: [u8; 32] = Sha256::digest(command.signing_payload()).into();
+    let acknowledgement = command.acknowledgement;
+    let evidence = acknowledgement.evidence;
+    let (kind, authority, volume, object) = resource_columns(evidence.resource());
+    let recomputed: [u8; 32] = Sha256::digest(acknowledgement.signing_payload()).into();
     if acknowledgement_digest != recomputed {
         return Err(RepositoryError::InvalidCommand);
     }
@@ -171,11 +167,11 @@ fn insert_acknowledgement(
         params![
             command.quarantine_id.as_bytes().as_slice(),
             signer_mesh_id.as_bytes().as_slice(),
-            to_i64(command.signer_generation)?,
-            command.signature.as_slice(),
-            to_i64(command.evidence.authority_epoch())?,
-            i64::from(command.evidence.required_rights().bits()),
-            to_i64(command.evidence.storage_bytes())?,
+            to_i64(acknowledgement.signer_generation)?,
+            acknowledgement.signature.as_slice(),
+            to_i64(evidence.authority_epoch())?,
+            i64::from(evidence.required_rights().bits()),
+            to_i64(evidence.storage_bytes())?,
             kind,
             authority.as_bytes().as_slice(),
             volume,
