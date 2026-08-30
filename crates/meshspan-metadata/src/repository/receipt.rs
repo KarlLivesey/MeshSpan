@@ -96,6 +96,8 @@ pub enum EntityKind {
     FederationStorageAllocation = 30,
     /// Consensus-ordered admission of one signed federated namespace mutation.
     FederationMutationAdmission = 31,
+    /// One user authentication method.
+    AuthenticationMethod = 32,
 }
 
 impl EntityKind {
@@ -132,6 +134,7 @@ impl EntityKind {
             29 => Ok(Self::FederationQuarantine),
             30 => Ok(Self::FederationStorageAllocation),
             31 => Ok(Self::FederationMutationAdmission),
+            32 => Ok(Self::AuthenticationMethod),
             _ => Err(RepositoryError::CorruptState),
         }
     }

@@ -6,12 +6,13 @@ use meshspan_contracts::{
     BoundedItems, ReclamationReceipt, RemovalPermit, ShardIdentity, TombstoneReceipt,
 };
 use meshspan_domain::{
-    ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, ComponentInstanceId,
-    ContentManifestId, DelegatedMetadataScope, DelegationAdmission, DurationMicros, FileVersionId,
-    GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange,
-    MetadataOperationFamily, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId,
-    OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, ScopeId, SessionId, SnapshotId,
-    SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
+    ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
+    AuthenticationMethodId, ComponentInstanceId, ContentManifestId, DelegatedMetadataScope,
+    DelegationAdmission, DurationMicros, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
+    JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId,
+    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision,
+    Rights, RoleId, ScopeId, SessionId, SnapshotId, SnapshotScheduleId, TagId, TargetId,
+    UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -123,6 +124,10 @@ pub enum AuthoritativeCommand {
     ActivateGroup(ActivateGroup),
     /// Revokes one exact current access activation.
     RevokeAccessActivation(RevokeAccessActivation),
+    /// Creates one scoped API-key authentication method without persisting plaintext.
+    CreateApiKeyAuthenticationMethod(CreateApiKeyAuthenticationMethod),
+    /// Revokes one exact authentication method immediately.
+    RevokeAuthenticationMethod(RevokeAuthenticationMethod),
     /// Issues one bounded authentication session after an accepted authentication ceremony.
     IssueAuthenticationSession(IssueAuthenticationSession),
     /// Revokes one exact authentication session immediately.
@@ -250,6 +255,8 @@ impl AuthoritativeCommand {
             Self::ActivateGrant(value) => value.update_digest(digest),
             Self::ActivateGroup(value) => value.update_digest(digest),
             Self::RevokeAccessActivation(value) => value.update_digest(digest),
+            Self::CreateApiKeyAuthenticationMethod(value) => value.update_digest(digest),
+            Self::RevokeAuthenticationMethod(value) => value.update_digest(digest),
             Self::IssueAuthenticationSession(value) => value.update_digest(digest),
             Self::RevokeAuthenticationSession(value) => value.update_digest(digest),
             Self::CreateComponent(value) => value.update_digest(digest),
@@ -1024,6 +1031,40 @@ pub struct RevokeAccessActivation {
     pub reason: String,
 }
 
+/// One login-capable, protocol-neutral scoped API-key method.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateApiKeyAuthenticationMethod {
+    /// Stable common authentication-method identity.
+    pub method_id: AuthenticationMethodId,
+    /// User who owns and may authenticate with the key.
+    pub principal_id: PrincipalId,
+    /// Stable public key identity; the secret is never authoritative metadata.
+    pub key_id: ApiKeyId,
+    /// Human-readable bounded method label.
+    pub label: String,
+    /// Non-empty protocol-compatibility bitset: HTTPS 1, headless API 2, SMB 4.
+    pub service_scope: u8,
+    /// Non-empty, server-defined least-privilege capability bitset.
+    pub scopes: u64,
+    /// Digest of the secret key; plaintext never enters consensus or SQLite.
+    pub key_digest: [u8; 32],
+    /// Inclusive first instant at which authentication is accepted.
+    pub valid_from: UnixMicros,
+    /// Exclusive expiry, or no automatic expiry.
+    pub valid_until: Option<UnixMicros>,
+}
+
+/// Immediate revocation of one exact authentication method.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevokeAuthenticationMethod {
+    /// Exact method to revoke.
+    pub method_id: AuthenticationMethodId,
+    /// Expected owner, preventing confused-deputy revocation.
+    pub principal_id: PrincipalId,
+    /// Non-blank bounded audit reason.
+    pub reason: String,
+}
+
 /// Accepted authentication ceremony converted into a mesh-wide bounded session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IssueAuthenticationSession {
@@ -1755,6 +1796,30 @@ digest_simple_record!(
     b"revoke-access-activation",
     |value, digest| {
         digest.identifier(value.activation_id.as_bytes());
+        digest.identifier(value.principal_id.as_bytes());
+        digest.bytes(value.reason.as_bytes());
+    }
+);
+digest_simple_record!(
+    CreateApiKeyAuthenticationMethod,
+    b"create-api-key-authentication-method",
+    |value, digest| {
+        digest.identifier(value.method_id.as_bytes());
+        digest.identifier(value.principal_id.as_bytes());
+        digest.identifier(value.key_id.as_bytes());
+        digest.bytes(value.label.as_bytes());
+        digest.byte(value.service_scope);
+        digest.unsigned(value.scopes);
+        digest.bytes(&value.key_digest);
+        digest.signed(value.valid_from.get());
+        digest.optional_instant(value.valid_until);
+    }
+);
+digest_simple_record!(
+    RevokeAuthenticationMethod,
+    b"revoke-authentication-method",
+    |value, digest| {
+        digest.identifier(value.method_id.as_bytes());
         digest.identifier(value.principal_id.as_bytes());
         digest.bytes(value.reason.as_bytes());
     }

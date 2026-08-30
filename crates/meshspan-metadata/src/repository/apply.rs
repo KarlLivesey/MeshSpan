@@ -8,13 +8,13 @@ use sha2::{Digest, Sha256};
 
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
-    ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
-    cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, federation_grant, federation_mutation_admission,
-    federation_principal, federation_quarantine, federation_relationship,
-    federation_storage_allocation, federation_succession, identity, namespace, retention,
-    root_delegation, routing, session, snapshot_schedule, tags, user_snapshot, version_cleanup,
-    volume_head,
+    ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
+    authentication_method, bootstrap, cleanup_attestation, cleanup_completion, cleanup_inventory,
+    cleanup_permit, cleanup_reclamation, cluster, component, federation_grant,
+    federation_mutation_admission, federation_principal, federation_quarantine,
+    federation_relationship, federation_storage_allocation, federation_succession, identity,
+    namespace, retention, root_delegation, routing, session, snapshot_schedule, tags,
+    user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -270,6 +270,7 @@ fn authorise(
     let self_activation_principal = match command {
         AuthoritativeCommand::ActivateGrant(value) => Some(value.principal_id),
         AuthoritativeCommand::ActivateGroup(value) => Some(value.principal_id),
+        AuthoritativeCommand::CreateApiKeyAuthenticationMethod(value) => Some(value.principal_id),
         AuthoritativeCommand::IssueAuthenticationSession(value) => Some(value.principal_id),
         _ => None,
     };
@@ -285,6 +286,11 @@ fn authorise(
     }
     match command {
         AuthoritativeCommand::RevokeAuthenticationSession(value)
+            if context.actor_principal_id == value.principal_id =>
+        {
+            return Ok(());
+        }
+        AuthoritativeCommand::RevokeAuthenticationMethod(value)
             if context.actor_principal_id == value.principal_id =>
         {
             return Ok(());
@@ -517,6 +523,8 @@ fn is_identity_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ActivateGrant(_)
             | AuthoritativeCommand::ActivateGroup(_)
             | AuthoritativeCommand::RevokeAccessActivation(_)
+            | AuthoritativeCommand::CreateApiKeyAuthenticationMethod(_)
+            | AuthoritativeCommand::RevokeAuthenticationMethod(_)
             | AuthoritativeCommand::IssueAuthenticationSession(_)
             | AuthoritativeCommand::RevokeAuthenticationSession(_)
     )
@@ -561,6 +569,12 @@ fn execute_identity_command(
         }
         AuthoritativeCommand::RevokeAccessActivation(value) => {
             identity::revoke_access_activation(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CreateApiKeyAuthenticationMethod(value) => {
+            authentication_method::create_api_key(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::RevokeAuthenticationMethod(value) => {
+            authentication_method::revoke(transaction, context, value, revision)
         }
         AuthoritativeCommand::IssueAuthenticationSession(value) => {
             session::issue(transaction, context, *value, revision)
@@ -852,6 +866,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ConfirmVersionCleanupReclamation(_) => 44,
         AuthoritativeCommand::IssueAuthenticationSession(_) => 45,
         AuthoritativeCommand::RevokeAuthenticationSession(_) => 46,
+        AuthoritativeCommand::CreateApiKeyAuthenticationMethod(_) => 74,
+        AuthoritativeCommand::RevokeAuthenticationMethod(_) => 75,
         AuthoritativeCommand::SetObjectGrantInheritance(_) => 47,
         AuthoritativeCommand::RemoveGroupMember(_) => 48,
         AuthoritativeCommand::RevokePermissionGrant(_) => 49,
