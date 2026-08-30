@@ -4,10 +4,12 @@
 
 mod federation;
 mod removal;
+mod scrub;
 
 pub use federation::{
-    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedShardAuthority,
-    FederatedShardOutcome, FederatedWriteEvidence,
+    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedScrubEvidence,
+    FederatedScrubPreparation, FederatedShardAuthority, FederatedShardOutcome,
+    FederatedWriteEvidence,
 };
 
 use meshspan_contracts::{

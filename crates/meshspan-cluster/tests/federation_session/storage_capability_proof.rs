@@ -12,12 +12,12 @@ use meshspan_cluster::{
 };
 use meshspan_contracts::{
     BoundedBytes, FederatedShardPermit, FederatedStoragePermitMacKey, ReclamationReceipt,
-    ShardReceipt, StoragePermitMacKey, TombstoneReceipt, federated_provider_shard_identity,
-    verify_federated_shard_permit_mac,
+    ScrubObservation, ScrubOutcome, ShardReceipt, StoragePermitMacKey, TombstoneReceipt,
+    federated_provider_shard_identity, verify_federated_shard_permit_mac,
 };
 use meshspan_data_plane::{
     DataPlaneError, RemoteShardService, decode_federated_shard_permit, get_federated_shard,
-    put_federated_shard, reclaim_federated_shard, retire_federated_shard,
+    put_federated_shard, reclaim_federated_shard, retire_federated_shard, scrub_federated_shard,
 };
 use meshspan_domain::{
     EntropyError, FederationStorageAction, FederationStorageAllocation, NodeId, OperationId,
@@ -119,40 +119,80 @@ pub(super) async fn prove_storage_capability_exchange(
     assert_eq!(retried.completed_at, receipt.completed_at);
     assert_usage(&local, allocation, PAYLOAD.len() as u64, 0)?;
 
-    prove_federated_read(
+    prove_federated_lifecycle(
         proof,
         &mut local,
         &mut service,
         &permit_key,
         allocation,
-        &mut client_replay,
-        &mut server_replay,
-    )
-    .await?;
-    prove_federated_repair(
-        proof,
-        &mut local,
-        &mut service,
-        &permit_key,
-        allocation,
+        &issued,
         &payload,
         &mut client_replay,
         &mut server_replay,
     )
     .await?;
-    Box::pin(prove_federated_retire_and_reclaim(
-        proof,
-        &mut local,
-        &mut service,
-        &permit_key,
-        allocation,
-        &issued.presented.permit,
-        &mut client_replay,
-        &mut server_replay,
-    ))
-    .await?;
     let inventory = service.into_provider().inventory(None, 2)?;
     assert!(inventory.entries.is_empty());
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the lifecycle proof keeps independently authenticated runtime inputs explicit"
+)]
+async fn prove_federated_lifecycle(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    service: &mut RemoteShardService<FolderShardStore>,
+    permit_key: &FederatedStoragePermitMacKey,
+    allocation: FederationStorageAllocation,
+    issued: &IssuedWriteCapability,
+    payload: &BoundedBytes,
+    client_replay: &mut FederationReplayGuard,
+    server_replay: &mut FederationReplayGuard,
+) -> Result<(), Box<dyn Error>> {
+    prove_federated_read(
+        proof,
+        local,
+        service,
+        permit_key,
+        allocation,
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    prove_federated_repair(
+        proof,
+        local,
+        service,
+        permit_key,
+        allocation,
+        payload,
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    prove_federated_scrub(
+        proof,
+        local,
+        service,
+        permit_key,
+        allocation,
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    Box::pin(prove_federated_retire_and_reclaim(
+        proof,
+        local,
+        service,
+        permit_key,
+        allocation,
+        &issued.presented.permit,
+        client_replay,
+        server_replay,
+    ))
+    .await?;
     Ok(())
 }
 
@@ -278,7 +318,7 @@ async fn prove_federated_retirement(
     client_replay: &mut FederationReplayGuard,
     server_replay: &mut FederationReplayGuard,
 ) -> Result<SignedRetirement, Box<dyn Error>> {
-    let retire_now = UnixMicros::new(NOW.get() + 4);
+    let retire_now = UnixMicros::new(NOW.get() + 6);
     let retire_capability = presented_capability(
         proof,
         local,
@@ -320,7 +360,7 @@ async fn prove_federated_retirement(
         )
     );
 
-    let retire_retry_now = UnixMicros::new(NOW.get() + 5);
+    let retire_retry_now = UnixMicros::new(NOW.get() + 7);
     let retry_capability = presented_capability(
         proof,
         local,
@@ -361,7 +401,7 @@ async fn prove_federated_reclamation(
     client_replay: &mut FederationReplayGuard,
     server_replay: &mut FederationReplayGuard,
 ) -> Result<(), Box<dyn Error>> {
-    let reclaim_now = UnixMicros::new(NOW.get() + 6);
+    let reclaim_now = UnixMicros::new(NOW.get() + 8);
     let reclaim_capability = presented_capability(
         proof,
         local,
@@ -387,7 +427,7 @@ async fn prove_federated_reclamation(
     assert_eq!(reclaimed.receipt.reclaimed_bytes, PAYLOAD.len() as u64);
     assert_usage(local, allocation, 0, 0)?;
 
-    let reclaim_retry_now = UnixMicros::new(NOW.get() + 7);
+    let reclaim_retry_now = UnixMicros::new(NOW.get() + 9);
     let retry_capability = presented_capability(
         proof,
         local,
@@ -479,6 +519,56 @@ async fn prove_federated_read(
         get_cycle(proof, local, service, permit_key, &read_presented, read_now).await?;
     assert_eq!(downloaded.as_slice(), PAYLOAD);
     assert_usage(local, allocation, PAYLOAD.len() as u64, 0)?;
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the integration boundary keeps every independently authenticated runtime input explicit"
+)]
+async fn prove_federated_scrub(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    service: &mut RemoteShardService<FolderShardStore>,
+    permit_key: &FederatedStoragePermitMacKey,
+    allocation: FederationStorageAllocation,
+    client_replay: &mut FederationReplayGuard,
+    server_replay: &mut FederationReplayGuard,
+) -> Result<(), Box<dyn Error>> {
+    let scrub_now = UnixMicros::new(NOW.get() + 4);
+    let capability = presented_capability(
+        proof,
+        local,
+        permit_key,
+        allocation,
+        FederationStorageAction::Scrub,
+        exchange_values(171, 217, scrub_now, UnixMicros::new(1_850_000))?,
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    let scrubbed = scrub_cycle(proof, local, service, permit_key, &capability, scrub_now).await?;
+    assert_eq!(scrubbed.observation.outcome, ScrubOutcome::Healthy);
+    assert_eq!(
+        scrubbed.observation.observed_digest,
+        Some(blake3::hash(PAYLOAD).into())
+    );
+
+    let retry_now = UnixMicros::new(NOW.get() + 5);
+    let retry = presented_capability(
+        proof,
+        local,
+        permit_key,
+        allocation,
+        FederationStorageAction::Scrub,
+        exchange_values(176, 217, retry_now, UnixMicros::new(1_860_000))?,
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    assert_eq!(retry.permit, capability.permit);
+    let replayed = scrub_cycle(proof, local, service, permit_key, &retry, retry_now).await?;
+    assert_eq!(replayed, scrubbed);
     Ok(())
 }
 
@@ -711,6 +801,62 @@ async fn get_cycle(
     Ok(get_result?)
 }
 
+async fn scrub_cycle(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    service: &mut RemoteShardService<FolderShardStore>,
+    permit_key: &FederatedStoragePermitMacKey,
+    presented: &PresentedPermit,
+    now: UnixMicros,
+) -> Result<SignedScrub, Box<dyn Error>> {
+    let limits = wire_limits()?;
+    let permit = &presented.permit;
+    let scrub = scrub_federated_shard(
+        proof.client_connection,
+        request_header(proof.client_mesh, permit.operation_id, permit.expires_at)?,
+        *permit,
+        presented.capability.capability_digest(),
+        limits,
+    );
+    let serve = proof.server_runtime.serve_federated_shard_stream(
+        proof.server_connection,
+        proof.server_authority,
+        local,
+        service,
+        permit_key,
+        FederationShardServeRequest {
+            relationship_id: proof.relationship_id,
+            now,
+            receipt_replay_nonce: receipt_nonce(now),
+        },
+    );
+    let (scrub_result, serve_result) = tokio::join!(scrub, serve);
+    let served = serve_result?.ok_or("provider did not produce a durable scrub result")?;
+    let mut receipt_replay = replay_guard()?;
+    let signed = proof
+        .client_runtime
+        .receive_storage_receipt(
+            proof.client_connection,
+            proof.client_authority,
+            FederationStorageReceiptReceiveRequest {
+                relationship_id: proof.relationship_id,
+                capability: &presented.capability,
+                now,
+            },
+            &mut receipt_replay,
+        )
+        .await?;
+    let receipt = signed.receipt();
+    assert_eq!(served.action, FederationStorageAction::Scrub);
+    assert_eq!(receipt.affected_bytes, served.affected_bytes);
+    assert_eq!(receipt.capability_digest, served.capability_digest);
+    Ok(SignedScrub {
+        observation: scrub_result?,
+        result_digest: receipt.result_digest.as_slice().try_into()?,
+        completed_at: UnixMicros::new(receipt.completed_at_unix_micros),
+    })
+}
+
 async fn retire_cycle(
     proof: &SessionProof<'_>,
     local: &mut LocalDatabase,
@@ -834,6 +980,13 @@ async fn reclaim_cycle(
 
 struct SignedPutResult {
     shard_receipt: ShardReceipt,
+    result_digest: [u8; 32],
+    completed_at: UnixMicros,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SignedScrub {
+    observation: ScrubObservation,
     result_digest: [u8; 32],
     completed_at: UnixMicros,
 }

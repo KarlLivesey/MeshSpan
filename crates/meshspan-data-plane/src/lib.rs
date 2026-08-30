@@ -16,11 +16,12 @@ pub use capability::{
 };
 pub use client::{
     get_federated_shard, get_shard, put_federated_shard, put_shard, reclaim_federated_shard,
-    reclaim_shard, retire_federated_shard, tombstone_shard,
+    reclaim_shard, retire_federated_shard, scrub_federated_shard, tombstone_shard,
 };
 pub use error::DataPlaneError;
 pub use router::RemoteShardRouter;
 pub use server::{
-    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedShardAuthority,
-    FederatedShardOutcome, FederatedWriteEvidence, RemoteShardService,
+    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedScrubEvidence,
+    FederatedScrubPreparation, FederatedShardAuthority, FederatedShardOutcome,
+    FederatedWriteEvidence, RemoteShardService,
 };

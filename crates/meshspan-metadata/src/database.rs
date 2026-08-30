@@ -243,7 +243,8 @@ mod tests {
         local_federation_authority_cache_migration_digest,
         local_federation_storage_capability_migration_digest,
         local_federation_storage_lifecycle_migration_digest,
-        local_federation_storage_quota_migration_digest, local_migration_digest, migrate_local,
+        local_federation_storage_quota_migration_digest,
+        local_federation_storage_scrub_migration_digest, local_migration_digest, migrate_local,
         migrate_local_through, migrate_partition, migrate_partition_through,
         partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
@@ -422,7 +423,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 5);
+        assert_eq!(database.schema_version(), 6);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -657,6 +658,14 @@ mod tests {
                 0xcc, 0x9f, 0x12, 0x3b, 0x42, 0x63, 0x9f, 0x56, 0xe8, 0xc8, 0x4c, 0x06, 0x8e, 0x81,
                 0x5d, 0xdf, 0xca, 0xfa, 0xa2, 0xc5, 0xa9, 0xfc, 0x8a, 0xc5, 0x50, 0x92, 0x38, 0x4f,
                 0xc7, 0x3a, 0x3f, 0x50,
+            ]
+        );
+        assert_eq!(
+            local_federation_storage_scrub_migration_digest(),
+            [
+                0x74, 0x0e, 0xb7, 0x1a, 0x04, 0x71, 0x7c, 0x9f, 0x5b, 0x94, 0xbc, 0x6d, 0x63, 0xcd,
+                0xd7, 0xb3, 0x61, 0x84, 0x3e, 0x9f, 0x46, 0x69, 0x89, 0x1a, 0x90, 0x98, 0xb6, 0xfc,
+                0x59, 0xb3, 0xb5, 0x8e,
             ]
         );
         assert_eq!(

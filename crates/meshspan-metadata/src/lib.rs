@@ -16,6 +16,7 @@ mod federation_storage_capability_ledger;
 mod federation_storage_command;
 mod federation_storage_lifecycle;
 mod federation_storage_quota;
+mod federation_storage_scrub;
 mod federation_succession_command;
 mod migration;
 mod name;
@@ -81,6 +82,10 @@ pub use federation_storage_quota::{
     FederationStorageWriteAbsence, FederationStorageWriteCompletion,
     FederationStorageWriteReservation, FederationStorageWriteReservationRequest,
     FederationStorageWriteState, MAXIMUM_FEDERATED_STORAGE_WRITE_LIFETIME_MICROS,
+};
+pub use federation_storage_scrub::{
+    FederationStorageScrubCompletion, FederationStorageScrubError, FederationStorageScrubEvidence,
+    FederationStorageScrubPreparation,
 };
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,

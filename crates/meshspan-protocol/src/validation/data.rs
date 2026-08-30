@@ -4,7 +4,10 @@
 
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::data_control_envelope::Message;
-use crate::v1::{GetShardHeader, OperationOutcome, PutShardReady, VersionedPayload};
+use crate::v1::{
+    GetShardHeader, OperationOutcome, PutShardReady, ScrubShardRequest, ScrubShardResult,
+    VersionedPayload,
+};
 
 use super::{
     valid_digest, valid_identifier, valid_nonempty_bytes, validate_header,
@@ -50,6 +53,8 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         }
         Message::GetShardHeader(value) => get_header(value, limits),
         Message::GetShardResult(value) => validate_operation_result(value.result.as_ref(), limits),
+        Message::ScrubShardRequest(value) => scrub_request(value, limits),
+        Message::ScrubShardResult(value) => scrub_result(value, limits),
         Message::DeleteShardRequest(value) => {
             validate_header(
                 value
@@ -105,6 +110,35 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             valid_digest(&value.permit_digest)
         }
     }
+}
+
+fn scrub_request(value: &ScrubShardRequest, limits: WireLimits) -> Result<(), WireContractError> {
+    validate_header(
+        value
+            .header
+            .as_ref()
+            .ok_or(WireContractError::InvalidMessage)?,
+    )?;
+    validate_target(&value.target_id, value.target_generation)?;
+    validate_shard(value.shard.as_ref())?;
+    valid_nonempty_bytes(&value.federation_capability, limits.maximum_control_bytes())?;
+    correlated_federation_digest(
+        &value.federation_capability,
+        &value.federation_capability_digest,
+    )
+}
+
+fn scrub_result(value: &ScrubShardResult, limits: WireLimits) -> Result<(), WireContractError> {
+    validate_operation_result(value.result.as_ref(), limits)?;
+    validate_observation(value.result.as_ref(), value.observation.as_ref(), limits)
+}
+
+fn validate_observation(
+    result: Option<&crate::v1::OperationResult>,
+    observation: Option<&VersionedPayload>,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_mutation_receipt(result, observation, limits)
 }
 
 fn validate_mutation_receipt(

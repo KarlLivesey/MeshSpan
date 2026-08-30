@@ -8,6 +8,7 @@ use meshspan_domain::{
 };
 
 use crate::{ContractError, ReclamationReceipt, ShardIdentity, ShardReceipt, TombstoneReceipt};
+use crate::{ScrubObservation, ScrubOutcome};
 
 const PERMIT_DOMAIN: &[u8] = b"meshspan.federation.shard-permit.v1";
 const PROVIDER_SHARD_NAMESPACE_DOMAIN: &[u8] = b"meshspan.federation.provider-shard-namespace.v1";
@@ -191,6 +192,35 @@ pub fn federated_shard_read_result_digest(
     digest.finalize().into()
 }
 
+/// Calculates durable provider result evidence for one complete federated shard scrub.
+#[must_use]
+pub fn federated_shard_scrub_result_digest(
+    permit: &FederatedShardPermit,
+    observation: ScrubObservation,
+    completed_at: UnixMicros,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.federation.shard-scrub-result.v1");
+    digest.update(&permit.permit_digest);
+    digest.update(&observation.shard.manifest_digest);
+    digest.update(&observation.shard.stripe_index.to_be_bytes());
+    digest.update(&observation.shard.shard_index.to_be_bytes());
+    digest.update(&observation.shard.generation.to_be_bytes());
+    digest_optional_measurement(
+        &mut digest,
+        observation.expected_length,
+        observation.expected_digest,
+    );
+    digest_optional_measurement(
+        &mut digest,
+        observation.observed_length,
+        observation.observed_digest,
+    );
+    digest.update(&[scrub_outcome_code(observation.outcome)]);
+    digest.update(&completed_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
 /// Calculates provider result evidence for one durable federated shard retirement.
 #[must_use]
 pub fn federated_shard_retirement_result_digest(
@@ -234,6 +264,42 @@ fn encode_tombstone(digest: &mut blake3::Hasher, receipt: TombstoneReceipt) {
     digest.update(&receipt.target_generation.to_be_bytes());
     digest.update(&receipt.permit_digest);
     digest.update(&receipt.tombstone_digest);
+}
+
+fn digest_optional_measurement(
+    digest: &mut blake3::Hasher,
+    length: Option<u64>,
+    content_digest: Option<[u8; 32]>,
+) {
+    match length {
+        Some(length) => {
+            digest.update(&[1]);
+            digest.update(&length.to_be_bytes());
+        }
+        None => {
+            digest.update(&[0]);
+        }
+    }
+    match content_digest {
+        Some(content_digest) => {
+            digest.update(&[1]);
+            digest.update(&content_digest);
+        }
+        None => {
+            digest.update(&[0]);
+        }
+    }
+}
+
+const fn scrub_outcome_code(outcome: ScrubOutcome) -> u8 {
+    match outcome {
+        ScrubOutcome::Healthy => 1,
+        ScrubOutcome::Missing => 2,
+        ScrubOutcome::Corrupt => 3,
+        ScrubOutcome::Unreadable => 4,
+        ScrubOutcome::Unexpected => 5,
+        ScrubOutcome::Deferred => 6,
+    }
 }
 
 #[cfg(test)]

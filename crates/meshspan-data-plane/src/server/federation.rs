@@ -3,22 +3,24 @@
 //! Federated-swarm authority adapter for the shared provider shard state machine.
 
 use meshspan_contracts::{
-    ContractError, FederatedShardPermit, FederatedStoragePermitMacKey, ReclamationReceipt,
-    RemovalPermit, ReservationClass, ShardReadPermit, ShardReceipt, StorageProvider,
-    TombstoneReceipt, federated_provider_shard_identity, federated_shard_read_result_digest,
-    read_permit_mac, removal_permit_mac, verify_federated_shard_permit_mac,
+    ContractError, FederatedShardPermit, FederatedStoragePermitMacKey, InventoryEntry,
+    ReclamationReceipt, RemovalPermit, ReservationClass, ScrubObservation, ShardReadPermit,
+    ShardReceipt, StorageProvider, TombstoneReceipt, federated_provider_shard_identity,
+    federated_shard_read_result_digest, read_permit_mac, removal_permit_mac,
+    validate_exact_scrub_observation, verify_federated_shard_permit_mac,
 };
 use meshspan_domain::{FederationStorageAction, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::data_control_envelope::Message;
 use meshspan_protocol::v1::{
-    DeleteShardRequest, GetShardRequest, PutShardBegin, ReclaimShardRequest,
+    DeleteShardRequest, GetShardRequest, PutShardBegin, ReclaimShardRequest, ScrubShardRequest,
 };
 use meshspan_transport::{
     AcceptedStream, AuthenticatedFederationPeer, StreamKind, receive_data_control,
 };
 
 use super::removal::{reject_delete, reject_reclaim, send_delete_result, send_reclaim_result};
+use super::scrub::{reject_scrub, send_scrub_result};
 use super::{AuthorisedGet, PreparedPut, RemoteShardService, reject_get, reject_put};
 use crate::DataPlaneError;
 use crate::capability::decode_federated_shard_permit;
@@ -76,6 +78,49 @@ impl FederatedRetirementEvidence {
 #[derive(Clone, Copy)]
 pub struct FederatedReclamationEvidence {
     receipt: ReclamationReceipt,
+}
+
+/// Exact durable scrub observation retained by provider-local accounting across retries.
+#[derive(Clone, Copy)]
+pub struct FederatedScrubEvidence {
+    observation: ScrubObservation,
+    completed_at: UnixMicros,
+    result_digest: [u8; 32],
+}
+
+/// Provider work required for a fresh scrub, or immutable evidence for an exact retry.
+#[derive(Clone, Copy)]
+pub enum FederatedScrubPreparation {
+    /// Inspect this independently authorised physical provider shard.
+    Pending(InventoryEntry),
+    /// Return this original logical observation without inspecting changed bytes again.
+    Replayed(FederatedScrubEvidence),
+}
+
+impl FederatedScrubEvidence {
+    /// Constructs validated durable exact scrub evidence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed observations, non-positive completion time or an empty result digest.
+    pub fn new(
+        observation: ScrubObservation,
+        completed_at: UnixMicros,
+        result_digest: [u8; 32],
+    ) -> Result<Self, ContractError> {
+        let valid = validate_exact_scrub_observation(observation).is_ok()
+            && completed_at.get() > 0
+            && result_digest != [0; 32];
+        if valid {
+            Ok(Self {
+                observation,
+                completed_at,
+                result_digest,
+            })
+        } else {
+            Err(ContractError::Corrupt)
+        }
+    }
 }
 
 impl FederatedReclamationEvidence {
@@ -169,6 +214,29 @@ pub trait FederatedShardAuthority {
         completed_at: UnixMicros,
     ) -> Result<FederatedWriteEvidence, ContractError>;
 
+    /// Resolves exact durable scrub replay or independently catalogued provider work.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, retired, substituted or corrupt shard evidence.
+    fn prepare_scrub(
+        &self,
+        permit: &FederatedShardPermit,
+    ) -> Result<FederatedScrubPreparation, ContractError>;
+
+    /// Records one immutable provider observation before signed scrub success may cross federation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale capability, conflicting replay or substituted physical observations.
+    fn commit_scrub(
+        &mut self,
+        permit: &FederatedShardPermit,
+        capability_digest: [u8; 32],
+        provider_observation: ScrubObservation,
+        completed_at: UnixMicros,
+    ) -> Result<FederatedScrubEvidence, ContractError>;
+
     /// Records a provider tombstone before logical retirement success may cross federation.
     ///
     /// # Errors
@@ -246,6 +314,20 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             }
             Message::GetShardRequest(request) => {
                 self.serve_federated_get(
+                    &mut stream,
+                    FederatedServeContext {
+                        peer,
+                        permit_key,
+                        authority,
+                        limits,
+                        observed_at,
+                    },
+                    request,
+                )
+                .await
+            }
+            Message::ScrubShardRequest(request) => {
+                self.serve_federated_scrub(
                     &mut stream,
                     FederatedServeContext {
                         peer,
@@ -437,6 +519,73 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
                 context.observed_at,
             ),
             completed_at: context.observed_at,
+        }))
+    }
+
+    async fn serve_federated_scrub<Authority: FederatedShardAuthority>(
+        &mut self,
+        stream: &mut AcceptedStream,
+        context: FederatedServeContext<'_, Authority>,
+        request: ScrubShardRequest,
+    ) -> Result<Option<FederatedShardOutcome>, DataPlaneError> {
+        let permit = match self.authorise_federated_lifecycle(
+            &context,
+            LifecycleWireRequest {
+                header: request.header.as_ref(),
+                target_id: &request.target_id,
+                target_generation: request.target_generation,
+                shard: request.shard.as_ref(),
+                capability: &request.federation_capability,
+                capability_digest: &request.federation_capability_digest,
+            },
+            FederationStorageAction::Scrub,
+        ) {
+            Ok(permit) => permit,
+            Err(error) => {
+                reject_scrub(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        let capability_digest = digest(&request.federation_capability_digest)?;
+        let evidence = match context.authority.prepare_scrub(&permit) {
+            Ok(FederatedScrubPreparation::Replayed(evidence)) => evidence,
+            Ok(FederatedScrubPreparation::Pending(expected)) => {
+                let provider_observation =
+                    match self.provider.scrub_exact(expected, context.observed_at) {
+                        Ok(observation) => observation,
+                        Err(error) => {
+                            reject_scrub(stream, context.limits, error).await?;
+                            return Ok(None);
+                        }
+                    };
+                match context.authority.commit_scrub(
+                    &permit,
+                    capability_digest,
+                    provider_observation,
+                    context.observed_at,
+                ) {
+                    Ok(evidence) => evidence,
+                    Err(error) => {
+                        reject_scrub(stream, context.limits, error).await?;
+                        return Ok(None);
+                    }
+                }
+            }
+            Err(error) => {
+                reject_scrub(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        send_scrub_result(stream, context.limits, Ok(evidence.observation)).await?;
+        Ok(Some(FederatedShardOutcome {
+            permit,
+            capability_digest,
+            affected_bytes: evidence
+                .observation
+                .expected_length
+                .ok_or(DataPlaneError::InvalidMessage)?,
+            result_digest: evidence.result_digest,
+            completed_at: evidence.completed_at,
         }))
     }
 

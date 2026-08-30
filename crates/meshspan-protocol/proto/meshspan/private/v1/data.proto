@@ -59,6 +59,20 @@ message GetShardResult {
   OperationResult result = 1;
 }
 
+message ScrubShardRequest {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  ShardIdentity shard = 4;
+  bytes federation_capability_digest = 5;
+  bytes federation_capability = 6;
+}
+
+message ScrubShardResult {
+  OperationResult result = 1;
+  VersionedPayload observation = 2;
+}
+
 message DeleteShardRequest {
   RequestHeader header = 1;
   bytes target_id = 2;
@@ -106,6 +120,8 @@ message DataControlEnvelope {
     GetShardRequest get_shard_request = 20;
     GetShardHeader get_shard_header = 21;
     GetShardResult get_shard_result = 22;
+    ScrubShardRequest scrub_shard_request = 23;
+    ScrubShardResult scrub_shard_result = 24;
     DeleteShardRequest delete_shard_request = 30;
     DeleteShardResult delete_shard_result = 31;
     ValidateRemoval validate_removal = 32;

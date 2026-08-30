@@ -5,10 +5,10 @@
 use std::fs;
 
 use meshspan_contracts::{
-    BoundedBytes, ContractError, ImplementationDescriptor, InventoryPage, PutShardRequest,
-    RemovalAuthorityFence, RemovalPermit, RequestContext, ReserveStorageRequest, ScrubPage,
-    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
-    TombstoneReceipt, read_permit_mac,
+    BoundedBytes, ContractError, ImplementationDescriptor, InventoryEntry, InventoryPage,
+    PutShardRequest, RemovalAuthorityFence, RemovalPermit, RequestContext, ReserveStorageRequest,
+    ScrubObservation, ScrubPage, ShardReadPermit, ShardReceipt, StoragePermitMacKey,
+    StorageProvider, StorageReservation, TombstoneReceipt, read_permit_mac,
 };
 use meshspan_domain::{
     BranchId, ContentManifestId, EntropyError, FileVersionId, MeshId, NamespaceCommitId, ObjectId,
@@ -359,6 +359,14 @@ impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
         limit: usize,
     ) -> Result<InventoryPage, ContractError> {
         self.inner.inventory(cursor, limit)
+    }
+
+    fn scrub_exact(
+        &mut self,
+        expected: InventoryEntry,
+        observed_at: UnixMicros,
+    ) -> Result<ScrubObservation, ContractError> {
+        self.inner.scrub_exact(expected, observed_at)
     }
 
     fn scrub(

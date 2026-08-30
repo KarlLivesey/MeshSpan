@@ -7,9 +7,9 @@ mod federation;
 pub use federation::{decode_federated_shard_permit, encode_federated_shard_permit};
 
 use meshspan_contracts::{
-    ReclamationReceipt, RemovalPermit, ReservationClass, ShardIdentity, ShardReadPermit,
-    ShardReceipt, ShardWritePermit, StorageReservation, TombstoneReceipt,
-    reclamation_receipt_digest,
+    ReclamationReceipt, RemovalPermit, ReservationClass, ScrubObservation, ScrubOutcome,
+    ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit, StorageReservation,
+    TombstoneReceipt, reclamation_receipt_digest, validate_exact_scrub_observation,
 };
 use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 use thiserror::Error;
@@ -21,6 +21,7 @@ const SHARD_RECEIPT_BYTES: usize = 126;
 const REMOVAL_PERMIT_BYTES: usize = 158;
 const TOMBSTONE_RECEIPT_BYTES: usize = 150;
 const RECLAMATION_RECEIPT_BYTES: usize = 198;
+const SCRUB_OBSERVATION_BYTES: usize = 129;
 
 /// Stable rejection for malformed or non-canonical capability bytes.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -293,6 +294,50 @@ pub(crate) fn decode_reclamation_evidence(
     }
 }
 
+pub(crate) fn encode_scrub_observation(
+    observation: ScrubObservation,
+) -> Result<Vec<u8>, CapabilityCodecError> {
+    validate_exact_scrub_observation(observation).map_err(|_| CapabilityCodecError::Invalid)?;
+    let mut bytes = Vec::with_capacity(SCRUB_OBSERVATION_BYTES);
+    push_shard(&mut bytes, observation.shard);
+    push_optional_measurement(
+        &mut bytes,
+        observation.expected_length,
+        observation.expected_digest,
+    );
+    push_optional_measurement(
+        &mut bytes,
+        observation.observed_length,
+        observation.observed_digest,
+    );
+    bytes.push(scrub_outcome_code(observation.outcome));
+    Ok(bytes)
+}
+
+pub(crate) fn decode_scrub_observation(
+    bytes: &[u8],
+) -> Result<ScrubObservation, CapabilityCodecError> {
+    if bytes.len() != SCRUB_OBSERVATION_BYTES {
+        return Err(CapabilityCodecError::Invalid);
+    }
+    let mut reader = Reader::new(bytes);
+    let shard = reader.shard()?;
+    let expected = read_optional_measurement(&mut reader, true)?;
+    let observed = read_optional_measurement(&mut reader, false)?;
+    let outcome = decode_scrub_outcome(reader.u8()?)?;
+    reader.finish()?;
+    let observation = ScrubObservation {
+        shard,
+        expected_length: expected.map(|value| value.0),
+        expected_digest: expected.map(|value| value.1),
+        observed_length: observed.map(|value| value.0),
+        observed_digest: observed.map(|value| value.1),
+        outcome,
+    };
+    validate_exact_scrub_observation(observation).map_err(|_| CapabilityCodecError::Invalid)?;
+    Ok(observation)
+}
+
 pub(crate) fn encode_reservation(reservation: StorageReservation) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(RESERVATION_BYTES);
     bytes.extend_from_slice(&reservation.operation_id.as_bytes());
@@ -361,6 +406,57 @@ fn push_shard(bytes: &mut Vec<u8>, shard: ShardIdentity) {
     bytes.extend_from_slice(&shard.stripe_index.to_be_bytes());
     bytes.extend_from_slice(&shard.shard_index.to_be_bytes());
     bytes.extend_from_slice(&shard.generation.to_be_bytes());
+}
+
+fn push_optional_measurement(bytes: &mut Vec<u8>, length: Option<u64>, digest: Option<[u8; 32]>) {
+    if let Some((length, digest)) = length.zip(digest) {
+        bytes.push(1);
+        bytes.extend_from_slice(&length.to_be_bytes());
+        bytes.extend_from_slice(&digest);
+    } else {
+        bytes.push(0);
+        bytes.extend_from_slice(&[0; 8]);
+        bytes.extend_from_slice(&[0; 32]);
+    }
+}
+
+fn read_optional_measurement(
+    reader: &mut Reader<'_>,
+    require_positive_length: bool,
+) -> Result<Option<(u64, [u8; 32])>, CapabilityCodecError> {
+    let present = reader.u8()?;
+    let length = reader.u64()?;
+    let digest = reader.array()?;
+    match present {
+        0 if length == 0 && digest == [0; 32] => Ok(None),
+        1 if digest != [0; 32] && (!require_positive_length || length > 0) => {
+            Ok(Some((length, digest)))
+        }
+        _ => Err(CapabilityCodecError::Invalid),
+    }
+}
+
+const fn scrub_outcome_code(outcome: ScrubOutcome) -> u8 {
+    match outcome {
+        ScrubOutcome::Healthy => 1,
+        ScrubOutcome::Missing => 2,
+        ScrubOutcome::Corrupt => 3,
+        ScrubOutcome::Unreadable => 4,
+        ScrubOutcome::Unexpected => 5,
+        ScrubOutcome::Deferred => 6,
+    }
+}
+
+const fn decode_scrub_outcome(value: u8) -> Result<ScrubOutcome, CapabilityCodecError> {
+    match value {
+        1 => Ok(ScrubOutcome::Healthy),
+        2 => Ok(ScrubOutcome::Missing),
+        3 => Ok(ScrubOutcome::Corrupt),
+        4 => Ok(ScrubOutcome::Unreadable),
+        5 => Ok(ScrubOutcome::Unexpected),
+        6 => Ok(ScrubOutcome::Deferred),
+        _ => Err(CapabilityCodecError::Invalid),
+    }
 }
 
 const fn class_code(class: ReservationClass) -> u8 {
@@ -451,16 +547,17 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use meshspan_contracts::{
-        ReclamationReceipt, RemovalPermit, ReservationClass, ShardIdentity, ShardReadPermit,
-        ShardWritePermit, TombstoneReceipt, reclamation_receipt_digest, tombstone_receipt_digest,
+        ReclamationReceipt, RemovalPermit, ReservationClass, ScrubObservation, ScrubOutcome,
+        ShardIdentity, ShardReadPermit, ShardWritePermit, TombstoneReceipt,
+        reclamation_receipt_digest, tombstone_receipt_digest,
     };
     use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 
     use super::{
         decode_read_permit, decode_reclamation_evidence, decode_reclamation_receipt,
-        decode_removal_permit, decode_tombstone_receipt, decode_write_permit, encode_read_permit,
-        encode_reclamation_receipt, encode_removal_permit, encode_tombstone_receipt,
-        encode_write_permit,
+        decode_removal_permit, decode_scrub_observation, decode_tombstone_receipt,
+        decode_write_permit, encode_read_permit, encode_reclamation_receipt, encode_removal_permit,
+        encode_scrub_observation, encode_tombstone_receipt, encode_write_permit,
     };
 
     #[test]
@@ -541,6 +638,78 @@ mod tests {
         let opaque = decode_reclamation_evidence(&forged)?;
         assert_eq!(opaque.tombstone, reclamation.tombstone);
         assert_ne!(opaque.reclamation_digest, reclamation.reclamation_digest);
+        Ok(())
+    }
+
+    #[test]
+    fn scrub_observation_encoding_is_exact_and_rejects_impossible_shapes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let healthy = ScrubObservation {
+            shard: read_permit()?.shard,
+            expected_length: Some(12),
+            expected_digest: Some([13; 32]),
+            observed_length: Some(12),
+            observed_digest: Some([13; 32]),
+            outcome: ScrubOutcome::Healthy,
+        };
+        let encoded = encode_scrub_observation(healthy)?;
+        assert_eq!(decode_scrub_observation(&encoded)?, healthy);
+        reject_every_non_exact_length(encoded, decode_scrub_observation);
+
+        let missing = ScrubObservation {
+            observed_length: None,
+            observed_digest: None,
+            outcome: ScrubOutcome::Missing,
+            ..healthy
+        };
+        assert_eq!(
+            decode_scrub_observation(&encode_scrub_observation(missing)?)?,
+            missing
+        );
+        let corrupt = ScrubObservation {
+            observed_digest: Some([14; 32]),
+            outcome: ScrubOutcome::Corrupt,
+            ..healthy
+        };
+        assert_eq!(
+            decode_scrub_observation(&encode_scrub_observation(corrupt)?)?,
+            corrupt
+        );
+        assert!(
+            encode_scrub_observation(ScrubObservation {
+                expected_digest: None,
+                ..healthy
+            })
+            .is_err()
+        );
+        assert!(
+            encode_scrub_observation(ScrubObservation {
+                observed_digest: None,
+                ..healthy
+            })
+            .is_err()
+        );
+        assert!(
+            encode_scrub_observation(ScrubObservation {
+                observed_digest: Some([14; 32]),
+                ..healthy
+            })
+            .is_err()
+        );
+        assert!(
+            encode_scrub_observation(ScrubObservation {
+                outcome: ScrubOutcome::Corrupt,
+                ..healthy
+            })
+            .is_err()
+        );
+        assert!(
+            encode_scrub_observation(ScrubObservation {
+                outcome: ScrubOutcome::Unexpected,
+                ..healthy
+            })
+            .is_err()
+        );
         Ok(())
     }
 

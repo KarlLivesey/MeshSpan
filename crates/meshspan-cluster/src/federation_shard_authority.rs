@@ -3,17 +3,19 @@
 //! Current metadata and node-local quota adapter around federated shard provider IO.
 
 use meshspan_contracts::{
-    ContractError, FederatedShardPermit, ReclamationReceipt, ShardReceipt, TombstoneReceipt,
-    federated_shard_write_result_digest,
+    ContractError, FederatedShardPermit, ReclamationReceipt, ScrubObservation, ShardReceipt,
+    TombstoneReceipt, federated_shard_write_result_digest,
 };
 use meshspan_data_plane::{
-    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedShardAuthority,
-    FederatedWriteEvidence,
+    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedScrubEvidence,
+    FederatedScrubPreparation, FederatedShardAuthority, FederatedWriteEvidence,
 };
 use meshspan_domain::{FederationStorageAction, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeRepository, FederationStorageAuthorityRequest, FederationStorageLifecycleError,
     FederationStorageReclamationCompletion, FederationStorageRetirementCompletion,
+    FederationStorageScrubCompletion, FederationStorageScrubError,
+    FederationStorageScrubPreparation as MetadataScrubPreparation,
     FederationStorageWriteCompletion, FederationStorageWriteReservation,
     FederationStorageWriteState, LocalDatabase,
 };
@@ -124,6 +126,51 @@ impl FederatedShardAuthority for MetadataFederatedShardAuthority<'_> {
         write_evidence(&completed)
     }
 
+    fn prepare_scrub(
+        &self,
+        permit: &FederatedShardPermit,
+    ) -> Result<FederatedScrubPreparation, ContractError> {
+        match self
+            .local_database
+            .prepare_federated_storage_scrub(permit)
+            .map_err(|error| scrub_error(&error))?
+        {
+            MetadataScrubPreparation::Pending(expected) => {
+                Ok(FederatedScrubPreparation::Pending(expected))
+            }
+            MetadataScrubPreparation::Replayed(evidence) => Ok(
+                FederatedScrubPreparation::Replayed(FederatedScrubEvidence::new(
+                    evidence.observation,
+                    evidence.completed_at,
+                    evidence.result_digest,
+                )?),
+            ),
+        }
+    }
+
+    fn commit_scrub(
+        &mut self,
+        permit: &FederatedShardPermit,
+        capability_digest: [u8; 32],
+        provider_observation: ScrubObservation,
+        completed_at: UnixMicros,
+    ) -> Result<FederatedScrubEvidence, ContractError> {
+        let evidence = self
+            .local_database
+            .record_federated_storage_scrub(&FederationStorageScrubCompletion {
+                permit: *permit,
+                capability_digest,
+                provider_observation,
+                completed_at,
+            })
+            .map_err(|error| scrub_error(&error))?;
+        FederatedScrubEvidence::new(
+            evidence.observation,
+            evidence.completed_at,
+            evidence.result_digest,
+        )
+    }
+
     fn commit_retirement(
         &mut self,
         permit: &FederatedShardPermit,
@@ -201,6 +248,16 @@ fn lifecycle_error(error: &FederationStorageLifecycleError) -> ContractError {
         FederationStorageLifecycleError::CorruptState
         | FederationStorageLifecycleError::Capability(_)
         | FederationStorageLifecycleError::Database(_) => ContractError::Unavailable,
+    }
+}
+
+fn scrub_error(error: &FederationStorageScrubError) -> ContractError {
+    match error {
+        FederationStorageScrubError::Invalid => ContractError::InvalidInput,
+        FederationStorageScrubError::Conflict => ContractError::Conflict,
+        FederationStorageScrubError::CorruptState
+        | FederationStorageScrubError::Capability(_)
+        | FederationStorageScrubError::Database(_) => ContractError::Unavailable,
     }
 }
 

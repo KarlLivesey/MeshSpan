@@ -3,16 +3,16 @@
 //! Client side of exact remote shard lifecycle streams.
 
 use meshspan_contracts::{
-    BoundedBytes, FederatedShardPermit, ReclamationReceipt, RemovalPermit, ShardIdentity,
-    ShardReadPermit, ShardReceipt, ShardWritePermit, TombstoneReceipt, reclamation_receipt_digest,
-    tombstone_receipt_digest,
+    BoundedBytes, FederatedShardPermit, ReclamationReceipt, RemovalPermit, ScrubObservation,
+    ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit, TombstoneReceipt,
+    reclamation_receipt_digest, tombstone_receipt_digest,
 };
 use meshspan_domain::{FederationStorageAction, OperationId, TargetId, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::data_control_envelope::Message;
 use meshspan_protocol::v1::{
     DataControlEnvelope, DataFrame, DeleteShardRequest, GetShardRequest, PutShardBegin,
-    PutShardFinish, ReclaimShardRequest, RequestHeader,
+    PutShardFinish, ReclaimShardRequest, RequestHeader, ScrubShardRequest,
 };
 use meshspan_transport::{
     StreamKind, open_stream, receive_data_control, receive_data_frame, send_data_control,
@@ -24,7 +24,7 @@ use crate::capability::{encode_federated_shard_permit, encode_read_permit, encod
 use crate::wire::{
     federated_reclamation_evidence, receipt, reclamation_receipt, remote_rejection,
     removal_permit_payload, request_context, request_context_without_revision, require_durable,
-    shard, tombstone_receipt, tombstone_receipt_payload, wire_shard,
+    scrub_observation, shard, tombstone_receipt, tombstone_receipt_payload, wire_shard,
 };
 
 /// Writes one exact immutable shard and returns only a decoded durable provider receipt.
@@ -284,6 +284,69 @@ pub async fn get_federated_shard(
         limits,
     )
     .await
+}
+
+/// Independently verifies one complete encrypted shard on its remote provider.
+///
+/// # Errors
+///
+/// Rejects non-scrub capabilities, local identity/bound contradictions, transport failure,
+/// provider rejection and any structurally invalid or differently scoped observation.
+pub async fn scrub_federated_shard(
+    connection: &quinn::Connection,
+    header: RequestHeader,
+    permit: FederatedShardPermit,
+    capability_digest: [u8; 32],
+    limits: WireLimits,
+) -> Result<ScrubObservation, DataPlaneError> {
+    let context = request_context(&header, permit.allocation_revision)?;
+    let deadline = UnixMicros::new(header.deadline_unix_micros);
+    let valid = permit.action == FederationStorageAction::Scrub
+        && context.operation_id == permit.operation_id
+        && header.mesh_id.as_slice() == permit.remote_mesh_id.as_bytes()
+        && capability_digest != [0; 32]
+        && deadline.get() > 0
+        && deadline <= permit.expires_at;
+    if !valid {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    let (mut send, mut receive) = open_stream(connection, StreamKind::Data).await?;
+    send_data_control(
+        &mut send,
+        &DataControlEnvelope {
+            message: Some(Message::ScrubShardRequest(ScrubShardRequest {
+                header: Some(header),
+                target_id: permit.target_id.as_bytes().to_vec(),
+                target_generation: permit.target_generation,
+                shard: Some(wire_shard(permit.shard)),
+                federation_capability_digest: capability_digest.to_vec(),
+                federation_capability: encode_federated_shard_permit(permit),
+            })),
+        },
+        limits,
+    )
+    .await?;
+    send.finish()
+        .map_err(meshspan_transport::TransportError::from)?;
+    let result = receive_data_control(&mut receive, limits)
+        .await?
+        .into_inner();
+    let Message::ScrubShardResult(result) = result.message.ok_or(DataPlaneError::InvalidMessage)?
+    else {
+        return Err(DataPlaneError::InvalidMessage);
+    };
+    require_durable(result.result.as_ref())?;
+    let observation = scrub_observation(result.observation.as_ref())?;
+    let valid = observation.shard == permit.shard
+        && observation
+            .expected_length
+            .is_some_and(|length| length > 0 && length <= permit.maximum_bytes)
+        && observation.expected_digest.is_some();
+    if valid {
+        Ok(observation)
+    } else {
+        Err(DataPlaneError::InvalidMessage)
+    }
 }
 
 struct GetInvocation {
