@@ -101,20 +101,24 @@ message FetchFederatedContentLayout {
   bytes grant_id = 1;
   VersionedPayload resource_scope = 2;
   bytes manifest_id = 3;
-  bytes cursor = 4;
-  uint32 limit = 5;
-  bytes signature = 6;
+  bytes export_token = 4;
+  bytes manifest_object_digest = 5;
+  bytes cursor = 6;
+  uint32 limit = 7;
+  bytes signature = 8;
 }
 
 message FederatedContentLayoutPage {
   bytes grant_id = 1;
   VersionedPayload resource_scope = 2;
   bytes manifest_id = 3;
-  VersionedPayload layout_header = 4;
-  repeated VersionedPayload chunks = 5;
-  bytes next_cursor = 6;
-  bytes page_digest = 7;
-  bytes signature = 8;
+  bytes export_token = 4;
+  bytes manifest_object_digest = 5;
+  VersionedPayload layout_header = 6;
+  repeated VersionedPayload chunks = 7;
+  bytes next_cursor = 8;
+  bytes page_digest = 9;
+  bytes signature = 10;
 }
 
 message ProposeFederatedBranch {

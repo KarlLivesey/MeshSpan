@@ -221,6 +221,8 @@ fn fetch_content_layout(
     valid_identifier(&value.grant_id)?;
     validate_payload(value.resource_scope.as_ref(), limits)?;
     valid_identifier(&value.manifest_id)?;
+    valid_digest(&value.export_token)?;
+    valid_digest(&value.manifest_object_digest)?;
     valid_optional_bytes(&value.cursor, limits.maximum_control_bytes())?;
     valid_page_limit(value.limit, limits)?;
     valid_signature(&value.signature, limits)
@@ -233,6 +235,8 @@ fn content_layout_page(
     valid_identifier(&value.grant_id)?;
     validate_payload(value.resource_scope.as_ref(), limits)?;
     valid_identifier(&value.manifest_id)?;
+    valid_digest(&value.export_token)?;
+    valid_digest(&value.manifest_object_digest)?;
     validate_payload(value.layout_header.as_ref(), limits)?;
     validate_payloads(&value.chunks, limits, true)?;
     valid_optional_bytes(&value.next_cursor, limits.maximum_control_bytes())?;

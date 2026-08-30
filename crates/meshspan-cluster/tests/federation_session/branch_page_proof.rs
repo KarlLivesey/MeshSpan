@@ -28,6 +28,7 @@ use meshspan_protocol::v1::{ProtocolVersion, VersionedPayload};
 use meshspan_transport::FederationExchangeContext;
 use tempfile::tempdir;
 
+use super::content_layout_proof::prove_federated_content_layout;
 use super::history_sync_proof::prove_restart_resumable_filesystem_sync;
 use super::{NOW, SessionProof, replay_guard};
 
@@ -38,6 +39,7 @@ pub(super) async fn prove_branch_page_service(
     prove_authorised_exchange(proof, &fixture).await?;
     prove_filesystem_backed_exchange(proof, &fixture).await?;
     prove_restart_resumable_filesystem_sync(proof, &fixture).await?;
+    prove_federated_content_layout(proof, &fixture).await?;
     prove_denied_exchange_skips_source(proof, &fixture).await?;
     prove_excessive_source_page_fails_closed(proof, &fixture).await
 }
@@ -266,11 +268,11 @@ pub(super) struct BranchFixture {
     pub(super) authority: EffectiveFederationGrantAuthority,
     pub(super) grant_id: FederationGrantId,
     pub(super) resource: FederationResourceScope,
-    relationship_id: FederationRelationshipId,
+    pub(super) relationship_id: FederationRelationshipId,
 }
 
 impl BranchFixture {
-    fn new(proof: &SessionProof<'_>) -> Result<Self, Box<dyn Error>> {
+    pub(super) fn new(proof: &SessionProof<'_>) -> Result<Self, Box<dyn Error>> {
         let grant_id = FederationGrantId::from_bytes([7; 16])?;
         let resource = FederationResourceScope::Volume {
             owner_mesh_id: proof.server_mesh,
@@ -304,7 +306,7 @@ impl BranchFixture {
         })
     }
 
-    fn request(self, seed: u8) -> Result<FederationBranchFetchRequest, Box<dyn Error>> {
+    pub(super) fn request(self, seed: u8) -> Result<FederationBranchFetchRequest, Box<dyn Error>> {
         Ok(FederationBranchFetchRequest {
             relationship_id: self.relationship_id,
             grant_id: self.grant_id,
@@ -325,7 +327,7 @@ impl BranchFixture {
         })
     }
 
-    fn object_request(
+    pub(super) fn object_request(
         self,
         seed: u8,
         export_token: [u8; 32],

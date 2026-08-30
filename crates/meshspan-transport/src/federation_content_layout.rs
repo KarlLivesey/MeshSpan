@@ -110,6 +110,8 @@ pub struct FederationContentLayoutPageExpectation {
     grant_id: Vec<u8>,
     resource_scope: Option<VersionedPayload>,
     manifest_id: Vec<u8>,
+    export_token: Vec<u8>,
+    manifest_object_digest: Vec<u8>,
     transit_binding: [u8; 32],
 }
 
@@ -197,6 +199,8 @@ pub fn signed_federation_content_layout_fetch(
         grant_id: request.grant_id.clone(),
         resource_scope: request.resource_scope.clone(),
         manifest_id: request.manifest_id.clone(),
+        export_token: request.export_token.clone(),
+        manifest_object_digest: request.manifest_object_digest.clone(),
         transit_binding,
     };
     let envelope = FederationEnvelope {
@@ -384,7 +388,9 @@ fn verify_page_shape(
         && exact::<32>(&header.replay_nonce).is_ok_and(|nonce| nonce != context.replay_nonce)
         && page.grant_id == expected.grant_id
         && page.resource_scope == expected.resource_scope
-        && page.manifest_id == expected.manifest_id;
+        && page.manifest_id == expected.manifest_id
+        && page.export_token == expected.export_token
+        && page.manifest_object_digest == expected.manifest_object_digest;
     if valid {
         Ok(())
     } else {

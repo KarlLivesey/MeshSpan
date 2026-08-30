@@ -88,6 +88,20 @@ impl NamespaceHistoryImmutableRecord {
         self.digest
     }
 
+    /// Returns the validated manifest carried by this record, or `None` for another object kind.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any in-memory record whose canonical bytes no longer decode exactly.
+    pub fn as_manifest(&self) -> Result<Option<ManifestPublication>, NamespaceHistoryRecordError> {
+        match self.decoded()? {
+            Decoded::Manifest(manifest) => Ok(Some(manifest)),
+            Decoded::DirectoryNode(_) | Decoded::FileVersion(_) | Decoded::ObjectRevision(_) => {
+                Ok(None)
+            }
+        }
+    }
+
     pub(in crate::publication) fn directory(
         record: &DirectoryNodeRecord,
     ) -> Result<Self, NamespaceHistoryRecordError> {

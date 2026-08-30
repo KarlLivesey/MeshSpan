@@ -20,9 +20,10 @@ mod transfer;
 pub use transfer::CommittedContentLayoutTransfer;
 
 use repository::{
-    chunk_count, copy_array, decode_chunk, from_sql, layout_is_sealed, layout_summary, load_chunk,
-    load_prepared_manifest, load_receipt, load_request, open_connection, to_i64, validate_chunk,
-    validate_exact_request, validate_live_request, validate_request,
+    chunk_count, committed_operation_for_manifest, copy_array, decode_chunk, from_sql,
+    layout_is_sealed, layout_summary, load_chunk, load_prepared_manifest, load_receipt,
+    load_request, open_connection, to_i64, validate_chunk, validate_exact_request,
+    validate_live_request, validate_request,
 };
 
 const MAXIMUM_PAGE_ITEMS: usize = 1_000;
@@ -444,6 +445,35 @@ impl DurableContentCatalog {
             catalog: self,
             content,
         })
+    }
+
+    /// Resolves and independently verifies one committed manifest without source-local operation
+    /// knowledge.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt or contradictory catalogue state. An unknown or incomplete manifest
+    /// returns `None` without exposing partial layout state.
+    pub fn committed_content_by_manifest(
+        &self,
+        manifest_id: meshspan_domain::ContentManifestId,
+    ) -> Result<Option<PublishedContentReference>, ContentCatalogError> {
+        let Some(operation_id) = committed_operation_for_manifest(&self.connection, manifest_id)?
+        else {
+            return Ok(None);
+        };
+        let request =
+            load_request(&self.connection, operation_id)?.ok_or(ContentCatalogError::Corrupt)?;
+        let layout = self
+            .prepared_layout(request)?
+            .ok_or(ContentCatalogError::Corrupt)?;
+        if request.manifest_id != manifest_id || layout.manifest.manifest_id != manifest_id {
+            return Err(ContentCatalogError::Corrupt);
+        }
+        Ok(Some(PublishedContentReference {
+            publication_operation_id: operation_id,
+            manifest: layout.manifest,
+        }))
     }
 
     /// Loads one prepared chunk identity for verified read/recovery work.

@@ -385,6 +385,53 @@ fn imported_layout_rejects_page_and_header_substitution() -> Result<(), Box<dyn 
     Ok(())
 }
 
+#[test]
+fn committed_manifest_lookup_hides_incomplete_state_and_reconstructs_exact_reference()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let request = request()?;
+    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+    assert_eq!(
+        catalog.committed_content_by_manifest(request.manifest_id)?,
+        None
+    );
+    catalog.begin(request)?;
+    assert_eq!(
+        catalog.committed_content_by_manifest(request.manifest_id)?,
+        None
+    );
+    let chunks = chunks()?;
+    catalog.append_chunks(request, &chunks)?;
+    let manifest = catalog.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 6,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for chunk in chunks {
+        catalog.record_receipt(
+            request,
+            chunk.chunk_index,
+            receipt(chunk, manifest.root_digest)?,
+            UnixMicros::new(4),
+        )?;
+    }
+    catalog.finish(request, UnixMicros::new(5))?;
+    assert_eq!(
+        catalog.committed_content_by_manifest(request.manifest_id)?,
+        Some(PublishedContentReference {
+            publication_operation_id: request.operation_id,
+            manifest,
+        })
+    );
+    let unknown = meshspan_domain::ContentManifestId::from_bytes([99; 16])?;
+    assert_eq!(catalog.committed_content_by_manifest(unknown)?, None);
+    Ok(())
+}
+
 fn request() -> Result<ContentPublicationRequest, Box<dyn std::error::Error>> {
     Ok(ContentPublicationRequest {
         operation_id: OperationId::from_bytes([1; 16])?,

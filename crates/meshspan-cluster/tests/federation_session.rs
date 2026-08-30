@@ -6,6 +6,8 @@
 mod authority_page_proof;
 #[path = "federation_session/branch_page_proof.rs"]
 mod branch_page_proof;
+#[path = "federation_session/content_layout_proof.rs"]
+mod content_layout_proof;
 #[path = "federation_session/history_sync_proof.rs"]
 mod history_sync_proof;
 #[path = "federation_session/storage_capability_proof.rs"]

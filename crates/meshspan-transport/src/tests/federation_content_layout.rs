@@ -258,6 +258,8 @@ fn layout_fetch() -> FetchFederatedContentLayout {
         grant_id: vec![95; 16],
         resource_scope: Some(resource_scope()),
         manifest_id: vec![97; 16],
+        export_token: vec![106; 32],
+        manifest_object_digest: vec![107; 32],
         cursor: vec![98; 16],
         limit: 2,
         signature: Vec::new(),
@@ -269,6 +271,8 @@ fn layout_page() -> FederatedContentLayoutPage {
         grant_id: vec![95; 16],
         resource_scope: Some(resource_scope()),
         manifest_id: vec![97; 16],
+        export_token: vec![106; 32],
+        manifest_object_digest: vec![107; 32],
         layout_header: Some(VersionedPayload {
             format_version: 1,
             canonical_bytes: b"portable-layout-header".to_vec(),

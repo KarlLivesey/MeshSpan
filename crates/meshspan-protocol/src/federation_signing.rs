@@ -508,6 +508,8 @@ mod tests {
                 canonical_bytes: vec![31],
             }),
             manifest_id: vec![32; 16],
+            export_token: vec![38; 32],
+            manifest_object_digest: vec![39; 32],
             layout_header: Some(VersionedPayload {
                 format_version: 1,
                 canonical_bytes: vec![33],

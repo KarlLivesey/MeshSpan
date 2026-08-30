@@ -243,6 +243,12 @@ pub enum FederationSessionError {
     /// The advertised immutable history body could not be produced safely.
     #[error("federation history object could not be produced")]
     HistoryObject(#[from] crate::FederationHistoryObjectSourceError),
+    /// The advertised portable encrypted-content layout could not be produced safely.
+    #[error("federation content layout could not be produced")]
+    ContentLayout(#[from] crate::FederationContentLayoutSourceError),
+    /// Portable content-layout fields or connection-bound key material were invalid.
+    #[error("federation content layout wire evidence failed")]
+    ContentLayoutWire(#[from] crate::FederationContentLayoutWireError),
     /// The signed resource scope was not the exact canonical typed form.
     #[error("federation resource scope is invalid")]
     ResourceScope(#[from] crate::FederationResourceWireError),
