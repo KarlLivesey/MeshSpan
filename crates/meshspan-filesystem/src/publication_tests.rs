@@ -215,6 +215,7 @@ fn federated_receive_retains_quarantine_without_replaying_its_namespace_effect()
     } = stage_complete_federated_receive()?;
     let prepared =
         target.prepare_namespace_history_receive(request.session_id, UnixMicros::new(100))?;
+    assert_eq!(prepared.admission_at(), request.now);
     assert_eq!(prepared.commits(), commit_records);
     assert!(matches!(
         target.complete_namespace_history_receive(request.session_id, UnixMicros::new(100)),

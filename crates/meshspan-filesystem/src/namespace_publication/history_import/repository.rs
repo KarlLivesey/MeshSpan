@@ -17,6 +17,7 @@ pub(super) struct StoredSession {
     pub(super) current_cursor: Vec<u8>,
     pub(super) terminal: bool,
     pub(super) limits: NamespaceHistoryLimits,
+    pub(super) created_at: UnixMicros,
     pub(super) expires_at: UnixMicros,
     pub(super) completion: Option<NamespaceHistoryImport>,
     pub(super) admission_digest: Option<[u8; 32]>,
@@ -31,6 +32,7 @@ struct StoredSessionRow {
     maximum_heads: i64,
     maximum_commits: i64,
     maximum_immutable_records: i64,
+    created_at: i64,
     expires_at: i64,
     imported_commits: Option<i64>,
     supplied_commits: Option<i64>,
@@ -45,7 +47,8 @@ pub(super) fn load_session(
     let row = connection
         .query_row(
             "SELECT scope_binding, export_token, volume_id, current_cursor, terminal,
-                    maximum_heads, maximum_commits, maximum_immutable_records, expires_at,
+                    maximum_heads, maximum_commits, maximum_immutable_records, created_at,
+                    expires_at,
                     imported_commits, supplied_commits, immutable_records, admission_digest
              FROM namespace_history_imports WHERE session_id = ?1",
             [session_id.as_slice()],
@@ -59,11 +62,12 @@ pub(super) fn load_session(
                     maximum_heads: row.get(5)?,
                     maximum_commits: row.get(6)?,
                     maximum_immutable_records: row.get(7)?,
-                    expires_at: row.get(8)?,
-                    imported_commits: row.get(9)?,
-                    supplied_commits: row.get(10)?,
-                    immutable_records: row.get(11)?,
-                    admission_digest: row.get(12)?,
+                    created_at: row.get(8)?,
+                    expires_at: row.get(9)?,
+                    imported_commits: row.get(10)?,
+                    supplied_commits: row.get(11)?,
+                    immutable_records: row.get(12)?,
+                    admission_digest: row.get(13)?,
                 })
             },
         )
@@ -201,6 +205,7 @@ fn decode_session(row: StoredSessionRow) -> Result<StoredSession, PublicationErr
             maximum_commits: usize_value(row.maximum_commits)?,
             maximum_immutable_records: usize_value(row.maximum_immutable_records)?,
         },
+        created_at: UnixMicros::new(row.created_at),
         expires_at: UnixMicros::new(row.expires_at),
         completion,
         admission_digest: row

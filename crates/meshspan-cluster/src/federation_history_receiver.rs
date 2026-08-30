@@ -2,27 +2,22 @@
 
 //! Admission-gated durable receiver boundary for authenticated federation history.
 
-use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 
-use meshspan_domain::{
-    FederatedMutationAcknowledgement, FederatedMutationAdmission, NamespaceCommitId, PartitionId,
-    QuarantineReason, UnixMicros,
-};
+use meshspan_domain::UnixMicros;
 use meshspan_filesystem::{
-    NamespaceHistoryCommitRecord, NamespaceHistoryImmutableRecord,
-    NamespaceHistoryMutationDecision, NamespaceHistoryPage, NamespaceHistoryReceiveCompletion,
-    NamespaceHistoryReceiveRequest, NamespaceHistoryReceiveStatus, PublicationError,
-    VersionPublicationStore,
+    NamespaceHistoryImmutableRecord, NamespaceHistoryMutationDecision, NamespaceHistoryPage,
+    NamespaceHistoryReceiveCompletion, NamespaceHistoryReceiveRequest,
+    NamespaceHistoryReceiveStatus, PublicationError, VersionPublicationStore,
 };
-use meshspan_metadata::{AuthoritativeRepository, MetadataStoreError, PartitionDatabase};
 use thiserror::Error;
 
-use crate::{
-    FederatedHistoryMutationAdmissionError, FilesystemFederationHistorySource,
-    classify_federated_history_mutation,
+use crate::FilesystemFederationHistorySource;
+use crate::federation_history_admission::{
+    FederationHistoryAdmissionError, FederationHistoryAdmissionSource,
+    FederationMutationAdmissionCommitError, FederationMutationAdmissionCommitter,
+    validate_admission_batch,
 };
 
 /// Owned future returned by a receiver which may dispatch blocking persistence work.
@@ -54,7 +49,7 @@ pub trait FederationHistoryReceiver: Send + Sync {
         now: UnixMicros,
     ) -> FederationHistoryReceiveFuture<'_, NamespaceHistoryReceiveStatus>;
 
-    /// Classifies every signed mutation, commits quarantine first, then imports exact decisions.
+    /// Classifies and consensus-commits every signed mutation before importing exact decisions.
     fn complete(
         &self,
         session_id: [u8; 32],
@@ -62,115 +57,33 @@ pub trait FederationHistoryReceiver: Send + Sync {
     ) -> FederationHistoryReceiveFuture<'_, NamespaceHistoryReceiveCompletion>;
 }
 
-/// Complete owner-side classifications and mandatory quarantine work for one receive session.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FederationHistoryAdmissionBatch {
-    decisions: Vec<NamespaceHistoryMutationDecision>,
-    quarantines: Vec<FederationQuarantineRetention>,
-}
-
-impl FederationHistoryAdmissionBatch {
-    /// Exact immutable decisions supplied to the filesystem transaction.
-    #[must_use]
-    pub fn decisions(&self) -> &[NamespaceHistoryMutationDecision] {
-        &self.decisions
-    }
-
-    /// Authentic quarantined mutations which must commit before filesystem completion.
-    #[must_use]
-    pub fn quarantines(&self) -> &[FederationQuarantineRetention] {
-        &self.quarantines
-    }
-
-    /// Constructs a batch only for admission sources which validated every exact record.
-    #[must_use]
-    pub fn new(
-        decisions: Vec<NamespaceHistoryMutationDecision>,
-        quarantines: Vec<FederationQuarantineRetention>,
-    ) -> Self {
-        Self {
-            decisions,
-            quarantines,
-        }
-    }
-}
-
-/// One authentic inadmissible mutation requiring replicated metadata retention.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FederationQuarantineRetention {
-    /// Receiver session providing idempotency scope to the consensus committer.
-    pub session_id: [u8; 32],
-    /// Exact immutable commit retained by the filesystem transaction.
-    pub commit_id: NamespaceCommitId,
-    /// Signed remote acceptance proof reclassified by the owner.
-    pub acknowledgement: FederatedMutationAcknowledgement,
-    /// Owner classification; metadata must independently derive the same reason.
-    pub reason: QuarantineReason,
-    /// Authoritative mesh time used for classification and command submission.
-    pub retained_at: UnixMicros,
-}
-
-/// Asynchronous authority which verifies every signed mutation against replicated metadata.
-pub trait FederationHistoryAdmissionSource: Send + Sync {
-    /// Returns one decision per record and quarantine work for every rejected decision.
-    fn classify(
-        &self,
-        session_id: [u8; 32],
-        records: Vec<NamespaceHistoryCommitRecord>,
-        now: UnixMicros,
-    ) -> FederationHistoryAdmissionFuture<'_>;
-}
-
-/// Owned future for one bounded metadata classification batch.
-pub type FederationHistoryAdmissionFuture<'a> = Pin<
-    Box<
-        dyn Future<
-                Output = Result<FederationHistoryAdmissionBatch, FederationHistoryAdmissionError>,
-            > + Send
-            + 'a,
-    >,
->;
-
-/// Consensus boundary which confirms exact quarantine retention before returning.
-pub trait FederationQuarantineCommitter: Send + Sync {
-    /// Idempotently commits one quarantine record and verifies its durable committed receipt.
-    fn retain(
-        &self,
-        retention: FederationQuarantineRetention,
-    ) -> FederationQuarantineCommitFuture<'_>;
-}
-
-/// Owned future for one replicated quarantine commit.
-pub type FederationQuarantineCommitFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<(), FederationQuarantineCommitError>> + Send + 'a>>;
-
 /// Filesystem receiver composed with mandatory metadata admission and quarantine consensus.
-pub struct AdmittingFederationHistoryReceiver<A, Q> {
+pub struct AdmittingFederationHistoryReceiver<A, C> {
     filesystem: FilesystemFederationHistorySource,
     admission: A,
-    quarantine: Q,
+    committer: C,
 }
 
-impl<A, Q> AdmittingFederationHistoryReceiver<A, Q> {
+impl<A, C> AdmittingFederationHistoryReceiver<A, C> {
     /// Constructs the federation receiver composition.
     #[must_use]
     pub const fn new(
         filesystem: FilesystemFederationHistorySource,
         admission: A,
-        quarantine: Q,
+        committer: C,
     ) -> Self {
         Self {
             filesystem,
             admission,
-            quarantine,
+            committer,
         }
     }
 }
 
-impl<A, Q> FederationHistoryReceiver for AdmittingFederationHistoryReceiver<A, Q>
+impl<A, C> FederationHistoryReceiver for AdmittingFederationHistoryReceiver<A, C>
 where
     A: FederationHistoryAdmissionSource,
-    Q: FederationQuarantineCommitter,
+    C: FederationMutationAdmissionCommitter,
 {
     fn begin(
         &self,
@@ -223,164 +136,27 @@ where
                 store.prepare_namespace_history_receive(session_id, now)
             })
             .await?;
+            let admission_at = preparation.admission_at();
             let admission = self
                 .admission
-                .classify(session_id, preparation.commits().to_vec(), now)
+                .classify(session_id, preparation.commits().to_vec(), admission_at)
                 .await?;
-            validate_admission_batch(session_id, preparation.commits(), &admission, now)?;
-            for retention in admission.quarantines() {
-                self.quarantine.retain(*retention).await?;
+            validate_admission_batch(preparation.commits(), &admission, admission_at)?;
+            let mut decisions = Vec::with_capacity(admission.commits().len());
+            for commit in admission.commits() {
+                let authoritative = self.committer.commit(*commit).await?;
+                decisions.push(NamespaceHistoryMutationDecision::new(
+                    commit.commit_id,
+                    authoritative,
+                    commit.acknowledgement.evidence.accepted_at(),
+                ));
             }
-            let decisions = admission.decisions().to_vec();
             blocking(move || {
                 let mut store = VersionPublicationStore::open(&state_directory, now)?;
                 store.complete_federated_namespace_history_receive(session_id, &decisions, now)
             })
             .await
         })
-    }
-}
-
-/// Opens one authoritative metadata partition per batch on a blocking worker.
-#[derive(Clone, Debug)]
-pub struct MetadataFederationHistoryAdmissionSource {
-    database_path: PathBuf,
-    partition_id: PartitionId,
-}
-
-impl MetadataFederationHistoryAdmissionSource {
-    /// Selects the authoritative partition database and its immutable identity.
-    #[must_use]
-    pub fn new(database_path: impl Into<PathBuf>, partition_id: PartitionId) -> Self {
-        Self {
-            database_path: database_path.into(),
-            partition_id,
-        }
-    }
-}
-
-impl FederationHistoryAdmissionSource for MetadataFederationHistoryAdmissionSource {
-    fn classify(
-        &self,
-        session_id: [u8; 32],
-        records: Vec<NamespaceHistoryCommitRecord>,
-        now: UnixMicros,
-    ) -> FederationHistoryAdmissionFuture<'_> {
-        let database_path = self.database_path.clone();
-        let partition_id = self.partition_id;
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                let database = PartitionDatabase::open(&database_path, partition_id, now)?;
-                classify_records(
-                    &AuthoritativeRepository::new(database),
-                    session_id,
-                    &records,
-                    now,
-                )
-            })
-            .await
-            .map_err(|_| FederationHistoryAdmissionError::Unavailable)?
-        })
-    }
-}
-
-fn classify_records(
-    repository: &AuthoritativeRepository,
-    session_id: [u8; 32],
-    records: &[NamespaceHistoryCommitRecord],
-    now: UnixMicros,
-) -> Result<FederationHistoryAdmissionBatch, FederationHistoryAdmissionError> {
-    let mut decisions = Vec::with_capacity(records.len());
-    let mut quarantines = Vec::new();
-    for record in records {
-        let acknowledgement = record
-            .federated_acknowledgement()?
-            .ok_or(FederationHistoryAdmissionError::MissingAcknowledgement)?;
-        let classified =
-            classify_federated_history_mutation(repository, record, &acknowledgement, now)?;
-        let admission = classified.admission();
-        decisions.push(NamespaceHistoryMutationDecision::new(
-            classified.commit_id(),
-            admission,
-            now,
-        ));
-        if let FederatedMutationAdmission::Quarantined(reason) = admission {
-            quarantines.push(FederationQuarantineRetention {
-                session_id,
-                commit_id: classified.commit_id(),
-                acknowledgement,
-                reason,
-                retained_at: now,
-            });
-        }
-    }
-    Ok(FederationHistoryAdmissionBatch::new(decisions, quarantines))
-}
-
-fn validate_admission_batch(
-    session_id: [u8; 32],
-    records: &[NamespaceHistoryCommitRecord],
-    batch: &FederationHistoryAdmissionBatch,
-    now: UnixMicros,
-) -> Result<(), FederationHistoryAdmissionError> {
-    let mut expected = BTreeMap::new();
-    for record in records {
-        let authority = record.mutation_authority()?;
-        let acknowledgement = record
-            .federated_acknowledgement()?
-            .ok_or(FederationHistoryAdmissionError::MissingAcknowledgement)?;
-        if expected
-            .insert(
-                authority.commit_id(),
-                (authority.created_at(), acknowledgement),
-            )
-            .is_some()
-        {
-            return Err(FederationHistoryAdmissionError::InvalidBatch);
-        }
-    }
-    if expected.len() != batch.decisions.len() {
-        return Err(FederationHistoryAdmissionError::InvalidBatch);
-    }
-    let mut decisions = BTreeMap::new();
-    for decision in &batch.decisions {
-        let Some((created_at, _)) = expected.get(&decision.commit_id()) else {
-            return Err(FederationHistoryAdmissionError::InvalidBatch);
-        };
-        if decision.classified_at() != now
-            || decision.classified_at() < *created_at
-            || decisions
-                .insert(decision.commit_id(), decision.admission())
-                .is_some()
-        {
-            return Err(FederationHistoryAdmissionError::InvalidBatch);
-        }
-    }
-    let mut quarantines = BTreeMap::new();
-    for retention in &batch.quarantines {
-        let Some((_, acknowledgement)) = expected.get(&retention.commit_id) else {
-            return Err(FederationHistoryAdmissionError::InvalidBatch);
-        };
-        if retention.session_id != session_id
-            || retention.retained_at != now
-            || retention.acknowledgement != *acknowledgement
-            || decisions.get(&retention.commit_id)
-                != Some(&FederatedMutationAdmission::Quarantined(retention.reason))
-            || quarantines
-                .insert(retention.commit_id, retention.reason)
-                .is_some()
-        {
-            return Err(FederationHistoryAdmissionError::InvalidBatch);
-        }
-    }
-    let expected_quarantines = decisions
-        .values()
-        .filter(|admission| matches!(admission, FederatedMutationAdmission::Quarantined(_)))
-        .count();
-    if quarantines.len() == expected_quarantines {
-        Ok(())
-    } else {
-        Err(FederationHistoryAdmissionError::InvalidBatch)
     }
 }
 
@@ -395,40 +171,6 @@ fn blocking<T: Send + 'static>(
     })
 }
 
-/// Closed failures while classifying one complete signed history batch.
-#[derive(Debug, Error)]
-pub enum FederationHistoryAdmissionError {
-    /// The blocking authority worker exited without a result.
-    #[error("federation history admission authority is unavailable")]
-    Unavailable,
-    /// A remote record lacked the mandatory signed accepting-swarm acknowledgement.
-    #[error("federated history mutation has no acceptance acknowledgement")]
-    MissingAcknowledgement,
-    /// An admission source omitted, duplicated or substituted a decision or quarantine item.
-    #[error("federation history admission batch is inconsistent")]
-    InvalidBatch,
-    /// A canonical history record was malformed.
-    #[error("federated history mutation record is invalid")]
-    Record(#[from] meshspan_filesystem::NamespaceHistoryRecordError),
-    /// The metadata partition could not be opened or verified.
-    #[error("federation admission metadata is unavailable")]
-    Metadata(#[from] MetadataStoreError),
-    /// Signed mutation binding or authoritative classification failed closed.
-    #[error("federation mutation admission failed")]
-    Admission(#[from] FederatedHistoryMutationAdmissionError),
-}
-
-/// Closed failures from replicated quarantine retention.
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-pub enum FederationQuarantineCommitError {
-    /// No authoritative consensus leader could confirm retention.
-    #[error("federation quarantine consensus is unavailable")]
-    Unavailable,
-    /// Consensus or the authoritative state machine rejected the exact retention request.
-    #[error("federation quarantine retention was rejected")]
-    Rejected,
-}
-
 /// Closed failures from receiver persistence, admission, quarantine or blocking workers.
 #[derive(Debug, Error)]
 pub enum FederationHistoryReceiveError {
@@ -441,9 +183,9 @@ pub enum FederationHistoryReceiveError {
     /// Metadata could not authoritatively classify every signed mutation.
     #[error("federation history admission failed")]
     Admission(#[from] FederationHistoryAdmissionError),
-    /// A quarantined mutation was not durably retained by consensus.
-    #[error("federation history quarantine retention failed")]
-    Quarantine(#[from] FederationQuarantineCommitError),
+    /// A mutation decision was not durably admitted or retained by consensus.
+    #[error("federation history admission commit failed")]
+    AdmissionCommit(#[from] FederationMutationAdmissionCommitError),
 }
 
 #[cfg(test)]
@@ -452,20 +194,30 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use meshspan_domain::{
-        BranchId, ContentManifestId, FederatedMutationEvidence, FederatedPrincipal,
-        FederationGrantId, FederationRelationshipId, FederationResourceScope, FileVersionId,
-        MeshId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Rights, VolumeId,
+        BranchId, ContentManifestId, FederatedMutationAcknowledgement, FederatedMutationAdmission,
+        FederatedMutationEvidence, FederatedPrincipal, FederationGrantId, FederationRelationshipId,
+        FederationResourceScope, FileVersionId, MeshId, NamespaceCommitId, ObjectId,
+        ObjectRevisionId, OperationId, PrincipalId, QuarantineReason, Rights, VolumeId,
     };
     use meshspan_filesystem::{
-        FilePublication, ManifestPublication, NamespaceHistoryLimits, NamespaceLimits,
-        NamespacePath, NamespacePublicationPath, RootFilePublication,
+        FilePublication, ManifestPublication, NamespaceHistoryCommitRecord, NamespaceHistoryLimits,
+        NamespaceLimits, NamespacePath, NamespacePublicationPath, RootFilePublication,
     };
+    use meshspan_metadata::{ApplyDisposition, CommandReceipt, EntityReference, LogPosition};
     use tempfile::{TempDir, tempdir};
 
     use super::*;
+    use crate::federation_history_admission::{
+        ConsensusFederationMutationAdmissionCommitter, FederationAuthoritativeCommandOutcome,
+        FederationAuthoritativeCommandResolveFuture, FederationAuthoritativeCommandSubmission,
+        FederationAuthoritativeCommandSubmitError, FederationAuthoritativeCommandSubmitFuture,
+        FederationAuthoritativeCommandSubmitter, FederationHistoryAdmissionBatch,
+        FederationHistoryAdmissionFuture, FederationMutationAdmissionCommit,
+        FederationMutationAdmissionCommitFuture, admission_submission,
+    };
 
     #[tokio::test]
-    async fn quarantine_must_commit_before_filesystem_import_and_retry_is_exact()
+    async fn decision_must_commit_before_filesystem_import_and_retry_is_exact()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = staged_quarantine_receive()?;
         let allow = Arc::new(AtomicBool::new(false));
@@ -473,15 +225,15 @@ mod tests {
         let receiver = AdmittingFederationHistoryReceiver::new(
             FilesystemFederationHistorySource::new(fixture.target.path()),
             StaticAdmission(fixture.batch.clone()),
-            GatedQuarantine {
+            GatedCommit {
                 allow: Arc::clone(&allow),
                 calls: Arc::clone(&calls),
             },
         );
         assert!(matches!(
             receiver.complete(fixture.session_id, fixture.now).await,
-            Err(FederationHistoryReceiveError::Quarantine(
-                FederationQuarantineCommitError::Unavailable
+            Err(FederationHistoryReceiveError::AdmissionCommit(
+                FederationMutationAdmissionCommitError::Unavailable
             ))
         ));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -490,7 +242,7 @@ mod tests {
         allow.store(true, Ordering::SeqCst);
         assert_eq!(
             receiver
-                .complete(fixture.session_id, fixture.now)
+                .complete(fixture.session_id, UnixMicros::new(110))
                 .await?
                 .disposition,
             meshspan_filesystem::PublicationDisposition::Applied
@@ -500,32 +252,108 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn committed_admission_wins_over_a_changed_retry_classification()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let publication = publication()?;
+        let acknowledgement = acknowledgement(&publication)?;
+        let admitted = FederationMutationAdmissionCommit {
+            commit_id: publication.namespace_commit_id,
+            acknowledgement,
+            admission: FederatedMutationAdmission::Admitted,
+        };
+        let administrator = PrincipalId::from_bytes([101; 16])?;
+        let (submission, expected_kind, expected_id) =
+            admission_submission(&admitted, administrator)?;
+        let submits = Arc::new(AtomicUsize::new(0));
+        let submitter = ResolvedAdmission {
+            outcome: FederationAuthoritativeCommandOutcome {
+                receipt: CommandReceipt {
+                    disposition: ApplyDisposition::Applied,
+                    operation_id: submission.context.operation_id,
+                    request_digest: submission.command.request_digest(submission.context),
+                    result_digest: [102; 32],
+                    committed_revision: meshspan_domain::Revision::new(9),
+                    committed_position: LogPosition { index: 10, term: 2 },
+                    applied_position: LogPosition { index: 10, term: 2 },
+                    entity: EntityReference {
+                        kind: expected_kind,
+                        id: expected_id,
+                    },
+                },
+                admission: FederatedMutationAdmission::Admitted,
+            },
+            submits: Arc::clone(&submits),
+        };
+        let committer =
+            ConsensusFederationMutationAdmissionCommitter::new(submitter, administrator);
+        let changed_retry = FederationMutationAdmissionCommit {
+            admission: FederatedMutationAdmission::Quarantined(QuarantineReason::Revoked),
+            ..admitted
+        };
+        assert_eq!(
+            committer.commit(changed_retry).await?,
+            FederatedMutationAdmission::Admitted
+        );
+        assert_eq!(submits.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn same_mutation_imports_idempotently_in_a_later_receive_session()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = staged_quarantine_receive()?;
+        let allow = Arc::new(AtomicBool::new(true));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let receiver = AdmittingFederationHistoryReceiver::new(
+            FilesystemFederationHistorySource::new(fixture.target.path()),
+            StaticAdmission(fixture.batch.clone()),
+            GatedCommit {
+                allow,
+                calls: Arc::clone(&calls),
+            },
+        );
+        receiver.complete(fixture.session_id, fixture.now).await?;
+
+        let second_session = [103; 32];
+        restage_imported_bundle(&fixture, second_session)?;
+        assert_eq!(
+            receiver
+                .complete(second_session, UnixMicros::new(120))
+                .await?
+                .disposition,
+            meshspan_filesystem::PublicationDisposition::Applied
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
     #[test]
     fn admission_batch_rejects_every_omission_and_substitution()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = staged_quarantine_receive()?;
         let record = fixture.record.clone();
         validate_admission_batch(
-            fixture.session_id,
             std::slice::from_ref(&record),
             &fixture.batch,
-            fixture.now,
+            UnixMicros::new(50),
         )?;
 
         let invalid = [
-            FederationHistoryAdmissionBatch::new(fixture.batch.decisions.clone(), Vec::new()),
-            FederationHistoryAdmissionBatch::new(Vec::new(), fixture.batch.quarantines.clone()),
-            substituted_session(&fixture),
+            FederationHistoryAdmissionBatch::new(Vec::new()),
+            FederationHistoryAdmissionBatch::new(vec![
+                fixture.batch.commits()[0],
+                fixture.batch.commits()[0],
+            ]),
+            substituted_commit(&fixture)?,
             substituted_acknowledgement(&fixture),
-            substituted_admission(&fixture),
         ];
         for batch in invalid {
             assert!(matches!(
                 validate_admission_batch(
-                    fixture.session_id,
                     std::slice::from_ref(&record),
                     &batch,
-                    fixture.now
+                    UnixMicros::new(50)
                 ),
                 Err(FederationHistoryAdmissionError::InvalidBatch)
             ));
@@ -561,17 +389,11 @@ mod tests {
         let session_id = [80; 32];
         let now = UnixMicros::new(100);
         stage_bundle(target.path(), &publication, session_id, &record, &immutable)?;
-        let decision = NamespaceHistoryMutationDecision::new(
-            publication.namespace_commit_id,
-            FederatedMutationAdmission::Quarantined(QuarantineReason::Revoked),
-            now,
-        );
-        let retention = FederationQuarantineRetention {
-            session_id,
+        let admission = FederatedMutationAdmission::Quarantined(QuarantineReason::Revoked);
+        let commit = FederationMutationAdmissionCommit {
             commit_id: publication.namespace_commit_id,
             acknowledgement,
-            reason: QuarantineReason::Revoked,
-            retained_at: now,
+            admission,
         };
         Ok(StagedFixture {
             target,
@@ -579,7 +401,7 @@ mod tests {
             now,
             publication,
             record,
-            batch: FederationHistoryAdmissionBatch::new(vec![decision], vec![retention]),
+            batch: FederationHistoryAdmissionBatch::new(vec![commit]),
         })
     }
 
@@ -636,25 +458,46 @@ mod tests {
             .is_ok())
     }
 
-    fn substituted_session(fixture: &StagedFixture) -> FederationHistoryAdmissionBatch {
-        let mut retention = fixture.batch.quarantines[0];
-        retention.session_id[0] ^= 1;
-        FederationHistoryAdmissionBatch::new(fixture.batch.decisions.clone(), vec![retention])
+    fn restage_imported_bundle(
+        fixture: &StagedFixture,
+        session_id: [u8; 32],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let store = VersionPublicationStore::open(fixture.target.path(), fixture.now)?;
+        let bundle = store.export_namespace_history(
+            fixture.publication.file.volume_id,
+            &[fixture.publication.namespace_commit_id],
+            &[],
+            NamespaceHistoryLimits::DEFAULT,
+        )?;
+        let record = bundle
+            .commit_records()?
+            .into_iter()
+            .next()
+            .ok_or("restaged commit is missing")?;
+        let immutable = bundle.immutable_records()?;
+        drop(store);
+        stage_bundle(
+            fixture.target.path(),
+            &fixture.publication,
+            session_id,
+            &record,
+            &immutable,
+        )?;
+        Ok(())
+    }
+
+    fn substituted_commit(
+        fixture: &StagedFixture,
+    ) -> Result<FederationHistoryAdmissionBatch, Box<dyn std::error::Error>> {
+        let mut commit = fixture.batch.commits()[0];
+        commit.commit_id = NamespaceCommitId::from_bytes([99; 16])?;
+        Ok(FederationHistoryAdmissionBatch::new(vec![commit]))
     }
 
     fn substituted_acknowledgement(fixture: &StagedFixture) -> FederationHistoryAdmissionBatch {
-        let mut retention = fixture.batch.quarantines[0];
-        retention.acknowledgement.signature[0] ^= 1;
-        FederationHistoryAdmissionBatch::new(fixture.batch.decisions.clone(), vec![retention])
-    }
-
-    fn substituted_admission(fixture: &StagedFixture) -> FederationHistoryAdmissionBatch {
-        let decision = NamespaceHistoryMutationDecision::new(
-            fixture.publication.namespace_commit_id,
-            FederatedMutationAdmission::Admitted,
-            fixture.now,
-        );
-        FederationHistoryAdmissionBatch::new(vec![decision], fixture.batch.quarantines.clone())
+        let mut commit = fixture.batch.commits()[0];
+        commit.acknowledgement.signature[0] ^= 1;
+        FederationHistoryAdmissionBatch::new(vec![commit])
     }
 
     #[derive(Clone)]
@@ -672,23 +515,46 @@ mod tests {
         }
     }
 
-    struct GatedQuarantine {
+    struct GatedCommit {
         allow: Arc<AtomicBool>,
         calls: Arc<AtomicUsize>,
     }
 
-    impl FederationQuarantineCommitter for GatedQuarantine {
-        fn retain(
+    struct ResolvedAdmission {
+        outcome: FederationAuthoritativeCommandOutcome,
+        submits: Arc<AtomicUsize>,
+    }
+
+    impl FederationAuthoritativeCommandSubmitter for ResolvedAdmission {
+        fn resolve(
             &self,
-            _retention: FederationQuarantineRetention,
-        ) -> FederationQuarantineCommitFuture<'_> {
+            _operation_id: OperationId,
+        ) -> FederationAuthoritativeCommandResolveFuture<'_> {
+            let outcome = self.outcome;
+            Box::pin(async move { Ok(Some(outcome)) })
+        }
+
+        fn submit(
+            &self,
+            _submission: FederationAuthoritativeCommandSubmission,
+        ) -> FederationAuthoritativeCommandSubmitFuture<'_> {
+            self.submits.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(FederationAuthoritativeCommandSubmitError::Rejected) })
+        }
+    }
+
+    impl FederationMutationAdmissionCommitter for GatedCommit {
+        fn commit(
+            &self,
+            admission: FederationMutationAdmissionCommit,
+        ) -> FederationMutationAdmissionCommitFuture<'_> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let allowed = self.allow.load(Ordering::SeqCst);
             Box::pin(async move {
                 if allowed {
-                    Ok(())
+                    Ok(admission.admission)
                 } else {
-                    Err(FederationQuarantineCommitError::Unavailable)
+                    Err(FederationMutationAdmissionCommitError::Unavailable)
                 }
             })
         }

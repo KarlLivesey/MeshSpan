@@ -6,6 +6,7 @@ mod command;
 mod database;
 mod federation_command;
 mod federation_grant_command;
+mod federation_mutation_admission_command;
 mod federation_principal_command;
 mod federation_quarantine_command;
 mod federation_remote_authority;
@@ -53,6 +54,7 @@ pub use federation_command::{
 pub use federation_grant_command::{
     FederationGrantRestriction, IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant,
 };
+pub use federation_mutation_admission_command::AdmitFederatedMutation;
 pub use federation_principal_command::{
     FederatedPrincipalKind, FederatedPrincipalState, UpsertFederatedPrincipalProjection,
 };
@@ -102,11 +104,11 @@ pub use repository::{
     AccessActivationCursor, AccessActivationRecord, AccessCapability, AccessDecision, AccessDenial,
     AccessRequest, ApplyDisposition, AuthoritativeMembership, AuthoritativeMetadataKernel,
     AuthoritativeRepository, CommandReceipt, ConsensusStoreError, ConvergedVolumeHead, EntityKind,
-    EntityReference, FederatedPrincipalProjectionRecord, FederationAuthoritySnapshotError,
-    FederationGrantCursor, FederationGrantCursorError, FederationGrantRecord,
-    FederationGrantRecordCodecError, FederationGrantState, FederationGrantTermination,
-    FederationGrantTerminationKind, FederationQuarantineRecord, FederationQuarantineState,
-    FederationRelationshipRecord, FederationRelationshipState,
+    EntityReference, FederatedMutationAdmissionReceipt, FederatedPrincipalProjectionRecord,
+    FederationAuthoritySnapshotError, FederationGrantCursor, FederationGrantCursorError,
+    FederationGrantRecord, FederationGrantRecordCodecError, FederationGrantState,
+    FederationGrantTermination, FederationGrantTerminationKind, FederationQuarantineRecord,
+    FederationQuarantineState, FederationRelationshipRecord, FederationRelationshipState,
     FederationStorageAllocationAuthority, FederationStorageAllocationRecord,
     FederationStorageAllocationState, FederationStorageAuthorityRequest,
     FederationSuccessionRecord, FederationSuccessionState, FederationTransportAuthority,

@@ -18,6 +18,7 @@ mod federation_branch_exchange;
 mod federation_branch_page_source;
 mod federation_filesystem_history;
 mod federation_grant_authority;
+mod federation_history_admission;
 mod federation_history_object_exchange;
 mod federation_history_object_source;
 mod federation_history_receiver;
@@ -107,6 +108,16 @@ pub use federation_grant_authority::{
     EffectiveFederationGrantAuthority, EffectiveFederationGrantAuthorityError,
     effective_federation_grant_authority,
 };
+pub use federation_history_admission::{
+    ConsensusFederationMutationAdmissionCommitter, FederationAuthoritativeCommandOutcome,
+    FederationAuthoritativeCommandResolveFuture, FederationAuthoritativeCommandSubmission,
+    FederationAuthoritativeCommandSubmitError, FederationAuthoritativeCommandSubmitFuture,
+    FederationAuthoritativeCommandSubmitter, FederationHistoryAdmissionBatch,
+    FederationHistoryAdmissionError, FederationHistoryAdmissionFuture,
+    FederationHistoryAdmissionSource, FederationMutationAdmissionCommit,
+    FederationMutationAdmissionCommitError, FederationMutationAdmissionCommitFuture,
+    FederationMutationAdmissionCommitter, MetadataFederationHistoryAdmissionSource,
+};
 pub use federation_history_object_exchange::{
     FederationHistoryObjectFetchRequest, FederationHistoryObjectServeRequest,
     FederationHistoryObjectServices, ServedFederationHistoryObject,
@@ -116,12 +127,8 @@ pub use federation_history_object_source::{
     FederationHistoryObjectSource, FederationHistoryObjectSourceError,
 };
 pub use federation_history_receiver::{
-    AdmittingFederationHistoryReceiver, FederationHistoryAdmissionBatch,
-    FederationHistoryAdmissionError, FederationHistoryAdmissionFuture,
-    FederationHistoryAdmissionSource, FederationHistoryReceiveError,
-    FederationHistoryReceiveFuture, FederationHistoryReceiver, FederationQuarantineCommitError,
-    FederationQuarantineCommitFuture, FederationQuarantineCommitter, FederationQuarantineRetention,
-    MetadataFederationHistoryAdmissionSource,
+    AdmittingFederationHistoryReceiver, FederationHistoryReceiveError,
+    FederationHistoryReceiveFuture, FederationHistoryReceiver,
 };
 pub use federation_history_sync::{
     FederationHistorySyncError, FederationHistorySyncOutcome, FederationHistorySyncRequest,

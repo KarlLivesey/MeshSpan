@@ -15,6 +15,7 @@ use meshspan_domain::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::AdmitFederatedMutation;
 use crate::RecordName;
 use crate::UpsertFederatedPrincipalProjection;
 use crate::{
@@ -188,6 +189,8 @@ pub enum AuthoritativeCommand {
     RevokeFederationSuccessorDesignation(RevokeFederationSuccessorDesignation),
     /// Retains one signed, authoritatively reclassified disconnected mutation invisibly.
     RetainFederatedMutationQuarantine(RetainFederatedMutationQuarantine),
+    /// Records one signed remote mutation as admissible at this exact consensus position.
+    AdmitFederatedMutation(AdmitFederatedMutation),
     /// Makes retained quarantine visible to authorised recovery administration.
     SurfaceFederatedMutationQuarantine(SurfaceFederatedMutationQuarantine),
     /// Records an authorised recovery or discard choice for surfaced quarantine.
@@ -280,6 +283,7 @@ impl AuthoritativeCommand {
             Self::ActivateFederationSuccessor(value) => value.update_digest(digest),
             Self::RevokeFederationSuccessorDesignation(value) => value.update_digest(digest),
             Self::RetainFederatedMutationQuarantine(value) => value.update_digest(digest),
+            Self::AdmitFederatedMutation(value) => value.update_digest(digest),
             Self::SurfaceFederatedMutationQuarantine(value) => value.update_digest(digest),
             Self::ResolveFederatedMutationQuarantine(value) => value.update_digest(digest),
         }

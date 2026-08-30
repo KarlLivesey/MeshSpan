@@ -13,7 +13,8 @@ use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
-    AuthoritativeRepository, EntityKind, FederationQuarantineState, LogPosition, RepositoryError,
+    AuthoritativeRepository, CommandReceipt, EntityKind, FederationQuarantineState, LogPosition,
+    RepositoryError,
 };
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
@@ -53,8 +54,7 @@ fn signed_quarantine_lifecycle_is_atomic_and_restart_safe() -> Result<(), Box<dy
         39,
         &AuthoritativeCommand::RetainFederatedMutationQuarantine(retained),
     )?;
-    assert_eq!(receipt.entity.kind, EntityKind::FederationQuarantine);
-    assert_eq!(receipt.entity.id, quarantine_id.as_bytes());
+    assert_resolved_quarantine(&fixture, 39, receipt, QuarantineReason::OutsideStorageLimit)?;
     fixture.assert_state(
         quarantine_id,
         FederationQuarantineState::Retained,
@@ -129,6 +129,25 @@ fn signed_quarantine_lifecycle_is_atomic_and_restart_safe() -> Result<(), Box<dy
             .ok_or("quarantine missing after restore")?
             .state,
         FederationQuarantineState::Restored
+    );
+    Ok(())
+}
+
+fn assert_resolved_quarantine(
+    fixture: &Fixture,
+    operation: u8,
+    receipt: CommandReceipt,
+    reason: QuarantineReason,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(receipt.entity.kind, EntityKind::FederationQuarantine);
+    let resolved = fixture
+        .repository
+        .resolve_federated_mutation_admission(OperationId::from_bytes([operation; 16])?)?
+        .ok_or("missing committed quarantine admission")?;
+    assert_eq!(resolved.receipt.entity, receipt.entity);
+    assert_eq!(
+        resolved.admission,
+        meshspan_domain::FederatedMutationAdmission::Quarantined(reason)
     );
     Ok(())
 }
