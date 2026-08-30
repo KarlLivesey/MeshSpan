@@ -264,6 +264,7 @@ mod tests {
         partition_federation_relationship_history_migration_digest,
         partition_federation_storage_allocation_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
+        partition_principal_inactive_quarantine_migration_digest,
         partition_principal_lifecycle_migration_digest, partition_roles_migration_digest,
         partition_root_delegation_directory_migration_digest, partition_routing_migration_digest,
         partition_snapshot_expiry_migration_digest, partition_snapshot_restores_migration_digest,
@@ -292,7 +293,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 40);
+        assert_eq!(database.check_integrity()?.schema_version, 41);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -342,7 +343,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            40
+            41
         );
         Ok(())
     }
@@ -411,6 +412,145 @@ mod tests {
             return Err("post-migration legacy evidence was accepted".into());
         };
         assert!(rejected.to_string().contains("migration-only"));
+        Ok(())
+    }
+
+    #[test]
+    fn inactive_principal_quarantine_migration_preserves_evidence_and_accepts_reason_six()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory
+            .path()
+            .join("principal-inactive-quarantine.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 40, 10)?;
+        seed_legacy_federation_quarantine(&connection)?;
+
+        migrate_partition(&mut connection, 20)?;
+        assert_eq!(
+            connection.query_row(
+                "SELECT reason_kind FROM federation_quarantine WHERE quarantine_id = ?1",
+                [[8_u8; 16].as_slice()],
+                |row| row.get::<_, i64>(0),
+            )?,
+            5
+        );
+        for table in [
+            "federation_quarantine_acknowledgements",
+            "federation_quarantine_events",
+        ] {
+            let count: i64 =
+                connection.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(count, 1);
+        }
+        connection.execute(
+            "INSERT INTO federation_quarantine(
+                quarantine_id, relationship_id, operation_id, grant_id,
+                subject_home_mesh_id, subject_principal_id, accepted_at, reason_kind,
+                payload_digest, acknowledgement_digest, state, surfaced_at, resolved_at,
+                resolution_kind, resolution_operation_id, revision
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 30, 6, ?7, ?8, 1,
+                       NULL, NULL, NULL, NULL, 2)",
+            params![
+                [13_u8; 16].as_slice(),
+                [3_u8; 16].as_slice(),
+                [14_u8; 16].as_slice(),
+                [4_u8; 16].as_slice(),
+                [2_u8; 16].as_slice(),
+                [5_u8; 16].as_slice(),
+                [15_u8; 32].as_slice(),
+                [16_u8; 32].as_slice(),
+            ],
+        )?;
+        let foreign_key_failures: i64 =
+            connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(foreign_key_failures, 0);
+        Ok(())
+    }
+
+    fn seed_legacy_federation_quarantine(
+        connection: &rusqlite::Connection,
+    ) -> rusqlite::Result<()> {
+        connection.execute(
+            "INSERT INTO meshes(
+                mesh_id, display_name, canonical_name, created_at,
+                configuration_revision, identity_revision, namespace_revision, revision
+             ) VALUES (?1, 'Local', 'local', 1, 1, 1, 1, 1)",
+            [[1_u8; 16].as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO federation_relationships(
+                relationship_id, local_mesh_id, remote_mesh_id, relationship_kind,
+                governance_direction, state, authority_epoch, remote_display_name,
+                proposed_at, approved_at, restricted_at, revoked_at, retired_at, revision
+             ) VALUES (?1, ?2, ?3, 1, 0, 2, 1, 'Remote', 1, 2, NULL, NULL, NULL, 2)",
+            params![
+                [3_u8; 16].as_slice(),
+                [1_u8; 16].as_slice(),
+                [2_u8; 16].as_slice(),
+            ],
+        )?;
+        connection.execute(
+            "INSERT INTO federation_grants(
+                grant_id, relationship_id, subject_home_mesh_id, subject_principal_id,
+                resource_kind, authority_mesh_id, volume_id, object_id, authority_epoch,
+                valid_from, valid_until, state, effective_policy_digest, issued_at,
+                revoked_at, revision
+             ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, NULL, 1, 1, NULL, 1, ?7, 2, NULL, 1)",
+            params![
+                [4_u8; 16].as_slice(),
+                [3_u8; 16].as_slice(),
+                [2_u8; 16].as_slice(),
+                [5_u8; 16].as_slice(),
+                [1_u8; 16].as_slice(),
+                [6_u8; 16].as_slice(),
+                [7_u8; 32].as_slice(),
+            ],
+        )?;
+        connection.execute(
+            "INSERT INTO federation_quarantine(
+                quarantine_id, relationship_id, operation_id, grant_id,
+                subject_home_mesh_id, subject_principal_id, accepted_at, reason_kind,
+                payload_digest, acknowledgement_digest, state, surfaced_at, resolved_at,
+                resolution_kind, resolution_operation_id, revision
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 12, 5, ?7, ?8, 1,
+                       NULL, NULL, NULL, NULL, 1)",
+            params![
+                [8_u8; 16].as_slice(),
+                [3_u8; 16].as_slice(),
+                [9_u8; 16].as_slice(),
+                [4_u8; 16].as_slice(),
+                [2_u8; 16].as_slice(),
+                [5_u8; 16].as_slice(),
+                [10_u8; 32].as_slice(),
+                [11_u8; 32].as_slice(),
+            ],
+        )?;
+        connection.execute(
+            "INSERT INTO federation_quarantine_acknowledgements(
+                quarantine_id, signer_mesh_id, signer_generation, signature, authority_epoch,
+                required_rights, storage_bytes, resource_kind, authority_mesh_id,
+                volume_id, object_id, revision
+             ) VALUES (?1, ?2, 1, ?3, 1, 2, 0, 1, ?4, ?5, NULL, 1)",
+            params![
+                [8_u8; 16].as_slice(),
+                [2_u8; 16].as_slice(),
+                [12_u8; 64].as_slice(),
+                [1_u8; 16].as_slice(),
+                [6_u8; 16].as_slice(),
+            ],
+        )?;
+        connection.execute(
+            "INSERT INTO federation_quarantine_events(
+                quarantine_id, event_sequence, event_kind, prior_state, resulting_state,
+                reason, changed_by, changed_at, revision
+             ) VALUES (?1, 1, 1, NULL, 1, NULL, ?2, 12, 1)",
+            params![[8_u8; 16].as_slice(), [1_u8; 16].as_slice()],
+        )?;
         Ok(())
     }
 
@@ -994,6 +1134,18 @@ mod tests {
                 0xc5, 0x12, 0xc6, 0x6d, 0x16, 0x7f, 0xbe, 0xff, 0xd9, 0x42, 0xad, 0xcd, 0xaf, 0x76,
                 0x90, 0x64, 0xeb, 0x16, 0xd8, 0x6f, 0x2c, 0x80, 0x0e, 0x66, 0x34, 0x8e, 0x63, 0x6c,
                 0x32, 0x80, 0x27, 0xa5,
+            ]
+        );
+    }
+
+    #[test]
+    fn principal_inactive_quarantine_migration_digest_is_committed_compatibility_value() {
+        assert_eq!(
+            partition_principal_inactive_quarantine_migration_digest(),
+            [
+                0xeb, 0x96, 0xd6, 0x5b, 0x41, 0x2a, 0xfc, 0xea, 0x7f, 0x77, 0xd1, 0xb7, 0x07, 0xd4,
+                0x91, 0x1b, 0x13, 0x63, 0x74, 0xf8, 0x95, 0x5e, 0xe1, 0x58, 0xe8, 0x2f, 0x70, 0xbf,
+                0xc7, 0x90, 0x4d, 0x5e,
             ]
         );
     }
