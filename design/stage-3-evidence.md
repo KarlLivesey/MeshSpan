@@ -1,11 +1,10 @@
 # Stage 3 completion evidence
 
-Status: original scope complete after its 2026-08-28 audit; Stage 3 reopened for
-autonomous-swarm trust and exchange.
+Status: complete after the autonomous-swarm federation closure on 2026-08-30.
 
-The missing federation transport/identity evidence and new closure gates are
-recorded in [`federation.md`](federation.md) and [`roadmap.md`](roadmap.md). This
-document does not claim that retrofit is implemented.
+Federation transport/identity evidence and the corrected closure gates are recorded in
+[`federation.md`](federation.md), [`roadmap.md`](roadmap.md) and
+[`stage-1-3-audit.md`](stage-1-3-audit.md).
 
 The original completion claim was broader than its executable proof. The
 reopened audit repaired that gap; all corrected closure gates and their exact
@@ -65,10 +64,19 @@ the final appliance daemon; those remain later roadmap stages.
 - Scoped proposals cross one reusable consensus boundary that checks the exact
   local committed route and presented routing epoch before touching consensus.
   Missing, corrupt, stale or foreign authority fails closed.
-- The private catalogue already defines bounded branch-head comparison,
-  cursor-paged immutable commit/object transfer and inclusion-result messages.
-  Filesystem branch creation and deterministic merge behaviour intentionally
-  remain Stage 5 work.
+- The private protocol implements bounded branch-head comparison, cursor-paged immutable
+  commit/object transfer and inclusion-result messages. Filesystem branch creation, remote-user
+  authorisation and deterministic multi-writer merge behaviour remain Stage 5 work.
+- Autonomous-swarm sessions reload mutually approved relationship authority before each signed
+  exchange. Identity rotation, authority paging, revocation, stale epoch and replay all cross a
+  real mTLS Quinn connection without granting local node, voter or principal status.
+- Namespace history uses durable incremental cursor pages and separately bounded immutable-object
+  streams. The receiver binds the grant/resource authority revisions, source export identity,
+  requested heads, cumulative limits and exact cursor chain, then validates and imports the whole
+  canonical graph in one SQLite transaction.
+- A bounded convergence run returns durable progress when its fresh-context budget is exhausted.
+  The real Quinn proof stops after page one, reopens the receiver, resumes its missing objects and
+  cursor, completes the non-empty import and verifies the imported commit from the restarted store.
 
 ## Exit-gate evidence
 
@@ -88,18 +96,19 @@ the final appliance daemon; those remain later roadmap stages.
 | Traffic isolation | A real QUIC test stalls an 8 MiB bulk-data write while a consensus ping completes on its independent high-priority stream within one second |
 | Three-process cycle | Three OS processes use distinct SQLite databases, certificates and dynamic loopback ports; only node one starts authoritative; committed grants admit nodes two and three, which install verified snapshots, catch up and become voters; the cycle then commits routing proof records, redirects a follower request, resolves a deliberately lost reply by durable operation ID, kills the leader, elects and writes through another, restarts the old process and catches it up |
 | Outage bounds | Per-peer reusable connection workers bound queueing, timeout and reconnect work; the process cycle commits through the surviving pair while the killed peer is unreachable |
+| Autonomous-swarm identity | Real mTLS Quinn sessions load current bilateral relationship authority, rotate identities on both sides and reject retired identity, stale authority, replay and committed revocation without touching local membership |
+| Bounded authority exchange | Signed cursor pages install one complete remote authority snapshot atomically; incomplete, excessive, substituted and stale sequences leave the prior cache visible |
+| Restart-resumable history | A real non-empty filesystem commit crosses signed page and independent object streams; the receiver stops after page one, reopens SQLite state, resumes exact missing bodies and cursor progress, atomically imports and re-exports the commit |
 | Adversarial closure | `npm run check:stage3-adversarial` runs the exact multi-way partition, stale-incarnation, corrupt/reordered/excessive snapshot and saturated bulk-stream tests concurrently, and fails if any filter executes zero tests |
 | Complete local gate | `npm run check` runs generation drift, strict Rust/web lint, unit/conformance/simulation, real Quinn and real-process tests locally with four concurrent workers and no GitHub Actions |
 
 ## Feedback-loop observation
 
-The final complete local gate measured 6.17 seconds with live learner admission,
-the one/two/three process matrix and exact joint/stable restart proofs. All five
-real-process cases complete together in approximately 4.9 seconds, dominated by
-the main bootstrap, admission, promotion, handoff, failover and restart cycle.
-The four-case adversarial closure completes in 4.66 seconds. Both use four
-workers, and the cluster lane remains isolated so unrelated lanes continue
-concurrently.
+The 2026-08-30 federation closure ran the four-case Stage 3 adversarial gate in 9.00 seconds and
+the complete repository gate in 109.90 seconds with four workers. The cluster package itself ran
+31 unit tests and eight integration/process tests, including the real federation and five
+one/two/three-voter process cases. The scheduler keeps unrelated gates concurrent and fails if an
+exact adversarial filter selects zero tests.
 
 ## Deliberate later-stage boundaries
 

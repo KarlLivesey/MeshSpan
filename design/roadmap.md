@@ -150,8 +150,8 @@ SCL-013, SCL-014.
 
 **Depends on:** Stage 2.
 
-**Status:** reopened for federation. Existing within-swarm consensus and transport proofs remain
-valid; autonomous-swarm trust and exchange are missing.
+**Status:** complete after the 2026-08-30 federation audit. Within-swarm consensus and autonomous-
+swarm identity, authority synchronisation and restart-resumable history exchange pass together.
 
 Build:
 
