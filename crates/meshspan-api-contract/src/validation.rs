@@ -10,14 +10,16 @@ use thiserror::Error;
 
 use crate::{
     ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
-    CreateSessionResponse, CurrentSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES,
-    schema,
+    CreateSessionResponse, CurrentSessionResponse, RevokeCurrentSessionRequest,
+    RevokeCurrentSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
 };
 
 /// Maximum accepted body size for one session-creation request.
 pub const MAX_CREATE_SESSION_BYTES: usize = 2_048;
 /// Maximum accepted body size for one first-mesh setup request.
 pub const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
+/// Maximum accepted body size for one current-session revocation request.
+pub const MAX_REVOKE_CURRENT_SESSION_BYTES: usize = 256;
 
 static API_ERROR_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
@@ -25,6 +27,10 @@ static CREATE_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>>
 static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CURRENT_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
+static REVOKE_CURRENT_SESSION_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> =
+    OnceLock::new();
+static REVOKE_CURRENT_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> =
+    OnceLock::new();
 static SETUP_STATUS_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 
 /// Validates and encodes a public error before transmission.
@@ -195,6 +201,55 @@ pub fn encode_current_session_response(
     serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
 }
 
+/// Validates and decodes an idempotent current-session revocation request.
+///
+/// # Errors
+///
+/// Rejects oversized, malformed, schema-invalid or unexpectedly undecodable input.
+pub fn decode_revoke_current_session_request(
+    bytes: &[u8],
+) -> Result<RevokeCurrentSessionRequest, BoundaryError> {
+    if bytes.len() > MAX_REVOKE_CURRENT_SESSION_BYTES {
+        return Err(BoundaryError::BodyTooLarge {
+            limit: MAX_REVOKE_CURRENT_SESSION_BYTES,
+        });
+    }
+    let value = serde_json::from_slice(bytes).map_err(|_| BoundaryError::MalformedJson)?;
+    validate_revoke_current_session_request_value(&value)?;
+    serde_json::from_value(value).map_err(|_| BoundaryError::DecodeMismatch)
+}
+
+/// Validates raw current-session revocation input against the Rust-authored schema.
+///
+/// # Errors
+///
+/// Returns all discovered issues up to the public issue limit.
+pub fn validate_revoke_current_session_request_value(value: &Value) -> Result<(), BoundaryError> {
+    validate(revoke_current_session_request_validator()?, value)
+}
+
+/// Validates and encodes an authoritative current-session revocation result.
+///
+/// # Errors
+///
+/// Suppresses an invalid outgoing body.
+pub fn encode_revoke_current_session_response(
+    response: &RevokeCurrentSessionResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate_revoke_current_session_response_value(&value)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
+/// Validates raw current-session revocation output against the Rust-authored schema.
+///
+/// # Errors
+///
+/// Returns all discovered issues up to the public issue limit.
+pub fn validate_revoke_current_session_response_value(value: &Value) -> Result<(), BoundaryError> {
+    validate(revoke_current_session_response_validator()?, value)
+}
+
 /// Validates and encodes anonymous setup status before transmission.
 ///
 /// # Errors
@@ -255,6 +310,20 @@ fn current_session_response_validator() -> Result<&'static Validator, BoundaryEr
     validator_from(
         CURRENT_SESSION_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<CurrentSessionResponse>())),
+    )
+}
+
+fn revoke_current_session_request_validator() -> Result<&'static Validator, BoundaryError> {
+    validator_from(
+        REVOKE_CURRENT_SESSION_REQUEST_VALIDATOR
+            .get_or_init(|| compile(&schema::request_schema::<RevokeCurrentSessionRequest>())),
+    )
+}
+
+fn revoke_current_session_response_validator() -> Result<&'static Validator, BoundaryError> {
+    validator_from(
+        REVOKE_CURRENT_SESSION_RESPONSE_VALIDATOR
+            .get_or_init(|| compile(&schema::response_schema::<RevokeCurrentSessionResponse>())),
     )
 }
 

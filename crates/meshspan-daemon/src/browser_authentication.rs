@@ -10,7 +10,7 @@ use meshspan_metadata::{
 };
 use thiserror::Error;
 
-use crate::{BrowserRequestProtection, parse_browser_session};
+use crate::{BrowserRequestProtection, BrowserSessionEvidence, parse_browser_session};
 
 /// Current local gateway identity included in every session capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +65,18 @@ impl BrowserSessionAuthority for AuthoritativeRepository {
     }
 }
 
+impl<T> BrowserSessionAuthority for &T
+where
+    T: BrowserSessionAuthority + ?Sized,
+{
+    fn evaluate_browser_session(
+        &self,
+        request: BrowserSessionAccessRequest,
+    ) -> Result<SessionAccessDecision, BrowserSessionAuthorityError> {
+        (*self).evaluate_browser_session(request)
+    }
+}
+
 /// Reusable default-deny browser authenticator independent of endpoint semantics.
 pub struct BrowserSessionAuthenticator<A> {
     authority: A,
@@ -95,6 +107,16 @@ where
     ) -> Result<SessionAccessCapability, BrowserAuthenticationError> {
         let evidence = parse_browser_session(headers, protection)
             .map_err(|_| BrowserAuthenticationError::Rejected)?;
+        self.authenticate_evidence(evidence, protection, required_assurance, now)
+    }
+
+    pub(crate) fn authenticate_evidence(
+        &self,
+        evidence: BrowserSessionEvidence,
+        protection: BrowserRequestProtection,
+        required_assurance: AssuranceLevel,
+        now: UnixMicros,
+    ) -> Result<SessionAccessCapability, BrowserAuthenticationError> {
         let protection = match protection {
             BrowserRequestProtection::Read => BrowserSessionProtection::Read,
             BrowserRequestProtection::Mutation => BrowserSessionProtection::Mutation {

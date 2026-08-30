@@ -248,6 +248,45 @@ export const zHealthResponse = z
   .strict();
 
 /**
+ * RevokeCurrentSessionRequest
+ *
+ * Idempotent request to revoke the caller's current browser session.
+ */
+export const zRevokeCurrentSessionRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * RevokeCurrentSessionResponse
+ *
+ * Durable result of revoking the caller's current browser session.
+ */
+export const zRevokeCurrentSessionResponse = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revoked_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    session_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * SetupStatusResponse
  *
  * Cheap anonymous first-start status safe for local-network discovery.
@@ -386,6 +425,16 @@ export const zCreateSessionResponse2 = zCreateSessionResponse;
  * Current browser session
  */
 export const zGetCurrentSessionResponse = zCurrentSessionResponse;
+
+/**
+ * Current-session revocation
+ */
+export const zRevokeCurrentSessionBody = zRevokeCurrentSessionRequest;
+
+/**
+ * Session authoritatively revoked
+ */
+export const zRevokeCurrentSessionResponse2 = zRevokeCurrentSessionResponse;
 
 /**
  * First-mesh setup

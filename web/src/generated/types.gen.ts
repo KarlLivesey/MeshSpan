@@ -214,6 +214,38 @@ export type HealthResponse = {
 };
 
 /**
+ * RevokeCurrentSessionRequest
+ *
+ * Idempotent request to revoke the caller's current browser session.
+ */
+export type RevokeCurrentSessionRequest = {
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
+};
+
+/**
+ * RevokeCurrentSessionResponse
+ *
+ * Durable result of revoking the caller's current browser session.
+ */
+export type RevokeCurrentSessionResponse = {
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Authoritative revocation instant as epoch microseconds.
+   */
+  revoked_at_epoch_micros: number;
+  /**
+   * Session which is now authoritatively unusable.
+   */
+  session_id: string;
+};
+
+/**
  * SetupStatusResponse
  *
  * Cheap anonymous first-start status safe for local-network discovery.
@@ -461,6 +493,56 @@ export type GetCurrentSessionResponses = {
 
 export type GetCurrentSessionResponse =
   GetCurrentSessionResponses[keyof GetCurrentSessionResponses];
+
+export type RevokeCurrentSessionData = {
+  /**
+   * Current-session revocation
+   */
+  body: RevokeCurrentSessionRequest;
+  path?: never;
+  query?: never;
+  url: "/sessions/current/revocations";
+};
+
+export type RevokeCurrentSessionErrors = {
+  /**
+   * Malformed or structurally invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Operation identifier conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type RevokeCurrentSessionError =
+  RevokeCurrentSessionErrors[keyof RevokeCurrentSessionErrors];
+
+export type RevokeCurrentSessionResponses = {
+  /**
+   * Session authoritatively revoked
+   */
+  200: RevokeCurrentSessionResponse;
+};
+
+export type RevokeCurrentSessionResponse2 =
+  RevokeCurrentSessionResponses[keyof RevokeCurrentSessionResponses];
 
 export type CreateMeshSetupData = {
   /**

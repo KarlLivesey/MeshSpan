@@ -283,6 +283,27 @@ pub struct CurrentSessionResponse {
     pub administration_available: bool,
 }
 
+/// Idempotent request to revoke the caller's current browser session.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeCurrentSessionRequest {
+    /// Client-generated idempotency identity.
+    pub operation_id: OperationId,
+}
+
+/// Durable result of revoking the caller's current browser session.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeCurrentSessionResponse {
+    /// Exact idempotency identity whose result was resolved.
+    pub operation_id: OperationId,
+    /// Session which is now authoritatively unusable.
+    pub session_id: SessionId,
+    /// Authoritative revocation instant as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_i64))]
+    pub revoked_at_epoch_micros: i64,
+}
+
 /// Cheap readiness state returned without authentication.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

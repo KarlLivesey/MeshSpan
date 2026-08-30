@@ -10,11 +10,13 @@
 
 use meshspan_api_contract::{
     ApiError, ApiErrorCode, CreateMeshSetupResponse, CreateSessionResponse, NullableField,
-    OperationId, SetupState, SetupStatusResponse, decode_create_mesh_setup_request,
-    decode_create_session_request, encode_api_error, encode_create_mesh_setup_response,
-    encode_create_session_response, encode_setup_status_response, generate_openapi,
-    validate_create_mesh_setup_request_value, validate_create_session_request_value,
-    validate_create_session_response_value, validate_setup_status_response_value,
+    OperationId, RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
+    decode_create_mesh_setup_request, decode_create_session_request,
+    decode_revoke_current_session_request, encode_api_error, encode_create_mesh_setup_response,
+    encode_create_session_response, encode_revoke_current_session_response,
+    encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
+    validate_create_session_request_value, validate_create_session_response_value,
+    validate_setup_status_response_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -117,6 +119,35 @@ fn public_error_passes_the_same_outgoing_contract_gate() {
 fn decoder_rejects_malformed_and_oversized_bodies_before_domain_work() {
     assert!(decode_create_session_request(b"{").is_err());
     assert!(decode_create_session_request(&vec![b' '; 2_049]).is_err());
+}
+
+#[test]
+fn current_session_revocation_is_exact_bounded_and_validated_both_ways() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    let request = decode_revoke_current_session_request(
+        &serde_json::to_vec(&json!({ "operation_id": operation }))
+            .expect("request fixture must encode"),
+    )
+    .expect("exact revocation request must decode");
+    assert_eq!(request.operation_id.as_str(), operation);
+    assert!(
+        decode_revoke_current_session_request(
+            &serde_json::to_vec(&json!({
+                "operation_id": operation,
+                "unexpected": true
+            }))
+            .expect("rejection fixture must encode")
+        )
+        .is_err()
+    );
+    let response = RevokeCurrentSessionResponse {
+        operation_id: serde_json::from_value(json!(operation))
+            .expect("operation fixture must be valid"),
+        session_id: SessionId::from_uuid_bytes(versioned(2))
+            .expect("session fixture must be valid"),
+        revoked_at_epoch_micros: 1_800_000_000_000_000,
+    };
+    assert!(encode_revoke_current_session_response(&response).is_ok());
 }
 
 #[test]
@@ -245,4 +276,11 @@ fn fixture_document() -> FixtureDocument {
 fn decode_request(value: &Value) -> meshspan_api_contract::CreateSessionRequest {
     let bytes = serde_json::to_vec(&value).expect("fixture must serialize");
     decode_create_session_request(&bytes).expect("fixture must decode")
+}
+
+fn versioned(value: u8) -> [u8; 16] {
+    let mut bytes = [value; 16];
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    bytes
 }

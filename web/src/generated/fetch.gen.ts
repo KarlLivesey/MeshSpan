@@ -9,6 +9,8 @@ import type {
   CreateSessionResponse,
   CurrentSessionResponse,
   HealthResponse,
+  RevokeCurrentSessionRequest,
+  RevokeCurrentSessionResponse,
   SetupStatusResponse,
 } from "./types.gen";
 import {
@@ -21,6 +23,8 @@ import {
   zGetHealthResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
+  zRevokeCurrentSessionBody,
+  zRevokeCurrentSessionResponse2,
 } from "./zod.gen";
 
 const MAX_JSON_RESPONSE_BYTES = 65_536;
@@ -48,6 +52,10 @@ export interface MeshSpanFetchClient {
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
+  revokeCurrentSession(
+    request: RevokeCurrentSessionRequest,
+    csrfToken: string,
+  ): Promise<RevokeCurrentSessionResponse>;
 }
 
 export class MeshSpanApiError extends Error {
@@ -140,6 +148,28 @@ export function createMeshSpanFetchClient(
         "/setup/status",
         { method: "GET" },
         zGetSetupStatusResponse,
+      );
+    },
+    async revokeCurrentSession(
+      request,
+      csrfToken,
+    ): Promise<RevokeCurrentSessionResponse> {
+      const body = zRevokeCurrentSessionBody.parse(request);
+      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
+        throw new TypeError("request has an invalid MeshSpan CSRF token");
+      }
+      return requestJson(
+        context,
+        "/sessions/current/revocations",
+        {
+          body: JSON.stringify(body),
+          headers: {
+            "Content-Type": "application/json",
+            "MeshSpan-CSRF-Token": csrfToken,
+          },
+          method: "POST",
+        },
+        zRevokeCurrentSessionResponse2,
       );
     },
   };
