@@ -137,6 +137,16 @@ pub(super) fn evaluate(
         ));
     };
     let assurance = assurance(stored.2)?;
+    let Some(factors) =
+        super::session::active_factor_state(database.connection(), &stored.0, request.now)?
+    else {
+        return Ok(SessionAccessDecision::Denied(
+            SessionAccessDenial::Unavailable,
+        ));
+    };
+    if assurance != factors.assurance {
+        return Err(RepositoryError::CorruptState);
+    }
     let session_revision = revision(stored.3)?;
     let identity_revision = revision(stored.5)?;
     if session_revision != identity_revision {
@@ -144,7 +154,12 @@ pub(super) fn evaluate(
             SessionAccessDenial::StaleIdentity,
         ));
     }
-    if assurance < request.required_assurance {
+    if !super::session::meets_assurance(
+        assurance,
+        factors.latest_authenticated_at,
+        request.required_assurance,
+        request.now,
+    ) {
         return Ok(SessionAccessDecision::Denied(
             SessionAccessDenial::InsufficientAssurance,
         ));

@@ -8,7 +8,8 @@ use std::path::Path;
 use ed25519_dalek::{Signer, SigningKey};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, BackupId, ComponentInstanceId,
+    ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
+    AuthenticationMethodId, AuthenticationService, BackupId, ComponentInstanceId,
     DelegatedMetadataScope, DelegationAdmission, DurationMicros, GrantId, GroupId, HandoffEvidence,
     HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NodeId, ObjectId,
     OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights, RoleId,
@@ -26,12 +27,14 @@ use super::{
 use crate::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
     AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh,
-    CommandContext, ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy, CreateComponent,
-    CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser,
-    CreateVolume, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission,
-    InstallScopeRouteProjection, IssueAuthenticationSession, IssueJoinGrant, JoinRoles,
-    NamespaceObjectKind, PartitionDatabase, PermissionScope, RecordName, RegisterRoutingSigner,
-    ReplaceObjectOwners, RevokeAuthenticationSession, RouteAttestation, TagTarget,
+    CommandContext, ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy,
+    CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateMetadataPartition,
+    CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume, DetachTag,
+    FreezeScopeHandoff, GrantInheritance, GrantPermission, InstallScopeRouteProjection,
+    IssueAuthenticationSession, IssueJoinGrant, JoinRoles, NamespaceObjectKind,
+    NewAuthenticationCredential, PartitionDatabase, PermissionScope, RecordName,
+    RegisterRoutingSigner, ReplaceObjectOwners, RevokeAuthenticationSession, RouteAttestation,
+    SessionAuthenticationFactor, TagTarget, TotpAlgorithm,
 };
 
 struct FixtureIds {
@@ -591,7 +594,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
 
     verify_vertical_queries(&repository, &ids)?;
 
-    let activation_context = context(32, ids.user, 52, 113, Some(13))?;
+    let activation_context = context(32, ids.user, 52, 113, Some(15))?;
     let activation_command = AuthoritativeCommand::ActivateGrant(ActivateGrant {
         activation_id: ActivationId::from_bytes([33; 16])?,
         principal_id: ids.user,
@@ -604,15 +607,15 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
         authentication_digest: [34; 32],
     });
     let replay = repository.apply_committed(
-        LogPosition { index: 15, term: 1 },
+        LogPosition { index: 17, term: 1 },
         activation_context,
         &activation_command,
     )?;
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
-    assert_eq!(replay.committed_position.index, 14);
-    assert_eq!(replay.applied_position.index, 15);
-    assert_eq!(replay.committed_revision, Revision::new(14));
-    assert_eq!(repository.current_revision()?, Revision::new(14));
+    assert_eq!(replay.committed_position.index, 16);
+    assert_eq!(replay.applied_position.index, 17);
+    assert_eq!(replay.committed_revision, Revision::new(16));
+    assert_eq!(repository.current_revision()?, Revision::new(16));
     drop(repository);
 
     let reopened = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(200))?;
@@ -622,11 +625,11 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
         .ok_or("committed operation was not resolved")?;
     assert_eq!(resolved.result_digest, replay.result_digest);
     assert_eq!(resolved.entity, replay.entity);
-    assert_eq!(resolved.committed_position.index, 14);
-    assert_eq!(resolved.applied_position.index, 15);
+    assert_eq!(resolved.committed_position.index, 16);
+    assert_eq!(resolved.applied_position.index, 17);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        44
+        45
     );
     Ok(())
 }
@@ -1924,16 +1927,18 @@ fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
     )?;
 
     let session_id = SessionId::from_bytes([88; 16])?;
+    let factors = create_test_session_factors(&mut repository, 3, ids.user, 200, 140)?;
     let issue = AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
         session_id,
         principal_id: ids.user,
         token_digest: [89; 32],
-        assurance: AssuranceLevel::MultiFactor,
+        service: AuthenticationService::Https,
+        factors: factors.clone(),
         expires_at: UnixMicros::new(1_000),
     });
-    let issue_context = context(90, ids.user, 91, 200, Some(2))?;
+    let issue_context = context(90, ids.user, 91, 200, Some(4))?;
     let receipt =
-        repository.apply_committed(LogPosition { index: 3, term: 1 }, issue_context, &issue)?;
+        repository.apply_committed(LogPosition { index: 5, term: 1 }, issue_context, &issue)?;
     assert_eq!(receipt.entity.kind, EntityKind::AuthenticationSession);
     assert_eq!(receipt.entity.id, session_id.as_bytes());
 
@@ -1941,13 +1946,14 @@ fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
         session_id: SessionId::from_bytes([92; 16])?,
         principal_id: ids.user,
         token_digest: [89; 32],
-        assurance: AssuranceLevel::SingleFactor,
+        service: AuthenticationService::Https,
+        factors,
         expires_at: UnixMicros::new(2_000),
     });
     assert!(matches!(
         repository.apply_committed(
-            LogPosition { index: 4, term: 1 },
-            context(93, ids.user, 94, 201, Some(3))?,
+            LogPosition { index: 6, term: 1 },
+            context(93, ids.user, 94, 201, Some(5))?,
             &duplicate,
         ),
         Err(RepositoryError::InvalidCommand)
@@ -1959,14 +1965,14 @@ fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
     });
     apply(
         &mut repository,
-        4,
-        context(95, ids.user, 96, 202, Some(3))?,
+        6,
+        context(95, ids.user, 96, 202, Some(5))?,
         &revoke,
     )?;
     assert!(matches!(
         repository.apply_committed(
-            LogPosition { index: 5, term: 1 },
-            context(97, ids.user, 98, 203, Some(4))?,
+            LogPosition { index: 7, term: 1 },
+            context(97, ids.user, 98, 203, Some(6))?,
             &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
                 session_id,
                 principal_id: ids.user,
@@ -1983,7 +1989,7 @@ fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
         [session_id.as_bytes().as_slice()],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )?;
-    assert_eq!(stored, (vec![89; 32], 2, 202, 4));
+    assert_eq!(stored, (vec![89; 32], 2, 202, 6));
     Ok(())
 }
 
@@ -2059,7 +2065,7 @@ fn activation_required_group_is_self_activated_with_bounded_evidence()
         }),
     )?;
     issue_group_activation_test_session(&mut repository, &ids)?;
-    let activation_context = context(125, ids.user, 126, 105, Some(6))?;
+    let activation_context = context(125, ids.user, 126, 105, Some(8))?;
     let activation = AuthoritativeCommand::ActivateGroup(ActivateGroup {
         activation_id: ActivationId::from_bytes([127; 16])?,
         principal_id: ids.user,
@@ -2072,11 +2078,11 @@ fn activation_required_group_is_self_activated_with_bounded_evidence()
         authentication_digest: [128; 32],
     });
     let receipt = repository.apply_committed(
-        LogPosition { index: 7, term: 1 },
+        LogPosition { index: 9, term: 1 },
         activation_context,
         &activation,
     )?;
-    assert_eq!(receipt.committed_revision, Revision::new(7));
+    assert_eq!(receipt.committed_revision, Revision::new(9));
     drop(repository);
     let reopened = PartitionDatabase::open(&file_path, ids.partition, UnixMicros::new(200))?;
     assert!(
@@ -2091,15 +2097,17 @@ fn issue_group_activation_test_session(
     repository: &mut AuthoritativeRepository,
     ids: &FixtureIds,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let factors = create_test_session_factors(repository, 6, ids.user, 105, 150)?;
     apply(
         repository,
-        6,
-        context(129, ids.user, 130, 105, Some(5))?,
+        8,
+        context(129, ids.user, 130, 105, Some(7))?,
         &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
             session_id: SessionId::from_bytes([131; 16])?,
             principal_id: ids.user,
             token_digest: [128; 32],
-            assurance: AssuranceLevel::RecentStepUp,
+            service: AuthenticationService::Https,
+            factors,
             expires_at: UnixMicros::new(2_000),
         }),
     )?;
@@ -2542,25 +2550,106 @@ fn create_and_activate_grant(
         assurance: AssuranceLevel::MultiFactor,
         authentication_digest: [34; 32],
     });
+    let factors = create_test_session_factors(repository, 13, ids.user, 112, 160)?;
     apply(
         repository,
-        13,
-        context(36, ids.user, 53, 112, Some(12))?,
+        15,
+        context(36, ids.user, 53, 112, Some(14))?,
         &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
             session_id: SessionId::from_bytes([37; 16])?,
             principal_id: ids.user,
             token_digest: [34; 32],
-            assurance: AssuranceLevel::MultiFactor,
+            service: AuthenticationService::Https,
+            factors,
             expires_at: UnixMicros::new(10_000),
         }),
     )?;
     apply(
         repository,
-        14,
-        context(32, ids.user, 52, 113, Some(13))?,
+        16,
+        context(32, ids.user, 52, 113, Some(15))?,
         &activation,
     )?;
     Ok(grant_id)
+}
+
+fn create_test_session_factors(
+    repository: &mut AuthoritativeRepository,
+    first_index: u64,
+    principal_id: PrincipalId,
+    now: i64,
+    seed: u8,
+) -> Result<BoundedItems<SessionAuthenticationFactor>, Box<dyn std::error::Error>> {
+    let api_method_id = AuthenticationMethodId::from_bytes([seed; 16])?;
+    let totp_method_id = AuthenticationMethodId::from_bytes([seed.wrapping_add(1); 16])?;
+    let key_id = ApiKeyId::from_bytes([seed.wrapping_add(2); 16])?;
+    apply(
+        repository,
+        first_index,
+        context(
+            seed.wrapping_add(10),
+            principal_id,
+            seed.wrapping_add(11),
+            now - 2,
+            Some(first_index - 1),
+        )?,
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: api_method_id,
+            principal_id,
+            label: "Session API key".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::ApiKey {
+                key_id,
+                key_digest: [seed.wrapping_add(3); 32],
+                scopes: AuthenticationService::Https.api_key_login_scope(),
+                valid_from: UnixMicros::new(now - 3),
+            },
+        }),
+    )?;
+    apply(
+        repository,
+        first_index + 1,
+        context(
+            seed.wrapping_add(12),
+            principal_id,
+            seed.wrapping_add(13),
+            now - 1,
+            Some(first_index),
+        )?,
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: totp_method_id,
+            principal_id,
+            label: "Session TOTP".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::Totp {
+                secret_ciphertext: vec![seed.wrapping_add(4); 64],
+                algorithm: TotpAlgorithm::Sha256,
+                digits: 6,
+                period_seconds: 30,
+                accepted_step_window: 1,
+            },
+        }),
+    )?;
+    let accepted_step = u64::try_from(now)? / 30_000_000;
+    Ok(BoundedItems::new(
+        vec![
+            SessionAuthenticationFactor::ApiKey {
+                method_id: api_method_id,
+                credential_generation: 1,
+                method_revision: Revision::new(first_index),
+                key_id,
+            },
+            SessionAuthenticationFactor::Totp {
+                method_id: totp_method_id,
+                credential_generation: 1,
+                method_revision: Revision::new(first_index + 1),
+                accepted_step,
+            },
+        ],
+        8,
+    )?)
 }
 
 fn apply(

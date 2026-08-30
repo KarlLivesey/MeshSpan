@@ -5,12 +5,12 @@ use std::error::Error;
 use ed25519_dalek::{Signature, SigningKey, Verifier};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AssuranceLevel, AuditEventId, BranchId, ContentManifestId, FederatedPrincipal,
-    FederationAccess, FederationGrant, FederationGrantId, FederationPolicy,
-    FederationRelationshipId, FederationRelationshipKind, FederationResourceScope, FileVersionId,
-    HostId, MeshId, NamespaceCommitId, NamespaceFederationPolicy, NodeId, ObjectId,
-    ObjectRevisionId, OperationId, PartitionId, PrincipalId, Revision, Rights, RoleId, SessionId,
-    UnixMicros, VolumeId,
+    ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId, AuthenticationService,
+    BranchId, ContentManifestId, FederatedPrincipal, FederationAccess, FederationGrant,
+    FederationGrantId, FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
+    FederationResourceScope, FileVersionId, HostId, MeshId, NamespaceCommitId,
+    NamespaceFederationPolicy, NodeId, ObjectId, ObjectRevisionId, OperationId, PartitionId,
+    PrincipalId, Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     FilePublication, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
@@ -18,13 +18,14 @@ use meshspan_filesystem::{
 };
 use meshspan_metadata::{
     ApproveFederationRelationship, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
-    CommandContext, CreateUser, FederationGovernanceDirection, FederationGrantRecord,
-    FederationGrantRestriction, FederationGrantState, FederationIdentityOwner,
-    FederationRelationshipRecord, FederationRelationshipState, FederationRemoteAuthoritySnapshot,
-    FederationTransportAuthority, FederationTrustIdentity, FederationTrustIdentityRecord,
-    IssueAuthenticationSession, IssueFederationGrant, LocalDatabase, LogPosition,
-    PartitionDatabase, ProposeFederationRelationship, RecordName, RevokeAuthenticationSession,
-    SessionAccessRequest,
+    CommandContext, CreateAuthenticationMethod, CreateUser, FederationGovernanceDirection,
+    FederationGrantRecord, FederationGrantRestriction, FederationGrantState,
+    FederationIdentityOwner, FederationRelationshipRecord, FederationRelationshipState,
+    FederationRemoteAuthoritySnapshot, FederationTransportAuthority, FederationTrustIdentity,
+    FederationTrustIdentityRecord, IssueAuthenticationSession, IssueFederationGrant, LocalDatabase,
+    LogPosition, NewAuthenticationCredential, PartitionDatabase, ProposeFederationRelationship,
+    RecordName, RevokeAuthenticationSession, SessionAccessRequest, SessionAuthenticationFactor,
+    TotpAlgorithm,
 };
 use tempfile::{TempDir, tempdir};
 
@@ -170,21 +171,10 @@ impl Fixture {
                 name: RecordName::new("Federated writer")?,
             }),
         )?;
+        self.issue_session()?;
         self.apply(
-            3,
-            22,
-            self.ids.user,
-            &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
-                session_id: self.ids.session,
-                principal_id: self.ids.user,
-                token_digest: [15; 32],
-                assurance: AssuranceLevel::MultiFactor,
-                expires_at: UnixMicros::new(90),
-            }),
-        )?;
-        self.apply(
-            4,
-            23,
+            6,
+            25,
             self.ids.administrator,
             &AuthoritativeCommand::ProposeFederationRelationship(ProposeFederationRelationship {
                 relationship_id: self.ids.relationship,
@@ -195,8 +185,8 @@ impl Fixture {
             }),
         )?;
         self.apply(
-            5,
-            24,
+            7,
+            26,
             self.ids.administrator,
             &AuthoritativeCommand::ApproveFederationRelationship(ApproveFederationRelationship {
                 relationship_id: self.ids.relationship,
@@ -208,8 +198,8 @@ impl Fixture {
         )?;
         let record = self.grant_record()?;
         self.apply(
-            6,
-            25,
+            8,
+            27,
             self.ids.administrator,
             &AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
                 grant: record.grant,
@@ -223,10 +213,79 @@ impl Fixture {
         Ok(())
     }
 
+    fn issue_session(&mut self) -> Result<(), Box<dyn Error>> {
+        self.apply(
+            3,
+            22,
+            self.ids.user,
+            &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([18; 16])?,
+                principal_id: self.ids.user,
+                label: "API key".to_owned(),
+                service_scope: AuthenticationService::Https.scope_bit(),
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([20; 16])?,
+                    key_digest: [21; 32],
+                    scopes: AuthenticationService::Https.api_key_login_scope(),
+                    valid_from: UnixMicros::new(1),
+                },
+            }),
+        )?;
+        self.apply(
+            4,
+            23,
+            self.ids.user,
+            &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([19; 16])?,
+                principal_id: self.ids.user,
+                label: "TOTP".to_owned(),
+                service_scope: AuthenticationService::Https.scope_bit(),
+                expires_at: None,
+                credential: NewAuthenticationCredential::Totp {
+                    secret_ciphertext: vec![22; 64],
+                    algorithm: TotpAlgorithm::Sha256,
+                    digits: 6,
+                    period_seconds: 30,
+                    accepted_step_window: 1,
+                },
+            }),
+        )?;
+        self.apply(
+            5,
+            24,
+            self.ids.user,
+            &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+                session_id: self.ids.session,
+                principal_id: self.ids.user,
+                token_digest: [15; 32],
+                service: AuthenticationService::Https,
+                factors: BoundedItems::new(
+                    vec![
+                        SessionAuthenticationFactor::ApiKey {
+                            method_id: AuthenticationMethodId::from_bytes([18; 16])?,
+                            credential_generation: 1,
+                            method_revision: Revision::new(3),
+                            key_id: ApiKeyId::from_bytes([20; 16])?,
+                        },
+                        SessionAuthenticationFactor::Totp {
+                            method_id: AuthenticationMethodId::from_bytes([19; 16])?,
+                            credential_generation: 1,
+                            method_revision: Revision::new(4),
+                            accepted_step: 0,
+                        },
+                    ],
+                    8,
+                )?,
+                expires_at: UnixMicros::new(90),
+            }),
+        )
+    }
+
     fn revoke_session(&mut self) -> Result<(), Box<dyn Error>> {
         self.apply(
-            7,
-            26,
+            9,
+            28,
             self.ids.user,
             &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
                 session_id: self.ids.session,

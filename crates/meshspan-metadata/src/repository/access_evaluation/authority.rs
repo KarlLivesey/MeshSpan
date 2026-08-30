@@ -43,16 +43,29 @@ pub(super) fn load_session(
             },
         )
         .optional()?;
-    row.map(|value| {
-        Ok(Session {
-            id: parse_session(&value.0)?,
-            principal_id: parse_principal(&value.1)?,
-            assurance: parse_assurance(value.2)?,
-            identity_revision: parse_revision(value.3)?,
-            expires_at: UnixMicros::new(value.4),
-        })
-    })
-    .transpose()
+    let Some(value) = row else {
+        return Ok(None);
+    };
+    let session_id = parse_session(&value.0)?;
+    let Some(factors) = super::super::session::active_factor_state(
+        database.connection(),
+        &session_id.as_bytes(),
+        now,
+    )?
+    else {
+        return Ok(None);
+    };
+    if factors.assurance != parse_assurance(value.2)? {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(Some(Session {
+        id: session_id,
+        principal_id: parse_principal(&value.1)?,
+        assurance: factors.assurance,
+        latest_authenticated_at: factors.latest_authenticated_at,
+        identity_revision: parse_revision(value.3)?,
+        expires_at: UnixMicros::new(value.4),
+    }))
 }
 
 pub(super) fn load_authority_revisions(

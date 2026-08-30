@@ -2,30 +2,20 @@
 
 //! Atomic authoritative lifecycle for protocol-neutral authentication methods.
 
-use meshspan_domain::{ApiKeyId, AuthenticationMethodId, PrincipalId, Revision, UnixMicros};
+use meshspan_domain::{
+    ApiKeyId, AuthenticationMethodId, AuthenticationMethodKind, AuthenticationService, PrincipalId,
+    Revision, UnixMicros,
+};
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{CommandContext, RevokeAuthenticationMethod};
 
-const API_KEY_METHOD: i64 = 4;
 const ACTIVE: i64 = 1;
 const REVOKED: i64 = 3;
 const MAXIMUM_REASON_CHARACTERS: usize = 1_024;
 const MAXIMUM_SERVICE_SCOPE: u8 = 7;
-
-/// One connector family against which an API key may authenticate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum AuthenticationService {
-    /// Browser and direct HTTPS file/application access.
-    Https = 1,
-    /// Headless public administration and data API access.
-    HeadlessApi = 2,
-    /// Embedded SMB 3.1.1 session establishment.
-    Smb = 4,
-}
 
 /// Validated active API-key authority without its secret or verifier digest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,7 +118,7 @@ fn validate_authentication(
     let generation = positive_u64(stored.credential_generation)?;
     let method_revision = positive_u64(stored.method_revision)?;
     positive_u64(stored.key_revision)?;
-    if stored.method_kind != API_KEY_METHOD
+    if stored.method_kind != AuthenticationMethodKind::ApiKey as i64
         || !(1..=3).contains(&stored.method_state)
         || !(1..=3).contains(&stored.principal_state)
         || stored
@@ -143,7 +133,7 @@ fn validate_authentication(
     {
         return Err(RepositoryError::CorruptState);
     }
-    let service_allowed = service_scope & service as u8 != 0;
+    let service_allowed = service_scope & service.scope_bit() != 0;
     let scopes_allowed = scopes & required_scopes == required_scopes;
     let time_allowed = now.get() >= stored.valid_from
         && stored.valid_until.is_none_or(|end| now.get() < end)

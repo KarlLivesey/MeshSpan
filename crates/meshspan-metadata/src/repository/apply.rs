@@ -577,7 +577,7 @@ fn execute_identity_command(
             authentication_method::revoke(transaction, context, value, revision)
         }
         AuthoritativeCommand::IssueAuthenticationSession(value) => {
-            session::issue(transaction, context, *value, revision)
+            session::issue(transaction, context, value, revision)
         }
         AuthoritativeCommand::RevokeAuthenticationSession(value) => {
             session::revoke(transaction, context, *value, revision)

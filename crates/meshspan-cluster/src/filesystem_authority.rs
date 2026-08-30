@@ -75,14 +75,16 @@ pub enum MetadataFilesystemAuthorityError {
 mod tests {
     use meshspan_contracts::BoundedItems;
     use meshspan_domain::{
-        AssuranceLevel, AuditEventId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
-        PartitionId, PrincipalId, Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
+        ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId, AuthenticationService,
+        HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId,
+        Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
     };
     use meshspan_filesystem::{FilesystemAccessContext, FilesystemAuthorityRequest};
     use meshspan_metadata::{
-        AuthoritativeCommand, BootstrapMesh, CommandContext, CreateUser, CreateVolume,
-        IssueAuthenticationSession, LogPosition, PartitionDatabase, RecordName,
-        RevokeAuthenticationSession,
+        AuthoritativeCommand, BootstrapMesh, CommandContext, CreateAuthenticationMethod,
+        CreateUser, CreateVolume, IssueAuthenticationSession, LogPosition,
+        NewAuthenticationCredential, PartitionDatabase, RecordName, RevokeAuthenticationSession,
+        SessionAuthenticationFactor, TotpAlgorithm,
     };
 
     use super::*;
@@ -142,18 +144,7 @@ mod tests {
                 owners: BoundedItems::new(vec![user_id], 1_024)?,
             }),
         )?;
-        apply(
-            &mut repository,
-            4,
-            user_id,
-            &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
-                session_id,
-                principal_id: user_id,
-                token_digest,
-                assurance: AssuranceLevel::MultiFactor,
-                expires_at: UnixMicros::new(500),
-            }),
-        )?;
+        issue_test_session(&mut repository, user_id, session_id, token_digest)?;
 
         let request = FilesystemAuthorityRequest {
             context: FilesystemAccessContext {
@@ -175,7 +166,7 @@ mod tests {
 
         apply(
             &mut repository,
-            5,
+            7,
             user_id,
             &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
                 session_id,
@@ -189,6 +180,80 @@ mod tests {
             ))
         ));
         Ok(())
+    }
+
+    fn issue_test_session(
+        repository: &mut AuthoritativeRepository,
+        user_id: PrincipalId,
+        session_id: SessionId,
+        token_digest: [u8; 32],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        apply(
+            repository,
+            4,
+            user_id,
+            &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([13; 16])?,
+                principal_id: user_id,
+                label: "API key".to_owned(),
+                service_scope: AuthenticationService::Https.scope_bit(),
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([14; 16])?,
+                    key_digest: [15; 32],
+                    scopes: AuthenticationService::Https.api_key_login_scope(),
+                    valid_from: UnixMicros::new(100),
+                },
+            }),
+        )?;
+        apply(
+            repository,
+            5,
+            user_id,
+            &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([16; 16])?,
+                principal_id: user_id,
+                label: "TOTP".to_owned(),
+                service_scope: AuthenticationService::Https.scope_bit(),
+                expires_at: None,
+                credential: NewAuthenticationCredential::Totp {
+                    secret_ciphertext: vec![17; 64],
+                    algorithm: TotpAlgorithm::Sha256,
+                    digits: 6,
+                    period_seconds: 30,
+                    accepted_step_window: 1,
+                },
+            }),
+        )?;
+        apply(
+            repository,
+            6,
+            user_id,
+            &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+                session_id,
+                principal_id: user_id,
+                token_digest,
+                service: AuthenticationService::Https,
+                factors: BoundedItems::new(
+                    vec![
+                        SessionAuthenticationFactor::ApiKey {
+                            method_id: AuthenticationMethodId::from_bytes([13; 16])?,
+                            credential_generation: 1,
+                            method_revision: Revision::new(4),
+                            key_id: ApiKeyId::from_bytes([14; 16])?,
+                        },
+                        SessionAuthenticationFactor::Totp {
+                            method_id: AuthenticationMethodId::from_bytes([16; 16])?,
+                            credential_generation: 1,
+                            method_revision: Revision::new(5),
+                            accepted_step: 0,
+                        },
+                    ],
+                    8,
+                )?,
+                expires_at: UnixMicros::new(500),
+            }),
+        )
     }
 
     fn apply(

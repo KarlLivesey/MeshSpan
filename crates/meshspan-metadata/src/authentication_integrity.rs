@@ -78,9 +78,77 @@ pub(crate) fn check_method_shapes(connection: &Connection) -> Result<(), Metadat
         [],
         |row| row.get(0),
     )?;
-    if invalid_subtype == 0 && invalid_lifecycle == 0 {
+    let invalid_session = invalid_session_shape(connection)?;
+    let invalid_factor = invalid_session_factor(connection)?;
+    if invalid_subtype == 0 && invalid_lifecycle == 0 && invalid_session == 0 && invalid_factor == 0
+    {
         Ok(())
     } else {
         Err(MetadataStoreError::IntegrityFailed)
     }
+}
+
+fn invalid_session_shape(connection: &Connection) -> Result<i64, rusqlite::Error> {
+    connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM authentication_sessions AS session
+            WHERE (SELECT count(*) FROM authentication_session_factors
+                   WHERE session_id = session.session_id) NOT BETWEEN 1 AND 8
+               OR (SELECT min(factor_sequence) FROM authentication_session_factors
+                   WHERE session_id = session.session_id) <> 1
+               OR (SELECT max(factor_sequence) FROM authentication_session_factors
+                   WHERE session_id = session.session_id) <>
+                  (SELECT count(*) FROM authentication_session_factors
+                   WHERE session_id = session.session_id)
+               OR NOT EXISTS(
+                   SELECT 1 FROM authentication_session_factors
+                   WHERE session_id = session.session_id AND method_kind IN (1, 4)
+               )
+               OR session.assurance <> CASE WHEN EXISTS(
+                   SELECT 1 FROM authentication_session_factors
+                   WHERE session_id = session.session_id AND method_kind IN (2, 3)
+               ) THEN 2 ELSE 1 END
+         )",
+        [],
+        |row| row.get(0),
+    )
+}
+
+fn invalid_session_factor(connection: &Connection) -> Result<i64, rusqlite::Error> {
+    connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM authentication_session_factors AS factor
+            JOIN authentication_sessions AS session USING(session_id)
+            JOIN authentication_methods AS method USING(method_id)
+            WHERE factor.method_kind <> method.method_kind
+               OR factor.authenticated_at <> session.issued_at
+               OR method.user_principal_id <> session.user_principal_id
+               OR (method.service_scope & session.service) <> session.service
+               OR factor.credential_generation > method.credential_generation
+               OR factor.method_revision > method.revision
+               OR (factor.method_kind = 1 AND NOT EXISTS(
+                   SELECT 1 FROM webauthn_credentials
+                   WHERE method_id = factor.method_id
+                     AND credential_id = factor.credential_reference
+               ))
+               OR (factor.method_kind = 2
+                   AND (factor.credential_reference <> factor.method_id OR NOT EXISTS(
+                       SELECT 1 FROM totp_credentials WHERE method_id = factor.method_id
+                   )))
+               OR (factor.method_kind = 3 AND NOT EXISTS(
+                   SELECT 1 FROM recovery_codes
+                   WHERE method_id = factor.method_id
+                     AND code_id = factor.credential_reference
+                     AND used_at IS NOT NULL
+               ))
+               OR (factor.method_kind = 4 AND NOT EXISTS(
+                   SELECT 1 FROM api_keys
+                   WHERE method_id = factor.method_id
+                     AND key_id = factor.credential_reference
+               ))
+         )",
+        [],
+        |row| row.get(0),
+    )
 }

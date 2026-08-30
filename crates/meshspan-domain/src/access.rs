@@ -189,6 +189,54 @@ pub enum AssuranceLevel {
     RecentStepUp,
 }
 
+/// Connector family for which an authentication method or session is valid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AuthenticationService {
+    /// Browser and direct HTTPS file/application access.
+    Https = 1,
+    /// Headless public administration and data API access.
+    HeadlessApi = 2,
+    /// Embedded SMB 3.1.1 session establishment.
+    Smb = 4,
+}
+
+impl AuthenticationService {
+    /// Returns the service bit used by authentication-method compatibility scopes.
+    #[must_use]
+    pub const fn scope_bit(self) -> u8 {
+        self as u8
+    }
+
+    /// Returns the API-key capability bit required to authenticate this service.
+    #[must_use]
+    pub const fn api_key_login_scope(self) -> u64 {
+        self as u64
+    }
+}
+
+/// Typed authentication-method family retained as session evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AuthenticationMethodKind {
+    /// `WebAuthn` public-key credential and assertion ceremony.
+    Passkey = 1,
+    /// Time-based one-time password used only as an additional factor.
+    Totp = 2,
+    /// Single-use recovery code used only for recovery or step-up.
+    RecoveryCode = 3,
+    /// Scoped high-entropy API key.
+    ApiKey = 4,
+}
+
+impl AuthenticationMethodKind {
+    /// Reports whether this method can establish a primary login by itself.
+    #[must_use]
+    pub const fn is_primary(self) -> bool {
+        matches!(self, Self::Passkey | Self::ApiKey)
+    }
+}
+
 /// Exact pre-authorised object whose rights require activation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivationSubject {

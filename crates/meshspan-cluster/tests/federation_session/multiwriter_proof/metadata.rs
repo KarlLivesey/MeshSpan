@@ -14,16 +14,19 @@ use meshspan_cluster::{
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AssuranceLevel, FederatedPrincipal, FederationAccess, FederationGrant, FederationGrantId,
-    FederationPolicy, FederationResourceScope, MeshId, OperationId, PartitionId, PrincipalId,
-    Revision, Rights, SessionId, UnixMicros, VolumeId,
+    ApiKeyId, AssuranceLevel, AuthenticationMethodId, AuthenticationService, FederatedPrincipal,
+    FederationAccess, FederationGrant, FederationGrantId, FederationPolicy,
+    FederationResourceScope, MeshId, OperationId, PartitionId, PrincipalId, Revision, Rights,
+    SessionId, UnixMicros, VolumeId,
 };
 use meshspan_metadata::{
-    AuthoritativeCommand, AuthoritativeRepository, ChangePrincipalState, CreateUser,
-    FederatedPrincipalKind, FederatedPrincipalState, FederationGrantRecord,
-    FederationGrantRestriction, FederationRemoteAuthoritySnapshot, IssueAuthenticationSession,
-    IssueFederationGrant, LocalDatabase, LogPosition, PartitionDatabase, PrincipalLifecycleState,
-    RecordName, SessionAccessRequest, UpsertFederatedPrincipalProjection,
+    AuthoritativeCommand, AuthoritativeRepository, ChangePrincipalState,
+    CreateAuthenticationMethod, CreateUser, FederatedPrincipalKind, FederatedPrincipalState,
+    FederationGrantRecord, FederationGrantRestriction, FederationRemoteAuthoritySnapshot,
+    IssueAuthenticationSession, IssueFederationGrant, LocalDatabase, LogPosition,
+    NewAuthenticationCredential, PartitionDatabase, PrincipalLifecycleState, RecordName,
+    SessionAccessRequest, SessionAuthenticationFactor, TotpAlgorithm,
+    UpsertFederatedPrincipalProjection,
 };
 use tempfile::{TempDir, tempdir};
 
@@ -155,18 +158,7 @@ fn configure_authoritative_state(
             name: RecordName::new("Disconnected writer")?,
         }),
     )?;
-    apply_next(
-        &mut authorities.server.repository,
-        user,
-        11,
-        &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
-            session_id: SessionId::from_bytes([95; 16])?,
-            principal_id: user,
-            token_digest: TOKEN_DIGEST,
-            assurance: AssuranceLevel::MultiFactor,
-            expires_at: UnixMicros::new(2_500_000),
-        }),
-    )?;
+    issue_home_session(authorities, user)?;
     let record = grant_record(authorities, user, grant, volume)?;
     issue_grant(
         &mut authorities.server.repository,
@@ -192,6 +184,80 @@ fn configure_authoritative_state(
         authorities.client.administrator_id,
         14,
         &record,
+    )
+}
+
+fn issue_home_session(
+    authorities: &mut MetadataAuthorities,
+    user: PrincipalId,
+) -> Result<(), Box<dyn Error>> {
+    apply_next(
+        &mut authorities.server.repository,
+        user,
+        11,
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: AuthenticationMethodId::from_bytes([96; 16])?,
+            principal_id: user,
+            label: "API key".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::ApiKey {
+                key_id: ApiKeyId::from_bytes([98; 16])?,
+                key_digest: [99; 32],
+                scopes: AuthenticationService::Https.api_key_login_scope(),
+                valid_from: UnixMicros::new(1),
+            },
+        }),
+    )?;
+    let api_revision = authorities.server.repository.current_revision()?;
+    apply_next(
+        &mut authorities.server.repository,
+        user,
+        12,
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: AuthenticationMethodId::from_bytes([97; 16])?,
+            principal_id: user,
+            label: "TOTP".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::Totp {
+                secret_ciphertext: vec![100; 64],
+                algorithm: TotpAlgorithm::Sha256,
+                digits: 6,
+                period_seconds: 30,
+                accepted_step_window: 1,
+            },
+        }),
+    )?;
+    let totp_revision = authorities.server.repository.current_revision()?;
+    apply_next(
+        &mut authorities.server.repository,
+        user,
+        13,
+        &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+            session_id: SessionId::from_bytes([95; 16])?,
+            principal_id: user,
+            token_digest: TOKEN_DIGEST,
+            service: AuthenticationService::Https,
+            factors: BoundedItems::new(
+                vec![
+                    SessionAuthenticationFactor::ApiKey {
+                        method_id: AuthenticationMethodId::from_bytes([96; 16])?,
+                        credential_generation: 1,
+                        method_revision: api_revision,
+                        key_id: ApiKeyId::from_bytes([98; 16])?,
+                    },
+                    SessionAuthenticationFactor::Totp {
+                        method_id: AuthenticationMethodId::from_bytes([97; 16])?,
+                        credential_generation: 1,
+                        method_revision: totp_revision,
+                        accepted_step: 0,
+                    },
+                ],
+                8,
+            )?,
+            expires_at: UnixMicros::new(2_500_000),
+        }),
     )
 }
 
