@@ -395,7 +395,7 @@ pub(super) fn storage_grant_command(
         FederationPolicy::intersect(&policies)?,
         1,
         UnixMicros::new(4),
-        Some(UnixMicros::new(1_000_000)),
+        Some(UnixMicros::new(3_000_000)),
     )?;
     Ok(AuthoritativeCommand::IssueFederationGrant(
         IssueFederationGrant {
@@ -432,6 +432,6 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         maximum_storage_bytes,
         StorageParticipation::new(counts_towards_protection, true),
-        Some(DurationMicros::new(1_000_000)),
+        Some(DurationMicros::new(3_000_000)),
     )?))
 }

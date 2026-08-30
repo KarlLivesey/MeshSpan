@@ -8,6 +8,8 @@ mod authority_page_proof;
 mod branch_page_proof;
 #[path = "federation_session/history_sync_proof.rs"]
 mod history_sync_proof;
+#[path = "federation_session/storage_capability_proof.rs"]
+mod storage_capability_proof;
 
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -21,14 +23,15 @@ use meshspan_cluster::{
 };
 use meshspan_domain::{
     AuditEventId, DurationMicros, FederationGrantId, FederationRelationshipId,
-    FederationRelationshipKind, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId,
-    Revision, RoleId, UnixMicros,
+    FederationRelationshipKind, FederationStorageAllocation, FederationStorageAllocationId, HostId,
+    MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId, TargetId, UnixMicros,
 };
 use meshspan_metadata::{
     ApproveFederationRelationship, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
     CommandContext, FederationGovernanceDirection, FederationIdentityOwner,
-    FederationTrustIdentity, LogPosition, PartitionDatabase, ProposeFederationRelationship,
-    RecordName, RevokeFederationRelationship, RotateFederationTrustIdentity,
+    FederationTrustIdentity, IssueFederationStorageAllocation, LogPosition, PartitionDatabase,
+    ProposeFederationRelationship, RecordName, RevokeFederationRelationship,
+    RotateFederationTrustIdentity,
 };
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::ProtocolVersion;
@@ -47,6 +50,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use authority_page_proof::{
     prove_initial_authority, prove_rotated_authority, storage_grant_command,
 };
+use storage_capability_proof::prove_storage_capability_exchange;
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
 const NOW: UnixMicros = UnixMicros::new(1_500_000);
@@ -113,6 +117,14 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
         );
         prove_rotated_authority(&rotated_proof, &expected_grants).await?
     };
+    let (allocation, provider_node_id) =
+        authorities.issue_server_storage_allocation(75, expected_grants[0])?;
+    let storage_proof = authorities.proof(
+        rotated_runtimes,
+        &rotated_connections,
+        SessionExpectation::new(76, 7, 2),
+    );
+    prove_storage_capability_exchange(&storage_proof, allocation, provider_node_id).await?;
     authorities.issue_server_grants(80, 1)?;
     assert!(matches!(
         authorities
@@ -320,6 +332,14 @@ impl MetadataAuthorities {
         self.server
             .issue_storage_grants(seed, count, self.client_mesh, self.server_mesh)
     }
+
+    fn issue_server_storage_allocation(
+        &mut self,
+        seed: u8,
+        grant_id: FederationGrantId,
+    ) -> Result<(FederationStorageAllocation, NodeId), Box<dyn Error>> {
+        self.server.issue_storage_allocation(seed, grant_id)
+    }
 }
 
 struct SessionProof<'a> {
@@ -439,6 +459,7 @@ struct MetadataAuthority {
     repository: AuthoritativeRepository,
     administrator_id: PrincipalId,
     relationship_id: FederationRelationshipId,
+    node_id: NodeId,
 }
 
 impl MetadataAuthority {
@@ -457,6 +478,7 @@ impl MetadataAuthority {
             UnixMicros::new(0),
         )?;
         let mut repository = AuthoritativeRepository::new(database);
+        let node_id = NodeId::from_bytes([identity.seed.saturating_add(5); 16])?;
         apply_bootstrap(
             &mut repository,
             identity.seed,
@@ -475,6 +497,7 @@ impl MetadataAuthority {
             repository,
             administrator_id,
             relationship_id,
+            node_id,
         })
     }
 
@@ -529,6 +552,42 @@ impl MetadataAuthority {
             grant_ids.push(grant_id);
         }
         Ok(grant_ids)
+    }
+
+    fn issue_storage_allocation(
+        &mut self,
+        seed: u8,
+        grant_id: FederationGrantId,
+    ) -> Result<(FederationStorageAllocation, NodeId), Box<dyn Error>> {
+        let allocation = FederationStorageAllocation::new(
+            FederationStorageAllocationId::from_bytes([seed; 16])?,
+            grant_id,
+            self.node_id,
+            TargetId::from_bytes([seed.saturating_add(1); 16])?,
+            1,
+            50,
+            UnixMicros::new(1_000_000),
+            UnixMicros::new(2_500_000),
+        )?;
+        let current = self.repository.current_revision()?;
+        let next = current.next()?;
+        apply(
+            &mut self.repository,
+            next.get(),
+            context(
+                seed.saturating_add(2),
+                self.administrator_id,
+                next.get(),
+                current.get(),
+            )?,
+            &AuthoritativeCommand::IssueFederationStorageAllocation(
+                IssueFederationStorageAllocation {
+                    allocation,
+                    expected_grant_revision: Revision::new(5),
+                },
+            ),
+        )?;
+        Ok((allocation, self.node_id))
     }
 
     fn rotate_local(

@@ -228,6 +228,9 @@ pub enum FederationSessionError {
     /// The bounded history source rejected or could not produce an exact page.
     #[error("federation branch page could not be produced")]
     BranchPage(#[from] crate::FederationBranchPageSourceError),
+    /// Provider-side federated shard capability issuance failed closed.
+    #[error("federation storage capability could not be issued")]
+    StorageCapability(#[from] crate::FederationStorageCapabilityIssuerError),
     /// The advertised immutable history body could not be produced safely.
     #[error("federation history object could not be produced")]
     HistoryObject(#[from] crate::FederationHistoryObjectSourceError),
