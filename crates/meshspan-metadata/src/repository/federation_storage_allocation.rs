@@ -77,6 +77,7 @@ pub struct FederationStorageAuthorityRequest {
 pub struct FederationStorageAllocationAuthority {
     allocation: FederationStorageAllocation,
     relationship_id: FederationRelationshipId,
+    provider_mesh_id: MeshId,
     remote_mesh_id: MeshId,
     relationship_authority_epoch: u64,
     participation: StorageParticipation,
@@ -97,6 +98,12 @@ impl FederationStorageAllocationAuthority {
     #[must_use]
     pub const fn relationship_id(self) -> FederationRelationshipId {
         self.relationship_id
+    }
+
+    /// Returns the exact local swarm providing the allocation.
+    #[must_use]
+    pub const fn provider_mesh_id(self) -> MeshId {
+        self.provider_mesh_id
     }
 
     /// Returns the authenticated consumer swarm.
@@ -252,6 +259,7 @@ pub(super) fn active_authority(
     Ok(Some(FederationStorageAllocationAuthority {
         allocation,
         relationship_id: relationship.relationship_id,
+        provider_mesh_id: relationship.local_mesh_id,
         remote_mesh_id: relationship.remote_mesh_id,
         relationship_authority_epoch: relationship.authority_epoch,
         participation: policy.participation(),

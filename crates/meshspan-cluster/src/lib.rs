@@ -24,6 +24,7 @@ mod federation_history_receiver;
 mod federation_history_sync;
 mod federation_resource_wire;
 mod federation_session;
+mod federation_storage_capability;
 mod filesystem_authority;
 mod filesystem_convergence;
 mod membership;
@@ -121,6 +122,10 @@ pub use federation_resource_wire::{
 pub use federation_session::{
     FederationAcceptRequest, FederationAuthoritySource, FederationDialRequest,
     FederationSessionError, FederationSessionRuntime,
+};
+pub use federation_storage_capability::{
+    FederationStorageCapabilityIssueRequest, FederationStorageCapabilityIssuer,
+    FederationStorageCapabilityIssuerError, IssuedFederationStorageCapability,
 };
 pub use filesystem_authority::{MetadataFilesystemAuthority, MetadataFilesystemAuthorityError};
 pub use filesystem_convergence::{

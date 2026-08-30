@@ -3,7 +3,7 @@
 //! Signed, exactly correlated federation storage capabilities over authenticated relationships.
 
 use ed25519_dalek::{Signature, Signer, VerifyingKey};
-use meshspan_domain::UnixMicros;
+use meshspan_domain::{OperationId, UnixMicros};
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
     FederatedStorageCapability, FederationEnvelope, FederationHeader,
@@ -12,6 +12,7 @@ use meshspan_protocol::v1::{
 use meshspan_protocol::{
     ValidatedFederationEnvelope, WireLimits, encode_federation_frame,
     federation_storage_capability_digest_payload,
+    federation_storage_capability_request_digest_payload,
     federation_storage_capability_request_signing_payload,
     federation_storage_capability_signing_payload,
 };
@@ -50,6 +51,8 @@ pub struct AuthenticatedFederationStorageCapabilityRequest {
     binding: FederationPeerBinding,
     header: FederationHeader,
     request: RequestFederatedStorageCapability,
+    operation_id: OperationId,
+    request_digest: [u8; 32],
 }
 
 impl AuthenticatedFederationStorageCapabilityRequest {
@@ -69,6 +72,27 @@ impl AuthenticatedFederationStorageCapabilityRequest {
     #[must_use]
     pub const fn request(&self) -> &RequestFederatedStorageCapability {
         &self.request
+    }
+
+    /// Returns the typed idempotent operation identity proven by the signed header.
+    #[must_use]
+    pub const fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+
+    /// Returns a digest of the complete logical request, independent of fresh envelope fields.
+    #[must_use]
+    pub const fn request_digest(&self) -> [u8; 32] {
+        self.request_digest
+    }
+
+    /// Returns the request nonce which an issued capability must not reflect.
+    ///
+    /// # Errors
+    ///
+    /// Rejects impossible stored state if the already-validated nonce is not exactly 32 bytes.
+    pub fn request_replay_nonce(&self) -> Result<[u8; 32], TransportError> {
+        exact(&self.header.replay_nonce)
     }
 
     /// Correlates the response with the request while requiring a fresh responder nonce.
@@ -280,11 +304,19 @@ impl FederationPeerRegistry {
         verify_inbound_request_header(binding, header)?;
         replay.check(binding.relationship_id, header, now)?;
         verify_capability_request_signature(binding.verifying_key, header, request)?;
+        let operation_id = OperationId::from_bytes(exact(&header.operation_id)?)
+            .map_err(|_| TransportError::UntrustedFederationPeer)?;
+        let request_digest: [u8; 32] = Sha256::digest(
+            federation_storage_capability_request_digest_payload(request),
+        )
+        .into();
         replay.record(binding.relationship_id, header)?;
         Ok(AuthenticatedFederationStorageCapabilityRequest {
             binding,
             header: header.clone(),
             request: request.clone(),
+            operation_id,
+            request_digest,
         })
     }
 

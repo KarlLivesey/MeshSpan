@@ -3,7 +3,7 @@
 use std::error::Error;
 
 use ed25519_dalek::SigningKey;
-use meshspan_domain::{DurationMicros, FederationRelationshipId, MeshId, UnixMicros};
+use meshspan_domain::{DurationMicros, FederationRelationshipId, MeshId, OperationId, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::{
     FederatedStorageCapability, FederatedStorageReceipt, RemoteShardAction,
@@ -52,6 +52,12 @@ pub(super) fn prove_signed_storage_capability_request(
     );
     assert_eq!(authenticated.request().scope_digest, vec![104; 32]);
     assert_eq!(
+        authenticated.operation_id(),
+        OperationId::from_bytes([92; 16])?
+    );
+    assert_eq!(authenticated.request_replay_nonce()?, [94; 32]);
+    assert_ne!(authenticated.request_digest(), [0; 32]);
+    assert_eq!(
         authenticated.response_context([95; 32])?.request_id,
         [91; 16]
     );
@@ -68,6 +74,28 @@ pub(super) fn prove_signed_storage_capability_request(
         ),
         Err(TransportError::ReplayedFederationMessage)
     ));
+    let retry_context = exchange_context(96, 92, 97, 98)?;
+    let retry = signed_federation_storage_capability_request(
+        &identity,
+        retry_context,
+        capability_request(),
+        limits,
+        UnixMicros::new(1_500_002),
+    )?;
+    let authenticated_retry = registry.authenticate_storage_capability_request(
+        connection,
+        &validated_federation(retry.envelope(), limits)?,
+        UnixMicros::new(1_500_002),
+        &mut replay,
+    )?;
+    assert_eq!(
+        authenticated_retry.operation_id(),
+        authenticated.operation_id()
+    );
+    assert_eq!(
+        authenticated_retry.request_digest(),
+        authenticated.request_digest()
+    );
     reject_tampered_request(registry, connection, outbound.envelope(), limits)?;
     inventory::prove_signed_storage_inventory_fetch(registry, connection, &identity, limits)
 }
