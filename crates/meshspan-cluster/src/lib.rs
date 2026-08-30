@@ -22,6 +22,7 @@ mod federation_history_object_exchange;
 mod federation_history_object_source;
 mod federation_history_receiver;
 mod federation_history_sync;
+mod federation_mutation_admission;
 mod federation_resource_wire;
 mod federation_session;
 mod federation_shard_authority;
@@ -119,6 +120,10 @@ pub use federation_history_receiver::{
 };
 pub use federation_history_sync::{
     FederationHistorySyncError, FederationHistorySyncOutcome, FederationHistorySyncRequest,
+};
+pub use federation_mutation_admission::{
+    FederatedHistoryMutationAdmission, FederatedHistoryMutationAdmissionError,
+    classify_federated_history_mutation,
 };
 pub use federation_resource_wire::{
     FederationResourceWireError, version_federation_resource_scope,

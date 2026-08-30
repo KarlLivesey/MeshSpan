@@ -212,6 +212,8 @@ pub enum FederatedMutationAdmission {
 /// Why an acknowledged disconnected mutation cannot enter the shared namespace.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuarantineReason {
+    /// The home swarm now reports the remote principal as suspended or retired.
+    PrincipalInactive,
     /// The peer accepted work before the grant became valid.
     BeforeValidity,
     /// The peer accepted work at or after the grant's expiry.

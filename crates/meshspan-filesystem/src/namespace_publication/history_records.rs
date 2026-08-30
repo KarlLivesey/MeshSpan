@@ -9,6 +9,10 @@ mod encode;
 #[path = "history_records/immutable.rs"]
 pub(in crate::publication) mod immutable;
 
+use meshspan_domain::{
+    FederationResourceScope, NamespaceCommitId, ObjectId, OperationId, PrincipalId, Rights,
+    UnixMicros, VolumeId,
+};
 use thiserror::Error;
 
 use self::decode::decode_commit;
@@ -26,6 +30,78 @@ const COMMIT_FORMAT_VERSION: u8 = 1;
 pub struct NamespaceHistoryCommitRecord {
     canonical_bytes: Vec<u8>,
     digest: [u8; 32],
+}
+
+/// Authority-relevant facts independently decoded from one immutable history record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespaceHistoryMutationAuthority {
+    commit_id: NamespaceCommitId,
+    operation_id: OperationId,
+    volume_id: VolumeId,
+    object_id: ObjectId,
+    target_ancestors: Vec<ObjectId>,
+    source_ancestors: Option<Vec<ObjectId>>,
+    created_by: PrincipalId,
+    created_at: UnixMicros,
+    required_rights: Rights,
+}
+
+impl NamespaceHistoryMutationAuthority {
+    /// Returns the immutable namespace commit identity.
+    #[must_use]
+    pub const fn commit_id(&self) -> NamespaceCommitId {
+        self.commit_id
+    }
+
+    /// Returns the source operation bound into the commit.
+    #[must_use]
+    pub const fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+
+    /// Returns the unqualified principal identity; federation admission supplies its home swarm.
+    #[must_use]
+    pub const fn created_by(&self) -> PrincipalId {
+        self.created_by
+    }
+
+    /// Returns when the source committed the mutation.
+    #[must_use]
+    pub const fn created_at(&self) -> UnixMicros {
+        self.created_at
+    }
+
+    /// Returns the exact rights exercised by this mutation shape.
+    #[must_use]
+    pub const fn required_rights(&self) -> Rights {
+        self.required_rights
+    }
+
+    /// Reports whether the mutation stays completely inside the declared namespace resource.
+    #[must_use]
+    pub fn is_within(&self, resource: FederationResourceScope) -> bool {
+        match resource {
+            FederationResourceScope::Volume { volume_id, .. } => self.volume_id == volume_id,
+            FederationResourceScope::File {
+                volume_id,
+                object_id,
+                ..
+            } => self.volume_id == volume_id && self.object_id == object_id,
+            FederationResourceScope::Subtree {
+                volume_id,
+                root_object_id,
+                ..
+            } => {
+                self.volume_id == volume_id
+                    && self.target_ancestors.contains(&root_object_id)
+                    && self
+                        .source_ancestors
+                        .as_ref()
+                        .is_none_or(|ancestors| ancestors.contains(&root_object_id))
+            }
+            FederationResourceScope::StorageCapacity { .. } => false,
+        }
+    }
 }
 
 impl NamespaceHistoryCommitRecord {
@@ -53,6 +129,40 @@ impl NamespaceHistoryCommitRecord {
         self.digest
     }
 
+    /// Decodes only the facts required for federation admission from the canonical record.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any malformed or internally inconsistent record.
+    pub fn mutation_authority(
+        &self,
+    ) -> Result<NamespaceHistoryMutationAuthority, NamespaceHistoryRecordError> {
+        let record = self.decoded()?;
+        let intent = &record.intent;
+        let required_rights = mutation_rights(intent);
+        Ok(NamespaceHistoryMutationAuthority {
+            commit_id: record.commit.commit_id,
+            operation_id: record.commit.operation_id,
+            volume_id: record.commit.volume_id,
+            object_id: intent.object_id,
+            target_ancestors: intent
+                .ancestors
+                .iter()
+                .map(|transition| transition.object_id())
+                .collect(),
+            source_ancestors: intent.rename.as_ref().map(|rename| {
+                rename
+                    .source_ancestors
+                    .iter()
+                    .map(|transition| transition.object_id())
+                    .collect()
+            }),
+            created_by: record.created_by,
+            created_at: record.created_at,
+            required_rights,
+        })
+    }
+
     pub(in crate::publication) fn from_commit(
         commit: &TransferredMutationCommit,
     ) -> Result<Self, NamespaceHistoryRecordError> {
@@ -75,6 +185,23 @@ impl NamespaceHistoryCommitRecord {
         &self,
     ) -> Result<TransferredMutationCommit, NamespaceHistoryRecordError> {
         decode_commit(&self.canonical_bytes)
+    }
+}
+
+fn mutation_rights(intent: &crate::BranchMutationIntent) -> Rights {
+    let traverse = Rights::TRAVERSE;
+    if intent.rename.is_some() {
+        return traverse.union(Rights::RENAME).union(Rights::CREATE_CHILD);
+    }
+    match intent.mutation {
+        crate::BranchMutation::File { .. } if intent.prior_object_revision_id.is_none() => traverse
+            .union(Rights::CREATE_CHILD)
+            .union(Rights::WRITE_DATA),
+        crate::BranchMutation::File { .. } => traverse.union(Rights::WRITE_DATA),
+        crate::BranchMutation::CreateDirectory => traverse.union(Rights::CREATE_CHILD),
+        crate::BranchMutation::DeleteFile { .. } | crate::BranchMutation::DeleteDirectory => {
+            traverse.union(Rights::DELETE)
+        }
     }
 }
 
@@ -132,8 +259,8 @@ pub enum NamespaceHistoryRecordError {
 #[cfg(test)]
 mod tests {
     use meshspan_domain::{
-        BranchId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId,
-        PrincipalId, UnixMicros, VolumeId,
+        BranchId, FederationResourceScope, FileVersionId, MeshId, NamespaceCommitId, ObjectId,
+        ObjectRevisionId, OperationId, PrincipalId, Rights, UnixMicros, VolumeId,
     };
 
     use super::super::repository::{StoredCommit, stored_commit_digest};
@@ -181,6 +308,93 @@ mod tests {
             NamespaceHistoryCommitRecord::from_canonical_bytes(vec![0; 2 * 1_024 * 1_024 + 1]),
             Err(NamespaceHistoryRecordError::BoundsExceeded)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn mutation_authority_derives_exact_rights_and_resource_containment()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let seed = 70;
+        let original = record(
+            seed,
+            BranchMutation::File {
+                version_id: FileVersionId::from_bytes([90; 16])?,
+            },
+            true,
+        )?;
+        let encoded = NamespaceHistoryCommitRecord::from_commit(&original)?;
+        let authority = encoded.mutation_authority()?;
+        assert_eq!(authority.commit_id(), original.commit.commit_id);
+        assert_eq!(authority.operation_id(), original.commit.operation_id);
+        assert_eq!(authority.created_by(), original.created_by);
+        assert_eq!(authority.created_at(), original.created_at);
+        assert_eq!(
+            authority.required_rights(),
+            Rights::TRAVERSE
+                .union(Rights::RENAME)
+                .union(Rights::CREATE_CHILD)
+        );
+
+        let owner = MeshId::from_bytes([91; 16])?;
+        assert!(authority.is_within(FederationResourceScope::Volume {
+            owner_mesh_id: owner,
+            volume_id: original.commit.volume_id,
+        }));
+        assert!(authority.is_within(FederationResourceScope::File {
+            owner_mesh_id: owner,
+            volume_id: original.commit.volume_id,
+            object_id: original.intent.object_id,
+        }));
+        assert!(!authority.is_within(FederationResourceScope::Subtree {
+            owner_mesh_id: owner,
+            volume_id: original.commit.volume_id,
+            root_object_id: original.intent.ancestors[0].object_id(),
+        }));
+        assert!(
+            !authority.is_within(FederationResourceScope::StorageCapacity {
+                provider_mesh_id: owner,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mutation_authority_distinguishes_create_write_and_delete()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let version_id = FileVersionId::from_bytes([100; 16])?;
+        let mut create = record(80, BranchMutation::File { version_id }, false)?;
+        create.intent.prior_object_revision_id = None;
+        create.commit.payload = ReconciliationCommitPayload::Mutation {
+            intent_digest: create.intent.digest(),
+        };
+        assert_eq!(
+            NamespaceHistoryCommitRecord::from_commit(&create)?
+                .mutation_authority()?
+                .required_rights(),
+            Rights::TRAVERSE
+                .union(Rights::CREATE_CHILD)
+                .union(Rights::WRITE_DATA)
+        );
+        assert_eq!(
+            NamespaceHistoryCommitRecord::from_commit(&record(
+                81,
+                BranchMutation::File { version_id },
+                false,
+            )?)?
+            .mutation_authority()?
+            .required_rights(),
+            Rights::TRAVERSE.union(Rights::WRITE_DATA)
+        );
+        assert_eq!(
+            NamespaceHistoryCommitRecord::from_commit(&record(
+                82,
+                BranchMutation::DeleteFile { version_id },
+                false,
+            )?)?
+            .mutation_authority()?
+            .required_rights(),
+            Rights::TRAVERSE.union(Rights::DELETE)
+        );
         Ok(())
     }
 

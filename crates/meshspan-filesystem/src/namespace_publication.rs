@@ -54,7 +54,7 @@ pub use history_import::{
 };
 pub use history_records::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
-    NamespaceHistoryRecordError,
+    NamespaceHistoryMutationAuthority, NamespaceHistoryRecordError,
 };
 use repository::{
     ObjectRevisionInsert, advance_namespace_head, load_commit, load_object_revision,
