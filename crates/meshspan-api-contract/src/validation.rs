@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use jsonschema::Validator;
+use boon::{Compiler, Draft, SchemaIndex, Schemas, ValidationError};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -21,17 +21,28 @@ pub const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
 /// Maximum accepted body size for one current-session revocation request.
 pub const MAX_REVOKE_CURRENT_SESSION_BYTES: usize = 256;
 
-static API_ERROR_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
-static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
-static CREATE_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
-static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
-static CREATE_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
-static CURRENT_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
-static REVOKE_CURRENT_SESSION_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> =
+static API_ERROR_VALIDATOR: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
-static REVOKE_CURRENT_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> =
+static CREATE_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
-static SETUP_STATUS_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
+static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static CREATE_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static CURRENT_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static REVOKE_CURRENT_SESSION_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static REVOKE_CURRENT_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static SETUP_STATUS_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+
+struct CompiledValidator {
+    schemas: Schemas,
+    schema: SchemaIndex,
+}
 
 /// Validates and encodes a public error before transmission.
 ///
@@ -272,102 +283,131 @@ pub fn validate_setup_status_response_value(value: &Value) -> Result<(), Boundar
     validate(setup_status_response_validator()?, value)
 }
 
-fn request_validator() -> Result<&'static Validator, BoundaryError> {
+fn request_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         CREATE_SESSION_REQUEST_VALIDATOR
             .get_or_init(|| compile(&schema::request_schema::<CreateSessionRequest>())),
     )
 }
 
-fn api_error_validator() -> Result<&'static Validator, BoundaryError> {
+fn api_error_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         API_ERROR_VALIDATOR.get_or_init(|| compile(&schema::response_schema::<ApiError>())),
     )
 }
 
-fn create_mesh_setup_request_validator() -> Result<&'static Validator, BoundaryError> {
+fn create_mesh_setup_request_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         CREATE_MESH_SETUP_REQUEST_VALIDATOR
             .get_or_init(|| compile(&schema::request_schema::<CreateMeshSetupRequest>())),
     )
 }
 
-fn create_mesh_setup_response_validator() -> Result<&'static Validator, BoundaryError> {
+fn create_mesh_setup_response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         CREATE_MESH_SETUP_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<CreateMeshSetupResponse>())),
     )
 }
 
-fn response_validator() -> Result<&'static Validator, BoundaryError> {
+fn response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         CREATE_SESSION_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<CreateSessionResponse>())),
     )
 }
 
-fn current_session_response_validator() -> Result<&'static Validator, BoundaryError> {
+fn current_session_response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         CURRENT_SESSION_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<CurrentSessionResponse>())),
     )
 }
 
-fn revoke_current_session_request_validator() -> Result<&'static Validator, BoundaryError> {
+fn revoke_current_session_request_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         REVOKE_CURRENT_SESSION_REQUEST_VALIDATOR
             .get_or_init(|| compile(&schema::request_schema::<RevokeCurrentSessionRequest>())),
     )
 }
 
-fn revoke_current_session_response_validator() -> Result<&'static Validator, BoundaryError> {
+fn revoke_current_session_response_validator() -> Result<&'static CompiledValidator, BoundaryError>
+{
     validator_from(
         REVOKE_CURRENT_SESSION_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<RevokeCurrentSessionResponse>())),
     )
 }
 
-fn setup_status_response_validator() -> Result<&'static Validator, BoundaryError> {
+fn setup_status_response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         SETUP_STATUS_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<SetupStatusResponse>())),
     )
 }
 
-fn compile(schema: &schemars::Schema) -> Result<Validator, String> {
-    jsonschema::draft202012::new(schema.as_value()).map_err(|error| error.to_string())
+fn compile(schema: &schemars::Schema) -> Result<CompiledValidator, String> {
+    const SCHEMA_LOCATION: &str = "https://schemas.meshspan.invalid/public-api.json";
+
+    let mut compiler = Compiler::new();
+    compiler.set_default_draft(Draft::V2020_12);
+    compiler
+        .add_resource(SCHEMA_LOCATION, schema.as_value().clone())
+        .map_err(|error| error.to_string())?;
+    let mut schemas = Schemas::new();
+    let schema = compiler
+        .compile(SCHEMA_LOCATION, &mut schemas)
+        .map_err(|error| error.to_string())?;
+    Ok(CompiledValidator { schemas, schema })
 }
 
 fn validator_from(
-    result: &'static Result<Validator, String>,
-) -> Result<&'static Validator, BoundaryError> {
+    result: &'static Result<CompiledValidator, String>,
+) -> Result<&'static CompiledValidator, BoundaryError> {
     result
         .as_ref()
         .map_err(|message| BoundaryError::InvalidSchema(message.clone()))
 }
 
-fn validate(validator: &Validator, value: &Value) -> Result<(), BoundaryError> {
-    let issues = validator
-        .iter_errors(value)
-        .take(MAX_ERROR_ISSUES)
-        .map(|error| ValidationIssue {
-            path: error.instance_path().to_string(),
-            constraint: constraint_name(error.schema_path().to_string().as_str()),
-        })
-        .collect::<Vec<_>>();
-
-    if issues.is_empty() {
-        Ok(())
-    } else {
-        Err(BoundaryError::Invalid { issues })
+fn validate(validator: &CompiledValidator, value: &Value) -> Result<(), BoundaryError> {
+    match validator.schemas.validate(value, validator.schema) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let mut issues = Vec::new();
+            collect_issues(&error, &mut issues);
+            if issues.is_empty() {
+                issues.push(ValidationIssue {
+                    path: error.instance_location.to_string(),
+                    constraint: constraint(&error),
+                });
+            }
+            Err(BoundaryError::Invalid { issues })
+        }
     }
 }
 
-fn constraint_name(schema_path: &str) -> String {
-    schema_path
-        .rsplit('/')
-        .next()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("schema")
-        .replace(['~', '-'], "_")
+fn collect_issues(error: &ValidationError<'_, '_>, issues: &mut Vec<ValidationIssue>) {
+    if issues.len() >= MAX_ERROR_ISSUES {
+        return;
+    }
+    if error.causes.is_empty() {
+        issues.push(ValidationIssue {
+            path: error.instance_location.to_string(),
+            constraint: constraint(error),
+        });
+        return;
+    }
+    for cause in &error.causes {
+        collect_issues(cause, issues);
+        if issues.len() >= MAX_ERROR_ISSUES {
+            break;
+        }
+    }
+}
+
+fn constraint(error: &ValidationError<'_, '_>) -> String {
+    error
+        .kind
+        .keyword_path()
+        .map_or_else(|| "schema".to_owned(), |path| path.keyword.to_owned())
 }
