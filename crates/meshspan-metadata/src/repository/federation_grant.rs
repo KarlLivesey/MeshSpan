@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 use meshspan_domain::{
     DurationMicros, FederatedMutationAdmission, FederatedMutationEvidence, FederationAccess,
     FederationGrant, FederationGrantError, FederationGrantId, FederationGrantRoute,
-    FederationPolicy, FederationResourceScope, MeshId, NamespaceFederationPolicy, Revision,
-    StorageFederationPolicy, UnixMicros, classify_federated_mutation,
+    FederationPolicy, FederationResourceScope, MeshId, NamespaceFederationPolicy, QuarantineReason,
+    Revision, StorageFederationPolicy, UnixMicros, classify_federated_mutation,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -52,13 +52,60 @@ pub(super) fn classify_persisted_mutation(
         .termination
         .as_ref()
         .map(|termination| termination.terminated_at);
-    classify_federated_mutation(&record.grant, evidence, revoked_at).map_err(|error| {
-        if error == FederationGrantError::EvidenceMismatch {
-            RepositoryError::InvalidCommand
-        } else {
-            RepositoryError::CorruptState
+    let admission =
+        classify_federated_mutation(&record.grant, evidence, revoked_at).map_err(|error| {
+            if error == FederationGrantError::EvidenceMismatch {
+                RepositoryError::InvalidCommand
+            } else {
+                RepositoryError::CorruptState
+            }
+        })?;
+    if admission != FederatedMutationAdmission::Admitted {
+        return Ok(admission);
+    }
+    classify_upstream_history(connection, &record, evidence.accepted_at())
+}
+
+fn classify_upstream_history(
+    connection: &Connection,
+    record: &super::FederationGrantRecord,
+    accepted_at: UnixMicros,
+) -> Result<FederatedMutationAdmission, RepositoryError> {
+    let mut current = record.grant.upstream_grant_id();
+    let mut remaining = meshspan_domain::MAXIMUM_FEDERATION_ROUTE_MESHES;
+    while let Some(grant_id) = current {
+        if remaining == 0 {
+            return Err(RepositoryError::CorruptState);
         }
-    })
+        remaining -= 1;
+        let upstream = super::federation_grant_evidence::load_verified(connection, grant_id)?
+            .ok_or(RepositoryError::CorruptState)?;
+        if accepted_at < upstream.grant.valid_from() {
+            return Ok(FederatedMutationAdmission::Quarantined(
+                QuarantineReason::BeforeValidity,
+            ));
+        }
+        if upstream
+            .grant
+            .valid_until()
+            .is_some_and(|valid_until| accepted_at >= valid_until)
+        {
+            return Ok(FederatedMutationAdmission::Quarantined(
+                QuarantineReason::Expired,
+            ));
+        }
+        if upstream
+            .termination
+            .as_ref()
+            .is_some_and(|termination| accepted_at >= termination.terminated_at)
+        {
+            return Ok(FederatedMutationAdmission::Quarantined(
+                QuarantineReason::Revoked,
+            ));
+        }
+        current = upstream.grant.upstream_grant_id();
+    }
+    Ok(FederatedMutationAdmission::Admitted)
 }
 
 pub(super) fn is_command(command: &AuthoritativeCommand) -> bool {

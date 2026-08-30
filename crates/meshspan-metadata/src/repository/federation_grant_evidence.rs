@@ -148,6 +148,7 @@ pub(super) fn load_verified(
         return Ok(None);
     };
     validate_lineage(connection, &record)?;
+    validate_upstream_lineage(connection, &record)?;
     Ok(Some(record))
 }
 
@@ -299,6 +300,37 @@ fn validate_lineage(
         }
         expected_predecessor = grant_id;
         current = successor.successor_grant_id;
+    }
+    Ok(())
+}
+
+fn validate_upstream_lineage(
+    connection: &Connection,
+    record: &FederationGrantRecord,
+) -> Result<(), RepositoryError> {
+    let mut seen = BTreeSet::from([record.grant.grant_id()]);
+    let mut child = record.clone();
+    while let Some(upstream_grant_id) = child.grant.upstream_grant_id() {
+        if !seen.insert(upstream_grant_id) {
+            return Err(RepositoryError::CorruptState);
+        }
+        let upstream =
+            load_record(connection, upstream_grant_id)?.ok_or(RepositoryError::CorruptState)?;
+        let expected_route = upstream
+            .grant
+            .route()
+            .delegate_to(child.grant.recipient_mesh_id())
+            .map_err(|_| RepositoryError::CorruptState)?;
+        if child.grant.route() != &expected_route
+            || child.grant.resource() != upstream.grant.resource()
+            || !policy_is_no_broader(child.grant.policy(), upstream.grant.policy())
+            || !policy_allows_downstream(upstream.grant.policy())
+            || child.grant.valid_from() < upstream.grant.valid_from()
+            || validity_end_broadens(child.grant.valid_until(), upstream.grant.valid_until())
+        {
+            return Err(RepositoryError::CorruptState);
+        }
+        child = upstream;
     }
     Ok(())
 }
@@ -514,6 +546,42 @@ fn is_current_authority(
     connection: &Connection,
     record: &FederationGrantRecord,
 ) -> Result<bool, RepositoryError> {
+    if !relationship_is_current(connection, record)? {
+        return Ok(false);
+    }
+    let mut seen = BTreeSet::from([record.grant.grant_id()]);
+    let mut child = record.clone();
+    while let Some(upstream_grant_id) = child.grant.upstream_grant_id() {
+        if !seen.insert(upstream_grant_id) {
+            return Err(RepositoryError::CorruptState);
+        }
+        let upstream =
+            load_record(connection, upstream_grant_id)?.ok_or(RepositoryError::CorruptState)?;
+        let expected_route = upstream
+            .grant
+            .route()
+            .delegate_to(child.grant.recipient_mesh_id())
+            .map_err(|_| RepositoryError::CorruptState)?;
+        if upstream.state != FederationGrantState::Active
+            || !relationship_is_current(connection, &upstream)?
+            || child.grant.route() != &expected_route
+            || child.grant.resource() != upstream.grant.resource()
+            || !policy_is_no_broader(child.grant.policy(), upstream.grant.policy())
+            || !policy_allows_downstream(upstream.grant.policy())
+            || child.grant.valid_from() < upstream.grant.valid_from()
+            || validity_end_broadens(child.grant.valid_until(), upstream.grant.valid_until())
+        {
+            return Ok(false);
+        }
+        child = upstream;
+    }
+    Ok(true)
+}
+
+fn relationship_is_current(
+    connection: &Connection,
+    record: &FederationGrantRecord,
+) -> Result<bool, RepositoryError> {
     let relationship: (i64, i64) = connection
         .query_row(
             "SELECT state, authority_epoch FROM federation_relationships
@@ -542,6 +610,21 @@ fn is_current_authority(
     Ok(relationship.0 == RELATIONSHIP_ACTIVE
         && positive(relationship.1)? == record.grant.authority_epoch()
         && retired == 0)
+}
+
+fn policy_allows_downstream(policy: FederationPolicy) -> bool {
+    match policy {
+        FederationPolicy::Namespace(policy) => policy.access().allows_downstream_delegation(),
+        FederationPolicy::Storage(policy) => policy.allows_downstream_delegation(),
+    }
+}
+
+fn validity_end_broadens(child: Option<UnixMicros>, parent: Option<UnixMicros>) -> bool {
+    match (child, parent) {
+        (Some(child), Some(parent)) => child > parent,
+        (None, Some(_)) => true,
+        (Some(_), None) | (None, None) => false,
+    }
 }
 
 fn parse_termination_kind(value: i64) -> Result<FederationGrantTerminationKind, RepositoryError> {

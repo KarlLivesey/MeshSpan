@@ -187,6 +187,80 @@ CREATE TABLE federation_grant_restrictions (
 CREATE INDEX federation_restrictions_by_imposing_swarm
 ON federation_grant_restrictions(imposing_mesh_id, grant_id);
 
+-- Recipient-local user/group authority. The owning swarm sees only the grant
+-- route and signed actor attribution; it never imports or administers these rows.
+CREATE TABLE federation_grant_assignments (
+    assignment_id BLOB PRIMARY KEY CHECK (length(assignment_id) = 16),
+    grant_id BLOB NOT NULL REFERENCES federation_grants(grant_id) ON DELETE RESTRICT,
+    subject_principal_id BLOB NOT NULL
+        REFERENCES principals(principal_id) ON DELETE RESTRICT,
+    rights INTEGER NOT NULL CHECK (rights > 0 AND (rights & ~8191) = 0),
+    valid_from INTEGER,
+    valid_until INTEGER,
+    activation_policy_id BLOB
+        REFERENCES access_activation_policies(policy_id) ON DELETE RESTRICT,
+    created_by BLOB NOT NULL REFERENCES principals(principal_id) ON DELETE RESTRICT,
+    created_at INTEGER NOT NULL,
+    state INTEGER NOT NULL CHECK (state IN (1, 2)),
+    revoked_at INTEGER,
+    revoked_by BLOB REFERENCES principals(principal_id) ON DELETE RESTRICT,
+    revocation_reason TEXT CHECK (
+        revocation_reason IS NULL OR (
+            length(revocation_reason) BETWEEN 1 AND 512
+            AND length(CAST(revocation_reason AS BLOB)) BETWEEN 1 AND 512
+        )
+    ),
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    CHECK (valid_until IS NULL OR valid_from IS NULL OR valid_until > valid_from),
+    CHECK (
+        (state = 1 AND revoked_at IS NULL AND revoked_by IS NULL AND revocation_reason IS NULL)
+        OR (state = 2 AND revoked_at IS NOT NULL AND revoked_by IS NOT NULL
+            AND revocation_reason IS NOT NULL)
+    )
+) STRICT;
+
+CREATE INDEX federation_assignments_by_grant_subject
+ON federation_grant_assignments(grant_id, subject_principal_id, state, valid_until, assignment_id);
+
+CREATE INDEX federation_assignments_by_subject
+ON federation_grant_assignments(subject_principal_id, state, valid_until, assignment_id);
+
+CREATE TABLE federation_grant_assignment_activations (
+    activation_id BLOB PRIMARY KEY CHECK (length(activation_id) = 16),
+    assignment_id BLOB NOT NULL
+        REFERENCES federation_grant_assignments(assignment_id) ON DELETE RESTRICT,
+    principal_id BLOB NOT NULL REFERENCES users(principal_id) ON DELETE RESTRICT,
+    policy_id BLOB NOT NULL
+        REFERENCES access_activation_policies(policy_id) ON DELETE RESTRICT,
+    reason TEXT NOT NULL CHECK (
+        length(reason) <= 512 AND length(CAST(reason AS BLOB)) <= 512
+    ),
+    authentication_digest BLOB NOT NULL CHECK (length(authentication_digest) = 32),
+    identity_revision INTEGER NOT NULL CHECK (identity_revision > 0),
+    assignment_revision INTEGER NOT NULL CHECK (assignment_revision > 0),
+    policy_revision INTEGER NOT NULL CHECK (policy_revision > 0),
+    activated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL CHECK (expires_at > activated_at),
+    revoked_at INTEGER,
+    revoked_by BLOB REFERENCES principals(principal_id) ON DELETE RESTRICT,
+    revocation_reason TEXT CHECK (
+        revocation_reason IS NULL OR (
+            length(revocation_reason) BETWEEN 1 AND 512
+            AND length(CAST(revocation_reason AS BLOB)) BETWEEN 1 AND 512
+        )
+    ),
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    CHECK (
+        (revoked_at IS NULL AND revoked_by IS NULL AND revocation_reason IS NULL)
+        OR (revoked_at IS NOT NULL AND revoked_by IS NOT NULL AND revocation_reason IS NOT NULL)
+    )
+) STRICT;
+
+CREATE INDEX federation_assignment_activations_by_user
+ON federation_grant_assignment_activations(
+    principal_id, assignment_id, revoked_at, expires_at, activation_id
+);
+
 -- Remote users and groups stay qualified by home swarm. They never become
 -- local principals and cannot collide with local identifiers.
 CREATE TABLE federation_principal_projections (

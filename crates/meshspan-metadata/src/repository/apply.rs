@@ -11,11 +11,11 @@ use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
     authentication_method, authentication_method_creation, authentication_policy, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, federation_grant, federation_mutation_admission,
-    federation_principal, federation_quarantine, federation_relationship,
-    federation_storage_allocation, federation_succession, identity, namespace, retention,
-    root_delegation, routing, session, snapshot_schedule, tags, user_snapshot, version_cleanup,
-    volume_head,
+    cleanup_reclamation, cluster, component, federation_assignment, federation_grant,
+    federation_mutation_admission, federation_principal, federation_quarantine,
+    federation_relationship, federation_storage_allocation, federation_succession, identity,
+    namespace, retention, root_delegation, routing, session, snapshot_schedule, tags,
+    user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -271,6 +271,7 @@ fn authorise(
     let self_activation_principal = match command {
         AuthoritativeCommand::ActivateGrant(value) => Some(value.principal_id),
         AuthoritativeCommand::ActivateGroup(value) => Some(value.principal_id),
+        AuthoritativeCommand::ActivateFederationGrantAssignment(value) => Some(value.principal_id),
         AuthoritativeCommand::CreateAuthenticationMethod(value) => Some(value.principal_id),
         AuthoritativeCommand::IssueAuthenticationSession(value) => Some(value.principal_id),
         _ => None,
@@ -297,6 +298,11 @@ fn authorise(
             return Ok(());
         }
         AuthoritativeCommand::RevokeAccessActivation(value)
+            if context.actor_principal_id == value.principal_id =>
+        {
+            return Ok(());
+        }
+        AuthoritativeCommand::RevokeFederationGrantAssignmentActivation(value)
             if context.actor_principal_id == value.principal_id =>
         {
             return Ok(());
@@ -355,6 +361,9 @@ fn execute(
     }
     if federation_grant::is_command(command) {
         return federation_grant::execute(transaction, context, command, revision);
+    }
+    if federation_assignment::is_command(command) {
+        return federation_assignment::execute(transaction, context, command, revision);
     }
     if federation_storage_allocation::is_command(command) {
         return federation_storage_allocation::execute(transaction, context, command, revision);
@@ -889,6 +898,10 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::IssueFederationGrant(_) => 59,
         AuthoritativeCommand::ReplaceFederationGrant(_) => 60,
         AuthoritativeCommand::RevokeFederationGrant(_) => 61,
+        AuthoritativeCommand::CreateFederationGrantAssignment(_) => 77,
+        AuthoritativeCommand::RevokeFederationGrantAssignment(_) => 78,
+        AuthoritativeCommand::ActivateFederationGrantAssignment(_) => 79,
+        AuthoritativeCommand::RevokeFederationGrantAssignmentActivation(_) => 80,
         AuthoritativeCommand::UpsertFederatedPrincipalProjection(_) => 62,
         AuthoritativeCommand::DesignateFederationSuccessor(_) => 63,
         AuthoritativeCommand::AcceptFederationSuccessor(_) => 64,

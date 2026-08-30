@@ -4,7 +4,9 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
+    ActivationId, ActivationPolicyId, AssuranceLevel, DurationMicros, FederationAssignmentId,
     FederationGrant, FederationGrantId, FederationPolicy, FederationResourceScope, MeshId,
+    PrincipalId, Rights, UnixMicros,
 };
 
 use crate::command::CanonicalDigest;
@@ -53,6 +55,68 @@ pub struct RevokeFederationGrant {
     pub reason: String,
 }
 
+/// Assigns a recipient swarm's local user or group to a namespace grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CreateFederationGrantAssignment {
+    /// Stable local assignment identity.
+    pub assignment_id: FederationAssignmentId,
+    /// Exact current swarm-targeted grant being narrowed.
+    pub grant_id: FederationGrantId,
+    /// Local user or group receiving the rights.
+    pub subject_principal_id: PrincipalId,
+    /// Non-empty namespace rights, no broader than the grant.
+    pub rights: Rights,
+    /// Inclusive local validity start.
+    pub valid_from: Option<UnixMicros>,
+    /// Exclusive local validity end.
+    pub valid_until: Option<UnixMicros>,
+    /// Optional self-activation policy.
+    pub activation_policy_id: Option<ActivationPolicyId>,
+}
+
+/// Revokes one recipient-local assignment without altering the upstream grant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevokeFederationGrantAssignment {
+    /// Exact active assignment.
+    pub assignment_id: FederationAssignmentId,
+    /// Bounded audit explanation.
+    pub reason: String,
+}
+
+/// Activates one pre-authorised recipient-local federation assignment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivateFederationGrantAssignment {
+    /// Stable activation identity.
+    pub activation_id: ActivationId,
+    /// Local user receiving temporarily active rights.
+    pub principal_id: PrincipalId,
+    /// Exact active assignment being activated.
+    pub assignment_id: FederationAssignmentId,
+    /// Exact activation policy expected on the assignment.
+    pub policy_id: ActivationPolicyId,
+    /// User-provided audit reason.
+    pub reason: String,
+    /// Requested activation duration.
+    pub duration: DurationMicros,
+    /// Current authenticating session expiry.
+    pub session_expires_at: UnixMicros,
+    /// Assurance proved by the current session.
+    pub assurance: AssuranceLevel,
+    /// Digest binding the authenticating session.
+    pub authentication_digest: [u8; 32],
+}
+
+/// Revokes one current federation-assignment activation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevokeFederationGrantAssignmentActivation {
+    /// Exact activation identity.
+    pub activation_id: ActivationId,
+    /// User to whom the activation belongs.
+    pub principal_id: PrincipalId,
+    /// Bounded audit explanation.
+    pub reason: String,
+}
+
 impl IssueFederationGrant {
     pub(crate) fn update_digest(&self, digest: &mut CanonicalDigest) {
         digest.bytes(b"issue-federation-grant");
@@ -77,6 +141,55 @@ impl RevokeFederationGrant {
         digest.bytes(b"revoke-federation-grant");
         digest.identifier(self.grant_id.as_bytes());
         digest.unsigned(self.expected_authority_epoch);
+        digest.bytes(self.reason.as_bytes());
+    }
+}
+
+impl CreateFederationGrantAssignment {
+    pub(crate) fn update_digest(&self, digest: &mut CanonicalDigest) {
+        digest.bytes(b"create-federation-grant-assignment");
+        digest.identifier(self.assignment_id.as_bytes());
+        digest.identifier(self.grant_id.as_bytes());
+        digest.identifier(self.subject_principal_id.as_bytes());
+        digest.unsigned(u64::from(self.rights.bits()));
+        digest.optional_instant(self.valid_from);
+        digest.optional_instant(self.valid_until);
+        digest.optional_identifier(self.activation_policy_id.map(ActivationPolicyId::as_bytes));
+    }
+}
+
+impl RevokeFederationGrantAssignment {
+    pub(crate) fn update_digest(&self, digest: &mut CanonicalDigest) {
+        digest.bytes(b"revoke-federation-grant-assignment");
+        digest.identifier(self.assignment_id.as_bytes());
+        digest.bytes(self.reason.as_bytes());
+    }
+}
+
+impl ActivateFederationGrantAssignment {
+    pub(crate) fn update_digest(&self, digest: &mut CanonicalDigest) {
+        digest.bytes(b"activate-federation-grant-assignment");
+        digest.identifier(self.activation_id.as_bytes());
+        digest.identifier(self.principal_id.as_bytes());
+        digest.identifier(self.assignment_id.as_bytes());
+        digest.identifier(self.policy_id.as_bytes());
+        digest.bytes(self.reason.as_bytes());
+        digest.unsigned(self.duration.get());
+        digest.signed(self.session_expires_at.get());
+        digest.byte(match self.assurance {
+            AssuranceLevel::SingleFactor => 1,
+            AssuranceLevel::MultiFactor => 2,
+            AssuranceLevel::RecentStepUp => 3,
+        });
+        digest.bytes(&self.authentication_digest);
+    }
+}
+
+impl RevokeFederationGrantAssignmentActivation {
+    pub(crate) fn update_digest(&self, digest: &mut CanonicalDigest) {
+        digest.bytes(b"revoke-federation-grant-assignment-activation");
+        digest.identifier(self.activation_id.as_bytes());
+        digest.identifier(self.principal_id.as_bytes());
         digest.bytes(self.reason.as_bytes());
     }
 }

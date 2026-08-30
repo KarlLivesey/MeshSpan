@@ -56,6 +56,23 @@ BEGIN
     SELECT RAISE(ABORT, 'federation grant restrictions are immutable');
 END;
 
+CREATE TRIGGER federation_grant_assignments_authority_immutable
+BEFORE UPDATE OF grant_id, subject_principal_id, rights, valid_from, valid_until,
+    activation_policy_id, created_by, created_at
+ON federation_grant_assignments
+BEGIN
+    SELECT RAISE(ABORT, 'federation grant assignment authority is immutable');
+END;
+
+CREATE TRIGGER federation_grant_assignment_activations_authority_immutable
+BEFORE UPDATE OF assignment_id, principal_id, policy_id, reason,
+    authentication_digest, identity_revision, assignment_revision,
+    policy_revision, activated_at, expires_at
+ON federation_grant_assignment_activations
+BEGIN
+    SELECT RAISE(ABORT, 'federation grant assignment activation is immutable');
+END;
+
 CREATE TRIGGER federation_grant_successions_reject_update
 BEFORE UPDATE ON federation_grant_successions
 BEGIN

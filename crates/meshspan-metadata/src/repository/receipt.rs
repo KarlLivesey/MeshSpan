@@ -100,6 +100,10 @@ pub enum EntityKind {
     AuthenticationMethod = 32,
     /// One immutable service/operation authentication-policy revision.
     AuthenticationPolicy = 33,
+    /// Recipient-local user/group assignment of one swarm-targeted grant.
+    FederationGrantAssignment = 34,
+    /// Time-bounded activation of one federation grant assignment.
+    FederationGrantAssignmentActivation = 35,
 }
 
 impl EntityKind {
@@ -138,6 +142,8 @@ impl EntityKind {
             31 => Ok(Self::FederationMutationAdmission),
             32 => Ok(Self::AuthenticationMethod),
             33 => Ok(Self::AuthenticationPolicy),
+            34 => Ok(Self::FederationGrantAssignment),
+            35 => Ok(Self::FederationGrantAssignmentActivation),
             _ => Err(RepositoryError::CorruptState),
         }
     }

@@ -24,6 +24,7 @@ mod cleanup_reclamation;
 mod cluster;
 mod component;
 mod consensus;
+mod federation_assignment;
 mod federation_authority_snapshot;
 #[cfg(test)]
 mod federation_backup_test_support;
@@ -111,6 +112,7 @@ pub use cleanup_permit::{
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
+pub use federation_assignment::FederationGrantAssignmentAuthority;
 pub use federation_authority_snapshot::FederationAuthoritySnapshotError;
 pub use federation_grant_cursor::{FederationGrantCursor, FederationGrantCursorError};
 pub use federation_grant_evidence::{
@@ -522,6 +524,29 @@ impl AuthoritativeRepository {
         request: SessionAccessRequest,
     ) -> Result<SessionAccessDecision, RepositoryError> {
         session_access::evaluate(&self.database, request)
+    }
+
+    /// Evaluates recipient-local user/group authority for one current swarm-targeted grant.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed grant lineage, assignments, group state or activations.
+    pub fn evaluate_federation_grant_assignment(
+        &self,
+        grant_id: meshspan_domain::FederationGrantId,
+        principal_id: meshspan_domain::PrincipalId,
+        identity_revision: Revision,
+        requested_rights: meshspan_domain::Rights,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Option<FederationGrantAssignmentAuthority>, RepositoryError> {
+        federation_assignment::evaluate(
+            &self.database,
+            grant_id,
+            principal_id,
+            identity_revision,
+            requested_rights,
+            now,
+        )
     }
 
     /// Authenticates one presented API-key digest against current user, method,

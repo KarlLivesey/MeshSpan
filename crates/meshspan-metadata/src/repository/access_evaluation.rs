@@ -4,7 +4,7 @@
 
 mod authority;
 mod grants;
-mod subjects;
+pub(super) mod subjects;
 
 use std::collections::{BTreeMap, BTreeSet};
 

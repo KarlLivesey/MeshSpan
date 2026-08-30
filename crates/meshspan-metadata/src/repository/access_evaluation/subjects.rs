@@ -27,40 +27,23 @@ pub(super) fn load_group_activations(
     session: Session,
     now: UnixMicros,
 ) -> Result<BTreeMap<PrincipalId, UnixMicros>, RepositoryError> {
-    let principal = session.principal_id.as_bytes();
-    let mut statement = database.connection().prepare(
-        "SELECT a.group_id, MAX(a.expires_at)
-         FROM access_activations a
-         JOIN groups g ON g.principal_id = a.group_id
-         JOIN principals p ON p.principal_id = g.principal_id
-         JOIN access_activation_policies ap ON ap.policy_id = a.policy_id
-         WHERE a.principal_id = ?1 AND a.group_id IS NOT NULL
-           AND a.revoked_at IS NULL AND a.activated_at <= ?2 AND a.expires_at > ?2
-           AND a.identity_revision = ?3 AND a.source_revision = p.revision
-           AND a.policy_revision = ap.revision AND g.activation_policy_id = a.policy_id
-         GROUP BY a.group_id LIMIT ?4",
-    )?;
-    let rows = statement.query_map(
-        params![
-            principal.as_slice(),
-            now.get(),
-            to_i64(session.identity_revision.get())?,
-            to_i64(
-                u64::try_from(MAXIMUM_MEMBERSHIPS + 1)
-                    .map_err(|_| RepositoryError::CapacityExceeded)?
-            )?,
-        ],
-        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
-    )?;
-    let mut activations = BTreeMap::new();
-    for row in rows {
-        let (group, expires_at) = row?;
-        if activations.len() == MAXIMUM_MEMBERSHIPS {
-            return Err(RepositoryError::CapacityExceeded);
-        }
-        activations.insert(parse_principal(&group)?, UnixMicros::new(expires_at));
-    }
-    Ok(activations)
+    load_group_activations_for_principal(
+        database,
+        session.principal_id,
+        session.identity_revision,
+        now,
+    )
+}
+
+pub(crate) fn load_effective_subjects_for_principal(
+    database: &PartitionDatabase,
+    principal_id: PrincipalId,
+    identity_revision: meshspan_domain::Revision,
+    now: UnixMicros,
+) -> Result<BTreeMap<PrincipalId, Option<UnixMicros>>, RepositoryError> {
+    let activations =
+        load_group_activations_for_principal(database, principal_id, identity_revision, now)?;
+    load_effective_subjects_inner(database, principal_id, now, &activations)
 }
 
 pub(super) fn load_effective_subjects(
@@ -69,13 +52,22 @@ pub(super) fn load_effective_subjects(
     now: UnixMicros,
     activations: &BTreeMap<PrincipalId, UnixMicros>,
 ) -> Result<BTreeMap<PrincipalId, Option<UnixMicros>>, RepositoryError> {
-    let edges = load_active_memberships(database, session.principal_id, now)?;
+    load_effective_subjects_inner(database, session.principal_id, now, activations)
+}
+
+fn load_effective_subjects_inner(
+    database: &PartitionDatabase,
+    principal_id: PrincipalId,
+    now: UnixMicros,
+    activations: &BTreeMap<PrincipalId, UnixMicros>,
+) -> Result<BTreeMap<PrincipalId, Option<UnixMicros>>, RepositoryError> {
+    let edges = load_active_memberships(database, principal_id, now)?;
     let mut by_member = BTreeMap::<PrincipalId, Vec<MembershipEdge>>::new();
     for edge in edges {
         by_member.entry(edge.member).or_default().push(edge);
     }
-    let mut subjects = BTreeMap::from([(session.principal_id, None)]);
-    let mut pending = VecDeque::from([session.principal_id]);
+    let mut subjects = BTreeMap::from([(principal_id, None)]);
+    let mut pending = VecDeque::from([principal_id]);
     while let Some(member) = pending.pop_front() {
         let member_expiry = subjects.get(&member).copied().flatten();
         for edge in by_member.get(&member).cloned().unwrap_or_default() {
@@ -98,6 +90,48 @@ pub(super) fn load_effective_subjects(
         }
     }
     Ok(subjects)
+}
+
+fn load_group_activations_for_principal(
+    database: &PartitionDatabase,
+    principal_id: PrincipalId,
+    identity_revision: meshspan_domain::Revision,
+    now: UnixMicros,
+) -> Result<BTreeMap<PrincipalId, UnixMicros>, RepositoryError> {
+    let principal = principal_id.as_bytes();
+    let mut statement = database.connection().prepare(
+        "SELECT a.group_id, MAX(a.expires_at)
+         FROM access_activations a
+         JOIN groups g ON g.principal_id = a.group_id
+         JOIN principals p ON p.principal_id = g.principal_id
+         JOIN access_activation_policies ap ON ap.policy_id = a.policy_id
+         WHERE a.principal_id = ?1 AND a.group_id IS NOT NULL
+           AND a.revoked_at IS NULL AND a.activated_at <= ?2 AND a.expires_at > ?2
+           AND a.identity_revision = ?3 AND a.source_revision = p.revision
+           AND a.policy_revision = ap.revision AND g.activation_policy_id = a.policy_id
+         GROUP BY a.group_id LIMIT ?4",
+    )?;
+    let rows = statement.query_map(
+        params![
+            principal.as_slice(),
+            now.get(),
+            to_i64(identity_revision.get())?,
+            to_i64(
+                u64::try_from(MAXIMUM_MEMBERSHIPS + 1)
+                    .map_err(|_| RepositoryError::CapacityExceeded)?
+            )?,
+        ],
+        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
+    )?;
+    let mut activations = BTreeMap::new();
+    for row in rows {
+        let (group, expires_at) = row?;
+        if activations.len() == MAXIMUM_MEMBERSHIPS {
+            return Err(RepositoryError::CapacityExceeded);
+        }
+        activations.insert(parse_principal(&group)?, UnixMicros::new(expires_at));
+    }
+    Ok(activations)
 }
 
 fn load_active_memberships(

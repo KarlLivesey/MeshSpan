@@ -5,10 +5,11 @@ use std::error::Error;
 use ed25519_dalek::{Signature, SigningKey, Verifier};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId, AuthenticationService,
-    BranchId, ContentManifestId, FederatedPrincipal, FederationAccess, FederationGrant,
+    ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
+    AuthenticationMethodId, AuthenticationService, BranchId, ContentManifestId, DurationMicros,
+    FederatedPrincipal, FederationAccess, FederationAssignmentId, FederationGrant,
     FederationGrantId, FederationGrantRoute, FederationPolicy, FederationRelationshipId,
-    FederationRelationshipKind, FederationResourceScope, FileVersionId, HostId, MeshId,
+    FederationRelationshipKind, FederationResourceScope, FileVersionId, GroupId, HostId, MeshId,
     NamespaceCommitId, NamespaceFederationPolicy, NodeId, ObjectId, ObjectRevisionId, OperationId,
     PartitionId, PrincipalId, Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
 };
@@ -17,15 +18,16 @@ use meshspan_filesystem::{
     RootFilePublication, VersionPublicationStore,
 };
 use meshspan_metadata::{
-    ApproveFederationRelationship, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
-    CommandContext, CreateAuthenticationMethod, CreateUser, FederationGovernanceDirection,
-    FederationGrantRecord, FederationGrantRestriction, FederationGrantState,
-    FederationIdentityOwner, FederationRelationshipRecord, FederationRelationshipState,
-    FederationRemoteAuthoritySnapshot, FederationTransportAuthority, FederationTrustIdentity,
-    FederationTrustIdentityRecord, IssueAuthenticationSession, IssueFederationGrant, LocalDatabase,
-    LogPosition, NewAuthenticationCredential, PartitionDatabase, ProposeFederationRelationship,
-    RecordName, RevokeAuthenticationSession, SessionAccessRequest, SessionAuthenticationFactor,
-    TotpAlgorithm,
+    ActivateFederationGrantAssignment, AddGroupMember, ApproveFederationRelationship,
+    AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh, CommandContext,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateFederationGrantAssignment,
+    CreateGroup, CreateUser, FederationGovernanceDirection, FederationGrantRecord,
+    FederationGrantRestriction, FederationGrantState, FederationIdentityOwner,
+    FederationRelationshipRecord, FederationRelationshipState, FederationRemoteAuthoritySnapshot,
+    FederationTransportAuthority, FederationTrustIdentity, FederationTrustIdentityRecord,
+    IssueAuthenticationSession, IssueFederationGrant, LocalDatabase, LogPosition,
+    NewAuthenticationCredential, PartitionDatabase, ProposeFederationRelationship, RecordName,
+    RevokeAuthenticationSession, SessionAccessRequest, SessionAuthenticationFactor, TotpAlgorithm,
 };
 use tempfile::{TempDir, tempdir};
 
@@ -36,12 +38,27 @@ use super::{
 };
 
 #[test]
-fn committed_session_and_bilateral_authority_sign_exact_proposal_then_revoke_immediately()
+fn local_group_and_activated_assignment_gate_signing_then_session_revokes_immediately()
 -> Result<(), Box<dyn Error>> {
     let mut fixture = Fixture::open()?;
     fixture.prepare()?;
     let proposal =
         VersionPublicationStore::root_file_federated_mutation_proposal(&fixture.publication()?)?;
+    let before_activation = FederationMutationAcceptor::new(
+        MetadataFederationMutationAcceptanceAuthority::new(
+            &fixture.repository,
+            &fixture.remote_cache,
+        ),
+        &fixture.local_key,
+    )
+    .acknowledge(fixture.request(13), &proposal);
+    assert!(matches!(
+        before_activation,
+        Err(FederationMutationAcceptanceError::Authority(
+            MetadataFederationMutationAcceptanceError::Denied
+        ))
+    ));
+    fixture.activate_write_assignment()?;
     let request = fixture.request(20);
     let acknowledgement = FederationMutationAcceptor::new(
         MetadataFederationMutationAcceptanceAuthority::new(
@@ -66,6 +83,42 @@ fn committed_session_and_bilateral_authority_sign_exact_proposal_then_revoke_imm
         &acknowledgement.signing_payload(),
         &Signature::from_bytes(&acknowledgement.signature),
     )?;
+    assert!(
+        fixture
+            .repository
+            .evaluate_federation_grant_assignment(
+                fixture.ids.grant,
+                fixture.ids.user,
+                Revision::new(10),
+                proposal.authority().required_rights(),
+                UnixMicros::new(20),
+            )?
+            .is_some()
+    );
+    assert!(
+        fixture
+            .repository
+            .evaluate_federation_grant_assignment(
+                fixture.ids.grant,
+                fixture.ids.administrator,
+                Revision::new(10),
+                Rights::TRAVERSE,
+                UnixMicros::new(20),
+            )?
+            .is_none()
+    );
+    assert!(
+        fixture
+            .repository
+            .evaluate_federation_grant_assignment(
+                fixture.ids.grant,
+                fixture.ids.user,
+                Revision::new(10),
+                Rights::CHANGE_PERMISSIONS,
+                UnixMicros::new(20),
+            )?
+            .is_none()
+    );
 
     fixture.revoke_session()?;
     let denial = FederationMutationAcceptor::new(
@@ -88,11 +141,16 @@ fn committed_session_and_bilateral_authority_sign_exact_proposal_then_revoke_imm
 struct FixtureIds {
     administrator: PrincipalId,
     user: PrincipalId,
+    writers: GroupId,
     partition: PartitionId,
     local_mesh: MeshId,
     remote_mesh: MeshId,
     relationship: FederationRelationshipId,
     grant: FederationGrantId,
+    group_assignment: FederationAssignmentId,
+    write_assignment: FederationAssignmentId,
+    activation_policy: ActivationPolicyId,
+    activation: ActivationId,
     volume: VolumeId,
     host: HostId,
     node: NodeId,
@@ -114,11 +172,16 @@ impl Fixture {
         let ids = FixtureIds {
             administrator: PrincipalId::from_bytes([1; 16])?,
             user: PrincipalId::from_bytes([2; 16])?,
+            writers: GroupId::from_bytes([24; 16])?,
             partition: PartitionId::from_bytes([3; 16])?,
             local_mesh: MeshId::from_bytes([4; 16])?,
             remote_mesh: MeshId::from_bytes([5; 16])?,
             relationship: FederationRelationshipId::from_bytes([6; 16])?,
             grant: FederationGrantId::from_bytes([7; 16])?,
+            group_assignment: FederationAssignmentId::from_bytes([23; 16])?,
+            write_assignment: FederationAssignmentId::from_bytes([25; 16])?,
+            activation_policy: ActivationPolicyId::from_bytes([26; 16])?,
+            activation: ActivationId::from_bytes([27; 16])?,
             volume: VolumeId::from_bytes([8; 16])?,
             host: HostId::from_bytes([9; 16])?,
             node: NodeId::from_bytes([10; 16])?,
@@ -171,9 +234,30 @@ impl Fixture {
                 name: RecordName::new("Federated writer")?,
             }),
         )?;
-        self.issue_session()?;
         self.apply(
-            6,
+            3,
+            30,
+            self.ids.administrator,
+            &AuthoritativeCommand::CreateGroup(CreateGroup {
+                group_id: self.ids.writers,
+                name: RecordName::new("Federated writers")?,
+                activation_policy_id: None,
+            }),
+        )?;
+        self.apply(
+            4,
+            31,
+            self.ids.administrator,
+            &AuthoritativeCommand::AddGroupMember(AddGroupMember {
+                containing_group_id: self.ids.writers,
+                member_principal_id: self.ids.user,
+                valid_from: None,
+                valid_until: None,
+                activation_required: false,
+            }),
+        )?;
+        self.apply(
+            5,
             25,
             self.ids.administrator,
             &AuthoritativeCommand::ProposeFederationRelationship(ProposeFederationRelationship {
@@ -185,7 +269,7 @@ impl Fixture {
             }),
         )?;
         self.apply(
-            7,
+            6,
             26,
             self.ids.administrator,
             &AuthoritativeCommand::ApproveFederationRelationship(ApproveFederationRelationship {
@@ -198,7 +282,7 @@ impl Fixture {
         )?;
         let record = self.grant_record()?;
         self.apply(
-            8,
+            7,
             27,
             self.ids.administrator,
             &AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
@@ -206,6 +290,52 @@ impl Fixture {
                 restrictions: BoundedItems::new(record.restrictions.clone(), 2)?,
             }),
         )?;
+        self.apply(
+            8,
+            32,
+            self.ids.administrator,
+            &AuthoritativeCommand::CreateActivationPolicy(CreateActivationPolicy {
+                policy_id: self.ids.activation_policy,
+                maximum_duration: DurationMicros::new(60),
+                reason_required: true,
+                minimum_assurance: AssuranceLevel::SingleFactor,
+                valid_from: None,
+                valid_until: None,
+            }),
+        )?;
+        self.apply(
+            9,
+            29,
+            self.ids.administrator,
+            &AuthoritativeCommand::CreateFederationGrantAssignment(
+                CreateFederationGrantAssignment {
+                    assignment_id: self.ids.group_assignment,
+                    grant_id: self.ids.grant,
+                    subject_principal_id: self.ids.writers.principal_id(),
+                    rights: Rights::TRAVERSE.union(Rights::CREATE_CHILD),
+                    valid_from: None,
+                    valid_until: None,
+                    activation_policy_id: None,
+                },
+            ),
+        )?;
+        self.apply(
+            10,
+            33,
+            self.ids.administrator,
+            &AuthoritativeCommand::CreateFederationGrantAssignment(
+                CreateFederationGrantAssignment {
+                    assignment_id: self.ids.write_assignment,
+                    grant_id: self.ids.grant,
+                    subject_principal_id: self.ids.user,
+                    rights: Rights::WRITE_DATA,
+                    valid_from: None,
+                    valid_until: None,
+                    activation_policy_id: Some(self.ids.activation_policy),
+                },
+            ),
+        )?;
+        self.issue_session()?;
         self.remote_cache.install_remote_federation_authority(
             &self.remote_snapshot(record),
             UnixMicros::new(19),
@@ -215,7 +345,7 @@ impl Fixture {
 
     fn issue_session(&mut self) -> Result<(), Box<dyn Error>> {
         self.apply(
-            3,
+            11,
             22,
             self.ids.user,
             &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
@@ -233,7 +363,7 @@ impl Fixture {
             }),
         )?;
         self.apply(
-            4,
+            12,
             23,
             self.ids.user,
             &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
@@ -252,7 +382,7 @@ impl Fixture {
             }),
         )?;
         self.apply(
-            5,
+            13,
             24,
             self.ids.user,
             &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
@@ -265,13 +395,13 @@ impl Fixture {
                         SessionAuthenticationFactor::ApiKey {
                             method_id: AuthenticationMethodId::from_bytes([18; 16])?,
                             credential_generation: 1,
-                            method_revision: Revision::new(3),
+                            method_revision: Revision::new(11),
                             key_id: ApiKeyId::from_bytes([20; 16])?,
                         },
                         SessionAuthenticationFactor::Totp {
                             method_id: AuthenticationMethodId::from_bytes([19; 16])?,
                             credential_generation: 1,
-                            method_revision: Revision::new(4),
+                            method_revision: Revision::new(12),
                             accepted_step: 0,
                         },
                     ],
@@ -284,13 +414,34 @@ impl Fixture {
 
     fn revoke_session(&mut self) -> Result<(), Box<dyn Error>> {
         self.apply(
-            9,
+            15,
             28,
             self.ids.user,
             &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
                 session_id: self.ids.session,
                 principal_id: self.ids.user,
             }),
+        )
+    }
+
+    fn activate_write_assignment(&mut self) -> Result<(), Box<dyn Error>> {
+        self.apply(
+            14,
+            34,
+            self.ids.user,
+            &AuthoritativeCommand::ActivateFederationGrantAssignment(
+                ActivateFederationGrantAssignment {
+                    activation_id: self.ids.activation,
+                    principal_id: self.ids.user,
+                    assignment_id: self.ids.write_assignment,
+                    policy_id: self.ids.activation_policy,
+                    reason: "Edit the shared report".to_owned(),
+                    duration: DurationMicros::new(50),
+                    session_expires_at: UnixMicros::new(90),
+                    assurance: AssuranceLevel::MultiFactor,
+                    authentication_digest: [15; 32],
+                },
+            ),
         )
     }
 
@@ -429,7 +580,7 @@ impl Fixture {
                     root_digest: [46; 32],
                 },
                 created_by: self.ids.user,
-                created_at: UnixMicros::new(20),
+                created_at: UnixMicros::new(13),
             },
             root_object_id: ObjectId::from_bytes([47; 16])?,
             expected_namespace_commit_id: None,

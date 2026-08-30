@@ -122,8 +122,16 @@ impl FederationMutationAcceptanceAuthority for MetadataFederationMutationAccepta
         let exact_scope = grant.resource().authority_mesh_id()
             == connection.local_identity.remote_mesh_id
             && authority.is_within(grant.resource());
+        let local_assignment = self.repository.evaluate_federation_grant_assignment(
+            grant.grant_id(),
+            session.principal_id,
+            session.identity_revision,
+            authority.required_rights(),
+            request.now,
+        )?;
         if !exact_actor
             || !exact_scope
+            || local_assignment.is_none()
             || !policy
                 .access()
                 .rights()
