@@ -257,6 +257,9 @@ fn issue_home_session(
             session_id: SessionId::from_bytes([95; 16])?,
             principal_id: user,
             token_digest: TOKEN_DIGEST,
+            csrf_digest: [96; 32],
+            client_label: None,
+            persistent_cookie: false,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(
                 vec![

@@ -608,6 +608,9 @@ pub(super) fn issue_session(
             session_id,
             principal_id: principal,
             token_digest,
+            csrf_digest: [seed.wrapping_add(3); 32],
+            client_label: None,
+            persistent_cookie: false,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(
                 vec![

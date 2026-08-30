@@ -17,6 +17,7 @@ use crate::{
 
 const ACTIVE: i64 = 1;
 const MAXIMUM_FACTORS: usize = 8;
+const MAXIMUM_CLIENT_LABEL_CHARACTERS: usize = 80;
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
 pub(super) fn issue(
@@ -43,12 +44,16 @@ pub(super) fn issue(
     let session = command.session_id.as_bytes();
     transaction.execute(
         "INSERT INTO authentication_sessions(
-            session_id, token_digest, user_principal_id, service, assurance,
-            identity_revision, issued_at, expires_at, revoked_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9)",
+            session_id, token_digest, csrf_digest, client_label, persistent_cookie,
+            user_principal_id, service, assurance, identity_revision, issued_at,
+            expires_at, revoked_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12)",
         params![
             session.as_slice(),
             command.token_digest.as_slice(),
+            command.csrf_digest.as_slice(),
+            command.client_label,
+            command.persistent_cookie,
             command.principal_id.as_bytes().as_slice(),
             command.service.scope_bit(),
             assurance_code(derived_assurance(&admitted)),
@@ -493,11 +498,12 @@ fn reject_duplicate_session(
     let duplicate: i64 = transaction.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM authentication_sessions
-            WHERE session_id = ?1 OR token_digest = ?2
+            WHERE session_id = ?1 OR token_digest = ?2 OR csrf_digest = ?3
          )",
         params![
             command.session_id.as_bytes().as_slice(),
-            command.token_digest.as_slice()
+            command.token_digest.as_slice(),
+            command.csrf_digest.as_slice()
         ],
         |row| row.get(0),
     )?;
@@ -522,6 +528,15 @@ fn validate_session_shape(
     now: UnixMicros,
 ) -> Result<(), RepositoryError> {
     if command.token_digest == [0; 32]
+        || command.csrf_digest == [0; 32]
+        || command.token_digest == command.csrf_digest
+        || command.client_label.as_ref().is_some_and(|label| {
+            let characters = label.chars().count();
+            characters == 0
+                || characters > MAXIMUM_CLIENT_LABEL_CHARACTERS
+                || label.trim() != label
+                || label.chars().any(char::is_control)
+        })
         || command.expires_at <= now
         || command.factors.is_empty()
         || command.factors.len() > MAXIMUM_FACTORS

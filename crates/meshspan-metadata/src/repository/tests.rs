@@ -629,7 +629,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 17);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        46
+        47
     );
     Ok(())
 }
@@ -1932,6 +1932,9 @@ fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
         session_id,
         principal_id: ids.user,
         token_digest: [89; 32],
+        csrf_digest: [90; 32],
+        client_label: None,
+        persistent_cookie: false,
         service: AuthenticationService::Https,
         factors: factors.clone(),
         expires_at: UnixMicros::new(1_000),
@@ -1946,6 +1949,9 @@ fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
         session_id: SessionId::from_bytes([92; 16])?,
         principal_id: ids.user,
         token_digest: [89; 32],
+        csrf_digest: [91; 32],
+        client_label: None,
+        persistent_cookie: false,
         service: AuthenticationService::Https,
         factors,
         expires_at: UnixMicros::new(2_000),
@@ -2106,6 +2112,9 @@ fn issue_group_activation_test_session(
             session_id: SessionId::from_bytes([131; 16])?,
             principal_id: ids.user,
             token_digest: [128; 32],
+            csrf_digest: [129; 32],
+            client_label: None,
+            persistent_cookie: false,
             service: AuthenticationService::Https,
             factors,
             expires_at: UnixMicros::new(2_000),
@@ -2559,6 +2568,9 @@ fn create_and_activate_grant(
             session_id: SessionId::from_bytes([37; 16])?,
             principal_id: ids.user,
             token_digest: [34; 32],
+            csrf_digest: [35; 32],
+            client_label: None,
+            persistent_cookie: false,
             service: AuthenticationService::Https,
             factors,
             expires_at: UnixMicros::new(10_000),

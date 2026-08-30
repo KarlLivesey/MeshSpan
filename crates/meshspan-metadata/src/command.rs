@@ -1256,6 +1256,12 @@ pub struct IssueAuthenticationSession {
     pub principal_id: PrincipalId,
     /// Digest of the bearer token; raw tokens never enter authoritative metadata.
     pub token_digest: [u8; 32],
+    /// Digest of the independently presented CSRF token for browser mutations.
+    pub csrf_digest: [u8; 32],
+    /// Optional bounded device/session label selected by the user.
+    pub client_label: Option<String>,
+    /// Whether the browser may persist the cookie beyond the current browser session.
+    pub persistent_cookie: bool,
     /// Connector family for which this session was established.
     pub service: AuthenticationService,
     /// Exact current method evidence accepted by the authentication ceremony.
@@ -2197,6 +2203,9 @@ digest_simple_record!(
         digest.identifier(value.session_id.as_bytes());
         digest.identifier(value.principal_id.as_bytes());
         digest.bytes(&value.token_digest);
+        digest.bytes(&value.csrf_digest);
+        digest.optional_text(value.client_label.as_deref());
+        digest.boolean(value.persistent_cookie);
         digest.byte(value.service.scope_bit());
         digest.unsigned(u64::try_from(value.factors.len()).unwrap_or(u64::MAX));
         for factor in value.factors.as_slice() {
@@ -2501,6 +2510,16 @@ impl CanonicalDigest {
             Some(value) => {
                 self.byte(1);
                 self.name(value);
+            }
+            None => self.byte(0),
+        }
+    }
+
+    fn optional_text(&mut self, value: Option<&str>) {
+        match value {
+            Some(value) => {
+                self.byte(1);
+                self.bytes(value.as_bytes());
             }
             None => self.byte(0),
         }

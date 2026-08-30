@@ -149,7 +149,14 @@ fn invalid_session_shape(connection: &Connection) -> Result<i64, rusqlite::Error
     connection.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM authentication_sessions AS session
-            WHERE (SELECT count(*) FROM authentication_session_factors
+            WHERE session.csrf_digest = zeroblob(32)
+               OR session.csrf_digest = session.token_digest
+               OR session.persistent_cookie NOT IN (0, 1)
+               OR (session.client_label IS NOT NULL AND (
+                   length(session.client_label) NOT BETWEEN 1 AND 80
+                   OR session.client_label <> trim(session.client_label)
+               ))
+               OR (SELECT count(*) FROM authentication_session_factors
                    WHERE session_id = session.session_id) NOT BETWEEN 1 AND 8
                OR (SELECT min(factor_sequence) FROM authentication_session_factors
                    WHERE session_id = session.session_id) <> 1

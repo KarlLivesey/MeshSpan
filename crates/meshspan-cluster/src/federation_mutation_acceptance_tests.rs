@@ -404,6 +404,9 @@ impl Fixture {
                 session_id: self.ids.session,
                 principal_id: self.ids.user,
                 token_digest: [15; 32],
+                csrf_digest: [16; 32],
+                client_label: None,
+                persistent_cookie: false,
                 service: AuthenticationService::Https,
                 factors: BoundedItems::new(
                     vec![
