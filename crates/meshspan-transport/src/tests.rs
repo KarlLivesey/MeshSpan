@@ -40,6 +40,7 @@ use super::{
 };
 
 mod federation_branch_page;
+mod federation_content_layout;
 mod federation_storage;
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -709,6 +710,7 @@ async fn prove_federation_authority_page(
         Err(TransportError::UntrustedFederationPeer)
     ));
     federation_branch_page::prove_federation_branch_page(proof).await?;
+    federation_content_layout::prove_federation_content_layout_page(proof).await?;
     federation_storage::prove_storage_capability_response(proof)?;
     Ok(())
 }
@@ -786,6 +788,13 @@ fn prove_hostile_federation_hellos(
     let certificate = CertificateDer::from(hello.public_identity_chain.clone());
     prove_signed_authority_fetch(registry, connection, &certificate, signing_key, limits)?;
     federation_branch_page::prove_signed_branch_fetch(
+        registry,
+        connection,
+        &certificate,
+        signing_key,
+        limits,
+    )?;
+    federation_content_layout::prove_signed_content_layout_fetch(
         registry,
         connection,
         &certificate,

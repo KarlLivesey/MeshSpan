@@ -97,6 +97,26 @@ message FederatedHistoryObjectHeader {
   bytes signature = 7;
 }
 
+message FetchFederatedContentLayout {
+  bytes grant_id = 1;
+  VersionedPayload resource_scope = 2;
+  bytes manifest_id = 3;
+  bytes cursor = 4;
+  uint32 limit = 5;
+  bytes signature = 6;
+}
+
+message FederatedContentLayoutPage {
+  bytes grant_id = 1;
+  VersionedPayload resource_scope = 2;
+  bytes manifest_id = 3;
+  VersionedPayload layout_header = 4;
+  repeated VersionedPayload chunks = 5;
+  bytes next_cursor = 6;
+  bytes page_digest = 7;
+  bytes signature = 8;
+}
+
 message ProposeFederatedBranch {
   bytes grant_id = 1;
   VersionedPayload resource_scope = 2;
@@ -199,6 +219,8 @@ message FederationEnvelope {
     FederatedBranchResult branch_result = 33;
     FetchFederatedHistoryObject fetch_history_object = 34;
     FederatedHistoryObjectHeader history_object_header = 35;
+    FetchFederatedContentLayout fetch_content_layout = 36;
+    FederatedContentLayoutPage content_layout_page = 37;
     RequestFederatedStorageCapability request_storage_capability = 40;
     FederatedStorageCapability storage_capability = 41;
     FederatedStorageReceipt storage_receipt = 42;
