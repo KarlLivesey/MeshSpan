@@ -53,6 +53,13 @@ impl RandomSource for FixedRandom {
     }
 }
 
+pub(super) struct ProtectionOnlyProvider {
+    _directory: tempfile::TempDir,
+    local: LocalDatabase,
+    service: RemoteShardService<FolderShardStore>,
+    allocation: FederationStorageAllocation,
+}
+
 pub(super) async fn prove_storage_capability_exchange(
     proof: &SessionProof<'_>,
     allocation: FederationStorageAllocation,
@@ -140,16 +147,9 @@ pub(super) async fn prove_storage_capability_exchange(
 
 pub(super) async fn prove_revoked_storage_inventory_fails_closed(
     proof: &SessionProof<'_>,
-    allocation: FederationStorageAllocation,
-    provider_node_id: NodeId,
+    retained: &ProtectionOnlyProvider,
 ) -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
-    let local = LocalDatabase::open(
-        &directory.path().join("revoked-local.sqlite3"),
-        provider_node_id,
-        NOW,
-    )?;
-    let service = shard_service(directory.path(), proof, allocation, provider_node_id)?;
+    let allocation = retained.allocation;
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
     let context = FederationExchangeContext::new(
@@ -182,8 +182,8 @@ pub(super) async fn prove_revoked_storage_inventory_fails_closed(
         proof.server_connection,
         FederationStorageInventoryProvider {
             repository: proof.server_authority,
-            local_database: &local,
-            provider: service.provider(),
+            local_database: &retained.local,
+            provider: retained.service.provider(),
         },
         FederationStorageInventoryServeRequest {
             response_replay_nonce: [205; 32],
@@ -197,14 +197,15 @@ pub(super) async fn prove_revoked_storage_inventory_fails_closed(
         serve_result,
         Err(meshspan_cluster::FederationSessionError::AuthorityUnavailable)
     ));
+    assert_retained_provider_state(proof, retained)?;
     Ok(())
 }
 
-pub(super) async fn prove_protection_only_read_fails_closed(
+pub(super) async fn prove_protection_only_storage(
     proof: &SessionProof<'_>,
     allocation: FederationStorageAllocation,
     provider_node_id: NodeId,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<ProtectionOnlyProvider, Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let mut local = LocalDatabase::open(
         &directory.path().join("protection-only-local.sqlite3"),
@@ -214,14 +215,71 @@ pub(super) async fn prove_protection_only_read_fails_closed(
     let permit_key = FederatedStoragePermitMacKey::from_bytes([207; 32])?;
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
-    let denied = exchange(
+    prove_excessive_storage_request_fails_closed(
         proof,
         &mut local,
         &permit_key,
-        request(allocation, FederationStorageAction::Get),
-        exchange_values(208, 209, NOW, UnixMicros::new(1_850_000))?,
+        allocation,
         &mut client_replay,
         &mut server_replay,
+    )
+    .await?;
+    let issued = issue_write_capability(
+        proof,
+        &mut local,
+        &permit_key,
+        allocation,
+        provider_node_id,
+        &mut client_replay,
+        &mut server_replay,
+    )
+    .await?;
+    let payload = BoundedBytes::copy_from(PAYLOAD, 20)?;
+    let mut service = shard_service(directory.path(), proof, allocation, provider_node_id)?;
+    put_cycle(
+        proof,
+        &mut local,
+        &mut service,
+        &permit_key,
+        &issued.presented,
+        &payload,
+        NOW,
+    )
+    .await?;
+    assert_usage(&local, allocation, PAYLOAD.len() as u64, 0)?;
+    prove_protection_only_read_denied(
+        proof,
+        &mut local,
+        &permit_key,
+        allocation,
+        &mut client_replay,
+        &mut server_replay,
+    )
+    .await?;
+    Ok(ProtectionOnlyProvider {
+        _directory: directory,
+        local,
+        service,
+        allocation,
+    })
+}
+
+async fn prove_protection_only_read_denied(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    permit_key: &FederatedStoragePermitMacKey,
+    allocation: FederationStorageAllocation,
+    client_replay: &mut FederationReplayGuard,
+    server_replay: &mut FederationReplayGuard,
+) -> Result<(), Box<dyn Error>> {
+    let denied = exchange(
+        proof,
+        local,
+        permit_key,
+        request(allocation, FederationStorageAction::Get),
+        exchange_values(208, 209, NOW, UnixMicros::new(1_850_000))?,
+        client_replay,
+        server_replay,
     )
     .await;
     assert!(
@@ -238,6 +296,66 @@ pub(super) async fn prove_protection_only_read_fails_closed(
         local
             .federated_storage_capability_for_operation(OperationId::from_bytes([209; 16])?)?
             .is_none()
+    );
+    Ok(())
+}
+
+async fn prove_excessive_storage_request_fails_closed(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    permit_key: &FederatedStoragePermitMacKey,
+    allocation: FederationStorageAllocation,
+    client_replay: &mut FederationReplayGuard,
+    server_replay: &mut FederationReplayGuard,
+) -> Result<(), Box<dyn Error>> {
+    let mut excessive = request(allocation, FederationStorageAction::Put);
+    excessive.maximum_bytes = allocation.maximum_bytes().saturating_add(1);
+    let denied = exchange(
+        proof,
+        local,
+        permit_key,
+        excessive,
+        exchange_values(201, 202, NOW, UnixMicros::new(1_850_000))?,
+        client_replay,
+        server_replay,
+    )
+    .await;
+    assert!(matches!(
+        denied,
+        Err(meshspan_cluster::FederationSessionError::StorageCapability(
+            meshspan_cluster::FederationStorageCapabilityIssuerError::AuthorityUnavailable
+        ))
+    ));
+    assert!(
+        local
+            .federated_storage_capability_for_operation(OperationId::from_bytes([202; 16])?)?
+            .is_none()
+    );
+    Ok(())
+}
+
+fn assert_retained_provider_state(
+    proof: &SessionProof<'_>,
+    retained: &ProtectionOnlyProvider,
+) -> Result<(), Box<dyn Error>> {
+    let allocation = retained.allocation;
+    let page = retained.local.federated_storage_inventory_page(
+        proof.client_mesh,
+        allocation.grant_id(),
+        allocation.target_id(),
+        allocation.target_generation(),
+        None,
+        2,
+    )?;
+    assert_eq!(page.records.len(), 1);
+    let record = page.records.as_slice()[0];
+    let expected = record.provider_entry(proof.client_mesh);
+    assert_eq!(
+        retained
+            .service
+            .provider()
+            .inventory_exact(expected.shard)?,
+        Some(expected)
     );
     Ok(())
 }

@@ -51,8 +51,8 @@ use authority_page_proof::{
     prove_initial_authority, prove_rotated_authority, storage_grant_command,
 };
 use storage_capability_proof::{
-    prove_protection_only_read_fails_closed, prove_revoked_storage_inventory_fails_closed,
-    prove_storage_capability_exchange,
+    ProtectionOnlyProvider, prove_protection_only_storage,
+    prove_revoked_storage_inventory_fails_closed, prove_storage_capability_exchange,
 };
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -120,7 +120,7 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
         );
         prove_rotated_authority(&rotated_proof, &expected_grants).await?
     };
-    let (allocation, provider_node_id) = prove_server_storage(
+    let protection_only = prove_server_storage(
         &mut authorities,
         rotated_runtimes,
         &rotated_connections,
@@ -145,8 +145,7 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
         &mut authorities,
         rotated_runtimes,
         &rotated_connections,
-        allocation,
-        provider_node_id,
+        &protection_only,
     )
     .await?;
 
@@ -161,7 +160,7 @@ async fn prove_server_storage(
     runtimes: SessionRuntimes<'_>,
     connections: &ConnectionPair,
     grants: &[FederationGrantId],
-) -> Result<(FederationStorageAllocation, NodeId), Box<dyn Error>> {
+) -> Result<ProtectionOnlyProvider, Box<dyn Error>> {
     let [read_grant, protection_grant] = grants else {
         return Err("storage proof requires exactly two grants".into());
     };
@@ -176,25 +175,24 @@ async fn prove_server_storage(
         provider_node_id,
     ))
     .await?;
-    prove_protection_only_read_fails_closed(
+    let protection_only = prove_protection_only_storage(
         &proof,
         protection_only_allocation,
         protection_provider_node_id,
     )
     .await?;
-    Ok((allocation, provider_node_id))
+    Ok(protection_only)
 }
 
 async fn revoke_and_prove_fencing(
     authorities: &mut MetadataAuthorities,
     runtimes: SessionRuntimes<'_>,
     connections: &ConnectionPair,
-    allocation: FederationStorageAllocation,
-    provider_node_id: NodeId,
+    protection_only: &ProtectionOnlyProvider,
 ) -> Result<(), Box<dyn Error>> {
     authorities.revoke(60)?;
     let proof = authorities.proof(runtimes, connections, SessionExpectation::new(18, 8, 2));
-    prove_revoked_storage_inventory_fails_closed(&proof, allocation, provider_node_id).await?;
+    prove_revoked_storage_inventory_fails_closed(&proof, protection_only).await?;
     prove_revoked_session_fails_closed(&proof).await
 }
 
