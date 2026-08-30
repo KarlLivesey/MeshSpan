@@ -52,7 +52,7 @@ pub(super) fn classify(
     verify_side_signature(
         connection,
         evidence.relationship_id(),
-        evidence.actor().home_mesh_id(),
+        evidence.accepting_mesh_id(),
         acknowledgement.signer_generation,
         &acknowledgement.signing_payload(),
         acknowledgement.signature,
@@ -66,21 +66,21 @@ pub(super) fn classify(
             connection,
             evidence.relationship_id(),
         )?;
-        if relationship.local_mesh_id != evidence.resource().authority_mesh_id()
-            || relationship.remote_mesh_id != evidence.actor().home_mesh_id()
-        {
+        if relationship.remote_mesh_id != evidence.accepting_mesh_id() {
             return Err(RepositoryError::InvalidCommand);
         }
-        let attestation = federation_actor_attestation::attestation_connection(
-            connection,
-            evidence.relationship_id(),
-            evidence.actor(),
-        )?
-        .ok_or(RepositoryError::InvalidCommand)?;
-        if attestation.state != FederatedActorState::Active {
-            return Ok(FederatedMutationAdmission::Quarantined(
-                QuarantineReason::PrincipalInactive,
-            ));
+        if evidence.actor().home_mesh_id() == evidence.accepting_mesh_id() {
+            let attestation = federation_actor_attestation::attestation_connection(
+                connection,
+                evidence.relationship_id(),
+                evidence.actor(),
+            )?
+            .ok_or(RepositoryError::InvalidCommand)?;
+            if attestation.state != FederatedActorState::Active {
+                return Ok(FederatedMutationAdmission::Quarantined(
+                    QuarantineReason::PrincipalInactive,
+                ));
+            }
         }
     }
     federation_grant::classify_persisted_mutation(connection, evidence)

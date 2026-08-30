@@ -15,18 +15,18 @@ use meshspan_cluster::{
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ApiKeyId, AssuranceLevel, AuthenticationMethodId, AuthenticationService, FederationAccess,
-    FederationGrant, FederationGrantId, FederationGrantRoute, FederationPolicy,
-    FederationResourceScope, MeshId, OperationId, PartitionId, PrincipalId, Revision, Rights,
-    SessionId, UnixMicros, VolumeId,
+    FederationAssignmentId, FederationGrant, FederationGrantId, FederationGrantRoute,
+    FederationPolicy, FederationResourceScope, MeshId, OperationId, PartitionId, PrincipalId,
+    Revision, Rights, SessionId, UnixMicros, VolumeId,
 };
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, ChangePrincipalState,
-    CreateAuthenticationMethod, CreateUser, FederatedActorKind, FederatedActorState,
-    FederationGrantRecord, FederationGrantRestriction, FederationRemoteAuthoritySnapshot,
-    IssueAuthenticationSession, IssueFederationGrant, LocalDatabase, LogPosition,
-    NewAuthenticationCredential, PartitionDatabase, PrincipalLifecycleState,
-    RecordFederatedActorAttestation, RecordName, SessionAccessRequest, SessionAuthenticationFactor,
-    TotpAlgorithm,
+    CreateAuthenticationMethod, CreateFederationGrantAssignment, CreateUser, FederatedActorKind,
+    FederatedActorState, FederationGrantRecord, FederationGrantRestriction,
+    FederationRemoteAuthoritySnapshot, IssueAuthenticationSession, IssueFederationGrant,
+    LocalDatabase, LogPosition, NewAuthenticationCredential, PartitionDatabase,
+    PrincipalLifecycleState, RecordFederatedActorAttestation, RecordName, SessionAccessRequest,
+    SessionAuthenticationFactor, TotpAlgorithm,
 };
 use tempfile::{TempDir, tempdir};
 
@@ -158,7 +158,6 @@ fn configure_authoritative_state(
             name: RecordName::new("Disconnected writer")?,
         }),
     )?;
-    issue_home_session(authorities, user)?;
     let record = grant_record(authorities, grant, volume)?;
     issue_grant(
         &mut authorities.server.repository,
@@ -166,6 +165,8 @@ fn configure_authoritative_state(
         12,
         &record,
     )?;
+    assign_grant_to_local_user(authorities, user, grant)?;
+    issue_home_session(authorities, user)?;
     let attestation =
         signed_attestation(authorities, user, FederatedActorState::Active, 1, home_key)?;
     apply_next(
@@ -179,6 +180,29 @@ fn configure_authoritative_state(
         authorities.client.administrator_id,
         14,
         &record,
+    )
+}
+
+fn assign_grant_to_local_user(
+    authorities: &mut MetadataAuthorities,
+    user: PrincipalId,
+    grant: FederationGrantId,
+) -> Result<(), Box<dyn Error>> {
+    apply_next(
+        &mut authorities.server.repository,
+        authorities.server.administrator_id,
+        13,
+        &AuthoritativeCommand::CreateFederationGrantAssignment(CreateFederationGrantAssignment {
+            assignment_id: FederationAssignmentId::from_bytes([90; 16])?,
+            grant_id: grant,
+            subject_principal_id: user,
+            rights: Rights::TRAVERSE
+                .union(Rights::CREATE_CHILD)
+                .union(Rights::WRITE_DATA),
+            valid_from: None,
+            valid_until: None,
+            activation_policy_id: None,
+        }),
     )
 }
 
@@ -399,6 +423,7 @@ fn grant_record(
         FederationAccess::new(
             Rights::TRAVERSE
                 .union(Rights::READ_DATA)
+                .union(Rights::CREATE_CHILD)
                 .union(Rights::WRITE_DATA),
             false,
         ),

@@ -33,7 +33,13 @@ pub(super) async fn prove(
     connections: &ConnectionPair,
     home_key: &SigningKey,
 ) -> Result<(), Box<dyn Error>> {
-    let state = prove_disconnected_edits(authorities, runtimes, connections, home_key).await?;
+    let state = Box::pin(prove_disconnected_edits(
+        authorities,
+        runtimes,
+        connections,
+        home_key,
+    ))
+    .await?;
     Box::pin(prove_suspended_writer_quarantine(
         authorities,
         runtimes,

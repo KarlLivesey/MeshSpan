@@ -179,13 +179,14 @@ fn build_stored(
     base: &BaseRow,
     acknowledgement: &AcknowledgementRow,
 ) -> Result<StoredQuarantine, RepositoryError> {
-    let evidence = FederatedMutationEvidence::new(
+    let evidence = FederatedMutationEvidence::new_relayed(
         parse_grant(&base.grant_id)?,
         parse_relationship(&base.relationship_id)?,
         FederatedPrincipal::new(
             parse_mesh(&base.subject_home_mesh_id)?,
             parse_principal(&base.subject_principal_id)?,
         ),
+        parse_mesh(&acknowledgement.signer_mesh_id)?,
         parse_resource(
             acknowledgement.resource_kind,
             &acknowledgement.authority_mesh_id,
@@ -295,7 +296,7 @@ fn verify_stored(
     connection: &Connection,
     stored: &StoredQuarantine,
 ) -> Result<(), RepositoryError> {
-    if stored.signer_mesh_id != stored.record.evidence.actor().home_mesh_id() {
+    if stored.signer_mesh_id != stored.record.evidence.accepting_mesh_id() {
         return Err(RepositoryError::CorruptState);
     }
     let command = RetainFederatedMutationQuarantine {

@@ -177,7 +177,9 @@ fn create(
     let grant_id = command.grant_id.as_bytes();
     let subject = command.subject_principal_id.as_bytes();
     let actor = context.actor_principal_id.as_bytes();
-    let policy_id = command.activation_policy_id.map(|value| value.as_bytes());
+    let policy_id = command
+        .activation_policy_id
+        .map(meshspan_domain::ActivationPolicyId::as_bytes);
     transaction.execute(
         "INSERT INTO federation_grant_assignments(
             assignment_id, grant_id, subject_principal_id, rights, valid_from, valid_until,

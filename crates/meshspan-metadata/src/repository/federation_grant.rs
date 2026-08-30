@@ -386,7 +386,7 @@ fn validity_is_no_broader(
     next_from >= prior_from
         && match (next_until, prior_until) {
             (Some(next), Some(prior)) => next <= prior,
-            (Some(_), None) | (None, None) => true,
+            (Some(_) | None, None) => true,
             (None, Some(_)) => false,
         }
 }

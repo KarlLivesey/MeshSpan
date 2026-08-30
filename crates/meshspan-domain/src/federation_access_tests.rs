@@ -53,12 +53,46 @@ fn expired_and_overbroad_use_is_quarantined() -> Result<(), Box<dyn std::error::
 #[test]
 fn substituted_principal_is_rejected_as_an_attack() -> Result<(), Box<dyn std::error::Error>> {
     let grant = edit_grant(10, Some(40))?;
-    let mut evidence = edit_evidence(&grant, 20, Rights::WRITE_DATA)?;
-    evidence.actor = FederatedPrincipal::new(mesh(9)?, crate::PrincipalId::from_bytes([9; 16])?);
+    let evidence = FederatedMutationEvidence::new_relayed(
+        grant.grant_id(),
+        grant.relationship_id(),
+        FederatedPrincipal::new(mesh(9)?, crate::PrincipalId::from_bytes([9; 16])?),
+        mesh(9)?,
+        grant.resource(),
+        grant.authority_epoch(),
+        UnixMicros::new(20),
+        Rights::WRITE_DATA,
+        0,
+    );
     assert_eq!(
         classify_federated_mutation(&grant, evidence, None),
         Err(FederationGrantError::EvidenceMismatch)
     );
+    Ok(())
+}
+
+#[test]
+fn accountable_recipient_may_relay_an_original_downstream_actor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let grant = edit_grant(10, Some(40))?;
+    let actor = FederatedPrincipal::new(mesh(9)?, crate::PrincipalId::from_bytes([9; 16])?);
+    let evidence = FederatedMutationEvidence::new_relayed(
+        grant.grant_id(),
+        grant.relationship_id(),
+        actor,
+        grant.recipient_mesh_id(),
+        grant.resource(),
+        grant.authority_epoch(),
+        UnixMicros::new(20),
+        Rights::WRITE_DATA,
+        0,
+    );
+    assert_eq!(
+        classify_federated_mutation(&grant, evidence, None)?,
+        FederatedMutationAdmission::Admitted
+    );
+    assert_eq!(evidence.actor(), actor);
+    assert_eq!(evidence.accepting_mesh_id(), grant.recipient_mesh_id());
     Ok(())
 }
 

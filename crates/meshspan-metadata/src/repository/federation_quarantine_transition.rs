@@ -61,7 +61,7 @@ fn retain(
         return Err(RepositoryError::InvalidCommand);
     }
     let reason = classify_for_command(transaction, &acknowledgement)?;
-    let signer_mesh_id = acknowledgement.evidence.actor().home_mesh_id();
+    let signer_mesh_id = acknowledgement.evidence.accepting_mesh_id();
     let acknowledgement_digest: [u8; 32] = Sha256::digest(acknowledgement.signing_payload()).into();
     insert_quarantine(
         transaction,

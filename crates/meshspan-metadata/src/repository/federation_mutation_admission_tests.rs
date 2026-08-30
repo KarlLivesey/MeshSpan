@@ -101,6 +101,67 @@ fn admitted_mutation_is_consensus_ordered_and_replays_after_suspension()
 }
 
 #[test]
+fn relayed_actor_is_admitted_under_the_accountable_recipient_signature()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare(&mut repository, fixture.ids, &fixture.remote_key)?;
+    let original_actor = FederatedPrincipal::new(
+        MeshId::from_bytes([70; 16])?,
+        PrincipalId::from_bytes([71; 16])?,
+    );
+    let mut acknowledgement = FederatedMutationAcknowledgement {
+        source_operation_id: OperationId::from_bytes([72; 16])?,
+        evidence: FederatedMutationEvidence::new_relayed(
+            fixture.ids.grant,
+            fixture.ids.relationship,
+            original_actor,
+            fixture.ids.remote_mesh,
+            FederationResourceScope::Volume {
+                owner_mesh_id: fixture.ids.local_mesh,
+                volume_id: fixture.ids.volume,
+            },
+            1,
+            UnixMicros::new(20),
+            Rights::WRITE_DATA,
+            0,
+        ),
+        payload_digest: [73; 32],
+        signer_generation: 1,
+        signature: [0; 64],
+    };
+    acknowledgement.signature = fixture
+        .remote_key
+        .sign(&acknowledgement.signing_payload())
+        .to_bytes();
+    assert_eq!(
+        repository.classify_federated_mutation_acknowledgement(&acknowledgement)?,
+        FederatedMutationAdmission::Admitted
+    );
+
+    let mut substituted = acknowledgement;
+    substituted.evidence = FederatedMutationEvidence::new_relayed(
+        fixture.ids.grant,
+        fixture.ids.relationship,
+        FederatedPrincipal::new(
+            original_actor.home_mesh_id(),
+            PrincipalId::from_bytes([74; 16])?,
+        ),
+        fixture.ids.remote_mesh,
+        acknowledgement.evidence.resource(),
+        1,
+        UnixMicros::new(20),
+        Rights::WRITE_DATA,
+        0,
+    );
+    assert!(matches!(
+        repository.classify_federated_mutation_acknowledgement(&substituted),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
+
+#[test]
 fn admitted_mutation_command_fails_closed_for_changed_or_inadmissible_input()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::open()?;

@@ -109,11 +109,12 @@ pub(super) fn persist(
     transaction.execute(
         "INSERT INTO federated_namespace_mutation_acknowledgements(
             namespace_commit_id, source_operation_id, grant_id, relationship_id,
-            subject_home_mesh_id, subject_principal_id, resource_kind, authority_mesh_id,
+            subject_home_mesh_id, subject_principal_id, accepting_mesh_id,
+            resource_kind, authority_mesh_id,
             volume_id, object_id, authority_epoch, accepted_at, required_rights, storage_bytes,
             payload_digest, signer_generation, signature, acknowledgement_digest
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                   ?15, ?16, ?17, ?18)",
+                   ?15, ?16, ?17, ?18, ?19)",
         params![
             namespace_commit_id.as_bytes().as_slice(),
             acknowledgement.source_operation_id.as_bytes().as_slice(),
@@ -121,6 +122,7 @@ pub(super) fn persist(
             evidence.relationship_id().as_bytes().as_slice(),
             evidence.actor().home_mesh_id().as_bytes().as_slice(),
             evidence.actor().principal_id().as_bytes().as_slice(),
+            evidence.accepting_mesh_id().as_bytes().as_slice(),
             resource_kind,
             authority_mesh_id.as_bytes().as_slice(),
             volume_id.as_bytes().as_slice(),
@@ -191,7 +193,8 @@ fn load_row(
     let row = connection
         .query_row(
             "SELECT source_operation_id, grant_id, relationship_id, subject_home_mesh_id,
-                    subject_principal_id, resource_kind, authority_mesh_id, volume_id, object_id,
+                    subject_principal_id, accepting_mesh_id, resource_kind, authority_mesh_id,
+                    volume_id, object_id,
                     authority_epoch, accepted_at, required_rights, storage_bytes, payload_digest,
                     signer_generation, signature, acknowledgement_digest
              FROM federated_namespace_mutation_acknowledgements
@@ -204,18 +207,19 @@ fn load_row(
                     relationship_id: row.get(2)?,
                     subject_home_mesh_id: row.get(3)?,
                     subject_principal_id: row.get(4)?,
-                    resource_kind: row.get(5)?,
-                    authority_mesh_id: row.get(6)?,
-                    volume_id: row.get(7)?,
-                    object_id: row.get(8)?,
-                    authority_epoch: row.get(9)?,
-                    accepted_at: row.get(10)?,
-                    required_rights: row.get(11)?,
-                    storage_bytes: row.get(12)?,
-                    payload_digest: row.get(13)?,
-                    signer_generation: row.get(14)?,
-                    signature: row.get(15)?,
-                    acknowledgement_digest: row.get(16)?,
+                    accepting_mesh_id: row.get(5)?,
+                    resource_kind: row.get(6)?,
+                    authority_mesh_id: row.get(7)?,
+                    volume_id: row.get(8)?,
+                    object_id: row.get(9)?,
+                    authority_epoch: row.get(10)?,
+                    accepted_at: row.get(11)?,
+                    required_rights: row.get(12)?,
+                    storage_bytes: row.get(13)?,
+                    payload_digest: row.get(14)?,
+                    signer_generation: row.get(15)?,
+                    signature: row.get(16)?,
+                    acknowledgement_digest: row.get(17)?,
                 })
             },
         )
@@ -224,13 +228,14 @@ fn load_row(
 }
 
 fn parse_row(row: StoredRow) -> Result<FederatedMutationAcknowledgement, PublicationError> {
-    let evidence = FederatedMutationEvidence::new(
+    let evidence = FederatedMutationEvidence::new_relayed(
         identifier(&row.grant_id, FederationGrantId::from_bytes)?,
         identifier(&row.relationship_id, FederationRelationshipId::from_bytes)?,
         FederatedPrincipal::new(
             identifier(&row.subject_home_mesh_id, MeshId::from_bytes)?,
             identifier(&row.subject_principal_id, PrincipalId::from_bytes)?,
         ),
+        identifier(&row.accepting_mesh_id, MeshId::from_bytes)?,
         parse_resource(&row)?,
         positive(row.authority_epoch)?,
         UnixMicros::new(row.accepted_at),
@@ -263,6 +268,7 @@ struct StoredRow {
     relationship_id: Vec<u8>,
     subject_home_mesh_id: Vec<u8>,
     subject_principal_id: Vec<u8>,
+    accepting_mesh_id: Vec<u8>,
     resource_kind: i64,
     authority_mesh_id: Vec<u8>,
     volume_id: Vec<u8>,

@@ -31,6 +31,8 @@ mod federation_assignment;
 mod federation_authority_snapshot;
 #[cfg(test)]
 mod federation_backup_test_support;
+#[cfg(test)]
+mod federation_downstream_tests;
 mod federation_grant;
 mod federation_grant_cursor;
 mod federation_grant_evidence;

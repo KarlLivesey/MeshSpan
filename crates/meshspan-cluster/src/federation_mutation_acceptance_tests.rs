@@ -210,6 +210,14 @@ impl Fixture {
     }
 
     fn prepare(&mut self) -> Result<(), Box<dyn Error>> {
+        self.bootstrap_local_identity()?;
+        self.connect_owner()?;
+        self.configure_grant_assignments()?;
+        self.issue_session()?;
+        Ok(())
+    }
+
+    fn bootstrap_local_identity(&mut self) -> Result<(), Box<dyn Error>> {
         self.apply(
             1,
             20,
@@ -235,7 +243,10 @@ impl Fixture {
                 principal_id: self.ids.user,
                 name: RecordName::new("Federated writer")?,
             }),
-        )?;
+        )
+    }
+
+    fn connect_owner(&mut self) -> Result<(), Box<dyn Error>> {
         self.apply(
             3,
             30,
@@ -281,7 +292,10 @@ impl Fixture {
                 remote_identity: identity(&self.remote_key, 17),
                 governance_proof: None,
             }),
-        )?;
+        )
+    }
+
+    fn configure_grant_assignments(&mut self) -> Result<(), Box<dyn Error>> {
         let record = self.grant_record()?;
         self.apply(
             7,
@@ -337,7 +351,6 @@ impl Fixture {
                 },
             ),
         )?;
-        self.issue_session()?;
         self.remote_cache.install_remote_federation_authority(
             &self.remote_snapshot(record),
             UnixMicros::new(19),

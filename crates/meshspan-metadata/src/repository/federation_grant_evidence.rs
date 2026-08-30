@@ -640,7 +640,7 @@ fn validity_end_broadens(child: Option<UnixMicros>, parent: Option<UnixMicros>) 
     match (child, parent) {
         (Some(child), Some(parent)) => child > parent,
         (None, Some(_)) => true,
-        (Some(_), None) | (None, None) => false,
+        (Some(_) | None, None) => false,
     }
 }
 

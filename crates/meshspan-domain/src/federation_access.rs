@@ -137,6 +137,7 @@ pub struct FederatedMutationEvidence {
     grant_id: FederationGrantId,
     relationship_id: FederationRelationshipId,
     actor: FederatedPrincipal,
+    accepting_mesh_id: crate::MeshId,
     resource: FederationResourceScope,
     authority_epoch: u64,
     accepted_at: UnixMicros,
@@ -165,6 +166,40 @@ impl FederatedMutationEvidence {
             grant_id,
             relationship_id,
             actor,
+            accepting_mesh_id: actor.home_mesh_id(),
+            resource,
+            authority_epoch,
+            accepted_at,
+            required_rights,
+            storage_bytes,
+        }
+    }
+
+    /// Constructs relayed evidence signed by a direct recipient on behalf of the original actor.
+    ///
+    /// The accepting swarm is accountable for having verified the downstream acknowledgement;
+    /// the actor remains the user or service which authored the immutable mutation.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "relayed untrusted evidence preserves every independently verified authority field"
+    )]
+    #[must_use]
+    pub const fn new_relayed(
+        grant_id: FederationGrantId,
+        relationship_id: FederationRelationshipId,
+        actor: FederatedPrincipal,
+        accepting_mesh_id: crate::MeshId,
+        resource: FederationResourceScope,
+        authority_epoch: u64,
+        accepted_at: UnixMicros,
+        required_rights: Rights,
+        storage_bytes: u64,
+    ) -> Self {
+        Self {
+            grant_id,
+            relationship_id,
+            actor,
+            accepting_mesh_id,
             resource,
             authority_epoch,
             accepted_at,
@@ -189,6 +224,12 @@ impl FederatedMutationEvidence {
     #[must_use]
     pub const fn actor(self) -> FederatedPrincipal {
         self.actor
+    }
+
+    /// Returns the swarm accountable for accepting and signing this evidence.
+    #[must_use]
+    pub const fn accepting_mesh_id(self) -> crate::MeshId {
+        self.accepting_mesh_id
     }
 
     /// Returns the exact owner-qualified resource presented at acceptance.
@@ -365,7 +406,7 @@ fn validate_evidence_identity(
 ) -> Result<(), FederationGrantError> {
     if evidence.grant_id != grant.grant_id
         || evidence.relationship_id != grant.relationship_id
-        || evidence.actor.home_mesh_id() != grant.recipient_mesh_id()
+        || evidence.accepting_mesh_id != grant.recipient_mesh_id()
         || evidence.resource != grant.resource
         || evidence.authority_epoch != grant.authority_epoch
     {

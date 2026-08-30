@@ -100,6 +100,7 @@ fn decode_acknowledgement(
         decoder.identifier(MeshId::from_bytes)?,
         decoder.identifier(PrincipalId::from_bytes)?,
     );
+    let accepting_mesh_id = decoder.identifier(MeshId::from_bytes)?;
     let resource = decode_resource(decoder)?;
     let authority_epoch = decoder.unsigned()?;
     let accepted_at = UnixMicros::new(decoder.signed()?);
@@ -111,10 +112,11 @@ fn decode_acknowledgement(
     let signature = decoder.array()?;
     Ok(FederatedMutationAcknowledgement {
         source_operation_id,
-        evidence: FederatedMutationEvidence::new(
+        evidence: FederatedMutationEvidence::new_relayed(
             grant_id,
             relationship_id,
             subject,
+            accepting_mesh_id,
             resource,
             authority_epoch,
             accepted_at,
