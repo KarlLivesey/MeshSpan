@@ -13,7 +13,6 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@js-temporal/polyfill": "0.5.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
