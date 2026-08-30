@@ -115,27 +115,26 @@ without erasing content validly acknowledged under the recorded revision.
 One user may enrol multiple independently revocable methods. The common record holds user, kind,
 label, state, service scope, creation, expiry and revision. Secret formats remain in typed tables:
 
-| Method | Stored material |
-| --- | --- |
-| Password | Argon2id verifier and parameters |
+| Method           | Stored material                                               |
+| ---------------- | ------------------------------------------------------------- |
 | WebAuthn/passkey | credential ID, public key, counter and authenticator metadata |
-| TOTP | encrypted secret and algorithm parameters |
-| Recovery code | single-use digest and used instant |
-| API token | digest, scopes and expiry |
-| Client certificate | issuer, fingerprint and expiry |
-| SMB credential | encrypted verifier, service scope and generation |
+| TOTP             | encrypted secret and algorithm parameters                     |
+| Recovery code    | single-use digest and used instant                            |
+| API key          | digest, scopes, validity and expiry                           |
 
-Raw passwords, tokens, recovery codes and session cookies are never stored.
+Raw API keys, recovery codes and session cookies are never stored. MeshSpan has
+no password, user client-certificate or service-specific credential method.
 
 ## Two-factor and step-up
 
 Authentication policy is scoped to service and operation class. It specifies allowed factor
 classes, minimum factor count, session lifetime and maximum age for privileged step-up.
 
-Administrative changes use recent strong authentication by default. Because ordinary SMB clients
-cannot perform an interactive second-factor exchange, the proposal is a separately revocable
-SMB-only credential created from a strongly authenticated web/admin session. It cannot administer
-the mesh.
+Administrative changes use recent strong authentication by default. A service
+may use only methods whose ceremony it can perform: SMB can accept an API key
+whose ordinary scopes permit SMB login but cannot conduct a passkey or TOTP
+ceremony. This never creates a second credential type or identity. A login-capable
+API key may exchange for a browser session; the raw key is then discarded.
 
 ## Sessions and throttling
 

@@ -15,15 +15,22 @@ single-voter configuration.
 
 1. The daemon validates that its state directory is private, writable and not
    already bound to another mesh.
-2. It generates a node identity key and mesh root material locally.
-3. The operator supplies the initial mesh name and administrator credentials.
-4. One bootstrap operation creates the mesh, host, node, voter membership,
+2. It generates a node identity key and one high-entropy single-use claim bundle,
+   prints it only on an interactive local CLI and atomically writes it to a
+   configured protected automation file when requested.
+3. The operator enters that bundle on the setup page or submits it through an
+   authenticated existing-swarm add-node flow. The setup surface never reveals
+   the bundle.
+4. For a new mesh, the operator supplies the mesh name and enrols a passkey or
+   login-capable API key.
+5. One bootstrap operation creates the mesh, host, node, voter membership,
    administrator user, initial owner/admin grants and audit event.
-5. The node installs its certificate, commits the bootstrap snapshot and only
+6. The node invalidates the claim bundle, removes its output file where possible,
+   installs its certificate, commits the bootstrap snapshot and only
    then starts public services.
 
 The receipt identifies the mesh, node and committed position. A crash resumes or
-rolls back bootstrap; it never exposes a half-created mesh or default password.
+rolls back bootstrap; it never exposes a half-created mesh or default credential.
 
 ## 2. Issue and consume a join grant
 
@@ -76,9 +83,10 @@ failure does not invalidate other paths in the same invocation.
 **Authority:** the owning configuration/namespace partition and deterministic
 placement evaluator.
 
-1. Create named fault-group classes and instances such as building, room,
-   circuit, PSU or switch.
-2. Add hosts or storage targets to any number of groups.
+1. Create named shared-failure groups such as physical hypervisor, building,
+   room, circuit, PSU or switch.
+2. Add machines to any number of overlapping groups. Backing-device identity
+   remains a separate built-in failure dimension.
 3. Define required simultaneous-failure scenarios, for example any two machine
    groups and any three backing-device groups.
 4. The evaluator tests current eligible target sets against every scenario and
@@ -138,17 +146,17 @@ identity changes take effect across gateways.
 
 **Authority:** the same user and permission records as HTTPS.
 
-1. A strongly authenticated HTTPS/admin session creates or rotates a
-   separately revocable SMB-scoped credential.
-2. An SMB gateway performs protocol authentication against the typed verifier
+1. A user creates or rotates an API key whose ordinary scopes permit SMB login.
+2. An SMB gateway performs protocol authentication against that method's digest
    and current user/method state.
 3. It establishes a bounded SMB session tied to user and identity revisions.
 4. Tree connect resolves an export and requires traversal/access rights; every
    file operation subsequently asks the common filesystem service for its exact
    right.
 
-SMB credentials cannot access administration. Multiple gateways may authenticate
-the same user and expose the same namespace concurrently.
+The same key cannot administer unless its explicit scopes also permit that
+operation. Multiple gateways may authenticate the same user and expose the same
+namespace concurrently.
 
 ## 8. Open, write, flush and close a file
 
@@ -263,8 +271,10 @@ recovery workflow.
 
 1. An administrator commits ACME account and HTTP-01 or DNS-01 settings.
 2. One elected worker obtains a fenced certificate-order claim.
-3. It fulfils the selected challenge. Replacement workers may resume only after
-   the prior fence expires or is superseded.
+3. It fulfils the selected challenge. A manual DNS-01 publisher creates a
+   durable task with the exact record and deadline; authoritative-DNS probing
+   resumes the order without relying on an administrator button. Replacement
+   workers may resume only after the prior fence expires or is superseded.
 4. It commits the public certificate plus a separately encrypted private-key
    envelope for every authorised gateway node.
 5. Each node fetches only its envelope, decrypts locally, atomically installs the
@@ -275,15 +285,25 @@ recovery workflow.
 One certificate order serves all relevant gateways, avoiding one public CA
 request per node behind the same address.
 
+An external automated CA instead calls the scoped certificate-publisher API with
+an idempotent operation ID, certificate chain and matching private key. MeshSpan
+validates names, chain, lifetime and key, creates the same encrypted generation,
+probes gateway installation and activates it make-before-break. There is no
+manual certificate-upload path and the private key is neither returned nor
+logged.
+
 ## 16. Backup and restore
 
 1. Authority creates a state-machine snapshot at an exact committed position.
 2. It packages the manifest, schema version and required encrypted secret
    material and verifies the digest.
-3. Restore occurs with public services closed.
-4. The daemon validates mesh identity, snapshot/log position, schema, membership
+3. It places several generations through configured backup destinations, which
+   may be registered targets, another swarm or another provider, and records
+   exact receipts plus declared failure overlap.
+4. Restore occurs with public services closed.
+5. The daemon validates mesh identity, snapshot/log position, schema, membership
    and decryptability before installing atomically.
-5. Nodes rejoin with their own identities and reconcile target inventories.
+6. Nodes rejoin with their own identities and reconcile target inventories.
 
 Copying an arbitrary live database file is not this flow.
 

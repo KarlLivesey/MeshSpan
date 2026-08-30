@@ -20,9 +20,9 @@ The ordinary product flow is:
 Backup/protection placement uses the same remote-capacity model. A policy such as
 “store in at least three partner swarms” may spread encrypted shards across five
 eligible partners without asking the user to place individual chunks. Detailed
-rights, quotas, offline duration, placement constraints and resharing live under
-advanced controls. Users never choose federation logs, merge heads, keys, leases
-or consensus roles.
+rights, quotas, offline duration and placement constraints live under advanced
+controls. Users never choose federation logs, merge heads, keys, leases or
+consensus roles.
 
 ## Relationship graph
 
@@ -62,10 +62,8 @@ its owning swarm, so federation does not make that authority free.
 ## Identity, trust and restrictions
 
 Every swarm has a globally qualified identity and rotating federation-signing
-identity chained to its recovery root. A remote principal is identified by both
-its home swarm and home principal identity. Users authenticate only with their
-home swarm; passwords, factors and raw sessions are never copied to another
-swarm.
+identity chained to its recovery root. Users authenticate only with their home
+swarm; API keys, factors and raw sessions are never copied to another swarm.
 
 Connecting swarms requires approval by an administrator on both sides and
 verification of the remote swarm identity. Each side may impose restrictions.
@@ -79,13 +77,24 @@ Effective authority is the intersection of:
 For example, one swarm may offer 100 GB while the other limits itself to 50 GB;
 the effective limit is 50 GB. A subordinate may make narrower local decisions
 without asking its parent, but neither it nor a peer may expand an upstream or
-remote grant. Resharing requires a distinct `manage sharing` right.
+remote grant.
+
+A share from Swarm A targets Swarm B rather than importing B's principal
+directory into A. B decides which of its users and groups receive equal or
+narrower rights. B may re-export through B to Swarm C within the same or narrower
+envelope, because B could already copy readable data; C does not thereby gain a
+direct relationship or connection right to A. Every hop remains attributable and
+inherits upstream expiry, revocation, ownership and restrictions.
 
 ## Resource ownership and multi-writer operation
 
 Every shared volume, folder or file retains one owning swarm. The owning swarm is
 the authority for its ACL policy and canonical converged history. Ownership is
 independent of where data is stored or which authorised swarm accepted an edit.
+
+The owner also remains authority for the canonical protection promise. A peer
+may keep stronger local caches or redundant copies but cannot redefine that
+promise. The owner may adopt the peer's signed receipts as evidence.
 
 An `edit` grant permits users from another swarm to create and modify data. While
 connected, the swarms exchange authenticated operations normally. While
@@ -149,14 +158,14 @@ relationship's removal is not itself proof that physical bytes were erased.
 
 ## Stage retrofit map
 
-| Stage | Required addition | Implementation evidence |
-| --- | --- | --- |
-| 0 | Lock federation terminology, authority, simple presets, failure semantics and record/message contracts. | Complete: logical records, canonical encodings, message catalogue and cross-document threat/flow review are locked. |
-| 1 | Add federation-qualified IDs, rights, restrictions, receipts and versioned replaceable contracts. | Complete: domain transitions, hostile vectors, canonical Protobuf fixture and deterministic graph/policy tests pass. |
-| 2 | Persist relationships, trust roots, governance, grants, quotas, recovery succession, quarantine and exact outcomes. | Complete: migrations, typed commands, indexes, atomic receipts, exact historical reads, backup/restore and command/apply crash-boundary proofs pass. |
-| 3 | Authenticate swarms and carry bounded federation control/data streams over Quinn without joining consensus groups. | Complete: mutual mTLS connection and identity rotation, durable signed authority synchronisation, replay/fencing, independently framed history objects and a stopped/restarted non-empty import pass over real Quinn. |
-| 4 | Treat partner capacity as a capability-scoped remote provider with placement and availability classifications. | Complete: encrypted cross-swarm shard IO, bilateral quota enforcement, protection/read classification, signed lifecycle receipts, exact inventory and returning/revoked-provider tests pass over real Quinn/mTLS. |
-| 5 | Authorise remote principals and reconcile signed multi-writer branches into the owning swarm. | Complete: real home-session and bilateral-grant admission, signed disconnected edits, restart, paged Quinn history exchange, deterministic preservation, exact encrypted-content healing and durable revocation quarantine pass. |
+| Stage | Required addition                                                                                                   | Implementation evidence                                                                                                                                                                                                          |
+| ----- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | Lock federation terminology, authority, simple presets, failure semantics and record/message contracts.             | Complete: logical records, canonical encodings, message catalogue and cross-document threat/flow review are locked.                                                                                                              |
+| 1     | Add federation-qualified IDs, rights, restrictions, receipts and versioned replaceable contracts.                   | Complete: domain transitions, hostile vectors, canonical Protobuf fixture and deterministic graph/policy tests pass.                                                                                                             |
+| 2     | Persist relationships, trust roots, governance, grants, quotas, recovery succession, quarantine and exact outcomes. | Complete: migrations, typed commands, indexes, atomic receipts, exact historical reads, backup/restore and command/apply crash-boundary proofs pass.                                                                             |
+| 3     | Authenticate swarms and carry bounded federation control/data streams over Quinn without joining consensus groups.  | Complete: mutual mTLS connection and identity rotation, durable signed authority synchronisation, replay/fencing, independently framed history objects and a stopped/restarted non-empty import pass over real Quinn.            |
+| 4     | Treat partner capacity as a capability-scoped remote provider with placement and availability classifications.      | Complete: encrypted cross-swarm shard IO, bilateral quota enforcement, protection/read classification, signed lifecycle receipts, exact inventory and returning/revoked-provider tests pass over real Quinn/mTLS.                |
+| 5     | Authorise remote principals and reconcile signed multi-writer branches into the owning swarm.                       | Complete: real home-session and bilateral-grant admission, signed disconnected edits, restart, paged Quinn history exchange, deterministic preservation, exact encrypted-content healing and durable revocation quarantine pass. |
 
 Stages 6 and later expose these contracts through the appliance UI and access
 services, place/repair federated shards, and add full multi-process, churn, power,
