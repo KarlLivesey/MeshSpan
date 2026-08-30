@@ -110,9 +110,10 @@ pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
 pub use repository::{
     AccessActivationCursor, AccessActivationRecord, AccessCapability, AccessDecision, AccessDenial,
-    AccessRequest, ApplyDisposition, AuthoritativeMembership, AuthoritativeMetadataKernel,
-    AuthoritativeRepository, CommandReceipt, ConsensusStoreError, ConvergedVolumeHead, EntityKind,
-    EntityReference, FederatedMutationAdmissionReceipt, FederatedPrincipalProjectionRecord,
+    AccessRequest, ApiKeyAuthentication, ApplyDisposition, AuthenticationService,
+    AuthoritativeMembership, AuthoritativeMetadataKernel, AuthoritativeRepository, CommandReceipt,
+    ConsensusStoreError, ConvergedVolumeHead, EntityKind, EntityReference,
+    FederatedMutationAdmissionReceipt, FederatedPrincipalProjectionRecord,
     FederationAuthoritySnapshotError, FederationGrantCursor, FederationGrantCursorError,
     FederationGrantRecord, FederationGrantRecordCodecError, FederationGrantState,
     FederationGrantTermination, FederationGrantTerminationKind, FederationQuarantineRecord,
