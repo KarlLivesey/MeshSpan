@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    DurationMicros, FederatedPrincipal, FederationAccess, FederationGrant, FederationGrantId,
+    DurationMicros, FederationAccess, FederationGrant, FederationGrantId, FederationGrantRoute,
     FederationPolicy, FederationRelationshipId, FederationResourceScope, MeshId,
-    NamespaceFederationPolicy, ObjectId, PrincipalId, Revision, Rights, StorageFederationPolicy,
+    NamespaceFederationPolicy, ObjectId, Revision, Rights, StorageFederationPolicy,
     StorageParticipation, UnixMicros, VolumeId,
 };
 
@@ -39,7 +39,7 @@ fn malformed_and_unknown_records_fail_closed() -> Result<(), Box<dyn std::error:
     assert_invalid(&wrong_domain);
     let mut unknown_version = encoded;
     let version_offset = b"meshspan.federation.grant-authority".len() + 1;
-    unknown_version[version_offset] = 2;
+    unknown_version[version_offset] = 3;
     assert_eq!(
         FederationGrantRecord::from_canonical_bytes(&unknown_version),
         Err(FederationGrantRecordCodecError::UnsupportedVersion)
@@ -107,7 +107,8 @@ fn namespace_record() -> Result<FederationGrantRecord, Box<dyn std::error::Error
         grant: FederationGrant::new(
             grant_id(3)?,
             relationship(4)?,
-            FederatedPrincipal::new(local, principal(5)?),
+            FederationGrantRoute::direct(remote, local)?,
+            None,
             FederationResourceScope::File {
                 owner_mesh_id: remote,
                 volume_id: volume(6)?,
@@ -146,7 +147,8 @@ fn storage_record() -> Result<FederationGrantRecord, Box<dyn std::error::Error>>
         grant: FederationGrant::new(
             grant_id(13)?,
             relationship(14)?,
-            FederatedPrincipal::new(local, principal(15)?),
+            FederationGrantRoute::direct(remote, local)?,
+            None,
             FederationResourceScope::StorageCapacity {
                 provider_mesh_id: remote,
             },
@@ -190,6 +192,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         bytes,
         StorageParticipation::new(protects, serves_reads),
+        false,
         Some(DurationMicros::new(offline_micros)),
     )?))
 }
@@ -213,10 +216,6 @@ fn assert_invalid(bytes: &[u8]) {
 
 fn mesh(seed: u8) -> Result<MeshId, Box<dyn std::error::Error>> {
     Ok(MeshId::from_bytes([seed; 16])?)
-}
-
-fn principal(seed: u8) -> Result<PrincipalId, Box<dyn std::error::Error>> {
-    Ok(PrincipalId::from_bytes([seed; 16])?)
 }
 
 fn relationship(seed: u8) -> Result<FederationRelationshipId, Box<dyn std::error::Error>> {

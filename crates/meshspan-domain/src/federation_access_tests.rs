@@ -9,9 +9,9 @@ use crate::{
 #[test]
 fn valid_disconnected_edit_is_admitted() -> Result<(), Box<dyn std::error::Error>> {
     let grant = edit_grant(10, Some(40))?;
-    let evidence = edit_evidence(grant, 20, Rights::WRITE_DATA);
+    let evidence = edit_evidence(&grant, 20, Rights::WRITE_DATA)?;
     assert_eq!(
-        classify_federated_mutation(grant, evidence, None)?,
+        classify_federated_mutation(&grant, evidence, None)?,
         FederatedMutationAdmission::Admitted
     );
     Ok(())
@@ -20,13 +20,13 @@ fn valid_disconnected_edit_is_admitted() -> Result<(), Box<dyn std::error::Error
 #[test]
 fn retroactive_revocation_quarantines_without_erasing() -> Result<(), Box<dyn std::error::Error>> {
     let grant = edit_grant(10, Some(40))?;
-    let evidence = edit_evidence(grant, 30, Rights::WRITE_DATA);
+    let evidence = edit_evidence(&grant, 30, Rights::WRITE_DATA)?;
     assert_eq!(
-        classify_federated_mutation(grant, evidence, Some(UnixMicros::new(25)))?,
+        classify_federated_mutation(&grant, evidence, Some(UnixMicros::new(25)))?,
         FederatedMutationAdmission::Quarantined(QuarantineReason::Revoked)
     );
     assert_eq!(
-        classify_federated_mutation(grant, evidence, Some(UnixMicros::new(35)))?,
+        classify_federated_mutation(&grant, evidence, Some(UnixMicros::new(35)))?,
         FederatedMutationAdmission::Admitted
     );
     Ok(())
@@ -36,11 +36,15 @@ fn retroactive_revocation_quarantines_without_erasing() -> Result<(), Box<dyn st
 fn expired_and_overbroad_use_is_quarantined() -> Result<(), Box<dyn std::error::Error>> {
     let grant = edit_grant(10, Some(40))?;
     assert_eq!(
-        classify_federated_mutation(grant, edit_evidence(grant, 40, Rights::WRITE_DATA), None)?,
+        classify_federated_mutation(&grant, edit_evidence(&grant, 40, Rights::WRITE_DATA)?, None,)?,
         FederatedMutationAdmission::Quarantined(QuarantineReason::Expired)
     );
     assert_eq!(
-        classify_federated_mutation(grant, edit_evidence(grant, 20, Rights::CHANGE_OWNER), None)?,
+        classify_federated_mutation(
+            &grant,
+            edit_evidence(&grant, 20, Rights::CHANGE_OWNER)?,
+            None,
+        )?,
         FederatedMutationAdmission::Quarantined(QuarantineReason::OutsideRights)
     );
     Ok(())
@@ -49,12 +53,46 @@ fn expired_and_overbroad_use_is_quarantined() -> Result<(), Box<dyn std::error::
 #[test]
 fn substituted_principal_is_rejected_as_an_attack() -> Result<(), Box<dyn std::error::Error>> {
     let grant = edit_grant(10, Some(40))?;
-    let mut evidence = edit_evidence(grant, 20, Rights::WRITE_DATA);
-    evidence.subject = FederatedPrincipal::new(mesh(9)?, crate::PrincipalId::from_bytes([9; 16])?);
+    let evidence = FederatedMutationEvidence::new_relayed(
+        grant.grant_id(),
+        grant.relationship_id(),
+        FederatedPrincipal::new(mesh(9)?, crate::PrincipalId::from_bytes([9; 16])?),
+        mesh(9)?,
+        grant.resource(),
+        grant.authority_epoch(),
+        UnixMicros::new(20),
+        Rights::WRITE_DATA,
+        0,
+    );
     assert_eq!(
-        classify_federated_mutation(grant, evidence, None),
+        classify_federated_mutation(&grant, evidence, None),
         Err(FederationGrantError::EvidenceMismatch)
     );
+    Ok(())
+}
+
+#[test]
+fn accountable_recipient_may_relay_an_original_downstream_actor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let grant = edit_grant(10, Some(40))?;
+    let actor = FederatedPrincipal::new(mesh(9)?, crate::PrincipalId::from_bytes([9; 16])?);
+    let evidence = FederatedMutationEvidence::new_relayed(
+        grant.grant_id(),
+        grant.relationship_id(),
+        actor,
+        grant.recipient_mesh_id(),
+        grant.resource(),
+        grant.authority_epoch(),
+        UnixMicros::new(20),
+        Rights::WRITE_DATA,
+        0,
+    );
+    assert_eq!(
+        classify_federated_mutation(&grant, evidence, None)?,
+        FederatedMutationAdmission::Admitted
+    );
+    assert_eq!(evidence.actor(), actor);
+    assert_eq!(evidence.accepting_mesh_id(), grant.recipient_mesh_id());
     Ok(())
 }
 
@@ -63,6 +101,7 @@ fn remote_storage_enforces_effective_capacity() -> Result<(), Box<dyn std::error
     let policy = FederationPolicy::Storage(StorageFederationPolicy::new(
         50,
         StorageParticipation::new(true, false),
+        false,
         None,
     )?);
     let resource = FederationResourceScope::StorageCapacity {
@@ -71,7 +110,8 @@ fn remote_storage_enforces_effective_capacity() -> Result<(), Box<dyn std::error
     let grant = FederationGrant::new(
         FederationGrantId::from_bytes([4; 16])?,
         FederationRelationshipId::from_bytes([5; 16])?,
-        FederatedPrincipal::new(mesh(6)?, crate::PrincipalId::from_bytes([7; 16])?),
+        FederationGrantRoute::direct(mesh(3)?, mesh(6)?)?,
+        None,
         resource,
         policy,
         2,
@@ -81,7 +121,10 @@ fn remote_storage_enforces_effective_capacity() -> Result<(), Box<dyn std::error
     let evidence = FederatedMutationEvidence::new(
         grant.grant_id(),
         grant.relationship_id(),
-        grant.subject(),
+        FederatedPrincipal::new(
+            grant.recipient_mesh_id(),
+            crate::PrincipalId::from_bytes([7; 16])?,
+        ),
         resource,
         grant.authority_epoch(),
         UnixMicros::new(20),
@@ -89,7 +132,7 @@ fn remote_storage_enforces_effective_capacity() -> Result<(), Box<dyn std::error
         51,
     );
     assert_eq!(
-        classify_federated_mutation(grant, evidence, None)?,
+        classify_federated_mutation(&grant, evidence, None)?,
         FederatedMutationAdmission::Quarantined(QuarantineReason::OutsideStorageLimit)
     );
     Ok(())
@@ -109,7 +152,8 @@ fn edit_grant(
     Ok(FederationGrant::new(
         FederationGrantId::from_bytes([1; 16])?,
         FederationRelationshipId::from_bytes([2; 16])?,
-        FederatedPrincipal::new(mesh(3)?, crate::PrincipalId::from_bytes([4; 16])?),
+        FederationGrantRoute::direct(mesh(5)?, mesh(3)?)?,
+        None,
         FederationResourceScope::File {
             owner_mesh_id: mesh(5)?,
             volume_id: VolumeId::from_bytes([6; 16])?,
@@ -123,20 +167,23 @@ fn edit_grant(
 }
 
 fn edit_evidence(
-    grant: FederationGrant,
+    grant: &FederationGrant,
     accepted_at: i64,
     required_rights: Rights,
-) -> FederatedMutationEvidence {
-    FederatedMutationEvidence::new(
+) -> Result<FederatedMutationEvidence, crate::IdentifierError> {
+    Ok(FederatedMutationEvidence::new(
         grant.grant_id(),
         grant.relationship_id(),
-        grant.subject(),
+        FederatedPrincipal::new(
+            grant.recipient_mesh_id(),
+            crate::PrincipalId::from_bytes([4; 16])?,
+        ),
         grant.resource(),
         grant.authority_epoch(),
         UnixMicros::new(accepted_at),
         required_rights,
         0,
-    )
+    ))
 }
 
 fn mesh(value: u8) -> Result<MeshId, crate::IdentifierError> {

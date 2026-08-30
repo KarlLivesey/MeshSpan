@@ -5,19 +5,20 @@ use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AuditEventId, FederatedMutationAcknowledgement, FederatedMutationAdmission,
     FederatedMutationEvidence, FederatedPrincipal, FederationAccess, FederationGrant,
-    FederationGrantId, FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
-    FederationResourceScope, HostId, MeshId, NamespaceFederationPolicy, NodeId, OperationId,
-    PartitionId, PrincipalId, QuarantineReason, Revision, Rights, RoleId, UnixMicros, VolumeId,
+    FederationGrantId, FederationGrantRoute, FederationPolicy, FederationRelationshipId,
+    FederationRelationshipKind, FederationResourceScope, HostId, MeshId, NamespaceFederationPolicy,
+    NodeId, OperationId, PartitionId, PrincipalId, QuarantineReason, Revision, Rights, RoleId,
+    UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
 use super::{AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
     AdmitFederatedMutation, ApplyDisposition, ApproveFederationRelationship, AuthoritativeCommand,
-    BootstrapMesh, CommandContext, EntityKind, FederatedPrincipalKind, FederatedPrincipalState,
+    BootstrapMesh, CommandContext, EntityKind, FederatedActorKind, FederatedActorState,
     FederationGovernanceDirection, FederationGrantRestriction, FederationTrustIdentity,
-    IssueFederationGrant, PartitionDatabase, ProposeFederationRelationship, RecordName,
-    RevokeFederationGrant, UpsertFederatedPrincipalProjection,
+    IssueFederationGrant, PartitionDatabase, ProposeFederationRelationship,
+    RecordFederatedActorAttestation, RecordName, RevokeFederationGrant,
 };
 
 #[test]
@@ -68,9 +69,9 @@ fn admitted_mutation_is_consensus_ordered_and_replays_after_suspension()
     assert_eq!(resolved.receipt.entity, receipt.entity);
     assert_eq!(resolved.admission, FederatedMutationAdmission::Admitted);
 
-    let suspended = signed_projection(
+    let suspended = signed_attestation(
         fixture.ids,
-        FederatedPrincipalState::Suspended,
+        FederatedActorState::Suspended,
         2,
         &fixture.remote_key,
     )?;
@@ -78,7 +79,7 @@ fn admitted_mutation_is_consensus_ordered_and_replays_after_suspension()
         &mut repository,
         7,
         context(83, fixture.ids.administrator, 84, 22, 6)?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(suspended),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(suspended),
     )?;
     let replay = repository.apply_committed(
         LogPosition { index: 8, term: 2 },
@@ -96,6 +97,67 @@ fn admitted_mutation_is_consensus_ordered_and_replays_after_suspension()
             .admission,
         FederatedMutationAdmission::Admitted
     );
+    Ok(())
+}
+
+#[test]
+fn relayed_actor_is_admitted_under_the_accountable_recipient_signature()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare(&mut repository, fixture.ids, &fixture.remote_key)?;
+    let original_actor = FederatedPrincipal::new(
+        MeshId::from_bytes([70; 16])?,
+        PrincipalId::from_bytes([71; 16])?,
+    );
+    let mut acknowledgement = FederatedMutationAcknowledgement {
+        source_operation_id: OperationId::from_bytes([72; 16])?,
+        evidence: FederatedMutationEvidence::new_relayed(
+            fixture.ids.grant,
+            fixture.ids.relationship,
+            original_actor,
+            fixture.ids.remote_mesh,
+            FederationResourceScope::Volume {
+                owner_mesh_id: fixture.ids.local_mesh,
+                volume_id: fixture.ids.volume,
+            },
+            1,
+            UnixMicros::new(20),
+            Rights::WRITE_DATA,
+            0,
+        ),
+        payload_digest: [73; 32],
+        signer_generation: 1,
+        signature: [0; 64],
+    };
+    acknowledgement.signature = fixture
+        .remote_key
+        .sign(&acknowledgement.signing_payload())
+        .to_bytes();
+    assert_eq!(
+        repository.classify_federated_mutation_acknowledgement(&acknowledgement)?,
+        FederatedMutationAdmission::Admitted
+    );
+
+    let mut substituted = acknowledgement;
+    substituted.evidence = FederatedMutationEvidence::new_relayed(
+        fixture.ids.grant,
+        fixture.ids.relationship,
+        FederatedPrincipal::new(
+            original_actor.home_mesh_id(),
+            PrincipalId::from_bytes([74; 16])?,
+        ),
+        fixture.ids.remote_mesh,
+        acknowledgement.evidence.resource(),
+        1,
+        UnixMicros::new(20),
+        Rights::WRITE_DATA,
+        0,
+    );
+    assert!(matches!(
+        repository.classify_federated_mutation_acknowledgement(&substituted),
+        Err(RepositoryError::InvalidCommand)
+    ));
     Ok(())
 }
 
@@ -220,9 +282,9 @@ fn signed_remote_mutations_use_retained_authority_and_current_principal_state()
         FederatedMutationAdmission::Quarantined(QuarantineReason::Revoked)
     );
 
-    let suspended = signed_projection(
+    let suspended = signed_attestation(
         fixture.ids,
-        FederatedPrincipalState::Suspended,
+        FederatedActorState::Suspended,
         2,
         &fixture.remote_key,
     )?;
@@ -230,7 +292,7 @@ fn signed_remote_mutations_use_retained_authority_and_current_principal_state()
         &mut repository,
         7,
         context(72, fixture.ids.administrator, 73, 32, 6)?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(suspended),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(suspended),
     )?;
     assert_eq!(
         repository.classify_federated_mutation_acknowledgement(&admitted)?,
@@ -307,9 +369,9 @@ fn prepare(
         repository,
         4,
         context(22, ids.administrator, 23, 4, 3)?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(signed_projection(
+        &AuthoritativeCommand::RecordFederatedActorAttestation(signed_attestation(
             ids,
-            FederatedPrincipalState::Active,
+            FederatedActorState::Active,
             1,
             remote_key,
         )?),
@@ -321,7 +383,8 @@ fn prepare(
     let grant = FederationGrant::new(
         ids.grant,
         ids.relationship,
-        FederatedPrincipal::new(ids.remote_mesh, ids.remote_principal),
+        FederationGrantRoute::direct(ids.local_mesh, ids.remote_mesh)?,
+        None,
         FederationResourceScope::Volume {
             owner_mesh_id: ids.local_mesh,
             volume_id: ids.volume,
@@ -355,17 +418,17 @@ fn prepare(
     Ok(())
 }
 
-fn signed_projection(
+fn signed_attestation(
     ids: FixtureIds,
-    state: FederatedPrincipalState,
+    state: FederatedActorState,
     identity_revision: u64,
     remote_key: &SigningKey,
-) -> Result<UpsertFederatedPrincipalProjection, Box<dyn std::error::Error>> {
-    let mut projection = UpsertFederatedPrincipalProjection {
+) -> Result<RecordFederatedActorAttestation, Box<dyn std::error::Error>> {
+    let mut attestation = RecordFederatedActorAttestation {
         relationship_id: ids.relationship,
         home_mesh_id: ids.remote_mesh,
         principal_id: ids.remote_principal,
-        kind: FederatedPrincipalKind::User,
+        kind: FederatedActorKind::User,
         name: RecordName::new("Remote user")?,
         state,
         identity_revision,
@@ -373,8 +436,8 @@ fn signed_projection(
         signer_generation: 1,
         signature: [0; 64],
     };
-    projection.signature = remote_key.sign(&projection.signing_payload()).to_bytes();
-    Ok(projection)
+    attestation.signature = remote_key.sign(&attestation.signing_payload()).to_bytes();
+    Ok(attestation)
 }
 
 fn acknowledgement(

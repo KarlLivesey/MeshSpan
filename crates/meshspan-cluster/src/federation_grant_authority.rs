@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// Current grant authority proved independently by both autonomous swarms.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EffectiveFederationGrantAuthority {
     /// Exact immutable authority envelope agreed by both sides.
     pub grant: FederationGrant,
@@ -94,7 +94,7 @@ fn evaluate_authority(
     {
         return Err(EffectiveFederationGrantAuthorityError::ContradictoryAuthority);
     }
-    let grant = local_grant.grant;
+    let grant = local_grant.grant.clone();
     if now < grant.valid_from() || grant.valid_until().is_some_and(|until| now >= until) {
         return Ok(None);
     }

@@ -199,8 +199,8 @@ fn validate_snapshot(
         let key = (record.revision, record.grant.grant_id());
         let valid = record.grant.relationship_id() == relationship.relationship_id
             && record.grant.authority_epoch() == relationship.authority_epoch
-            && parties.contains(&record.grant.subject().home_mesh_id())
-            && parties.contains(&record.grant.resource().authority_mesh_id())
+            && parties.contains(&record.grant.issuer_mesh_id())
+            && parties.contains(&record.grant.recipient_mesh_id())
             && record.revision > snapshot.after_revision
             && record.revision <= snapshot.authority_revision
             && previous.is_none_or(|value| value < key);

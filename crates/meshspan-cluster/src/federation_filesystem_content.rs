@@ -143,7 +143,7 @@ fn load_layout(
         .map_err(|error| map_publication_error(&error))?;
     let advertised = namespace
         .namespace_history_object(NamespaceHistoryObjectRequest {
-            scope_binding: authority_binding(query.authority, query.resource),
+            scope_binding: authority_binding(&query.authority, query.resource),
             export_token: query.export_token,
             object_digest: query.manifest_object_digest,
             now: query.now,
@@ -241,7 +241,7 @@ fn load_shard<P: StorageProvider>(
         .map_err(|error| map_shard_publication_error(&error))?;
     let advertised = namespace
         .namespace_history_object(NamespaceHistoryObjectRequest {
-            scope_binding: authority_binding(query.authority, query.resource),
+            scope_binding: authority_binding(&query.authority, query.resource),
             export_token: query.export_token,
             object_digest: query.manifest_object_digest,
             now: query.now,
@@ -298,10 +298,10 @@ fn validate_shard_query(
     binding: FederationContentShardProviderBinding,
     query: &FederationContentShardQuery,
 ) -> Result<(), FederationContentShardSourceError> {
-    let grant = query.authority.grant;
+    let grant = &query.authority.grant;
     let length = usize::try_from(query.expected_length).ok();
     let valid = grant.resource() == query.resource
-        && grant_allows_history_read(query.authority)
+        && grant_allows_history_read(&query.authority)
         && query.now >= grant.valid_from()
         && grant
             .valid_until()
@@ -371,9 +371,9 @@ fn validate_committed_shard(
 fn validate_query(
     query: &FederationContentLayoutQuery,
 ) -> Result<(), FederationContentLayoutSourceError> {
-    let grant = query.authority.grant;
+    let grant = &query.authority.grant;
     if grant.resource() != query.resource
-        || !grant_allows_history_read(query.authority)
+        || !grant_allows_history_read(&query.authority)
         || query.now < grant.valid_from()
         || grant
             .valid_until()

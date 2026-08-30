@@ -9,10 +9,10 @@ use meshspan_domain::{
 
 use super::federation_succession_trust::verify_side_signature;
 use super::{
-    CommandReceipt, EntityKind, EntityReference, RepositoryError, federation_grant,
-    federation_principal,
+    CommandReceipt, EntityKind, EntityReference, RepositoryError, federation_actor_attestation,
+    federation_grant,
 };
-use crate::{AdmitFederatedMutation, CommandContext, FederatedPrincipalState, PartitionDatabase};
+use crate::{AdmitFederatedMutation, CommandContext, FederatedActorState, PartitionDatabase};
 
 /// Exact durable owner decision for one deterministic federated mutation operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,7 +52,7 @@ pub(super) fn classify(
     verify_side_signature(
         connection,
         evidence.relationship_id(),
-        evidence.subject().home_mesh_id(),
+        evidence.accepting_mesh_id(),
         acknowledgement.signer_generation,
         &acknowledgement.signing_payload(),
         acknowledgement.signature,
@@ -66,21 +66,21 @@ pub(super) fn classify(
             connection,
             evidence.relationship_id(),
         )?;
-        if relationship.local_mesh_id != evidence.resource().authority_mesh_id()
-            || relationship.remote_mesh_id != evidence.subject().home_mesh_id()
-        {
+        if relationship.remote_mesh_id != evidence.accepting_mesh_id() {
             return Err(RepositoryError::InvalidCommand);
         }
-        let projection = federation_principal::projection_connection(
-            connection,
-            evidence.relationship_id(),
-            evidence.subject(),
-        )?
-        .ok_or(RepositoryError::InvalidCommand)?;
-        if projection.state != FederatedPrincipalState::Active {
-            return Ok(FederatedMutationAdmission::Quarantined(
-                QuarantineReason::PrincipalInactive,
-            ));
+        if evidence.actor().home_mesh_id() == evidence.accepting_mesh_id() {
+            let attestation = federation_actor_attestation::attestation_connection(
+                connection,
+                evidence.relationship_id(),
+                evidence.actor(),
+            )?
+            .ok_or(RepositoryError::InvalidCommand)?;
+            if attestation.state != FederatedActorState::Active {
+                return Ok(FederatedMutationAdmission::Quarantined(
+                    QuarantineReason::PrincipalInactive,
+                ));
+            }
         }
     }
     federation_grant::classify_persisted_mutation(connection, evidence)

@@ -2,9 +2,9 @@
 
 use ed25519_dalek::SigningKey;
 use meshspan_domain::{
-    DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId, FederationPolicy,
+    DurationMicros, FederationGrant, FederationGrantId, FederationGrantRoute, FederationPolicy,
     FederationRelationshipId, FederationRelationshipKind, FederationResourceScope, MeshId,
-    PrincipalId, Revision, StorageFederationPolicy, StorageParticipation, UnixMicros,
+    Revision, StorageFederationPolicy, StorageParticipation, UnixMicros,
 };
 use meshspan_metadata::{
     CachedFederationGrantAuthority, FederationGovernanceDirection, FederationGrantRecord,
@@ -207,7 +207,8 @@ fn grant_record(
         grant: FederationGrant::new(
             grant_id()?,
             relationship_id()?,
-            FederatedPrincipal::new(mesh(2)?, principal()?),
+            FederationGrantRoute::direct(mesh(1)?, mesh(2)?)?,
+            None,
             FederationResourceScope::StorageCapacity {
                 provider_mesh_id: mesh(1)?,
             },
@@ -233,6 +234,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         maximum_bytes,
         StorageParticipation::new(protects, true),
+        false,
         Some(DurationMicros::new(10)),
     )?))
 }
@@ -243,10 +245,6 @@ fn relationship_id() -> Result<FederationRelationshipId, Box<dyn std::error::Err
 
 fn grant_id() -> Result<FederationGrantId, Box<dyn std::error::Error>> {
     Ok(FederationGrantId::from_bytes([11; 16])?)
-}
-
-fn principal() -> Result<PrincipalId, Box<dyn std::error::Error>> {
-    Ok(PrincipalId::from_bytes([12; 16])?)
 }
 
 fn mesh(seed: u8) -> Result<MeshId, Box<dyn std::error::Error>> {

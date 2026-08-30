@@ -5,10 +5,10 @@
 mod authentication_integrity;
 mod command;
 mod database;
+mod federation_actor_attestation_command;
 mod federation_command;
 mod federation_grant_command;
 mod federation_mutation_admission_command;
-mod federation_principal_command;
 mod federation_quarantine_command;
 mod federation_remote_authority;
 #[cfg(test)]
@@ -50,6 +50,9 @@ pub use command::{
     TotpAlgorithm, VersionCleanupAttestation, VersionCleanupItemPlacement,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
+pub use federation_actor_attestation_command::{
+    FederatedActorKind, FederatedActorState, RecordFederatedActorAttestation,
+};
 pub use federation_command::{
     ApproveFederationRelationship, FederationGovernanceDirection, FederationGovernanceEdge,
     FederationGovernanceProof, FederationIdentityOwner, FederationTrustIdentity,
@@ -57,12 +60,11 @@ pub use federation_command::{
     RetireFederationRelationship, RevokeFederationRelationship, RotateFederationTrustIdentity,
 };
 pub use federation_grant_command::{
-    FederationGrantRestriction, IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant,
+    ActivateFederationGrantAssignment, CreateFederationGrantAssignment, FederationGrantRestriction,
+    IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant,
+    RevokeFederationGrantAssignment, RevokeFederationGrantAssignmentActivation,
 };
 pub use federation_mutation_admission_command::AdmitFederatedMutation;
-pub use federation_principal_command::{
-    FederatedPrincipalKind, FederatedPrincipalState, UpsertFederatedPrincipalProjection,
-};
 pub use federation_quarantine_command::{
     FederationQuarantineResolution, ResolveFederatedMutationQuarantine,
     RetainFederatedMutationQuarantine, SurfaceFederatedMutationQuarantine,
@@ -114,29 +116,29 @@ pub use repository::{
     AccessRequest, ApiKeyAuthentication, ApplyDisposition, AuthenticationPolicy,
     AuthenticationService, AuthoritativeMembership, AuthoritativeMetadataKernel,
     AuthoritativeRepository, CommandReceipt, ConsensusStoreError, ConvergedVolumeHead, EntityKind,
-    EntityReference, FederatedMutationAdmissionReceipt, FederatedPrincipalProjectionRecord,
-    FederationAuthoritySnapshotError, FederationGrantCursor, FederationGrantCursorError,
-    FederationGrantRecord, FederationGrantRecordCodecError, FederationGrantState,
-    FederationGrantTermination, FederationGrantTerminationKind, FederationQuarantineRecord,
-    FederationQuarantineState, FederationRelationshipRecord, FederationRelationshipState,
-    FederationStorageAllocationAuthority, FederationStorageAllocationRecord,
-    FederationStorageAllocationState, FederationStorageAuthorityRequest,
-    FederationSuccessionRecord, FederationSuccessionState, FederationTransportAuthority,
-    FederationTrustIdentityRecord, GroupMemberCursor, InvariantFinding, InvariantKind,
-    InvariantReport, LogPosition, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, NamespaceCursor,
-    NamespaceRecord, ObjectOwnerCursor, ObjectOwnerRecord, Page, PageLimit,
-    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
-    PermissionGrantRecord, PreservedVote, PrincipalKind, PrincipalRecord,
-    RepositoryConformanceCheck, RepositoryConformanceReport, RepositoryConformanceVector,
-    RepositoryError, RetainedNamespaceRoot, RetainedNamespaceRootCursor, RetainedNamespaceRootPage,
-    RetainedNamespaceRootSource, ScopeWriteAuthority, ScopedGrantCursor, SessionAccessCapability,
-    SessionAccessDecision, SessionAccessDenial, SessionAccessRequest, SnapshotCursor,
-    SnapshotExpiryCandidate, SnapshotExpiryCursor, SnapshotSchedule, SnapshotScheduleCursor,
-    SubjectGrantCursor, VersionCleanupAttestationProgress, VersionCleanupCompletion,
-    VersionCleanupIntent, VersionCleanupInventory, VersionCleanupInventoryState,
-    VersionCleanupItem, VersionCleanupItemCompletion, VersionCleanupItemCursor,
-    VersionCleanupItemReclamation, VersionCleanupParticipant, VersionCleanupPermitAttempt,
-    VersionCleanupPermitAuthority, VersionCleanupReclamation, VersionCleanupState,
-    VersionRetentionPolicy, VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
-    run_repository_conformance,
+    EntityReference, FederatedActorAttestationRecord, FederatedMutationAdmissionReceipt,
+    FederationAuthoritySnapshotError, FederationGrantAssignmentAuthority, FederationGrantCursor,
+    FederationGrantCursorError, FederationGrantRecord, FederationGrantRecordCodecError,
+    FederationGrantState, FederationGrantTermination, FederationGrantTerminationKind,
+    FederationQuarantineRecord, FederationQuarantineState, FederationRelationshipRecord,
+    FederationRelationshipState, FederationStorageAllocationAuthority,
+    FederationStorageAllocationRecord, FederationStorageAllocationState,
+    FederationStorageAuthorityRequest, FederationSuccessionRecord, FederationSuccessionState,
+    FederationTransportAuthority, FederationTrustIdentityRecord, GroupMemberCursor,
+    InvariantFinding, InvariantKind, InvariantReport, LogPosition,
+    MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, NamespaceCursor, NamespaceRecord, ObjectOwnerCursor,
+    ObjectOwnerRecord, Page, PageLimit, PartitionBackupManifest, PartitionConsensusPersistence,
+    PartitionSnapshotManifest, PermissionGrantRecord, PreservedVote, PrincipalKind,
+    PrincipalRecord, RepositoryConformanceCheck, RepositoryConformanceReport,
+    RepositoryConformanceVector, RepositoryError, RetainedNamespaceRoot,
+    RetainedNamespaceRootCursor, RetainedNamespaceRootPage, RetainedNamespaceRootSource,
+    ScopeWriteAuthority, ScopedGrantCursor, SessionAccessCapability, SessionAccessDecision,
+    SessionAccessDenial, SessionAccessRequest, SnapshotCursor, SnapshotExpiryCandidate,
+    SnapshotExpiryCursor, SnapshotSchedule, SnapshotScheduleCursor, SubjectGrantCursor,
+    VersionCleanupAttestationProgress, VersionCleanupCompletion, VersionCleanupIntent,
+    VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
+    VersionCleanupItemCompletion, VersionCleanupItemCursor, VersionCleanupItemReclamation,
+    VersionCleanupParticipant, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
+    VersionCleanupReclamation, VersionCleanupState, VersionRetentionPolicy, VolumeSnapshot,
+    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };

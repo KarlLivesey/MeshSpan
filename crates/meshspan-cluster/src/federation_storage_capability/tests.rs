@@ -6,7 +6,7 @@ use meshspan_contracts::{
 };
 use meshspan_data_plane::decode_federated_shard_permit;
 use meshspan_domain::{
-    AuditEventId, DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId,
+    AuditEventId, DurationMicros, FederationGrant, FederationGrantId, FederationGrantRoute,
     FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
     FederationResourceScope, FederationStorageAllocation, FederationStorageAllocationId, HostId,
     MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId,
@@ -448,6 +448,7 @@ fn issue_storage_authority(
     let policy = FederationPolicy::Storage(StorageFederationPolicy::new(
         100,
         StorageParticipation::new(false, serves_reads),
+        false,
         Some(DurationMicros::new(200)),
     )?);
     apply(
@@ -461,7 +462,8 @@ fn issue_storage_authority(
             grant: FederationGrant::new(
                 ids.grant,
                 ids.relationship,
-                FederatedPrincipal::new(ids.remote_mesh, ids.administrator),
+                FederationGrantRoute::direct(ids.local_mesh, ids.remote_mesh)?,
+                None,
                 FederationResourceScope::StorageCapacity {
                     provider_mesh_id: ids.local_mesh,
                 },

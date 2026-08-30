@@ -110,7 +110,7 @@ impl FederationSessionRuntime<'_> {
         let mut receive = receiver
             .begin(NamespaceHistoryReceiveRequest {
                 session_id: request.session_id,
-                scope_binding: authority_binding(grant, request.resource),
+                scope_binding: authority_binding(&grant, request.resource),
                 volume_id,
                 requested_heads: request.requested_heads.clone(),
                 limits: request.limits,

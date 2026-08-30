@@ -20,15 +20,19 @@ use meshspan_domain::{
 use sha2::{Digest, Sha256};
 
 use crate::AdmitFederatedMutation;
+use crate::RecordFederatedActorAttestation;
 use crate::RecordName;
-use crate::UpsertFederatedPrincipalProjection;
 use crate::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, ApproveFederationRelationship,
     DesignateFederationSuccessor, ProposeFederationRelationship, RecoverFederationRelationship,
     RestrictFederationRelationship, RetireFederationRelationship, RevokeFederationRelationship,
     RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
-use crate::{IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant};
+use crate::{
+    ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
+    ReplaceFederationGrant, RevokeFederationGrant, RevokeFederationGrantAssignment,
+    RevokeFederationGrantAssignmentActivation,
+};
 use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
 use crate::{
     ResolveFederatedMutationQuarantine, RetainFederatedMutationQuarantine,
@@ -183,12 +187,20 @@ pub enum AuthoritativeCommand {
     ReplaceFederationGrant(ReplaceFederationGrant),
     /// Revokes one live federation grant while retaining its evidence.
     RevokeFederationGrant(RevokeFederationGrant),
+    /// Assigns a swarm-targeted namespace grant to one local user or group.
+    CreateFederationGrantAssignment(CreateFederationGrantAssignment),
+    /// Revokes one local federation grant assignment immediately.
+    RevokeFederationGrantAssignment(RevokeFederationGrantAssignment),
+    /// Activates one pre-authorised local federation grant assignment.
+    ActivateFederationGrantAssignment(ActivateFederationGrantAssignment),
+    /// Revokes one current federation-assignment activation.
+    RevokeFederationGrantAssignmentActivation(RevokeFederationGrantAssignmentActivation),
     /// Assigns one disjoint storage-grant slice to an exact provider node and target generation.
     IssueFederationStorageAllocation(IssueFederationStorageAllocation),
     /// Revokes one live provider allocation without deleting its authority history.
     RevokeFederationStorageAllocation(RevokeFederationStorageAllocation),
-    /// Advances one signed home-swarm principal projection.
-    UpsertFederatedPrincipalProjection(UpsertFederatedPrincipalProjection),
+    /// Advances one signed home-swarm actor attestation.
+    RecordFederatedActorAttestation(RecordFederatedActorAttestation),
     /// Persists a retiring swarm's signed pre-authorisation of one recovery successor.
     DesignateFederationSuccessor(DesignateFederationSuccessor),
     /// Persists the nominated successor's exact signed acceptance.
@@ -288,9 +300,13 @@ impl AuthoritativeCommand {
             Self::IssueFederationGrant(value) => value.update_digest(digest),
             Self::ReplaceFederationGrant(value) => value.update_digest(digest),
             Self::RevokeFederationGrant(value) => value.update_digest(digest),
+            Self::CreateFederationGrantAssignment(value) => value.update_digest(digest),
+            Self::RevokeFederationGrantAssignment(value) => value.update_digest(digest),
+            Self::ActivateFederationGrantAssignment(value) => value.update_digest(digest),
+            Self::RevokeFederationGrantAssignmentActivation(value) => value.update_digest(digest),
             Self::IssueFederationStorageAllocation(value) => value.update_digest(digest),
             Self::RevokeFederationStorageAllocation(value) => value.update_digest(digest),
-            Self::UpsertFederatedPrincipalProjection(value) => value.update_digest(digest),
+            Self::RecordFederatedActorAttestation(value) => value.update_digest(digest),
             Self::DesignateFederationSuccessor(value) => value.update_digest(digest),
             Self::AcceptFederationSuccessor(value) => value.update_digest(digest),
             Self::ActivateFederationSuccessor(value) => value.update_digest(digest),
@@ -2484,7 +2500,7 @@ impl CanonicalDigest {
         }
     }
 
-    fn optional_identifier(&mut self, value: Option<[u8; 16]>) {
+    pub(crate) fn optional_identifier(&mut self, value: Option<[u8; 16]>) {
         match value {
             Some(value) => {
                 self.byte(1);

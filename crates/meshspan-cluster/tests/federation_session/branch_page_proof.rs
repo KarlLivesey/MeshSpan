@@ -15,8 +15,8 @@ use meshspan_cluster::{
     FederationHistoryObjectServices, FederationSessionError, FilesystemFederationHistorySource,
 };
 use meshspan_domain::{
-    BranchId, ContentManifestId, FederatedPrincipal, FederationAccess, FederationGrant,
-    FederationGrantId, FederationPolicy, FederationPreset, FederationRelationshipId,
+    BranchId, ContentManifestId, FederationAccess, FederationGrant, FederationGrantId,
+    FederationGrantRoute, FederationPolicy, FederationPreset, FederationRelationshipId,
     FederationResourceScope, FileVersionId, NamespaceCommitId, NamespaceFederationPolicy, ObjectId,
     ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
 };
@@ -54,8 +54,8 @@ async fn prove_filesystem_backed_exchange(
     store.publish_root_file(&publication)?;
     drop(store);
     let source = FilesystemFederationHistorySource::new(directory.path());
-    let client_grants = StaticBranchAuthority::admit(fixture.authority);
-    let server_grants = StaticBranchAuthority::admit(fixture.authority);
+    let client_grants = StaticBranchAuthority::admit(fixture.authority.clone());
+    let server_grants = StaticBranchAuthority::admit(fixture.authority.clone());
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
     let mut request = fixture.request(130)?;
@@ -147,9 +147,9 @@ async fn prove_authorised_exchange(
     proof: &SessionProof<'_>,
     fixture: &BranchFixture,
 ) -> Result<(), Box<dyn Error>> {
-    let source = RecordingHistorySource::new(fixture.authority, fixture.resource);
-    let client_grants = StaticBranchAuthority::admit(fixture.authority);
-    let server_grants = StaticBranchAuthority::admit(fixture.authority);
+    let source = RecordingHistorySource::new(fixture.authority.clone(), fixture.resource);
+    let client_grants = StaticBranchAuthority::admit(fixture.authority.clone());
+    let server_grants = StaticBranchAuthority::admit(fixture.authority.clone());
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
     let fetch = proof.client_runtime.fetch_branch_page(
@@ -185,8 +185,8 @@ async fn prove_denied_exchange_skips_source(
     proof: &SessionProof<'_>,
     fixture: &BranchFixture,
 ) -> Result<(), Box<dyn Error>> {
-    let source = RecordingHistorySource::new(fixture.authority, fixture.resource);
-    let client_grants = StaticBranchAuthority::admit(fixture.authority);
+    let source = RecordingHistorySource::new(fixture.authority.clone(), fixture.resource);
+    let client_grants = StaticBranchAuthority::admit(fixture.authority.clone());
     let server_grants = StaticBranchAuthority::deny();
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
@@ -225,9 +225,9 @@ async fn prove_excessive_source_page_fails_closed(
     proof: &SessionProof<'_>,
     fixture: &BranchFixture,
 ) -> Result<(), Box<dyn Error>> {
-    let source = RecordingHistorySource::excessive(fixture.authority, fixture.resource);
-    let client_grants = StaticBranchAuthority::admit(fixture.authority);
-    let server_grants = StaticBranchAuthority::admit(fixture.authority);
+    let source = RecordingHistorySource::excessive(fixture.authority.clone(), fixture.resource);
+    let client_grants = StaticBranchAuthority::admit(fixture.authority.clone());
+    let server_grants = StaticBranchAuthority::admit(fixture.authority.clone());
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
     let request = fixture.request(120)?;
@@ -263,7 +263,7 @@ async fn prove_excessive_source_page_fails_closed(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct BranchFixture {
     pub(super) authority: EffectiveFederationGrantAuthority,
     pub(super) grant_id: FederationGrantId,
@@ -281,7 +281,8 @@ impl BranchFixture {
         let grant = FederationGrant::new(
             grant_id,
             proof.relationship_id,
-            FederatedPrincipal::new(proof.client_mesh, PrincipalId::from_bytes([6; 16])?),
+            FederationGrantRoute::direct(proof.server_mesh, proof.client_mesh)?,
+            None,
             resource,
             FederationPolicy::Namespace(NamespaceFederationPolicy::new(
                 FederationAccess::from_preset(FederationPreset::View),
@@ -306,7 +307,7 @@ impl BranchFixture {
         })
     }
 
-    pub(super) fn request(self, seed: u8) -> Result<FederationBranchFetchRequest, Box<dyn Error>> {
+    pub(super) fn request(&self, seed: u8) -> Result<FederationBranchFetchRequest, Box<dyn Error>> {
         Ok(FederationBranchFetchRequest {
             relationship_id: self.relationship_id,
             grant_id: self.grant_id,
@@ -328,7 +329,7 @@ impl BranchFixture {
     }
 
     pub(super) fn object_request(
-        self,
+        &self,
         seed: u8,
         export_token: [u8; 32],
         object_digest: [u8; 32],
@@ -376,7 +377,7 @@ impl FederationBranchAuthoritySource for StaticBranchAuthority {
         _now: UnixMicros,
     ) -> Result<Option<EffectiveFederationGrantAuthority>, EffectiveFederationGrantAuthorityError>
     {
-        Ok(self.authority.filter(|authority| {
+        Ok(self.authority.clone().filter(|authority| {
             authority.grant.relationship_id() == relationship_id
                 && authority.grant.grant_id() == grant_id
         }))

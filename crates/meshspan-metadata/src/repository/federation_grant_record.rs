@@ -52,11 +52,12 @@ impl FederationGrantRecord {
 }
 
 fn validate_record(record: &FederationGrantRecord) -> Result<(), FederationGrantRecordCodecError> {
-    let grant = record.grant;
+    let grant = &record.grant;
     let reconstructed = FederationGrant::new(
         grant.grant_id(),
         grant.relationship_id(),
-        grant.subject(),
+        grant.route().clone(),
+        grant.upstream_grant_id(),
         grant.resource(),
         grant.policy(),
         grant.authority_epoch(),
@@ -64,9 +65,8 @@ fn validate_record(record: &FederationGrantRecord) -> Result<(), FederationGrant
         grant.valid_until(),
     )
     .map_err(|_| FederationGrantRecordCodecError::Invalid)?;
-    if reconstructed != grant
+    if reconstructed != *grant
         || record.revision.get() == 0
-        || grant.subject().home_mesh_id() == grant.resource().authority_mesh_id()
         || !valid_restrictions(record)
         || !valid_lifecycle(record)
     {
@@ -88,15 +88,16 @@ fn valid_restrictions(record: &FederationGrantRecord) -> bool {
         .iter()
         .map(|restriction| restriction.imposing_mesh_id)
         .collect::<BTreeSet<_>>();
-    let required = [
-        record.grant.subject().home_mesh_id(),
-        record.grant.resource().authority_mesh_id(),
-    ];
     let policies = restrictions
         .iter()
         .map(|restriction| restriction.policy)
         .collect::<Vec<_>>();
-    required.iter().all(|mesh_id| imposing.contains(mesh_id))
+    record
+        .grant
+        .route()
+        .meshes()
+        .iter()
+        .all(|mesh_id| imposing.contains(mesh_id))
         && FederationPolicy::intersect(&policies)
             .is_ok_and(|policy| policy == record.grant.policy())
 }

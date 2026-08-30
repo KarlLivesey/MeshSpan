@@ -36,20 +36,22 @@ fn grant_policy_shapes_and_quarantine_evidence_fail_closed()
     let grant = [4_u8; 16];
     fixture.database.connection().execute(
         "INSERT INTO federation_grants(
-            grant_id, relationship_id, subject_home_mesh_id, subject_principal_id,
+            grant_id, relationship_id, issuer_mesh_id, recipient_mesh_id,
+            upstream_grant_id, route_depth,
             resource_kind, authority_mesh_id, volume_id, object_id, authority_epoch,
             valid_from, valid_until, state, effective_policy_digest, issued_at,
             revoked_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, 4, ?5, NULL, NULL, 1, 10, 20, 1, ?6, 10, NULL, 1)",
+         ) VALUES (?1, ?2, ?3, ?4, NULL, 0, 4, ?3, NULL, NULL, 1,
+                   10, 20, 1, ?5, 10, NULL, 1)",
         params![
             grant.as_slice(),
             relationship.as_slice(),
-            fixture.local_mesh.as_slice(),
-            [5_u8; 16].as_slice(),
             remote.as_slice(),
+            fixture.local_mesh.as_slice(),
             [6_u8; 32].as_slice(),
         ],
     )?;
+    fixture.insert_grant_route(grant, remote, fixture.local_mesh)?;
 
     let mixed_policy = fixture.database.connection().execute(
         "INSERT INTO federation_grant_restrictions(
@@ -66,7 +68,7 @@ fn grant_policy_shapes_and_quarantine_evidence_fail_closed()
             grant_id, imposing_mesh_id, policy_kind, rights, allows_downstream_delegation,
             maximum_storage_bytes, counts_towards_protection, serves_reads,
             maximum_offline_micros, policy_digest, revision
-         ) VALUES (?1, ?2, 2, NULL, NULL, 100, 1, 0, 10, ?3, 1)",
+         ) VALUES (?1, ?2, 2, NULL, 0, 100, 1, 0, 10, ?3, 1)",
         params![grant.as_slice(), remote.as_slice(), [7_u8; 32].as_slice()],
     )?;
     let quarantine = [8_u8; 16];
@@ -203,6 +205,22 @@ impl Fixture {
                 direction,
             ],
         )?;
+        Ok(())
+    }
+
+    fn insert_grant_route(
+        &self,
+        grant: [u8; 16],
+        issuer: [u8; 16],
+        recipient: [u8; 16],
+    ) -> Result<(), rusqlite::Error> {
+        for (hop_index, mesh_id) in [(0_i64, issuer), (1_i64, recipient)] {
+            self.database.connection().execute(
+                "INSERT INTO federation_grant_route_hops(grant_id, hop_index, mesh_id, revision)
+                 VALUES (?1, ?2, ?3, 1)",
+                params![grant.as_slice(), hop_index, mesh_id.as_slice()],
+            )?;
+        }
         Ok(())
     }
 }

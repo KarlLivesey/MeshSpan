@@ -11,21 +11,21 @@ use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_rev
 use super::{AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
-    FederatedPrincipalKind, FederatedPrincipalState, FederationGovernanceDirection,
-    FederationTrustIdentity, PartitionDatabase, ProposeFederationRelationship, RecordName,
-    UpsertFederatedPrincipalProjection,
+    FederatedActorKind, FederatedActorState, FederationGovernanceDirection,
+    FederationTrustIdentity, PartitionDatabase, ProposeFederationRelationship,
+    RecordFederatedActorAttestation, RecordName,
 };
 
 #[test]
-fn every_apply_boundary_rolls_back_complete_signed_principal_projection()
+fn every_apply_boundary_rolls_back_complete_signed_actor_attestation()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::open()?;
     let mut repository = fixture.repository;
     prepare_relationship(&mut repository, fixture.ids, &fixture.remote_key)?;
-    let command = AuthoritativeCommand::UpsertFederatedPrincipalProjection(signed_projection(
+    let command = AuthoritativeCommand::RecordFederatedActorAttestation(signed_attestation(
         fixture.ids,
         PrincipalId::from_bytes([60; 16])?,
-        FederatedPrincipalState::Active,
+        FederatedActorState::Active,
         1,
         1,
         &fixture.remote_key,
@@ -51,8 +51,8 @@ fn every_apply_boundary_rolls_back_complete_signed_principal_projection()
         ));
         let retained: (i64, i64) = database.connection().query_row(
             "SELECT
-                (SELECT count(*) FROM federation_principal_projections),
-                (SELECT count(*) FROM federation_principal_projection_history)",
+                (SELECT count(*) FROM federation_actor_attestations),
+                (SELECT count(*) FROM federation_actor_attestation_history)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -72,8 +72,8 @@ const fn all_apply_faults() -> [ApplyFaultPoint; 4] {
 }
 
 #[test]
-fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dyn std::error::Error>>
-{
+fn signed_attestation_is_monotonic_atomic_and_restart_safe()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::open()?;
     let backup_directory = fixture.directory.path().to_path_buf();
     let file_path = fixture.file_path.clone();
@@ -81,10 +81,10 @@ fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dy
     prepare_relationship(&mut repository, fixture.ids, &fixture.remote_key)?;
 
     let principal_id = PrincipalId::from_bytes([30; 16])?;
-    let first = signed_projection(
+    let first = signed_attestation(
         fixture.ids,
         principal_id,
-        FederatedPrincipalState::Active,
+        FederatedActorState::Active,
         1,
         1,
         &fixture.remote_key,
@@ -92,19 +92,16 @@ fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dy
     let receipt = repository.apply_committed(
         LogPosition { index: 4, term: 1 },
         context(31, fixture.ids.administrator, 32, 4, 3)?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(first.clone()),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(first.clone()),
     )?;
-    assert_eq!(
-        receipt.entity.kind,
-        EntityKind::FederatedPrincipalProjection
-    );
+    assert_eq!(receipt.entity.kind, EntityKind::FederatedActorAttestation);
 
     reject_forged_and_stale_updates(&mut repository, fixture.ids, &first)?;
 
-    let second = signed_projection(
+    let second = signed_attestation(
         fixture.ids,
         principal_id,
-        FederatedPrincipalState::Suspended,
+        FederatedActorState::Suspended,
         2,
         1,
         &fixture.remote_key,
@@ -113,20 +110,20 @@ fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dy
         &mut repository,
         5,
         context(37, fixture.ids.administrator, 38, 5, 4)?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(second),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(second),
     )?;
     drop(repository);
 
     let database = PartitionDatabase::open(&file_path, fixture.ids.partition, UnixMicros::new(6))?;
     let repository = AuthoritativeRepository::new(database);
     let record = repository
-        .federated_principal_projection(
+        .federated_actor_attestation(
             fixture.ids.relationship,
             FederatedPrincipal::new(fixture.ids.remote_mesh, principal_id),
         )?
-        .ok_or("projection missing after restart")?;
-    assert_eq!(record.kind, FederatedPrincipalKind::User);
-    assert_eq!(record.state, FederatedPrincipalState::Suspended);
+        .ok_or("attestation missing after restart")?;
+    assert_eq!(record.kind, FederatedActorKind::User);
+    assert_eq!(record.state, FederatedActorState::Suspended);
     assert_eq!(record.identity_revision, 2);
     assert_eq!(record.authority_epoch, 1);
     assert_eq!(record.display_name, "Remote user");
@@ -137,18 +134,18 @@ fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dy
     )?;
     assert_eq!(
         restored
-            .federated_principal_projection(
+            .federated_actor_attestation(
                 fixture.ids.relationship,
                 FederatedPrincipal::new(fixture.ids.remote_mesh, principal_id),
             )?
-            .ok_or("projection missing after restore")?
+            .ok_or("attestation missing after restore")?
             .identity_revision,
         2
     );
     let database = restored.into_database();
     verify_history_count(&database, fixture.ids, principal_id, 2)?;
     database.connection().execute(
-        "UPDATE federation_principal_projections SET display_name = 'Tampered user'
+        "UPDATE federation_actor_attestations SET display_name = 'Tampered user'
          WHERE relationship_id = ?1 AND home_mesh_id = ?2 AND principal_id = ?3",
         rusqlite::params![
             fixture.ids.relationship.as_bytes().as_slice(),
@@ -158,7 +155,7 @@ fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dy
     )?;
     let repository = AuthoritativeRepository::new(database);
     assert!(matches!(
-        repository.federated_principal_projection(
+        repository.federated_actor_attestation(
             fixture.ids.relationship,
             FederatedPrincipal::new(fixture.ids.remote_mesh, principal_id),
         ),
@@ -168,17 +165,17 @@ fn signed_projection_is_monotonic_atomic_and_restart_safe() -> Result<(), Box<dy
 }
 
 #[test]
-fn projection_rejects_wrong_home_swarm_and_authority_epoch()
+fn attestation_rejects_wrong_home_swarm_and_authority_epoch()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::open()?;
     let mut repository = fixture.repository;
     prepare_relationship(&mut repository, fixture.ids, &fixture.remote_key)?;
     let principal_id = PrincipalId::from_bytes([40; 16])?;
 
-    let mut wrong_home = signed_projection(
+    let mut wrong_home = signed_attestation(
         fixture.ids,
         principal_id,
-        FederatedPrincipalState::Active,
+        FederatedActorState::Active,
         1,
         1,
         &fixture.remote_key,
@@ -190,10 +187,10 @@ fn projection_rejects_wrong_home_swarm_and_authority_epoch()
         .to_bytes();
     reject_without_advancing(&mut repository, fixture.ids, 4, 42, wrong_home)?;
 
-    let wrong_epoch = signed_projection(
+    let wrong_epoch = signed_attestation(
         fixture.ids,
         principal_id,
-        FederatedPrincipalState::Active,
+        FederatedActorState::Active,
         1,
         2,
         &fixture.remote_key,
@@ -202,7 +199,7 @@ fn projection_rejects_wrong_home_swarm_and_authority_epoch()
 
     assert!(
         repository
-            .federated_principal_projection(
+            .federated_actor_attestation(
                 fixture.ids.relationship,
                 FederatedPrincipal::new(fixture.ids.remote_mesh, principal_id),
             )?
@@ -214,11 +211,11 @@ fn projection_rejects_wrong_home_swarm_and_authority_epoch()
 fn reject_forged_and_stale_updates(
     repository: &mut AuthoritativeRepository,
     ids: FixtureIds,
-    first: &UpsertFederatedPrincipalProjection,
+    first: &RecordFederatedActorAttestation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut forged = first.clone();
     forged.identity_revision = 2;
-    forged.state = FederatedPrincipalState::Suspended;
+    forged.state = FederatedActorState::Suspended;
     reject_without_advancing(repository, ids, 5, 33, forged)?;
 
     let stale = first.clone();
@@ -231,7 +228,7 @@ fn reject_without_advancing(
     ids: FixtureIds,
     index: u64,
     operation: u8,
-    command: UpsertFederatedPrincipalProjection,
+    command: RecordFederatedActorAttestation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let before = repository.current_revision()?;
     let result = repository.apply_committed(
@@ -243,7 +240,7 @@ fn reject_without_advancing(
             index,
             before.get(),
         )?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(command),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(command),
     );
     assert!(matches!(result, Err(RepositoryError::InvalidCommand)));
     assert_eq!(repository.current_revision()?, before);
@@ -257,7 +254,7 @@ fn verify_history_count(
     expected: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let count: i64 = database.connection().query_row(
-        "SELECT count(*) FROM federation_principal_projection_history
+        "SELECT count(*) FROM federation_actor_attestation_history
          WHERE relationship_id = ?1 AND home_mesh_id = ?2 AND principal_id = ?3",
         rusqlite::params![
             ids.relationship.as_bytes().as_slice(),
@@ -270,19 +267,19 @@ fn verify_history_count(
     Ok(())
 }
 
-fn signed_projection(
+fn signed_attestation(
     ids: FixtureIds,
     principal_id: PrincipalId,
-    state: FederatedPrincipalState,
+    state: FederatedActorState,
     identity_revision: u64,
     authority_epoch: u64,
     remote_key: &SigningKey,
-) -> Result<UpsertFederatedPrincipalProjection, Box<dyn std::error::Error>> {
-    let mut command = UpsertFederatedPrincipalProjection {
+) -> Result<RecordFederatedActorAttestation, Box<dyn std::error::Error>> {
+    let mut command = RecordFederatedActorAttestation {
         relationship_id: ids.relationship,
         home_mesh_id: ids.remote_mesh,
         principal_id,
-        kind: FederatedPrincipalKind::User,
+        kind: FederatedActorKind::User,
         name: RecordName::new("Remote user")?,
         state,
         identity_revision,

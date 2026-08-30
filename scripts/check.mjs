@@ -160,6 +160,15 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "daemon lifecycle tests",
+      steps: [
+        [
+          "cargo",
+          ["test", "-p", "meshspan-daemon", "--all-targets", "--all-features"],
+        ],
+      ],
+    },
+    {
       name: "workspace format",
       steps: [
         [

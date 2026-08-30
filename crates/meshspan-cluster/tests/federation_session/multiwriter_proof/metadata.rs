@@ -14,19 +14,19 @@ use meshspan_cluster::{
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ApiKeyId, AssuranceLevel, AuthenticationMethodId, AuthenticationService, FederatedPrincipal,
-    FederationAccess, FederationGrant, FederationGrantId, FederationPolicy,
-    FederationResourceScope, MeshId, OperationId, PartitionId, PrincipalId, Revision, Rights,
-    SessionId, UnixMicros, VolumeId,
+    ApiKeyId, AssuranceLevel, AuthenticationMethodId, AuthenticationService, FederationAccess,
+    FederationAssignmentId, FederationGrant, FederationGrantId, FederationGrantRoute,
+    FederationPolicy, FederationResourceScope, MeshId, OperationId, PartitionId, PrincipalId,
+    Revision, Rights, SessionId, UnixMicros, VolumeId,
 };
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, ChangePrincipalState,
-    CreateAuthenticationMethod, CreateUser, FederatedPrincipalKind, FederatedPrincipalState,
-    FederationGrantRecord, FederationGrantRestriction, FederationRemoteAuthoritySnapshot,
-    IssueAuthenticationSession, IssueFederationGrant, LocalDatabase, LogPosition,
-    NewAuthenticationCredential, PartitionDatabase, PrincipalLifecycleState, RecordName,
-    SessionAccessRequest, SessionAuthenticationFactor, TotpAlgorithm,
-    UpsertFederatedPrincipalProjection,
+    CreateAuthenticationMethod, CreateFederationGrantAssignment, CreateUser, FederatedActorKind,
+    FederatedActorState, FederationGrantRecord, FederationGrantRestriction,
+    FederationRemoteAuthoritySnapshot, IssueAuthenticationSession, IssueFederationGrant,
+    LocalDatabase, LogPosition, NewAuthenticationCredential, PartitionDatabase,
+    PrincipalLifecycleState, RecordFederatedActorAttestation, RecordName, SessionAccessRequest,
+    SessionAuthenticationFactor, TotpAlgorithm,
 };
 use tempfile::{TempDir, tempdir};
 
@@ -126,10 +126,10 @@ impl FederationFixture {
                 owner_transfers: BoundedItems::new(Vec::new(), 0)?,
             }),
         )?;
-        let projection = signed_projection(
+        let attestation = signed_attestation(
             authorities,
             self.user,
-            FederatedPrincipalState::Suspended,
+            FederatedActorState::Suspended,
             2,
             home_key,
         )?;
@@ -137,7 +137,7 @@ impl FederationFixture {
             &mut authorities.client.repository,
             authorities.client.administrator_id,
             32,
-            &AuthoritativeCommand::UpsertFederatedPrincipalProjection(projection),
+            &AuthoritativeCommand::RecordFederatedActorAttestation(attestation),
         )
     }
 }
@@ -158,32 +158,51 @@ fn configure_authoritative_state(
             name: RecordName::new("Disconnected writer")?,
         }),
     )?;
-    issue_home_session(authorities, user)?;
-    let record = grant_record(authorities, user, grant, volume)?;
+    let record = grant_record(authorities, grant, volume)?;
     issue_grant(
         &mut authorities.server.repository,
         authorities.server.administrator_id,
         12,
         &record,
     )?;
-    let projection = signed_projection(
-        authorities,
-        user,
-        FederatedPrincipalState::Active,
-        1,
-        home_key,
-    )?;
+    assign_grant_to_local_user(authorities, user, grant)?;
+    issue_home_session(authorities, user)?;
+    let attestation =
+        signed_attestation(authorities, user, FederatedActorState::Active, 1, home_key)?;
     apply_next(
         &mut authorities.client.repository,
         authorities.client.administrator_id,
         13,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(projection),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(attestation),
     )?;
     issue_grant(
         &mut authorities.client.repository,
         authorities.client.administrator_id,
         14,
         &record,
+    )
+}
+
+fn assign_grant_to_local_user(
+    authorities: &mut MetadataAuthorities,
+    user: PrincipalId,
+    grant: FederationGrantId,
+) -> Result<(), Box<dyn Error>> {
+    apply_next(
+        &mut authorities.server.repository,
+        authorities.server.administrator_id,
+        13,
+        &AuthoritativeCommand::CreateFederationGrantAssignment(CreateFederationGrantAssignment {
+            assignment_id: FederationAssignmentId::from_bytes([90; 16])?,
+            grant_id: grant,
+            subject_principal_id: user,
+            rights: Rights::TRAVERSE
+                .union(Rights::CREATE_CHILD)
+                .union(Rights::WRITE_DATA),
+            valid_from: None,
+            valid_until: None,
+            activation_policy_id: None,
+        }),
     )
 }
 
@@ -397,7 +416,6 @@ fn assert_identity_orientation(
 
 fn grant_record(
     authorities: &MetadataAuthorities,
-    user: PrincipalId,
     grant_id: FederationGrantId,
     volume_id: VolumeId,
 ) -> Result<FederationGrantRecord, Box<dyn Error>> {
@@ -405,6 +423,7 @@ fn grant_record(
         FederationAccess::new(
             Rights::TRAVERSE
                 .union(Rights::READ_DATA)
+                .union(Rights::CREATE_CHILD)
                 .union(Rights::WRITE_DATA),
             false,
         ),
@@ -424,7 +443,8 @@ fn grant_record(
         grant: FederationGrant::new(
             grant_id,
             authorities.relationship_id,
-            FederatedPrincipal::new(authorities.server_mesh, user),
+            FederationGrantRoute::direct(authorities.client_mesh, authorities.server_mesh)?,
+            None,
             FederationResourceScope::Volume {
                 owner_mesh_id: authorities.client_mesh,
                 volume_id,
@@ -455,24 +475,24 @@ fn issue_grant(
         administrator,
         occurred_at,
         &AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
-            grant: record.grant,
+            grant: record.grant.clone(),
             restrictions: BoundedItems::new(record.restrictions.clone(), 2)?,
         }),
     )
 }
 
-fn signed_projection(
+fn signed_attestation(
     authorities: &MetadataAuthorities,
     user: PrincipalId,
-    state: FederatedPrincipalState,
+    state: FederatedActorState,
     identity_revision: u64,
     home_key: &SigningKey,
-) -> Result<UpsertFederatedPrincipalProjection, Box<dyn Error>> {
-    let mut projection = UpsertFederatedPrincipalProjection {
+) -> Result<RecordFederatedActorAttestation, Box<dyn Error>> {
+    let mut attestation = RecordFederatedActorAttestation {
         relationship_id: authorities.relationship_id,
         home_mesh_id: authorities.server_mesh,
         principal_id: user,
-        kind: FederatedPrincipalKind::User,
+        kind: FederatedActorKind::User,
         name: RecordName::new("Disconnected writer")?,
         state,
         identity_revision,
@@ -480,8 +500,8 @@ fn signed_projection(
         signer_generation: 1,
         signature: [0; 64],
     };
-    projection.signature = home_key.sign(&projection.signing_payload()).to_bytes();
-    Ok(projection)
+    attestation.signature = home_key.sign(&attestation.signing_payload()).to_bytes();
+    Ok(attestation)
 }
 
 fn install_remote_snapshot(

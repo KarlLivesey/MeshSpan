@@ -2,7 +2,7 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId,
+    AuditEventId, DurationMicros, FederationGrant, FederationGrantId, FederationGrantRoute,
     FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
     FederationResourceScope, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId,
     Revision, RoleId, StorageFederationPolicy, StorageParticipation, UnixMicros,
@@ -14,6 +14,111 @@ use super::{
     AuthoritativeRepository, EntityKind, FederationGrantCursor, FederationGrantCursorError,
     FederationGrantState, FederationGrantTerminationKind, LogPosition, PageLimit, RepositoryError,
 };
+
+#[test]
+fn downstream_recipient_accepts_its_bilateral_grant_without_importing_upstream_consensus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let recipient = Fixture::open()?;
+    let mut recipient_repository = recipient.repository;
+    prepare_relationship(&mut recipient_repository, recipient.ids)?;
+    let owner_mesh = MeshId::from_bytes([19; 16])?;
+    let upstream_grant_id = FederationGrantId::from_bytes([180; 16])?;
+    let child_grant_id = FederationGrantId::from_bytes([181; 16])?;
+    let child = downstream_grant(
+        recipient.ids,
+        owner_mesh,
+        upstream_grant_id,
+        child_grant_id,
+        false,
+    )?;
+    apply(
+        &mut recipient_repository,
+        4,
+        context(182, recipient.ids.administrator, 183, 4, 3)?,
+        &AuthoritativeCommand::IssueFederationGrant(child),
+    )?;
+    let stored = recipient_repository
+        .active_federation_grant(child_grant_id)?
+        .ok_or("recipient child grant missing")?;
+    assert_eq!(
+        stored.grant.route().meshes(),
+        &[
+            owner_mesh,
+            recipient.ids.remote_mesh,
+            recipient.ids.local_mesh
+        ]
+    );
+    assert_eq!(stored.grant.upstream_grant_id(), Some(upstream_grant_id));
+
+    let issuer = Fixture::open()?;
+    let mut issuer_repository = issuer.repository;
+    prepare_relationship(&mut issuer_repository, issuer.ids)?;
+    let unsupported = downstream_grant(
+        issuer.ids,
+        owner_mesh,
+        upstream_grant_id,
+        FederationGrantId::from_bytes([184; 16])?,
+        true,
+    )?;
+    assert!(matches!(
+        apply(
+            &mut issuer_repository,
+            4,
+            context(185, issuer.ids.administrator, 186, 4, 3)?,
+            &AuthoritativeCommand::IssueFederationGrant(unsupported),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(issuer_repository.current_revision()?, Revision::new(3));
+    Ok(())
+}
+
+fn downstream_grant(
+    ids: FixtureIds,
+    owner_mesh: MeshId,
+    upstream_grant_id: FederationGrantId,
+    grant_id: FederationGrantId,
+    local_is_issuer: bool,
+) -> Result<IssueFederationGrant, Box<dyn std::error::Error>> {
+    let route = if local_is_issuer {
+        FederationGrantRoute::from_meshes(vec![owner_mesh, ids.local_mesh, ids.remote_mesh])?
+    } else {
+        FederationGrantRoute::from_meshes(vec![owner_mesh, ids.remote_mesh, ids.local_mesh])?
+    };
+    let policy = storage_policy(50, false)?;
+    Ok(IssueFederationGrant {
+        grant: FederationGrant::new(
+            grant_id,
+            ids.relationship,
+            route,
+            Some(upstream_grant_id),
+            FederationResourceScope::StorageCapacity {
+                provider_mesh_id: owner_mesh,
+            },
+            policy,
+            1,
+            UnixMicros::new(4),
+            Some(UnixMicros::new(24)),
+        )?,
+        restrictions: BoundedItems::new(
+            vec![
+                FederationGrantRestriction {
+                    imposing_mesh_id: owner_mesh,
+                    policy,
+                },
+                FederationGrantRestriction {
+                    imposing_mesh_id: ids.local_mesh,
+                    policy,
+                },
+                FederationGrantRestriction {
+                    imposing_mesh_id: ids.remote_mesh,
+                    policy,
+                },
+            ],
+            3,
+        )?,
+    })
+}
 
 #[test]
 fn relationship_grants_page_stably_and_fail_closed_when_snapshot_changes()
@@ -649,7 +754,8 @@ fn grant(
     Ok(FederationGrant::new(
         grant_id,
         ids.relationship,
-        FederatedPrincipal::new(ids.local_mesh, ids.administrator),
+        FederationGrantRoute::direct(ids.remote_mesh, ids.local_mesh)?,
+        None,
         FederationResourceScope::StorageCapacity {
             provider_mesh_id: ids.remote_mesh,
         },
@@ -687,6 +793,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         bytes,
         StorageParticipation::new(counts_towards_protection, true),
+        false,
         Some(DurationMicros::new(20)),
     )?))
 }

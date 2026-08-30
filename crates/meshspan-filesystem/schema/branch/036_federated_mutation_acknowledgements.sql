@@ -10,6 +10,7 @@ CREATE TABLE federated_namespace_mutation_acknowledgements (
     relationship_id BLOB NOT NULL CHECK (length(relationship_id) = 16),
     subject_home_mesh_id BLOB NOT NULL CHECK (length(subject_home_mesh_id) = 16),
     subject_principal_id BLOB NOT NULL CHECK (length(subject_principal_id) = 16),
+    accepting_mesh_id BLOB NOT NULL CHECK (length(accepting_mesh_id) = 16),
     resource_kind INTEGER NOT NULL CHECK (resource_kind BETWEEN 1 AND 3),
     authority_mesh_id BLOB NOT NULL CHECK (length(authority_mesh_id) = 16),
     volume_id BLOB NOT NULL CHECK (length(volume_id) = 16),

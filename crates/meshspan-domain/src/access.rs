@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
-use crate::{DurationMicros, GrantId, GroupId, OperationId, PrincipalId, Revision, UnixMicros};
+use crate::{
+    DurationMicros, FederationAssignmentId, GrantId, GroupId, OperationId, PrincipalId, Revision,
+    UnixMicros,
+};
 
 const MAX_GROUPS: usize = 4_096;
 const MAX_MEMBERSHIPS: usize = 65_536;
@@ -314,6 +317,8 @@ pub enum ActivationSubject {
     Group(GroupId),
     /// Rights contributed by this individual permission grant.
     Grant(GrantId),
+    /// Rights contributed by one recipient-local federation grant assignment.
+    FederationAssignment(FederationAssignmentId),
 }
 
 /// Absolute interval during which a source or policy permits activation.

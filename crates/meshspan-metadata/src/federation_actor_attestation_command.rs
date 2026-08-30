@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Signed home-swarm principal projections used by federated access decisions.
+//! Signed home-swarm actor lifecycle attestations used by federation admission.
 
 use meshspan_domain::{FederationRelationshipId, MeshId, PrincipalId};
 
@@ -8,7 +8,7 @@ use crate::{RecordName, command::CanonicalDigest};
 
 /// Closed remote principal families.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FederatedPrincipalKind {
+pub enum FederatedActorKind {
     /// Interactive or service user.
     User,
     /// Nested identity group.
@@ -17,7 +17,7 @@ pub enum FederatedPrincipalKind {
     Service,
 }
 
-impl FederatedPrincipalKind {
+impl FederatedActorKind {
     pub(crate) const fn code(self) -> u8 {
         match self {
             Self::User => 1,
@@ -27,9 +27,9 @@ impl FederatedPrincipalKind {
     }
 }
 
-/// Closed home-swarm lifecycle projection.
+/// Closed home-swarm actor lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FederatedPrincipalState {
+pub enum FederatedActorState {
     /// May authenticate and receive authority.
     Active,
     /// Temporarily disabled by its home swarm.
@@ -38,7 +38,7 @@ pub enum FederatedPrincipalState {
     Retired,
 }
 
-impl FederatedPrincipalState {
+impl FederatedActorState {
     pub(crate) const fn code(self) -> u8 {
         match self {
             Self::Active => 1,
@@ -48,9 +48,9 @@ impl FederatedPrincipalState {
     }
 }
 
-/// One signed, monotonic remote-principal statement.
+/// One signed, monotonic remote-actor lifecycle statement.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UpsertFederatedPrincipalProjection {
+pub struct RecordFederatedActorAttestation {
     /// Direct relationship carrying the statement.
     pub relationship_id: FederationRelationshipId,
     /// Autonomous swarm which owns and authenticates the principal.
@@ -58,11 +58,11 @@ pub struct UpsertFederatedPrincipalProjection {
     /// Principal identity inside its home swarm.
     pub principal_id: PrincipalId,
     /// User, group or service.
-    pub kind: FederatedPrincipalKind,
+    pub kind: FederatedActorKind,
     /// Display/canonical names supplied by the home swarm.
     pub name: RecordName,
     /// Current home-swarm lifecycle.
-    pub state: FederatedPrincipalState,
+    pub state: FederatedActorState,
     /// Strictly monotonic home-swarm identity revision.
     pub identity_revision: u64,
     /// Exact current federation authority epoch.
@@ -73,12 +73,12 @@ pub struct UpsertFederatedPrincipalProjection {
     pub signature: [u8; 64],
 }
 
-impl UpsertFederatedPrincipalProjection {
+impl RecordFederatedActorAttestation {
     /// Returns canonical bytes signed by the home swarm.
     #[must_use]
     pub fn signing_payload(&self) -> Vec<u8> {
         let mut payload = Vec::with_capacity(160);
-        payload.extend_from_slice(b"meshspan.federation.principal-projection.v1");
+        payload.extend_from_slice(b"meshspan.federation.actor-attestation.v1");
         payload.extend_from_slice(&self.relationship_id.as_bytes());
         payload.extend_from_slice(&self.home_mesh_id.as_bytes());
         payload.extend_from_slice(&self.principal_id.as_bytes());
@@ -93,7 +93,7 @@ impl UpsertFederatedPrincipalProjection {
     }
 
     pub(crate) fn update_digest(&self, digest: &mut CanonicalDigest) {
-        digest.bytes(b"upsert-federated-principal-projection");
+        digest.bytes(b"upsert-federated-actor-attestation");
         digest.bytes(&self.signing_payload());
         digest.bytes(&self.signature);
     }

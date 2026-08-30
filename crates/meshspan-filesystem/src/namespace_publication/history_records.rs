@@ -24,7 +24,7 @@ use crate::NamespaceHistoryBundle;
 const MAXIMUM_COMMIT_RECORD_BYTES: usize = 2 * 1_024 * 1_024;
 const COMMIT_DOMAIN: &[u8] = b"meshspan.filesystem.history-commit\0";
 const LOCAL_COMMIT_FORMAT_VERSION: u8 = 1;
-const FEDERATED_COMMIT_FORMAT_VERSION: u8 = 2;
+const FEDERATED_COMMIT_FORMAT_VERSION: u8 = 3;
 
 /// One canonical immutable mutation record suitable for a bounded control page.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -258,7 +258,7 @@ pub(super) fn validate_acknowledgement(
         || acknowledgement.signature == [0; 64]
         || acknowledgement.source_operation_id != authority.operation_id()
         || acknowledgement.payload_digest != mutation_digest
-        || evidence.subject().principal_id() != authority.created_by()
+        || evidence.actor().principal_id() != authority.created_by()
         || evidence.accepted_at() < authority.created_at()
         || evidence.required_rights() != authority.required_rights()
         || evidence.storage_bytes() != 0

@@ -101,6 +101,10 @@ define_identifier!(
     "Stable identity of one scoped federation grant."
 );
 define_identifier!(
+    FederationAssignmentId,
+    "Stable identity of one recipient-local federation grant assignment."
+);
+define_identifier!(
     FederationStorageAllocationId,
     "Stable identity of one disjoint provider-node federation storage allocation."
 );

@@ -86,11 +86,24 @@ envelope, because B could already copy readable data; C does not thereby gain a
 direct relationship or connection right to A. Every hop remains attributable and
 inherits upstream expiry, revocation, ownership and restrictions.
 
+The B↔C relationship authenticates only that immediate transport and service
+hop. The immutable route still begins at owner A. C persists the opaque upstream
+grant identity but does not import A's or B's consensus rows; B must retain and
+validate its full upstream authority before issuing the child grant. Consequently
+C can request the shared resource only from B, while B remains accountable to A.
+
 ## Resource ownership and multi-writer operation
 
-Every shared volume, folder or file retains one owning swarm. The owning swarm is
-the authority for its ACL policy and canonical converged history. Ownership is
-independent of where data is stored or which authorised swarm accepted an edit.
+Every swarm is the intrinsic root principal for each volume, folder, file and
+version it owns. From that root authority it may grant rights directly to its
+local users and groups, delegate constrained rights to another swarm, or do
+both. Those are sibling delegations: ownership is not represented by a synthetic
+self-federation relationship or self-grant. Every external re-delegation remains
+an explicit, narrowing hop.
+
+Every shared resource retains exactly one such owning swarm. The owner is the
+authority for its ACL policy and canonical converged history independently of
+where data is stored or which authorised swarm accepted an edit.
 
 The owner also remains authority for the canonical protection promise. A peer
 may keep stronger local caches or redundant copies but cannot redefine that

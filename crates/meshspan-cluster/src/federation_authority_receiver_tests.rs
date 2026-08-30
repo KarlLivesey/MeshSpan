@@ -2,9 +2,9 @@
 
 use ed25519_dalek::SigningKey;
 use meshspan_domain::{
-    DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId, FederationPolicy,
+    DurationMicros, FederationGrant, FederationGrantId, FederationGrantRoute, FederationPolicy,
     FederationRelationshipId, FederationRelationshipKind, FederationResourceScope, MeshId,
-    PrincipalId, Revision, StorageFederationPolicy, StorageParticipation, UnixMicros,
+    Revision, StorageFederationPolicy, StorageParticipation, UnixMicros,
 };
 use meshspan_metadata::{
     FederationGovernanceDirection, FederationGrantRecord, FederationGrantRestriction,
@@ -40,6 +40,24 @@ fn terminal_page_atomically_exposes_the_complete_snapshot() -> Result<(), Box<dy
     assert_eq!(snapshot.authority_revision, Revision::new(5));
     assert_eq!(snapshot.grants.len(), 1);
     assert_eq!(snapshot.grants[0].grant.grant_id(), grant_id(20)?);
+    Ok(())
+}
+
+#[test]
+fn downstream_owner_need_not_be_a_direct_transport_party() -> Result<(), Box<dyn std::error::Error>>
+{
+    let authority = local_authority()?;
+    let mut receiver = receiver(&authority, 0, 2)?;
+    let relationship = relationship_payload(&authority, false)?;
+    let downstream = downstream_grant_payload(&authority, 20, 4)?;
+    receiver.accept_page_view(&[], page(5, &[relationship, downstream], &[]))?;
+    let FederationAuthorityUpdate::Snapshot(snapshot) = receiver.finish()? else {
+        return Err("downstream import returned unchanged".into());
+    };
+    let grant = &snapshot.grants[0].grant;
+    assert_eq!(grant.route().meshes(), &[mesh(3)?, mesh(2)?, mesh(1)?]);
+    assert_eq!(grant.resource().authority_mesh_id(), mesh(3)?);
+    assert_eq!(grant.upstream_grant_id(), Some(grant_id(19)?));
     Ok(())
 }
 
@@ -232,9 +250,70 @@ fn grant_payload(
         grant: FederationGrant::new(
             grant_id(seed)?,
             authority.peer.relationship_id,
-            FederatedPrincipal::new(authority.peer.local_mesh_id, principal(seed)?),
+            FederationGrantRoute::direct(
+                authority.peer.remote_mesh_id,
+                authority.peer.local_mesh_id,
+            )?,
+            None,
             FederationResourceScope::StorageCapacity {
                 provider_mesh_id: authority.peer.remote_mesh_id,
+            },
+            FederationPolicy::intersect(&policies)?,
+            authority.peer.authority_epoch,
+            UnixMicros::new(10),
+            Some(UnixMicros::new(20)),
+        )?,
+        restrictions,
+        state: FederationGrantState::Active,
+        issued_at: UnixMicros::new(9),
+        termination: None,
+        predecessor_grant_id: None,
+        successor_grant_id: None,
+        revision: Revision::new(revision),
+    };
+    Ok(VersionedPayload {
+        format_version: 1,
+        canonical_bytes: record.canonical_bytes()?,
+    })
+}
+
+fn downstream_grant_payload(
+    authority: &FederationConnectionAuthority,
+    seed: u8,
+    revision: u64,
+) -> Result<VersionedPayload, Box<dyn std::error::Error>> {
+    let owner = mesh(3)?;
+    let mut restrictions = vec![
+        FederationGrantRestriction {
+            imposing_mesh_id: owner,
+            policy: storage_policy(50, false)?,
+        },
+        FederationGrantRestriction {
+            imposing_mesh_id: authority.peer.remote_mesh_id,
+            policy: storage_policy(50, false)?,
+        },
+        FederationGrantRestriction {
+            imposing_mesh_id: authority.peer.local_mesh_id,
+            policy: storage_policy(50, false)?,
+        },
+    ];
+    restrictions.sort_by_key(|restriction| restriction.imposing_mesh_id);
+    let policies = restrictions
+        .iter()
+        .map(|restriction| restriction.policy)
+        .collect::<Vec<_>>();
+    let record = FederationGrantRecord {
+        grant: FederationGrant::new(
+            grant_id(seed)?,
+            authority.peer.relationship_id,
+            FederationGrantRoute::from_meshes(vec![
+                owner,
+                authority.peer.remote_mesh_id,
+                authority.peer.local_mesh_id,
+            ])?,
+            Some(grant_id(seed.saturating_sub(1))?),
+            FederationResourceScope::StorageCapacity {
+                provider_mesh_id: owner,
             },
             FederationPolicy::intersect(&policies)?,
             authority.peer.authority_epoch,
@@ -279,6 +358,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         maximum_bytes,
         StorageParticipation::new(protects, true),
+        false,
         Some(DurationMicros::new(100)),
     )?))
 }
@@ -293,8 +373,4 @@ fn mesh(seed: u8) -> Result<MeshId, Box<dyn std::error::Error>> {
 
 fn grant_id(seed: u8) -> Result<FederationGrantId, Box<dyn std::error::Error>> {
     Ok(FederationGrantId::from_bytes([seed; 16])?)
-}
-
-fn principal(seed: u8) -> Result<PrincipalId, Box<dyn std::error::Error>> {
-    Ok(PrincipalId::from_bytes([seed; 16])?)
 }

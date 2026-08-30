@@ -3,9 +3,9 @@
 //! Fixed byte layout for complete federation grant authority records.
 
 use meshspan_domain::{
-    DurationMicros, FederatedPrincipal, FederationAccess, FederationGrant, FederationGrantId,
+    DurationMicros, FederationAccess, FederationGrant, FederationGrantId, FederationGrantRoute,
     FederationPolicy, FederationRelationshipId, FederationResourceScope, MeshId,
-    NamespaceFederationPolicy, ObjectId, PrincipalId, Revision, Rights, StorageFederationPolicy,
+    NamespaceFederationPolicy, ObjectId, Revision, Rights, StorageFederationPolicy,
     StorageParticipation, UnixMicros, VolumeId,
 };
 
@@ -16,7 +16,7 @@ use crate::{
 };
 
 const DOMAIN: &[u8] = b"meshspan.federation.grant-authority";
-const FORMAT_VERSION: u8 = 1;
+const FORMAT_VERSION: u8 = 2;
 const MAXIMUM_RESTRICTIONS: usize = 64;
 const MAXIMUM_REASON_BYTES: usize = 512;
 
@@ -28,7 +28,7 @@ pub(super) fn encode(
     bytes.push(0);
     bytes.push(FORMAT_VERSION);
     bytes.extend_from_slice(&record.revision.get().to_be_bytes());
-    encode_grant(&mut bytes, record.grant);
+    encode_grant(&mut bytes, &record.grant)?;
     bytes.push(state_code(record.state));
     bytes.extend_from_slice(&record.issued_at.get().to_be_bytes());
     encode_termination(&mut bytes, record.termination.as_ref())?;
@@ -86,16 +86,25 @@ pub(super) fn decode(
     })
 }
 
-fn encode_grant(bytes: &mut Vec<u8>, grant: FederationGrant) {
+fn encode_grant(
+    bytes: &mut Vec<u8>,
+    grant: &FederationGrant,
+) -> Result<(), FederationGrantRecordCodecError> {
     bytes.extend_from_slice(&grant.grant_id().as_bytes());
     bytes.extend_from_slice(&grant.relationship_id().as_bytes());
-    bytes.extend_from_slice(&grant.subject().home_mesh_id().as_bytes());
-    bytes.extend_from_slice(&grant.subject().principal_id().as_bytes());
+    let route_length = u8::try_from(grant.route().meshes().len())
+        .map_err(|_| FederationGrantRecordCodecError::Invalid)?;
+    bytes.push(route_length);
+    for mesh_id in grant.route().meshes() {
+        bytes.extend_from_slice(&mesh_id.as_bytes());
+    }
+    encode_optional_id(bytes, grant.upstream_grant_id());
     encode_resource(bytes, grant.resource());
     encode_policy(bytes, grant.policy());
     bytes.extend_from_slice(&grant.authority_epoch().to_be_bytes());
     bytes.extend_from_slice(&grant.valid_from().get().to_be_bytes());
     encode_optional_time(bytes, grant.valid_until());
+    Ok(())
 }
 
 fn decode_grant(
@@ -103,7 +112,17 @@ fn decode_grant(
 ) -> Result<FederationGrant, FederationGrantRecordCodecError> {
     let grant_id = decode_grant_id(decoder)?;
     let relationship_id = decode_relationship(decoder)?;
-    let subject = FederatedPrincipal::new(decode_mesh(decoder)?, decode_principal(decoder)?);
+    let route_length = usize::from(decoder.byte()?);
+    if !(2..=meshspan_domain::MAXIMUM_FEDERATION_ROUTE_MESHES).contains(&route_length) {
+        return Err(FederationGrantRecordCodecError::Invalid);
+    }
+    let mut route = Vec::with_capacity(route_length);
+    for _ in 0..route_length {
+        route.push(decode_mesh(decoder)?);
+    }
+    let route = FederationGrantRoute::from_meshes(route)
+        .map_err(|_| FederationGrantRecordCodecError::Invalid)?;
+    let upstream_grant_id = decode_optional_id(decoder)?;
     let resource = decode_resource(decoder)?;
     let policy = decode_policy(decoder)?;
     let authority_epoch = decoder.unsigned()?;
@@ -112,7 +131,8 @@ fn decode_grant(
     FederationGrant::new(
         grant_id,
         relationship_id,
-        subject,
+        route,
+        upstream_grant_id,
         resource,
         policy,
         authority_epoch,
@@ -197,6 +217,7 @@ fn encode_policy(bytes: &mut Vec<u8>, policy: FederationPolicy) {
             bytes.extend_from_slice(&policy.maximum_storage_bytes().to_be_bytes());
             bytes.push(u8::from(policy.participation().counts_towards_protection()));
             bytes.push(u8::from(policy.participation().serves_reads()));
+            bytes.push(u8::from(policy.allows_downstream_delegation()));
             encode_optional_duration(bytes, policy.maximum_offline_duration());
         }
     }
@@ -219,6 +240,7 @@ fn decode_policy(
         2 => StorageFederationPolicy::new(
             decoder.unsigned()?,
             StorageParticipation::new(decoder.boolean()?, decoder.boolean()?),
+            decoder.boolean()?,
             decode_optional_duration(decoder)?,
         )
         .map(FederationPolicy::Storage)
@@ -385,12 +407,6 @@ fn positive_revision(value: u64) -> Result<Revision, FederationGrantRecordCodecE
 
 fn decode_mesh(decoder: &mut Decoder<'_>) -> Result<MeshId, FederationGrantRecordCodecError> {
     MeshId::from_bytes(decoder.array()?).map_err(|_| FederationGrantRecordCodecError::Invalid)
-}
-
-fn decode_principal(
-    decoder: &mut Decoder<'_>,
-) -> Result<PrincipalId, FederationGrantRecordCodecError> {
-    PrincipalId::from_bytes(decoder.array()?).map_err(|_| FederationGrantRecordCodecError::Invalid)
 }
 
 fn decode_grant_id(

@@ -582,7 +582,7 @@ pub(super) fn revoke_access_activation(
     })
 }
 
-fn validate_audit_reason(reason: &str) -> Result<(), RepositoryError> {
+pub(super) fn validate_audit_reason(reason: &str) -> Result<(), RepositoryError> {
     let valid = !reason.trim().is_empty()
         && reason.len() <= MAXIMUM_REVOCATION_REASON_BYTES
         && !reason.chars().any(char::is_control);
@@ -663,7 +663,7 @@ fn require_volume(transaction: &Transaction<'_>, volume: [u8; 16]) -> Result<(),
     }
 }
 
-fn require_active_principal(
+pub(super) fn require_active_principal(
     transaction: &Transaction<'_>,
     principal: PrincipalId,
 ) -> Result<(), RepositoryError> {
@@ -680,7 +680,7 @@ fn require_active_principal(
     }
 }
 
-fn require_user(
+pub(super) fn require_user(
     transaction: &Transaction<'_>,
     principal: PrincipalId,
 ) -> Result<(), RepositoryError> {
@@ -700,7 +700,7 @@ fn require_user(
     }
 }
 
-fn validate_activation_session(
+pub(super) fn validate_activation_session(
     transaction: &Transaction<'_>,
     principal: PrincipalId,
     authentication_digest: [u8; 32],
@@ -753,7 +753,10 @@ fn validate_activation_session(
     Ok(())
 }
 
-fn require_policy(transaction: &Transaction<'_>, policy: [u8; 16]) -> Result<(), RepositoryError> {
+pub(super) fn require_policy(
+    transaction: &Transaction<'_>,
+    policy: [u8; 16],
+) -> Result<(), RepositoryError> {
     let exists: i64 = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM access_activation_policies WHERE policy_id = ?1)",
         [policy.as_slice()],
@@ -766,7 +769,7 @@ fn require_policy(transaction: &Transaction<'_>, policy: [u8; 16]) -> Result<(),
     }
 }
 
-fn load_policy(
+pub(super) fn load_policy(
     transaction: &Transaction<'_>,
     policy: [u8; 16],
 ) -> Result<(AccessActivationPolicy, Revision), RepositoryError> {
@@ -803,7 +806,7 @@ fn load_policy(
     Ok((policy, Revision::new(parse_u64(row.5)?)))
 }
 
-fn active_group_path(
+pub(super) fn active_group_path(
     transaction: &Transaction<'_>,
     containing_group: GroupId,
     member: PrincipalId,
@@ -921,7 +924,9 @@ fn path_exists(
     false
 }
 
-fn read_identity_revision(transaction: &Transaction<'_>) -> Result<Revision, RepositoryError> {
+pub(super) fn read_identity_revision(
+    transaction: &Transaction<'_>,
+) -> Result<Revision, RepositoryError> {
     let value =
         transaction.query_row("SELECT identity_revision FROM meshes LIMIT 2", [], |row| {
             row.get::<_, i64>(0)
@@ -929,7 +934,7 @@ fn read_identity_revision(transaction: &Transaction<'_>) -> Result<Revision, Rep
     Ok(Revision::new(parse_u64(value)?))
 }
 
-fn update_identity_revision(
+pub(super) fn update_identity_revision(
     transaction: &Transaction<'_>,
     revision: Revision,
 ) -> Result<(), RepositoryError> {

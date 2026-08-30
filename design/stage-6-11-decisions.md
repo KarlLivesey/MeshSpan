@@ -4,12 +4,9 @@ Status: **accepted in discussion on 2026-08-30**.
 
 This document records the accepted product decisions for the HTTPS appliance,
 embedded SMB service, protection, healing, operations and `0.1.0` proof. It is a
-contract, not an implementation claim. Existing code and evidence remain subject
-to the retrofit notes in the roadmap and this document.
-
-The current generated public-API scaffold still contains password login models.
-Those models are implementation debt and must be removed with their generated
-types/tests before Stage 6 can pass; their presence is not an accepted exception.
+contract, not an implementation claim. The prerequisite accepted-decision
+retrofit is complete and recorded in
+[`pre-stage-6-retrofit-evidence.md`](pre-stage-6-retrofit-evidence.md).
 
 ## 1. Claim and authentication
 
@@ -64,6 +61,9 @@ types/tests before Stage 6 can pass; their presence is not an accepted exception
 
 ## 3. Federated delegation and repair
 
+- Each swarm is the intrinsic root principal for every resource it owns. It may
+  grant rights directly to local users/groups and separately delegate rights to
+  another swarm. Ownership needs no synthetic self-federation record.
 - Swarm A grants a shared resource to Swarm B, not to users or groups that A
   imports from B. A does not enumerate or administer B's principals.
 - B decides which of its local users and groups receive equal or narrower rights.
@@ -73,6 +73,10 @@ types/tests before Stage 6 can pass; their presence is not an accepted exception
   narrow the effective rights, bounds and validity it received. Revocation and
   expiry propagate through the chain with the already accepted disconnected-work
   quarantine rules.
+- The immediate relationship authenticates only its adjacent transport/service
+  hop. A downstream recipient stores the owner-rooted route and opaque upstream
+  grant identity without importing upstream consensus; its issuer must retain
+  and validate the full predecessor chain.
 - A remains authority for its content, ACL and canonical protection promise. B
   may keep additional caches or copies but cannot redefine A's promise. A may
   adopt signed B placement receipts as evidence for A's policy.

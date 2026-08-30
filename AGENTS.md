@@ -57,6 +57,10 @@ decision explicitly.
   bounded immutable history asynchronously. Governance is acyclic, horizontal
   sharing may form a graph, and effective authority is every applicable side's
   intersection.
+- Each swarm is the intrinsic root principal for every volume, folder, file and
+  version it owns. Local user/group grants and outbound swarm grants are sibling
+  delegations from that root; no synthetic self-federation grant represents
+  ownership, and every external re-delegation is explicit and narrowing.
 - Eventual convergence is the normal availability-first write policy. Strong
   publication waits only for predicates and zones explicitly marked required;
   eventual zones create debt and never hold its barrier.

@@ -33,6 +33,7 @@ mod federation_history_receiver;
 mod federation_history_sync;
 mod federation_mutation_acceptance;
 mod federation_mutation_admission;
+mod federation_mutation_relay;
 mod federation_resource_wire;
 mod federation_session;
 mod federation_shard_authority;
@@ -52,6 +53,8 @@ mod wire;
 mod access_administration_tests;
 #[cfg(test)]
 mod convergence_tests;
+#[cfg(test)]
+mod federation_mutation_relay_tests;
 #[cfg(test)]
 mod filesystem_convergence_tests;
 #[cfg(test)]
@@ -183,6 +186,9 @@ pub use federation_mutation_acceptance::{
 pub use federation_mutation_admission::{
     FederatedHistoryMutationAdmission, FederatedHistoryMutationAdmissionError,
     classify_federated_history_mutation,
+};
+pub use federation_mutation_relay::{
+    FederationMutationRelayError, relay_federated_history_mutation,
 };
 pub use federation_resource_wire::{
     FederationResourceWireError, version_federation_resource_scope,

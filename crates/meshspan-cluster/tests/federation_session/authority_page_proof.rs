@@ -13,8 +13,8 @@ use meshspan_cluster::{
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId, FederationPolicy,
-    FederationRelationshipId, FederationResourceScope, MeshId, NodeId, PrincipalId, Revision,
+    DurationMicros, FederationGrant, FederationGrantId, FederationGrantRoute, FederationPolicy,
+    FederationRelationshipId, FederationResourceScope, MeshId, NodeId, Revision,
     StorageFederationPolicy, StorageParticipation, UnixMicros,
 };
 use meshspan_metadata::{
@@ -391,7 +391,8 @@ pub(super) fn storage_grant_command(
     let grant = FederationGrant::new(
         grant_id,
         relationship_id,
-        FederatedPrincipal::new(consumer_mesh_id, PrincipalId::from_bytes([90; 16])?),
+        FederationGrantRoute::direct(provider_mesh_id, consumer_mesh_id)?,
+        None,
         FederationResourceScope::StorageCapacity { provider_mesh_id },
         FederationPolicy::intersect(&policies)?,
         1,
@@ -434,6 +435,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         maximum_storage_bytes,
         StorageParticipation::new(counts_towards_protection, serves_reads),
+        false,
         Some(DurationMicros::new(3_000_000)),
     )?))
 }

@@ -258,6 +258,7 @@ impl NamespaceFederationPolicy {
 pub struct StorageFederationPolicy {
     maximum_storage_bytes: u64,
     participation: StorageParticipation,
+    allows_downstream_delegation: bool,
     maximum_offline_duration: Option<DurationMicros>,
 }
 
@@ -270,6 +271,7 @@ impl StorageFederationPolicy {
     pub const fn new(
         maximum_storage_bytes: u64,
         participation: StorageParticipation,
+        allows_downstream_delegation: bool,
         maximum_offline_duration: Option<DurationMicros>,
     ) -> Result<Self, FederationPolicyError> {
         if maximum_storage_bytes == 0 {
@@ -278,6 +280,7 @@ impl StorageFederationPolicy {
         Ok(Self {
             maximum_storage_bytes,
             participation,
+            allows_downstream_delegation,
             maximum_offline_duration,
         })
     }
@@ -292,6 +295,12 @@ impl StorageFederationPolicy {
     #[must_use]
     pub const fn participation(self) -> StorageParticipation {
         self.participation
+    }
+
+    /// Reports whether the recipient may offer a narrowed capacity grant downstream.
+    #[must_use]
+    pub const fn allows_downstream_delegation(self) -> bool {
+        self.allows_downstream_delegation
     }
 
     /// Returns the maximum disconnected duration, or `None` for explicit indefinite access.
@@ -309,6 +318,8 @@ impl StorageFederationPolicy {
         Self {
             maximum_storage_bytes,
             participation: self.participation.intersection(other.participation),
+            allows_downstream_delegation: self.allows_downstream_delegation
+                && other.allows_downstream_delegation,
             maximum_offline_duration: earliest_duration(
                 self.maximum_offline_duration,
                 other.maximum_offline_duration,

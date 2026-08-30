@@ -3,7 +3,7 @@
 use ed25519_dalek::SigningKey;
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId,
+    AuditEventId, DurationMicros, FederationGrant, FederationGrantId, FederationGrantRoute,
     FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
     FederationResourceScope, FederationStorageAllocation, FederationStorageAllocationId, HostId,
     MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId,
@@ -481,7 +481,8 @@ fn issue_storage_grant(
             grant: FederationGrant::new(
                 ids.grant,
                 ids.relationship,
-                FederatedPrincipal::new(subject_mesh, ids.administrator),
+                FederationGrantRoute::direct(provider_mesh_id, subject_mesh)?,
+                None,
                 FederationResourceScope::StorageCapacity { provider_mesh_id },
                 effective,
                 1,
@@ -513,6 +514,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         maximum_bytes,
         StorageParticipation::new(counts_towards_protection, true),
+        false,
         Some(DurationMicros::new(200)),
     )?))
 }

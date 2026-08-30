@@ -60,7 +60,7 @@ pub fn classify_federated_history_mutation(
     let admission = repository.classify_federated_mutation_acknowledgement(acknowledgement)?;
     Ok(FederatedHistoryMutationAdmission {
         commit_id: authority.commit_id(),
-        actor: acknowledgement.evidence.subject(),
+        actor: acknowledgement.evidence.actor(),
         admission,
     })
 }
@@ -74,7 +74,7 @@ fn validate_binding(
     let evidence = acknowledgement.evidence;
     if acknowledgement.source_operation_id != authority.operation_id()
         || acknowledgement.payload_digest != record.mutation_digest()?
-        || evidence.subject().principal_id() != authority.created_by()
+        || evidence.actor().principal_id() != authority.created_by()
         || evidence.accepted_at() < authority.created_at()
         || evidence.accepted_at() > now
         || evidence.required_rights() != authority.required_rights()
@@ -204,7 +204,7 @@ mod tests {
             value.evidence.grant_id(),
             value.evidence.relationship_id(),
             FederatedPrincipal::new(
-                value.evidence.subject().home_mesh_id(),
+                value.evidence.actor().home_mesh_id(),
                 PrincipalId::from_bytes([51; 16])?,
             ),
             value.evidence.resource(),
@@ -222,7 +222,7 @@ mod tests {
         value.evidence = FederatedMutationEvidence::new(
             value.evidence.grant_id(),
             value.evidence.relationship_id(),
-            value.evidence.subject(),
+            value.evidence.actor(),
             value.evidence.resource(),
             value.evidence.authority_epoch(),
             UnixMicros::new(31),
@@ -238,7 +238,7 @@ mod tests {
         value.evidence = FederatedMutationEvidence::new(
             value.evidence.grant_id(),
             value.evidence.relationship_id(),
-            value.evidence.subject(),
+            value.evidence.actor(),
             value.evidence.resource(),
             value.evidence.authority_epoch(),
             value.evidence.accepted_at(),
@@ -254,7 +254,7 @@ mod tests {
         value.evidence = FederatedMutationEvidence::new(
             value.evidence.grant_id(),
             value.evidence.relationship_id(),
-            value.evidence.subject(),
+            value.evidence.actor(),
             value.evidence.resource(),
             value.evidence.authority_epoch(),
             value.evidence.accepted_at(),
@@ -270,7 +270,7 @@ mod tests {
         value.evidence = FederatedMutationEvidence::new(
             value.evidence.grant_id(),
             value.evidence.relationship_id(),
-            value.evidence.subject(),
+            value.evidence.actor(),
             FederationResourceScope::Volume {
                 owner_mesh_id: value.evidence.resource().authority_mesh_id(),
                 volume_id: VolumeId::from_bytes([52; 16])?,

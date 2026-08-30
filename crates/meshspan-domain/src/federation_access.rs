@@ -5,16 +5,17 @@
 use thiserror::Error;
 
 use crate::{
-    FederatedPrincipal, FederationGrantId, FederationPolicy, FederationRelationshipId,
-    FederationResourceScope, Rights, UnixMicros,
+    FederatedPrincipal, FederationGrantId, FederationGrantRoute, FederationPolicy,
+    FederationRelationshipId, FederationResourceScope, Rights, UnixMicros,
 };
 
 /// One signed authority envelope which a peer may use while disconnected.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationGrant {
     grant_id: FederationGrantId,
     relationship_id: FederationRelationshipId,
-    subject: FederatedPrincipal,
+    route: FederationGrantRoute,
+    upstream_grant_id: Option<FederationGrantId>,
     resource: FederationResourceScope,
     policy: FederationPolicy,
     authority_epoch: u64,
@@ -36,7 +37,8 @@ impl FederationGrant {
     pub fn new(
         grant_id: FederationGrantId,
         relationship_id: FederationRelationshipId,
-        subject: FederatedPrincipal,
+        route: FederationGrantRoute,
+        upstream_grant_id: Option<FederationGrantId>,
         resource: FederationResourceScope,
         policy: FederationPolicy,
         authority_epoch: u64,
@@ -46,12 +48,14 @@ impl FederationGrant {
         if authority_epoch == 0 {
             return Err(FederationGrantError::InvalidEpoch);
         }
+        validate_route(&route, upstream_grant_id, resource)?;
         validate_resource_policy(resource, policy)?;
         validate_interval(policy, valid_from, valid_until)?;
         Ok(Self {
             grant_id,
             relationship_id,
-            subject,
+            route,
+            upstream_grant_id,
             resource,
             policy,
             authority_epoch,
@@ -62,49 +66,67 @@ impl FederationGrant {
 
     /// Returns the stable grant identity.
     #[must_use]
-    pub const fn grant_id(self) -> FederationGrantId {
+    pub const fn grant_id(&self) -> FederationGrantId {
         self.grant_id
     }
 
     /// Returns the mutually approved relationship carrying the grant.
     #[must_use]
-    pub const fn relationship_id(self) -> FederationRelationshipId {
+    pub const fn relationship_id(&self) -> FederationRelationshipId {
         self.relationship_id
     }
 
-    /// Returns the exact remote principal receiving authority.
+    /// Returns the complete authority-to-recipient route.
     #[must_use]
-    pub const fn subject(self) -> FederatedPrincipal {
-        self.subject
+    pub const fn route(&self) -> &FederationGrantRoute {
+        &self.route
+    }
+
+    /// Returns the immediate swarm receiving this grant.
+    #[must_use]
+    pub fn recipient_mesh_id(&self) -> crate::MeshId {
+        self.route.recipient_mesh_id()
+    }
+
+    /// Returns the immediate swarm issuing this grant.
+    #[must_use]
+    pub fn issuer_mesh_id(&self) -> crate::MeshId {
+        self.route.issuer_mesh_id()
+    }
+
+    /// Returns the exact upstream authority grant for a downstream grant.
+    #[must_use]
+    pub const fn upstream_grant_id(&self) -> Option<FederationGrantId> {
+        self.upstream_grant_id
     }
 
     /// Returns the exact shared resource.
     #[must_use]
-    pub const fn resource(self) -> FederationResourceScope {
+    pub const fn resource(&self) -> FederationResourceScope {
         self.resource
     }
 
     /// Returns the already-intersected bilateral/governance policy.
     #[must_use]
-    pub const fn policy(self) -> FederationPolicy {
+    pub const fn policy(&self) -> FederationPolicy {
         self.policy
     }
 
     /// Returns the authority epoch which fences older grants.
     #[must_use]
-    pub const fn authority_epoch(self) -> u64 {
+    pub const fn authority_epoch(&self) -> u64 {
         self.authority_epoch
     }
 
     /// Returns the first authorised instant, inclusive.
     #[must_use]
-    pub const fn valid_from(self) -> UnixMicros {
+    pub const fn valid_from(&self) -> UnixMicros {
         self.valid_from
     }
 
     /// Returns the expiry instant, exclusive, or `None` for explicit indefinite access.
     #[must_use]
-    pub const fn valid_until(self) -> Option<UnixMicros> {
+    pub const fn valid_until(&self) -> Option<UnixMicros> {
         self.valid_until
     }
 }
@@ -114,7 +136,8 @@ impl FederationGrant {
 pub struct FederatedMutationEvidence {
     grant_id: FederationGrantId,
     relationship_id: FederationRelationshipId,
-    subject: FederatedPrincipal,
+    actor: FederatedPrincipal,
+    accepting_mesh_id: crate::MeshId,
     resource: FederationResourceScope,
     authority_epoch: u64,
     accepted_at: UnixMicros,
@@ -132,7 +155,7 @@ impl FederatedMutationEvidence {
     pub const fn new(
         grant_id: FederationGrantId,
         relationship_id: FederationRelationshipId,
-        subject: FederatedPrincipal,
+        actor: FederatedPrincipal,
         resource: FederationResourceScope,
         authority_epoch: u64,
         accepted_at: UnixMicros,
@@ -142,7 +165,41 @@ impl FederatedMutationEvidence {
         Self {
             grant_id,
             relationship_id,
-            subject,
+            actor,
+            accepting_mesh_id: actor.home_mesh_id(),
+            resource,
+            authority_epoch,
+            accepted_at,
+            required_rights,
+            storage_bytes,
+        }
+    }
+
+    /// Constructs relayed evidence signed by a direct recipient on behalf of the original actor.
+    ///
+    /// The accepting swarm is accountable for having verified the downstream acknowledgement;
+    /// the actor remains the user or service which authored the immutable mutation.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "relayed untrusted evidence preserves every independently verified authority field"
+    )]
+    #[must_use]
+    pub const fn new_relayed(
+        grant_id: FederationGrantId,
+        relationship_id: FederationRelationshipId,
+        actor: FederatedPrincipal,
+        accepting_mesh_id: crate::MeshId,
+        resource: FederationResourceScope,
+        authority_epoch: u64,
+        accepted_at: UnixMicros,
+        required_rights: Rights,
+        storage_bytes: u64,
+    ) -> Self {
+        Self {
+            grant_id,
+            relationship_id,
+            actor,
+            accepting_mesh_id,
             resource,
             authority_epoch,
             accepted_at,
@@ -165,8 +222,14 @@ impl FederatedMutationEvidence {
 
     /// Returns the globally qualified principal which performed the mutation.
     #[must_use]
-    pub const fn subject(self) -> FederatedPrincipal {
-        self.subject
+    pub const fn actor(self) -> FederatedPrincipal {
+        self.actor
+    }
+
+    /// Returns the swarm accountable for accepting and signing this evidence.
+    #[must_use]
+    pub const fn accepting_mesh_id(self) -> crate::MeshId {
+        self.accepting_mesh_id
     }
 
     /// Returns the exact owner-qualified resource presented at acceptance.
@@ -236,7 +299,7 @@ pub enum QuarantineReason {
 ///
 /// Rejects evidence which names a different grant, relationship, principal, resource or epoch.
 pub fn classify_federated_mutation(
-    grant: FederationGrant,
+    grant: &FederationGrant,
     evidence: FederatedMutationEvidence,
     revoked_at: Option<UnixMicros>,
 ) -> Result<FederatedMutationAdmission, FederationGrantError> {
@@ -274,6 +337,9 @@ pub enum FederationGrantError {
     /// Namespace and storage policy was attached to the wrong resource kind.
     #[error("federation grant policy does not match its resource")]
     InvalidResourcePolicy,
+    /// The route does not originate at the resource authority or bind its predecessor shape.
+    #[error("federation grant route does not match its resource or predecessor")]
+    InvalidRoute,
     /// Untrusted use evidence substituted an authority-bound field.
     #[error("federated mutation evidence does not match its grant")]
     EvidenceMismatch,
@@ -319,13 +385,28 @@ fn validate_resource_policy(
     }
 }
 
+fn validate_route(
+    route: &FederationGrantRoute,
+    upstream_grant_id: Option<FederationGrantId>,
+    resource: FederationResourceScope,
+) -> Result<(), FederationGrantError> {
+    let is_direct = route.downstream_depth() == 0;
+    if route.authority_mesh_id() != resource.authority_mesh_id()
+        || is_direct != upstream_grant_id.is_none()
+    {
+        Err(FederationGrantError::InvalidRoute)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_evidence_identity(
-    grant: FederationGrant,
+    grant: &FederationGrant,
     evidence: FederatedMutationEvidence,
 ) -> Result<(), FederationGrantError> {
     if evidence.grant_id != grant.grant_id
         || evidence.relationship_id != grant.relationship_id
-        || evidence.subject != grant.subject
+        || evidence.accepting_mesh_id != grant.recipient_mesh_id()
         || evidence.resource != grant.resource
         || evidence.authority_epoch != grant.authority_epoch
     {

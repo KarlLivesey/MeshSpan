@@ -118,7 +118,7 @@ Build:
   non-production compatibility lane;
 - authoritative federation relationships, rotating trust identities, governance
   edges, resource grants, delegated ceilings, bilateral quotas, offline validity,
-  receiving-swarm principal projections, downstream delegation chains, successor
+  recipient-local grant assignments, actor lifecycle attestations, downstream delegation chains, successor
   designations and quarantine records;
 - typed idempotent commands and receipts for connect/approve, renew, restrict,
   revoke, recover, transfer ownership and retire a relationship;
@@ -304,6 +304,9 @@ AUTH-006, SIM-008, SIM-009, FED-005, FED-007–015, FED-022–025.
 ## Pre-Stage 6 — accepted-decision retrofit
 
 **Depends on:** Stages 1–5. **Required before Stage 6 starts.**
+
+**Status:** complete. See
+[`pre-stage-6-retrofit-evidence.md`](pre-stage-6-retrofit-evidence.md).
 
 The executed Stage 1–5 evidence predates D-074–D-077. It remains valid for the
 underlying consensus, persistence, transport, storage and filesystem behaviour,

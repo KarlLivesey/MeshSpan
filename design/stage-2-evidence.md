@@ -22,7 +22,7 @@ public file access; those remain later roadmap stages.
   backup/snapshot positions.
 - Federation schemas and typed commands cover independently administered swarm
   relationships, rotating identities, signed governance ancestry, bilateral
-  grants/restrictions, remote-principal projections, recovery succession and
+  grants/restrictions, remote actor lifecycle attestations, recovery succession and
   retained quarantine outcomes. Governance and succession ancestry reject
   direct and transitive cycles.
 - A permanent root directory owns immutable metadata scopes and signed route

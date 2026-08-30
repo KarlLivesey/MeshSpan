@@ -515,6 +515,61 @@ mod tests {
     }
 
     #[test]
+    fn one_machine_reports_device_protection_separately_from_machine_ha() {
+        let mut topology = Topology::default();
+        topology.register_host(host(1)).expect("host fits");
+        topology
+            .register_fault_group(group(1), class(1))
+            .expect("machine group fits");
+        topology
+            .add_fault_group_member(group(1), FaultGroupMember::Host(host(1)))
+            .expect("host exists");
+        for value in 1..=3 {
+            topology
+                .register_target(target(value), host(1))
+                .expect("target fits");
+            topology
+                .register_fault_group(group(value.saturating_add(10)), class(2))
+                .expect("device group fits");
+            topology
+                .add_fault_group_member(
+                    group(value.saturating_add(10)),
+                    FaultGroupMember::Target(target(value)),
+                )
+                .expect("target exists");
+        }
+        let layout = ProtectionLayout::new(1, vec![target(1), target(2), target(3)])
+            .expect("layout is valid");
+        let device_loss = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2),
+            failure_count: 2,
+        }])
+        .expect("device scenario is valid");
+        let machine_loss = FailureScenario::new(vec![FailureTerm {
+            class_id: class(1),
+            failure_count: 1,
+        }])
+        .expect("machine scenario is valid");
+
+        assert_eq!(
+            prove_protection(&topology, &device_loss, &layout, 10),
+            Ok(ProtectionProof {
+                survives: true,
+                evaluated_loss_sets: 3,
+                minimum_remaining_slices: 1,
+            })
+        );
+        assert_eq!(
+            prove_protection(&topology, &machine_loss, &layout, 10),
+            Ok(ProtectionProof {
+                survives: false,
+                evaluated_loss_sets: 1,
+                minimum_remaining_slices: 0,
+            })
+        );
+    }
+
+    #[test]
     fn refuses_vacuous_or_unbounded_protection_claims() {
         let topology = three_host_topology();
         let scenario = FailureScenario::new(vec![FailureTerm {

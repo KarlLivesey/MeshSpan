@@ -107,23 +107,31 @@ impl FederationMutationAcceptanceAuthority for MetadataFederationMutationAccepta
         let connection =
             federation_connection_authority(self.repository, request.relationship_id, request.now)?
                 .ok_or(MetadataFederationMutationAcceptanceError::AuthorityUnavailable)?;
-        let grant = effective.grant;
-        let subject = grant.subject();
+        let grant = &effective.grant;
+        let actor = FederatedPrincipal::new(
+            connection.local_identity.local_mesh_id,
+            session.principal_id,
+        );
         let FederationPolicy::Namespace(policy) = grant.policy() else {
             return Err(MetadataFederationMutationAcceptanceError::InvalidRequest);
         };
         let authority = proposal.authority();
-        let exact_subject = subject
-            == FederatedPrincipal::new(
-                connection.local_identity.local_mesh_id,
-                session.principal_id,
-            )
+        let exact_actor = grant.recipient_mesh_id() == connection.local_identity.local_mesh_id
+            && grant.issuer_mesh_id() == connection.local_identity.remote_mesh_id
             && authority.created_by() == session.principal_id;
-        let exact_scope = grant.resource().authority_mesh_id()
+        let exact_scope = grant.route().issuer_mesh_id()
             == connection.local_identity.remote_mesh_id
             && authority.is_within(grant.resource());
-        if !exact_subject
+        let local_assignment = self.repository.evaluate_federation_grant_assignment(
+            grant.grant_id(),
+            session.principal_id,
+            session.identity_revision,
+            authority.required_rights(),
+            request.now,
+        )?;
+        if !exact_actor
             || !exact_scope
+            || local_assignment.is_none()
             || !policy
                 .access()
                 .rights()
@@ -135,7 +143,7 @@ impl FederationMutationAcceptanceAuthority for MetadataFederationMutationAccepta
             evidence: FederatedMutationEvidence::new(
                 grant.grant_id(),
                 grant.relationship_id(),
-                subject,
+                actor,
                 grant.resource(),
                 grant.authority_epoch(),
                 request.now,

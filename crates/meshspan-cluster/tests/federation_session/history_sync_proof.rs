@@ -68,8 +68,8 @@ pub(super) async fn prove_restart_resumable_filesystem_sync(
         AdmitEverySignedMutation,
         AdmitProofMutation,
     );
-    let client_grants = StaticBranchAuthority::admit(fixture.authority);
-    let server_grants = StaticBranchAuthority::admit(fixture.authority);
+    let client_grants = StaticBranchAuthority::admit(fixture.authority.clone());
+    let server_grants = StaticBranchAuthority::admit(fixture.authority.clone());
     let environment = SyncEnvironment {
         proof,
         fixture,
