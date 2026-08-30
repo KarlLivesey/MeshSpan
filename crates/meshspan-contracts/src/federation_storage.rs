@@ -7,7 +7,7 @@ use meshspan_domain::{
     FederationStorageAllocationId, MeshId, NodeId, OperationId, Revision, TargetId, UnixMicros,
 };
 
-use crate::{ContractError, ShardIdentity};
+use crate::{ContractError, ShardIdentity, ShardReceipt};
 
 const PERMIT_DOMAIN: &[u8] = b"meshspan.federation.shard-permit.v1";
 
@@ -125,6 +125,29 @@ pub fn verify_federated_shard_permit_mac(
         == blake3::Hash::from_bytes(permit.permit_digest)
 }
 
+/// Calculates durable provider result evidence for one federated shard write.
+#[must_use]
+pub fn federated_shard_write_result_digest(
+    permit: &FederatedShardPermit,
+    receipt: ShardReceipt,
+    completed_at: UnixMicros,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.federation.shard-write-result.v1");
+    digest.update(&permit.permit_digest);
+    digest.update(&receipt.operation_id.as_bytes());
+    digest.update(&receipt.shard.manifest_digest);
+    digest.update(&receipt.shard.stripe_index.to_be_bytes());
+    digest.update(&receipt.shard.shard_index.to_be_bytes());
+    digest.update(&receipt.shard.generation.to_be_bytes());
+    digest.update(&receipt.length.to_be_bytes());
+    digest.update(&receipt.digest);
+    digest.update(&receipt.target_id.as_bytes());
+    digest.update(&receipt.target_generation.to_be_bytes());
+    digest.update(&completed_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use meshspan_domain::{
@@ -134,9 +157,9 @@ mod tests {
 
     use super::{
         FederatedShardPermit, FederatedStoragePermitMacKey, federated_shard_permit_mac,
-        verify_federated_shard_permit_mac,
+        federated_shard_write_result_digest, verify_federated_shard_permit_mac,
     };
-    use crate::ShardIdentity;
+    use crate::{ShardIdentity, ShardReceipt};
 
     #[test]
     fn digest_binds_every_authority_dimension() -> Result<(), Box<dyn std::error::Error>> {
@@ -157,6 +180,66 @@ mod tests {
     #[test]
     fn secret_key_rejects_zero_sentinel() {
         assert!(FederatedStoragePermitMacKey::from_bytes([0; 32]).is_err());
+    }
+
+    #[test]
+    fn write_result_digest_binds_permit_receipt_and_completion()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let permit = FederatedShardPermit {
+            permit_digest: [41; 32],
+            ..permit()?
+        };
+        let receipt = receipt(&permit);
+        let completed_at = UnixMicros::new(42);
+        let expected = federated_shard_write_result_digest(&permit, receipt, completed_at);
+        let receipt_substitutions = [
+            ShardReceipt {
+                operation_id: OperationId::from_bytes([43; 16])?,
+                ..receipt
+            },
+            ShardReceipt {
+                shard: ShardIdentity {
+                    shard_index: 44,
+                    ..receipt.shard
+                },
+                ..receipt
+            },
+            ShardReceipt {
+                length: 45,
+                ..receipt
+            },
+            ShardReceipt {
+                digest: [46; 32],
+                ..receipt
+            },
+            ShardReceipt {
+                target_id: TargetId::from_bytes([47; 16])?,
+                ..receipt
+            },
+            ShardReceipt {
+                target_generation: 48,
+                ..receipt
+            },
+        ];
+        assert!(receipt_substitutions.into_iter().all(|substitution| {
+            federated_shard_write_result_digest(&permit, substitution, completed_at) != expected
+        }));
+        assert_ne!(
+            federated_shard_write_result_digest(
+                &FederatedShardPermit {
+                    permit_digest: [49; 32],
+                    ..permit
+                },
+                receipt,
+                completed_at
+            ),
+            expected
+        );
+        assert_ne!(
+            federated_shard_write_result_digest(&permit, receipt, UnixMicros::new(50)),
+            expected
+        );
+        Ok(())
     }
 
     fn reject_every_substitution(
@@ -334,5 +417,16 @@ mod tests {
             request_digest: [22; 32],
             permit_digest: [0; 32],
         })
+    }
+
+    const fn receipt(permit: &FederatedShardPermit) -> ShardReceipt {
+        ShardReceipt {
+            operation_id: permit.operation_id,
+            shard: permit.shard,
+            length: 1,
+            digest: [40; 32],
+            target_id: permit.target_id,
+            target_generation: permit.target_generation,
+        }
     }
 }

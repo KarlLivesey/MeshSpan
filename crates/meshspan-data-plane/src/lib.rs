@@ -14,7 +14,9 @@ pub use capability::{
     decode_write_permit, encode_federated_shard_permit, encode_read_permit, encode_removal_permit,
     encode_write_permit,
 };
-pub use client::{get_shard, put_shard, reclaim_shard, tombstone_shard};
+pub use client::{
+    get_federated_shard, get_shard, put_federated_shard, put_shard, reclaim_shard, tombstone_shard,
+};
 pub use error::DataPlaneError;
 pub use router::RemoteShardRouter;
-pub use server::RemoteShardService;
+pub use server::{FederatedShardAuthority, RemoteShardService};

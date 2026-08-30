@@ -43,7 +43,7 @@ pub use data::{
 };
 pub use federation_storage::{
     FederatedShardPermit, FederatedStoragePermitMacKey, federated_shard_permit_mac,
-    verify_federated_shard_permit_mac,
+    federated_shard_write_result_digest, verify_federated_shard_permit_mac,
 };
 pub use filesystem::{
     namespace_reconciliation_result_digest, namespace_snapshot_restore_result_digest,

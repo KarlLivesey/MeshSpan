@@ -304,6 +304,7 @@ impl Fixture {
             provider,
             StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
             self.mesh_id,
+            self.storage_node,
             self.target_id,
             1,
             1_024,

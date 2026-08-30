@@ -3,21 +3,49 @@
 //! Real Quinn proof for signed federated storage issuance and lost-response replay.
 
 use std::error::Error;
+use std::fs;
 
 use meshspan_cluster::{
-    FederationStorageCapabilityProvider, FederationStorageCapabilityRequest,
-    FederationStorageCapabilityServeRequest,
+    FederationShardServeRequest, FederationStorageCapabilityProvider,
+    FederationStorageCapabilityRequest, FederationStorageCapabilityServeRequest,
 };
-use meshspan_contracts::{FederatedStoragePermitMacKey, verify_federated_shard_permit_mac};
-use meshspan_data_plane::decode_federated_shard_permit;
-use meshspan_domain::{FederationStorageAction, FederationStorageAllocation, NodeId, UnixMicros};
-use meshspan_metadata::{FederationStorageQuotaDisposition, LocalDatabase};
+use meshspan_contracts::{
+    BoundedBytes, FederatedShardPermit, FederatedStoragePermitMacKey, ShardReceipt,
+    StoragePermitMacKey, verify_federated_shard_permit_mac,
+};
+use meshspan_data_plane::{
+    DataPlaneError, RemoteShardService, decode_federated_shard_permit, get_federated_shard,
+    put_federated_shard,
+};
+use meshspan_domain::{
+    EntropyError, FederationStorageAction, FederationStorageAllocation, NodeId, OperationId,
+    PartitionId, RandomSource, Revision, UnixMicros,
+};
+use meshspan_metadata::{FederationStorageQuotaDisposition, FederationStorageUsage, LocalDatabase};
+use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::{
-    ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability, ShardIdentity,
+    ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability, RequestHeader,
+    ShardIdentity,
+};
+use meshspan_storage::{
+    CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
+    UsageLimit,
 };
 use meshspan_transport::{FederationExchangeContext, FederationReplayGuard};
 
 use super::{NOW, SessionProof, replay_guard};
+
+const PROVIDER_PERMIT_KEY: [u8; 32] = [209; 32];
+const PAYLOAD: &[u8] = b"federated shard";
+
+struct FixedRandom;
+
+impl RandomSource for FixedRandom {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        destination.fill(17);
+        Ok(())
+    }
+}
 
 pub(super) async fn prove_storage_capability_exchange(
     proof: &SessionProof<'_>,
@@ -28,32 +56,35 @@ pub(super) async fn prove_storage_capability_exchange(
     let local_path = directory.path().join("provider-local.sqlite3");
     let mut local = LocalDatabase::open(&local_path, provider_node_id, NOW)?;
     let permit_key = FederatedStoragePermitMacKey::from_bytes([210; 32])?;
-    let capability_request = request(allocation);
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
-
-    let (capability, served) = exchange(
+    let issued = issue_write_capability(
         proof,
         &mut local,
         &permit_key,
-        capability_request.clone(),
-        exchange_values(211, NOW, UnixMicros::new(1_800_000))?,
+        allocation,
+        provider_node_id,
         &mut client_replay,
         &mut server_replay,
     )
     .await?;
-    assert_eq!(served.relationship_id, proof.relationship_id);
-    assert_eq!(served.action, FederationStorageAction::Put);
-    assert_eq!(served.maximum_bytes, 20);
-    assert_eq!(
-        served.quota_disposition,
-        Some(FederationStorageQuotaDisposition::Applied)
-    );
-    let permit = decode_federated_shard_permit(&capability.capability().canonical_capability)?;
-    assert!(verify_federated_shard_permit_mac(&permit_key, &permit));
-    assert_eq!(permit.operation_id, served.operation_id);
-    assert_eq!(permit.provider_node_id, provider_node_id);
-    assert_eq!(reserved_bytes(&local, allocation)?, 20);
+    assert_eq!(usage(&local, allocation)?.reserved_bytes, 20);
+
+    let payload = BoundedBytes::copy_from(PAYLOAD, 20)?;
+    let mut service = shard_service(directory.path(), proof, allocation, provider_node_id)?;
+    reject_deadline_beyond_permit(proof, &issued.permit, &payload).await?;
+    let receipt = put_cycle(
+        proof,
+        &mut local,
+        &mut service,
+        &permit_key,
+        &issued.permit,
+        &payload,
+        NOW,
+    )
+    .await?;
+    assert_eq!(receipt.length, PAYLOAD.len() as u64);
+    assert_usage(&local, allocation, PAYLOAD.len() as u64, 0)?;
 
     drop(local);
     let retry_now = UnixMicros::new(NOW.get() + 1);
@@ -62,8 +93,8 @@ pub(super) async fn prove_storage_capability_exchange(
         proof,
         &mut local,
         &permit_key,
-        capability_request,
-        exchange_values(221, retry_now, UnixMicros::new(1_850_000))?,
+        request(allocation, FederationStorageAction::Put),
+        exchange_values(221, 212, retry_now, UnixMicros::new(1_850_000))?,
         &mut client_replay,
         &mut server_replay,
     )
@@ -74,10 +105,227 @@ pub(super) async fn prove_storage_capability_exchange(
     );
     assert_eq!(
         retry.capability().canonical_capability,
-        capability.capability().canonical_capability
+        issued.canonical_capability
     );
-    assert_eq!(reserved_bytes(&local, allocation)?, 20);
+    let retry_permit = decode_federated_shard_permit(&retry.capability().canonical_capability)?;
+    assert_eq!(
+        put_cycle(
+            proof,
+            &mut local,
+            &mut service,
+            &permit_key,
+            &retry_permit,
+            &payload,
+            retry_now,
+        )
+        .await?,
+        receipt
+    );
+    assert_usage(&local, allocation, PAYLOAD.len() as u64, 0)?;
+
+    let read_now = UnixMicros::new(NOW.get() + 2);
+    let (read_capability, read_served) = exchange(
+        proof,
+        &mut local,
+        &permit_key,
+        request(allocation, FederationStorageAction::Get),
+        exchange_values(231, 213, read_now, UnixMicros::new(1_850_000))?,
+        &mut client_replay,
+        &mut server_replay,
+    )
+    .await?;
+    assert_eq!(read_served.action, FederationStorageAction::Get);
+    assert_eq!(read_served.quota_disposition, None);
+    let read_permit =
+        decode_federated_shard_permit(&read_capability.capability().canonical_capability)?;
+    let downloaded = get_cycle(
+        proof,
+        &mut local,
+        &mut service,
+        &permit_key,
+        &read_permit,
+        read_now,
+    )
+    .await?;
+    assert_eq!(downloaded, payload);
+    assert_usage(&local, allocation, PAYLOAD.len() as u64, 0)?;
     Ok(())
+}
+
+async fn reject_deadline_beyond_permit(
+    proof: &SessionProof<'_>,
+    permit: &FederatedShardPermit,
+    payload: &BoundedBytes,
+) -> Result<(), Box<dyn Error>> {
+    let mut header = request_header(proof.client_mesh, permit.operation_id, permit.expires_at)?;
+    header.deadline_unix_micros = permit.expires_at.get() + 1;
+    assert!(matches!(
+        put_federated_shard(
+            proof.client_connection,
+            header,
+            *permit,
+            payload,
+            wire_limits()?
+        )
+        .await,
+        Err(DataPlaneError::InvalidMessage)
+    ));
+    Ok(())
+}
+
+struct IssuedWriteCapability {
+    canonical_capability: Vec<u8>,
+    permit: FederatedShardPermit,
+}
+
+async fn issue_write_capability(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    permit_key: &FederatedStoragePermitMacKey,
+    allocation: FederationStorageAllocation,
+    provider_node_id: NodeId,
+    client_replay: &mut FederationReplayGuard,
+    server_replay: &mut FederationReplayGuard,
+) -> Result<IssuedWriteCapability, Box<dyn Error>> {
+    let (capability, served) = exchange(
+        proof,
+        local,
+        permit_key,
+        request(allocation, FederationStorageAction::Put),
+        exchange_values(211, 212, NOW, UnixMicros::new(1_800_000))?,
+        client_replay,
+        server_replay,
+    )
+    .await?;
+    assert_eq!(served.relationship_id, proof.relationship_id);
+    assert_eq!(served.action, FederationStorageAction::Put);
+    assert_eq!(served.maximum_bytes, 20);
+    assert_eq!(
+        served.quota_disposition,
+        Some(FederationStorageQuotaDisposition::Applied)
+    );
+    let canonical_capability = capability.capability().canonical_capability.clone();
+    let permit = decode_federated_shard_permit(&canonical_capability)?;
+    assert!(verify_federated_shard_permit_mac(permit_key, &permit));
+    assert_eq!(permit.operation_id, served.operation_id);
+    assert_eq!(permit.provider_node_id, provider_node_id);
+    Ok(IssuedWriteCapability {
+        canonical_capability,
+        permit,
+    })
+}
+
+fn shard_service(
+    root: &std::path::Path,
+    proof: &SessionProof<'_>,
+    allocation: FederationStorageAllocation,
+    provider_node_id: NodeId,
+) -> Result<RemoteShardService<FolderShardStore>, Box<dyn Error>> {
+    let storage_path = root.join("provider-storage");
+    let state_path = root.join("provider-state");
+    fs::create_dir(&storage_path)?;
+    let mut random = FixedRandom;
+    let folder = RegisteredFolder::register_new(
+        &storage_path,
+        FolderRegistration {
+            mesh_id: proof.server_mesh,
+            target_id: allocation.target_id(),
+            generation: allocation.target_generation(),
+            usage_limit: UsageLimit::bytes(4_096)?,
+        },
+        &mut random,
+    )?;
+    let provider = FolderShardStore::open(
+        folder,
+        &state_path,
+        CapacityPolicy {
+            usage_limit: UsageLimit::bytes(4_096)?,
+            repair_reserve_bytes: 0,
+            revision: Revision::new(1),
+        },
+        StoragePermitVerifier::new(
+            proof.server_mesh,
+            1,
+            Revision::new(1),
+            StoragePermitMacKey::from_bytes(PROVIDER_PERMIT_KEY)?,
+        )?,
+        NOW,
+        &mut random,
+    )?;
+    Ok(RemoteShardService::new(
+        provider,
+        StoragePermitMacKey::from_bytes(PROVIDER_PERMIT_KEY)?,
+        proof.server_mesh,
+        provider_node_id,
+        allocation.target_id(),
+        allocation.target_generation(),
+        1_024,
+    )?)
+}
+
+async fn put_cycle(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    service: &mut RemoteShardService<FolderShardStore>,
+    permit_key: &FederatedStoragePermitMacKey,
+    permit: &FederatedShardPermit,
+    payload: &BoundedBytes,
+    now: UnixMicros,
+) -> Result<ShardReceipt, Box<dyn Error>> {
+    let limits = wire_limits()?;
+    let put = put_federated_shard(
+        proof.client_connection,
+        request_header(proof.client_mesh, permit.operation_id, permit.expires_at)?,
+        *permit,
+        payload,
+        limits,
+    );
+    let serve = proof.server_runtime.serve_federated_shard_stream(
+        proof.server_connection,
+        proof.server_authority,
+        local,
+        service,
+        permit_key,
+        FederationShardServeRequest {
+            relationship_id: proof.relationship_id,
+            now,
+        },
+    );
+    let (put_result, serve_result) = tokio::join!(put, serve);
+    serve_result?;
+    Ok(put_result?)
+}
+
+async fn get_cycle(
+    proof: &SessionProof<'_>,
+    local: &mut LocalDatabase,
+    service: &mut RemoteShardService<FolderShardStore>,
+    permit_key: &FederatedStoragePermitMacKey,
+    permit: &FederatedShardPermit,
+    now: UnixMicros,
+) -> Result<BoundedBytes, Box<dyn Error>> {
+    let limits = wire_limits()?;
+    let get = get_federated_shard(
+        proof.client_connection,
+        request_header(proof.client_mesh, permit.operation_id, permit.expires_at)?,
+        *permit,
+        1_024,
+        limits,
+    );
+    let serve = proof.server_runtime.serve_federated_shard_stream(
+        proof.server_connection,
+        proof.server_authority,
+        local,
+        service,
+        permit_key,
+        FederationShardServeRequest {
+            relationship_id: proof.relationship_id,
+            now,
+        },
+    );
+    let (get_result, serve_result) = tokio::join!(get, serve);
+    serve_result?;
+    Ok(get_result?)
 }
 
 async fn exchange(
@@ -131,6 +379,7 @@ struct ExchangeValues {
 
 fn exchange_values(
     seed: u8,
+    operation_seed: u8,
     now: UnixMicros,
     requested_valid_until: UnixMicros,
 ) -> Result<ExchangeValues, meshspan_transport::TransportError> {
@@ -138,7 +387,7 @@ fn exchange_values(
         context: FederationExchangeContext::new(
             ProtocolVersion { major: 1, minor: 1 },
             [seed; 16],
-            [212; 16],
+            [operation_seed; 16],
             [seed.saturating_add(1); 16],
             UnixMicros::new(1_900_000),
             [seed.saturating_add(2); 32],
@@ -150,7 +399,10 @@ fn exchange_values(
     })
 }
 
-fn request(allocation: FederationStorageAllocation) -> RequestFederatedStorageCapability {
+fn request(
+    allocation: FederationStorageAllocation,
+    action: FederationStorageAction,
+) -> RequestFederatedStorageCapability {
     RequestFederatedStorageCapability {
         grant_id: allocation.grant_id().as_bytes().to_vec(),
         allocation_id: allocation.allocation_id().as_bytes().to_vec(),
@@ -162,19 +414,64 @@ fn request(allocation: FederationStorageAllocation) -> RequestFederatedStorageCa
             shard_index: 4,
             generation: 1,
         }),
-        action: RemoteShardAction::Put.into(),
+        action: wire_action(action).into(),
         maximum_bytes: 20,
         scope_digest: vec![231; 32],
         signature: Vec::new(),
     }
 }
 
-fn reserved_bytes(
+fn wire_action(action: FederationStorageAction) -> RemoteShardAction {
+    match action {
+        FederationStorageAction::Put => RemoteShardAction::Put,
+        FederationStorageAction::Get => RemoteShardAction::Get,
+        FederationStorageAction::Scrub => RemoteShardAction::Scrub,
+        FederationStorageAction::Repair => RemoteShardAction::Repair,
+        FederationStorageAction::Retire => RemoteShardAction::Retire,
+        FederationStorageAction::Reclaim => RemoteShardAction::Reclaim,
+    }
+}
+
+fn request_header(
+    mesh_id: meshspan_domain::MeshId,
+    operation: OperationId,
+    deadline: UnixMicros,
+) -> Result<RequestHeader, Box<dyn Error>> {
+    Ok(RequestHeader {
+        version: Some(ProtocolVersion { major: 1, minor: 0 }),
+        mesh_id: mesh_id.as_bytes().to_vec(),
+        partition_id: PartitionId::from_bytes([240; 16])?.as_bytes().to_vec(),
+        routing_epoch: 1,
+        sender_node_id: NodeId::from_bytes([241; 16])?.as_bytes().to_vec(),
+        sender_incarnation: 1,
+        request_id: operation.as_bytes().to_vec(),
+        operation_id: operation.as_bytes().to_vec(),
+        deadline_unix_micros: deadline.get(),
+        trace_id: operation.as_bytes().to_vec(),
+    })
+}
+
+fn wire_limits() -> Result<WireLimits, Box<dyn Error>> {
+    Ok(WireLimits::new(64 * 1_024, 64 * 1_024, 256, 4_096)?)
+}
+
+fn usage(
     local: &LocalDatabase,
     allocation: FederationStorageAllocation,
-) -> Result<u64, Box<dyn Error>> {
-    Ok(local
+) -> Result<FederationStorageUsage, Box<dyn Error>> {
+    local
         .federated_storage_usage(allocation.allocation_id())?
-        .ok_or("federated storage usage was not persisted")?
-        .reserved_bytes)
+        .ok_or_else(|| "federated storage usage was not persisted".into())
+}
+
+fn assert_usage(
+    local: &LocalDatabase,
+    allocation: FederationStorageAllocation,
+    committed_bytes: u64,
+    reserved_bytes: u64,
+) -> Result<(), Box<dyn Error>> {
+    let usage = usage(local, allocation)?;
+    assert_eq!(usage.committed_bytes, committed_bytes);
+    assert_eq!(usage.reserved_bytes, reserved_bytes);
+    Ok(())
 }

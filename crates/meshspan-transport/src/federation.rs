@@ -43,7 +43,51 @@ pub struct FederationPeerRegistry {
     by_fingerprint: BTreeMap<[u8; 32], FederationPeerBinding>,
 }
 
+/// Federation peer identity proven from the current TLS certificate and metadata lifetime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedFederationPeer(FederationPeerBinding);
+
+impl AuthenticatedFederationPeer {
+    /// Returns the exact current bilateral relationship.
+    #[must_use]
+    pub const fn relationship_id(self) -> FederationRelationshipId {
+        self.0.relationship_id
+    }
+
+    /// Returns the receiving provider swarm.
+    #[must_use]
+    pub const fn local_mesh_id(self) -> MeshId {
+        self.0.local_mesh_id
+    }
+
+    /// Returns the certificate-authenticated remote swarm.
+    #[must_use]
+    pub const fn remote_mesh_id(self) -> MeshId {
+        self.0.remote_mesh_id
+    }
+
+    /// Returns the current relationship authority fence.
+    #[must_use]
+    pub const fn authority_epoch(self) -> u64 {
+        self.0.authority_epoch
+    }
+}
+
 impl FederationPeerRegistry {
+    /// Authenticates the connection certificate against one current federation identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown certificate or an identity outside its authoritative lifetime.
+    pub fn authenticate_connection(
+        &self,
+        connection: &quinn::Connection,
+        now: UnixMicros,
+    ) -> Result<AuthenticatedFederationPeer, TransportError> {
+        self.connection_binding(connection, now)
+            .map(|(binding, _)| AuthenticatedFederationPeer(binding))
+    }
+
     /// Builds an unambiguous registry from active, metadata-validated relationship identities.
     ///
     /// # Errors

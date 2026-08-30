@@ -2,7 +2,8 @@
 
 //! Authenticated remote-storage capability exchange over one dedicated Quinn stream.
 
-use meshspan_contracts::FederatedStoragePermitMacKey;
+use meshspan_contracts::{FederatedStoragePermitMacKey, StorageProvider};
+use meshspan_data_plane::RemoteShardService;
 use meshspan_domain::{FederationRelationshipId, FederationStorageAction, OperationId, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeRepository, FederationStorageQuotaDisposition, LocalDatabase,
@@ -18,6 +19,7 @@ use crate::federation_session::{envelope_relationship, load_authority};
 use crate::{
     FederationAuthoritySource, FederationSessionError, FederationSessionRuntime,
     FederationStorageCapabilityIssueRequest, FederationStorageCapabilityIssuer,
+    MetadataFederatedShardAuthority,
 };
 
 /// Complete consumer-side input for one exact remote-shard capability request.
@@ -42,6 +44,15 @@ pub struct FederationStorageCapabilityServeRequest {
     pub capability_nonce: [u8; 32],
     /// Exclusive short-lived permit expiry.
     pub valid_until: UnixMicros,
+    /// Current quorum-derived mesh time.
+    pub now: UnixMicros,
+}
+
+/// Current relationship and mesh time for one inbound federated data stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FederationShardServeRequest {
+    /// Relationship established for the connection and reloaded before accepting provider IO.
+    pub relationship_id: FederationRelationshipId,
     /// Current quorum-derived mesh time.
     pub now: UnixMicros,
 }
@@ -186,5 +197,38 @@ impl FederationSessionRuntime<'_> {
             maximum_bytes: issued.permit().maximum_bytes,
             quota_disposition: issued.quota_disposition(),
         })
+    }
+
+    /// Reauthenticates a federation connection and serves one bounded provider data stream.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unavailable current relationship authority, a substituted TLS peer, wrong stream
+    /// class, invalid/stale permits, quota lifecycle failure and provider or transport failure.
+    pub async fn serve_federated_shard_stream<Provider: StorageProvider>(
+        &self,
+        connection: &quinn::Connection,
+        repository: &AuthoritativeRepository,
+        local_database: &mut LocalDatabase,
+        service: &mut RemoteShardService<Provider>,
+        permit_key: &FederatedStoragePermitMacKey,
+        request: FederationShardServeRequest,
+    ) -> Result<(), FederationSessionError> {
+        let current = load_authority(repository, request.relationship_id, request.now)?;
+        let peers = meshspan_transport::FederationPeerRegistry::new([current.peer])?;
+        let peer = peers.authenticate_connection(connection, request.now)?;
+        let stream = accept_stream(connection).await?;
+        let mut authority = MetadataFederatedShardAuthority::new(repository, local_database);
+        service
+            .serve_federated_stream(
+                stream,
+                peer,
+                permit_key,
+                &mut authority,
+                self.negotiation_config.wire_limits(),
+                request.now,
+            )
+            .await
+            .map_err(Into::into)
     }
 }

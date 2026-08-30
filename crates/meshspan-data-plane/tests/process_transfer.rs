@@ -243,6 +243,7 @@ fn create_service(
         provider,
         StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
         mesh_id,
+        NodeId::from_bytes([config.number; 16])?,
         target_id,
         1,
         1_024,

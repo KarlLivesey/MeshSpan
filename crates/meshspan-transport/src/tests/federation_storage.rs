@@ -30,6 +30,11 @@ pub(super) fn prove_signed_storage_capability_request(
     limits: WireLimits,
 ) -> Result<(), Box<dyn Error>> {
     let identity = client_identity(certificate, signing_key)?;
+    let peer = registry.authenticate_connection(connection, UnixMicros::new(1_500_000))?;
+    assert_eq!(peer.relationship_id(), identity.binding().relationship_id);
+    assert_eq!(peer.remote_mesh_id(), identity.binding().local_mesh_id);
+    assert_eq!(peer.local_mesh_id(), identity.binding().remote_mesh_id);
+    assert_eq!(peer.authority_epoch(), 1);
     let context = exchange_context(91, 92, 93, 94)?;
     let outbound = signed_federation_storage_capability_request(
         &identity,
