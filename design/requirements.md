@@ -177,7 +177,9 @@ Status: **draft for review**.
   and no delegation hop may expand rights, bounds or validity.
 - **FED-010** Every shared volume, folder or file MUST retain exactly one owning swarm responsible
   for its ACL policy and canonical converged history, independently of data placement and the swarm
-  that accepted an offline edit.
+  that accepted an offline edit. That owning swarm is the intrinsic root principal for every
+  resource it owns. It MUST be able to delegate rights independently to its local users/groups and
+  to receiving swarms without creating a synthetic self-federation relationship or grant.
 - **FED-011** An edit grant MUST allow authorised users from another swarm to create and modify data.
   A disconnected swarm with a valid signed offline delegation MUST be able to commit a durable
   local branch without synchronous confirmation from the owner or a governing swarm.

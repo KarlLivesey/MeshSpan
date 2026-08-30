@@ -11,8 +11,8 @@ use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
     authentication_method, authentication_method_creation, authentication_policy, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, federation_assignment, federation_grant,
-    federation_mutation_admission, federation_principal, federation_quarantine,
+    cleanup_reclamation, cluster, component, federation_actor_attestation, federation_assignment,
+    federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
     namespace, retention, root_delegation, routing, session, snapshot_schedule, tags,
     user_snapshot, version_cleanup, volume_head,
@@ -368,8 +368,8 @@ fn execute(
     if federation_storage_allocation::is_command(command) {
         return federation_storage_allocation::execute(transaction, context, command, revision);
     }
-    if federation_principal::is_command(command) {
-        return federation_principal::execute(transaction, context, command, revision);
+    if federation_actor_attestation::is_command(command) {
+        return federation_actor_attestation::execute(transaction, context, command, revision);
     }
     if federation_succession::is_command(command) {
         return federation_succession::execute(transaction, context, command, revision);
@@ -902,7 +902,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RevokeFederationGrantAssignment(_) => 78,
         AuthoritativeCommand::ActivateFederationGrantAssignment(_) => 79,
         AuthoritativeCommand::RevokeFederationGrantAssignmentActivation(_) => 80,
-        AuthoritativeCommand::UpsertFederatedPrincipalProjection(_) => 62,
+        AuthoritativeCommand::RecordFederatedActorAttestation(_) => 62,
         AuthoritativeCommand::DesignateFederationSuccessor(_) => 63,
         AuthoritativeCommand::AcceptFederationSuccessor(_) => 64,
         AuthoritativeCommand::ActivateFederationSuccessor(_) => 65,

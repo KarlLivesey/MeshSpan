@@ -15,10 +15,10 @@ use tempfile::tempdir;
 use super::{AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
     AdmitFederatedMutation, ApplyDisposition, ApproveFederationRelationship, AuthoritativeCommand,
-    BootstrapMesh, CommandContext, EntityKind, FederatedPrincipalKind, FederatedPrincipalState,
+    BootstrapMesh, CommandContext, EntityKind, FederatedActorKind, FederatedActorState,
     FederationGovernanceDirection, FederationGrantRestriction, FederationTrustIdentity,
-    IssueFederationGrant, PartitionDatabase, ProposeFederationRelationship, RecordName,
-    RevokeFederationGrant, UpsertFederatedPrincipalProjection,
+    IssueFederationGrant, PartitionDatabase, ProposeFederationRelationship,
+    RecordFederatedActorAttestation, RecordName, RevokeFederationGrant,
 };
 
 #[test]
@@ -69,9 +69,9 @@ fn admitted_mutation_is_consensus_ordered_and_replays_after_suspension()
     assert_eq!(resolved.receipt.entity, receipt.entity);
     assert_eq!(resolved.admission, FederatedMutationAdmission::Admitted);
 
-    let suspended = signed_projection(
+    let suspended = signed_attestation(
         fixture.ids,
-        FederatedPrincipalState::Suspended,
+        FederatedActorState::Suspended,
         2,
         &fixture.remote_key,
     )?;
@@ -79,7 +79,7 @@ fn admitted_mutation_is_consensus_ordered_and_replays_after_suspension()
         &mut repository,
         7,
         context(83, fixture.ids.administrator, 84, 22, 6)?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(suspended),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(suspended),
     )?;
     let replay = repository.apply_committed(
         LogPosition { index: 8, term: 2 },
@@ -221,9 +221,9 @@ fn signed_remote_mutations_use_retained_authority_and_current_principal_state()
         FederatedMutationAdmission::Quarantined(QuarantineReason::Revoked)
     );
 
-    let suspended = signed_projection(
+    let suspended = signed_attestation(
         fixture.ids,
-        FederatedPrincipalState::Suspended,
+        FederatedActorState::Suspended,
         2,
         &fixture.remote_key,
     )?;
@@ -231,7 +231,7 @@ fn signed_remote_mutations_use_retained_authority_and_current_principal_state()
         &mut repository,
         7,
         context(72, fixture.ids.administrator, 73, 32, 6)?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(suspended),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(suspended),
     )?;
     assert_eq!(
         repository.classify_federated_mutation_acknowledgement(&admitted)?,
@@ -308,9 +308,9 @@ fn prepare(
         repository,
         4,
         context(22, ids.administrator, 23, 4, 3)?,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(signed_projection(
+        &AuthoritativeCommand::RecordFederatedActorAttestation(signed_attestation(
             ids,
-            FederatedPrincipalState::Active,
+            FederatedActorState::Active,
             1,
             remote_key,
         )?),
@@ -357,17 +357,17 @@ fn prepare(
     Ok(())
 }
 
-fn signed_projection(
+fn signed_attestation(
     ids: FixtureIds,
-    state: FederatedPrincipalState,
+    state: FederatedActorState,
     identity_revision: u64,
     remote_key: &SigningKey,
-) -> Result<UpsertFederatedPrincipalProjection, Box<dyn std::error::Error>> {
-    let mut projection = UpsertFederatedPrincipalProjection {
+) -> Result<RecordFederatedActorAttestation, Box<dyn std::error::Error>> {
+    let mut attestation = RecordFederatedActorAttestation {
         relationship_id: ids.relationship,
         home_mesh_id: ids.remote_mesh,
         principal_id: ids.remote_principal,
-        kind: FederatedPrincipalKind::User,
+        kind: FederatedActorKind::User,
         name: RecordName::new("Remote user")?,
         state,
         identity_revision,
@@ -375,8 +375,8 @@ fn signed_projection(
         signer_generation: 1,
         signature: [0; 64],
     };
-    projection.signature = remote_key.sign(&projection.signing_payload()).to_bytes();
-    Ok(projection)
+    attestation.signature = remote_key.sign(&attestation.signing_payload()).to_bytes();
+    Ok(attestation)
 }
 
 fn acknowledgement(

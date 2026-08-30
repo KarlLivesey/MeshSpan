@@ -1,8 +1,8 @@
 -- SPDX-License-Identifier: GPL-2.0-only
 
--- Current projections are replaceable read models. Every accepted signed home-
--- swarm statement remains immutable here for access and reconciliation audits.
-CREATE TABLE federation_principal_projection_history (
+-- Current attestations are replaceable read models. Every accepted signed home-
+-- swarm actor lifecycle statement remains immutable for reconciliation audits.
+CREATE TABLE federation_actor_attestation_history (
     relationship_id BLOB NOT NULL
         REFERENCES federation_relationships(relationship_id) ON DELETE RESTRICT,
     home_mesh_id BLOB NOT NULL CHECK (length(home_mesh_id) = 16),
@@ -21,17 +21,17 @@ CREATE TABLE federation_principal_projection_history (
     PRIMARY KEY (relationship_id, home_mesh_id, principal_id, identity_revision)
 ) STRICT;
 
-CREATE INDEX federation_principal_history_by_revision
-ON federation_principal_projection_history(revision, relationship_id, home_mesh_id, principal_id);
+CREATE INDEX federation_actor_attestation_history_by_revision
+ON federation_actor_attestation_history(revision, relationship_id, home_mesh_id, principal_id);
 
-CREATE TRIGGER federation_principal_history_reject_update
-BEFORE UPDATE ON federation_principal_projection_history
+CREATE TRIGGER federation_actor_attestation_history_reject_update
+BEFORE UPDATE ON federation_actor_attestation_history
 BEGIN
-    SELECT RAISE(ABORT, 'federated principal history is immutable');
+    SELECT RAISE(ABORT, 'federated actor attestation history is immutable');
 END;
 
-CREATE TRIGGER federation_principal_history_reject_delete
-BEFORE DELETE ON federation_principal_projection_history
+CREATE TRIGGER federation_actor_attestation_history_reject_delete
+BEFORE DELETE ON federation_actor_attestation_history
 BEGIN
-    SELECT RAISE(ABORT, 'federated principal history is immutable');
+    SELECT RAISE(ABORT, 'federated actor attestation history is immutable');
 END;

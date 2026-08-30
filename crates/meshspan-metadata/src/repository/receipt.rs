@@ -86,8 +86,8 @@ pub enum EntityKind {
     FederationTrustIdentity = 25,
     /// Effective immutable federation authority grant.
     FederationGrant = 26,
-    /// Signed home-swarm principal projection.
-    FederatedPrincipalProjection = 27,
+    /// Signed home-swarm actor lifecycle attestation.
+    FederatedActorAttestation = 27,
     /// Two-sided pre-authorised recovery succession.
     FederationSuccession = 28,
     /// Signed invisible federated mutation quarantine.
@@ -135,7 +135,7 @@ impl EntityKind {
             24 => Ok(Self::FederationRelationship),
             25 => Ok(Self::FederationTrustIdentity),
             26 => Ok(Self::FederationGrant),
-            27 => Ok(Self::FederatedPrincipalProjection),
+            27 => Ok(Self::FederatedActorAttestation),
             28 => Ok(Self::FederationSuccession),
             29 => Ok(Self::FederationQuarantine),
             30 => Ok(Self::FederationStorageAllocation),

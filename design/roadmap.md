@@ -118,7 +118,7 @@ Build:
   non-production compatibility lane;
 - authoritative federation relationships, rotating trust identities, governance
   edges, resource grants, delegated ceilings, bilateral quotas, offline validity,
-  receiving-swarm principal projections, downstream delegation chains, successor
+  recipient-local grant assignments, actor lifecycle attestations, downstream delegation chains, successor
   designations and quarantine records;
 - typed idempotent commands and receipts for connect/approve, renew, restrict,
   revoke, recover, transfer ownership and retire a relationship;

@@ -24,6 +24,9 @@ mod cleanup_reclamation;
 mod cluster;
 mod component;
 mod consensus;
+mod federation_actor_attestation;
+#[cfg(test)]
+mod federation_actor_attestation_tests;
 mod federation_assignment;
 mod federation_authority_snapshot;
 #[cfg(test)]
@@ -38,9 +41,6 @@ mod federation_grant_tests;
 mod federation_mutation_admission;
 #[cfg(test)]
 mod federation_mutation_admission_tests;
-mod federation_principal;
-#[cfg(test)]
-mod federation_principal_tests;
 mod federation_quarantine;
 mod federation_quarantine_codec;
 mod federation_quarantine_evidence;
@@ -112,6 +112,7 @@ pub use cleanup_permit::{
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
+pub use federation_actor_attestation::FederatedActorAttestationRecord;
 pub use federation_assignment::FederationGrantAssignmentAuthority;
 pub use federation_authority_snapshot::FederationAuthoritySnapshotError;
 pub use federation_grant_cursor::{FederationGrantCursor, FederationGrantCursorError};
@@ -121,7 +122,6 @@ pub use federation_grant_evidence::{
 };
 pub use federation_grant_record::FederationGrantRecordCodecError;
 pub use federation_mutation_admission::FederatedMutationAdmissionReceipt;
-pub use federation_principal::FederatedPrincipalProjectionRecord;
 pub use federation_quarantine::{FederationQuarantineRecord, FederationQuarantineState};
 pub use federation_query::{
     FederationRelationshipRecord, FederationRelationshipState, FederationTransportAuthority,
@@ -368,17 +368,17 @@ impl AuthoritativeRepository {
         )
     }
 
-    /// Returns one current, signed home-swarm principal projection.
+    /// Returns one current, signed home-swarm actor lifecycle attestation.
     ///
     /// # Errors
     ///
     /// Fails closed for malformed identifiers, state, revision or missing history evidence.
-    pub fn federated_principal_projection(
+    pub fn federated_actor_attestation(
         &self,
         relationship_id: meshspan_domain::FederationRelationshipId,
         principal: meshspan_domain::FederatedPrincipal,
-    ) -> Result<Option<FederatedPrincipalProjectionRecord>, RepositoryError> {
-        federation_principal::projection(&self.database, relationship_id, principal)
+    ) -> Result<Option<FederatedActorAttestationRecord>, RepositoryError> {
+        federation_actor_attestation::attestation(&self.database, relationship_id, principal)
     }
 
     /// Verifies one accepting-swarm signature and classifies its exact historical grant use.

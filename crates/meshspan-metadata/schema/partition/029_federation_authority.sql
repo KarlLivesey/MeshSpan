@@ -261,9 +261,10 @@ ON federation_grant_assignment_activations(
     principal_id, assignment_id, revoked_at, expires_at, activation_id
 );
 
--- Remote users and groups stay qualified by home swarm. They never become
--- local principals and cannot collide with local identifiers.
-CREATE TABLE federation_principal_projections (
+-- The home swarm attests only to the lifecycle of an actor named in signed
+-- mutation evidence. This does not import the actor as a local principal and
+-- cannot grant local or federated authority.
+CREATE TABLE federation_actor_attestations (
     relationship_id BLOB NOT NULL
         REFERENCES federation_relationships(relationship_id) ON DELETE RESTRICT,
     home_mesh_id BLOB NOT NULL CHECK (length(home_mesh_id) = 16),
@@ -274,14 +275,14 @@ CREATE TABLE federation_principal_projections (
     state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 3),
     identity_revision INTEGER NOT NULL CHECK (identity_revision > 0),
     authority_epoch INTEGER NOT NULL CHECK (authority_epoch > 0),
-    projection_digest BLOB NOT NULL CHECK (length(projection_digest) = 32),
+    attestation_digest BLOB NOT NULL CHECK (length(attestation_digest) = 32),
     observed_at INTEGER NOT NULL,
     revision INTEGER NOT NULL CHECK (revision > 0),
     PRIMARY KEY (relationship_id, home_mesh_id, principal_id)
 ) STRICT;
 
-CREATE INDEX federation_principals_by_name
-ON federation_principal_projections(
+CREATE INDEX federation_actor_attestations_by_name
+ON federation_actor_attestations(
     relationship_id, canonical_name, home_mesh_id, principal_id
 );
 

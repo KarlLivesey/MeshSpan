@@ -5,10 +5,10 @@
 mod authentication_integrity;
 mod command;
 mod database;
+mod federation_actor_attestation_command;
 mod federation_command;
 mod federation_grant_command;
 mod federation_mutation_admission_command;
-mod federation_principal_command;
 mod federation_quarantine_command;
 mod federation_remote_authority;
 #[cfg(test)]
@@ -50,6 +50,9 @@ pub use command::{
     TotpAlgorithm, VersionCleanupAttestation, VersionCleanupItemPlacement,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
+pub use federation_actor_attestation_command::{
+    FederatedActorKind, FederatedActorState, RecordFederatedActorAttestation,
+};
 pub use federation_command::{
     ApproveFederationRelationship, FederationGovernanceDirection, FederationGovernanceEdge,
     FederationGovernanceProof, FederationIdentityOwner, FederationTrustIdentity,
@@ -62,9 +65,6 @@ pub use federation_grant_command::{
     RevokeFederationGrantAssignment, RevokeFederationGrantAssignmentActivation,
 };
 pub use federation_mutation_admission_command::AdmitFederatedMutation;
-pub use federation_principal_command::{
-    FederatedPrincipalKind, FederatedPrincipalState, UpsertFederatedPrincipalProjection,
-};
 pub use federation_quarantine_command::{
     FederationQuarantineResolution, ResolveFederatedMutationQuarantine,
     RetainFederatedMutationQuarantine, SurfaceFederatedMutationQuarantine,
@@ -116,7 +116,7 @@ pub use repository::{
     AccessRequest, ApiKeyAuthentication, ApplyDisposition, AuthenticationPolicy,
     AuthenticationService, AuthoritativeMembership, AuthoritativeMetadataKernel,
     AuthoritativeRepository, CommandReceipt, ConsensusStoreError, ConvergedVolumeHead, EntityKind,
-    EntityReference, FederatedMutationAdmissionReceipt, FederatedPrincipalProjectionRecord,
+    EntityReference, FederatedActorAttestationRecord, FederatedMutationAdmissionReceipt,
     FederationAuthoritySnapshotError, FederationGrantAssignmentAuthority, FederationGrantCursor,
     FederationGrantCursorError, FederationGrantRecord, FederationGrantRecordCodecError,
     FederationGrantState, FederationGrantTermination, FederationGrantTerminationKind,

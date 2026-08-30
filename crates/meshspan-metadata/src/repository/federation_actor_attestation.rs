@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Signed monotonic home-swarm principal projection persistence and typed reads.
+//! Signed monotonic home-swarm actor lifecycle attestations.
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use meshspan_domain::{FederatedPrincipal, FederationRelationshipId, MeshId, Revision};
@@ -10,29 +10,29 @@ use sha2::{Digest, Sha256};
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{
-    AuthoritativeCommand, CommandContext, FederatedPrincipalKind, FederatedPrincipalState,
-    PartitionDatabase, RecordName, UpsertFederatedPrincipalProjection,
+    AuthoritativeCommand, CommandContext, FederatedActorKind, FederatedActorState,
+    PartitionDatabase, RecordFederatedActorAttestation, RecordName,
 };
 
 const RELATIONSHIP_ACTIVE: i64 = 2;
 const RELATIONSHIP_RESTRICTED: i64 = 3;
 const REMOTE_IDENTITY_OWNER: i64 = 2;
 
-/// Current remote principal state plus the exact signed home-swarm revision.
+/// Current remote actor lifecycle plus the exact signed home-swarm revision.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FederatedPrincipalProjectionRecord {
-    /// Direct relationship carrying this projection.
+pub struct FederatedActorAttestationRecord {
+    /// Direct relationship carrying this attestation.
     pub relationship_id: FederationRelationshipId,
     /// Globally qualified remote principal.
     pub principal: FederatedPrincipal,
     /// User, group or service.
-    pub kind: FederatedPrincipalKind,
+    pub kind: FederatedActorKind,
     /// Display-only name.
     pub display_name: String,
     /// Canonical home-swarm name.
     pub canonical_name: String,
     /// Current home-swarm lifecycle.
-    pub state: FederatedPrincipalState,
+    pub state: FederatedActorState,
     /// Strictly monotonic home-swarm revision.
     pub identity_revision: u64,
     /// Exact relationship authority epoch carrying the statement.
@@ -44,7 +44,7 @@ pub struct FederatedPrincipalProjectionRecord {
 pub(super) fn is_command(command: &AuthoritativeCommand) -> bool {
     matches!(
         command,
-        AuthoritativeCommand::UpsertFederatedPrincipalProjection(_)
+        AuthoritativeCommand::RecordFederatedActorAttestation(_)
     )
 }
 
@@ -55,7 +55,7 @@ pub(super) fn execute(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     match command {
-        AuthoritativeCommand::UpsertFederatedPrincipalProjection(value) => {
+        AuthoritativeCommand::RecordFederatedActorAttestation(value) => {
             upsert(transaction, context, value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
@@ -65,7 +65,7 @@ pub(super) fn execute(
 fn upsert(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    command: &UpsertFederatedPrincipalProjection,
+    command: &RecordFederatedActorAttestation,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate_statement(transaction, command)?;
@@ -77,14 +77,14 @@ fn upsert(
     insert_history(transaction, context, command, statement_digest, revision)?;
     upsert_current(transaction, context, command, statement_digest, revision)?;
     Ok(EntityReference {
-        kind: EntityKind::FederatedPrincipalProjection,
+        kind: EntityKind::FederatedActorAttestation,
         id: command.principal_id.as_bytes(),
     })
 }
 
 fn validate_statement(
     transaction: &Transaction<'_>,
-    command: &UpsertFederatedPrincipalProjection,
+    command: &RecordFederatedActorAttestation,
 ) -> Result<(), RepositoryError> {
     if command.identity_revision == 0
         || command.authority_epoch == 0
@@ -98,7 +98,7 @@ fn validate_statement(
 
 fn verify_relationship(
     connection: &rusqlite::Connection,
-    command: &UpsertFederatedPrincipalProjection,
+    command: &RecordFederatedActorAttestation,
 ) -> Result<(), RepositoryError> {
     let relationship = connection
         .query_row(
@@ -128,7 +128,7 @@ fn verify_relationship(
 
 fn verify_signature(
     connection: &rusqlite::Connection,
-    command: &UpsertFederatedPrincipalProjection,
+    command: &RecordFederatedActorAttestation,
     require_active_key: bool,
 ) -> Result<(), RepositoryError> {
     let identity: (Vec<u8>, i64) = connection
@@ -165,11 +165,11 @@ fn verify_signature(
 
 fn current_identity_revision(
     transaction: &Transaction<'_>,
-    command: &UpsertFederatedPrincipalProjection,
+    command: &RecordFederatedActorAttestation,
 ) -> Result<Option<u64>, RepositoryError> {
     transaction
         .query_row(
-            "SELECT identity_revision FROM federation_principal_projections
+            "SELECT identity_revision FROM federation_actor_attestations
              WHERE relationship_id = ?1 AND home_mesh_id = ?2 AND principal_id = ?3",
             params![
                 command.relationship_id.as_bytes().as_slice(),
@@ -186,12 +186,12 @@ fn current_identity_revision(
 fn insert_history(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    command: &UpsertFederatedPrincipalProjection,
+    command: &RecordFederatedActorAttestation,
     statement_digest: [u8; 32],
     revision: Revision,
 ) -> Result<(), RepositoryError> {
     transaction.execute(
-        "INSERT INTO federation_principal_projection_history(
+        "INSERT INTO federation_actor_attestation_history(
             relationship_id, home_mesh_id, principal_id, identity_revision,
             principal_kind, display_name, canonical_name, state, authority_epoch,
             statement_digest, signer_generation, signature, accepted_at, revision
@@ -219,15 +219,15 @@ fn insert_history(
 fn upsert_current(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    command: &UpsertFederatedPrincipalProjection,
+    command: &RecordFederatedActorAttestation,
     statement_digest: [u8; 32],
     revision: Revision,
 ) -> Result<(), RepositoryError> {
     transaction.execute(
-        "INSERT INTO federation_principal_projections(
+        "INSERT INTO federation_actor_attestations(
             relationship_id, home_mesh_id, principal_id, principal_kind,
             display_name, canonical_name, state, identity_revision, authority_epoch,
-            projection_digest, observed_at, revision
+            attestation_digest, observed_at, revision
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(relationship_id, home_mesh_id, principal_id) DO UPDATE SET
             principal_kind = excluded.principal_kind,
@@ -236,7 +236,7 @@ fn upsert_current(
             state = excluded.state,
             identity_revision = excluded.identity_revision,
             authority_epoch = excluded.authority_epoch,
-            projection_digest = excluded.projection_digest,
+            attestation_digest = excluded.attestation_digest,
             observed_at = excluded.observed_at,
             revision = excluded.revision",
         params![
@@ -257,24 +257,24 @@ fn upsert_current(
     Ok(())
 }
 
-pub(super) fn projection(
+pub(super) fn attestation(
     database: &PartitionDatabase,
     relationship_id: FederationRelationshipId,
     principal: FederatedPrincipal,
-) -> Result<Option<FederatedPrincipalProjectionRecord>, RepositoryError> {
-    projection_connection(database.connection(), relationship_id, principal)
+) -> Result<Option<FederatedActorAttestationRecord>, RepositoryError> {
+    attestation_connection(database.connection(), relationship_id, principal)
 }
 
-pub(super) fn projection_connection(
+pub(super) fn attestation_connection(
     connection: &rusqlite::Connection,
     relationship_id: FederationRelationshipId,
     principal: FederatedPrincipal,
-) -> Result<Option<FederatedPrincipalProjectionRecord>, RepositoryError> {
+) -> Result<Option<FederatedActorAttestationRecord>, RepositoryError> {
     let row = connection
         .query_row(
             "SELECT principal_kind, display_name, canonical_name, state,
-                    identity_revision, authority_epoch, projection_digest, revision
-             FROM federation_principal_projections
+                    identity_revision, authority_epoch, attestation_digest, revision
+             FROM federation_actor_attestations
              WHERE relationship_id = ?1 AND home_mesh_id = ?2 AND principal_id = ?3",
             params![
                 relationship_id.as_bytes().as_slice(),
@@ -296,7 +296,7 @@ pub(super) fn projection_connection(
         )
         .optional()?;
     row.map(|row| {
-        let record = FederatedPrincipalProjectionRecord {
+        let record = FederatedActorAttestationRecord {
             relationship_id,
             principal,
             kind: parse_kind(row.0)?,
@@ -315,13 +315,13 @@ pub(super) fn projection_connection(
 
 fn verify_current_history(
     connection: &rusqlite::Connection,
-    record: &FederatedPrincipalProjectionRecord,
-    projection_digest: &[u8],
+    record: &FederatedActorAttestationRecord,
+    attestation_digest: &[u8],
 ) -> Result<(), RepositoryError> {
     let history: Option<(Vec<u8>, i64, Vec<u8>)> = connection
         .query_row(
             "SELECT statement_digest, signer_generation, signature
-             FROM federation_principal_projection_history
+             FROM federation_actor_attestation_history
              WHERE relationship_id = ?1 AND home_mesh_id = ?2
                AND principal_id = ?3 AND identity_revision = ?4",
             params![
@@ -340,7 +340,7 @@ fn verify_current_history(
     if name.canonical() != record.canonical_name {
         return Err(RepositoryError::CorruptState);
     }
-    let command = UpsertFederatedPrincipalProjection {
+    let command = RecordFederatedActorAttestation {
         relationship_id: record.relationship_id,
         home_mesh_id: record.principal.home_mesh_id(),
         principal_id: record.principal.principal_id(),
@@ -356,7 +356,7 @@ fn verify_current_history(
             .map_err(|_| RepositoryError::CorruptState)?,
     };
     let recomputed: [u8; 32] = Sha256::digest(command.signing_payload()).into();
-    if projection_digest != recomputed || history_digest.as_slice() != recomputed {
+    if attestation_digest != recomputed || history_digest.as_slice() != recomputed {
         return Err(RepositoryError::CorruptState);
     }
     verify_historical_relationship(connection, &command)
@@ -366,7 +366,7 @@ fn verify_current_history(
 
 fn verify_historical_relationship(
     connection: &rusqlite::Connection,
-    command: &UpsertFederatedPrincipalProjection,
+    command: &RecordFederatedActorAttestation,
 ) -> Result<(), RepositoryError> {
     let remote_mesh_id = connection
         .query_row(
@@ -383,20 +383,20 @@ fn verify_historical_relationship(
     }
 }
 
-fn parse_kind(value: i64) -> Result<FederatedPrincipalKind, RepositoryError> {
+fn parse_kind(value: i64) -> Result<FederatedActorKind, RepositoryError> {
     match value {
-        1 => Ok(FederatedPrincipalKind::User),
-        2 => Ok(FederatedPrincipalKind::Group),
-        3 => Ok(FederatedPrincipalKind::Service),
+        1 => Ok(FederatedActorKind::User),
+        2 => Ok(FederatedActorKind::Group),
+        3 => Ok(FederatedActorKind::Service),
         _ => Err(RepositoryError::CorruptState),
     }
 }
 
-fn parse_state(value: i64) -> Result<FederatedPrincipalState, RepositoryError> {
+fn parse_state(value: i64) -> Result<FederatedActorState, RepositoryError> {
     match value {
-        1 => Ok(FederatedPrincipalState::Active),
-        2 => Ok(FederatedPrincipalState::Suspended),
-        3 => Ok(FederatedPrincipalState::Retired),
+        1 => Ok(FederatedActorState::Active),
+        2 => Ok(FederatedActorState::Suspended),
+        3 => Ok(FederatedActorState::Retired),
         _ => Err(RepositoryError::CorruptState),
     }
 }

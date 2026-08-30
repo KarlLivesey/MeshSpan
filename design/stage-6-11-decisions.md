@@ -64,6 +64,9 @@ types/tests before Stage 6 can pass; their presence is not an accepted exception
 
 ## 3. Federated delegation and repair
 
+- Each swarm is the intrinsic root principal for every resource it owns. It may
+  grant rights directly to local users/groups and separately delegate rights to
+  another swarm. Ownership needs no synthetic self-federation record.
 - Swarm A grants a shared resource to Swarm B, not to users or groups that A
   imports from B. A does not enumerate or administer B's principals.
 - B decides which of its local users and groups receive equal or narrower rights.

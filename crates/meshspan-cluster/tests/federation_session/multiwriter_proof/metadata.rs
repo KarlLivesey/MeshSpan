@@ -21,12 +21,12 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, ChangePrincipalState,
-    CreateAuthenticationMethod, CreateUser, FederatedPrincipalKind, FederatedPrincipalState,
+    CreateAuthenticationMethod, CreateUser, FederatedActorKind, FederatedActorState,
     FederationGrantRecord, FederationGrantRestriction, FederationRemoteAuthoritySnapshot,
     IssueAuthenticationSession, IssueFederationGrant, LocalDatabase, LogPosition,
-    NewAuthenticationCredential, PartitionDatabase, PrincipalLifecycleState, RecordName,
-    SessionAccessRequest, SessionAuthenticationFactor, TotpAlgorithm,
-    UpsertFederatedPrincipalProjection,
+    NewAuthenticationCredential, PartitionDatabase, PrincipalLifecycleState,
+    RecordFederatedActorAttestation, RecordName, SessionAccessRequest, SessionAuthenticationFactor,
+    TotpAlgorithm,
 };
 use tempfile::{TempDir, tempdir};
 
@@ -126,10 +126,10 @@ impl FederationFixture {
                 owner_transfers: BoundedItems::new(Vec::new(), 0)?,
             }),
         )?;
-        let projection = signed_projection(
+        let attestation = signed_attestation(
             authorities,
             self.user,
-            FederatedPrincipalState::Suspended,
+            FederatedActorState::Suspended,
             2,
             home_key,
         )?;
@@ -137,7 +137,7 @@ impl FederationFixture {
             &mut authorities.client.repository,
             authorities.client.administrator_id,
             32,
-            &AuthoritativeCommand::UpsertFederatedPrincipalProjection(projection),
+            &AuthoritativeCommand::RecordFederatedActorAttestation(attestation),
         )
     }
 }
@@ -166,18 +166,13 @@ fn configure_authoritative_state(
         12,
         &record,
     )?;
-    let projection = signed_projection(
-        authorities,
-        user,
-        FederatedPrincipalState::Active,
-        1,
-        home_key,
-    )?;
+    let attestation =
+        signed_attestation(authorities, user, FederatedActorState::Active, 1, home_key)?;
     apply_next(
         &mut authorities.client.repository,
         authorities.client.administrator_id,
         13,
-        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(projection),
+        &AuthoritativeCommand::RecordFederatedActorAttestation(attestation),
     )?;
     issue_grant(
         &mut authorities.client.repository,
@@ -461,18 +456,18 @@ fn issue_grant(
     )
 }
 
-fn signed_projection(
+fn signed_attestation(
     authorities: &MetadataAuthorities,
     user: PrincipalId,
-    state: FederatedPrincipalState,
+    state: FederatedActorState,
     identity_revision: u64,
     home_key: &SigningKey,
-) -> Result<UpsertFederatedPrincipalProjection, Box<dyn Error>> {
-    let mut projection = UpsertFederatedPrincipalProjection {
+) -> Result<RecordFederatedActorAttestation, Box<dyn Error>> {
+    let mut attestation = RecordFederatedActorAttestation {
         relationship_id: authorities.relationship_id,
         home_mesh_id: authorities.server_mesh,
         principal_id: user,
-        kind: FederatedPrincipalKind::User,
+        kind: FederatedActorKind::User,
         name: RecordName::new("Disconnected writer")?,
         state,
         identity_revision,
@@ -480,8 +475,8 @@ fn signed_projection(
         signer_generation: 1,
         signature: [0; 64],
     };
-    projection.signature = home_key.sign(&projection.signing_payload()).to_bytes();
-    Ok(projection)
+    attestation.signature = home_key.sign(&attestation.signing_payload()).to_bytes();
+    Ok(attestation)
 }
 
 fn install_remote_snapshot(

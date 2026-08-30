@@ -144,7 +144,7 @@ const PARTITION_MIGRATIONS: [Migration; 46] = [
     },
     Migration {
         version: 33,
-        sql: include_str!("../schema/partition/033_federation_principal_history.sql"),
+        sql: include_str!("../schema/partition/033_federation_actor_attestation_history.sql"),
     },
     Migration {
         version: 34,
@@ -582,7 +582,7 @@ pub(crate) fn partition_federation_governance_proof_migration_digest() -> [u8; 3
 }
 
 #[cfg(test)]
-pub(crate) fn partition_federation_principal_history_migration_digest() -> [u8; 32] {
+pub(crate) fn partition_federation_actor_attestation_history_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[32].sql)
 }
 

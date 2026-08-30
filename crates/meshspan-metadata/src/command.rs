@@ -20,8 +20,8 @@ use meshspan_domain::{
 use sha2::{Digest, Sha256};
 
 use crate::AdmitFederatedMutation;
+use crate::RecordFederatedActorAttestation;
 use crate::RecordName;
-use crate::UpsertFederatedPrincipalProjection;
 use crate::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, ApproveFederationRelationship,
     DesignateFederationSuccessor, ProposeFederationRelationship, RecoverFederationRelationship,
@@ -199,8 +199,8 @@ pub enum AuthoritativeCommand {
     IssueFederationStorageAllocation(IssueFederationStorageAllocation),
     /// Revokes one live provider allocation without deleting its authority history.
     RevokeFederationStorageAllocation(RevokeFederationStorageAllocation),
-    /// Advances one signed home-swarm principal projection.
-    UpsertFederatedPrincipalProjection(UpsertFederatedPrincipalProjection),
+    /// Advances one signed home-swarm actor attestation.
+    RecordFederatedActorAttestation(RecordFederatedActorAttestation),
     /// Persists a retiring swarm's signed pre-authorisation of one recovery successor.
     DesignateFederationSuccessor(DesignateFederationSuccessor),
     /// Persists the nominated successor's exact signed acceptance.
@@ -306,7 +306,7 @@ impl AuthoritativeCommand {
             Self::RevokeFederationGrantAssignmentActivation(value) => value.update_digest(digest),
             Self::IssueFederationStorageAllocation(value) => value.update_digest(digest),
             Self::RevokeFederationStorageAllocation(value) => value.update_digest(digest),
-            Self::UpsertFederatedPrincipalProjection(value) => value.update_digest(digest),
+            Self::RecordFederatedActorAttestation(value) => value.update_digest(digest),
             Self::DesignateFederationSuccessor(value) => value.update_digest(digest),
             Self::AcceptFederationSuccessor(value) => value.update_digest(digest),
             Self::ActivateFederationSuccessor(value) => value.update_digest(digest),

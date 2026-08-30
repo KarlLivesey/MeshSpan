@@ -88,9 +88,16 @@ inherits upstream expiry, revocation, ownership and restrictions.
 
 ## Resource ownership and multi-writer operation
 
-Every shared volume, folder or file retains one owning swarm. The owning swarm is
-the authority for its ACL policy and canonical converged history. Ownership is
-independent of where data is stored or which authorised swarm accepted an edit.
+Every swarm is the intrinsic root principal for each volume, folder, file and
+version it owns. From that root authority it may grant rights directly to its
+local users and groups, delegate constrained rights to another swarm, or do
+both. Those are sibling delegations: ownership is not represented by a synthetic
+self-federation relationship or self-grant. Every external re-delegation remains
+an explicit, narrowing hop.
+
+Every shared resource retains exactly one such owning swarm. The owner is the
+authority for its ACL policy and canonical converged history independently of
+where data is stored or which authorised swarm accepted an edit.
 
 The owner also remains authority for the canonical protection promise. A peer
 may keep stronger local caches or redundant copies but cannot redefine that

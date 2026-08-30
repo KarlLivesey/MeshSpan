@@ -9,10 +9,10 @@ use meshspan_domain::{
 
 use super::federation_succession_trust::verify_side_signature;
 use super::{
-    CommandReceipt, EntityKind, EntityReference, RepositoryError, federation_grant,
-    federation_principal,
+    CommandReceipt, EntityKind, EntityReference, RepositoryError, federation_actor_attestation,
+    federation_grant,
 };
-use crate::{AdmitFederatedMutation, CommandContext, FederatedPrincipalState, PartitionDatabase};
+use crate::{AdmitFederatedMutation, CommandContext, FederatedActorState, PartitionDatabase};
 
 /// Exact durable owner decision for one deterministic federated mutation operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,13 +71,13 @@ pub(super) fn classify(
         {
             return Err(RepositoryError::InvalidCommand);
         }
-        let projection = federation_principal::projection_connection(
+        let attestation = federation_actor_attestation::attestation_connection(
             connection,
             evidence.relationship_id(),
             evidence.actor(),
         )?
         .ok_or(RepositoryError::InvalidCommand)?;
-        if projection.state != FederatedPrincipalState::Active {
+        if attestation.state != FederatedActorState::Active {
             return Ok(FederatedMutationAdmission::Quarantined(
                 QuarantineReason::PrincipalInactive,
             ));
