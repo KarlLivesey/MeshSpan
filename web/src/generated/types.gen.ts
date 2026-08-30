@@ -411,13 +411,25 @@ export type CreateMeshSetupErrors = {
    */
   400: ApiError;
   /**
+   * First-boot claim rejected
+   */
+  401: ApiError;
+  /**
    * Changed retry or setup conflict
    */
   409: ApiError;
   /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
    * Internal contract failure
    */
   500: ApiError;
+  /**
+   * Bootstrap authority temporarily unavailable
+   */
+  503: ApiError;
 };
 
 export type CreateMeshSetupError =

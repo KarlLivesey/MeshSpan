@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode};
 use meshspan_api_contract::{CreateMeshSetupRequest, decode_create_mesh_setup_request};
 use meshspan_domain::{
     ClaimBundle, EntropyError, InitialBootstrapMaterial, OperationId, RandomSource, UnixMicros,
@@ -12,10 +14,11 @@ use meshspan_metadata::{
     LogPosition, NewLocalClaim, PartitionDatabase, RepositoryError,
 };
 use tempfile::tempdir;
+use tower::ServiceExt;
 
 use crate::{
     BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, ClaimFile, CreateMeshSetupError,
-    CreateMeshSetupService, SetupStateSnapshot,
+    CreateMeshSetupService, SetupStateSnapshot, SetupStatusSource, setup_api_router_with_creation,
 };
 
 const OPERATION_TEXT: &str = "00000000-0000-4000-8000-000000000001";
@@ -70,6 +73,31 @@ fn changed_retry_conflicts_before_a_second_authority_mutation()
     Ok(())
 }
 
+#[tokio::test]
+async fn public_http_request_commits_the_real_local_and_root_stores()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture(false)?;
+    let body = serde_json::to_vec(&fixture.request)?;
+    let router = setup_api_router_with_creation(Arc::clone(&fixture.setup_state), fixture.service)?;
+    let response = router
+        .oneshot(
+            Request::post("/api/latest/setup/meshes")
+                .header("content-type", "application/json")
+                .body(Body::from(body))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = to_bytes(response.into_body(), 2_048).await?;
+    let created = serde_json::from_slice::<meshspan_api_contract::CreateMeshSetupResponse>(&bytes)?;
+    assert_eq!(created.operation_id.as_str(), OPERATION_TEXT);
+    assert_eq!(
+        fixture.setup_state.setup_state(),
+        meshspan_api_contract::SetupState::Configured
+    );
+    assert!(!fixture.claim_path.exists());
+    Ok(())
+}
+
 struct Fixture {
     service: CreateMeshSetupService<RepositoryBootstrapAuthority>,
     request: CreateMeshSetupRequest,
@@ -77,6 +105,8 @@ struct Fixture {
     claim_id: meshspan_domain::ClaimId,
     material: InitialBootstrapMaterial,
     local_path: PathBuf,
+    claim_path: PathBuf,
+    setup_state: Arc<SetupStateSnapshot>,
 }
 
 fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Error>> {
@@ -114,8 +144,8 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
             repository: AuthoritativeRepository::new(partition),
             lose_first_response,
         },
-        claim_path,
-        setup_state,
+        claim_path.clone(),
+        Arc::clone(&setup_state),
     );
     let request = request(&claim, "First mesh")?;
     Ok(Fixture {
@@ -125,6 +155,8 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
         claim_id,
         material,
         local_path,
+        claim_path,
+        setup_state,
     })
 }
 

@@ -9,12 +9,12 @@
 )]
 
 use meshspan_api_contract::{
-    CreateMeshSetupResponse, CreateSessionResponse, NullableField, OperationId, SetupState,
-    SetupStatusResponse, decode_create_mesh_setup_request, decode_create_session_request,
-    encode_create_mesh_setup_response, encode_create_session_response,
-    encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
-    validate_create_session_request_value, validate_create_session_response_value,
-    validate_setup_status_response_value,
+    ApiError, ApiErrorCode, CreateMeshSetupResponse, CreateSessionResponse, NullableField,
+    OperationId, SetupState, SetupStatusResponse, decode_create_mesh_setup_request,
+    decode_create_session_request, encode_api_error, encode_create_mesh_setup_response,
+    encode_create_session_response, encode_setup_status_response, generate_openapi,
+    validate_create_mesh_setup_request_value, validate_create_session_request_value,
+    validate_create_session_response_value, validate_setup_status_response_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -95,6 +95,22 @@ fn accepted_response_passes_the_outgoing_encoder() {
     let encoded_value =
         serde_json::from_slice::<Value>(&encoded).expect("the outgoing encoder must produce JSON");
     assert_eq!(encoded_value, value);
+}
+
+#[test]
+fn public_error_passes_the_same_outgoing_contract_gate() {
+    let error = ApiError {
+        code: ApiErrorCode::InvalidRequest,
+        message: "request does not satisfy the public contract".to_owned(),
+        request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+        operation_id: None,
+        issues: vec![],
+    };
+    let encoded = encode_api_error(&error).expect("public error must validate");
+    assert_eq!(
+        serde_json::from_slice::<ApiError>(&encoded).expect("public error must decode"),
+        error
+    );
 }
 
 #[test]

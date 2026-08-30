@@ -23,7 +23,8 @@ pub use create_mesh_setup::{
     CreateMeshSetupService,
 };
 pub use setup_api::{
-    SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, setup_api_router,
+    CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,
+    SetupStatusSource, setup_api_router, setup_api_router_with_creation,
 };
 
 use meshspan_domain::{EntropyError, RandomSource};

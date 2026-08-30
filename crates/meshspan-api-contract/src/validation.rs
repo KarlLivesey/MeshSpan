@@ -9,18 +9,40 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest, CreateSessionResponse,
-    SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
+    ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
+    CreateSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
 };
 
 const MAX_CREATE_SESSION_BYTES: usize = 2_048;
-const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
+/// Maximum accepted body size for one first-mesh setup request.
+pub const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
 
+static API_ERROR_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static SETUP_STATUS_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
+
+/// Validates and encodes a public error before transmission.
+///
+/// # Errors
+///
+/// Returns an encoding or outgoing-contract error instead of emitting an invalid envelope.
+pub fn encode_api_error(response: &ApiError) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate_api_error_value(&value)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
+/// Validates a raw public error against the Rust-authored response schema.
+///
+/// # Errors
+///
+/// Returns every discovered issue up to the public issue limit.
+pub fn validate_api_error_value(value: &Value) -> Result<(), BoundaryError> {
+    validate(api_error_validator()?, value)
+}
 
 /// Validates and decodes a first-mesh setup request without coercion.
 ///
@@ -183,6 +205,12 @@ fn request_validator() -> Result<&'static Validator, BoundaryError> {
     validator_from(
         CREATE_SESSION_REQUEST_VALIDATOR
             .get_or_init(|| compile(&schema::request_schema::<CreateSessionRequest>())),
+    )
+}
+
+fn api_error_validator() -> Result<&'static Validator, BoundaryError> {
+    validator_from(
+        API_ERROR_VALIDATOR.get_or_init(|| compile(&schema::response_schema::<ApiError>())),
     )
 }
 

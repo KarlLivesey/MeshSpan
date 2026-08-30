@@ -135,7 +135,10 @@ fn paths() -> Value {
                 "responses": {
                     "201": json_response("Committed first mesh", "#/components/schemas/CreateMeshSetupResponse"),
                     "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                    "401": json_response("First-boot claim rejected", "#/components/schemas/ApiError"),
                     "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
+                    "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                    "503": json_response("Bootstrap authority temporarily unavailable", "#/components/schemas/ApiError"),
                     "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
                 }
             }
