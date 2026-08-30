@@ -134,20 +134,28 @@ impl<'a, 'identity> FederationStorageCapabilityIssuer<'a, 'identity> {
                 request.observed_at,
             ))?
             .ok_or(FederationStorageCapabilityIssuerError::AuthorityUnavailable)?;
-        parsed.validate_authority(
-            authority,
-            self.local_identity,
-            request.valid_until,
-            request.observed_at,
-        )?;
         let prior_reservation = if parsed.action.reserves_capacity() {
             self.local_database
                 .federated_storage_write(admitted.operation_id)?
         } else {
             None
         };
-        let issuance =
-            PermitIssuance::select(parsed, request, admitted, prior_reservation.as_ref())?;
+        let prior_presentation = self
+            .local_database
+            .federated_storage_capability_for_operation(admitted.operation_id)?;
+        let issuance = PermitIssuance::select(
+            parsed,
+            request,
+            admitted,
+            prior_reservation.as_ref(),
+            prior_presentation.as_ref(),
+        )?;
+        parsed.validate_authority(
+            authority,
+            self.local_identity,
+            issuance.expires_at(),
+            request.observed_at,
+        )?;
         let mut permit = parsed.permit(
             authority,
             self.local_identity,
@@ -164,26 +172,28 @@ impl<'a, 'identity> FederationStorageCapabilityIssuer<'a, 'identity> {
             request.limits,
             request.observed_at,
         )?;
-        let quota_disposition = if issuance.is_replay() {
-            Some(FederationStorageQuotaDisposition::Replayed)
-        } else if permit.action.reserves_capacity() {
-            Some(
-                self.local_database
-                    .reserve_federated_storage_write(
-                        authority,
-                        FederationStorageWriteReservationRequest {
-                            operation_id: permit.operation_id,
-                            request_digest: permit.request_digest,
-                            capability_nonce: permit.capability_nonce,
-                            shard: permit.shard,
-                            action: permit.action,
-                            permit_digest: permit.permit_digest,
-                            expires_at: permit.expires_at,
-                            issued_at: permit.issued_at,
-                        },
-                    )?
-                    .0,
-            )
+        let quota_disposition = if permit.action.reserves_capacity() {
+            if issuance.is_replay() {
+                Some(FederationStorageQuotaDisposition::Replayed)
+            } else {
+                Some(
+                    self.local_database
+                        .reserve_federated_storage_write(
+                            authority,
+                            FederationStorageWriteReservationRequest {
+                                operation_id: permit.operation_id,
+                                request_digest: permit.request_digest,
+                                capability_nonce: permit.capability_nonce,
+                                shard: permit.shard,
+                                action: permit.action,
+                                permit_digest: permit.permit_digest,
+                                expires_at: permit.expires_at,
+                                issued_at: permit.issued_at,
+                            },
+                        )?
+                        .0,
+                )
+            }
         } else {
             None
         };
@@ -410,9 +420,13 @@ impl PermitIssuance {
         parsed: ParsedRequest,
         issue: IssueParameters,
         admitted: AdmittedRequest<'_>,
-        prior: Option<&FederationStorageWriteReservation>,
+        prior_reservation: Option<&FederationStorageWriteReservation>,
+        prior_presentation: Option<&FederationStorageCapabilityPresentation>,
     ) -> Result<Self, FederationStorageCapabilityIssuerError> {
-        let Some(prior) = prior else {
+        if let Some(presentation) = prior_presentation {
+            return Self::from_presentation(parsed, issue, admitted, presentation);
+        }
+        let Some(prior) = prior_reservation else {
             return Ok(Self {
                 capability_nonce: issue.capability_nonce,
                 issued_at: issue.observed_at,
@@ -435,6 +449,38 @@ impl PermitIssuance {
                 issued_at: prior.issued_at,
                 expires_at: prior.expires_at,
                 replayed_permit_digest: Some(prior.permit_digest),
+            })
+        } else {
+            Err(FederationStorageCapabilityIssuerError::InvalidRequest)
+        }
+    }
+
+    fn from_presentation(
+        parsed: ParsedRequest,
+        issue: IssueParameters,
+        admitted: AdmittedRequest<'_>,
+        presentation: &FederationStorageCapabilityPresentation,
+    ) -> Result<Self, FederationStorageCapabilityIssuerError> {
+        let permit = presentation.permit;
+        let valid = permit.operation_id == admitted.operation_id
+            && permit.relationship_id == admitted.relationship_id
+            && permit.remote_mesh_id == admitted.remote_mesh_id
+            && permit.allocation_id == parsed.allocation_id
+            && permit.grant_id == parsed.grant_id
+            && permit.target_id == parsed.target_id
+            && permit.target_generation == parsed.target_generation
+            && permit.shard == parsed.shard
+            && permit.action == parsed.action
+            && permit.maximum_bytes == parsed.maximum_bytes
+            && permit.scope_digest == parsed.scope_digest
+            && permit.request_digest == admitted.request_digest
+            && permit.expires_at > issue.observed_at;
+        if valid {
+            Ok(Self {
+                capability_nonce: permit.capability_nonce,
+                issued_at: permit.issued_at,
+                expires_at: permit.expires_at,
+                replayed_permit_digest: Some(permit.permit_digest),
             })
         } else {
             Err(FederationStorageCapabilityIssuerError::InvalidRequest)

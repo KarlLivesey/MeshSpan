@@ -75,6 +75,62 @@ impl LocalDatabase {
         }
         load(self.connection(), capability_digest)
     }
+
+    /// Loads the exact provider permit already issued for one idempotent operation.
+    ///
+    /// Multiple outer signed responses may exist after lost replies, but every response for one
+    /// operation must carry the same inner permit. A conflicting persisted permit fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed identity, conflicting permit evidence or corrupt rows.
+    pub fn federated_storage_capability_for_operation(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<
+        Option<FederationStorageCapabilityPresentation>,
+        FederationStorageCapabilityLedgerError,
+    > {
+        load_for_operation(self.connection(), operation_id)
+    }
+}
+
+fn load_for_operation(
+    connection: &rusqlite::Connection,
+    operation_id: OperationId,
+) -> Result<Option<FederationStorageCapabilityPresentation>, FederationStorageCapabilityLedgerError>
+{
+    let capability_digest = connection
+        .query_row(
+            "SELECT capability_digest FROM local_federation_storage_capabilities
+             WHERE operation_id = ?1 ORDER BY recorded_at, capability_digest LIMIT 1",
+            [operation_id.as_bytes().as_slice()],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?
+        .map(|value| exact(&value))
+        .transpose()?;
+    let Some(capability_digest) = capability_digest else {
+        return Ok(None);
+    };
+    let presentation = load(connection, capability_digest)?
+        .ok_or(FederationStorageCapabilityLedgerError::CorruptState)?;
+    let conflicting: bool = connection.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM local_federation_storage_capabilities
+             WHERE operation_id = ?1 AND permit_digest != ?2
+         )",
+        params![
+            operation_id.as_bytes().as_slice(),
+            presentation.permit.permit_digest.as_slice()
+        ],
+        |row| row.get(0),
+    )?;
+    if conflicting {
+        Err(FederationStorageCapabilityLedgerError::CorruptState)
+    } else {
+        Ok(Some(presentation))
+    }
 }
 
 fn record(
@@ -465,6 +521,11 @@ mod tests {
         let database = LocalDatabase::open(&file_path, node_id, UnixMicros::new(11))?;
         assert_eq!(
             database.federated_storage_capability(presentation.capability_digest)?,
+            Some(presentation)
+        );
+        assert_eq!(
+            database
+                .federated_storage_capability_for_operation(presentation.permit.operation_id)?,
             Some(presentation)
         );
         Ok(())
