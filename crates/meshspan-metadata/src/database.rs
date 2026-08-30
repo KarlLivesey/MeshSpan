@@ -251,6 +251,7 @@ mod tests {
         partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
+        partition_authentication_method_events_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
         partition_component_rollout_migration_digest,
@@ -296,7 +297,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 42);
+        assert_eq!(database.check_integrity()?.schema_version, 43);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -346,7 +347,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            42
+            43
         );
         Ok(())
     }
@@ -1253,6 +1254,18 @@ mod tests {
     }
 
     #[test]
+    fn authentication_method_events_migration_digest_is_a_committed_compatibility_value() {
+        assert_eq!(
+            partition_authentication_method_events_migration_digest(),
+            [
+                0xc9, 0x7a, 0x73, 0x66, 0x3a, 0x1d, 0xb7, 0x1a, 0x37, 0xd5, 0x76, 0xce, 0x35, 0x68,
+                0x07, 0x01, 0x8c, 0x95, 0x4b, 0x66, 0xb0, 0x78, 0x24, 0x73, 0x71, 0x9e, 0xf0, 0xe1,
+                0x4f, 0x51, 0x44, 0xc6,
+            ]
+        );
+    }
+
+    #[test]
     fn typed_authentication_schema_has_only_bound_credential_subtypes()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;
@@ -1312,6 +1325,13 @@ mod tests {
                 [22_u8; 32].as_slice(),
                 [23_u8; 32].as_slice(),
             ],
+        )?;
+        database.connection().execute(
+            "INSERT INTO authentication_method_events(
+                method_id, event_sequence, event_kind, prior_state, resulting_state,
+                reason, changed_by, changed_at, revision
+             ) VALUES (?1, 1, 1, NULL, 1, NULL, ?2, 10, 1)",
+            params![method.as_slice(), principal.as_slice()],
         )?;
         assert!(
             database

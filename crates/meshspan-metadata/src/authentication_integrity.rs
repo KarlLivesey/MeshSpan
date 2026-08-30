@@ -8,7 +8,7 @@ use crate::MetadataStoreError;
 
 /// Proves each common method has only its required typed credential rows.
 pub(crate) fn check_method_shapes(connection: &Connection) -> Result<(), MetadataStoreError> {
-    let invalid: i64 = connection.query_row(
+    let invalid_subtype: i64 = connection.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM authentication_methods AS method
             WHERE NOT (
@@ -53,7 +53,32 @@ pub(crate) fn check_method_shapes(connection: &Connection) -> Result<(), Metadat
         [],
         |row| row.get(0),
     )?;
-    if invalid == 0 {
+    let invalid_lifecycle: i64 = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM authentication_methods AS method
+            WHERE NOT EXISTS(
+                SELECT 1 FROM authentication_method_events AS event
+                WHERE event.method_id = method.method_id
+                    AND event.event_sequence = 1
+                    AND event.event_kind = 1
+                    AND event.resulting_state = 1
+            )
+            OR (method.state IN (1, 2) AND EXISTS(
+                SELECT 1 FROM authentication_method_events
+                WHERE method_id = method.method_id AND event_sequence = 2
+            ))
+            OR (method.state = 3 AND NOT EXISTS(
+                SELECT 1 FROM authentication_method_events AS event
+                WHERE event.method_id = method.method_id
+                    AND event.event_sequence = 2
+                    AND event.event_kind = 2
+                    AND event.resulting_state = 3
+            ))
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if invalid_subtype == 0 && invalid_lifecycle == 0 {
         Ok(())
     } else {
         Err(MetadataStoreError::IntegrityFailed)

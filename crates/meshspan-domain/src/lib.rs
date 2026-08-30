@@ -47,9 +47,9 @@ pub use partitioning::{
     MetadataOperationFamily, RootDelegatedRoute,
 };
 pub use primitives::{
-    ActivationId, ActivationPolicyId, AuditEventId, BackupId, BranchId, ClaimId,
-    ComponentInstanceId, ContentManifestId, DurationMicros, FaultGroupClassId, FaultGroupId,
-    FederationGrantId, FederationRelationshipId, FederationStorageAllocationId,
+    ActivationId, ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationMethodId, BackupId,
+    BranchId, ClaimId, ComponentInstanceId, ContentManifestId, DurationMicros, FaultGroupClassId,
+    FaultGroupId, FederationGrantId, FederationRelationshipId, FederationStorageAllocationId,
     FederationSuccessionId, FileVersionId, GrantId, GroupId, HandleId, HostId, IdentifierError,
     JoinGrantId, LockId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
     OperationId, OwnerSetId, PartitionId, PrincipalId, QuarantineId, QuorumPlanId, Revision,

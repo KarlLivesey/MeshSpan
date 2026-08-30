@@ -5,6 +5,9 @@
 mod access_evaluation;
 mod access_query;
 mod apply;
+mod authentication_method;
+#[cfg(test)]
+mod authentication_method_tests;
 mod backup;
 mod bootstrap;
 mod cleanup_attestation;
