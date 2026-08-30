@@ -9,15 +9,67 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    CreateSessionRequest, CreateSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES,
-    schema,
+    CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest, CreateSessionResponse,
+    SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
 };
 
 const MAX_CREATE_SESSION_BYTES: usize = 2_048;
+const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
 
+static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
+static CREATE_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static SETUP_STATUS_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
+
+/// Validates and decodes a first-mesh setup request without coercion.
+///
+/// # Errors
+///
+/// Returns a bounded boundary error before domain or persistence work begins.
+pub fn decode_create_mesh_setup_request(
+    bytes: &[u8],
+) -> Result<CreateMeshSetupRequest, BoundaryError> {
+    if bytes.len() > MAX_CREATE_MESH_SETUP_BYTES {
+        return Err(BoundaryError::BodyTooLarge {
+            limit: MAX_CREATE_MESH_SETUP_BYTES,
+        });
+    }
+    let value = serde_json::from_slice(bytes).map_err(|_| BoundaryError::MalformedJson)?;
+    validate_create_mesh_setup_request_value(&value)?;
+    serde_json::from_value(value).map_err(|_| BoundaryError::DecodeMismatch)
+}
+
+/// Validates raw first-mesh setup input against the Rust-authored request schema.
+///
+/// # Errors
+///
+/// Returns every discovered issue up to the public issue limit.
+pub fn validate_create_mesh_setup_request_value(value: &Value) -> Result<(), BoundaryError> {
+    validate(create_mesh_setup_request_validator()?, value)
+}
+
+/// Validates and encodes a committed first-mesh setup response before transmission.
+///
+/// # Errors
+///
+/// Returns an encoding or outgoing-contract error instead of leaking invalid output.
+pub fn encode_create_mesh_setup_response(
+    response: &CreateMeshSetupResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate_create_mesh_setup_response_value(&value)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
+/// Validates raw first-mesh setup output against the Rust-authored response schema.
+///
+/// # Errors
+///
+/// Returns every discovered issue up to the public issue limit.
+pub fn validate_create_mesh_setup_response_value(value: &Value) -> Result<(), BoundaryError> {
+    validate(create_mesh_setup_response_validator()?, value)
+}
 
 /// One safe, bounded description of a structural contract violation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -131,6 +183,20 @@ fn request_validator() -> Result<&'static Validator, BoundaryError> {
     validator_from(
         CREATE_SESSION_REQUEST_VALIDATOR
             .get_or_init(|| compile(&schema::request_schema::<CreateSessionRequest>())),
+    )
+}
+
+fn create_mesh_setup_request_validator() -> Result<&'static Validator, BoundaryError> {
+    validator_from(
+        CREATE_MESH_SETUP_REQUEST_VALIDATOR
+            .get_or_init(|| compile(&schema::request_schema::<CreateMeshSetupRequest>())),
+    )
+}
+
+fn create_mesh_setup_response_validator() -> Result<&'static Validator, BoundaryError> {
+    validator_from(
+        CREATE_MESH_SETUP_RESPONSE_VALIDATOR
+            .get_or_init(|| compile(&schema::response_schema::<CreateMeshSetupResponse>())),
     )
 }
 

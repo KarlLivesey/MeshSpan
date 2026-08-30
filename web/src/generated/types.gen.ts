@@ -49,6 +49,58 @@ export type ApiError = {
 };
 
 /**
+ * CreateMeshSetupRequest
+ *
+ * One exact request to create the first mesh on an unclaimed daemon.
+ */
+export type CreateMeshSetupRequest = {
+  /**
+   * Human-readable first administrator name.
+   */
+  administrator_name: string;
+  /**
+   * Human-readable physical host name.
+   */
+  host_name: string;
+  /**
+   * Human-readable mesh name.
+   */
+  mesh_name: string;
+  /**
+   * Human-readable daemon-node name.
+   */
+  node_name: string;
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreateMeshSetupResponse
+ *
+ * Successful, committed first-mesh creation result.
+ */
+export type CreateMeshSetupResponse = {
+  /**
+   * One-time presentation of the first administrator's ordinary API key.
+   */
+  api_key: string;
+  /**
+   * Stable UUID of the created mesh.
+   */
+  mesh_id: string;
+  /**
+   * Stable UUID of the first daemon node.
+   */
+  node_id: string;
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -147,6 +199,38 @@ export type SetupStatusResponse = {
    * Current coarse setup state; this response never includes claim material.
    */
   state: "claim_required" | "configuring" | "configured";
+};
+
+/**
+ * CreateMeshSetupRequest
+ *
+ * One exact request to create the first mesh on an unclaimed daemon.
+ */
+export type CreateMeshSetupRequestWritable = {
+  /**
+   * Human-readable first administrator name.
+   */
+  administrator_name: string;
+  /**
+   * High-entropy single-use claim printed or written by the local daemon.
+   */
+  claim: string;
+  /**
+   * Human-readable physical host name.
+   */
+  host_name: string;
+  /**
+   * Human-readable mesh name.
+   */
+  mesh_name: string;
+  /**
+   * Human-readable daemon-node name.
+   */
+  node_name: string;
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
 };
 
 /**
@@ -310,6 +394,44 @@ export type CreateSessionResponses = {
 
 export type CreateSessionResponse2 =
   CreateSessionResponses[keyof CreateSessionResponses];
+
+export type CreateMeshSetupData = {
+  /**
+   * First-mesh setup
+   */
+  body: CreateMeshSetupRequestWritable;
+  path?: never;
+  query?: never;
+  url: "/setup/meshes";
+};
+
+export type CreateMeshSetupErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Changed retry or setup conflict
+   */
+  409: ApiError;
+  /**
+   * Internal contract failure
+   */
+  500: ApiError;
+};
+
+export type CreateMeshSetupError =
+  CreateMeshSetupErrors[keyof CreateMeshSetupErrors];
+
+export type CreateMeshSetupResponses = {
+  /**
+   * Committed first mesh
+   */
+  201: CreateMeshSetupResponse;
+};
+
+export type CreateMeshSetupResponse2 =
+  CreateMeshSetupResponses[keyof CreateMeshSetupResponses];
 
 export type GetSetupStatusData = {
   body?: never;

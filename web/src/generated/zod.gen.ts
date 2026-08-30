@@ -50,6 +50,74 @@ export const zApiError = z
   .strict();
 
 /**
+ * CreateMeshSetupRequest
+ *
+ * One exact request to create the first mesh on an unclaimed daemon.
+ */
+export const zCreateMeshSetupRequest = z
+  .strictObject({
+    administrator_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    host_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    mesh_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    node_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateMeshSetupResponse
+ *
+ * Successful, committed first-mesh creation result.
+ */
+export const zCreateMeshSetupResponse = z
+  .strictObject({
+    api_key: z
+      .string()
+      .length(113)
+      .regex(/^meshspan-key-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/),
+    mesh_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    node_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -171,6 +239,46 @@ export const zSetupStatusResponse = z
   .strict();
 
 /**
+ * CreateMeshSetupRequest
+ *
+ * One exact request to create the first mesh on an unclaimed daemon.
+ */
+export const zCreateMeshSetupRequestWritable = z
+  .strictObject({
+    administrator_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    claim: z
+      .string()
+      .length(115)
+      .regex(/^meshspan-claim-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/),
+    host_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    mesh_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    node_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -249,6 +357,16 @@ export const zCreateSessionBody = zCreateSessionRequestWritable;
  * Authenticated session created
  */
 export const zCreateSessionResponse2 = zCreateSessionResponse;
+
+/**
+ * First-mesh setup
+ */
+export const zCreateMeshSetupBody = zCreateMeshSetupRequestWritable;
+
+/**
+ * Committed first mesh
+ */
+export const zCreateMeshSetupResponse2 = zCreateMeshSetupResponse;
 
 /**
  * First-start state

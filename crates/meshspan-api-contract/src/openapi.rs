@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ApiError, CreateSessionRequest, CreateSessionResponse, HealthResponse, SetupStatusResponse,
-    schema,
+    ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
+    CreateSessionResponse, HealthResponse, SetupStatusResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -66,6 +66,8 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
         "components": {
             "schemas": {
                 "ApiError": response_component::<ApiError>(),
+                "CreateMeshSetupRequest": request_component::<CreateMeshSetupRequest>(),
+                "CreateMeshSetupResponse": response_component::<CreateMeshSetupResponse>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
                 "HealthResponse": response_component::<HealthResponse>(),
@@ -123,6 +125,21 @@ fn paths() -> Value {
                 }
             }
         },
+        "/setup/meshes": {
+            "post": {
+                "operationId": "createMeshSetup",
+                "summary": "Create the first mesh using the node's single-use claim",
+                "x-meshspan-access": "claim",
+                "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+                "requestBody": json_request("First-mesh setup", "#/components/schemas/CreateMeshSetupRequest"),
+                "responses": {
+                    "201": json_response("Committed first mesh", "#/components/schemas/CreateMeshSetupResponse"),
+                    "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                    "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
+                    "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
+                }
+            }
+        },
         "/sessions": {
             "post": {
                 "operationId": "createSession",
@@ -145,6 +162,18 @@ fn paths() -> Value {
                     "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
                     "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
                 }
+            }
+        }
+    })
+}
+
+fn json_request(description: &str, schema_reference: &str) -> Value {
+    json!({
+        "description": description,
+        "required": true,
+        "content": {
+            "application/json": {
+                "schema": { "$ref": schema_reference }
             }
         }
     })

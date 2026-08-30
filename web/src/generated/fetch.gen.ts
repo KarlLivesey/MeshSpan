@@ -3,6 +3,8 @@
 
 import type {
   ApiError,
+  CreateMeshSetupRequestWritable,
+  CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
   HealthResponse,
@@ -10,6 +12,8 @@ import type {
 } from "./types.gen";
 import {
   zApiError,
+  zCreateMeshSetupBody,
+  zCreateMeshSetupResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
   zGetHealthResponse,
@@ -26,6 +30,9 @@ export type MeshSpanFetchClientOptions = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  createMeshSetup(
+    request: CreateMeshSetupRequestWritable,
+  ): Promise<CreateMeshSetupResponse>;
   createSession(
     request: CreateSessionRequestWritable,
   ): Promise<CreateSessionResponse>;
@@ -64,6 +71,19 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
+      const body = zCreateMeshSetupBody.parse(request);
+      return requestJson(
+        context,
+        "/setup/meshes",
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        zCreateMeshSetupResponse2,
+      );
+    },
     async createSession(request): Promise<CreateSessionResponse> {
       const body = zCreateSessionBody.parse(request);
       return requestJson(

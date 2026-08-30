@@ -102,6 +102,108 @@
         "title": "ApiError",
         "type": "object"
       },
+      "CreateMeshSetupRequest": {
+        "additionalProperties": false,
+        "description": "One exact request to create the first mesh on an unclaimed daemon.",
+        "properties": {
+          "administrator_name": {
+            "description": "Human-readable first administrator name.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "claim": {
+            "description": "High-entropy single-use claim printed or written by the local daemon.",
+            "maxLength": 115,
+            "minLength": 115,
+            "pattern": "^meshspan-claim-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "host_name": {
+            "description": "Human-readable physical host name.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "mesh_name": {
+            "description": "Human-readable mesh name.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "node_name": {
+            "description": "Human-readable daemon-node name.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Client-generated idempotency identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "claim",
+          "mesh_name",
+          "administrator_name",
+          "host_name",
+          "node_name"
+        ],
+        "title": "CreateMeshSetupRequest",
+        "type": "object"
+      },
+      "CreateMeshSetupResponse": {
+        "additionalProperties": false,
+        "description": "Successful, committed first-mesh creation result.",
+        "properties": {
+          "api_key": {
+            "description": "One-time presentation of the first administrator's ordinary API key.",
+            "maxLength": 113,
+            "minLength": 113,
+            "pattern": "^meshspan-key-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+            "type": "string",
+            "x-meshspan-sensitive": true
+          },
+          "mesh_id": {
+            "description": "Stable UUID of the created mesh.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "node_id": {
+            "description": "Stable UUID of the first daemon node.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact idempotency identity whose result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "mesh_id",
+          "node_id",
+          "api_key"
+        ],
+        "title": "CreateMeshSetupResponse",
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "additionalProperties": false,
         "description": "Input for exchanging accepted authentication proofs for a session.",
@@ -699,6 +801,131 @@
         },
         "summary": "Start a bounded authentication ceremony",
         "x-meshspan-access": "anonymous",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/setup/meshes": {
+      "post": {
+        "operationId": "createMeshSetup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMeshSetupRequest"
+              }
+            }
+          },
+          "description": "First-mesh setup",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateMeshSetupResponse"
+                }
+              }
+            },
+            "description": "Committed first mesh",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or setup conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create the first mesh using the node's single-use claim",
+        "x-meshspan-access": "claim",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
     },

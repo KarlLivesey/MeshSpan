@@ -10,6 +10,8 @@ const RESPONSE_HEADERS = {
   "MeshSpan-API-Schema": `sha256:${"a".repeat(64)}`,
   "MeshSpan-API-Version": "latest",
 };
+const SETUP_OPERATION_ID = "00000000-0000-4000-8000-000000000001";
+const SETUP_CLAIM = `meshspan-claim-v1.${"1".repeat(32)}.${"2".repeat(64)}`;
 
 describe("generated native Fetch client requests", () => {
   it("uses the generated route and validates the response", async () => {
@@ -177,6 +179,66 @@ describe("generated anonymous setup status", () => {
   });
 });
 
+describe("generated first-mesh setup", () => {
+  it("posts the exact bounded request and validates the sensitive result", async () => {
+    const fetchStub: typeof globalThis.fetch = async (input, init) => {
+      expect(readRequestUrl(input)).toBe(
+        "https://node.example/api/latest/setup/meshes",
+      );
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(readStringBody(init?.body))).toMatchObject({
+        claim: SETUP_CLAIM,
+        operation_id: SETUP_OPERATION_ID,
+      });
+      return Promise.resolve(jsonResponse(validSetupResponse(), 201));
+    };
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: fetchStub,
+    });
+
+    await expect(client.createMeshSetup(validSetupRequest())).resolves.toEqual(
+      validSetupResponse(),
+    );
+  });
+
+  it("rejects invalid setup input before Fetch", async () => {
+    let called = false;
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async () => {
+        called = true;
+        return Promise.resolve(jsonResponse(validSetupResponse(), 201));
+      },
+    });
+
+    await expect(
+      client.createMeshSetup({ ...validSetupRequest(), mesh_name: "bad/name" }),
+    ).rejects.toThrow();
+    expect(called).toBe(false);
+  });
+});
+
+function validSetupRequest() {
+  return {
+    administrator_name: "Administrator",
+    claim: SETUP_CLAIM,
+    host_name: "First host",
+    mesh_name: "Home storage",
+    node_name: "First node",
+    operation_id: SETUP_OPERATION_ID,
+  } as const;
+}
+
+function validSetupResponse() {
+  return {
+    api_key: `meshspan-key-v1.${"3".repeat(32)}.${"4".repeat(64)}`,
+    mesh_id: "00000000-0000-4000-8000-000000000002",
+    node_id: "00000000-0000-4000-8000-000000000003",
+    operation_id: SETUP_OPERATION_ID,
+  } as const;
+}
+
 function readRequestUrl(
   input: RequestInfo | URL | undefined,
 ): string | undefined {
@@ -187,6 +249,13 @@ function readRequestUrl(
     return input.url;
   }
   return input;
+}
+
+function readStringBody(body: BodyInit | null | undefined): string {
+  if (typeof body !== "string") {
+    throw new TypeError("expected a string request body");
+  }
+  return body;
 }
 
 function jsonResponse(value: unknown, statusCode = 200): Response {

@@ -20,6 +20,8 @@ const source = `// SPDX-License-Identifier: GPL-2.0-only
 
 import type {
   ApiError,
+  CreateMeshSetupRequestWritable,
+  CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
   HealthResponse,
@@ -27,6 +29,8 @@ import type {
 } from "./types.gen";
 import {
   zApiError,
+  zCreateMeshSetupBody,
+  zCreateMeshSetupResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
   zGetHealthResponse,
@@ -43,6 +47,7 @@ export type MeshSpanFetchClientOptions = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResponse>;
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
@@ -79,6 +84,19 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
+      const body = zCreateMeshSetupBody.parse(request);
+      return requestJson(
+        context,
+        ${JSON.stringify(routes.createMeshSetup.route)},
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: ${JSON.stringify(routes.createMeshSetup.method)},
+        },
+        zCreateMeshSetupResponse2,
+      );
+    },
     async createSession(request): Promise<CreateSessionResponse> {
       const body = zCreateSessionBody.parse(request);
       return requestJson(
@@ -281,6 +299,7 @@ function readRequiredRoutes(document) {
     }
   }
   return {
+    createMeshSetup: requireOperation(operations, "createMeshSetup"),
     createSession: requireOperation(operations, "createSession"),
     getHealth: requireOperation(operations, "getHealth"),
     getOpenApi: requireOperation(operations, "getOpenApi"),
