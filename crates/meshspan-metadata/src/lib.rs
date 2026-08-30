@@ -2,6 +2,7 @@
 
 //! Strict SQLite-compatible persistence for authoritative partitions and node-local state.
 
+mod authentication_integrity;
 mod command;
 mod database;
 mod federation_command;
