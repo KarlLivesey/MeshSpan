@@ -25,8 +25,8 @@ use meshspan_metadata::{
 use tempfile::{TempDir, tempdir};
 
 use crate::{
-    FederationMutationRelayError, classify_federated_history_mutation,
-    relay_federated_history_mutation,
+    FederatedHistoryMutationAdmissionError, FederationMutationRelayError,
+    classify_federated_history_mutation, relay_federated_history_mutation,
 };
 
 #[test]
@@ -35,6 +35,16 @@ fn intermediary_verifies_downstream_then_countersigns_for_the_root_owner()
     let mut fixture = RelayFixture::open()?;
     fixture.prepare()?;
     let (record, downstream) = fixture.downstream_history()?;
+
+    assert!(matches!(
+        classify_federated_history_mutation(
+            &fixture.owner,
+            &record,
+            &downstream,
+            UnixMicros::new(30),
+        ),
+        Err(FederatedHistoryMutationAdmissionError::Authority(_))
+    ));
 
     let relayed = relay_federated_history_mutation(
         &fixture.intermediary,
@@ -520,13 +530,14 @@ impl Ids {
 }
 
 fn policy(allows_downstream: bool) -> FederationPolicy {
+    let mut rights = Rights::TRAVERSE
+        .union(Rights::CREATE_CHILD)
+        .union(Rights::WRITE_DATA);
+    if allows_downstream {
+        rights = rights.union(Rights::DELETE);
+    }
     FederationPolicy::Namespace(NamespaceFederationPolicy::new(
-        FederationAccess::new(
-            Rights::TRAVERSE
-                .union(Rights::CREATE_CHILD)
-                .union(Rights::WRITE_DATA),
-            allows_downstream,
-        ),
+        FederationAccess::new(rights, allows_downstream),
         None,
     ))
 }
