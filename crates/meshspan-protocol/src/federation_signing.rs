@@ -5,9 +5,11 @@
 use prost::Message;
 
 use crate::v1::{
-    FederatedBranchPage, FederatedHistoryObjectHeader, FederationAuthorityPage, FederationHeader,
-    FederationHello, FederationWelcome, FetchFederatedBranchPage, FetchFederatedHistoryObject,
-    FetchFederatedStorageInventory, FetchFederationAuthority, RequestFederatedStorageCapability,
+    FederatedBranchPage, FederatedHistoryObjectHeader, FederatedStorageCapability,
+    FederatedStorageInventoryPage, FederatedStorageReceipt, FederationAuthorityPage,
+    FederationHeader, FederationHello, FederationWelcome, FetchFederatedBranchPage,
+    FetchFederatedHistoryObject, FetchFederatedStorageInventory, FetchFederationAuthority,
+    RequestFederatedStorageCapability,
 };
 
 const HELLO_DOMAIN: &[u8] = b"meshspan.federation.hello.v1\0";
@@ -22,7 +24,14 @@ const HISTORY_OBJECT_FETCH_DOMAIN: &[u8] = b"meshspan.federation.history-object-
 const HISTORY_OBJECT_HEADER_DOMAIN: &[u8] = b"meshspan.federation.history-object-header.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DOMAIN: &[u8] =
     b"meshspan.federation.storage-capability-request.v1\0";
+const STORAGE_CAPABILITY_DOMAIN: &[u8] = b"meshspan.federation.storage-capability.v1\0";
+const STORAGE_CAPABILITY_DIGEST_DOMAIN: &[u8] =
+    b"meshspan.federation.storage-capability-digest.v1\0";
+const STORAGE_RECEIPT_DOMAIN: &[u8] = b"meshspan.federation.storage-receipt.v1\0";
 const STORAGE_INVENTORY_FETCH_DOMAIN: &[u8] = b"meshspan.federation.storage-inventory-fetch.v1\0";
+const STORAGE_INVENTORY_PAGE_DOMAIN: &[u8] = b"meshspan.federation.storage-inventory-page.v1\0";
+const STORAGE_INVENTORY_PAGE_DIGEST_DOMAIN: &[u8] =
+    b"meshspan.federation.storage-inventory-page-digest.v1\0";
 
 /// Returns the exact bytes signed by a federation hello identity.
 #[must_use]
@@ -159,6 +168,45 @@ pub fn federation_storage_capability_request_signing_payload(
     signing_payload(STORAGE_CAPABILITY_REQUEST_DOMAIN, header, &unsigned)
 }
 
+/// Returns the exact bytes signed by a remote-storage capability issuer.
+#[must_use]
+pub fn federation_storage_capability_signing_payload(
+    header: &FederationHeader,
+    capability: &FederatedStorageCapability,
+) -> Vec<u8> {
+    let mut unsigned = capability.clone();
+    unsigned.signature.clear();
+    signing_payload(STORAGE_CAPABILITY_DOMAIN, header, &unsigned)
+}
+
+/// Returns canonical domain-separated capability content for lifecycle receipt correlation.
+#[must_use]
+pub fn federation_storage_capability_digest_payload(
+    capability: &FederatedStorageCapability,
+) -> Vec<u8> {
+    let encoded = capability.encode_to_vec();
+    let mut payload = Vec::with_capacity(
+        STORAGE_CAPABILITY_DIGEST_DOMAIN
+            .len()
+            .saturating_add(8)
+            .saturating_add(encoded.len()),
+    );
+    payload.extend_from_slice(STORAGE_CAPABILITY_DIGEST_DOMAIN);
+    append_part(&mut payload, &encoded);
+    payload
+}
+
+/// Returns the exact bytes signed by a remote-storage lifecycle result.
+#[must_use]
+pub fn federation_storage_receipt_signing_payload(
+    header: &FederationHeader,
+    receipt: &FederatedStorageReceipt,
+) -> Vec<u8> {
+    let mut unsigned = receipt.clone();
+    unsigned.signature.clear();
+    signing_payload(STORAGE_RECEIPT_DOMAIN, header, &unsigned)
+}
+
 /// Returns the exact bytes signed by a remote-storage inventory fetch identity.
 #[must_use]
 pub fn federation_storage_inventory_fetch_signing_payload(
@@ -168,6 +216,37 @@ pub fn federation_storage_inventory_fetch_signing_payload(
     let mut unsigned = request.clone();
     unsigned.signature.clear();
     signing_payload(STORAGE_INVENTORY_FETCH_DOMAIN, header, &unsigned)
+}
+
+/// Returns the exact bytes signed by one remote-storage inventory page.
+#[must_use]
+pub fn federation_storage_inventory_page_signing_payload(
+    header: &FederationHeader,
+    page: &FederatedStorageInventoryPage,
+) -> Vec<u8> {
+    let mut unsigned = page.clone();
+    unsigned.signature.clear();
+    signing_payload(STORAGE_INVENTORY_PAGE_DOMAIN, header, &unsigned)
+}
+
+/// Returns canonical domain-separated inventory content for the embedded page digest.
+#[must_use]
+pub fn federation_storage_inventory_page_digest_payload(
+    page: &FederatedStorageInventoryPage,
+) -> Vec<u8> {
+    let mut unsigned = page.clone();
+    unsigned.page_digest.clear();
+    unsigned.signature.clear();
+    let encoded = unsigned.encode_to_vec();
+    let mut payload = Vec::with_capacity(
+        STORAGE_INVENTORY_PAGE_DIGEST_DOMAIN
+            .len()
+            .saturating_add(8)
+            .saturating_add(encoded.len()),
+    );
+    payload.extend_from_slice(STORAGE_INVENTORY_PAGE_DIGEST_DOMAIN);
+    append_part(&mut payload, &encoded);
+    payload
 }
 
 fn signing_payload(domain: &[u8], header: &FederationHeader, message: &impl Message) -> Vec<u8> {
@@ -194,14 +273,19 @@ fn append_part(payload: &mut Vec<u8>, part: &[u8]) {
 #[cfg(test)]
 mod tests {
     use crate::v1::{
-        FederatedBranchPage, FederationAuthorityPage, FederationHeader, FederationHello,
-        ProtocolVersion, VersionedPayload,
+        FederatedBranchPage, FederatedStorageCapability, FederatedStorageInventoryPage,
+        FederatedStorageReceipt, FederationAuthorityPage, FederationHeader, FederationHello,
+        ProtocolVersion, RemoteShardAction, ShardIdentity, VersionedPayload,
     };
 
     use super::{
         federation_authority_page_digest_payload, federation_authority_page_signing_payload,
         federation_branch_page_digest_payload, federation_branch_page_signing_payload,
-        federation_hello_signing_payload,
+        federation_hello_signing_payload, federation_storage_capability_digest_payload,
+        federation_storage_capability_signing_payload,
+        federation_storage_inventory_page_digest_payload,
+        federation_storage_inventory_page_signing_payload,
+        federation_storage_receipt_signing_payload,
     };
 
     #[test]
@@ -342,5 +426,133 @@ mod tests {
         page.immutable_object_digests[0][0] ^= 1;
         page.export_token[0] ^= 1;
         assert_ne!(federation_branch_page_digest_payload(&page), digest);
+    }
+
+    fn storage_header() -> FederationHeader {
+        FederationHeader {
+            version: Some(ProtocolVersion { major: 1, minor: 0 }),
+            relationship_id: vec![1; 16],
+            sender_mesh_id: vec![2; 16],
+            recipient_mesh_id: vec![3; 16],
+            request_id: vec![4; 16],
+            operation_id: vec![5; 16],
+            authority_epoch: 1,
+            deadline_unix_micros: 10,
+            trace_id: vec![6; 16],
+            replay_nonce: vec![7; 32],
+        }
+    }
+
+    fn storage_shard() -> ShardIdentity {
+        ShardIdentity {
+            manifest_digest: vec![8; 32],
+            stripe_index: 9,
+            shard_index: 10,
+            generation: 11,
+        }
+    }
+
+    #[test]
+    fn storage_capability_signature_binds_exact_authority() {
+        let header = storage_header();
+        let mut capability = FederatedStorageCapability {
+            grant_id: vec![12; 16],
+            target_id: vec![13; 16],
+            target_generation: 14,
+            shard: Some(storage_shard()),
+            action: RemoteShardAction::Put.into(),
+            maximum_bytes: 15,
+            valid_until_unix_micros: 16,
+            capability_nonce: vec![17; 32],
+            canonical_capability: vec![18],
+            signature: vec![19; 64],
+        };
+        let capability_payload =
+            federation_storage_capability_signing_payload(&header, &capability);
+        let capability_digest = federation_storage_capability_digest_payload(&capability);
+        capability.signature = vec![20; 64];
+        assert_eq!(
+            federation_storage_capability_signing_payload(&header, &capability),
+            capability_payload
+        );
+        assert_ne!(
+            federation_storage_capability_digest_payload(&capability),
+            capability_digest
+        );
+        capability.maximum_bytes += 1;
+        assert_ne!(
+            federation_storage_capability_signing_payload(&header, &capability),
+            capability_payload
+        );
+    }
+
+    #[test]
+    fn storage_receipt_signature_binds_exact_result() {
+        let header = storage_header();
+        let mut receipt = FederatedStorageReceipt {
+            grant_id: vec![12; 16],
+            target_id: vec![13; 16],
+            target_generation: 14,
+            shard: Some(storage_shard()),
+            action: RemoteShardAction::Put.into(),
+            affected_bytes: 15,
+            completed_at_unix_micros: 16,
+            capability_digest: vec![17; 32],
+            result_digest: vec![18; 32],
+            signature: vec![19; 64],
+        };
+        let receipt_payload = federation_storage_receipt_signing_payload(&header, &receipt);
+        receipt.signature = vec![20; 64];
+        assert_eq!(
+            federation_storage_receipt_signing_payload(&header, &receipt),
+            receipt_payload
+        );
+        receipt.result_digest[0] ^= 1;
+        assert_ne!(
+            federation_storage_receipt_signing_payload(&header, &receipt),
+            receipt_payload
+        );
+    }
+
+    #[test]
+    fn storage_inventory_digest_and_signature_bind_distinct_fields() {
+        let header = storage_header();
+        let mut page = FederatedStorageInventoryPage {
+            grant_id: vec![12; 16],
+            target_id: vec![13; 16],
+            target_generation: 14,
+            records: vec![VersionedPayload {
+                format_version: 1,
+                canonical_bytes: vec![15],
+            }],
+            next_cursor: vec![16],
+            page_digest: vec![17; 32],
+            signature: vec![18; 64],
+        };
+        let page_digest = federation_storage_inventory_page_digest_payload(&page);
+        let page_signature = federation_storage_inventory_page_signing_payload(&header, &page);
+        page.signature = vec![19; 64];
+        assert_eq!(
+            federation_storage_inventory_page_digest_payload(&page),
+            page_digest
+        );
+        assert_eq!(
+            federation_storage_inventory_page_signing_payload(&header, &page),
+            page_signature
+        );
+        page.page_digest[0] ^= 1;
+        assert_eq!(
+            federation_storage_inventory_page_digest_payload(&page),
+            page_digest
+        );
+        assert_ne!(
+            federation_storage_inventory_page_signing_payload(&header, &page),
+            page_signature
+        );
+        page.records[0].canonical_bytes[0] ^= 1;
+        assert_ne!(
+            federation_storage_inventory_page_digest_payload(&page),
+            page_digest
+        );
     }
 }
