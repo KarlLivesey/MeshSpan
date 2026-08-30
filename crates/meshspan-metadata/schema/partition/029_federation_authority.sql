@@ -143,7 +143,7 @@ CREATE TABLE federation_grant_restrictions (
     imposing_mesh_id BLOB NOT NULL CHECK (length(imposing_mesh_id) = 16),
     policy_kind INTEGER NOT NULL CHECK (policy_kind IN (1, 2)),
     rights INTEGER,
-    manage_sharing INTEGER,
+    allows_downstream_delegation INTEGER,
     maximum_storage_bytes INTEGER,
     counts_towards_protection INTEGER,
     serves_reads INTEGER,
@@ -155,10 +155,10 @@ CREATE TABLE federation_grant_restrictions (
     PRIMARY KEY (grant_id, imposing_mesh_id),
     CHECK (
         (policy_kind = 1 AND rights IS NOT NULL AND rights > 0
-            AND (rights & ~8191) = 0 AND manage_sharing IN (0, 1)
+            AND (rights & ~8191) = 0 AND allows_downstream_delegation IN (0, 1)
             AND maximum_storage_bytes IS NULL
             AND counts_towards_protection IS NULL AND serves_reads IS NULL)
-        OR (policy_kind = 2 AND rights IS NULL AND manage_sharing IS NULL
+        OR (policy_kind = 2 AND rights IS NULL AND allows_downstream_delegation IS NULL
             AND maximum_storage_bytes IS NOT NULL AND maximum_storage_bytes > 0
             AND counts_towards_protection IN (0, 1) AND serves_reads IN (0, 1))
     )

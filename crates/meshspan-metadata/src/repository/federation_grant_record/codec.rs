@@ -189,7 +189,7 @@ fn encode_policy(bytes: &mut Vec<u8>, policy: FederationPolicy) {
         FederationPolicy::Namespace(policy) => {
             bytes.push(1);
             bytes.extend_from_slice(&policy.access().rights().bits().to_be_bytes());
-            bytes.push(u8::from(policy.access().may_manage_sharing()));
+            bytes.push(u8::from(policy.access().allows_downstream_delegation()));
             encode_optional_duration(bytes, policy.maximum_offline_duration());
         }
         FederationPolicy::Storage(policy) => {
@@ -209,10 +209,10 @@ fn decode_policy(
         1 => {
             let rights = Rights::from_bits(decoder.long()?)
                 .map_err(|_| FederationGrantRecordCodecError::Invalid)?;
-            let manage_sharing = decoder.boolean()?;
+            let allows_downstream_delegation = decoder.boolean()?;
             let offline = decode_optional_duration(decoder)?;
             Ok(FederationPolicy::Namespace(NamespaceFederationPolicy::new(
-                FederationAccess::new(rights, manage_sharing),
+                FederationAccess::new(rights, allows_downstream_delegation),
                 offline,
             )))
         }

@@ -157,7 +157,7 @@ pub(crate) fn digest_policy(digest: &mut CanonicalDigest, policy: FederationPoli
         FederationPolicy::Namespace(policy) => {
             digest.byte(1);
             digest.unsigned(u64::from(policy.access().rights().bits()));
-            digest.boolean(policy.access().may_manage_sharing());
+            digest.boolean(policy.access().allows_downstream_delegation());
             digest.optional_unsigned(
                 policy
                     .maximum_offline_duration()

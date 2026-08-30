@@ -7,7 +7,7 @@ fn presets_expand_without_storing_ambiguous_authority() {
     let view = FederationAccess::from_preset(FederationPreset::View);
     assert!(view.rights().contains(Rights::READ_DATA));
     assert!(!view.rights().contains(Rights::WRITE_DATA));
-    assert!(!view.may_manage_sharing());
+    assert!(!view.allows_downstream_delegation());
 
     let edit = FederationAccess::from_preset(FederationPreset::Edit);
     assert!(edit.rights().contains(Rights::WRITE_DATA));
@@ -15,7 +15,7 @@ fn presets_expand_without_storing_ambiguous_authority() {
 
     let manage = FederationAccess::from_preset(FederationPreset::Manage);
     assert_eq!(manage.rights(), Rights::ALL);
-    assert!(manage.may_manage_sharing());
+    assert!(manage.allows_downstream_delegation());
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn every_side_can_only_narrow_effective_policy() -> Result<(), Box<dyn std::erro
             .rights()
             .contains(Rights::CHANGE_PERMISSIONS)
     );
-    assert!(!effective.access().may_manage_sharing());
+    assert!(!effective.access().allows_downstream_delegation());
 
     let storage_offered = FederationPolicy::Storage(StorageFederationPolicy::new(
         100,
