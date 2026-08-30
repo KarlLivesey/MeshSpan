@@ -72,7 +72,9 @@ impl PartitionDatabase {
     ///
     /// Fails closed for any non-`ok` integrity value or first foreign-key violation.
     pub fn check_integrity(&self) -> Result<IntegrityReport, MetadataStoreError> {
-        check_integrity(&self.connection, PARTITION_SCHEMA_VERSION)
+        let report = check_integrity(&self.connection, PARTITION_SCHEMA_VERSION)?;
+        crate::authentication_integrity::check_method_shapes(&self.connection)?;
+        Ok(report)
     }
 
     pub(crate) const fn connection_mut(&mut self) -> &mut Connection {
@@ -271,6 +273,7 @@ mod tests {
         partition_snapshot_retention_selection_migration_digest,
         partition_snapshot_root_removals_migration_digest,
         partition_snapshot_schedules_migration_digest,
+        partition_typed_authentication_migration_digest,
         partition_version_cleanup_attestations_migration_digest,
         partition_version_cleanup_completions_migration_digest,
         partition_version_cleanup_finalisation_migration_digest,
@@ -293,7 +296,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 41);
+        assert_eq!(database.check_integrity()?.schema_version, 42);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -343,7 +346,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            41
+            42
         );
         Ok(())
     }
@@ -1235,6 +1238,158 @@ mod tests {
                 0xc7, 0x90, 0x4d, 0x5e,
             ]
         );
+    }
+
+    #[test]
+    fn typed_authentication_migration_digest_is_a_committed_compatibility_value() {
+        assert_eq!(
+            partition_typed_authentication_migration_digest(),
+            [
+                0xa7, 0x02, 0x30, 0x33, 0x3f, 0x8a, 0xb3, 0x24, 0xa2, 0x7e, 0x92, 0xb4, 0xb8, 0x61,
+                0xa0, 0x33, 0x28, 0x3b, 0x73, 0xc0, 0x74, 0x43, 0x8f, 0x14, 0x87, 0x2c, 0x3f, 0xd3,
+                0x60, 0x73, 0xc9, 0x1c,
+            ]
+        );
+    }
+
+    #[test]
+    fn typed_authentication_schema_has_only_bound_credential_subtypes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("typed-authentication.sqlite3");
+        let partition_id = PartitionId::from_bytes([7; 16])?;
+        let database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(10))?;
+        let principal = [20_u8; 16];
+        let method = [21_u8; 16];
+        database.connection().execute(
+            "INSERT INTO principals(
+                principal_id, principal_kind, display_name, canonical_name,
+                state, created_at, revision
+             ) VALUES (?1, 1, 'User', 'user', 1, 10, 1)",
+            [principal.as_slice()],
+        )?;
+        database.connection().execute(
+            "INSERT INTO users(principal_id, primary_email) VALUES (?1, NULL)",
+            [principal.as_slice()],
+        )?;
+
+        let generic_secret_columns: i64 = database.connection().query_row(
+            "SELECT count(*) FROM pragma_table_info('authentication_methods')
+             WHERE name IN ('protected_material', 'secret', 'password', 'certificate')",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(generic_secret_columns, 0);
+        assert!(
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO authentication_methods(
+                        method_id, user_principal_id, method_kind, label, service_scope,
+                        state, created_at, last_used_at, expires_at,
+                        credential_generation, revision
+                     ) VALUES (?1, ?2, 5, 'obsolete', 1, 1, 10, NULL, NULL, 1, 1)",
+                    params![method.as_slice(), principal.as_slice()],
+                )
+                .is_err()
+        );
+        database.connection().execute(
+            "INSERT INTO authentication_methods(
+                method_id, user_principal_id, method_kind, label, service_scope,
+                state, created_at, last_used_at, expires_at,
+                credential_generation, revision
+             ) VALUES (?1, ?2, 1, 'passkey', 1, 1, 10, NULL, NULL, 1, 1)",
+            params![method.as_slice(), principal.as_slice()],
+        )?;
+        database.connection().execute(
+            "INSERT INTO webauthn_credentials(
+                method_id, credential_id, public_key_algorithm, public_key,
+                signature_counter, authenticator_guid, transports,
+                backup_eligible, backup_state, revision
+             ) VALUES (?1, ?2, 1, ?3, 0, NULL, 1, 1, 0, 1)",
+            params![
+                method.as_slice(),
+                [22_u8; 32].as_slice(),
+                [23_u8; 32].as_slice(),
+            ],
+        )?;
+        assert!(
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO api_keys(
+                        method_id, key_id, key_digest, scopes,
+                        valid_from, valid_until, last_used_at, revision
+                     ) VALUES (?1, ?2, ?3, 1, 10, NULL, NULL, 1)",
+                    params![
+                        method.as_slice(),
+                        [24_u8; 16].as_slice(),
+                        [25_u8; 32].as_slice(),
+                    ],
+                )
+                .is_err()
+        );
+        assert!(database.check_integrity()?.foreign_keys_ok);
+        let incomplete_method = [26_u8; 16];
+        database.connection().execute(
+            "INSERT INTO authentication_methods(
+                method_id, user_principal_id, method_kind, label, service_scope,
+                state, created_at, last_used_at, expires_at,
+                credential_generation, revision
+             ) VALUES (?1, ?2, 2, 'incomplete TOTP', 1, 1, 10, NULL, NULL, 1, 1)",
+            params![incomplete_method.as_slice(), principal.as_slice()],
+        )?;
+        assert!(matches!(
+            database.check_integrity(),
+            Err(MetadataStoreError::IntegrityFailed)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn typed_authentication_migration_rejects_ambiguous_legacy_material_atomically()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("legacy-authentication.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 41, 10)?;
+        let principal = [30_u8; 16];
+        connection.execute(
+            "INSERT INTO principals(
+                principal_id, principal_kind, display_name, canonical_name,
+                state, created_at, revision
+             ) VALUES (?1, 1, 'Legacy user', 'legacy user', 1, 10, 1)",
+            [principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO users(principal_id, primary_email) VALUES (?1, NULL)",
+            [principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO authentication_methods(
+                method_id, user_principal_id, method_kind, label, service_scope,
+                state, protected_material, created_at, valid_until, revision
+             ) VALUES (?1, ?2, 1, 'ambiguous', 1, 1, ?3, 10, NULL, 1)",
+            params![
+                [31_u8; 16].as_slice(),
+                principal.as_slice(),
+                [32_u8; 32].as_slice(),
+            ],
+        )?;
+
+        assert!(migrate_partition(&mut connection, 20).is_err());
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            41
+        );
+        let legacy_column: i64 = connection.query_row(
+            "SELECT count(*) FROM pragma_table_info('authentication_methods')
+             WHERE name = 'protected_material'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(legacy_column, 1);
+        Ok(())
     }
 
     #[test]
