@@ -16,16 +16,16 @@ MeshSpan protects:
 
 ## Trust boundaries
 
-| Boundary | Assumption |
-| --- | --- |
-| Browser/SMB client to gateway | Untrusted network and input; authenticated user may be malicious |
-| Node to node | Network is hostile; enrolled peer identity is authenticated but its input remains untrusted |
-| Daemon to provider folder | Filesystem may fail, corrupt, reorder, fill or return stale bytes |
-| Gateway to metadata authority | Gateway may be stale; every mutation and capability is fenced |
-| Storage worker to catalogue | Worker observations are evidence, not authority |
-| Administrator | May configure infrastructure; does not silently own user content |
-| Voters | Crash/partition faults tolerated; malicious majority is out of scope |
-| Build/update source | Untrusted until signature, provenance and gates verify it |
+| Boundary                      | Assumption                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| Browser/SMB client to gateway | Untrusted network and input; authenticated user may be malicious                            |
+| Node to node                  | Network is hostile; enrolled peer identity is authenticated but its input remains untrusted |
+| Daemon to provider folder     | Filesystem may fail, corrupt, reorder, fill or return stale bytes                           |
+| Gateway to metadata authority | Gateway may be stale; every mutation and capability is fenced                               |
+| Storage worker to catalogue   | Worker observations are evidence, not authority                                             |
+| Administrator                 | May configure infrastructure; does not silently own user content                            |
+| Voters                        | Crash/partition faults tolerated; malicious majority is out of scope                        |
+| Build/update source           | Untrusted until signature, provenance and gates verify it                                   |
 
 Trust is operation-scoped and non-transitive. Authentication, TLS, a successful
 system call, a database constraint, a catalogue row, a checksum, a durability
@@ -56,14 +56,14 @@ in `stage-0-review.md`. Secret-store implementation must preserve that boundary.
 
 Controls include:
 
-- memory-hard password verification with upgradeable parameters;
 - constant-shape failure responses and mesh-wide throttling;
 - secure, HTTP-only, same-site cookies plus CSRF protection;
 - origin checks for state-changing browser requests;
 - WebAuthn challenge binding and replay prevention;
 - TOTP replay window tracking;
-- hashed, scoped, expiring API tokens and recovery codes;
-- revocable SMB-only credentials created after strong web/admin authentication;
+- hashed, scoped, expiring API keys and single-use recovery codes;
+- one method/scope model for interactive-login exchange, headless API and SMB
+  login without service-specific credential copies;
 - session fixation prevention, rotation after step-up and mesh-wide revocation.
 
 Authentication material is parsed by its method-specific handler; generic
@@ -218,7 +218,7 @@ operation they describe where correctness requires it.
 ## Recovery and break-glass
 
 The recovery bundle contains enough encrypted authority to validate a committed
-snapshot and reconstruct the mesh control plane, but no user passwords or
+snapshot and reconstruct the mesh control plane, but no user API keys or
 plaintext file data. Recovery runs with public services closed and produces an
 audited new authority epoch. Old nodes and capabilities are fenced until they
 are deliberately re-admitted.

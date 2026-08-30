@@ -17,12 +17,12 @@ updates must pass the same complete local gates as a human change.
 
 ## Toolchains
 
-| Tool | Required line | Purpose |
-| --- | --- | --- |
-| Rust | Latest tested stable; currently planned around 1.98 | Daemon, embedded services and native tools |
-| Node.js | 26 | Reproducible web build/test tooling only; no production Node.js service |
-| TypeScript | 6.0.3 | Strict web application and generated API types; upgrade to 7 when the generator and typed ESLint stack support it |
-| pnpm | Current pinned stable | Reproducible JavaScript dependency and workspace management |
+| Tool       | Required line                                       | Purpose                                                                                                           |
+| ---------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Rust       | Latest tested stable; currently planned around 1.98 | Daemon, embedded services and native tools                                                                        |
+| Node.js    | 26                                                  | Reproducible web build/test tooling only; no production Node.js service                                           |
+| TypeScript | 6.0.3                                               | Strict web application and generated API types; upgrade to 7 when the generator and typed ESLint stack support it |
+| pnpm       | Current pinned stable                               | Reproducible JavaScript dependency and workspace management                                                       |
 
 Solid 2 is available as the `next` release candidate `solid-js@2.0.0-rc.3`.
 MeshSpan will pin that exact prerelease rather than accidentally resolving the
@@ -36,33 +36,33 @@ These direct dependencies are currently installed. They are build-time tools or
 libraries linked into project artefacts as indicated; transitive inventory and
 source/advisory policy automation arrive before a release artefact is built.
 
-| Rust dependency | Resolved version | Declared licence |
-| --- | ---: | --- |
-| `jsonschema` | 0.52.0 | `MIT` |
-| `prost` | 0.14.4 | `Apache-2.0` |
-| `prost-build` (build only) | 0.14.4 | `Apache-2.0` |
-| `protoc-bin-vendored` (build only) | 3.2.0 | `MIT` |
-| `rusqlite` | 0.40.2 | `MIT` |
-| `schemars` | 1.2.2 | `MIT` |
-| `serde` | 1.0.229 | `MIT OR Apache-2.0` |
-| `serde_json` | 1.0.151 | `MIT OR Apache-2.0` |
-| `sha2` | 0.10.9 | `MIT OR Apache-2.0` |
-| `thiserror` | 2.0.20 | `MIT OR Apache-2.0` |
-| `unicode-normalization` | 0.1.25 | `MIT OR Apache-2.0` |
-| `tempfile` (test only) | 3.27.0 | `MIT OR Apache-2.0` |
-| `bytes` | 1.12.1 | `MIT` |
-| `chacha20poly1305` | 0.11.0 | `Apache-2.0 OR MIT` |
-| `ed25519-dalek` | 3.0.0 | `BSD-3-Clause` |
-| `quinn` | 0.11.11 | `MIT OR Apache-2.0` |
-| `rcgen` | 0.14.9 | `MIT OR Apache-2.0` |
-| `rustls` | 0.23.43 | `Apache-2.0 OR ISC OR MIT` |
-| `tokio` | 1.53.1 | `MIT` |
-| `zeroize` | 1.9.0 | `Apache-2.0 OR MIT` |
+| Rust dependency                    | Resolved version | Declared licence           |
+| ---------------------------------- | ---------------: | -------------------------- |
+| `jsonschema`                       |           0.52.0 | `MIT`                      |
+| `prost`                            |           0.14.4 | `Apache-2.0`               |
+| `prost-build` (build only)         |           0.14.4 | `Apache-2.0`               |
+| `protoc-bin-vendored` (build only) |            3.2.0 | `MIT`                      |
+| `rusqlite`                         |           0.40.2 | `MIT`                      |
+| `schemars`                         |            1.2.2 | `MIT`                      |
+| `serde`                            |          1.0.229 | `MIT OR Apache-2.0`        |
+| `serde_json`                       |          1.0.151 | `MIT OR Apache-2.0`        |
+| `sha2`                             |           0.10.9 | `MIT OR Apache-2.0`        |
+| `thiserror`                        |           2.0.20 | `MIT OR Apache-2.0`        |
+| `unicode-normalization`            |           0.1.25 | `MIT OR Apache-2.0`        |
+| `tempfile` (test only)             |           3.27.0 | `MIT OR Apache-2.0`        |
+| `bytes`                            |           1.12.1 | `MIT`                      |
+| `chacha20poly1305`                 |           0.11.0 | `Apache-2.0 OR MIT`        |
+| `ed25519-dalek`                    |            3.0.0 | `BSD-3-Clause`             |
+| `quinn`                            |          0.11.11 | `MIT OR Apache-2.0`        |
+| `rcgen`                            |           0.14.9 | `MIT OR Apache-2.0`        |
+| `rustls`                           |          0.23.43 | `Apache-2.0 OR ISC OR MIT` |
+| `tokio`                            |           1.53.1 | `MIT`                      |
+| `zeroize`                          |            1.9.0 | `Apache-2.0 OR MIT`        |
 
-| Web/runtime dependency | Version | Declared licence |
-| --- | ---: | --- |
-| `@js-temporal/polyfill` | 0.5.1 | `ISC` |
-| `zod` | 4.4.3 | `MIT` |
+| Web/runtime dependency  | Version | Declared licence |
+| ----------------------- | ------: | ---------------- |
+| `@js-temporal/polyfill` |   0.5.1 | `ISC`            |
+| `zod`                   |   4.4.3 | `MIT`            |
 
 The direct Node.js build/test dependencies in the lockfile are MIT or
 Apache-2.0 except `@js-temporal/polyfill` (`ISC`) and
@@ -75,13 +75,13 @@ lockfile.
 
 ### Runtime and transport
 
-| Direct dependency | Need |
-| --- | --- |
-| `tokio` | One async runtime, sockets, tasks, timers, channels and bounded blocking workers |
-| `tokio-util` | Cancellation tokens and framed/stream utilities not present in the core runtime |
-| `quinn` | Private QUIC streams and datagrams between mutually authenticated nodes |
-| `rustls` | Shared in-process TLS implementation for QUIC, HTTPS and certificate handling |
-| `bytes` | Bounded zero-copy-oriented network buffers |
+| Direct dependency | Need                                                                             |
+| ----------------- | -------------------------------------------------------------------------------- |
+| `tokio`           | One async runtime, sockets, tasks, timers, channels and bounded blocking workers |
+| `tokio-util`      | Cancellation tokens and framed/stream utilities not present in the core runtime  |
+| `quinn`           | Private QUIC streams and datagrams between mutually authenticated nodes          |
+| `rustls`          | Shared in-process TLS implementation for QUIC, HTTPS and certificate handling    |
+| `bytes`           | Bounded zero-copy-oriented network buffers                                       |
 
 There is no OpenRaft or `raft-rs` runtime dependency. Their behaviour remains a
 reference and differential-test oracle for the standard-majority subset of the
@@ -89,15 +89,15 @@ MeshSpan-owned core.
 
 ### HTTPS, API and encoding
 
-| Direct dependency | Need |
-| --- | --- |
-| `axum` | Embedded HTTPS API, administration panel assets and HTTP-01 route |
-| `tower` | Explicit service boundaries, timeouts, concurrency and observability layers |
-| `tower-http` | Narrow HTTP middleware such as tracing, limits and static asset handling |
-| `serde` | Typed configuration and public JSON models |
-| `serde_json` | Public JSON API and bounded diagnostic documents |
-| `prost` | Versioned private Protobuf messages; generated types do not cross domain boundaries |
-| `base64` | Strict URL-safe token and wire encodings where the protocol requires them |
+| Direct dependency | Need                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `axum`            | Embedded HTTPS API, administration panel assets and HTTP-01 route                   |
+| `tower`           | Explicit service boundaries, timeouts, concurrency and observability layers         |
+| `tower-http`      | Narrow HTTP middleware such as tracing, limits and static asset handling            |
+| `serde`           | Typed configuration and public JSON models                                          |
+| `serde_json`      | Public JSON API and bounded diagnostic documents                                    |
+| `prost`           | Versioned private Protobuf messages; generated types do not cross domain boundaries |
+| `base64`          | Strict URL-safe token and wire encodings where the protocol requires them           |
 
 Rust boundary types and structural constraints generate OpenAPI 3.1 and drive
 runtime request/response validation. The exact Rust schema crates remain gated
@@ -112,13 +112,13 @@ are committed and checked for drift and compatibility.
 
 ### Persistence and local filesystem
 
-| Direct dependency | Need |
-| --- | --- |
-| `rusqlite` | Initial SQLite-compatible relational repository with explicit transactions and SQL |
-| `cap-std` | Capability-scoped access beneath registered state/storage folders |
-| `uuid` | Application-generated 128-bit identifiers; exact permitted versions are domain-defined |
-| `unicode-normalization` | Canonical Unicode handling for names without locale-dependent behaviour |
-| `jiff` | Rust-side expiry, duration and civil-time validation; authoritative instants remain UTC epoch microseconds |
+| Direct dependency       | Need                                                                                                       |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `rusqlite`              | Initial SQLite-compatible relational repository with explicit transactions and SQL                         |
+| `cap-std`               | Capability-scoped access beneath registered state/storage folders                                          |
+| `uuid`                  | Application-generated 128-bit identifiers; exact permitted versions are domain-defined                     |
+| `unicode-normalization` | Canonical Unicode handling for names without locale-dependent behaviour                                    |
+| `jiff`                  | Rust-side expiry, duration and civil-time validation; authoritative instants remain UTC epoch microseconds |
 
 SQL migrations, transaction boundaries and invariants remain MeshSpan code. No
 ORM, generic migration framework or distributed database client is required for
@@ -126,18 +126,17 @@ the first implementation.
 
 ### Cryptography, identity and certificates
 
-| Direct dependency | Need |
-| --- | --- |
-| `blake3` | Content, manifest, proof and operation digests where the design selects BLAKE3 |
-| `argon2` | Password hashing with versioned parameters |
-| `ed25519-dalek` | Signed routing, grants, receipts and offline-authority projections |
-| `chacha20poly1305` | Authenticated envelope encryption for protected application material |
-| `hkdf` | Domain-separated key derivation |
-| `sha2` | Standards that mandate SHA-2, including certificate and SMB constructions |
-| `getrandom` | Operating-system cryptographic randomness |
-| `zeroize` | Best-effort erasure for owned secret buffers |
-| `secrecy` | Types that prevent accidental secret formatting/logging |
-| `rcgen` | Internal node certificates and certificate requests |
+| Direct dependency  | Need                                                                           |
+| ------------------ | ------------------------------------------------------------------------------ |
+| `blake3`           | Content, manifest, proof and operation digests where the design selects BLAKE3 |
+| `ed25519-dalek`    | Signed routing, grants, receipts and offline-authority projections             |
+| `chacha20poly1305` | Authenticated envelope encryption for protected application material           |
+| `hkdf`             | Domain-separated key derivation                                                |
+| `sha2`             | Standards that mandate SHA-2, including certificate and SMB constructions      |
+| `getrandom`        | Operating-system cryptographic randomness                                      |
+| `zeroize`          | Best-effort erasure for owned secret buffers                                   |
+| `secrecy`          | Types that prevent accidental secret formatting/logging                        |
+| `rcgen`            | Internal node certificates and certificate requests                            |
 
 `webauthn-rs` and `totp-rs` are evaluation candidates for the WebAuthn and TOTP
 authentication-method adapters. They are not admitted until their parsing,
@@ -155,10 +154,10 @@ external daemon.
 Exactly one implementation will be selected by the Stage 1 correctness and
 benchmark harness:
 
-| Candidate | Evaluation purpose |
-| --- | --- |
+| Candidate              | Evaluation purpose                                                 |
+| ---------------------- | ------------------------------------------------------------------ |
 | `reed-solomon-erasure` | Straightforward mature matrix implementation and reference vectors |
-| `reed-solomon-simd` | SIMD/FFT-oriented throughput on x86-64 and ARM64 |
+| `reed-solomon-simd`    | SIMD/FFT-oriented throughput on x86-64 and ARM64                   |
 
 Both must round-trip every allowed geometry, reject corrupt/wrong-length slices,
 produce stable manifests across platforms and pass Raspberry Pi plus server
@@ -172,10 +171,10 @@ No SMB server crate is approved as a production dependency today.
 The current `smb-server` crate is useful reference code and exposes a promising
 backend seam, but its current release does not meet MeshSpan's first profile: it
 offers older dialects, does not implement SMB encryption and does not require
-signing. It also owns users/passwords in a way that cannot be MeshSpan's
+signing. It also owns users/credentials in a way that cannot be MeshSpan's
 authoritative cluster-wide IAM boundary.
 
-The likely implementation is therefore a MeshSpan-owned bounded SMB 3.0.2/3.1.1
+The likely implementation is therefore a MeshSpan-owned bounded SMB 3.1.1-only
 server over `tokio` and `bytes`, using the same filesystem, handle, IAM and crypto
 contracts as HTTPS. We may reuse an upstream parser or backend trait only after
 adversarial wire tests prove exact bounds and the missing security features can
@@ -183,12 +182,12 @@ be added without fighting its architecture.
 
 ### Command line, errors and telemetry
 
-| Direct dependency | Need |
-| --- | --- |
-| `clap` | Validated headless daemon flags, including repeated `--storage-path` |
-| `thiserror` | Specific library/domain errors with explicit sources |
-| `tracing` | Structured spans/events without a second logging system |
-| `tracing-subscriber` | Configurable local formatting and bounded filtering/export plumbing |
+| Direct dependency    | Need                                                                 |
+| -------------------- | -------------------------------------------------------------------- |
+| `clap`               | Validated headless daemon flags, including repeated `--storage-path` |
+| `thiserror`          | Specific library/domain errors with explicit sources                 |
+| `tracing`            | Structured spans/events without a second logging system              |
+| `tracing-subscriber` | Configurable local formatting and bounded filtering/export plumbing  |
 
 No metrics backend is required to run the appliance. The observability contract
 emits bounded internal metrics; exporters are replaceable adapters.
@@ -197,18 +196,18 @@ emits bounded internal metrics; exporters are replaceable adapters.
 
 These do not ship in the daemon:
 
-| Dependency/tool | Need |
-| --- | --- |
-| `proptest` | Generated domain, parser, schema, quorum and state-machine cases with shrinking |
-| `stateright` | Executable bounded models for consensus and distributed state machines |
-| `loom` | Exhaustive small-schedule concurrency checks for shared-memory primitives |
-| `turmoil` | Deterministic network partitions, delay, loss and reconnect scenarios |
-| `tempfile` | Isolated real-filesystem fixtures |
-| `criterion` | Repeatable microbenchmarks with regression evidence |
-| `cargo-nextest` | Fast partitioned Rust test execution |
-| `cargo-fuzz` | Coverage-guided wire, manifest, SQL-value and recovery-input fuzzing |
-| `cargo-deny` | Advisory, duplicate, source and `GPL-2.0-only` dependency-policy checks |
-| `cargo-audit` | Independent Rust advisory check |
+| Dependency/tool | Need                                                                            |
+| --------------- | ------------------------------------------------------------------------------- |
+| `proptest`      | Generated domain, parser, schema, quorum and state-machine cases with shrinking |
+| `stateright`    | Executable bounded models for consensus and distributed state machines          |
+| `loom`          | Exhaustive small-schedule concurrency checks for shared-memory primitives       |
+| `turmoil`       | Deterministic network partitions, delay, loss and reconnect scenarios           |
+| `tempfile`      | Isolated real-filesystem fixtures                                               |
+| `criterion`     | Repeatable microbenchmarks with regression evidence                             |
+| `cargo-nextest` | Fast partitioned Rust test execution                                            |
+| `cargo-fuzz`    | Coverage-guided wire, manifest, SQL-value and recovery-input fuzzing            |
+| `cargo-deny`    | Advisory, duplicate, source and `GPL-2.0-only` dependency-policy checks         |
+| `cargo-audit`   | Independent Rust advisory check                                                 |
 
 Real SMB/HTTPS clients, multi-process daemons, power/fault injection and
 multi-machine acceptance remain black-box test infrastructure rather than Rust
@@ -216,14 +215,14 @@ library dependencies.
 
 ## Web production dependencies
 
-| Direct dependency | Need |
-| --- | --- |
-| `solid-js` `2.0.0-rc.3` | Pinned Solid 2 reactive runtime from the `next` tag |
-| `@solidjs/web` `2.0.0-rc.3` | Solid 2 DOM renderer paired exactly with the runtime prerelease |
-| `@solidjs/router` `2.0.0-next.18` | Solid-2-compatible URL routing and nested user/admin panel layouts |
-| `@js-temporal/polyfill` | Temporal until every supported browser provides the required API natively |
-| `zod` 4.x | Runtime validation and type narrowing for untrusted API, route, persisted-browser and form inputs |
-| `@kobalte/core` | Candidate accessible primitives for dialogs, menus, selects and focus management |
+| Direct dependency                 | Need                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `solid-js` `2.0.0-rc.3`           | Pinned Solid 2 reactive runtime from the `next` tag                                               |
+| `@solidjs/web` `2.0.0-rc.3`       | Solid 2 DOM renderer paired exactly with the runtime prerelease                                   |
+| `@solidjs/router` `2.0.0-next.18` | Solid-2-compatible URL routing and nested user/admin panel layouts                                |
+| `@js-temporal/polyfill`           | Temporal until every supported browser provides the required API natively                         |
+| `zod` 4.x                         | Runtime validation and type narrowing for untrusted API, route, persisted-browser and form inputs |
+| `@kobalte/core`                   | Candidate accessible primitives for dialogs, menus, selects and focus management                  |
 
 `@kobalte/core` is optional until a native implementation proves less risky.
 There is no Axios, Redux-style state store, CSS framework, chart framework or
@@ -232,32 +231,32 @@ native `fetch`, CSS and browser platform APIs are sufficient initially.
 
 ## Web build and verification dependencies
 
-| Direct dependency | Need |
-| --- | --- |
-| `typescript` 6.0.3 | Strict type checking; 7 remains the next ecosystem-supported upgrade |
-| `vite` | Fast development/build pipeline and static production bundle |
-| `vite-plugin-solid` `3.0.0-next.27` | Solid-2-compatible compiler integration |
-| `@types/node` | Node 26 build-script types only |
-| `@hey-api/openapi-ts` | Generates committed TypeScript types and Zod 4 schemas from Rust-generated OpenAPI |
-| `vitest` | Fast unit and component tests sharing Vite transforms |
-| `@solidjs/testing-library` | Behaviour-level component tests once its declared peer range accepts the pinned Solid 2 prerelease; tests use Vitest/browser primitives until then |
-| `@testing-library/user-event` | Realistic keyboard/pointer interaction in component tests |
-| `happy-dom` | Fast DOM for non-browser unit/component suites |
-| `@playwright/test` | Real Chromium, Firefox and WebKit journeys with no manual browser interaction |
-| `@axe-core/playwright` | Automated accessibility checks inside the real-browser journeys |
-| `eslint` | JavaScript/TypeScript lint runner |
-| `@eslint/js` | Maintained core JavaScript correctness baseline for flat configuration |
-| `globals` | Explicit browser and Node build-script global sets |
-| `typescript-eslint` | Type-aware TypeScript rules |
-| `eslint-plugin-solid` | Solid-specific correctness rules |
-| `eslint-plugin-jsx-a11y` | Static accessibility checks for JSX |
-| `eslint-plugin-sonarjs` | Cognitive-complexity and maintainability rules not supplied by core ESLint |
-| `eslint-plugin-import-x` | Import graph, dependency and layer-boundary correctness |
-| `eslint-plugin-regexp` | Regular-expression correctness and safety checks |
-| `@eslint-community/eslint-plugin-eslint-comments` | Requires used, described and narrowly scoped lint suppressions |
-| `@vitest/eslint-plugin` | Vitest correctness and prevention of focused or silently disabled tests |
-| `eslint-plugin-n` | Node 26 correctness for build and configuration scripts only |
-| `prettier` | Deterministic Markdown, JSON, CSS and TypeScript formatting |
+| Direct dependency                                 | Need                                                                                                                                               |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `typescript` 6.0.3                                | Strict type checking; 7 remains the next ecosystem-supported upgrade                                                                               |
+| `vite`                                            | Fast development/build pipeline and static production bundle                                                                                       |
+| `vite-plugin-solid` `3.0.0-next.27`               | Solid-2-compatible compiler integration                                                                                                            |
+| `@types/node`                                     | Node 26 build-script types only                                                                                                                    |
+| `@hey-api/openapi-ts`                             | Generates committed TypeScript types and Zod 4 schemas from Rust-generated OpenAPI                                                                 |
+| `vitest`                                          | Fast unit and component tests sharing Vite transforms                                                                                              |
+| `@solidjs/testing-library`                        | Behaviour-level component tests once its declared peer range accepts the pinned Solid 2 prerelease; tests use Vitest/browser primitives until then |
+| `@testing-library/user-event`                     | Realistic keyboard/pointer interaction in component tests                                                                                          |
+| `happy-dom`                                       | Fast DOM for non-browser unit/component suites                                                                                                     |
+| `@playwright/test`                                | Real Chromium, Firefox and WebKit journeys with no manual browser interaction                                                                      |
+| `@axe-core/playwright`                            | Automated accessibility checks inside the real-browser journeys                                                                                    |
+| `eslint`                                          | JavaScript/TypeScript lint runner                                                                                                                  |
+| `@eslint/js`                                      | Maintained core JavaScript correctness baseline for flat configuration                                                                             |
+| `globals`                                         | Explicit browser and Node build-script global sets                                                                                                 |
+| `typescript-eslint`                               | Type-aware TypeScript rules                                                                                                                        |
+| `eslint-plugin-solid`                             | Solid-specific correctness rules                                                                                                                   |
+| `eslint-plugin-jsx-a11y`                          | Static accessibility checks for JSX                                                                                                                |
+| `eslint-plugin-sonarjs`                           | Cognitive-complexity and maintainability rules not supplied by core ESLint                                                                         |
+| `eslint-plugin-import-x`                          | Import graph, dependency and layer-boundary correctness                                                                                            |
+| `eslint-plugin-regexp`                            | Regular-expression correctness and safety checks                                                                                                   |
+| `@eslint-community/eslint-plugin-eslint-comments` | Requires used, described and narrowly scoped lint suppressions                                                                                     |
+| `@vitest/eslint-plugin`                           | Vitest correctness and prevention of focused or silently disabled tests                                                                            |
+| `eslint-plugin-n`                                 | Node 26 correctness for build and configuration scripts only                                                                                       |
+| `prettier`                                        | Deterministic Markdown, JSON, CSS and TypeScript formatting                                                                                        |
 
 Unit and component suites are split from real-browser acceptance so routine
 feedback remains fast. The production daemon embeds only the built static files;

@@ -56,14 +56,17 @@ model; they never open a second configuration path.
 
 ## Safe automatic defaults
 
-- One node starts useful and reports that it has no machine redundancy.
+- One node starts useful and reports machine, backing-device, power and location
+  protection independently; several independent devices may provide device
+  redundancy without machine HA.
 - Added folders/nodes become eligible after validation without changing an
   existing acknowledgement promise silently.
 - Eventual convergence is the default so a broken link does not stop ordinary
   work.
 - Voter count, placement, encoding, repair priority and rebalance are automatic.
 - HTTPS works on first start with a clearly scoped local bootstrap identity;
-  public ACME or an administrator certificate is an optional later policy.
+  public ACME is recommended when a domain is available, while a mesh-local CA
+  remains complete and external CA automation uses the publisher API.
 - Every recommendation includes its consequence in user language before commit.
 
 ## One control path

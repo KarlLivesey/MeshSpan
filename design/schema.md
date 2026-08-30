@@ -378,6 +378,11 @@ Node-local `local.sqlite3` records:
 ```text
 local_node(singleton PK, mesh_id, node_id, incarnation, state_dir_version)
 
+local_claim_bundles(
+  claim_id PK, node_public_key_fingerprint, secret_digest UNIQUE,
+  state, created_at, consumed_at NULL, revision
+)
+
 local_targets(
   target_id PK, provider_instance_id, authoritative_config_revision,
   generation, canonical_path UNIQUE, marker_fingerprint,
@@ -408,30 +413,29 @@ local_scrub_cursors(
 )
 ```
 
-Only `local_targets` contains host paths. A target generation changes when path
-identity or target marker continuity cannot be proved.
+`local_claim_bundles` stores only the verifier digest. The printable claim
+secret exists only in the one-time interactive output or protected automation
+file. Losing that output requires a local rotation that invalidates the previous
+digest before issuing a replacement. Only `local_targets` contains host paths.
+A target generation changes when path identity or target marker continuity
+cannot be proved.
 
 ## 8. Fault groups, cells and placement policies
 
 ```text
-fault_group_classes(
+failure_classes(
   class_id PK, display_name, canonical_name UNIQUE,
-  member_kind, system_managed, revision
+  class_kind, system_managed, revision
 )
 
-fault_groups(
-  group_id PK, class_id -> fault_group_classes, display_name, canonical_name,
+shared_failure_groups(
+  group_id PK, class_id -> failure_classes, display_name, canonical_name,
   state, revision, UNIQUE(class_id, canonical_name)
 )
 
-host_fault_group_memberships(
-  host_id -> hosts, group_id -> fault_groups, source_kind,
+machine_shared_failure_memberships(
+  host_id -> hosts, group_id -> shared_failure_groups, source_kind,
   evidence_payload NULL, revision, PK(host_id, group_id)
-)
-
-target_fault_group_memberships(
-  target_id -> storage_targets, group_id -> fault_groups, source_kind,
-  evidence_payload NULL, revision, PK(target_id, group_id)
 )
 
 availability_cells(
@@ -468,7 +472,7 @@ protection_scenarios(
 
 protection_scenario_terms(
   term_id PK, scenario_id -> protection_scenarios,
-  class_id -> fault_group_classes, failure_count,
+  class_id -> failure_classes, failure_count,
   UNIQUE(scenario_id, class_id)
 )
 
@@ -585,11 +589,6 @@ authentication_methods(
 Exactly one matching subtype exists for each method:
 
 ```text
-password_credentials(
-  method_id PK -> authentication_methods, algorithm, parameters,
-  salt, verifier, changed_at
-)
-
 webauthn_credentials(
   method_id -> authentication_methods, credential_id,
   public_key_algorithm, public_key, signature_counter,
@@ -607,26 +606,16 @@ recovery_codes(
   created_at, used_at NULL, PK(method_id, code_id), UNIQUE(code_digest)
 )
 
-api_tokens(
-  method_id -> authentication_methods, token_id, token_digest UNIQUE,
+api_keys(
+  method_id -> authentication_methods, key_id, key_digest UNIQUE,
   scopes, valid_from, valid_until, last_used_at NULL,
-  PK(method_id, token_id)
-)
-
-client_certificate_credentials(
-  method_id -> authentication_methods, issuer_fingerprint,
-  certificate_fingerprint, subject_key_fingerprint, valid_until,
-  PK(method_id, certificate_fingerprint)
-)
-
-smb_credentials(
-  method_id PK -> authentication_methods, verifier_ciphertext,
-  protocol_profile, generated_at
+  PK(method_id, key_id)
 )
 ```
 
 Secrets capable of direct authentication are digests or encrypted typed
-material, never plaintext.
+material, never plaintext. Password, user client-certificate and service-specific
+credential subtypes do not exist.
 
 ## 11. Authentication policy and sessions
 
@@ -1303,10 +1292,25 @@ certificate_orders(
   last_error_kind NULL, created_at, completed_at NULL, revision
 )
 
+dns_challenge_tasks(
+  task_id PK, order_id -> certificate_orders,
+  record_name, record_type, record_value_secret_id,
+  state, deadline, last_probe_at NULL, verified_at NULL, revision
+)
+
+external_certificate_publications(
+  publication_id PK, operation_id -> operations,
+  publisher_principal_id -> principals, requested_names,
+  chain_digest, public_key_fingerprint, not_before, not_after,
+  state, created_at, activated_at NULL, revision
+)
+
 certificates(
-  certificate_id PK, order_id -> certificate_orders,
+  certificate_id PK, order_id NULL -> certificate_orders,
+  publication_id NULL -> external_certificate_publications,
   generation, names, chain_der, public_key_fingerprint,
-  not_before, not_after, state, revision
+  not_before, not_after, state, revision,
+  CHECK(exactly one of order_id, publication_id is non-NULL)
 )
 
 secret_generations(
@@ -1423,10 +1427,15 @@ metadata_backups(
   state, created_at, verified_at NULL, revision
 )
 
-backup_target_copies(
-  backup_id -> metadata_backups, target_id -> storage_targets,
-  target_generation, object_reference, copy_digest,
-  state, verified_at NULL, PK(backup_id, target_id)
+backup_destinations(
+  destination_id PK, provider_instance_id -> component_instances,
+  destination_kind, failure_evidence, state, revision
+)
+
+backup_copies(
+  backup_id -> metadata_backups, destination_id -> backup_destinations,
+  provider_generation, object_reference, copy_digest,
+  state, verified_at NULL, PK(backup_id, destination_id)
 )
 
 recovery_epochs(
@@ -1436,8 +1445,9 @@ recovery_epochs(
 )
 ```
 
-Protected target copies do not vote and cannot appoint authority. Recovery
-material remains encrypted for the administrator-held recovery mechanism.
+Protected copies on local targets, other swarms or other provider destinations
+do not vote and cannot appoint authority. Recovery material remains encrypted
+for the administrator-held recovery mechanism.
 
 ## 26. Cross-record invariants
 

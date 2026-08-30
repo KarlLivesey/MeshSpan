@@ -11,7 +11,7 @@ Mesh
 │       ├── Gateway capability
 │       ├── Voter capability
 │       └── Storage target (registered folder)
-├── Fault groups (overlapping sets of hosts or targets)
+├── Shared-failure groups (overlapping sets of machines)
 ├── Availability cells (local service/quorum placement domains)
 ├── Metadata partitions (single-authority record scopes)
 ├── Principals (users and groups)
@@ -41,17 +41,17 @@ name causal base commits; concurrent outage branches reconcile through the expli
 
 ## State ownership
 
-| State | Authority | Durable location |
-| --- | --- | --- |
-| Consensus vote, log, quorum plan and snapshot progress | one partition voter locally, replicated by that consensus group | partition voter consensus store |
-| Mesh, identity, namespace and catalogues | owning committed metadata partition | voters of that metadata partition |
-| Filesystem outage branch commits, receipts and debt | originating node/cell until inclusion | per-partition local branch store and referenced storage targets |
-| Component selections, desired configuration and revision history | owning committed metadata partition | voters of that metadata partition |
-| Node private identity and decryption keys | owning node only | daemon state directory |
-| Storage path, socket binding and provider recovery journal | owning node only | daemon state and registered folder |
-| Immutable shard bytes and provider tombstones | owning storage target | registered folder |
-| Connection, heartbeat and latency observations | observing process | memory or bounded node-local state |
-| Staging bytes | write-owning gateway/storage nodes | node-local staging journal until resolved |
+| State                                                            | Authority                                                       | Durable location                                                |
+| ---------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- |
+| Consensus vote, log, quorum plan and snapshot progress           | one partition voter locally, replicated by that consensus group | partition voter consensus store                                 |
+| Mesh, identity, namespace and catalogues                         | owning committed metadata partition                             | voters of that metadata partition                               |
+| Filesystem outage branch commits, receipts and debt              | originating node/cell until inclusion                           | per-partition local branch store and referenced storage targets |
+| Component selections, desired configuration and revision history | owning committed metadata partition                             | voters of that metadata partition                               |
+| Node private identity and decryption keys                        | owning node only                                                | daemon state directory                                          |
+| Storage path, socket binding and provider recovery journal       | owning node only                                                | daemon state and registered folder                              |
+| Immutable shard bytes and provider tombstones                    | owning storage target                                           | registered folder                                               |
+| Connection, heartbeat and latency observations                   | observing process                                               | memory or bounded node-local state                              |
+| Staging bytes                                                    | write-owning gateway/storage nodes                              | node-local staging journal until resolved                       |
 
 Derived caches are disposable. They never become the only copy of an acknowledged fact.
 
@@ -59,8 +59,8 @@ Derived caches are disposable. They never become the only copy of an acknowledge
 
 An availability cell is a placement domain intended to keep useful work local
 during a wider network outage, for example one university building. It does not
-replace fault groups: a building may contain several rooms, circuits and hosts,
-and a host may participate in services for several cells.
+replace shared-failure groups: a building may contain several rooms, circuits
+and machines, and a machine may participate in services for several cells.
 
 A metadata partition owns one converged consensus head and its control records. Every
 mutable aggregate has one owning partition ID. Small meshes start with one partition;
@@ -99,11 +99,14 @@ semantics or make its local locator authoritative.
 
 ## Fault model
 
-Fault-group classes describe risks such as machine, backing device, PSU, circuit, rack, room,
-network switch or building. Fault groups are instances such as `room/upstairs` or `psu/shared-2`.
+Built-in identities describe daemon, machine and backing-device failures.
+Administrator-defined shared-failure groups describe sets of machines that may
+fail together because they share a hypervisor, PSU, circuit, rack, room, network
+switch, building or another common point. Groups may overlap and do not contain
+other groups.
 
-A target's effective group set is the union of its direct groups and all groups on its host. Groups
-may overlap and need not form a hierarchy.
+A target's effective failure set contains its backing-device identity, machine
+identity and every shared-failure group assigned to that machine.
 
 A protection policy is a set of required scenarios. Each scenario contains simultaneous terms:
 

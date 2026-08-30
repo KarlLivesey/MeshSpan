@@ -51,6 +51,11 @@ Status: **draft for review**.
 - **SIM-009** Federation internals including trust chains, delegation leases, remote branches,
   cryptographic keys, receipts and reconciliation MUST be automatic and MUST NOT become routine
   user or administrator choices.
+- **SIM-010** First boot MUST create one high-entropy single-use claim bundle visible only through
+  local CLI output or an explicitly protected automation file. An unauthenticated setup surface
+  MUST never reveal it. Claim MUST support both local setup and submission to an authenticated
+  existing-swarm enrolment flow, survive restart until use/rotation and become invalid atomically
+  after successful claim.
 
 ## Hosts, nodes and membership
 
@@ -164,10 +169,12 @@ Status: **draft for review**.
   user MUST authenticate with its home swarm; raw credentials, factors and sessions MUST NOT be
   copied into another swarm.
 - **FED-008** Federation grants MUST target a volume, folder subtree, individual file or bounded
-  storage capacity and MUST express explicit view, edit, manage and manage-sharing rights over the
-  applicable resource kind.
-- **FED-009** The ordinary UI MUST lead with the `view`, `edit` and `manage` presets. Resharing MUST
-  require an explicit manage-sharing right, and advanced rights MUST NOT silently broaden a preset.
+  storage capacity and MUST express explicit view, edit and manage rights over the applicable
+  resource kind. The grant targets the receiving swarm, not principals imported from it.
+- **FED-009** The receiving swarm MUST decide which of its principals receive equal or narrower
+  rights and MAY re-export through itself to another swarm with equal or narrower rights. A
+  downstream swarm MUST NOT thereby become authorised to connect directly to an upstream owner,
+  and no delegation hop may expand rights, bounds or validity.
 - **FED-010** Every shared volume, folder or file MUST retain exactly one owning swarm responsible
   for its ACL policy and canonical converged history, independently of data placement and the swarm
   that accepted an offline edit.
@@ -216,6 +223,12 @@ Status: **draft for review**.
   swarm MUST NOT require consensus, voter contact or a synchronous catalogue transaction in any
   other swarm. Large deployments MUST be able to distribute ownership by volume or explicit
   subtree across swarms while retaining the same sharing semantics.
+- **FED-027** A remote swarm's physical independence MUST remain signed declared topology evidence
+  accepted by the relying swarm, not a property inferred from swarm identity. Unaccepted or
+  incomplete evidence MAY permit storage but MUST NOT satisfy the affected failure promise.
+- **FED-028** The swarm whose local protection state is being repaired MUST coordinate that repair.
+  External swarms MUST act only inside bounded capabilities and MUST NOT become repair authority
+  merely because they provide source or destination storage.
 
 ## Storage targets and fault groups
 
@@ -225,9 +238,11 @@ Status: **draft for review**.
 - **TOP-003** Folder size and filesystem type MUST NOT be assumed uniform.
 - **TOP-004** A storage target MUST have a stable identity independent of its path spelling.
 - **TOP-005** Machine, daemon, target, backing device and filesystem identities MUST remain distinct.
-- **TOP-006** Hosts and storage targets MAY belong to multiple overlapping fault groups.
-- **TOP-007** Fault-group classes and instances MUST be administrator-definable; machine and backing
-  device groups MUST be created automatically where they can be proved.
+- **TOP-006** Machines MAY belong to multiple overlapping administrator-defined shared-failure
+  groups. Backing-device identity remains a separate built-in failure dimension rather than a
+  user-created machine group.
+- **TOP-007** Shared-failure group classes and instances MUST be administrator-definable; machine,
+  daemon and backing-device identities MUST be created automatically where they can be proved.
 - **TOP-008** Placement MUST evaluate the union of resources affected by simultaneous group failures.
 - **TOP-009** Uncertain or contradictory failure-domain identity MUST reduce placement eligibility;
   it MUST NOT manufacture independence.
@@ -245,6 +260,10 @@ Status: **draft for review**.
 - **TOP-015** Target disappearance MUST NOT authorise retirement, cleanup or replacement of its
   identity. Repair urgency MUST consider protection risk and flap history without permitting an
   endless reconnect cycle to postpone critical repair.
+- **TOP-016** Administrators MUST be able to place machines into several overlapping shared-failure
+  groups describing common hypervisor, power, network, rack, room, building or other failure
+  points. These groups MUST inform both data-survival proof and service-availability proof without
+  conflating either with backing-device independence.
 
 ## Protection and data lifecycle
 
@@ -252,7 +271,9 @@ Status: **draft for review**.
   Solomon geometry.
 - **DAT-002** A volume MAY contain immutable data encoded with different layouts while retaining one
   user-visible protection promise.
-- **DAT-003** One-node data MUST use an explicitly unprotected layout rather than fake redundancy.
+- **DAT-003** Node count MUST NOT determine whether a layout is called protected. A one-machine
+  layout MAY prove backing-device survival while remaining explicitly unprotected against machine,
+  power or location loss; every reported dimension MUST match its actual failure proof.
 - **DAT-004** A write MUST NOT become visible until every shard required by the receipt's declared
   durability scope is durable and verified and its CoW branch version is committed. Wider
   convergence and protection MUST be reported separately.
@@ -287,6 +308,10 @@ Status: **draft for review**.
   length, cryptographic integrity, revision/generation, authority, freshness and semantic bounds
   required for that operation. A successful read, authenticated sender, catalogue entry, receipt,
   prior scrub or matching path MUST NOT make bytes inherently trusted.
+- **DAT-021** Providers MAY pack small immutable shard records only in bounded append-only packs
+  with exact indexed range reads, independent authentication and copy-on-write compaction. A
+  logical update MUST append new records rather than rewrite a pack, and packing MUST bound dead
+  space, record count, read amplification and corruption blast radius.
 
 ## Erasure coding
 
@@ -529,9 +554,10 @@ Status: **draft for review**.
 ## Authentication and sessions
 
 - **AUTH-001** A user MUST be able to enrol multiple independently revocable authentication methods.
-- **AUTH-002** The model MUST support password, WebAuthn/passkey, TOTP, recovery-code, API-token,
-  client-certificate and SMB-scoped credential records without combining their secret formats.
-- **AUTH-003** Raw passwords, session tokens, API tokens and recovery codes MUST NOT be persisted.
+- **AUTH-002** The initial model MUST support WebAuthn/passkey, TOTP, recovery-code and API-key
+  records without combining their secret formats. It MUST NOT add passwords, user client
+  certificates or service-specific duplicate credential kinds.
+- **AUTH-003** Raw session tokens, API keys and recovery codes MUST NOT be persisted.
 - **AUTH-004** Authentication policies MUST support factor count, factor class, service scope,
   session lifetime and recent step-up requirements.
 - **AUTH-005** Administrative operations SHOULD require recent strong authentication.
@@ -542,6 +568,12 @@ Status: **draft for review**.
 - **AUTH-008** Credential and secret material at rest MUST be hashed or encrypted according to its
   verification needs.
 - **AUTH-009** Authentication failure MUST NOT reveal whether a user or individual factor exists.
+- **AUTH-010** Passkeys and login-capable API keys MUST be primary authentication methods. TOTP
+  MUST be an additional factor and recovery codes MUST be single-use recovery/step-up factors.
+  API-key scopes MAY permit browser-session exchange, headless operations and SMB login through
+  the same method record.
+- **AUTH-011** A service that cannot perform an authentication method's ceremony MUST report the
+  incompatibility without invalidating the method or creating a second service-owned identity.
 
 ## Access services
 
@@ -559,6 +591,12 @@ Status: **draft for review**.
   gateway staging.
 - **ACC-009** Each eligible gateway MAY expose HTTPS and SMB concurrently; gateway selection MUST
   NOT create a single active namespace or credential owner.
+- **ACC-010** The initial SMB service MUST negotiate SMB 3.1.1 only, require signing, require
+  encryption by default and authenticate through ordinary scoped MeshSpan API keys. It MUST reject
+  legacy dialects and MUST NOT persist SMB-only credentials.
+- **ACC-011** An authorised owner, user or administrator MUST be able to publish a volume or folder
+  under a chosen SMB share name and eligible gateway policy. No namespace scope may become an SMB
+  export implicitly.
 
 ## Certificates and secrets
 
@@ -570,8 +608,15 @@ Status: **draft for review**.
   envelopes to authorised gateways.
 - **PKI-006** Renewal, failed-order retry and worker replacement SHOULD be automatic.
 - **PKI-007** Secret rotation MUST identify generation, recipients and installation acknowledgements.
-- **PKI-008** Local installations MUST support a clearly identified mesh-local certificate, and
-  administrators MAY install their own certificate without weakening private node identity.
+- **PKI-008** Local installations MUST support a clearly identified mesh-local CA and trust bundle
+  without weakening private node identity; the product SHOULD strongly recommend a domain for
+  unattended publicly trusted HTTPS.
+- **PKI-009** Externally issued HTTPS certificates MUST enter through a narrowly scoped automated
+  publisher API rather than manual upload. It MUST validate chain, names, matching key, lifetime
+  and generation, stage per-node encrypted envelopes and activate make-before-break without
+  returning or logging the private key.
+- **PKI-010** Public ACME issuance MUST be shared across eligible gateways and respect CA renewal
+  schedules, rate limits and retry guidance. Routine gateway churn MUST NOT create a new order.
 
 ## Administration and status
 
@@ -609,6 +654,19 @@ Status: **draft for review**.
 - **OPS-016** The ordinary user experience MUST use files, folders, people, safety and place
   vocabulary. Branches, shards, consensus terms and coding geometry MAY appear in advanced
   diagnostics but MUST NOT be required to use the appliance.
+- **OPS-017** Metrics MUST use versioned names, units and histogram buckets with bounded
+  cardinality. Usernames, paths, object/shard/operation IDs, secrets and client IPs MUST NOT be
+  metric labels.
+- **OPS-018** The panel MAY retain bounded downsampled local metric history but MUST NOT turn the
+  control plane into a distributed time-series database. Prometheus/OpenMetrics MUST be the first
+  optional authenticated exporter behind the replaceable observability contract.
+- **OPS-019** Metrics MUST cover protection/locality debt, capacity/reservations, background work,
+  target IO/integrity, HTTPS/SMB, consensus/catch-up, coding/degraded reads, packs/deduplication,
+  federation backlog, authentication rejection, certificates, backups, updates, runtime resources
+  and clock uncertainty without becoming authority or durability evidence.
+- **OPS-020** No operational telemetry MAY leave the appliance by default. Every exporter, email
+  or webhook MUST be explicitly configured, authenticated, allow-listed, redacted and independent
+  of local healing/status correctness.
 
 ## Persistence, upgrade and recovery
 
@@ -617,7 +675,9 @@ Status: **draft for review**.
 - **PER-003** Migrations MUST be transactional, restartable or fail closed before service admission.
 - **PER-004** Backup and restore MUST bind an exact committed metadata position and mesh identity.
 - **PER-005** Restore MUST validate integrity, membership and secret availability before admission.
-- **PER-006** Upgrade and supported rollback paths MUST be tested against real published artefacts.
+- **PER-006** Upgrade and every explicitly supported recovery path MUST be tested against real
+  published artefacts. Before `1.0`, MeshSpan makes no downgrade or rollback compatibility promise;
+  one-way migrations and the absence of rollback MUST be stated plainly.
 - **PER-007** A voter database MUST remain local to that voter and MUST NOT be shared over a network
   filesystem.
 - **PER-008** Protocol, command, schema, manifest, provider, capability and export formats MUST be
@@ -625,8 +685,9 @@ Status: **draft for review**.
 - **PER-009** Rolling upgrade planning MUST preserve a valid election path, consensus-write quorum
   and working gateways, negotiate mixed-version features explicitly and block operations
   unsupported by any required participant.
-- **PER-010** Recoverable metadata snapshots SHOULD be copied to protected storage targets without
-  allowing those copies to participate in consensus.
+- **PER-010** Recoverable metadata snapshots SHOULD retain several verified generations across
+  configured registered-target, other-swarm or replaceable backup-provider destinations. Their
+  failure overlap MUST be reported, and no backup copy may participate in consensus.
 - **PER-011** Catastrophic metadata recovery MUST use an administrator-held recovery bundle plus a
   verified committed snapshot and target inventories; it MUST never infer a new namespace solely
   from untrusted filenames or locations.
@@ -680,7 +741,8 @@ Status: **draft for review**.
 - **TST-005** Protection tests MUST remove every configured combination of machine, device and custom
   fault groups and verify exact reconstructed bytes.
 - **TST-006** Repair, scrub and drains MUST be tested while client activity continues.
-- **TST-007** Backup, restore, migration, upgrade and rollback MUST have end-to-end acceptance tests.
+- **TST-007** Backup, restore, migration, upgrade and every explicitly supported recovery path MUST
+  have end-to-end acceptance tests against real artefacts.
 - **TST-008** Long-duration churn, certificate renewal and heterogeneous-capacity tests MUST precede
   a stable release claim.
 - **TST-009** Native Linux and macOS daemon/gateway acceptance plus the supported container path MUST
@@ -689,6 +751,10 @@ Status: **draft for review**.
 - **TST-010** A continuous physical-churn gate MUST repeatedly unplug and reconnect network links,
   hosts and storage devices during reads, writes, flushes, repair, scrub, drain, configuration
   rollout and certificate rotation, asserting exact acknowledged bytes and automatic convergence.
+- **TST-011** The `0.1.0` release candidate MUST complete a seven-day active soak outside ordinary
+  CI using a restart-safe controller, reproducible schedule/seed, out-of-band expected hashes and
+  receipts, and a signed result manifest. Accelerated-time, process and controlled hardware layers
+  MUST complement rather than impersonate one another.
 - **REL-001** Commits and tags MUST be signed, and releases MUST publish checksums and provenance.
 - **REL-002** Development branches MUST be short-lived, merged promptly and deleted after merge.
 - **REL-003** The project MUST publish a container image and the accepted native platform artefacts.
@@ -708,7 +774,7 @@ Status: **draft for review**.
 - **DEV-004** Every Rust workspace crate and web package MUST participate in language-standard
   format, lint, type/build and test gates with warnings treated as failures.
 - **DEV-005** Dependency and toolchain update pull requests MAY merge automatically only after all
-  required gates pass and the update policy has not classified the change for manual review. This
+  applicable automated tests, compatibility fixtures, advisory checks and licence gates pass. This
   automation remains deferred while GitHub Actions are disabled.
 - **DEV-006** Fast checks MUST be runnable locally in independently parallelisable lanes; ordinary
   feature work MUST NOT depend on a remote workflow before its own relevant tests run.
@@ -716,9 +782,9 @@ Status: **draft for review**.
   Rust daemon and introduce no production Node.js server.
 - **DEV-008** Rust public API schemas SHOULD generate TypeScript representations so the web client
   does not manually duplicate protocol-facing types.
-- **DEV-009** GitHub Actions MUST remain absent during early implementation. Enabling remote CI
-  requires an explicit decision, measured local-suite timings and a plan that preserves local-first
-  feedback.
+- **DEV-009** GitHub Actions MUST remain absent until a later explicit decision. Complete local
+  validation, update, packaging and release scripts MUST exist first so future automation only
+  orchestrates proven commands and preserves local-first feedback.
 - **DEV-010** Unit, property, conformance, simulation, web and process-integration tests MUST run
   concurrently by default using isolated state, dynamic ports and bounded worker pools. A serial
   test MUST document the genuinely exclusive resource that prevents isolation.
@@ -775,8 +841,8 @@ Status: **draft for review**.
   anonymous, authenticated, recent-step-up or internal-node access profile. Authentication and
   coarse authorisation MUST precede expensive allocation/work where protocol framing permits.
 - **API-015** Browser sessions MUST initially use secure HTTP-only cookies plus CSRF defence;
-  headless clients MUST support scoped bearer tokens or client certificates. Credentials MUST NOT
-  appear in URLs, and authentication methods remain replaceable.
+  passkeys or login-capable API keys exchange for that session, while headless clients use scoped
+  API keys. Credentials MUST NOT appear in URLs, and authentication methods remain replaceable.
 - **API-016** Every mutation MUST carry a client-generated operation ID. Replay with the same
   canonical digest returns the durable outcome; reuse with different input is rejected.
 - **API-017** A long-running mutation MUST support one durable operation with an asynchronous status
@@ -858,8 +924,7 @@ Status: **draft for review**.
   never count toward durability.
 - **DEF-004** Whole-device management and native Windows hosting are not part of the initial MUP.
 - **DEF-005** Automatically deciding when and how to create, split, merge and rebalance delegated
-  metadata Raft groups is a future optimisation. The root/delegation model and safe manual/test
-  transition are foundational, but production heuristics MUST wait for measured load, measured
-  per-group resource capacity, eligible membership, fault-domain placement and migration-cost
-  evidence. They MUST NOT use node count or a fixed operation rate as a hardware-independent split
+  metadata Raft groups is deferred from `0.1.0` but REQUIRED before `1.0`. Production heuristics
+  MUST use measured load, per-group resource capacity, eligible membership, fault-domain placement
+  and migration cost; they MUST NOT use node count or a fixed hardware-independent operation-rate
   trigger.

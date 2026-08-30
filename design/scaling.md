@@ -76,9 +76,10 @@ or other metadata families. Identity ranges should use stable IDs or hashes rath
 than mutable username letters; a separately partitionable canonical-login index
 can route a login to its stable principal owner.
 
-Automatically choosing creation, split, merge and rebalance points is a future
-optimisation. MeshSpan must not split merely because it can, create a consensus
-group for every ordinary folder, or weaken quorum placement to satisfy load.
+Automatically choosing creation, split, merge and rebalance points is deferred
+from `0.1.0` but required before `1.0`. MeshSpan must not split merely because it
+can, create a consensus group for every ordinary folder, or weaken quorum
+placement to satisfy load.
 
 The exact eligible-member threshold, load signals, hysteresis, minimum partition
 size, split/merge cost model and automatic-action policy remain open design item
@@ -87,12 +88,12 @@ than an invented threshold.
 
 An illustrative growth path is:
 
-| Scale | Possible shape |
-| ---: | --- |
-| 1 node | One root Raft owns every authoritative scope. |
-| 10 nodes | The root retains low-rate swarm control; a loaded volume or identity family may move to a separate group. |
-| 100 nodes | Several volume, identity/authentication and work families may have independent groups and worker placement. |
-| 1,000 nodes | Cached hierarchical routing and many delegated groups prevent ordinary operations from broadcasting or entering the root log. |
+|        Scale | Possible shape                                                                                                                                    |
+| -----------: | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+|       1 node | One root Raft owns every authoritative scope.                                                                                                     |
+|     10 nodes | The root retains low-rate swarm control; a loaded volume or identity family may move to a separate group.                                         |
+|    100 nodes | Several volume, identity/authentication and work families may have independent groups and worker placement.                                       |
+|  1,000 nodes | Cached hierarchical routing and many delegated groups prevent ordinary operations from broadcasting or entering the root log.                     |
 | 10,000 nodes | Ownership is spread across many groups and may additionally be spread across federated swarms according to administrative and failure boundaries. |
 
 These numbers are examples, not split triggers, supported maxima or product
@@ -113,7 +114,8 @@ campus uplink but its internal network remains:
 
 - A's gateways continue serving converged namespace operations where a voter
   majority is reachable and local branch operations wherever valid cached
-  authorisation, required base bytes and writable storage remain;
+  authorisation and writable storage remain; a CoW overlay may reference an
+  immutable base whose bytes are temporarily unreadable;
 - other buildings continue serving their own and campus-authoritative
   partitions where they retain quorum;
 - cached committed identity/configuration may authorise bounded ordinary access

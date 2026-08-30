@@ -1,20 +1,22 @@
 # Stage 5 implementation evidence
 
-Status: complete on 2026-08-30 after the autonomous-swarm federation and local
-convergence completion audit.
+Status: executable Stage 5 evidence complete on 2026-08-30 for the tested
+contract. The D-075 downstream-delegation decision supersedes its direct
+remote-principal/`manage_sharing` policy and is a required pre-Stage 6 retrofit;
+the underlying filesystem/convergence evidence remains valid.
 
 Stage 5 turns authoritative identity/metadata foundations into one protocol-neutral,
 copy-on-write filesystem service. This document records executable evidence only.
 
 ## Completion-audit closure
 
-| Audit gap | Executable closure |
-| --- | --- |
-| Existing-file edits on a newly forked branch | Lazy file-head materialisation is part of the publication transaction. `concurrent_file_edits_materialise_one_owned_recovered_copy` proves two edits of the inherited file converge without losing either version. |
-| Whole-volume history export and fixed batch ceiling | `history_export_includes_only_records_reachable_from_requested_heads`, `durable_history_pages_are_incremental_exact_and_restart_resumable` and the hostile-cursor vectors prove referenced-record-only, bounded keyset pages and restart continuation. |
-| Opaque in-process history transfer | `autonomous_swarms_reconcile_signed_disconnected_file_edits` transfers pages and immutable objects through the production signed Protobuf messages over a real mutually authenticated Quinn connection with page limit one. |
-| Empty-content healing proof | `prove_content_healing` transfers three encrypted shards, survives an interrupted fetch and complete receiving-store restart, then decrypts and reads exact `helloworld` bytes. |
-| Incomplete cross-record and origin validation | Federated mutation proposals bind every supported namespace mutation to exact rights and canonical payload bytes; accepting-swarm signatures, consensus admission receipts, referenced commit/intent/object/version/manifest validation and hostile substitution tests all fail closed before import becomes visible. |
+| Audit gap                                             | Executable closure                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Existing-file edits on a newly forked branch          | Lazy file-head materialisation is part of the publication transaction. `concurrent_file_edits_materialise_one_owned_recovered_copy` proves two edits of the inherited file converge without losing either version.                                                                                                                                                                                                                                             |
+| Whole-volume history export and fixed batch ceiling   | `history_export_includes_only_records_reachable_from_requested_heads`, `durable_history_pages_are_incremental_exact_and_restart_resumable` and the hostile-cursor vectors prove referenced-record-only, bounded keyset pages and restart continuation.                                                                                                                                                                                                         |
+| Opaque in-process history transfer                    | `autonomous_swarms_reconcile_signed_disconnected_file_edits` transfers pages and immutable objects through the production signed Protobuf messages over a real mutually authenticated Quinn connection with page limit one.                                                                                                                                                                                                                                    |
+| Empty-content healing proof                           | `prove_content_healing` transfers three encrypted shards, survives an interrupted fetch and complete receiving-store restart, then decrypts and reads exact `helloworld` bytes.                                                                                                                                                                                                                                                                                |
+| Incomplete cross-record and origin validation         | Federated mutation proposals bind every supported namespace mutation to exact rights and canonical payload bytes; accepting-swarm signatures, consensus admission receipts, referenced commit/intent/object/version/manifest validation and hostile substitution tests all fail closed before import becomes visible.                                                                                                                                          |
 | Remote-principal multi-writer and revocation handling | The composed two-autonomous-swarm proof uses a real home session, bilateral grants and production mutation acceptance, persists disconnected non-empty edits across restart, transfers signed history, deterministically retains both admissible versions, then proves a later suspended-principal edit is durably quarantined and absent from replay. Partition migration 41 preserves prior quarantine evidence while adding the `PrincipalInactive` reason. |
 
 The composed namespace proof and the encrypted-content healing proof deliberately
@@ -150,8 +152,9 @@ exercise separate replaceable interfaces, then run together in the same
   appends immutable layout identities in pages of at most 1,000, seals the
   independently recomputed manifest and wrapped key, then records an exact
   provider receipt for every chunk before reporting the manifest durable. The
-  initial layout is explicitly one-node and unprotected; Stage 8 replaces its
-  placement/coding decision without replacing this lifecycle. A real registered-
+  current initial publisher proves only one-node durability and does not yet
+  evaluate backing-device, machine or shared-failure protection; Stage 8 replaces
+  its placement/coding decision without replacing this lifecycle. A real registered-
   folder proof stages `helloworld` as three chunks, reads each ciphertext by
   authenticated shard identity and reconstructs the exact file. A second proof
   interrupts the second provider write, drops and reopens every filesystem and
@@ -341,259 +344,259 @@ exercise separate replaceable interfaces, then run together in the same
 1. [x] Protocol-neutral canonical component/path types and compatibility bounds.
 2. [x] Persistent immutable versions, staged random writes and atomic CoW volume heads.
 3. [x] Deterministic branch commits, disconnected reconciliation and recovered items.
-   Durable branch commits now bind exact nested mutation lineage, and a pure
-   bounded replay planner validates each commit-bound mutation-intent digest,
-   the causal plan's exact headers and the affected-entry base before producing
-   one digested action sequence. Merge commits have a distinct plan-digest
-   payload and are proven to remain causal markers rather than replay actions.
-   Tests prove delivery-order independence, same-name recovered copies, later edits
-   following a recovered file, descendants following a recovered directory,
-   and fail-closed handling of malformed intents, incomplete bases and commit
-   substitution. A production SQLite applier now revalidates every commit and
-   intent at apply time, path-copies the exact actions, materialises recovered
-   copies under independently owned file versions, and atomically records the
-   immutable multi-parent merge plus a digest-bound retry receipt. Real database
-   proofs cover restart/idempotency, divergent roots, concurrent same-file edits,
-   post-merge causal loading, receipt corruption and rollback at every injected
-   transaction boundary. The cluster composition boundary now reloads the exact
-   local receipt and immutable merge, proves the volume, root and prior converged
-   parent, then constructs one canonical replicated command. The metadata state
-   machine performs a per-volume compare-and-swap, appends immutable evidence
-   history and its normal operation/audit receipt in one transaction. Local and
-   replicated databases deliberately remain separate: a crash after the local
-   commit leaves a resolvable receipt for exact retry, while a stale replicated
-   head rejects without hiding or deleting the local merge. Tests cover the real
-   cross-crate path, restart/lost response, conflicting evidence, stale bases,
-   broken history and rollback at every metadata transaction boundary.
+       Durable branch commits now bind exact nested mutation lineage, and a pure
+       bounded replay planner validates each commit-bound mutation-intent digest,
+       the causal plan's exact headers and the affected-entry base before producing
+       one digested action sequence. Merge commits have a distinct plan-digest
+       payload and are proven to remain causal markers rather than replay actions.
+       Tests prove delivery-order independence, same-name recovered copies, later edits
+       following a recovered file, descendants following a recovered directory,
+       and fail-closed handling of malformed intents, incomplete bases and commit
+       substitution. A production SQLite applier now revalidates every commit and
+       intent at apply time, path-copies the exact actions, materialises recovered
+       copies under independently owned file versions, and atomically records the
+       immutable multi-parent merge plus a digest-bound retry receipt. Real database
+       proofs cover restart/idempotency, divergent roots, concurrent same-file edits,
+       post-merge causal loading, receipt corruption and rollback at every injected
+       transaction boundary. The cluster composition boundary now reloads the exact
+       local receipt and immutable merge, proves the volume, root and prior converged
+       parent, then constructs one canonical replicated command. The metadata state
+       machine performs a per-volume compare-and-swap, appends immutable evidence
+       history and its normal operation/audit receipt in one transaction. Local and
+       replicated databases deliberately remain separate: a crash after the local
+       commit leaves a resolvable receipt for exact retry, while a stale replicated
+       head rejects without hiding or deleting the local merge. Tests cover the real
+       cross-crate path, restart/lost response, conflicting evidence, stale bases,
+       broken history and rollback at every metadata transaction boundary.
 4. [x] Snapshots, retention and restore-as-new-head. The first authoritative slice is
-   implemented: a manual snapshot command pins the exact current converged
-   commit and root in constant metadata work, records an idempotent audited
-   receipt, rejects stale heads and elapsed expiry, survives restart, and exposes
-   index-aligned bounded listing with a next cursor only when another page
-   exists. Manual or due automatic expiry can now move an unprotected snapshot
-   into an explicit expiring state behind an exact snapshot-revision CAS. The
-   same transaction retains an immutable reason record and normal operation/audit
-   receipt; restart, exact replay, premature automation, protected roots, stale
-   revisions and every injected apply boundary are proven. An expiring snapshot
-   can now drop its root only through a separate authoritative command bound to
-   the exact snapshot revision, pinned namespace commit/root and accepted expiry
-   operation. The atomic transition records immutable removal evidence plus the
-   normal operation/audit receipt; substitution, stale state, restart/replay and
-   every injected apply boundary are proven. It deliberately authorises no shard
-   deletion. The metadata repository also exposes the complete converged-head
-   plus active/expiring-snapshot root set as stable bounded pages tied to one
-   exact catalogue revision. Any mutation between pages makes continuation fail
-   stale instead of mixing root sets; an absent head or malformed root fails
-   closed. This is the authority input for the separately durable filesystem
-   graph scan. Fixed-interval schedules now use immutable configurations and
-   one indexed authoritative due head. Due work is bounded and cursor-paged; a
-   late run captures the exact converged head once, records its occurrence,
-   derives its expiry, and advances beyond the current instant without replaying
-   a storm of missed intervals. Sequence/due CAS, disabled and premature runs,
-   stale heads, restart/replay, duplicated configuration corruption and every
-   injected apply boundary are proven. Each successful run also receives a
-   gap-free per-schedule sequence. Indexed bounded selection now finds exact age
-   and “older than newest N” candidates, and the expiry mutation independently
-   revalidates the typed reason against current retention state. Corrupt run or
-   configuration ledgers fail closed. Whole-volume restore-as-new-head is now a
-   two-phase cross-database transition: the filesystem store prepares an immutable
-   single-parent restore commit without advancing its branch, the cluster boundary
-   reloads and verifies the exact durable receipt, and replicated metadata validates
-   the snapshot revision/source/root before one head CAS and immutable restore-history
-   insert. Only that committed authority permits idempotent local activation. Lost
-   responses, restart, stale heads, substituted roots/evidence, premature causal
-   reconciliation and every injected local/metadata transaction boundary are proven.
-   Every new volume now receives the
-   accepted safe ordinary-history default: enabled, 30-day soft minimum,
-   pressure-triggered reclamation and a
-   separate 30-day conflict minimum. Policy changes append immutable per-volume
-   revisions behind an exact sequence CAS; validation rejects zero counts,
-   inverted ages, unsafe conflict minima and maximum-age mode without a maximum.
-   The current policy is restart-safe and fails closed on sequence gaps. Branch
-   schema v9 now records each superseded version's ordinary-history decision and
-   exact policy sequence in the same transaction as its new version and namespace
-   head. Reconciliation uses that same explicit decision and separately protects
-   acknowledged concurrent alternatives. Bounded seek pagination selects
-   preliminary candidates oldest first, excludes every current branch-file head,
-   enforces minimum count/age, maximum-age, pressure and critical soft-minimum
-   rules, and binds each result to both the selection policy and supersession
-   policy sequences. Restart equality, disabled-history selection, conflict
-   safety, pressure ordering, page bounds, corrupt lineage and transaction
-   rollback are executable. No returned candidate authorises deletion. A durable
-   bounded graph scanner now ingests the exact revision-bound retained-root set,
-   adds node-local branch/handle/lifecycle roots, traverses immutable directory and
-   object records across restart, and emits a terminal unreachable proof only if
-   every root remains unchanged. Missing records, corrupt encodings, substituted
-   roots and changed local heads fail closed. The cluster boundary preserves every
-   proof field in a replicated cleanup proposal; the metadata transaction
-   independently recomputes the current retained-root digest and count, validates
-   the selected retention-policy sequence and terminal proof digest, then records
-   one audited idempotent proposal. A proposal deliberately cannot issue removal
-   permits. Each proposal now snapshots every admitted gateway and its exact
-   incarnation. Nodes sign terminal local scan evidence with a separately
-   rotating cleanup-attestation key; the metadata transaction verifies the key,
-   signature, incarnation, terminal digest and operation-independent subject.
-   Coverage is incomplete until every snapshotted gateway has attested, while
-   its per-node scan request remains uniquely replay-safe. The graph proof also
-   treats any reachable version sharing the candidate's immutable manifest as a
-   live reference, preventing logical copies from authorising shared-shard
-   deletion. Retention selection, scan evidence and replicated proposals also
-   carry the immutable manifest root digest used by physical shard identities,
-   preventing cleanup-item substitution across manifests. Storage providers
-   also enforce a monotonically advancing applied-catalogue fence, so applying a
-   newer revision permanently rejects an otherwise authentic older removal
-   permit. Each node now atomically installs a durable manifest-root reference
-   fence when it admits a reachability scan. File publication and reconciliation
-   reject new references while the fence is active; a reachable result releases
-   it atomically, while an unreachable proof remains loadable only with its exact
-   active fence. Restart, parallel-scan exclusion, alternate manifest IDs sharing
-   a fenced root, forged release state and subsequent permitted publication after
-   a reachable result are executable. Scan evidence and replicated proposals now
-   also carry a revision-independent digest of the exact ordered retained-root
-   set. Tests prove that the digest survives unrelated global revision advances
-   while the revision-bound digest does not. Whole-volume restore preparation is
-   blocked while a volume has an active cleanup fence, closing the existing-root
-   head-activation path without scanning every ordinary write. Replicated
-   finalisation now has distinct `authorised` and `cancelled` terminal states.
-   Authorisation revalidates the current policy, stable retained-root set,
-   complete current gateway/incarnation membership, active key generations,
-   terminal scan digests and every persisted Ed25519 signature in the same
-   transaction as its audited terminal revision. Cancellation grants no deletion
-   authority. Restart/replay, incomplete coverage, changed roots or policy,
-   rotated keys, tampered persisted signatures and every injected transaction
-   boundary are executable. The durable content catalogue now opens a
-   borrow-scoped shard inventory only after independently revalidating the
-   complete committed manifest once, then exposes exact provider receipts in
-   bounded keyset pages without repeating that whole-layout scan. Missing receipt
-   state and invalid bounds fail closed. Replicated inventories now accept only
-   non-empty bounded contiguous pages of exact placements under the authorised
-   manifest root. Every item has a globally reserved provider operation ID; an
-   ordered rolling digest and immutable expected count must seal before bounded
-   worker pagination becomes available. Tests cover gaps, changed totals, wrong
-   roots, duplicate/reused operation authority, premature and post-seal
-   mutations, restart/replay, missing or substituted rows, relational partial
-   state and every injected transaction boundary. Replicated short-lived permit
-   issue now derives only from an exact sealed inventory item, consumes its reserved
-   operation identity on the first attempt, binds the resulting catalogue
-   revision and persists the complete keyed capability before use. Same-epoch
-   retries wait for expiry, epoch advances can fence immediately and later
-   attempts reserve fresh operation identities. Restart/replay, stale seal,
-   substituted mesh/item/revision, excessive lifetime, persisted corruption and
-   every injected transaction boundary are executable. Provider tombstone
-   receipts now cross into consensus only through exact committed-attempt and
-   canonical-digest validation. Each completion binds the current reporting
-   node incarnation, and the final item atomically creates an ordered terminal
-   digest only after the sealed count is complete. Out-of-order arrival,
-   restart/replay, duplicate completion, substituted receipts/attempts/seals,
-   stale reporters, persisted corruption and every injected transaction
-   boundary are executable. Every gateway can now load its independently
-   signature-verified participant scan, join it with the exact authorised intent
-   and terminal completion, and atomically install permanent local manifest-root
-   retirement. Exact replay/restart, subject substitution, operation conflict,
-   transaction interruption, persisted retirement corruption and deliberate
-   damage to the older temporary fence are executable; publication and repeated
-   cleanup scans remain blocked by the independent retirement record. Provider
-   unlink now returns a distinct durable `ReclamationReceipt`, and exact replay
-   returns its original time and byte count without double-accounting capacity.
-   Replicated per-item reclamation accepts only the exact earlier tombstone,
-   canonical digest, same authenticated node and current incarnation. Earlier
-   items may be reclaimed before the terminal tombstone summary; the final
-   reclamation transaction waits for every item, checks the byte sum and records
-   an arrival-order-independent digest. Restart/replay, early and out-of-order
-   results, forged/substituted receipts, stale reporters, persisted corruption
-   and every injected transaction boundary are executable. Tombstone completion
-   and permanent gateway retirement therefore never overclaim physical byte
-   release. Replicated cancellation now produces exact per-gateway release
-   authority for a local scan even when that gateway never completed attestation.
-   One atomic branch transaction records the cancellation evidence and releases
-   the temporary fence. Replay/restart, interruption, wrong subjects, operation
-   conflict, stored corruption and both cancellation-after-retirement and
-   retirement-after-cancellation are executable; permanent retirement cannot be
-   weakened. A bounded cleanup-work catalogue now classifies sealed items as
-   permit, tombstone, reclamation or complete work. Entries are independent and
-   can run concurrently; each execution performs at most one provider transition
-   before returning an exact command for consensus. A real registered-folder
-   proof drops and reopens the provider after both a lost tombstone command and
-   a lost reclamation command, recovering byte-identical commands without
-   duplicate capacity accounting. Substituted dispatch authority fails before
-   provider IO. Sealed inventory now binds every target generation to its exact
-   owning storage node. The worker rejects another reporter before IO, the
-   metadata state machine repeats the check against authenticated identity and
-   migrated ownerless inventories fail closed. The asynchronous cleanup bridge
-   resolves only that owner through a replaceable connection source, rejects a
-   returned certificate peer other than the inventory owner before opening a
-   stream, creates a bounded request deadline and returns the exact completion
-   command. Non-provider work does not resolve a connection. Distinct bounded
-   delete and reclaim messages carry canonical versioned authority, return exact durable receipts,
-   preserve replayed time/byte accounting and reject forged removal permits.
-   The server and multi-target router also require the authenticated peer and
-   reject sender-node or incarnation impersonation in every request header. A
-   real Quinn/mTLS test drives the worker through tombstone and reclamation
-   against the real folder provider and verifies exact reporter identity and
-   released-byte accounting; the full data-plane proof additionally drives put,
-   get, forged sender/write/removal, tombstone replay and reclamation replay.
+       implemented: a manual snapshot command pins the exact current converged
+       commit and root in constant metadata work, records an idempotent audited
+       receipt, rejects stale heads and elapsed expiry, survives restart, and exposes
+       index-aligned bounded listing with a next cursor only when another page
+       exists. Manual or due automatic expiry can now move an unprotected snapshot
+       into an explicit expiring state behind an exact snapshot-revision CAS. The
+       same transaction retains an immutable reason record and normal operation/audit
+       receipt; restart, exact replay, premature automation, protected roots, stale
+       revisions and every injected apply boundary are proven. An expiring snapshot
+       can now drop its root only through a separate authoritative command bound to
+       the exact snapshot revision, pinned namespace commit/root and accepted expiry
+       operation. The atomic transition records immutable removal evidence plus the
+       normal operation/audit receipt; substitution, stale state, restart/replay and
+       every injected apply boundary are proven. It deliberately authorises no shard
+       deletion. The metadata repository also exposes the complete converged-head
+       plus active/expiring-snapshot root set as stable bounded pages tied to one
+       exact catalogue revision. Any mutation between pages makes continuation fail
+       stale instead of mixing root sets; an absent head or malformed root fails
+       closed. This is the authority input for the separately durable filesystem
+       graph scan. Fixed-interval schedules now use immutable configurations and
+       one indexed authoritative due head. Due work is bounded and cursor-paged; a
+       late run captures the exact converged head once, records its occurrence,
+       derives its expiry, and advances beyond the current instant without replaying
+       a storm of missed intervals. Sequence/due CAS, disabled and premature runs,
+       stale heads, restart/replay, duplicated configuration corruption and every
+       injected apply boundary are proven. Each successful run also receives a
+       gap-free per-schedule sequence. Indexed bounded selection now finds exact age
+       and “older than newest N” candidates, and the expiry mutation independently
+       revalidates the typed reason against current retention state. Corrupt run or
+       configuration ledgers fail closed. Whole-volume restore-as-new-head is now a
+       two-phase cross-database transition: the filesystem store prepares an immutable
+       single-parent restore commit without advancing its branch, the cluster boundary
+       reloads and verifies the exact durable receipt, and replicated metadata validates
+       the snapshot revision/source/root before one head CAS and immutable restore-history
+       insert. Only that committed authority permits idempotent local activation. Lost
+       responses, restart, stale heads, substituted roots/evidence, premature causal
+       reconciliation and every injected local/metadata transaction boundary are proven.
+       Every new volume now receives the
+       accepted safe ordinary-history default: enabled, 30-day soft minimum,
+       pressure-triggered reclamation and a
+       separate 30-day conflict minimum. Policy changes append immutable per-volume
+       revisions behind an exact sequence CAS; validation rejects zero counts,
+       inverted ages, unsafe conflict minima and maximum-age mode without a maximum.
+       The current policy is restart-safe and fails closed on sequence gaps. Branch
+       schema v9 now records each superseded version's ordinary-history decision and
+       exact policy sequence in the same transaction as its new version and namespace
+       head. Reconciliation uses that same explicit decision and separately protects
+       acknowledged concurrent alternatives. Bounded seek pagination selects
+       preliminary candidates oldest first, excludes every current branch-file head,
+       enforces minimum count/age, maximum-age, pressure and critical soft-minimum
+       rules, and binds each result to both the selection policy and supersession
+       policy sequences. Restart equality, disabled-history selection, conflict
+       safety, pressure ordering, page bounds, corrupt lineage and transaction
+       rollback are executable. No returned candidate authorises deletion. A durable
+       bounded graph scanner now ingests the exact revision-bound retained-root set,
+       adds node-local branch/handle/lifecycle roots, traverses immutable directory and
+       object records across restart, and emits a terminal unreachable proof only if
+       every root remains unchanged. Missing records, corrupt encodings, substituted
+       roots and changed local heads fail closed. The cluster boundary preserves every
+       proof field in a replicated cleanup proposal; the metadata transaction
+       independently recomputes the current retained-root digest and count, validates
+       the selected retention-policy sequence and terminal proof digest, then records
+       one audited idempotent proposal. A proposal deliberately cannot issue removal
+       permits. Each proposal now snapshots every admitted gateway and its exact
+       incarnation. Nodes sign terminal local scan evidence with a separately
+       rotating cleanup-attestation key; the metadata transaction verifies the key,
+       signature, incarnation, terminal digest and operation-independent subject.
+       Coverage is incomplete until every snapshotted gateway has attested, while
+       its per-node scan request remains uniquely replay-safe. The graph proof also
+       treats any reachable version sharing the candidate's immutable manifest as a
+       live reference, preventing logical copies from authorising shared-shard
+       deletion. Retention selection, scan evidence and replicated proposals also
+       carry the immutable manifest root digest used by physical shard identities,
+       preventing cleanup-item substitution across manifests. Storage providers
+       also enforce a monotonically advancing applied-catalogue fence, so applying a
+       newer revision permanently rejects an otherwise authentic older removal
+       permit. Each node now atomically installs a durable manifest-root reference
+       fence when it admits a reachability scan. File publication and reconciliation
+       reject new references while the fence is active; a reachable result releases
+       it atomically, while an unreachable proof remains loadable only with its exact
+       active fence. Restart, parallel-scan exclusion, alternate manifest IDs sharing
+       a fenced root, forged release state and subsequent permitted publication after
+       a reachable result are executable. Scan evidence and replicated proposals now
+       also carry a revision-independent digest of the exact ordered retained-root
+       set. Tests prove that the digest survives unrelated global revision advances
+       while the revision-bound digest does not. Whole-volume restore preparation is
+       blocked while a volume has an active cleanup fence, closing the existing-root
+       head-activation path without scanning every ordinary write. Replicated
+       finalisation now has distinct `authorised` and `cancelled` terminal states.
+       Authorisation revalidates the current policy, stable retained-root set,
+       complete current gateway/incarnation membership, active key generations,
+       terminal scan digests and every persisted Ed25519 signature in the same
+       transaction as its audited terminal revision. Cancellation grants no deletion
+       authority. Restart/replay, incomplete coverage, changed roots or policy,
+       rotated keys, tampered persisted signatures and every injected transaction
+       boundary are executable. The durable content catalogue now opens a
+       borrow-scoped shard inventory only after independently revalidating the
+       complete committed manifest once, then exposes exact provider receipts in
+       bounded keyset pages without repeating that whole-layout scan. Missing receipt
+       state and invalid bounds fail closed. Replicated inventories now accept only
+       non-empty bounded contiguous pages of exact placements under the authorised
+       manifest root. Every item has a globally reserved provider operation ID; an
+       ordered rolling digest and immutable expected count must seal before bounded
+       worker pagination becomes available. Tests cover gaps, changed totals, wrong
+       roots, duplicate/reused operation authority, premature and post-seal
+       mutations, restart/replay, missing or substituted rows, relational partial
+       state and every injected transaction boundary. Replicated short-lived permit
+       issue now derives only from an exact sealed inventory item, consumes its reserved
+       operation identity on the first attempt, binds the resulting catalogue
+       revision and persists the complete keyed capability before use. Same-epoch
+       retries wait for expiry, epoch advances can fence immediately and later
+       attempts reserve fresh operation identities. Restart/replay, stale seal,
+       substituted mesh/item/revision, excessive lifetime, persisted corruption and
+       every injected transaction boundary are executable. Provider tombstone
+       receipts now cross into consensus only through exact committed-attempt and
+       canonical-digest validation. Each completion binds the current reporting
+       node incarnation, and the final item atomically creates an ordered terminal
+       digest only after the sealed count is complete. Out-of-order arrival,
+       restart/replay, duplicate completion, substituted receipts/attempts/seals,
+       stale reporters, persisted corruption and every injected transaction
+       boundary are executable. Every gateway can now load its independently
+       signature-verified participant scan, join it with the exact authorised intent
+       and terminal completion, and atomically install permanent local manifest-root
+       retirement. Exact replay/restart, subject substitution, operation conflict,
+       transaction interruption, persisted retirement corruption and deliberate
+       damage to the older temporary fence are executable; publication and repeated
+       cleanup scans remain blocked by the independent retirement record. Provider
+       unlink now returns a distinct durable `ReclamationReceipt`, and exact replay
+       returns its original time and byte count without double-accounting capacity.
+       Replicated per-item reclamation accepts only the exact earlier tombstone,
+       canonical digest, same authenticated node and current incarnation. Earlier
+       items may be reclaimed before the terminal tombstone summary; the final
+       reclamation transaction waits for every item, checks the byte sum and records
+       an arrival-order-independent digest. Restart/replay, early and out-of-order
+       results, forged/substituted receipts, stale reporters, persisted corruption
+       and every injected transaction boundary are executable. Tombstone completion
+       and permanent gateway retirement therefore never overclaim physical byte
+       release. Replicated cancellation now produces exact per-gateway release
+       authority for a local scan even when that gateway never completed attestation.
+       One atomic branch transaction records the cancellation evidence and releases
+       the temporary fence. Replay/restart, interruption, wrong subjects, operation
+       conflict, stored corruption and both cancellation-after-retirement and
+       retirement-after-cancellation are executable; permanent retirement cannot be
+       weakened. A bounded cleanup-work catalogue now classifies sealed items as
+       permit, tombstone, reclamation or complete work. Entries are independent and
+       can run concurrently; each execution performs at most one provider transition
+       before returning an exact command for consensus. A real registered-folder
+       proof drops and reopens the provider after both a lost tombstone command and
+       a lost reclamation command, recovering byte-identical commands without
+       duplicate capacity accounting. Substituted dispatch authority fails before
+       provider IO. Sealed inventory now binds every target generation to its exact
+       owning storage node. The worker rejects another reporter before IO, the
+       metadata state machine repeats the check against authenticated identity and
+       migrated ownerless inventories fail closed. The asynchronous cleanup bridge
+       resolves only that owner through a replaceable connection source, rejects a
+       returned certificate peer other than the inventory owner before opening a
+       stream, creates a bounded request deadline and returns the exact completion
+       command. Non-provider work does not resolve a connection. Distinct bounded
+       delete and reclaim messages carry canonical versioned authority, return exact durable receipts,
+       preserve replayed time/byte accounting and reject forged removal permits.
+       The server and multi-target router also require the authenticated peer and
+       reject sender-node or incarnation impersonation in every request header. A
+       real Quinn/mTLS test drives the worker through tombstone and reclamation
+       against the real folder provider and verifies exact reporter identity and
+       released-byte accounting; the full data-plane proof additionally drives put,
+       get, forged sender/write/removal, tombstone replay and reclamation replay.
 5. [x] Authoritative handles, opens, share modes, locks, rename, delete-on-close and flush.
-   Existing-file opens, cross-gateway share admission, leased/fenced handle
-   takeover, byte-range locks and guarded delete-on-close readiness are durable
-   and tested. Handle-bound random writes, their lock ordering and cross-database
-   stage takeover are also durable and tested. Handle-bound flush publication is
-   durable and tested through the real encrypted folder provider, including
-   bounded base-version overlay and lost-response recovery after complete
-   restart. Creation-capable dispositions now publish an empty first version and
-   reserve the creator's handle in one final metadata transaction; exact restart
-   replay, existing-path open-or-create, hostile plan rejection and rollback when
-   handle admission fails are tested. Close now detects uncommitted private-stage
-   work, publishes it before releasing authority, recovers a crash between flush
-   and close, and leaves the handle live on incomplete content. Overwrite opens
-   journal truncation as a replayable mutation, including empty close without a
-   later write. Same-volume rename/move and final namespace unlink are atomic
-   durable branch transactions. Both bind stable object/revision/generation
-   evidence, update affected handle or pending-delete state in the same
-   transaction, survive restart replay and roll back at every injected phase.
-   The immutable directory trie now has a bounded exact-removal primitive with
-   stale-revision rejection and historical-root preservation; persisted two-path
-   rename intent now binds the source path and lineage, preserved entry
-   generation, destination path and lineage, and the intermediate root between
-   removal and insertion. Existing one-path intent digests remain byte-for-byte
-   compatible across branch-schema migration v23. Deterministic replay now binds
-   source removal and destination insertion in one digest-covered action, carries
-   a concurrent content edit to the selected destination, recovers destination
-   collisions, materialises a competing file rename as a distinct logical copy,
-   rejects directory cycles, and produces the same plan for every delivery order.
-   The reconciliation SQL applier performs the removal and insertion inside its
-   existing all-or-nothing transaction, using the explicit intermediate root.
-   The public branch-local rename and unlink transactions and their end-to-end
-   durable replay proofs are complete.
+       Existing-file opens, cross-gateway share admission, leased/fenced handle
+       takeover, byte-range locks and guarded delete-on-close readiness are durable
+       and tested. Handle-bound random writes, their lock ordering and cross-database
+       stage takeover are also durable and tested. Handle-bound flush publication is
+       durable and tested through the real encrypted folder provider, including
+       bounded base-version overlay and lost-response recovery after complete
+       restart. Creation-capable dispositions now publish an empty first version and
+       reserve the creator's handle in one final metadata transaction; exact restart
+       replay, existing-path open-or-create, hostile plan rejection and rollback when
+       handle admission fails are tested. Close now detects uncommitted private-stage
+       work, publishes it before releasing authority, recovers a crash between flush
+       and close, and leaves the handle live on incomplete content. Overwrite opens
+       journal truncation as a replayable mutation, including empty close without a
+       later write. Same-volume rename/move and final namespace unlink are atomic
+       durable branch transactions. Both bind stable object/revision/generation
+       evidence, update affected handle or pending-delete state in the same
+       transaction, survive restart replay and roll back at every injected phase.
+       The immutable directory trie now has a bounded exact-removal primitive with
+       stale-revision rejection and historical-root preservation; persisted two-path
+       rename intent now binds the source path and lineage, preserved entry
+       generation, destination path and lineage, and the intermediate root between
+       removal and insertion. Existing one-path intent digests remain byte-for-byte
+       compatible across branch-schema migration v23. Deterministic replay now binds
+       source removal and destination insertion in one digest-covered action, carries
+       a concurrent content edit to the selected destination, recovers destination
+       collisions, materialises a competing file rename as a distinct logical copy,
+       rejects directory cycles, and produces the same plan for every delivery order.
+       The reconciliation SQL applier performs the removal and insertion inside its
+       existing all-or-nothing transaction, using the explicit intermediate root.
+       The public branch-local rename and unlink transactions and their end-to-end
+       durable replay proofs are complete.
 6. [x] Complete nested-group/owner/grant/time/activation permission evaluation.
-   The authoritative evaluator, session fencing, revocation and principal
-   lifecycle transitions are implemented and tested. Operation-time capability
-   validation now fronts the implemented mutating handle and namespace service
-   families plus bounded handle reads, immutable stat and directory enumeration
-   through one metadata adapter. The complete 13-right vector is proven both
-   independently and as one atomic requested set. Indexed bounded owner, active
-   grant and nominal activation administration projections are implemented and
-   exposed only through their operation-time object/self/system-authorised
-   composition. No connector can treat a raw repository read or administrator
-   role as file-data authority.
+       The authoritative evaluator, session fencing, revocation and principal
+       lifecycle transitions are implemented and tested. Operation-time capability
+       validation now fronts the implemented mutating handle and namespace service
+       families plus bounded handle reads, immutable stat and directory enumeration
+       through one metadata adapter. The complete 13-right vector is proven both
+       independently and as one atomic requested set. Indexed bounded owner, active
+       grant and nominal activation administration projections are implemented and
+       exposed only through their operation-time object/self/system-authorised
+       composition. No connector can treat a raw repository read or administrator
+       role as file-data authority.
 7. [x] Adapter-facing filesystem contract and real two-gateway/restart/partition proofs.
-   The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
-   contract, every creation-capable file disposition, semantic directory
-   creation/rename/unlink, authorised access-administration views and two-gateway
-   restart proof are complete. Branch schema v32 and the bounded namespace-history
-   exchange now let separately restarted stores transfer mutation commits and every
-   referenced immutable directory/version record without copying mutable heads,
-   handles, sessions or local operation receipts. Imports are one idempotent
-   transaction, verify canonical commit and intent evidence, reject bounds,
-   corruption and identity collisions, and feed the existing deterministic planner.
-   The store-level proof has two independently writable databases exchange both
-   branches and produce the same recovered merge after restart. The completed
-   production composition proof now forks two local branches from one converged
-   commit, has two authorised semantic adapters create the same logical filename,
-   restarts both nodes, exchanges their immutable histories through the bounded
-   cluster convergence service, and independently obtains the same merge. It proves
-   both acknowledged source versions survive, exactly one collision becomes a
-   recovered logical copy, imports never move local heads, and a second restart
-   resolves the same durable merge receipt on both nodes.
+       The semantic existing-file open/read/write/flush/stat/list/close/lease/lock
+       contract, every creation-capable file disposition, semantic directory
+       creation/rename/unlink, authorised access-administration views and two-gateway
+       restart proof are complete. Branch schema v32 and the bounded namespace-history
+       exchange now let separately restarted stores transfer mutation commits and every
+       referenced immutable directory/version record without copying mutable heads,
+       handles, sessions or local operation receipts. Imports are one idempotent
+       transaction, verify canonical commit and intent evidence, reject bounds,
+       corruption and identity collisions, and feed the existing deterministic planner.
+       The store-level proof has two independently writable databases exchange both
+       branches and produce the same recovered merge after restart. The completed
+       production composition proof now forks two local branches from one converged
+       commit, has two authorised semantic adapters create the same logical filename,
+       restarts both nodes, exchanges their immutable histories through the bounded
+       cluster convergence service, and independently obtains the same merge. It proves
+       both acknowledged source versions survive, exactly one collision becomes a
+       recovered logical copy, imports never move local heads, and a second restart
+       resolves the same durable merge receipt on both nodes.
 
 On 2026-08-30, the complete `federation_session` target passed both real-Quinn
 proofs concurrently in 13.25 seconds. The repository-wide local gate then passed

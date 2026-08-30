@@ -32,18 +32,18 @@ hand-maintained model. The web generator is `@hey-api/openapi-ts` with its
 TypeScript, native-Fetch SDK and Zod 4 outputs.
 
 Handwritten Zod is limited to browser-only state absent from the public API,
-such as a password-confirmation field or an unfinished local wizard step. It
-must not recreate an API payload schema.
+such as an unfinished local wizard step. It must not recreate an API payload
+schema.
 
 ## 2. Version paths
 
 MeshSpan exposes three kinds of direct route; none redirects:
 
-| Path | Meaning |
-| --- | --- |
-| `/api/latest` | Rolling edge contract; may change incompatibly |
-| `/api/v1.x` | Rolling pin to the newest published compatible `1.*` fixed point |
-| `/api/v1.0` | Exact immutable published fixed point |
+| Path          | Meaning                                                          |
+| ------------- | ---------------------------------------------------------------- |
+| `/api/latest` | Rolling edge contract; may change incompatibly                   |
+| `/api/v1.x`   | Rolling pin to the newest published compatible `1.*` fixed point |
+| `/api/v1.0`   | Exact immutable published fixed point                            |
 
 Before MeshSpan 1.0 only `/api/latest` exists. Publishing the first stable API
 creates `/api/v1.0`; later compatible fixed points may create `/api/v1.1`, while
@@ -122,12 +122,15 @@ Missing access metadata prevents route generation.
 
 The initial replaceable authentication profile is:
 
-- secure HTTP-only session cookie plus CSRF protection for browsers;
-- scoped bearer token or client certificate for CLIs/applications; and
-- a separate SMB-compatible credential for SMB.
+- secure HTTP-only session cookie plus CSRF protection after passkey or
+  login-capable API-key exchange for browsers;
+- scoped API keys for CLIs/applications; and
+- the same API-key method, with an SMB-login scope, where SMB needs a
+  non-interactive secret.
 
 Credentials never appear in URLs. Additional authentication handlers may be
-added later without changing endpoint domain semantics.
+added later without changing endpoint domain semantics. Passwords, user client
+certificates and service-specific duplicate credential kinds are absent.
 
 Processing rejects cheap failures before expensive work:
 

@@ -109,10 +109,9 @@ node_component_support
 component_observations
 availability_cells
 availability_cell_memberships
-fault_group_classes
-fault_groups
-host_fault_group_memberships
-target_fault_group_memberships
+failure_classes
+shared_failure_groups
+machine_shared_failure_memberships
 protection_policies
 protection_scenarios
 protection_scenario_terms
@@ -126,7 +125,10 @@ acknowledgement_zone_requirements
 object_acknowledgement_bindings
 ```
 
-Join secrets are stored as digests. Target paths remain in `local.sqlite3`; authoritative target
+Join and first-boot claim secrets are stored only as verifier digests. The
+node-local `local_claim_bundles` record binds one unconsumed digest to the node
+public-key fingerprint and persists its created, consumed and revision state
+across restart. Target paths remain in `local.sqlite3`; authoritative target
 records use stable IDs and redacted display information.
 
 Component configuration is replicated desired state. Installed implementation
@@ -142,13 +144,10 @@ groups
 group_memberships
 group_closure
 authentication_methods
-password_credentials
 webauthn_credentials
 totp_credentials
 recovery_codes
-api_tokens
-client_certificate_credentials
-smb_credentials
+api_keys
 authentication_policies
 authentication_sessions
 session_factors
@@ -245,6 +244,8 @@ the target's local durable store; `cleanup_completions` records the authoritativ
 ```text
 acme_configurations
 certificate_orders
+dns_challenge_tasks
+external_certificate_publications
 certificates
 secret_generations
 node_secret_envelopes
@@ -263,7 +264,8 @@ notification_deliveries
 capacity_accounts
 capacity_ledger
 metadata_backups
-backup_target_copies
+backup_destinations
+backup_copies
 recovery_epochs
 ```
 
@@ -273,20 +275,20 @@ backup copies cannot vote or create a new authority by themselves.
 
 ## Critical transaction boundaries
 
-| Transaction | Atomic result |
-| --- | --- |
-| Group edge change | edge, cycle validation, affected closure, identity revision and audit |
-| Ownership transfer | new owner/policy/object revisions, prevent ownerless object, namespace head and audit |
-| Open | target resolution/create reservation, sharing conflict check, handle/fence and receipt |
-| Local file publish | verified manifest/catalogue, immutable file/object/path revisions, branch-head swap, receipt and debt |
-| Converged/strong publish | validated branch inclusions, merge root, converged-head swap, predicate evidence and receipts |
-| Snapshot create | exact namespace-commit root, retention/locality policy and audit |
-| Component configuration | immutable desired revision, instance head, assignments and audit |
-| Scope handoff | frozen source fence and exactly one destination ownership epoch |
-| Abort write | transaction resolution plus bounded provisional cleanup intents |
-| Shard retirement | irreversible cleanup item before any removal permit can exist |
-| Repair completion | generation compare-and-swap, new location publication and old cleanup item |
-| Node activation | identity, keys, capabilities, endpoints and membership eligibility |
+| Transaction              | Atomic result                                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Group edge change        | edge, cycle validation, affected closure, identity revision and audit                                 |
+| Ownership transfer       | new owner/policy/object revisions, prevent ownerless object, namespace head and audit                 |
+| Open                     | target resolution/create reservation, sharing conflict check, handle/fence and receipt                |
+| Local file publish       | verified manifest/catalogue, immutable file/object/path revisions, branch-head swap, receipt and debt |
+| Converged/strong publish | validated branch inclusions, merge root, converged-head swap, predicate evidence and receipts         |
+| Snapshot create          | exact namespace-commit root, retention/locality policy and audit                                      |
+| Component configuration  | immutable desired revision, instance head, assignments and audit                                      |
+| Scope handoff            | frozen source fence and exactly one destination ownership epoch                                       |
+| Abort write              | transaction resolution plus bounded provisional cleanup intents                                       |
+| Shard retirement         | irreversible cleanup item before any removal permit can exist                                         |
+| Repair completion        | generation compare-and-swap, new location publication and old cleanup item                            |
+| Node activation          | identity, keys, capabilities, endpoints and membership eligibility                                    |
 
 ## Migration and backup
 
@@ -296,7 +298,9 @@ migration leaves the previous version usable or fails closed with recovery guida
 An authoritative backup is a logical state-machine snapshot at an exact applied consensus position plus
 encrypted key material and a manifest digest. Copying a live database file is not the backup
 contract. Restore verifies mesh identity, schema, snapshot digest, membership and secrets before
-opening public services.
+opening public services. A destination may be a registered target, another
+swarm or another installed backup-provider instance. Its declared failure overlap
+with the protected source is retained and reported; a copy never becomes a voter.
 
 ## Turso eligibility
 

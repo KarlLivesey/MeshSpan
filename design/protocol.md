@@ -34,20 +34,20 @@ does not expose the database layout.
 
 Every request carries, directly or through connection context:
 
-| Field | Purpose |
-| --- | --- |
-| `protocol_major`, `protocol_minor` | Compatibility negotiation |
-| `mesh_id` | Prevent cross-mesh requests |
-| `partition_id` | Selects the one metadata/consensus authority for the operation |
-| `routing_epoch` | Detects stale scope-to-partition routing |
-| `sender_node_id` | Must match the mTLS identity |
-| `sender_incarnation` | Fences a restarted or replaced process |
-| `request_id` | Correlates one exchange |
-| `operation_id` | Deduplicates one logical mutation |
-| `deadline` | Rejects work that can no longer help the caller |
-| `trace_id` | Correlation without carrying credentials |
+| Field                              | Purpose                                                        |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `protocol_major`, `protocol_minor` | Compatibility negotiation                                      |
+| `mesh_id`                          | Prevent cross-mesh requests                                    |
+| `partition_id`                     | Selects the one metadata/consensus authority for the operation |
+| `routing_epoch`                    | Detects stale scope-to-partition routing                       |
+| `sender_node_id`                   | Must match the mTLS identity                                   |
+| `sender_incarnation`               | Fences a restarted or replaced process                         |
+| `request_id`                       | Correlates one exchange                                        |
+| `operation_id`                     | Deduplicates one logical mutation                              |
+| `deadline`                         | Rejects work that can no longer help the caller                |
+| `trace_id`                         | Correlation without carrying credentials                       |
 
-Credentials, raw private keys, password material and database queries are never
+Credentials, raw private keys, authentication secrets and database queries are never
 placed in this envelope.
 
 Federation traffic uses a separate `FederationHeader` containing relationship,
@@ -83,13 +83,13 @@ keys, paths, topology or record existence.
 
 ## 4. Connection messages
 
-| Message | Essential fields | Result |
-| --- | --- | --- |
-| `NodeHello` | versions, mesh/node/incarnation, roles, component implementations, feature bits, limits | Authenticates and negotiates |
-| `NodeWelcome` | selected version, peer identity, partition route/leader hints, limits | Opens normal streams |
-| `Ping` / `Pong` | nonce, monotonic timings | Liveness and latency sample |
-| `GoAway` | reason, retry hint | Graceful connection retirement |
-| `ProtocolError` | stable code, offending request | Closes invalid traffic safely |
+| Message         | Essential fields                                                                        | Result                         |
+| --------------- | --------------------------------------------------------------------------------------- | ------------------------------ |
+| `NodeHello`     | versions, mesh/node/incarnation, roles, component implementations, feature bits, limits | Authenticates and negotiates   |
+| `NodeWelcome`   | selected version, peer identity, partition route/leader hints, limits                   | Opens normal streams           |
+| `Ping` / `Pong` | nonce, monotonic timings                                                                | Liveness and latency sample    |
+| `GoAway`        | reason, retry hint                                                                      | Graceful connection retirement |
+| `ProtocolError` | stable code, offending request                                                          | Closes invalid traffic safely  |
 
 Certificate identity and `NodeHello` must agree exactly. Limits are the lower of
 both peers' advertised safe bounds.
@@ -237,14 +237,14 @@ predicates; `excluded` zones are rejected as placement targets.
 
 ## 7. Presence and inventory
 
-| Message | Purpose |
-| --- | --- |
-| `PublishPresence` | Node incarnation, monotonic sequence, mesh-time lease, addresses, roles and health summary |
-| `PublishComponentSupport` | Installed implementation IDs, contract ranges, capabilities and limits |
-| `PublishComponentObservation` | Desired/active revisions and bounded apply status |
-| `PublishTargetStatus` | Capacity, reservation, IO and filesystem observations |
-| `InventoryBegin/Batch/Finish` | Reconcile locally present shard identities |
-| `ScrubObservation` | Report verified health without changing authority |
+| Message                       | Purpose                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------ |
+| `PublishPresence`             | Node incarnation, monotonic sequence, mesh-time lease, addresses, roles and health summary |
+| `PublishComponentSupport`     | Installed implementation IDs, contract ranges, capabilities and limits                     |
+| `PublishComponentObservation` | Desired/active revisions and bounded apply status                                          |
+| `PublishTargetStatus`         | Capacity, reservation, IO and filesystem observations                                      |
+| `InventoryBegin/Batch/Finish` | Reconcile locally present shard identities                                                 |
+| `ScrubObservation`            | Report verified health without changing authority                                          |
 
 Presence is a lease-backed observation. Its sequence is monotonic within one
 authority-accepted process incarnation, and a new accepted incarnation fences

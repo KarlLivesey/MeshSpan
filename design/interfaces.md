@@ -34,18 +34,18 @@ activation.
 
 Replaceability applies to these major boundaries:
 
-| Contract | Initial implementation | Replacement must preserve |
-| --- | --- | --- |
-| Storage provider | registered folder provider | exact shard identity, durable receipt, guarded removal and inventory semantics |
-| Access connector | embedded HTTPS and SMB | filesystem/IAM outcomes and acknowledgement rules |
-| Administration client | shipped Solid web panel | public administration API only |
-| Metadata repository | SQLite | transactions, migrations, snapshots and domain invariants |
-| Consensus engine | MeshSpan consensus core | one converged control/head history, quorum plans and read barriers |
-| Coding scheme | selected Reed–Solomon implementation | recorded layout, deterministic vectors and verified reconstruction |
-| Placement policy | fault-scenario planner | hard protection proof and revision-bound plans |
-| Authentication handler | password, WebAuthn, TOTP and others | typed secret handling, assurance and revocation |
-| Certificate challenge | HTTP-01 and DNS-01 handlers | fenced orders and secret isolation |
-| Notification/metrics output | built-in sinks | redaction, bounded delivery and no authority |
+| Contract                    | Initial implementation                          | Replacement must preserve                                                      |
+| --------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------ |
+| Storage provider            | registered folder provider                      | exact shard identity, durable receipt, guarded removal and inventory semantics |
+| Access connector            | embedded HTTPS and SMB                          | filesystem/IAM outcomes and acknowledgement rules                              |
+| Administration client       | shipped Solid web panel                         | public administration API only                                                 |
+| Metadata repository         | SQLite                                          | transactions, migrations, snapshots and domain invariants                      |
+| Consensus engine            | MeshSpan consensus core                         | one converged control/head history, quorum plans and read barriers             |
+| Coding scheme               | selected Reed–Solomon implementation            | recorded layout, deterministic vectors and verified reconstruction             |
+| Placement policy            | fault-scenario planner                          | hard protection proof and revision-bound plans                                 |
+| Authentication handler      | passkey, API key, TOTP, recovery and later OIDC | typed secret handling, assurance and revocation                                |
+| Certificate challenge       | HTTP-01 and DNS-01 handlers                     | fenced orders and secret isolation                                             |
+| Notification/metrics output | built-in sinks                                  | redaction, bounded delivery and no authority                                   |
 
 Replacing an implementation is not permission to weaken the contract. If a
 candidate cannot express an existing record or safety guarantee, validation
@@ -299,7 +299,7 @@ revoke(subject) -> committed_revision
 
 Protocol adapters provide credentials/ceremony messages but do not calculate
 effective rights. Storage nodes validate issued capabilities; they do not query
-passwords or infer access from shard IDs.
+credentials or infer access from shard IDs.
 
 ## Filesystem service
 

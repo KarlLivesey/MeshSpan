@@ -34,9 +34,10 @@ proof. For a policy of any two machine failures, no selected two machine groups
 may contain more than `m` slices of a stripe. The ordinary rule therefore places
 at most one slice per host when enough independent hosts exist.
 
-The same applies to backing devices and custom groups. If a target belongs to
-`building-a`, `room-2`, `circuit-7`, `host-12` and `device-x`, its one slice is
-removed when any selected failed group contains that target.
+Backing-device identity is evaluated separately. Administrators place machines
+into overlapping shared-failure groups such as `building-a`, `room-2`,
+`circuit-7` and `hypervisor-3`. When any selected group fails, every target
+attached to every member machine is removed from the placement proof.
 
 ## Alternative and simultaneous scenarios
 
