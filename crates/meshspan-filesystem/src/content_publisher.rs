@@ -24,6 +24,8 @@ use crate::{
     PreparedContentChunk,
 };
 
+mod recovery;
+
 const SPOOL_DIRECTORY: &str = "content-spools";
 const PREPARE_PAGE_ITEMS: usize = 1_000;
 const COPY_BUFFER_BYTES: usize = 64 * 1_024;
