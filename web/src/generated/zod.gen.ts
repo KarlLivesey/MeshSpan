@@ -52,21 +52,48 @@ export const zApiError = z
 /**
  * CreateSessionRequest
  *
- * Input for the initial password authentication ceremony.
+ * Input for exchanging accepted authentication proofs for a session.
  */
 export const zCreateSessionRequest = z
   .strictObject({
+    additional_factor: z
+      .union([
+        z
+          .strictObject({
+            method: z.literal("totp"),
+          })
+          .strict(),
+        z
+          .strictObject({
+            method: z.literal("recovery_code"),
+          })
+          .strict(),
+      ])
+      .nullish(),
+    authentication: z.union([
+      z
+        .strictObject({
+          method: z.literal("api_key"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          challenge_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          method: z.literal("passkey"),
+        })
+        .strict(),
+    ]),
     client_label: z
       .string()
       .min(1)
       .max(80)
       .regex(/^[^\x00-\x1f\x7f]+$/)
       .nullish(),
-    login_name: z
-      .string()
-      .min(1)
-      .max(254)
-      .regex(/^[^\x00-\x1f\x7f]+$/),
     operation_id: z
       .string()
       .length(36)
@@ -131,28 +158,62 @@ export const zHealthResponse = z
 /**
  * CreateSessionRequest
  *
- * Input for the initial password authentication ceremony.
+ * Input for exchanging accepted authentication proofs for a session.
  */
 export const zCreateSessionRequestWritable = z
   .strictObject({
+    additional_factor: z
+      .union([
+        z
+          .strictObject({
+            code: z.string().min(6).max(8),
+            method: z.literal("totp"),
+          })
+          .strict(),
+        z
+          .strictObject({
+            code: z.string().min(8).max(128),
+            method: z.literal("recovery_code"),
+          })
+          .strict(),
+      ])
+      .nullish(),
+    authentication: z.union([
+      z
+        .strictObject({
+          method: z.literal("api_key"),
+          secret: z.string().min(16).max(512),
+        })
+        .strict(),
+      z
+        .strictObject({
+          authenticator_data: z.string().min(1).max(2048),
+          challenge_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          client_data_json: z.string().min(1).max(4096),
+          credential_id: z.string().min(1).max(1024),
+          method: z.literal("passkey"),
+          signature: z.string().min(1).max(1024),
+          user_handle: z.string().min(1).max(1024).nullish(),
+        })
+        .strict(),
+    ]),
     client_label: z
       .string()
       .min(1)
       .max(80)
       .regex(/^[^\x00-\x1f\x7f]+$/)
       .nullish(),
-    login_name: z
-      .string()
-      .min(1)
-      .max(254)
-      .regex(/^[^\x00-\x1f\x7f]+$/),
     operation_id: z
       .string()
       .length(36)
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
-    password: z.string().min(1).max(1024),
     remember: z.boolean(),
   })
   .strict();

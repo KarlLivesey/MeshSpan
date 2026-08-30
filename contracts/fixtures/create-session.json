@@ -7,8 +7,10 @@
       "accepted": true,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "correct horse battery staple",
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "remember": false
       }
     },
@@ -18,8 +20,10 @@
       "accepted": true,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "correct horse battery staple",
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "client_label": null,
         "remember": true
       }
@@ -30,10 +34,51 @@
       "accepted": true,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "correct horse battery staple",
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "client_label": "front desk",
         "remember": true
+      }
+    },
+    {
+      "name": "request accepts a complete passkey assertion with TOTP",
+      "direction": "request",
+      "accepted": true,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "authentication": {
+          "method": "passkey",
+          "challenge_id": "018f1d20-8c5d-7a1e-9d22-39a1558b4c62",
+          "credential_id": "AQIDBA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0",
+          "authenticator_data": "BQYHCA",
+          "signature": "CQoLDA",
+          "user_handle": null
+        },
+        "additional_factor": {
+          "method": "totp",
+          "code": "123456"
+        },
+        "remember": false
+      }
+    },
+    {
+      "name": "request accepts a recovery-code factor",
+      "direction": "request",
+      "accepted": true,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
+        "additional_factor": {
+          "method": "recovery_code",
+          "code": "meshspan-recovery-7H9Q-2MK4"
+        },
+        "remember": false
       }
     },
     {
@@ -42,8 +87,10 @@
       "accepted": false,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "correct horse battery staple",
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "remember": false,
         "administrator": true
       }
@@ -54,19 +101,61 @@
       "accepted": false,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "correct horse battery staple",
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "remember": "false"
       }
     },
     {
-      "name": "request rejects an empty password",
+      "name": "request rejects the removed password shape",
       "direction": "request",
       "accepted": false,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
         "login_name": "ada@example.test",
-        "password": "",
+        "password": "must-not-be-accepted",
+        "remember": false
+      }
+    },
+    {
+      "name": "request rejects an empty API key",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "authentication": {
+          "method": "api_key",
+          "secret": ""
+        },
+        "remember": false
+      }
+    },
+    {
+      "name": "request rejects an incomplete passkey assertion",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "authentication": {
+          "method": "passkey",
+          "challenge_id": "018f1d20-8c5d-7a1e-9d22-39a1558b4c62",
+          "credential_id": "AQIDBA"
+        },
+        "remember": false
+      }
+    },
+    {
+      "name": "request rejects an unknown authentication method",
+      "direction": "request",
+      "accepted": false,
+      "value": {
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
+        "authentication": {
+          "method": "password",
+          "secret": "must-not-be-accepted"
+        },
         "remember": false
       }
     },
@@ -76,8 +165,10 @@
       "accepted": false,
       "value": {
         "operation_id": "018F1D20-7B4C-7A1E-9D22-39A1558B4C61",
-        "login_name": "ada@example.test",
-        "password": "correct horse battery staple",
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "remember": false
       }
     },
@@ -87,8 +178,7 @@
       "accepted": false,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": null,
-        "password": "correct horse battery staple",
+        "authentication": null,
         "remember": false
       }
     },
@@ -98,8 +188,10 @@
       "accepted": false,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "correct horse battery staple"
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        }
       }
     },
     {
@@ -108,8 +200,10 @@
       "accepted": false,
       "value": {
         "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c61",
-        "login_name": "ada@example.test",
-        "password": "correct horse battery staple",
+        "authentication": {
+          "method": "api_key",
+          "secret": "meshspan_api_7hR9vQ2mK4xP8nT6wY3cF5aJ"
+        },
         "client_label": "",
         "remember": false
       }
@@ -182,4 +276,3 @@
     }
   ]
 }
-

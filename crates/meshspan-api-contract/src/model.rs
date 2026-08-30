@@ -93,18 +93,71 @@ pub struct SessionLabel(
     #[schemars(length(min = 1, max = 80), pattern(r"^[^\x00-\x1f\x7f]+$"))] String,
 );
 
-/// Input for the initial password authentication ceremony.
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+/// Primary proof accepted when creating an authenticated session.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, tag = "method", rename_all = "snake_case")]
+pub enum SessionAuthentication {
+    /// One ordinary login-capable `MeshSpan` API key.
+    ApiKey {
+        /// Opaque API-key secret. The key identity and scopes are resolved server-side.
+        #[schemars(length(min = 16, max = 512), extend("writeOnly" = true))]
+        secret: String,
+    },
+    /// One complete assertion bound to a previously issued `WebAuthn` challenge.
+    Passkey {
+        /// Server-issued challenge identity consumed exactly once.
+        #[schemars(
+            length(equal = 36),
+            pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+        )]
+        challenge_id: String,
+        /// Base64url-encoded `WebAuthn` credential identity.
+        #[schemars(length(min = 1, max = 1_024), extend("writeOnly" = true))]
+        credential_id: String,
+        /// Base64url-encoded `WebAuthn` client data JSON.
+        #[schemars(length(min = 1, max = 4_096), extend("writeOnly" = true))]
+        client_data_json: String,
+        /// Base64url-encoded authenticator data.
+        #[schemars(length(min = 1, max = 2_048), extend("writeOnly" = true))]
+        authenticator_data: String,
+        /// Base64url-encoded assertion signature.
+        #[schemars(length(min = 1, max = 1_024), extend("writeOnly" = true))]
+        signature: String,
+        /// Base64url-encoded user handle, null when the authenticator omitted it.
+        #[schemars(length(min = 1, max = 1_024), extend("writeOnly" = true))]
+        user_handle: Option<String>,
+    },
+}
+
+/// Optional recovery or step-up proof supplied beside the primary method.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, tag = "method", rename_all = "snake_case")]
+pub enum SessionAdditionalFactor {
+    /// Current time-based one-time code.
+    Totp {
+        /// Six-to-eight digit TOTP value.
+        #[schemars(length(min = 6, max = 8), extend("writeOnly" = true))]
+        code: String,
+    },
+    /// One single-use recovery code.
+    RecoveryCode {
+        /// Opaque recovery code consumed atomically on success.
+        #[schemars(length(min = 8, max = 128), extend("writeOnly" = true))]
+        code: String,
+    },
+}
+
+/// Input for exchanging accepted authentication proofs for a session.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSessionRequest {
     /// Client-generated idempotency key.
     pub operation_id: OperationId,
-    /// Mesh-wide canonical login name supplied by the user.
-    #[schemars(length(min = 1, max = 254), pattern(r"^[^\x00-\x1f\x7f]+$"))]
-    pub login_name: String,
-    /// Secret password. It is accepted only in the request and must never be logged.
-    #[schemars(length(min = 1, max = 1024), extend("writeOnly" = true))]
-    pub password: String,
+    /// Primary API-key or passkey proof. It identifies the principal server-side.
+    pub authentication: SessionAuthentication,
+    /// Optional TOTP or recovery-code proof when policy requires another factor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_factor: Option<SessionAdditionalFactor>,
     /// Optional client label: omitted means unchanged and null means clear.
     #[serde(default, skip_serializing_if = "NullableField::is_missing")]
     pub client_label: NullableField<SessionLabel>,
