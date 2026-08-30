@@ -198,7 +198,7 @@ impl LocalDatabase {
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let record = load_by_id(&transaction, claim_id)?.ok_or(LocalClaimError::Rejected)?;
-        if record.secret_digest != presented_secret_digest {
+        if !digests_match(record.secret_digest, presented_secret_digest) {
             return Err(LocalClaimError::Rejected);
         }
         match record.state {
@@ -417,4 +417,14 @@ fn matches_new(record: LocalClaimRecord, claim: NewLocalClaim) -> bool {
         && record.state == LocalClaimState::Active
         && record.consumed_at.is_none()
         && record.rotated_at.is_none()
+}
+
+fn digests_match(expected: [u8; 32], presented: [u8; 32]) -> bool {
+    expected
+        .iter()
+        .zip(presented)
+        .fold(0_u8, |difference, (expected, presented)| {
+            difference | (expected ^ presented)
+        })
+        == 0
 }
