@@ -10,13 +10,17 @@ use meshspan_domain::{ContentManifestId, OperationId, TargetId, UnixMicros};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::{CommittedShardPage, ContentCatalogError, PreparedContentChunk};
+use crate::content_transfer::ContentManifestAccumulator;
 use crate::{
-    CompletedStage, ContentPublicationRequest, ManifestPublication, PublishedContentReference,
-    WrappedContentKey,
+    CompletedStage, ContentLayoutChunk, ContentLayoutTransferPage, ContentPublicationRequest,
+    ManifestPublication, PublishedContentReference,
 };
 
 const DATABASE_FILE: &str = "filesystem-content.sqlite3";
-const MIGRATION: &str = include_str!("../../schema/content/001_initial.sql");
+const MIGRATIONS: &[&str] = &[
+    include_str!("../../schema/content/001_initial.sql"),
+    include_str!("../../schema/content/002_layout_import.sql"),
+];
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 
 pub(super) struct LayoutSummary {
@@ -146,7 +150,6 @@ pub(super) fn layout_summary(
     request: ContentPublicationRequest,
     completed: CompletedStage,
     chunk_bytes: u64,
-    wrapped: WrappedContentKey,
 ) -> Result<LayoutSummary, ContentCatalogError> {
     let mut statement = connection.prepare(
         "SELECT chunk_index, plaintext_length, plaintext_digest, ciphertext_length,
@@ -154,43 +157,26 @@ pub(super) fn layout_summary(
          FROM content_chunks WHERE operation_id = ?1 ORDER BY chunk_index",
     )?;
     let mut rows = statement.query([request.operation_id.as_bytes().as_slice()])?;
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.content.unprotected-manifest.v1\0");
-    digest.update(&request.manifest_id.as_bytes());
-    digest.update(&request.format_version.to_be_bytes());
-    digest.update(&completed.logical_length.to_be_bytes());
-    digest.update(&completed.content_digest);
-    digest.update(&chunk_bytes.to_be_bytes());
-    digest.update(&wrapped.envelope_digest);
-    let mut count = 0_u64;
-    let mut total = 0_u64;
+    let mut accumulator = ContentManifestAccumulator::new(
+        request.manifest_id,
+        request.format_version,
+        completed.logical_length,
+        completed.content_digest,
+        chunk_bytes,
+    )
+    .map_err(|_| ContentCatalogError::InvalidInput)?;
     while let Some(row) = rows.next()? {
         let chunk = decode_chunk(row)?;
-        if chunk.chunk_index != count {
-            return Err(ContentCatalogError::Corrupt);
-        }
-        total = total
-            .checked_add(chunk.plaintext_length)
-            .ok_or(ContentCatalogError::Corrupt)?;
-        digest.update(&chunk.chunk_index.to_be_bytes());
-        digest.update(&chunk.plaintext_length.to_be_bytes());
-        digest.update(&chunk.plaintext_digest);
-        digest.update(&chunk.ciphertext_length.to_be_bytes());
-        digest.update(&chunk.ciphertext_digest);
-        count = count.checked_add(1).ok_or(ContentCatalogError::Corrupt)?;
+        accumulator
+            .push(ContentLayoutChunk::from(chunk))
+            .map_err(|_| ContentCatalogError::Corrupt)?;
     }
-    if total != completed.logical_length {
-        return Err(ContentCatalogError::InvalidInput);
-    }
+    let (manifest, chunk_count) = accumulator
+        .finish()
+        .map_err(|_| ContentCatalogError::InvalidInput)?;
     Ok(LayoutSummary {
-        manifest: ManifestPublication {
-            manifest_id: request.manifest_id,
-            format_version: request.format_version,
-            logical_length: completed.logical_length,
-            content_digest: completed.content_digest,
-            root_digest: digest.finalize().into(),
-        },
-        chunk_count: count,
+        manifest,
+        chunk_count,
     })
 }
 
@@ -207,8 +193,7 @@ pub(super) fn load_prepared_manifest(
     }
     let stored = connection
         .query_row(
-            "SELECT content_digest, root_digest, chunk_bytes, key_generation,
-                    key_nonce, key_ciphertext, key_envelope_digest
+            "SELECT content_digest, root_digest, chunk_bytes
              FROM content_publications
              WHERE operation_id = ?1 AND root_digest IS NOT NULL",
             [request.operation_id.as_bytes().as_slice()],
@@ -217,18 +202,12 @@ pub(super) fn load_prepared_manifest(
                     copy_array(&row.get::<_, Vec<u8>>(0)?)?,
                     copy_array(&row.get::<_, Vec<u8>>(1)?)?,
                     from_sql(row.get(2)?)?,
-                    WrappedContentKey {
-                        key_generation: from_sql(row.get(3)?)?,
-                        nonce: copy_array(&row.get::<_, Vec<u8>>(4)?)?,
-                        ciphertext: copy_array(&row.get::<_, Vec<u8>>(5)?)?,
-                        envelope_digest: copy_array(&row.get::<_, Vec<u8>>(6)?)?,
-                    },
                 ))
             },
         )
         .optional()?;
     stored
-        .map(|(content_digest, root_digest, chunk_bytes, wrapped)| {
+        .map(|(content_digest, root_digest, chunk_bytes)| {
             let summary = layout_summary(
                 connection,
                 request,
@@ -237,7 +216,6 @@ pub(super) fn load_prepared_manifest(
                     content_digest,
                 },
                 chunk_bytes,
-                wrapped,
             )?;
             if summary.manifest.root_digest == root_digest {
                 Ok(summary.manifest)
@@ -377,6 +355,50 @@ pub(super) fn load_committed_shard_page(
     })
 }
 
+pub(super) fn load_content_layout_page(
+    connection: &Connection,
+    operation_id: OperationId,
+    after_index: Option<u64>,
+    limit: usize,
+) -> Result<ContentLayoutTransferPage, ContentCatalogError> {
+    let after = after_index.map_or(-1, |value| i64::try_from(value).unwrap_or(i64::MAX));
+    let mut statement = connection.prepare(
+        "SELECT chunk_index, plaintext_length, plaintext_digest, ciphertext_length,
+                ciphertext_digest
+         FROM content_chunks
+         WHERE operation_id = ?1 AND chunk_index > ?2
+         ORDER BY chunk_index LIMIT ?3",
+    )?;
+    let rows = statement.query_map(
+        params![
+            operation_id.as_bytes().as_slice(),
+            after,
+            i64::try_from(limit.saturating_add(1))
+                .map_err(|_| ContentCatalogError::InvalidInput)?,
+        ],
+        |row| {
+            Ok(ContentLayoutChunk {
+                chunk_index: from_sql(row.get(0)?)?,
+                plaintext_length: from_sql(row.get(1)?)?,
+                plaintext_digest: copy_array(&row.get::<_, Vec<u8>>(2)?)?,
+                ciphertext_length: from_sql(row.get(3)?)?,
+                ciphertext_digest: copy_array(&row.get::<_, Vec<u8>>(4)?)?,
+            })
+        },
+    )?;
+    let mut chunks = rows.collect::<Result<Vec<_>, _>>()?;
+    let next_index = if chunks.len() > limit {
+        chunks.pop();
+        chunks.last().map(|chunk| chunk.chunk_index)
+    } else {
+        None
+    };
+    ContentLayoutTransferPage::new(chunks, next_index).map_err(|error| match error {
+        crate::ContentLayoutTransferError::BoundsExceeded => ContentCatalogError::InvalidInput,
+        crate::ContentLayoutTransferError::Invalid => ContentCatalogError::Corrupt,
+    })
+}
+
 pub(super) fn to_i64(value: u64) -> Result<i64, ContentCatalogError> {
     i64::try_from(value).map_err(|_| ContentCatalogError::InvalidInput)
 }
@@ -408,34 +430,42 @@ fn migrate(connection: &mut Connection, at: UnixMicros) -> Result<(), ContentCat
         )
         .optional()?
         .is_some();
-    let expected = *blake3::hash(MIGRATION.as_bytes()).as_bytes();
-    if exists {
-        let maximum: i64 = connection.query_row(
+    let mut applied = if exists {
+        connection.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
             [],
-            |row| row.get(0),
-        )?;
-        if maximum != 1 {
-            return Err(ContentCatalogError::Corrupt);
-        }
-        let stored: Vec<u8> = connection.query_row(
-            "SELECT migration_digest FROM schema_migrations WHERE version = 1",
-            [],
-            |row| row.get(0),
-        )?;
-        return if stored.as_slice() == expected {
-            Ok(())
-        } else {
-            Err(ContentCatalogError::Corrupt)
-        };
+            |row| row.get::<_, u32>(0),
+        )?
+    } else {
+        0
+    };
+    if usize::try_from(applied).map_err(|_| ContentCatalogError::Corrupt)? > MIGRATIONS.len() {
+        return Err(ContentCatalogError::Corrupt);
     }
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    transaction.execute_batch(MIGRATION)?;
-    transaction.execute(
-        "INSERT INTO schema_migrations(version,migration_digest,applied_at) VALUES(1,?1,?2)",
-        params![expected.as_slice(), at.get()],
-    )?;
-    transaction.commit()?;
+    for (offset, migration) in MIGRATIONS.iter().enumerate() {
+        let version = u32::try_from(offset + 1).map_err(|_| ContentCatalogError::Corrupt)?;
+        let expected = *blake3::hash(migration.as_bytes()).as_bytes();
+        if version <= applied {
+            let stored: Vec<u8> = connection.query_row(
+                "SELECT migration_digest FROM schema_migrations WHERE version = ?1",
+                [version],
+                |row| row.get(0),
+            )?;
+            if stored.as_slice() != expected {
+                return Err(ContentCatalogError::Corrupt);
+            }
+            continue;
+        }
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute_batch(migration)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version,migration_digest,applied_at)
+             VALUES(?1,?2,?3)",
+            params![version, expected.as_slice(), at.get()],
+        )?;
+        transaction.commit()?;
+        applied = version;
+    }
     Ok(())
 }
 

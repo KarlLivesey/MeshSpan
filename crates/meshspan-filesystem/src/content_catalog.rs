@@ -15,6 +15,9 @@ use crate::{
 };
 
 mod repository;
+mod transfer;
+
+pub use transfer::CommittedContentLayoutTransfer;
 
 use repository::{
     chunk_count, copy_array, decode_chunk, from_sql, layout_is_sealed, layout_summary, load_chunk,
@@ -221,16 +224,22 @@ impl DurableContentCatalog {
         if chunk_bytes == 0 || completed.logical_length != request.logical_length {
             return Err(ContentCatalogError::InvalidInput);
         }
-        let summary = layout_summary(
-            &self.connection,
-            request,
-            completed,
-            chunk_bytes,
-            wrapped_key,
+        let imported: bool = self.connection.query_row(
+            "SELECT import_header_digest IS NOT NULL FROM content_publications
+             WHERE operation_id = ?1",
+            [request.operation_id.as_bytes().as_slice()],
+            |row| row.get(0),
         )?;
-        if let Some(manifest) = load_prepared_manifest(&self.connection, request)? {
-            return if manifest == summary.manifest {
-                Ok(manifest)
+        if imported {
+            return Err(ContentCatalogError::Conflict);
+        }
+        let summary = layout_summary(&self.connection, request, completed, chunk_bytes)?;
+        if let Some(existing) = self.prepared_layout(request)? {
+            return if existing.manifest == summary.manifest
+                && existing.chunk_bytes == chunk_bytes
+                && existing.wrapped_key == wrapped_key
+            {
+                Ok(existing.manifest)
             } else {
                 Err(ContentCatalogError::Conflict)
             };
@@ -386,11 +395,16 @@ impl DurableContentCatalog {
                 ))
             },
         )?;
-        Ok(Some(PreparedContentLayout {
+        let layout = PreparedContentLayout {
             manifest,
             chunk_bytes: stored.0,
             wrapped_key: stored.1,
-        }))
+        };
+        if layout.wrapped_key.valid_for(layout.manifest.manifest_id) {
+            Ok(Some(layout))
+        } else {
+            Err(ContentCatalogError::Corrupt)
+        }
     }
 
     pub(crate) fn committed_layout(

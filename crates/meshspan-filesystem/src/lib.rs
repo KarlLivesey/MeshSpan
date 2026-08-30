@@ -13,6 +13,7 @@ mod content_crypto;
 mod content_key;
 mod content_publisher;
 mod content_reader;
+mod content_transfer;
 mod directory;
 mod handle_io;
 mod handles;
@@ -50,8 +51,9 @@ pub use commit_service::{
     FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
 };
 pub use content_catalog::{
-    CommittedShardInventory, CommittedShardPage, ContentCatalogError, DurableContentCatalog,
-    PendingContentChunkPage, PreparedContentChunk, PreparedContentLayout,
+    CommittedContentLayoutTransfer, CommittedShardInventory, CommittedShardPage,
+    ContentCatalogError, DurableContentCatalog, PendingContentChunkPage, PreparedContentChunk,
+    PreparedContentLayout,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,
@@ -66,6 +68,10 @@ pub use content_publisher::{
 };
 pub use content_reader::{
     ContentReadError, ContentReadRequest, DurableContentReader, PublishedContentReference,
+};
+pub use content_transfer::{
+    ContentLayoutChunk, ContentLayoutTransferError, ContentLayoutTransferHeader,
+    ContentLayoutTransferPage, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS,
 };
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
