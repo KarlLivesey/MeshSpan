@@ -24,6 +24,7 @@ use crate::{
     RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
 use crate::{IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant};
+use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
 use crate::{
     ResolveFederatedMutationQuarantine, RetainFederatedMutationQuarantine,
     SurfaceFederatedMutationQuarantine,
@@ -171,6 +172,10 @@ pub enum AuthoritativeCommand {
     ReplaceFederationGrant(ReplaceFederationGrant),
     /// Revokes one live federation grant while retaining its evidence.
     RevokeFederationGrant(RevokeFederationGrant),
+    /// Assigns one disjoint storage-grant slice to an exact provider node and target generation.
+    IssueFederationStorageAllocation(IssueFederationStorageAllocation),
+    /// Revokes one live provider allocation without deleting its authority history.
+    RevokeFederationStorageAllocation(RevokeFederationStorageAllocation),
     /// Advances one signed home-swarm principal projection.
     UpsertFederatedPrincipalProjection(UpsertFederatedPrincipalProjection),
     /// Persists a retiring swarm's signed pre-authorisation of one recovery successor.
@@ -267,6 +272,8 @@ impl AuthoritativeCommand {
             Self::IssueFederationGrant(value) => value.update_digest(digest),
             Self::ReplaceFederationGrant(value) => value.update_digest(digest),
             Self::RevokeFederationGrant(value) => value.update_digest(digest),
+            Self::IssueFederationStorageAllocation(value) => value.update_digest(digest),
+            Self::RevokeFederationStorageAllocation(value) => value.update_digest(digest),
             Self::UpsertFederatedPrincipalProjection(value) => value.update_digest(digest),
             Self::DesignateFederationSuccessor(value) => value.update_digest(digest),
             Self::AcceptFederationSuccessor(value) => value.update_digest(digest),

@@ -101,6 +101,10 @@ define_identifier!(
     "Stable identity of one scoped federation grant."
 );
 define_identifier!(
+    FederationStorageAllocationId,
+    "Stable identity of one disjoint provider-node federation storage allocation."
+);
+define_identifier!(
     FederationSuccessionId,
     "Stable identity of one pre-authorised federation ownership succession."
 );

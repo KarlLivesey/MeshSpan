@@ -257,7 +257,8 @@ mod tests {
         partition_federation_principal_history_migration_digest,
         partition_federation_quarantine_proof_migration_digest,
         partition_federation_relationship_evidence_guard_migration_digest,
-        partition_federation_relationship_history_migration_digest, partition_migration_digest,
+        partition_federation_relationship_history_migration_digest,
+        partition_federation_storage_allocation_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
         partition_principal_lifecycle_migration_digest, partition_roles_migration_digest,
         partition_root_delegation_directory_migration_digest, partition_routing_migration_digest,
@@ -287,7 +288,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 39);
+        assert_eq!(database.check_integrity()?.schema_version, 40);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -337,7 +338,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            39
+            40
         );
         Ok(())
     }
@@ -790,6 +791,14 @@ mod tests {
                 0x2b, 0x33, 0xa8, 0x58, 0x5b, 0x02, 0x7a, 0xe9, 0xa3, 0x2c, 0x07, 0x72, 0x5f, 0xa5,
                 0x76, 0x81, 0xe9, 0xb8, 0xec, 0xd1, 0xf9, 0x0d, 0x81, 0xef, 0x06, 0xec, 0x61, 0xf1,
                 0x3b, 0xd4, 0xe0, 0xc6,
+            ]
+        );
+        assert_eq!(
+            partition_federation_storage_allocation_migration_digest(),
+            [
+                0xc5, 0x12, 0xc6, 0x6d, 0x16, 0x7f, 0xbe, 0xff, 0xd9, 0x42, 0xad, 0xcd, 0xaf, 0x76,
+                0x90, 0x64, 0xeb, 0x16, 0xd8, 0x6f, 0x2c, 0x80, 0x0e, 0x66, 0x34, 0x8e, 0x63, 0x6c,
+                0x32, 0x80, 0x27, 0xa5,
             ]
         );
     }
