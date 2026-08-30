@@ -83,6 +83,7 @@ pub struct FederationStorageAllocationAuthority {
     grant_revision: Revision,
     allocation_revision: Revision,
     requested_bytes: u64,
+    observed_at: UnixMicros,
 }
 
 impl FederationStorageAllocationAuthority {
@@ -132,6 +133,12 @@ impl FederationStorageAllocationAuthority {
     #[must_use]
     pub const fn requested_bytes(self) -> u64 {
         self.requested_bytes
+    }
+
+    /// Returns the quorum-derived instant at which every authority fence was checked.
+    #[must_use]
+    pub const fn observed_at(self) -> UnixMicros {
+        self.observed_at
     }
 }
 
@@ -251,6 +258,7 @@ pub(super) fn active_authority(
         grant_revision: grant_record.revision,
         allocation_revision: allocation_record.revision,
         requested_bytes: request.requested_bytes,
+        observed_at: request.observed_at,
     }))
 }
 

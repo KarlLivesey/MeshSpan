@@ -30,7 +30,10 @@ pub use federation_access::{
     QuarantineReason, classify_federated_mutation,
 };
 pub use federation_graph::{FederationGraph, FederationGraphError, FederationRelationshipKind};
-pub use federation_storage::{FederationStorageAllocation, FederationStorageAllocationError};
+pub use federation_storage::{
+    FederationStorageAction, FederationStorageActionError, FederationStorageAllocation,
+    FederationStorageAllocationError,
+};
 pub use lifecycle::{LifecycleEvent, LifecycleState, LifecycleTransitionError};
 pub use operation::{
     CommitOutcome, DurabilityScope, OperationDecision, OperationReceipt, classify_operation,

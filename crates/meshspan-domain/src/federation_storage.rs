@@ -6,6 +6,66 @@ use thiserror::Error;
 
 use crate::{FederationGrantId, FederationStorageAllocationId, NodeId, TargetId, UnixMicros};
 
+/// Closed semantic action carried by one federated storage capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FederationStorageAction {
+    /// Persist a new immutable shard.
+    Put,
+    /// Read one existing immutable shard.
+    Get,
+    /// Verify one existing immutable shard.
+    Scrub,
+    /// Persist a replacement shard during healing.
+    Repair,
+    /// Make one shard logically unreachable.
+    Retire,
+    /// Physically reclaim one already-retired shard.
+    Reclaim,
+}
+
+impl FederationStorageAction {
+    /// Returns whether this action can increase durable byte usage.
+    #[must_use]
+    pub const fn reserves_capacity(self) -> bool {
+        matches!(self, Self::Put | Self::Repair)
+    }
+
+    /// Returns the stable persistence code.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Put => 1,
+            Self::Get => 2,
+            Self::Scrub => 3,
+            Self::Repair => 4,
+            Self::Retire => 5,
+            Self::Reclaim => 6,
+        }
+    }
+
+    /// Parses the stable persistence code.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero and unknown future action codes.
+    pub const fn from_code(code: u8) -> Result<Self, FederationStorageActionError> {
+        match code {
+            1 => Ok(Self::Put),
+            2 => Ok(Self::Get),
+            3 => Ok(Self::Scrub),
+            4 => Ok(Self::Repair),
+            5 => Ok(Self::Retire),
+            6 => Ok(Self::Reclaim),
+            _ => Err(FederationStorageActionError),
+        }
+    }
+}
+
+/// Unknown federated storage action code.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("federated storage action is invalid")]
+pub struct FederationStorageActionError;
+
 /// One immutable quota slice assigned to one exact provider node and target incarnation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FederationStorageAllocation {

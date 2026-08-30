@@ -24,6 +24,8 @@ use crate::{
     RevokeFederationRelationship, RevokeFederationStorageAllocation,
 };
 
+mod quota_ledger;
+
 #[test]
 fn bilateral_quota_is_disjoint_fenced_and_durable() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::open()?;
