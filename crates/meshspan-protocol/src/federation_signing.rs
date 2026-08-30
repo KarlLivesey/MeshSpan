@@ -5,11 +5,12 @@
 use prost::Message;
 
 use crate::v1::{
-    FederatedBranchPage, FederatedContentLayoutPage, FederatedHistoryObjectHeader,
-    FederatedStorageCapability, FederatedStorageInventoryPage, FederatedStorageReceipt,
-    FederationAuthorityPage, FederationHeader, FederationHello, FederationWelcome,
-    FetchFederatedBranchPage, FetchFederatedContentLayout, FetchFederatedHistoryObject,
-    FetchFederatedStorageInventory, FetchFederationAuthority, RequestFederatedStorageCapability,
+    FederatedBranchPage, FederatedContentLayoutPage, FederatedContentShardHeader,
+    FederatedHistoryObjectHeader, FederatedStorageCapability, FederatedStorageInventoryPage,
+    FederatedStorageReceipt, FederationAuthorityPage, FederationHeader, FederationHello,
+    FederationWelcome, FetchFederatedBranchPage, FetchFederatedContentLayout,
+    FetchFederatedContentShard, FetchFederatedHistoryObject, FetchFederatedStorageInventory,
+    FetchFederationAuthority, RequestFederatedStorageCapability,
 };
 
 const HELLO_DOMAIN: &[u8] = b"meshspan.federation.hello.v1\0";
@@ -26,6 +27,8 @@ const CONTENT_LAYOUT_FETCH_DOMAIN: &[u8] = b"meshspan.federation.content-layout-
 const CONTENT_LAYOUT_PAGE_DOMAIN: &[u8] = b"meshspan.federation.content-layout-page.v1\0";
 const CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN: &[u8] =
     b"meshspan.federation.content-layout-page-digest.v1\0";
+const CONTENT_SHARD_FETCH_DOMAIN: &[u8] = b"meshspan.federation.content-shard-fetch.v1\0";
+const CONTENT_SHARD_HEADER_DOMAIN: &[u8] = b"meshspan.federation.content-shard-header.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DOMAIN: &[u8] =
     b"meshspan.federation.storage-capability-request.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DIGEST_DOMAIN: &[u8] =
@@ -201,6 +204,28 @@ pub fn federation_content_layout_page_digest_payload(page: &FederatedContentLayo
     payload.extend_from_slice(CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN);
     append_part(&mut payload, &encoded);
     payload
+}
+
+/// Returns the exact bytes signed by one federated encrypted-shard requester.
+#[must_use]
+pub fn federation_content_shard_fetch_signing_payload(
+    header: &FederationHeader,
+    request: &FetchFederatedContentShard,
+) -> Vec<u8> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    signing_payload(CONTENT_SHARD_FETCH_DOMAIN, header, &unsigned)
+}
+
+/// Returns the exact bytes signed by one federated encrypted-shard response.
+#[must_use]
+pub fn federation_content_shard_header_signing_payload(
+    header: &FederationHeader,
+    response: &FederatedContentShardHeader,
+) -> Vec<u8> {
+    let mut unsigned = response.clone();
+    unsigned.signature.clear();
+    signing_payload(CONTENT_SHARD_HEADER_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by a remote-storage capability requester.

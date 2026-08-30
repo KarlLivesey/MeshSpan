@@ -121,6 +121,36 @@ message FederatedContentLayoutPage {
   bytes signature = 10;
 }
 
+message FetchFederatedContentShard {
+  bytes grant_id = 1;
+  VersionedPayload resource_scope = 2;
+  bytes manifest_id = 3;
+  bytes export_token = 4;
+  bytes manifest_object_digest = 5;
+  bytes target_id = 6;
+  uint64 target_generation = 7;
+  ShardIdentity shard = 8;
+  uint64 expected_length = 9;
+  bytes expected_digest = 10;
+  bytes signature = 11;
+}
+
+message FederatedContentShardHeader {
+  bytes grant_id = 1;
+  VersionedPayload resource_scope = 2;
+  bytes manifest_id = 3;
+  bytes export_token = 4;
+  bytes manifest_object_digest = 5;
+  bytes target_id = 6;
+  uint64 target_generation = 7;
+  ShardIdentity shard = 8;
+  uint64 declared_length = 9;
+  bytes content_digest = 10;
+  uint64 maximum_frame_bytes = 11;
+  sint64 served_at_unix_micros = 12;
+  bytes signature = 13;
+}
+
 message ProposeFederatedBranch {
   bytes grant_id = 1;
   VersionedPayload resource_scope = 2;
@@ -225,6 +255,8 @@ message FederationEnvelope {
     FederatedHistoryObjectHeader history_object_header = 35;
     FetchFederatedContentLayout fetch_content_layout = 36;
     FederatedContentLayoutPage content_layout_page = 37;
+    FetchFederatedContentShard fetch_content_shard = 38;
+    FederatedContentShardHeader content_shard_header = 39;
     RequestFederatedStorageCapability request_storage_capability = 40;
     FederatedStorageCapability storage_capability = 41;
     FederatedStorageReceipt storage_receipt = 42;

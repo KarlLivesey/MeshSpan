@@ -8,9 +8,10 @@ use crate::framing::{WireContractError, WireLimits};
 use crate::v1::federation_envelope::Message;
 use crate::v1::{
     FederatedBranchPage, FederatedBranchResult, FederatedContentLayoutPage,
-    FederatedHistoryObjectHeader, FederatedStorageCapability, FederatedStorageInventoryPage,
-    FederatedStorageReceipt, FederationAuthorityPage, FederationEnvelope, FederationHeader,
-    FederationHello, FederationWelcome, FetchFederatedBranchPage, FetchFederatedContentLayout,
+    FederatedContentShardHeader, FederatedHistoryObjectHeader, FederatedStorageCapability,
+    FederatedStorageInventoryPage, FederatedStorageReceipt, FederationAuthorityPage,
+    FederationEnvelope, FederationHeader, FederationHello, FederationWelcome,
+    FetchFederatedBranchPage, FetchFederatedContentLayout, FetchFederatedContentShard,
     FetchFederatedHistoryObject, FetchFederatedStorageInventory, FetchFederationAuthority,
     OperationOutcome, ProposeFederatedBranch, RemoteShardAction, RequestFederatedStorageCapability,
 };
@@ -46,6 +47,8 @@ pub(super) fn envelope(
         Message::HistoryObjectHeader(value) => history_object_header(value, limits),
         Message::FetchContentLayout(value) => fetch_content_layout(value, limits),
         Message::ContentLayoutPage(value) => content_layout_page(value, limits),
+        Message::FetchContentShard(value) => fetch_content_shard(value, limits),
+        Message::ContentShardHeader(value) => content_shard_header(value, limits),
         Message::ProposeBranch(value) => propose_branch(value, limits),
         Message::BranchResult(value) => branch_result(value, limits),
         Message::RequestStorageCapability(value) => request_storage_capability(value, limits),
@@ -243,6 +246,69 @@ fn content_layout_page(
     terminal_if_empty(value.chunks.is_empty(), &value.next_cursor)?;
     valid_digest(&value.page_digest)?;
     valid_signature(&value.signature, limits)
+}
+
+fn fetch_content_shard(
+    value: &FetchFederatedContentShard,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    valid_identifier(&value.grant_id)?;
+    validate_payload(value.resource_scope.as_ref(), limits)?;
+    valid_identifier(&value.manifest_id)?;
+    valid_digest(&value.export_token)?;
+    valid_digest(&value.manifest_object_digest)?;
+    content_shard_route(
+        &value.target_id,
+        value.target_generation,
+        value.shard.as_ref(),
+        value.expected_length,
+        &value.expected_digest,
+    )?;
+    valid_signature(&value.signature, limits)
+}
+
+fn content_shard_header(
+    value: &FederatedContentShardHeader,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    valid_identifier(&value.grant_id)?;
+    validate_payload(value.resource_scope.as_ref(), limits)?;
+    valid_identifier(&value.manifest_id)?;
+    valid_digest(&value.export_token)?;
+    valid_digest(&value.manifest_object_digest)?;
+    content_shard_route(
+        &value.target_id,
+        value.target_generation,
+        value.shard.as_ref(),
+        value.declared_length,
+        &value.content_digest,
+    )?;
+    let maximum_frame_bytes = usize::try_from(value.maximum_frame_bytes)
+        .map_err(|_| WireContractError::InvalidMessage)?;
+    if maximum_frame_bytes == 0
+        || maximum_frame_bytes > limits.maximum_data_frame_bytes()
+        || value.served_at_unix_micros <= 0
+    {
+        return Err(WireContractError::InvalidMessage);
+    }
+    valid_signature(&value.signature, limits)
+}
+
+fn content_shard_route(
+    target_id: &[u8],
+    target_generation: u64,
+    shard: Option<&crate::v1::ShardIdentity>,
+    length: u64,
+    digest: &[u8],
+) -> Result<(), WireContractError> {
+    valid_identifier(target_id)?;
+    validate_shard(shard)?;
+    valid_digest(digest)?;
+    if target_generation == 0 || length == 0 {
+        Err(WireContractError::InvalidMessage)
+    } else {
+        Ok(())
+    }
 }
 
 fn propose_branch(
