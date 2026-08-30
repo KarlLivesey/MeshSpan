@@ -88,6 +88,7 @@ pub use access_query::{
     AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
     PermissionGrantRecord, ScopedGrantCursor, SubjectGrantCursor,
 };
+pub use authentication_method::{ApiKeyAuthentication, AuthenticationService};
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -511,6 +512,31 @@ impl AuthoritativeRepository {
         request: SessionAccessRequest,
     ) -> Result<SessionAccessDecision, RepositoryError> {
         session_access::evaluate(&self.database, request)
+    }
+
+    /// Authenticates one presented API-key digest against current user, method,
+    /// service, capability and time bounds.
+    ///
+    /// Absence and every ordinary policy/credential rejection return `None` so an
+    /// unauthenticated caller cannot enumerate which field disagreed.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when matching persisted evidence is structurally invalid.
+    pub fn authenticate_api_key(
+        &self,
+        presented_key_digest: [u8; 32],
+        service: AuthenticationService,
+        required_scopes: u64,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Option<ApiKeyAuthentication>, RepositoryError> {
+        authentication_method::authenticate_api_key(
+            self.database.connection(),
+            presented_key_digest,
+            service,
+            required_scopes,
+            now,
+        )
     }
 
     /// Returns a stable bounded page from one object's current immutable owner set.

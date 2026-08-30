@@ -6,7 +6,10 @@ use meshspan_domain::{
 };
 use tempfile::tempdir;
 
-use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
+use super::{
+    ApplyDisposition, AuthenticationService, AuthoritativeRepository, EntityKind, LogPosition,
+    RepositoryError,
+};
 use crate::{
     AuthoritativeCommand, BootstrapMesh, CommandContext, CreateApiKeyAuthenticationMethod,
     PartitionDatabase, RecordName, RevokeAuthenticationMethod,
@@ -144,6 +147,140 @@ fn api_key_revocation_is_audited_restart_safe_and_exactly_replayable()
         )
     );
     assert_eq!(database.check_integrity()?.schema_version, 43);
+    Ok(())
+}
+
+#[test]
+fn api_key_authentication_applies_service_scope_capability_time_and_revocation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("api-key-verifier.sqlite3");
+    let partition_id = PartitionId::from_bytes([1; 16])?;
+    let administrator = PrincipalId::from_bytes([2; 16])?;
+    let database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap(&mut repository, administrator)?;
+    let method_id = AuthenticationMethodId::from_bytes([7; 16])?;
+    repository.apply_committed(
+        position(2),
+        context(8, administrator, 9, 20, Some(Revision::new(1)))?,
+        &api_key_command(method_id, administrator)?,
+    )?;
+
+    let accepted = repository
+        .authenticate_api_key(
+            [11; 32],
+            AuthenticationService::HeadlessApi,
+            0b001,
+            UnixMicros::new(20),
+        )?
+        .ok_or("valid API key was rejected")?;
+    assert_eq!(accepted.principal_id, administrator);
+    assert_eq!(accepted.method_id, method_id);
+    assert_eq!(accepted.key_id, ApiKeyId::from_bytes([10; 16])?);
+    assert_eq!(accepted.scopes, 0b101);
+    assert_eq!(accepted.credential_generation, 1);
+    assert_eq!(accepted.revision, Revision::new(2));
+
+    for rejected in [
+        repository.authenticate_api_key(
+            [0; 32],
+            AuthenticationService::HeadlessApi,
+            0b001,
+            UnixMicros::new(20),
+        )?,
+        repository.authenticate_api_key(
+            [11; 32],
+            AuthenticationService::HeadlessApi,
+            0,
+            UnixMicros::new(20),
+        )?,
+        repository.authenticate_api_key(
+            [12; 32],
+            AuthenticationService::HeadlessApi,
+            0b001,
+            UnixMicros::new(20),
+        )?,
+        repository.authenticate_api_key(
+            [11; 32],
+            AuthenticationService::HeadlessApi,
+            0b010,
+            UnixMicros::new(20),
+        )?,
+        repository.authenticate_api_key(
+            [11; 32],
+            AuthenticationService::Https,
+            0b001,
+            UnixMicros::new(19),
+        )?,
+        repository.authenticate_api_key(
+            [11; 32],
+            AuthenticationService::Smb,
+            0b001,
+            UnixMicros::new(200),
+        )?,
+    ] {
+        assert_eq!(rejected, None);
+    }
+
+    repository.apply_committed(
+        position(3),
+        context(16, administrator, 17, 30, Some(Revision::new(2)))?,
+        &AuthoritativeCommand::RevokeAuthenticationMethod(RevokeAuthenticationMethod {
+            method_id,
+            principal_id: administrator,
+            reason: "Credential retired".to_owned(),
+        }),
+    )?;
+    assert_eq!(
+        repository.authenticate_api_key(
+            [11; 32],
+            AuthenticationService::Https,
+            0b001,
+            UnixMicros::new(31),
+        )?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn api_key_authentication_fails_closed_for_matching_corrupt_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("corrupt-api-key.sqlite3");
+    let partition_id = PartitionId::from_bytes([1; 16])?;
+    let administrator = PrincipalId::from_bytes([2; 16])?;
+    let database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap(&mut repository, administrator)?;
+    let method_id = AuthenticationMethodId::from_bytes([7; 16])?;
+    repository.apply_committed(
+        position(2),
+        context(8, administrator, 9, 20, Some(Revision::new(1)))?,
+        &api_key_command(method_id, administrator)?,
+    )?;
+    let database = repository.into_database();
+    database
+        .connection()
+        .execute_batch("PRAGMA ignore_check_constraints = ON")?;
+    database.connection().execute(
+        "UPDATE authentication_methods SET credential_generation = 0 WHERE method_id = ?1",
+        [method_id.as_bytes().as_slice()],
+    )?;
+    database
+        .connection()
+        .execute_batch("PRAGMA ignore_check_constraints = OFF")?;
+    let repository = AuthoritativeRepository::new(database);
+    assert!(matches!(
+        repository.authenticate_api_key(
+            [11; 32],
+            AuthenticationService::Https,
+            0b001,
+            UnixMicros::new(21),
+        ),
+        Err(RepositoryError::CorruptState)
+    ));
     Ok(())
 }
 
