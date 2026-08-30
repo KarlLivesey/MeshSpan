@@ -287,6 +287,7 @@ fn request_storage_capability(
     value: &RequestFederatedStorageCapability,
     limits: WireLimits,
 ) -> Result<(), WireContractError> {
+    valid_identifier(&value.allocation_id)?;
     storage_subject(
         &value.grant_id,
         &value.target_id,
@@ -303,6 +304,7 @@ fn storage_capability(
     value: &FederatedStorageCapability,
     limits: WireLimits,
 ) -> Result<(), WireContractError> {
+    valid_identifier(&value.allocation_id)?;
     storage_subject(
         &value.grant_id,
         &value.target_id,
@@ -323,6 +325,7 @@ fn storage_receipt(
     value: &FederatedStorageReceipt,
     limits: WireLimits,
 ) -> Result<(), WireContractError> {
+    valid_identifier(&value.allocation_id)?;
     storage_subject(
         &value.grant_id,
         &value.target_id,

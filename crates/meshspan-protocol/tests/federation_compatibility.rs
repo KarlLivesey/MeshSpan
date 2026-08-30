@@ -183,6 +183,7 @@ fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::
         }),
         Message::RequestStorageCapability(RequestFederatedStorageCapability {
             grant_id: vec![1; 16],
+            allocation_id: vec![4; 16],
             target_id: vec![2; 16],
             target_generation: 1,
             shard: Some(shard()),
@@ -314,6 +315,7 @@ fn branch_exchange_binds_grant_scope_heads_and_signature() -> Result<(), Box<dyn
 fn storage_capability_is_exactly_bound_and_bounded() -> Result<(), Box<dyn std::error::Error>> {
     let request = RequestFederatedStorageCapability {
         grant_id: vec![30; 16],
+        allocation_id: vec![36; 16],
         target_id: vec![31; 16],
         target_generation: 2,
         shard: Some(shard()),
@@ -342,6 +344,7 @@ fn storage_capability_is_exactly_bound_and_bounded() -> Result<(), Box<dyn std::
 
     let capability = FederatedStorageCapability {
         grant_id: vec![30; 16],
+        allocation_id: vec![36; 16],
         target_id: vec![31; 16],
         target_generation: 2,
         shard: Some(shard()),
@@ -352,6 +355,15 @@ fn storage_capability_is_exactly_bound_and_bounded() -> Result<(), Box<dyn std::
         canonical_capability: vec![34; 128],
         signature: vec![35; 64],
     };
+    let mut missing_allocation = capability.clone();
+    missing_allocation.allocation_id.clear();
+    assert_eq!(
+        encode_federation_frame(
+            &federation_envelope(Message::StorageCapability(missing_allocation)),
+            limits()?
+        ),
+        Err(WireContractError::InvalidMessage)
+    );
     assert!(
         encode_federation_frame(
             &federation_envelope(Message::StorageCapability(capability)),
