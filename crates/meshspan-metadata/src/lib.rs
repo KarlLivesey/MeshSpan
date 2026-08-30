@@ -11,6 +11,7 @@ mod federation_quarantine_command;
 mod federation_remote_authority;
 #[cfg(test)]
 mod federation_schema_tests;
+mod federation_storage_command;
 mod federation_succession_command;
 mod migration;
 mod name;
@@ -58,6 +59,9 @@ pub use federation_remote_authority::{
     FederationRemoteAuthorityCacheDisposition, FederationRemoteAuthorityCacheError,
     FederationRemoteAuthoritySnapshot,
 };
+pub use federation_storage_command::{
+    IssueFederationStorageAllocation, RevokeFederationStorageAllocation,
+};
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,
     FederationSuccessionEdge, RevokeFederationSuccessorDesignation,
@@ -72,9 +76,10 @@ pub use repository::{
     FederationGrantCursor, FederationGrantCursorError, FederationGrantRecord,
     FederationGrantRecordCodecError, FederationGrantState, FederationGrantTermination,
     FederationGrantTerminationKind, FederationQuarantineRecord, FederationQuarantineState,
-    FederationRelationshipRecord, FederationRelationshipState, FederationSuccessionRecord,
-    FederationSuccessionState, FederationTransportAuthority, FederationTrustIdentityRecord,
-    GroupMemberCursor, InvariantFinding, InvariantKind, InvariantReport, LogPosition,
+    FederationRelationshipRecord, FederationRelationshipState, FederationStorageAllocationRecord,
+    FederationStorageAllocationState, FederationSuccessionRecord, FederationSuccessionState,
+    FederationTransportAuthority, FederationTrustIdentityRecord, GroupMemberCursor,
+    InvariantFinding, InvariantKind, InvariantReport, LogPosition,
     MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME, NamespaceCursor, NamespaceRecord, ObjectOwnerCursor,
     ObjectOwnerRecord, Page, PageLimit, PartitionBackupManifest, PartitionConsensusPersistence,
     PartitionSnapshotManifest, PermissionGrantRecord, PreservedVote, PrincipalKind,

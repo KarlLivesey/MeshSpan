@@ -11,9 +11,9 @@ use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
     cleanup_reclamation, cluster, component, federation_grant, federation_principal,
-    federation_quarantine, federation_relationship, federation_succession, identity, namespace,
-    retention, root_delegation, routing, session, snapshot_schedule, tags, user_snapshot,
-    version_cleanup, volume_head,
+    federation_quarantine, federation_relationship, federation_storage_allocation,
+    federation_succession, identity, namespace, retention, root_delegation, routing, session,
+    snapshot_schedule, tags, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -347,6 +347,9 @@ fn execute(
     }
     if federation_grant::is_command(command) {
         return federation_grant::execute(transaction, context, command, revision);
+    }
+    if federation_storage_allocation::is_command(command) {
+        return federation_storage_allocation::execute(transaction, context, command, revision);
     }
     if federation_principal::is_command(command) {
         return federation_principal::execute(transaction, context, command, revision);
@@ -868,6 +871,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RetainFederatedMutationQuarantine(_) => 67,
         AuthoritativeCommand::SurfaceFederatedMutationQuarantine(_) => 68,
         AuthoritativeCommand::ResolveFederatedMutationQuarantine(_) => 69,
+        AuthoritativeCommand::IssueFederationStorageAllocation(_) => 71,
+        AuthoritativeCommand::RevokeFederationStorageAllocation(_) => 72,
     }
 }
 

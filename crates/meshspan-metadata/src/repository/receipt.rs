@@ -92,6 +92,8 @@ pub enum EntityKind {
     FederationSuccession = 28,
     /// Signed invisible federated mutation quarantine.
     FederationQuarantine = 29,
+    /// Disjoint provider-node slice of one federated storage grant.
+    FederationStorageAllocation = 30,
 }
 
 impl EntityKind {
@@ -126,6 +128,7 @@ impl EntityKind {
             27 => Ok(Self::FederatedPrincipalProjection),
             28 => Ok(Self::FederationSuccession),
             29 => Ok(Self::FederationQuarantine),
+            30 => Ok(Self::FederationStorageAllocation),
             _ => Err(RepositoryError::CorruptState),
         }
     }

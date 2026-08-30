@@ -39,6 +39,9 @@ mod federation_relationship;
 mod federation_relationship_evidence;
 #[cfg(test)]
 mod federation_relationship_tests;
+mod federation_storage_allocation;
+#[cfg(test)]
+mod federation_storage_allocation_tests;
 mod federation_succession;
 mod federation_succession_evidence;
 mod federation_succession_graph;
@@ -104,6 +107,9 @@ pub use federation_quarantine::{FederationQuarantineRecord, FederationQuarantine
 pub use federation_query::{
     FederationRelationshipRecord, FederationRelationshipState, FederationTransportAuthority,
     FederationTrustIdentityRecord,
+};
+pub use federation_storage_allocation::{
+    FederationStorageAllocationRecord, FederationStorageAllocationState,
 };
 pub use federation_succession::{FederationSuccessionRecord, FederationSuccessionState};
 pub use kernel::{
@@ -249,6 +255,18 @@ impl AuthoritativeRepository {
         owner: crate::FederationIdentityOwner,
     ) -> Result<Option<FederationTrustIdentityRecord>, RepositoryError> {
         federation_query::active_identity(&self.database, relationship_id, owner)
+    }
+
+    /// Returns one complete disjoint federation storage allocation, if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the stored allocation or lifecycle evidence is malformed.
+    pub fn federation_storage_allocation(
+        &self,
+        allocation_id: meshspan_domain::FederationStorageAllocationId,
+    ) -> Result<Option<FederationStorageAllocationRecord>, RepositoryError> {
+        federation_storage_allocation::load(self.database.connection(), allocation_id)
     }
 
     /// Returns complete current transport authority only for an active or restricted relationship.
