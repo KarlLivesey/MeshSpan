@@ -3,12 +3,43 @@
 //! Authoritative verification and historical classification of remote mutation acknowledgements.
 
 use meshspan_domain::{
-    FederatedMutationAcknowledgement, FederatedMutationAdmission, QuarantineReason,
+    FederatedMutationAcknowledgement, FederatedMutationAdmission, OperationId, QuarantineId,
+    QuarantineReason, Revision,
 };
 
 use super::federation_succession_trust::verify_side_signature;
-use super::{RepositoryError, federation_grant, federation_principal};
-use crate::FederatedPrincipalState;
+use super::{
+    CommandReceipt, EntityKind, EntityReference, RepositoryError, federation_grant,
+    federation_principal,
+};
+use crate::{AdmitFederatedMutation, CommandContext, FederatedPrincipalState, PartitionDatabase};
+
+/// Exact durable owner decision for one deterministic federated mutation operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FederatedMutationAdmissionReceipt {
+    /// Consensus-applied operation receipt.
+    pub receipt: CommandReceipt,
+    /// Immutable admitted or quarantined outcome, including the authoritative reason.
+    pub admission: FederatedMutationAdmission,
+}
+
+pub(super) fn admit(
+    transaction: &rusqlite::Transaction<'_>,
+    context: CommandContext,
+    command: &AdmitFederatedMutation,
+    _revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    if command.acknowledgement.source_operation_id == context.operation_id
+        || command.acknowledgement.evidence.accepted_at() > context.occurred_at
+        || classify(transaction, &command.acknowledgement)? != FederatedMutationAdmission::Admitted
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    Ok(EntityReference {
+        kind: EntityKind::FederationMutationAdmission,
+        id: command.namespace_commit_id.as_bytes(),
+    })
+}
 
 pub(super) fn classify(
     connection: &rusqlite::Connection,
@@ -53,4 +84,28 @@ pub(super) fn classify(
         }
     }
     federation_grant::classify_persisted_mutation(connection, evidence)
+}
+
+pub(super) fn resolve(
+    database: &PartitionDatabase,
+    operation_id: OperationId,
+) -> Result<Option<FederatedMutationAdmissionReceipt>, RepositoryError> {
+    let Some(receipt) = super::receipt::resolve_operation(database, operation_id)? else {
+        return Ok(None);
+    };
+    let admission = match receipt.entity.kind {
+        EntityKind::FederationMutationAdmission => FederatedMutationAdmission::Admitted,
+        EntityKind::FederationQuarantine => {
+            let quarantine_id = QuarantineId::from_bytes(receipt.entity.id)
+                .map_err(|_| RepositoryError::CorruptState)?;
+            let quarantine = super::federation_quarantine::quarantine(database, quarantine_id)?
+                .ok_or(RepositoryError::CorruptState)?;
+            FederatedMutationAdmission::Quarantined(quarantine.reason)
+        }
+        _ => return Err(RepositoryError::InvalidCommand),
+    };
+    Ok(Some(FederatedMutationAdmissionReceipt {
+        receipt,
+        admission,
+    }))
 }

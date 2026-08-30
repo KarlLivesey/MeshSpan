@@ -10,10 +10,11 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, federation_grant, federation_principal,
-    federation_quarantine, federation_relationship, federation_storage_allocation,
-    federation_succession, identity, namespace, retention, root_delegation, routing, session,
-    snapshot_schedule, tags, user_snapshot, version_cleanup, volume_head,
+    cleanup_reclamation, cluster, component, federation_grant, federation_mutation_admission,
+    federation_principal, federation_quarantine, federation_relationship,
+    federation_storage_allocation, federation_succession, identity, namespace, retention,
+    root_delegation, routing, session, snapshot_schedule, tags, user_snapshot, version_cleanup,
+    volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -356,6 +357,9 @@ fn execute(
     }
     if federation_succession::is_command(command) {
         return federation_succession::execute(transaction, context, command, revision);
+    }
+    if let AuthoritativeCommand::AdmitFederatedMutation(value) = command {
+        return federation_mutation_admission::admit(transaction, context, value, revision);
     }
     if federation_quarantine::is_command(command) {
         return federation_quarantine::execute(transaction, context, command, revision);
@@ -871,6 +875,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RetainFederatedMutationQuarantine(_) => 67,
         AuthoritativeCommand::SurfaceFederatedMutationQuarantine(_) => 68,
         AuthoritativeCommand::ResolveFederatedMutationQuarantine(_) => 69,
+        AuthoritativeCommand::AdmitFederatedMutation(_) => 73,
         AuthoritativeCommand::IssueFederationStorageAllocation(_) => 71,
         AuthoritativeCommand::RevokeFederationStorageAllocation(_) => 72,
     }

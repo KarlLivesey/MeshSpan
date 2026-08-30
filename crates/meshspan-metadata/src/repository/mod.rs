@@ -105,6 +105,7 @@ pub use federation_grant_evidence::{
     FederationGrantTerminationKind,
 };
 pub use federation_grant_record::FederationGrantRecordCodecError;
+pub use federation_mutation_admission::FederatedMutationAdmissionReceipt;
 pub use federation_principal::FederatedPrincipalProjectionRecord;
 pub use federation_quarantine::{FederationQuarantineRecord, FederationQuarantineState};
 pub use federation_query::{
@@ -378,6 +379,19 @@ impl AuthoritativeRepository {
         acknowledgement: &meshspan_domain::FederatedMutationAcknowledgement,
     ) -> Result<meshspan_domain::FederatedMutationAdmission, RepositoryError> {
         federation_mutation_admission::classify(self.database.connection(), acknowledgement)
+    }
+
+    /// Resolves the immutable decision for one deterministic federated mutation operation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if the operation belongs to another command family or its quarantine evidence
+    /// is missing, malformed or inconsistent.
+    pub fn resolve_federated_mutation_admission(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<FederatedMutationAdmissionReceipt>, RepositoryError> {
+        federation_mutation_admission::resolve(&self.database, operation_id)
     }
 
     /// Returns the active, locally authoritative recovery successor for one retired swarm.

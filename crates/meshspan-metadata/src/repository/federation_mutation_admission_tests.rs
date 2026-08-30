@@ -13,12 +13,162 @@ use tempfile::tempdir;
 
 use super::{AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
-    ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
-    FederatedPrincipalKind, FederatedPrincipalState, FederationGovernanceDirection,
-    FederationGrantRestriction, FederationTrustIdentity, IssueFederationGrant, PartitionDatabase,
-    ProposeFederationRelationship, RecordName, RevokeFederationGrant,
-    UpsertFederatedPrincipalProjection,
+    AdmitFederatedMutation, ApplyDisposition, ApproveFederationRelationship, AuthoritativeCommand,
+    BootstrapMesh, CommandContext, EntityKind, FederatedPrincipalKind, FederatedPrincipalState,
+    FederationGovernanceDirection, FederationGrantRestriction, FederationTrustIdentity,
+    IssueFederationGrant, PartitionDatabase, ProposeFederationRelationship, RecordName,
+    RevokeFederationGrant, UpsertFederatedPrincipalProjection,
 };
+
+#[test]
+fn admitted_mutation_is_consensus_ordered_and_replays_after_suspension()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare(&mut repository, fixture.ids, &fixture.remote_key)?;
+    let acknowledgement = acknowledgement(
+        fixture.ids,
+        Rights::TRAVERSE.union(Rights::WRITE_DATA),
+        20,
+        &fixture.remote_key,
+    )?;
+    let commit_id = meshspan_domain::NamespaceCommitId::from_bytes([80; 16])?;
+    let admission_context = context(81, fixture.ids.administrator, 82, 21, 5)?;
+    let command = AuthoritativeCommand::AdmitFederatedMutation(AdmitFederatedMutation {
+        namespace_commit_id: commit_id,
+        acknowledgement,
+    });
+    let receipt = repository.apply_committed(
+        LogPosition { index: 6, term: 1 },
+        admission_context,
+        &command,
+    )?;
+    assert_eq!(receipt.disposition, ApplyDisposition::Applied);
+    assert_eq!(receipt.entity.kind, EntityKind::FederationMutationAdmission);
+    assert_eq!(receipt.entity.id, commit_id.as_bytes());
+    assert_eq!(
+        receipt.request_digest,
+        command.request_digest(admission_context)
+    );
+    let resolved = repository
+        .resolve_federated_mutation_admission(admission_context.operation_id)?
+        .ok_or("missing committed admission")?;
+    assert_eq!(resolved.receipt.disposition, ApplyDisposition::Replayed);
+    assert_eq!(resolved.receipt.operation_id, receipt.operation_id);
+    assert_eq!(resolved.receipt.request_digest, receipt.request_digest);
+    assert_eq!(resolved.receipt.result_digest, receipt.result_digest);
+    assert_eq!(
+        resolved.receipt.committed_revision,
+        receipt.committed_revision
+    );
+    assert_eq!(
+        resolved.receipt.committed_position,
+        receipt.committed_position
+    );
+    assert_eq!(resolved.receipt.entity, receipt.entity);
+    assert_eq!(resolved.admission, FederatedMutationAdmission::Admitted);
+
+    let suspended = signed_projection(
+        fixture.ids,
+        FederatedPrincipalState::Suspended,
+        2,
+        &fixture.remote_key,
+    )?;
+    apply(
+        &mut repository,
+        7,
+        context(83, fixture.ids.administrator, 84, 22, 6)?,
+        &AuthoritativeCommand::UpsertFederatedPrincipalProjection(suspended),
+    )?;
+    let replay = repository.apply_committed(
+        LogPosition { index: 8, term: 2 },
+        admission_context,
+        &command,
+    )?;
+    assert_eq!(replay.disposition, ApplyDisposition::Replayed);
+    assert_eq!(replay.committed_position, receipt.committed_position);
+    assert_eq!(replay.committed_revision, receipt.committed_revision);
+    assert_eq!(replay.entity, receipt.entity);
+    assert_eq!(
+        repository
+            .resolve_federated_mutation_admission(admission_context.operation_id)?
+            .ok_or("missing replayed admission")?
+            .admission,
+        FederatedMutationAdmission::Admitted
+    );
+    Ok(())
+}
+
+#[test]
+fn admitted_mutation_command_fails_closed_for_changed_or_inadmissible_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::open()?;
+    let mut repository = fixture.repository;
+    prepare(&mut repository, fixture.ids, &fixture.remote_key)?;
+    let accepted_acknowledgement = acknowledgement(
+        fixture.ids,
+        Rights::TRAVERSE.union(Rights::WRITE_DATA),
+        20,
+        &fixture.remote_key,
+    )?;
+    let admission_context = context(85, fixture.ids.administrator, 86, 21, 5)?;
+    let command = AuthoritativeCommand::AdmitFederatedMutation(AdmitFederatedMutation {
+        namespace_commit_id: meshspan_domain::NamespaceCommitId::from_bytes([87; 16])?,
+        acknowledgement: accepted_acknowledgement,
+    });
+    repository.apply_committed(
+        LogPosition { index: 6, term: 1 },
+        admission_context,
+        &command,
+    )?;
+
+    let mut changed = accepted_acknowledgement;
+    changed.payload_digest[0] ^= 1;
+    let substituted = AuthoritativeCommand::AdmitFederatedMutation(AdmitFederatedMutation {
+        namespace_commit_id: meshspan_domain::NamespaceCommitId::from_bytes([87; 16])?,
+        acknowledgement: changed,
+    });
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 7, term: 1 },
+            admission_context,
+            &substituted
+        ),
+        Err(RepositoryError::OperationConflict)
+    ));
+
+    let outside_rights = acknowledgement(fixture.ids, Rights::DELETE, 20, &fixture.remote_key)?;
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 7, term: 1 },
+            context(88, fixture.ids.administrator, 89, 21, 6)?,
+            &AuthoritativeCommand::AdmitFederatedMutation(AdmitFederatedMutation {
+                namespace_commit_id: meshspan_domain::NamespaceCommitId::from_bytes([90; 16])?,
+                acknowledgement: outside_rights,
+            }),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+
+    let accepted_in_future = acknowledgement(
+        fixture.ids,
+        Rights::TRAVERSE.union(Rights::WRITE_DATA),
+        30,
+        &fixture.remote_key,
+    )?;
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 7, term: 1 },
+            context(91, fixture.ids.administrator, 92, 29, 6)?,
+            &AuthoritativeCommand::AdmitFederatedMutation(AdmitFederatedMutation {
+                namespace_commit_id: meshspan_domain::NamespaceCommitId::from_bytes([93; 16])?,
+                acknowledgement: accepted_in_future,
+            }),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
 
 #[test]
 fn signed_remote_mutations_use_retained_authority_and_current_principal_state()

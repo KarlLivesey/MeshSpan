@@ -121,10 +121,17 @@ impl NamespaceHistoryMutationDecision {
 /// Complete, validated commit records awaiting owner-side federation admission.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceHistoryReceivePreparation {
+    admission_at: UnixMicros,
     commits: Vec<super::history_records::NamespaceHistoryCommitRecord>,
 }
 
 impl NamespaceHistoryReceivePreparation {
+    /// Returns the durable receive-session instant used by every admission retry.
+    #[must_use]
+    pub const fn admission_at(&self) -> UnixMicros {
+        self.admission_at
+    }
+
     /// Returns every exact signed mutation which must receive one decision.
     #[must_use]
     pub fn commits(&self) -> &[super::history_records::NamespaceHistoryCommitRecord] {
@@ -132,9 +139,13 @@ impl NamespaceHistoryReceivePreparation {
     }
 
     pub(super) const fn new(
+        admission_at: UnixMicros,
         commits: Vec<super::history_records::NamespaceHistoryCommitRecord>,
     ) -> Self {
-        Self { commits }
+        Self {
+            admission_at,
+            commits,
+        }
     }
 }
 

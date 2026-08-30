@@ -63,6 +63,7 @@ pub(super) fn prepare(
     }
     let bundle = assemble(connection, session_id, session.volume_id)?;
     Ok(NamespaceHistoryReceivePreparation::new(
+        session.created_at,
         bundle
             .commit_records()
             .map_err(|_| PublicationError::Corrupt)?,

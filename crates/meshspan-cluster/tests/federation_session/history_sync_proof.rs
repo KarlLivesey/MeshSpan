@@ -10,17 +10,16 @@ use meshspan_cluster::{
     FederationHistoryAdmissionFuture, FederationHistoryAdmissionSource,
     FederationHistoryObjectServeRequest, FederationHistoryObjectServices,
     FederationHistorySyncError, FederationHistorySyncOutcome, FederationHistorySyncRequest,
-    FederationQuarantineCommitError, FederationQuarantineCommitFuture,
-    FederationQuarantineCommitter, FederationQuarantineRetention,
-    FilesystemFederationHistorySource,
+    FederationMutationAdmissionCommit, FederationMutationAdmissionCommitFuture,
+    FederationMutationAdmissionCommitter, FilesystemFederationHistorySource,
 };
 use meshspan_domain::{
     DurationMicros, FederatedMutationAcknowledgement, FederatedMutationAdmission,
     FederatedMutationEvidence, FederatedPrincipal, MeshId, Rights, UnixMicros,
 };
 use meshspan_filesystem::{
-    NamespaceHistoryCommitRecord, NamespaceHistoryLimits, NamespaceHistoryMutationDecision,
-    RootFilePublication, VersionPublicationStore,
+    NamespaceHistoryCommitRecord, NamespaceHistoryLimits, RootFilePublication,
+    VersionPublicationStore,
 };
 use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_transport::{FederationExchangeContext, FederationReplayGuard, TransportError};
@@ -39,7 +38,8 @@ struct SyncEnvironment<'a> {
     server_grants: &'a StaticBranchAuthority,
 }
 
-type ProofReceiver = AdmittingFederationHistoryReceiver<AdmitEverySignedMutation, NoQuarantine>;
+type ProofReceiver =
+    AdmittingFederationHistoryReceiver<AdmitEverySignedMutation, AdmitProofMutation>;
 
 pub(super) async fn prove_restart_resumable_filesystem_sync(
     proof: &SessionProof<'_>,
@@ -66,7 +66,7 @@ pub(super) async fn prove_restart_resumable_filesystem_sync(
     let receiver = AdmittingFederationHistoryReceiver::new(
         FilesystemFederationHistorySource::new(receiver_directory.path()),
         AdmitEverySignedMutation,
-        NoQuarantine,
+        AdmitProofMutation,
     );
     let client_grants = StaticBranchAuthority::admit(fixture.authority);
     let server_grants = StaticBranchAuthority::admit(fixture.authority);
@@ -137,33 +137,34 @@ impl FederationHistoryAdmissionSource for AdmitEverySignedMutation {
         &self,
         _session_id: [u8; 32],
         records: Vec<NamespaceHistoryCommitRecord>,
-        now: UnixMicros,
+        _now: UnixMicros,
     ) -> FederationHistoryAdmissionFuture<'_> {
         Box::pin(async move {
-            let mut decisions = Vec::with_capacity(records.len());
+            let mut commits = Vec::with_capacity(records.len());
             for record in records {
-                if record.federated_acknowledgement()?.is_none() {
-                    return Err(FederationHistoryAdmissionError::MissingAcknowledgement);
-                }
-                decisions.push(NamespaceHistoryMutationDecision::new(
-                    record.mutation_authority()?.commit_id(),
-                    FederatedMutationAdmission::Admitted,
-                    now,
-                ));
+                let acknowledgement = record
+                    .federated_acknowledgement()?
+                    .ok_or(FederationHistoryAdmissionError::MissingAcknowledgement)?;
+                let commit_id = record.mutation_authority()?.commit_id();
+                commits.push(FederationMutationAdmissionCommit {
+                    commit_id,
+                    acknowledgement,
+                    admission: FederatedMutationAdmission::Admitted,
+                });
             }
-            Ok(FederationHistoryAdmissionBatch::new(decisions, Vec::new()))
+            Ok(FederationHistoryAdmissionBatch::new(commits))
         })
     }
 }
 
-struct NoQuarantine;
+struct AdmitProofMutation;
 
-impl FederationQuarantineCommitter for NoQuarantine {
-    fn retain(
+impl FederationMutationAdmissionCommitter for AdmitProofMutation {
+    fn commit(
         &self,
-        _retention: FederationQuarantineRetention,
-    ) -> FederationQuarantineCommitFuture<'_> {
-        Box::pin(async { Err(FederationQuarantineCommitError::Rejected) })
+        admission: FederationMutationAdmissionCommit,
+    ) -> FederationMutationAdmissionCommitFuture<'_> {
+        Box::pin(async move { Ok(admission.admission) })
     }
 }
 

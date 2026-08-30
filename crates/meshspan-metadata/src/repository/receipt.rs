@@ -94,6 +94,8 @@ pub enum EntityKind {
     FederationQuarantine = 29,
     /// Disjoint provider-node slice of one federated storage grant.
     FederationStorageAllocation = 30,
+    /// Consensus-ordered admission of one signed federated namespace mutation.
+    FederationMutationAdmission = 31,
 }
 
 impl EntityKind {
@@ -129,6 +131,7 @@ impl EntityKind {
             28 => Ok(Self::FederationSuccession),
             29 => Ok(Self::FederationQuarantine),
             30 => Ok(Self::FederationStorageAllocation),
+            31 => Ok(Self::FederationMutationAdmission),
             _ => Err(RepositoryError::CorruptState),
         }
     }
