@@ -6,6 +6,7 @@ mod api_http;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
+mod browser_authentication;
 mod browser_session;
 mod claim_file;
 mod claim_service;
@@ -22,6 +23,10 @@ mod setup_api;
 mod setup_api_tests;
 
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
+pub use browser_authentication::{
+    BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
+    BrowserSessionAuthorityError, GatewaySessionIdentity,
+};
 pub use browser_session::{
     BrowserRequestProtection, BrowserSessionError, BrowserSessionEvidence, parse_browser_session,
 };
