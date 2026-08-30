@@ -7,9 +7,10 @@ mod namespace;
 
 pub use namespace::{
     NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
-    NamespaceHistoryMutationAuthority, NamespaceHistoryObjectRequest, NamespaceHistoryPage,
-    NamespaceHistoryPageRequest, NamespaceHistoryReceiveCompletion, NamespaceHistoryReceiveRequest,
-    NamespaceHistoryReceiveStatus, NamespaceHistoryRecordError,
+    NamespaceHistoryMutationAuthority, NamespaceHistoryMutationDecision,
+    NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
+    NamespaceHistoryReceiveCompletion, NamespaceHistoryReceivePreparation,
+    NamespaceHistoryReceiveRequest, NamespaceHistoryReceiveStatus, NamespaceHistoryRecordError,
 };
 
 use std::collections::BTreeSet;
@@ -35,7 +36,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 36] = [
+const MIGRATIONS: [Migration; 37] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -180,8 +181,12 @@ const MIGRATIONS: [Migration; 36] = [
         version: 36,
         sql: include_str!("../schema/branch/036_federated_mutation_acknowledgements.sql"),
     },
+    Migration {
+        version: 37,
+        sql: include_str!("../schema/branch/037_federated_mutation_admissions.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 36;
+const SCHEMA_VERSION: u32 = 37;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -983,6 +988,42 @@ impl VersionPublicationStore {
         namespace::complete_namespace_history_receive(&mut self.connection, session_id, now)
     }
 
+    /// Loads every complete staged mutation for authoritative federation admission.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete, expired or malformed receive state.
+    pub fn prepare_namespace_history_receive(
+        &self,
+        session_id: [u8; 32],
+        now: UnixMicros,
+    ) -> Result<NamespaceHistoryReceivePreparation, PublicationError> {
+        namespace::prepare_namespace_history_receive(&self.connection, session_id, now)
+    }
+
+    /// Atomically imports a complete signed history with one exact decision per mutation.
+    ///
+    /// Quarantined commits and immutable content are retained, while their namespace effects are
+    /// excluded from reconciliation. Exact retries must provide the same decision set.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, duplicate or substituted decisions, unsigned commits, incomplete input,
+    /// corruption or replay mismatch without exposing partial state.
+    pub fn complete_federated_namespace_history_receive(
+        &mut self,
+        session_id: [u8; 32],
+        decisions: &[NamespaceHistoryMutationDecision],
+        now: UnixMicros,
+    ) -> Result<NamespaceHistoryReceiveCompletion, PublicationError> {
+        namespace::complete_federated_namespace_history_receive(
+            &mut self.connection,
+            session_id,
+            decisions,
+            now,
+        )
+    }
+
     /// Transactionally imports one immutable disconnected-history bundle.
     ///
     /// Exact retries are idempotent. Identity reuse, malformed graphs, missing parents and changed
@@ -998,6 +1039,26 @@ impl VersionPublicationStore {
         limits: NamespaceHistoryLimits,
     ) -> Result<NamespaceHistoryImport, PublicationError> {
         namespace::transfer::import_history(&mut self.connection, bundle, limits)
+    }
+
+    /// Imports signed federated history with one exact owner-side decision per mutation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, duplicate or substituted decisions, unsigned records, graph corruption,
+    /// identity collision or persistence failure without importing partial state.
+    pub fn import_federated_namespace_history(
+        &mut self,
+        bundle: &NamespaceHistoryBundle,
+        limits: NamespaceHistoryLimits,
+        decisions: &[NamespaceHistoryMutationDecision],
+    ) -> Result<NamespaceHistoryImport, PublicationError> {
+        namespace::transfer::import_federated_history(
+            &mut self.connection,
+            bundle,
+            limits,
+            decisions,
+        )
     }
 
     /// Persists one bounded path-copy node set before a later namespace-head transaction.
@@ -1864,6 +1925,7 @@ impl VersionPublicationStore {
         let commits = load_reconciliation_commits(&self.connection, frontier, limits)?;
         let causal = crate::plan_reconciliation(&commits, frontier, limits)?;
         let mut intents = Vec::new();
+        let mut quarantined_commits = BTreeSet::new();
         for commit_id in causal.ordered_commits() {
             let commit = commits
                 .iter()
@@ -1874,6 +1936,9 @@ impl VersionPublicationStore {
                     namespace::load_branch_intent(&self.connection, *commit_id)?
                         .ok_or(crate::ReconciliationError::MissingIntent)?,
                 );
+                if namespace::federated_admission::is_quarantined(&self.connection, *commit_id)? {
+                    quarantined_commits.insert(*commit_id);
+                }
             }
         }
         let base = if let Some(converged_head) = causal.converged_head() {
@@ -1888,7 +1953,13 @@ impl VersionPublicationStore {
                 entries: Vec::new(),
             }
         };
-        let replay = crate::plan_namespace_replay(&causal, &commits, &intents, &base)?;
+        let replay = crate::reconciliation::plan_namespace_replay_with_quarantine(
+            &causal,
+            &commits,
+            &intents,
+            &base,
+            &quarantined_commits,
+        )?;
         Ok(PreparedNamespaceReconciliation::new(causal, replay))
     }
 

@@ -5,13 +5,23 @@
 use std::error::Error;
 
 use meshspan_cluster::{
-    FederationBranchPageServeRequest, FederationBranchPageServices,
+    AdmittingFederationHistoryReceiver, FederationBranchPageServeRequest,
+    FederationBranchPageServices, FederationHistoryAdmissionBatch, FederationHistoryAdmissionError,
+    FederationHistoryAdmissionFuture, FederationHistoryAdmissionSource,
     FederationHistoryObjectServeRequest, FederationHistoryObjectServices,
     FederationHistorySyncError, FederationHistorySyncOutcome, FederationHistorySyncRequest,
+    FederationQuarantineCommitError, FederationQuarantineCommitFuture,
+    FederationQuarantineCommitter, FederationQuarantineRetention,
     FilesystemFederationHistorySource,
 };
-use meshspan_domain::{DurationMicros, UnixMicros};
-use meshspan_filesystem::{NamespaceHistoryLimits, RootFilePublication, VersionPublicationStore};
+use meshspan_domain::{
+    DurationMicros, FederatedMutationAcknowledgement, FederatedMutationAdmission,
+    FederatedMutationEvidence, FederatedPrincipal, MeshId, Rights, UnixMicros,
+};
+use meshspan_filesystem::{
+    NamespaceHistoryCommitRecord, NamespaceHistoryLimits, NamespaceHistoryMutationDecision,
+    RootFilePublication, VersionPublicationStore,
+};
 use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_transport::{FederationExchangeContext, FederationReplayGuard, TransportError};
 use tempfile::tempdir;
@@ -24,10 +34,12 @@ struct SyncEnvironment<'a> {
     fixture: &'a BranchFixture,
     publication: &'a RootFilePublication,
     source: &'a FilesystemFederationHistorySource,
-    receiver: &'a FilesystemFederationHistorySource,
+    receiver: &'a ProofReceiver,
     client_grants: &'a StaticBranchAuthority,
     server_grants: &'a StaticBranchAuthority,
 }
+
+type ProofReceiver = AdmittingFederationHistoryReceiver<AdmitEverySignedMutation, NoQuarantine>;
 
 pub(super) async fn prove_restart_resumable_filesystem_sync(
     proof: &SessionProof<'_>,
@@ -38,7 +50,8 @@ pub(super) async fn prove_restart_resumable_filesystem_sync(
     let publication = publication()?;
     let mut source_store =
         VersionPublicationStore::open(source_directory.path(), UnixMicros::new(1))?;
-    source_store.publish_root_file(&publication)?;
+    let acknowledgement = acknowledgement(proof, fixture, &publication)?;
+    source_store.publish_federated_root_file(&publication, &acknowledgement)?;
     let bundle = source_store.export_namespace_history(
         publication.file.volume_id,
         &[publication.namespace_commit_id],
@@ -50,7 +63,11 @@ pub(super) async fn prove_restart_resumable_filesystem_sync(
     drop(source_store);
 
     let source = FilesystemFederationHistorySource::new(source_directory.path());
-    let receiver = FilesystemFederationHistorySource::new(receiver_directory.path());
+    let receiver = AdmittingFederationHistoryReceiver::new(
+        FilesystemFederationHistorySource::new(receiver_directory.path()),
+        AdmitEverySignedMutation,
+        NoQuarantine,
+    );
     let client_grants = StaticBranchAuthority::admit(fixture.authority);
     let server_grants = StaticBranchAuthority::admit(fixture.authority);
     let environment = SyncEnvironment {
@@ -86,6 +103,68 @@ pub(super) async fn prove_restart_resumable_filesystem_sync(
         1
     );
     Ok(())
+}
+
+fn acknowledgement(
+    proof: &SessionProof<'_>,
+    fixture: &BranchFixture,
+    publication: &RootFilePublication,
+) -> Result<FederatedMutationAcknowledgement, Box<dyn Error>> {
+    Ok(FederatedMutationAcknowledgement {
+        source_operation_id: publication.file.operation_id,
+        evidence: FederatedMutationEvidence::new(
+            fixture.grant_id,
+            proof.relationship_id,
+            FederatedPrincipal::new(MeshId::from_bytes([211; 16])?, publication.file.created_by),
+            fixture.resource,
+            1,
+            publication.file.created_at,
+            Rights::TRAVERSE
+                .union(Rights::CREATE_CHILD)
+                .union(Rights::WRITE_DATA),
+            0,
+        ),
+        payload_digest: VersionPublicationStore::root_file_federated_mutation_digest(publication)?,
+        signer_generation: 1,
+        signature: [212; 64],
+    })
+}
+
+struct AdmitEverySignedMutation;
+
+impl FederationHistoryAdmissionSource for AdmitEverySignedMutation {
+    fn classify(
+        &self,
+        _session_id: [u8; 32],
+        records: Vec<NamespaceHistoryCommitRecord>,
+        now: UnixMicros,
+    ) -> FederationHistoryAdmissionFuture<'_> {
+        Box::pin(async move {
+            let mut decisions = Vec::with_capacity(records.len());
+            for record in records {
+                if record.federated_acknowledgement()?.is_none() {
+                    return Err(FederationHistoryAdmissionError::MissingAcknowledgement);
+                }
+                decisions.push(NamespaceHistoryMutationDecision::new(
+                    record.mutation_authority()?.commit_id(),
+                    FederatedMutationAdmission::Admitted,
+                    now,
+                ));
+            }
+            Ok(FederationHistoryAdmissionBatch::new(decisions, Vec::new()))
+        })
+    }
+}
+
+struct NoQuarantine;
+
+impl FederationQuarantineCommitter for NoQuarantine {
+    fn retain(
+        &self,
+        _retention: FederationQuarantineRetention,
+    ) -> FederationQuarantineCommitFuture<'_> {
+        Box::pin(async { Err(FederationQuarantineCommitError::Rejected) })
+    }
 }
 
 async fn prove_first_page_checkpoint(

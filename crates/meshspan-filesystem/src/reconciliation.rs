@@ -13,6 +13,7 @@ use thiserror::Error;
 #[path = "reconciliation/replay.rs"]
 mod replay;
 
+pub(crate) use replay::plan_namespace_replay_with_quarantine;
 pub use replay::{
     NamespaceReplayAction, NamespaceReplayBase, NamespaceReplayDisposition, NamespaceReplayEffect,
     NamespaceReplayEntry, NamespaceReplayPlan, NamespaceReplayRemoval, plan_namespace_replay,

@@ -116,7 +116,12 @@ pub use federation_history_object_source::{
     FederationHistoryObjectSource, FederationHistoryObjectSourceError,
 };
 pub use federation_history_receiver::{
-    FederationHistoryReceiveError, FederationHistoryReceiveFuture, FederationHistoryReceiver,
+    AdmittingFederationHistoryReceiver, FederationHistoryAdmissionBatch,
+    FederationHistoryAdmissionError, FederationHistoryAdmissionFuture,
+    FederationHistoryAdmissionSource, FederationHistoryReceiveError,
+    FederationHistoryReceiveFuture, FederationHistoryReceiver, FederationQuarantineCommitError,
+    FederationQuarantineCommitFuture, FederationQuarantineCommitter, FederationQuarantineRetention,
+    MetadataFederationHistoryAdmissionSource,
 };
 pub use federation_history_sync::{
     FederationHistorySyncError, FederationHistorySyncOutcome, FederationHistorySyncRequest,

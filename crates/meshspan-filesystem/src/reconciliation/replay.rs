@@ -141,15 +141,22 @@ pub struct NamespaceReplayAction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceReplayPlan {
     actions: Vec<NamespaceReplayAction>,
+    quarantined_commits: Vec<NamespaceCommitId>,
     final_root_object_revision_id: Option<ObjectRevisionId>,
     digest: [u8; 32],
 }
 
 impl NamespaceReplayPlan {
-    /// One action for every ordered mutation commit.
+    /// One action for every admitted ordered mutation commit which requires an effect.
     #[must_use]
     pub fn actions(&self) -> &[NamespaceReplayAction] {
         &self.actions
+    }
+
+    /// Signed remote commits retained as causal history without a namespace effect.
+    #[must_use]
+    pub fn quarantined_commits(&self) -> &[NamespaceCommitId] {
+        &self.quarantined_commits
     }
 
     /// Root revision selected after all actions.
@@ -209,11 +216,29 @@ pub fn plan_namespace_replay(
     intents: &[BranchMutationIntent],
     base: &NamespaceReplayBase,
 ) -> Result<NamespaceReplayPlan, ReconciliationError> {
+    plan_namespace_replay_with_quarantine(causal_plan, commits, intents, base, &BTreeSet::new())
+}
+
+pub(crate) fn plan_namespace_replay_with_quarantine(
+    causal_plan: &ReconciliationPlan,
+    commits: &[ReconciliationCommit],
+    intents: &[BranchMutationIntent],
+    base: &NamespaceReplayBase,
+    quarantined_commits: &BTreeSet<NamespaceCommitId>,
+) -> Result<NamespaceReplayPlan, ReconciliationError> {
     if !causal_plan.validates_commits(commits) {
         return Err(ReconciliationError::InvalidInput);
     }
     let commits = index_commits(commits)?;
     let intents = index_intents(causal_plan, &commits, intents)?;
+    if quarantined_commits.iter().any(|commit_id| {
+        !causal_plan.ordered_commits().contains(commit_id)
+            || commits.get(commit_id).is_none_or(|commit| {
+                !matches!(commit.payload, ReconciliationCommitPayload::Mutation { .. })
+            })
+    }) {
+        return Err(ReconciliationError::InvalidInput);
+    }
     let mut state = ReplayState::from_base(base)?;
     let mut actions = Vec::with_capacity(causal_plan.ordered_commits().len());
     for commit_id in causal_plan.ordered_commits() {
@@ -227,11 +252,22 @@ pub fn plan_namespace_replay(
             .get(commit_id)
             .ok_or(ReconciliationError::MissingIntent)?;
         validate_intent(commit, intent)?;
+        if quarantined_commits.contains(commit_id) {
+            continue;
+        }
         actions.push(state.apply(causal_plan.digest(), commit, intent, &commits)?);
     }
-    let digest = replay_digest(causal_plan.digest(), base, &actions, state.current_root);
+    let quarantined_commits = quarantined_commits.iter().copied().collect::<Vec<_>>();
+    let digest = replay_digest(
+        causal_plan.digest(),
+        base,
+        &actions,
+        &quarantined_commits,
+        state.current_root,
+    );
     Ok(NamespaceReplayPlan {
         actions,
+        quarantined_commits,
         final_root_object_revision_id: state.current_root,
         digest,
     })

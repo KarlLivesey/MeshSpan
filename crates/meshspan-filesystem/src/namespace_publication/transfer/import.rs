@@ -16,6 +16,7 @@ use super::super::repository::{
     persist_stored_commit, stored_commit_digest,
 };
 use super::{TransferredFileVersion, TransferredMutationCommit, imported_evidence_digest};
+use crate::NamespaceHistoryMutationDecision;
 use crate::publication::{
     copy_array, decode_identifier, from_i64, persist_directory_node, persist_manifest, to_i64,
 };
@@ -30,7 +31,19 @@ pub(in crate::publication) fn import_history(
     limits: NamespaceHistoryLimits,
 ) -> Result<NamespaceHistoryImport, PublicationError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let result = import_history_transaction(&transaction, bundle, limits)?;
+    let result = import_history_transaction(&transaction, bundle, limits, None)?;
+    transaction.commit()?;
+    Ok(result)
+}
+
+pub(in crate::publication) fn import_federated_history(
+    connection: &mut Connection,
+    bundle: &NamespaceHistoryBundle,
+    limits: NamespaceHistoryLimits,
+    decisions: &[NamespaceHistoryMutationDecision],
+) -> Result<NamespaceHistoryImport, PublicationError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let result = import_history_transaction(&transaction, bundle, limits, Some(decisions))?;
     transaction.commit()?;
     Ok(result)
 }
@@ -39,19 +52,59 @@ pub(in crate::publication) fn import_history_transaction(
     transaction: &Transaction<'_>,
     bundle: &NamespaceHistoryBundle,
     limits: NamespaceHistoryLimits,
+    decisions: Option<&[NamespaceHistoryMutationDecision]>,
 ) -> Result<NamespaceHistoryImport, PublicationError> {
     validate_bundle_shape(bundle, limits)?;
+    let decisions = validate_decisions(&bundle.commits, decisions)?;
     persist_nodes(transaction, &bundle.directory_nodes)?;
     persist_manifests(transaction, &bundle.manifests)?;
     persist_versions(transaction, &bundle.file_versions)?;
     persist_revisions(transaction, &bundle.object_revisions)?;
-    let imported_commits = persist_commits(transaction, &bundle.commits)?;
+    let imported_commits = persist_commits(transaction, &bundle.commits, &decisions)?;
     verify_heads(transaction, bundle)?;
     Ok(NamespaceHistoryImport {
         imported_commits,
         supplied_commits: bundle.commits.len(),
         immutable_records: bundle.immutable_record_count(),
     })
+}
+
+fn validate_decisions(
+    commits: &[TransferredMutationCommit],
+    decisions: Option<&[NamespaceHistoryMutationDecision]>,
+) -> Result<BTreeMap<NamespaceCommitId, NamespaceHistoryMutationDecision>, PublicationError> {
+    let Some(decisions) = decisions else {
+        return if commits
+            .iter()
+            .all(|record| record.acknowledgement.is_none())
+        {
+            Ok(BTreeMap::new())
+        } else {
+            Err(PublicationError::InvalidInput)
+        };
+    };
+    if decisions.len() != commits.len()
+        || commits
+            .iter()
+            .any(|record| record.acknowledgement.is_none())
+    {
+        return Err(PublicationError::InvalidInput);
+    }
+    let mut indexed = BTreeMap::new();
+    for decision in decisions {
+        if indexed.insert(decision.commit_id(), *decision).is_some() {
+            return Err(PublicationError::InvalidInput);
+        }
+    }
+    for record in commits {
+        let decision = indexed
+            .get(&record.commit.commit_id)
+            .ok_or(PublicationError::InvalidInput)?;
+        if decision.classified_at() < record.created_at {
+            return Err(PublicationError::InvalidInput);
+        }
+    }
+    Ok(indexed)
 }
 
 fn validate_bundle_shape(
@@ -321,6 +374,7 @@ fn revision_exists(
 fn persist_commits(
     transaction: &Transaction<'_>,
     commits: &[TransferredMutationCommit],
+    decisions: &BTreeMap<NamespaceCommitId, NamespaceHistoryMutationDecision>,
 ) -> Result<usize, PublicationError> {
     let mut pending = commits
         .iter()
@@ -336,10 +390,13 @@ fn persist_commits(
                 continue;
             }
             if let Some(existing) = load_reconciliation_commit(transaction, commit_id)? {
+                let expected_decision = decisions.get(&commit_id).copied();
                 if existing != record.commit
                     || load_branch_intent(transaction, commit_id)?.as_ref() != Some(&record.intent)
                     || super::super::federated_mutation::load(transaction, commit_id)?
                         != record.acknowledgement
+                    || super::super::federated_admission::load(transaction, commit_id)?
+                        != expected_decision
                 {
                     return Err(PublicationError::OperationConflict);
                 }
@@ -367,6 +424,15 @@ fn persist_commits(
                     super::super::federated_mutation::persist(
                         transaction,
                         commit_id,
+                        &acknowledgement,
+                    )?;
+                    let decision = decisions
+                        .get(&commit_id)
+                        .copied()
+                        .ok_or(PublicationError::InvalidInput)?;
+                    super::super::federated_admission::persist(
+                        transaction,
+                        decision,
                         &acknowledgement,
                     )?;
                 }
