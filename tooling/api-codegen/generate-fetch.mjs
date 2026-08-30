@@ -24,6 +24,7 @@ import type {
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
+  CurrentSessionResponse,
   HealthResponse,
   SetupStatusResponse,
 } from "./types.gen";
@@ -33,6 +34,7 @@ import {
   zCreateMeshSetupResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
+  zGetCurrentSessionResponse,
   zGetHealthResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
@@ -55,6 +57,7 @@ export type CreateSessionResult = Readonly<{
 export interface MeshSpanFetchClient {
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
+  getCurrentSession(): Promise<CurrentSessionResponse>;
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
@@ -126,6 +129,14 @@ export function createMeshSpanFetchClient(
         ${JSON.stringify(routes.getHealth.route)},
         { method: ${JSON.stringify(routes.getHealth.method)} },
         zGetHealthResponse,
+      );
+    },
+    async getCurrentSession(): Promise<CurrentSessionResponse> {
+      return requestJson(
+        context,
+        ${JSON.stringify(routes.getCurrentSession.route)},
+        { method: ${JSON.stringify(routes.getCurrentSession.method)} },
+        zGetCurrentSessionResponse,
       );
     },
     async getOpenApi(): Promise<Record<string, unknown>> {
@@ -340,6 +351,7 @@ function readRequiredRoutes(document) {
       requireOperation(operations, "createSession"),
     ),
     getHealth: requireOperation(operations, "getHealth"),
+    getCurrentSession: requireOperation(operations, "getCurrentSession"),
     getOpenApi: requireOperation(operations, "getOpenApi"),
     getSetupStatus: requireOperation(operations, "getSetupStatus"),
   };

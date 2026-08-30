@@ -201,6 +201,30 @@ export const zCreateSessionResponse = z
   .strict();
 
 /**
+ * CurrentSessionResponse
+ *
+ * Current caller identity and coarse panel-navigation authority.
+ */
+export const zCurrentSessionResponse = z
+  .strictObject({
+    administration_available: z.boolean(),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    principal_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    session_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * HealthResponse
  *
  * Bounded anonymous health response.
@@ -357,6 +381,11 @@ export const zCreateSessionBody = zCreateSessionRequestWritable;
  * Authenticated session created
  */
 export const zCreateSessionResponse2 = zCreateSessionResponse;
+
+/**
+ * Current browser session
+ */
+export const zGetCurrentSessionResponse = zCurrentSessionResponse;
 
 /**
  * First-mesh setup

@@ -10,7 +10,8 @@ use thiserror::Error;
 
 use crate::{
     ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
-    CreateSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
+    CreateSessionResponse, CurrentSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES,
+    schema,
 };
 
 /// Maximum accepted body size for one session-creation request.
@@ -23,6 +24,7 @@ static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> 
 static CREATE_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static CREATE_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
+static CURRENT_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 static SETUP_STATUS_RESPONSE_VALIDATOR: OnceLock<Result<Validator, String>> = OnceLock::new();
 
 /// Validates and encodes a public error before transmission.
@@ -180,6 +182,19 @@ pub fn validate_create_session_response_value(value: &Value) -> Result<(), Bound
     validate(response_validator()?, value)
 }
 
+/// Validates and encodes the current authenticated-session response before transmission.
+///
+/// # Errors
+///
+/// Returns an encoding or outgoing-contract error instead of emitting an invalid body.
+pub fn encode_current_session_response(
+    response: &CurrentSessionResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate(current_session_response_validator()?, &value)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
 /// Validates and encodes anonymous setup status before transmission.
 ///
 /// # Errors
@@ -233,6 +248,13 @@ fn response_validator() -> Result<&'static Validator, BoundaryError> {
     validator_from(
         CREATE_SESSION_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<CreateSessionResponse>())),
+    )
+}
+
+fn current_session_response_validator() -> Result<&'static Validator, BoundaryError> {
+    validator_from(
+        CURRENT_SESSION_RESPONSE_VALIDATOR
+            .get_or_init(|| compile(&schema::response_schema::<CurrentSessionResponse>())),
     )
 }
 

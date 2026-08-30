@@ -27,6 +27,29 @@ pub struct SessionAccessRequest {
     pub now: UnixMicros,
 }
 
+/// Browser-specific presentation requirements layered over common session evaluation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserSessionProtection {
+    /// Safe read requiring no CSRF presentation.
+    Read,
+    /// State change requiring the independently presented CSRF verifier digest.
+    Mutation {
+        /// Digest of the separately presented CSRF secret.
+        csrf_digest: [u8; 32],
+    },
+}
+
+/// Browser session request binding token identity and CSRF requirements before authorisation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BrowserSessionAccessRequest {
+    /// Session identity embedded in the presented bearer.
+    pub expected_session_id: SessionId,
+    /// Common current session and gateway requirements.
+    pub session: SessionAccessRequest,
+    /// Read or mutation-specific CSRF requirement.
+    pub protection: BrowserSessionProtection,
+}
+
 /// Non-disclosing rejection of a session-level administration request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionAccessDenial {
@@ -183,6 +206,52 @@ pub(super) fn evaluate(
         capability_digest: capability_digest(capability),
         ..capability
     }))
+}
+
+pub(super) fn evaluate_browser(
+    database: &PartitionDatabase,
+    request: BrowserSessionAccessRequest,
+) -> Result<SessionAccessDecision, RepositoryError> {
+    let decision = evaluate(database, request.session)?;
+    let SessionAccessDecision::Granted(capability) = decision else {
+        return Ok(decision);
+    };
+    if capability.session_id != request.expected_session_id {
+        return Ok(SessionAccessDecision::Denied(
+            SessionAccessDenial::Unavailable,
+        ));
+    }
+    let BrowserSessionProtection::Mutation { csrf_digest } = request.protection else {
+        return Ok(SessionAccessDecision::Granted(capability));
+    };
+    if csrf_digest == [0; 32] {
+        return Ok(SessionAccessDecision::Denied(
+            SessionAccessDenial::Unavailable,
+        ));
+    }
+    let stored: Vec<u8> = database.connection().query_row(
+        "SELECT csrf_digest FROM authentication_sessions WHERE session_id = ?1",
+        [capability.session_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    let stored: [u8; 32] = stored
+        .try_into()
+        .map_err(|_| RepositoryError::CorruptState)?;
+    if !constant_time_equal(stored, csrf_digest) {
+        return Ok(SessionAccessDecision::Denied(
+            SessionAccessDenial::Unavailable,
+        ));
+    }
+    Ok(SessionAccessDecision::Granted(capability))
+}
+
+fn constant_time_equal(left: [u8; 32], right: [u8; 32]) -> bool {
+    left.into_iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn capability_digest(capability: SessionAccessCapability) -> [u8; 32] {

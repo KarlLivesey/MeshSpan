@@ -170,6 +170,30 @@ export type CreateSessionResponse = {
 };
 
 /**
+ * CurrentSessionResponse
+ *
+ * Current caller identity and coarse panel-navigation authority.
+ */
+export type CurrentSessionResponse = {
+  /**
+   * Whether the current role projection permits entering administration.
+   */
+  administration_available: boolean;
+  /**
+   * Exclusive authoritative session expiry as epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Current authenticated user principal.
+   */
+  principal_id: string;
+  /**
+   * Current committed session identity.
+   */
+  session_id: string;
+};
+
+/**
  * HealthResponse
  *
  * Bounded anonymous health response.
@@ -402,6 +426,41 @@ export type CreateSessionResponses = {
 
 export type CreateSessionResponse2 =
   CreateSessionResponses[keyof CreateSessionResponses];
+
+export type GetCurrentSessionData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/sessions/current";
+};
+
+export type GetCurrentSessionErrors = {
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetCurrentSessionError =
+  GetCurrentSessionErrors[keyof GetCurrentSessionErrors];
+
+export type GetCurrentSessionResponses = {
+  /**
+   * Current browser session
+   */
+  200: CurrentSessionResponse;
+};
+
+export type GetCurrentSessionResponse =
+  GetCurrentSessionResponses[keyof GetCurrentSessionResponses];
 
 export type CreateMeshSetupData = {
   /**

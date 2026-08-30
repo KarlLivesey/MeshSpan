@@ -154,7 +154,8 @@ pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference,
 pub use retention::VersionRetentionPolicy;
 pub use session::ApiKeySessionReplay;
 pub use session_access::{
-    SessionAccessCapability, SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
+    BrowserSessionAccessRequest, BrowserSessionProtection, SessionAccessCapability,
+    SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
 };
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use snapshot_schedule::{SnapshotSchedule, SnapshotScheduleCursor};
@@ -542,6 +543,18 @@ impl AuthoritativeRepository {
         request: SessionAccessRequest,
     ) -> Result<SessionAccessDecision, RepositoryError> {
         session_access::evaluate(&self.database, request)
+    }
+
+    /// Authenticates one browser session and enforces session-bound CSRF for mutations.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if persisted session, CSRF, gateway, identity or role evidence is malformed.
+    pub fn evaluate_browser_session_access(
+        &self,
+        request: BrowserSessionAccessRequest,
+    ) -> Result<SessionAccessDecision, RepositoryError> {
+        session_access::evaluate_browser(&self.database, request)
     }
 
     /// Evaluates recipient-local user/group authority for one current swarm-targeted grant.

@@ -6,6 +6,8 @@ mod api_http;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
+mod browser_authentication;
+mod browser_session;
 mod claim_file;
 mod claim_service;
 #[cfg(test)]
@@ -16,11 +18,21 @@ mod create_mesh_setup_tests;
 mod create_session;
 #[cfg(test)]
 mod create_session_tests;
+mod current_session_api;
+#[cfg(test)]
+mod current_session_api_tests;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
+pub use browser_authentication::{
+    BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
+    BrowserSessionAuthorityError, GatewaySessionIdentity,
+};
+pub use browser_session::{
+    BrowserRequestProtection, BrowserSessionError, BrowserSessionEvidence, parse_browser_session,
+};
 pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,
@@ -33,6 +45,10 @@ pub use create_mesh_setup::{
 pub use create_session::{
     CreateSessionError, CreateSessionResult, CreateSessionService, SessionAuthority,
     SessionAuthorityError, SessionCommit,
+};
+pub use current_session_api::{
+    CurrentSessionApiError, CurrentSessionController, CurrentSessionError,
+    current_session_api_router,
 };
 pub use setup_api::{
     CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,

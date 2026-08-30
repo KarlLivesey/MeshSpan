@@ -7,6 +7,7 @@ import type {
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
+  CurrentSessionResponse,
   HealthResponse,
   SetupStatusResponse,
 } from "./types.gen";
@@ -16,6 +17,7 @@ import {
   zCreateMeshSetupResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
+  zGetCurrentSessionResponse,
   zGetHealthResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
@@ -42,6 +44,7 @@ export interface MeshSpanFetchClient {
   createSession(
     request: CreateSessionRequestWritable,
   ): Promise<CreateSessionResult>;
+  getCurrentSession(): Promise<CurrentSessionResponse>;
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
@@ -113,6 +116,14 @@ export function createMeshSpanFetchClient(
         "/health",
         { method: "GET" },
         zGetHealthResponse,
+      );
+    },
+    async getCurrentSession(): Promise<CurrentSessionResponse> {
+      return requestJson(
+        context,
+        "/sessions/current",
+        { method: "GET" },
+        zGetCurrentSessionResponse,
       );
     },
     async getOpenApi(): Promise<Record<string, unknown>> {
