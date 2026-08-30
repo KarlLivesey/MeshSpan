@@ -393,7 +393,7 @@ pub(super) fn load_content_layout_page(
     } else {
         None
     };
-    ContentLayoutTransferPage::new(chunks, next_index).map_err(|error| match error {
+    ContentLayoutTransferPage::from_untrusted(chunks, next_index).map_err(|error| match error {
         crate::ContentLayoutTransferError::BoundsExceeded => ContentCatalogError::InvalidInput,
         crate::ContentLayoutTransferError::Invalid => ContentCatalogError::Corrupt,
     })

@@ -363,7 +363,7 @@ fn imported_layout_rejects_page_and_header_substitution() -> Result<(), Box<dyn 
     receiver.begin_layout_import(receiver_request, header)?;
     let mut substituted = page.chunks().to_vec();
     substituted[1].ciphertext_digest[0] ^= 1;
-    let substituted = ContentLayoutTransferPage::new(substituted, None)?;
+    let substituted = ContentLayoutTransferPage::from_untrusted(substituted, None)?;
     receiver.append_layout_import_page(receiver_request, header, &substituted)?;
     assert!(matches!(
         receiver.seal_layout_import(receiver_request, header),
@@ -381,7 +381,7 @@ fn imported_layout_rejects_page_and_header_substitution() -> Result<(), Box<dyn 
         ContentLayoutChunk::from(chunks[0]),
         ContentLayoutChunk::from(chunks[2]),
     ];
-    assert!(ContentLayoutTransferPage::new(discontinuous, None).is_err());
+    assert!(ContentLayoutTransferPage::from_untrusted(discontinuous, None).is_err());
     Ok(())
 }
 

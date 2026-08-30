@@ -11,6 +11,7 @@ mod commit_service;
 mod content_catalog;
 mod content_crypto;
 mod content_key;
+mod content_key_transit;
 mod content_publisher;
 mod content_reader;
 mod content_transfer;
@@ -62,6 +63,9 @@ pub use content_crypto::{
 pub use content_key::{
     ContentKeyEnvelopeCipher, ContentKeyError, VolumeKeyEncryptionKey, WrappedContentKey,
     rewrap_content_key,
+};
+pub use content_key_transit::{
+    ContentKeyTransitCipher, ContentKeyTransitError, TransitWrappedContentKey,
 };
 pub use content_publisher::{
     DurableContentSink, UnprotectedContentAccess, UnprotectedContentPublisher,

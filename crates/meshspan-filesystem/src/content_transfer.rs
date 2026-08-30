@@ -134,7 +134,12 @@ pub struct ContentLayoutTransferPage {
 }
 
 impl ContentLayoutTransferPage {
-    pub(crate) fn new(
+    /// Revalidates one untrusted bounded page before it enters durable recovery state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty, excessive, discontinuous, malformed or contradictory page fields.
+    pub fn from_untrusted(
         chunks: Vec<ContentLayoutChunk>,
         next_index: Option<u64>,
     ) -> Result<Self, ContentLayoutTransferError> {
