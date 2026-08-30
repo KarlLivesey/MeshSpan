@@ -241,6 +241,41 @@ impl LocalDatabase {
     pub fn active_local_claim(&self) -> Result<Option<LocalClaimRecord>, LocalClaimError> {
         load_active(self.connection())
     }
+
+    /// Loads and independently validates one claim by its public identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt persisted evidence or a store failure.
+    pub fn local_claim_record(
+        &self,
+        claim_id: ClaimId,
+    ) -> Result<Option<LocalClaimRecord>, LocalClaimError> {
+        load_by_id(self.connection(), claim_id)
+    }
+
+    /// Loads the most recently revised claim lifecycle record, if one exists.
+    ///
+    /// This is used only to distinguish a never-issued claim from terminal local
+    /// history when no active claim exists.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt persisted evidence or a store failure.
+    pub fn latest_local_claim(&self) -> Result<Option<LocalClaimRecord>, LocalClaimError> {
+        let record = self
+            .connection()
+            .query_row(
+                "SELECT claim_id, node_public_key_fingerprint, secret_digest, state,
+                        created_at, consumed_at, rotated_at, revision
+                 FROM local_claim_bundles
+                 ORDER BY revision DESC, claim_id DESC LIMIT 1",
+                [],
+                read_record,
+            )
+            .optional()?;
+        record.map(validate_record).transpose()
+    }
 }
 
 fn validate_new_claim(claim: NewLocalClaim) -> Result<(), LocalClaimError> {
