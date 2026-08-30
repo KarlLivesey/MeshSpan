@@ -6,8 +6,9 @@ use std::fs;
 
 use meshspan_contracts::{
     BoundedBytes, ContractError, ImplementationDescriptor, InventoryPage, PutShardRequest,
-    RemovalPermit, RequestContext, ReserveStorageRequest, ScrubPage, ShardReadPermit, ShardReceipt,
-    StoragePermitMacKey, StorageProvider, StorageReservation, TombstoneReceipt, read_permit_mac,
+    RemovalAuthorityFence, RemovalPermit, RequestContext, ReserveStorageRequest, ScrubPage,
+    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
+    TombstoneReceipt, read_permit_mac,
 };
 use meshspan_domain::{
     BranchId, ContentManifestId, EntropyError, FileVersionId, MeshId, NamespaceCommitId, ObjectId,
@@ -330,6 +331,10 @@ impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
         observed_at: UnixMicros,
     ) -> Result<BoundedBytes, ContractError> {
         self.inner.get_exact(context, permit, observed_at)
+    }
+
+    fn removal_authority_fence(&self) -> RemovalAuthorityFence {
+        self.inner.removal_authority_fence()
     }
 
     fn tombstone(

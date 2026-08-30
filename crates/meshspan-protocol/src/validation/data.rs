@@ -59,8 +59,15 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             )?;
             validate_target(&value.target_id, value.target_generation)?;
             validate_shard(value.shard.as_ref())?;
-            validate_payload(value.removal_permit.as_ref(), limits)?;
-            optional_digest(&value.federation_capability_digest)
+            validate_removal_authority(
+                value.removal_permit.as_ref(),
+                &value.federation_capability,
+                limits,
+            )?;
+            correlated_federation_digest(
+                &value.federation_capability,
+                &value.federation_capability_digest,
+            )
         }
         Message::DeleteShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
@@ -76,7 +83,11 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             validate_target(&value.target_id, value.target_generation)?;
             validate_shard(value.shard.as_ref())?;
             validate_payload(value.tombstone_receipt.as_ref(), limits)?;
-            optional_digest(&value.federation_capability_digest)
+            optional_bytes(&value.federation_capability, limits)?;
+            correlated_federation_digest(
+                &value.federation_capability,
+                &value.federation_capability_digest,
+            )
         }
         Message::ReclaimShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
@@ -170,5 +181,36 @@ fn optional_digest(value: &[u8]) -> Result<(), WireContractError> {
         Ok(())
     } else {
         valid_digest(value)
+    }
+}
+
+fn validate_removal_authority(
+    local_permit: Option<&VersionedPayload>,
+    federation_permit: &[u8],
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    match (local_permit, federation_permit.is_empty()) {
+        (Some(permit), true) => validate_payload(Some(permit), limits),
+        (None, false) => valid_nonempty_bytes(federation_permit, limits.maximum_control_bytes()),
+        _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn optional_bytes(value: &[u8], limits: WireLimits) -> Result<(), WireContractError> {
+    if value.is_empty() {
+        Ok(())
+    } else {
+        valid_nonempty_bytes(value, limits.maximum_control_bytes())
+    }
+}
+
+fn correlated_federation_digest(
+    capability: &[u8],
+    capability_digest: &[u8],
+) -> Result<(), WireContractError> {
+    if capability.is_empty() == capability_digest.is_empty() {
+        optional_digest(capability_digest)
+    } else {
+        Err(WireContractError::InvalidMessage)
     }
 }

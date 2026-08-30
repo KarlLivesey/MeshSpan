@@ -4,7 +4,7 @@
 
 use meshspan_contracts::ShardIdentity;
 use meshspan_domain::{
-    FederationGrantId, FederationStorageAction, FederationStorageAllocationId, OperationId,
+    FederationGrantId, FederationStorageAction, FederationStorageAllocationId, MeshId, OperationId,
     TargetId, UnixMicros,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction};
@@ -16,6 +16,8 @@ use super::{
 };
 
 type ReservationRow = (
+    Vec<u8>,
+    Vec<u8>,
     Vec<u8>,
     Vec<u8>,
     Vec<u8>,
@@ -43,10 +45,11 @@ pub(super) fn load_reservation(
 ) -> Result<Option<FederationStorageWriteReservation>, FederationStorageQuotaError> {
     let row = connection
         .query_row(
-            "SELECT allocation_id, request_digest, capability_nonce, manifest_digest,
-                    stripe_index, shard_index, shard_generation, action, maximum_bytes,
-                    permit_digest, expires_at, state, affected_bytes, charged_bytes,
-                    content_digest, result_digest, absence_evidence_digest, issued_at, completed_at
+            "SELECT allocation_id, remote_mesh_id, scope_digest, request_digest,
+                    capability_nonce, manifest_digest, stripe_index, shard_index,
+                    shard_generation, action, maximum_bytes, permit_digest, expires_at, state,
+                    affected_bytes, charged_bytes, content_digest, result_digest,
+                    absence_evidence_digest, issued_at, completed_at
              FROM local_federation_storage_reservations WHERE operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
@@ -70,6 +73,8 @@ pub(super) fn load_reservation(
                     row.get(16)?,
                     row.get(17)?,
                     row.get(18)?,
+                    row.get(19)?,
+                    row.get(20)?,
                 ))
             },
         )
@@ -82,7 +87,7 @@ fn decode_reservation(
     operation_id: OperationId,
     row: ReservationRow,
 ) -> Result<FederationStorageWriteReservation, FederationStorageQuotaError> {
-    let state = match row.11 {
+    let state = match row.13 {
         RESERVED => FederationStorageWriteState::Reserved,
         COMMITTED => FederationStorageWriteState::Committed,
         RELEASED => FederationStorageWriteState::Released,
@@ -92,31 +97,34 @@ fn decode_reservation(
         operation_id,
         allocation_id: FederationStorageAllocationId::from_bytes(exact(row.0)?)
             .map_err(|_| FederationStorageQuotaError::CorruptState)?,
-        request_digest: exact(row.1)?,
-        capability_nonce: exact(row.2)?,
+        remote_mesh_id: MeshId::from_bytes(exact(row.1)?)
+            .map_err(|_| FederationStorageQuotaError::CorruptState)?,
+        scope_digest: exact(row.2)?,
+        request_digest: exact(row.3)?,
+        capability_nonce: exact(row.4)?,
         shard: ShardIdentity {
-            manifest_digest: exact(row.3)?,
-            stripe_index: nonnegative(row.4)?,
-            shard_index: u16::try_from(row.5)
+            manifest_digest: exact(row.5)?,
+            stripe_index: nonnegative(row.6)?,
+            shard_index: u16::try_from(row.7)
                 .map_err(|_| FederationStorageQuotaError::CorruptState)?,
-            generation: u32::try_from(row.6)
+            generation: u32::try_from(row.8)
                 .map_err(|_| FederationStorageQuotaError::CorruptState)?,
         },
         action: FederationStorageAction::from_code(
-            u8::try_from(row.7).map_err(|_| FederationStorageQuotaError::CorruptState)?,
+            u8::try_from(row.9).map_err(|_| FederationStorageQuotaError::CorruptState)?,
         )
         .map_err(|_| FederationStorageQuotaError::CorruptState)?,
-        maximum_bytes: positive(row.8)?,
-        permit_digest: exact(row.9)?,
-        expires_at: UnixMicros::new(row.10),
+        maximum_bytes: positive(row.10)?,
+        permit_digest: exact(row.11)?,
+        expires_at: UnixMicros::new(row.12),
         state,
-        affected_bytes: row.12.map(positive).transpose()?,
-        charged_bytes: row.13.map(nonnegative).transpose()?,
-        content_digest: row.14.map(exact).transpose()?,
-        result_digest: row.15.map(exact).transpose()?,
-        absence_evidence_digest: row.16.map(exact).transpose()?,
-        issued_at: UnixMicros::new(row.17),
-        completed_at: row.18.map(UnixMicros::new),
+        affected_bytes: row.14.map(positive).transpose()?,
+        charged_bytes: row.15.map(nonnegative).transpose()?,
+        content_digest: row.16.map(exact).transpose()?,
+        result_digest: row.17.map(exact).transpose()?,
+        absence_evidence_digest: row.18.map(exact).transpose()?,
+        issued_at: UnixMicros::new(row.19),
+        completed_at: row.20.map(UnixMicros::new),
     };
     validate_stored_reservation(&record)?;
     Ok(record)
@@ -130,6 +138,7 @@ fn validate_stored_reservation(
         && record.issued_at.get() > 0
         && record.expires_at > record.issued_at
         && record.maximum_bytes > 0
+        && valid_digest(record.scope_digest)
         && valid_digest(record.request_digest)
         && valid_digest(record.capability_nonce)
         && valid_digest(record.permit_digest);
@@ -211,6 +220,7 @@ pub(super) fn load_usage(
 
 pub(super) struct UsageIdentity {
     pub(super) grant_id: FederationGrantId,
+    pub(super) remote_mesh_id: meshspan_domain::MeshId,
     pub(super) target_id: TargetId,
     pub(super) target_generation: u64,
 }
@@ -220,23 +230,26 @@ pub(super) fn load_usage_identity(
     allocation_id: FederationStorageAllocationId,
 ) -> Result<UsageIdentity, FederationStorageQuotaError> {
     let row = transaction.query_row(
-        "SELECT grant_id, target_id, target_generation
+        "SELECT grant_id, remote_mesh_id, target_id, target_generation
          FROM local_federation_storage_usage WHERE allocation_id = ?1",
         [allocation_id.as_bytes().as_slice()],
         |row| {
             Ok((
                 row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, i64>(2)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
             ))
         },
     )?;
     Ok(UsageIdentity {
         grant_id: FederationGrantId::from_bytes(exact(row.0)?)
             .map_err(|_| FederationStorageQuotaError::CorruptState)?,
-        target_id: TargetId::from_bytes(exact(row.1)?)
+        remote_mesh_id: meshspan_domain::MeshId::from_bytes(exact(row.1)?)
             .map_err(|_| FederationStorageQuotaError::CorruptState)?,
-        target_generation: positive(row.2)?,
+        target_id: TargetId::from_bytes(exact(row.2)?)
+            .map_err(|_| FederationStorageQuotaError::CorruptState)?,
+        target_generation: positive(row.3)?,
     })
 }
 

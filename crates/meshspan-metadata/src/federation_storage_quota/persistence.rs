@@ -18,6 +18,8 @@ pub(super) fn validate_reservation_replay(
     request: FederationStorageWriteReservationRequest,
 ) -> Result<(), FederationStorageQuotaError> {
     let matches = stored.allocation_id == authority.allocation().allocation_id()
+        && stored.remote_mesh_id == request.remote_mesh_id
+        && stored.scope_digest == request.scope_digest
         && stored.request_digest == request.request_digest
         && stored.capability_nonce == request.capability_nonce
         && stored.shard == request.shard
@@ -141,13 +143,15 @@ pub(super) fn insert_reservation(
 ) -> Result<(), FederationStorageQuotaError> {
     transaction.execute(
         "INSERT INTO local_federation_storage_reservations(
-            operation_id, allocation_id, request_digest, capability_nonce, manifest_digest,
-            stripe_index, shard_index, shard_generation, action, maximum_bytes, permit_digest,
-            expires_at, state, issued_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13)",
+            operation_id, allocation_id, remote_mesh_id, scope_digest, request_digest,
+            capability_nonce, manifest_digest, stripe_index, shard_index, shard_generation,
+            action, maximum_bytes, permit_digest, expires_at, state, issued_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1, ?15)",
         params![
             request.operation_id.as_bytes().as_slice(),
             authority.allocation().allocation_id().as_bytes().as_slice(),
+            request.remote_mesh_id.as_bytes().as_slice(),
+            request.scope_digest.as_slice(),
             request.request_digest.as_slice(),
             request.capability_nonce.as_slice(),
             request.shard.manifest_digest.as_slice(),
@@ -170,14 +174,29 @@ pub(super) fn persist_unique_shard(
     completion: FederationStorageWriteCompletion,
 ) -> Result<u64, FederationStorageQuotaError> {
     let usage = load_usage_identity(transaction, stored.allocation_id)?;
+    if usage.remote_mesh_id != stored.remote_mesh_id {
+        return Err(FederationStorageQuotaError::CorruptState);
+    }
     let existing = transaction
         .query_row(
             "SELECT length, content_digest FROM local_federation_storage_shards
-             WHERE grant_id = ?1 AND target_id = ?2 AND target_generation = ?3
-               AND manifest_digest = ?4 AND stripe_index = ?5 AND shard_index = ?6
-               AND shard_generation = ?7",
+             WHERE remote_mesh_id = ?1 AND scope_digest = ?2 AND target_id = ?3
+               AND target_generation = ?4 AND manifest_digest = ?5 AND stripe_index = ?6
+               AND shard_index = ?7 AND shard_generation = ?8
+               AND NOT EXISTS(
+                   SELECT 1 FROM local_federation_storage_lifecycle AS lifecycle
+                   WHERE lifecycle.remote_mesh_id = local_federation_storage_shards.remote_mesh_id
+                     AND lifecycle.scope_digest = local_federation_storage_shards.scope_digest
+                     AND lifecycle.target_id = local_federation_storage_shards.target_id
+                     AND lifecycle.target_generation = local_federation_storage_shards.target_generation
+                     AND lifecycle.manifest_digest = local_federation_storage_shards.manifest_digest
+                     AND lifecycle.stripe_index = local_federation_storage_shards.stripe_index
+                     AND lifecycle.shard_index = local_federation_storage_shards.shard_index
+                     AND lifecycle.shard_generation = local_federation_storage_shards.shard_generation
+               )",
             params![
-                usage.grant_id.as_bytes().as_slice(),
+                usage.remote_mesh_id.as_bytes().as_slice(),
+                stored.scope_digest.as_slice(),
                 usage.target_id.as_bytes().as_slice(),
                 to_i64(usage.target_generation)?,
                 stored.shard.manifest_digest.as_slice(),
@@ -198,12 +217,14 @@ pub(super) fn persist_unique_shard(
     }
     transaction.execute(
         "INSERT INTO local_federation_storage_shards(
-            grant_id, target_id, target_generation, manifest_digest, stripe_index,
+            grant_id, remote_mesh_id, scope_digest, target_id, target_generation, manifest_digest, stripe_index,
             shard_index, shard_generation, allocation_id, length, content_digest,
             committed_operation_id, committed_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             usage.grant_id.as_bytes().as_slice(),
+            usage.remote_mesh_id.as_bytes().as_slice(),
+            stored.scope_digest.as_slice(),
             usage.target_id.as_bytes().as_slice(),
             to_i64(usage.target_generation)?,
             stored.shard.manifest_digest.as_slice(),

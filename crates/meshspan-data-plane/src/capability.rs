@@ -254,6 +254,23 @@ pub(crate) fn encode_reclamation_receipt(receipt: ReclamationReceipt) -> Vec<u8>
 pub(crate) fn decode_reclamation_receipt(
     bytes: &[u8],
 ) -> Result<ReclamationReceipt, CapabilityCodecError> {
+    let receipt = decode_reclamation_evidence(bytes)?;
+    if receipt.reclamation_digest
+        == reclamation_receipt_digest(
+            receipt.tombstone,
+            receipt.bytes_unlinked_at,
+            receipt.reclaimed_bytes,
+        )
+    {
+        Ok(receipt)
+    } else {
+        Err(CapabilityCodecError::Invalid)
+    }
+}
+
+pub(crate) fn decode_reclamation_evidence(
+    bytes: &[u8],
+) -> Result<ReclamationReceipt, CapabilityCodecError> {
     if bytes.len() != RECLAMATION_RECEIPT_BYTES {
         return Err(CapabilityCodecError::Invalid);
     }
@@ -268,12 +285,7 @@ pub(crate) fn decode_reclamation_receipt(
     reader.finish()?;
     if receipt.bytes_unlinked_at.get() <= 0
         || receipt.reclaimed_bytes == 0
-        || receipt.reclamation_digest
-            != reclamation_receipt_digest(
-                tombstone,
-                receipt.bytes_unlinked_at,
-                receipt.reclaimed_bytes,
-            )
+        || receipt.reclamation_digest == [0; 32]
     {
         Err(CapabilityCodecError::Invalid)
     } else {
@@ -445,8 +457,8 @@ mod tests {
     use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 
     use super::{
-        decode_read_permit, decode_reclamation_receipt, decode_removal_permit,
-        decode_tombstone_receipt, decode_write_permit, encode_read_permit,
+        decode_read_permit, decode_reclamation_evidence, decode_reclamation_receipt,
+        decode_removal_permit, decode_tombstone_receipt, decode_write_permit, encode_read_permit,
         encode_reclamation_receipt, encode_removal_permit, encode_tombstone_receipt,
         encode_write_permit,
     };
@@ -526,6 +538,9 @@ mod tests {
         let last = forged.len() - 1;
         forged[last] ^= 1;
         assert!(decode_reclamation_receipt(&forged).is_err());
+        let opaque = decode_reclamation_evidence(&forged)?;
+        assert_eq!(opaque.tombstone, reclamation.tombstone);
+        assert_ne!(opaque.reclamation_digest, reclamation.reclamation_digest);
         Ok(())
     }
 

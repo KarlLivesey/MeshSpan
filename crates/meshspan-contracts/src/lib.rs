@@ -44,6 +44,7 @@ pub use data::{
 pub use federation_storage::{
     FederatedShardPermit, FederatedStoragePermitMacKey, federated_provider_shard_identity,
     federated_shard_permit_mac, federated_shard_read_result_digest,
+    federated_shard_reclamation_result_digest, federated_shard_retirement_result_digest,
     federated_shard_write_result_digest, verify_federated_shard_permit_mac,
 };
 pub use filesystem::{
@@ -55,9 +56,9 @@ pub use security::{
     CertificateChallengeKind, CertificateChallengeReceipt, CertificateChallengeRequest,
 };
 pub use storage::{
-    InventoryEntry, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalPermit,
-    ReservationClass, ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage,
-    ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit, StoragePermitMacKey,
+    InventoryEntry, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalAuthorityFence,
+    RemovalPermit, ReservationClass, ReserveStorageRequest, ScrubObservation, ScrubOutcome,
+    ScrubPage, ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit, StoragePermitMacKey,
     StorageProvider, StorageReservation, TombstoneReceipt, read_permit_mac,
     reclamation_receipt_digest, removal_permit_mac, tombstone_receipt_digest,
     verify_read_permit_mac, verify_removal_permit_mac, verify_write_permit_mac, write_permit_mac,

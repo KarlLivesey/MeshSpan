@@ -137,25 +137,32 @@ fn record(
     database: &mut LocalDatabase,
     presentation: &FederationStorageCapabilityPresentation,
 ) -> Result<FederationStorageCapabilityDisposition, FederationStorageCapabilityLedgerError> {
-    validate(presentation)?;
     let transaction = database
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(stored) = load(&transaction, presentation.capability_digest)? {
+    let result = record_in_transaction(&transaction, presentation)?;
+    transaction.commit()?;
+    Ok(result)
+}
+
+pub(crate) fn record_in_transaction(
+    transaction: &Transaction<'_>,
+    presentation: &FederationStorageCapabilityPresentation,
+) -> Result<FederationStorageCapabilityDisposition, FederationStorageCapabilityLedgerError> {
+    validate(presentation)?;
+    if let Some(stored) = load(transaction, presentation.capability_digest)? {
         if stored == *presentation {
-            transaction.commit()?;
             return Ok(FederationStorageCapabilityDisposition::Replayed);
         }
         return Err(FederationStorageCapabilityLedgerError::Conflict);
     }
-    reject_nonce_substitution(&transaction, presentation)?;
-    insert(&transaction, presentation)?;
-    let stored = load(&transaction, presentation.capability_digest)?
+    reject_nonce_substitution(transaction, presentation)?;
+    insert(transaction, presentation)?;
+    let stored = load(transaction, presentation.capability_digest)?
         .ok_or(FederationStorageCapabilityLedgerError::CorruptState)?;
     if stored != *presentation {
         return Err(FederationStorageCapabilityLedgerError::CorruptState);
     }
-    transaction.commit()?;
     Ok(FederationStorageCapabilityDisposition::Applied)
 }
 

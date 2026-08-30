@@ -11,8 +11,10 @@ mod federation_quarantine_command;
 mod federation_remote_authority;
 #[cfg(test)]
 mod federation_schema_tests;
+mod federation_storage_admission;
 mod federation_storage_capability_ledger;
 mod federation_storage_command;
+mod federation_storage_lifecycle;
 mod federation_storage_quota;
 mod federation_succession_command;
 mod migration;
@@ -61,12 +63,18 @@ pub use federation_remote_authority::{
     FederationRemoteAuthorityCacheDisposition, FederationRemoteAuthorityCacheError,
     FederationRemoteAuthoritySnapshot,
 };
+pub use federation_storage_admission::FederationStorageAdmissionError;
 pub use federation_storage_capability_ledger::{
     FederationStorageCapabilityDisposition, FederationStorageCapabilityLedgerError,
     FederationStorageCapabilityPresentation,
 };
 pub use federation_storage_command::{
     IssueFederationStorageAllocation, RevokeFederationStorageAllocation,
+};
+pub use federation_storage_lifecycle::{
+    FederationStorageLifecycle, FederationStorageLifecycleDisposition,
+    FederationStorageLifecycleError, FederationStorageLifecycleState,
+    FederationStorageReclamationCompletion, FederationStorageRetirementCompletion,
 };
 pub use federation_storage_quota::{
     FederationStorageQuotaDisposition, FederationStorageQuotaError, FederationStorageUsage,

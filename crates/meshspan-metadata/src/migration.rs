@@ -11,7 +11,7 @@ use thiserror::Error;
 const MAXIMUM_MIGRATIONS: usize = 256;
 
 pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 40;
-pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 4;
+pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 5;
 
 const PARTITION_MIGRATIONS: [Migration; 40] = [
     Migration {
@@ -176,7 +176,7 @@ const PARTITION_MIGRATIONS: [Migration; 40] = [
     },
 ];
 
-const LOCAL_MIGRATIONS: [Migration; 4] = [
+const LOCAL_MIGRATIONS: [Migration; 5] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/local/001_initial.sql"),
@@ -190,8 +190,12 @@ const LOCAL_MIGRATIONS: [Migration; 4] = [
         sql: include_str!("../schema/local/003_federation_storage_quota.sql"),
     },
     Migration {
-        version: LOCAL_SCHEMA_VERSION,
+        version: 4,
         sql: include_str!("../schema/local/004_federation_storage_capabilities.sql"),
+    },
+    Migration {
+        version: LOCAL_SCHEMA_VERSION,
+        sql: include_str!("../schema/local/005_federation_storage_lifecycle.sql"),
     },
 ];
 
@@ -251,6 +255,18 @@ pub(crate) fn migrate_partition_through(
     applied_at: i64,
 ) -> Result<(), MetadataStoreError> {
     let migrations = PARTITION_MIGRATIONS
+        .get(..version)
+        .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
+    apply_migrations(connection, migrations, applied_at)
+}
+
+#[cfg(test)]
+pub(crate) fn migrate_local_through(
+    connection: &mut Connection,
+    version: usize,
+    applied_at: i64,
+) -> Result<(), MetadataStoreError> {
+    let migrations = LOCAL_MIGRATIONS
         .get(..version)
         .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
     apply_migrations(connection, migrations, applied_at)
@@ -591,4 +607,9 @@ pub(crate) fn local_federation_storage_quota_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn local_federation_storage_capability_migration_digest() -> [u8; 32] {
     migration_digest(LOCAL_MIGRATIONS[3].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn local_federation_storage_lifecycle_migration_digest() -> [u8; 32] {
+    migration_digest(LOCAL_MIGRATIONS[4].sql)
 }

@@ -196,6 +196,15 @@ pub struct RemovalPermit {
     pub permit_digest: [u8; 32],
 }
 
+/// Provider-local fence values required when translating an authorised cleanup decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemovalAuthorityFence {
+    /// Current provider-local cleanup authority epoch.
+    pub authority_epoch: u64,
+    /// Minimum storage catalogue revision already applied by the provider.
+    pub catalogue_revision: Revision,
+}
+
 /// Calculates the canonical keyed MAC for one exact read permit.
 ///
 /// The existing `permit_digest` field is excluded and may contain any value; callers replace it
@@ -454,6 +463,9 @@ pub trait StorageProvider {
         permit: ShardReadPermit,
         observed_at: UnixMicros,
     ) -> Result<BoundedBytes, ContractError>;
+
+    /// Returns the provider-local fence required by a freshly translated removal permit.
+    fn removal_authority_fence(&self) -> RemovalAuthorityFence;
 
     /// Records an irreversible tombstone before physical unlink is permitted.
     ///

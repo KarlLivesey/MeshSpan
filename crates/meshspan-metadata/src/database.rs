@@ -242,8 +242,10 @@ mod tests {
     use crate::migration::{
         local_federation_authority_cache_migration_digest,
         local_federation_storage_capability_migration_digest,
-        local_federation_storage_quota_migration_digest, local_migration_digest, migrate_partition,
-        migrate_partition_through, partition_access_administration_migration_digest,
+        local_federation_storage_lifecycle_migration_digest,
+        local_federation_storage_quota_migration_digest, local_migration_digest, migrate_local,
+        migrate_local_through, migrate_partition, migrate_partition_through,
+        partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
@@ -420,13 +422,172 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 4);
+        assert_eq!(database.schema_version(), 5);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
             LocalDatabase::open(&file_path, second, UnixMicros::new(11)),
             Err(MetadataStoreError::IdentityMismatch)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_migration_preserves_exact_federated_scope_and_tenant()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("local-v4.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_local_through(&mut connection, 4, 10)?;
+        insert_v4_usage(&connection)?;
+        insert_v4_reservation(&connection)?;
+        insert_v4_capability(&connection)?;
+        insert_v4_shard(&connection)?;
+
+        migrate_local(&mut connection, 20)?;
+        let reservation: (Vec<u8>, Vec<u8>) = connection.query_row(
+            "SELECT remote_mesh_id, scope_digest FROM local_federation_storage_reservations
+             WHERE operation_id = ?1",
+            [[12_u8; 16].as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(reservation, (vec![2; 16], vec![13; 32]));
+        let shard: (Vec<u8>, Vec<u8>) = connection.query_row(
+            "SELECT remote_mesh_id, scope_digest FROM local_federation_storage_shards
+             WHERE committed_operation_id = ?1",
+            [[12_u8; 16].as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(shard, reservation);
+        let foreign_key_failures: i64 =
+            connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(foreign_key_failures, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_migration_rejects_unscoped_legacy_reservation_atomically()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("local-v4-unscoped.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_local_through(&mut connection, 4, 10)?;
+        insert_v4_usage(&connection)?;
+        insert_v4_reservation(&connection)?;
+
+        assert!(matches!(
+            migrate_local(&mut connection, 20),
+            Err(MetadataStoreError::Sqlite(_))
+        ));
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            4
+        );
+        let reservation_count: i64 = connection.query_row(
+            "SELECT count(*) FROM local_federation_storage_reservations",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(reservation_count, 1);
+        Ok(())
+    }
+
+    fn insert_v4_usage(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            "INSERT INTO local_federation_storage_usage(
+                allocation_id, relationship_id, remote_mesh_id, grant_id, provider_node_id,
+                target_id, target_generation, maximum_bytes, committed_bytes, reserved_bytes,
+                valid_from, valid_until, relationship_authority_epoch, grant_revision,
+                allocation_revision, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 100, 10, 0, 10, 100, 1, 4, 5, 20)",
+            params![
+                [1_u8; 16].as_slice(),
+                [3_u8; 16].as_slice(),
+                [2_u8; 16].as_slice(),
+                [4_u8; 16].as_slice(),
+                [5_u8; 16].as_slice(),
+                [6_u8; 16].as_slice(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_v4_reservation(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            "INSERT INTO local_federation_storage_reservations(
+                operation_id, allocation_id, request_digest, capability_nonce, manifest_digest,
+                stripe_index, shard_index, shard_generation, action, maximum_bytes,
+                permit_digest, expires_at, state, affected_bytes, charged_bytes, content_digest,
+                result_digest, absence_evidence_digest, issued_at, completed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 1, 2, 1, 1, 10, ?6, 30, 2, 10, 10, ?7, ?8,
+                       NULL, 20, 21)",
+            params![
+                [12_u8; 16].as_slice(),
+                [1_u8; 16].as_slice(),
+                [14_u8; 32].as_slice(),
+                [15_u8; 32].as_slice(),
+                [16_u8; 32].as_slice(),
+                [17_u8; 32].as_slice(),
+                [18_u8; 32].as_slice(),
+                [19_u8; 32].as_slice(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_v4_capability(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            "INSERT INTO local_federation_storage_capabilities(
+                capability_digest, operation_id, permit_digest, relationship_id, remote_mesh_id,
+                provider_mesh_id, allocation_id, grant_id, provider_node_id, target_id,
+                target_generation, manifest_digest, stripe_index, shard_index, shard_generation,
+                action, maximum_bytes, relationship_authority_epoch, grant_revision,
+                allocation_revision, capability_nonce, scope_digest, request_digest, issued_at,
+                expires_at, protocol_major, protocol_minor, request_id, trace_id,
+                request_deadline, response_replay_nonce, recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, 1, 2, 1, 1, 10,
+                       1, 4, 5, ?12, ?13, ?14, 20, 30, 1, 0, ?15, ?16, 30, ?17, 20)",
+            params![
+                [20_u8; 32].as_slice(),
+                [12_u8; 16].as_slice(),
+                [17_u8; 32].as_slice(),
+                [3_u8; 16].as_slice(),
+                [2_u8; 16].as_slice(),
+                [21_u8; 16].as_slice(),
+                [1_u8; 16].as_slice(),
+                [4_u8; 16].as_slice(),
+                [5_u8; 16].as_slice(),
+                [6_u8; 16].as_slice(),
+                [16_u8; 32].as_slice(),
+                [15_u8; 32].as_slice(),
+                [13_u8; 32].as_slice(),
+                [14_u8; 32].as_slice(),
+                [22_u8; 16].as_slice(),
+                [23_u8; 16].as_slice(),
+                [24_u8; 32].as_slice(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_v4_shard(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            "INSERT INTO local_federation_storage_shards(
+                grant_id, target_id, target_generation, manifest_digest, stripe_index,
+                shard_index, shard_generation, allocation_id, length, content_digest,
+                committed_operation_id, committed_at
+             ) VALUES (?1, ?2, 1, ?3, 1, 2, 1, ?4, 10, ?5, ?6, 21)",
+            params![
+                [4_u8; 16].as_slice(),
+                [6_u8; 16].as_slice(),
+                [16_u8; 32].as_slice(),
+                [1_u8; 16].as_slice(),
+                [18_u8; 32].as_slice(),
+                [12_u8; 16].as_slice(),
+            ],
+        )?;
         Ok(())
     }
 
@@ -488,6 +649,14 @@ mod tests {
                 0x9c, 0xbc, 0x20, 0xdb, 0x9a, 0x24, 0xde, 0x48, 0x11, 0xec, 0x5f, 0x6e, 0xa1, 0x11,
                 0x35, 0x74, 0x82, 0x14, 0xd5, 0xb2, 0x72, 0x87, 0x0b, 0xe8, 0xf4, 0x13, 0x7f, 0xb1,
                 0xfa, 0x21, 0x0b, 0x0e,
+            ]
+        );
+        assert_eq!(
+            local_federation_storage_lifecycle_migration_digest(),
+            [
+                0xcc, 0x9f, 0x12, 0x3b, 0x42, 0x63, 0x9f, 0x56, 0xe8, 0xc8, 0x4c, 0x06, 0x8e, 0x81,
+                0x5d, 0xdf, 0xca, 0xfa, 0xa2, 0xc5, 0xa9, 0xfc, 0x8a, 0xc5, 0x50, 0x92, 0x38, 0x4f,
+                0xc7, 0x3a, 0x3f, 0x50,
             ]
         );
         assert_eq!(

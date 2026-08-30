@@ -3,22 +3,26 @@
 //! Federated-swarm authority adapter for the shared provider shard state machine.
 
 use meshspan_contracts::{
-    ContractError, FederatedShardPermit, FederatedStoragePermitMacKey, ReservationClass,
-    ShardReadPermit, ShardReceipt, StorageProvider, federated_provider_shard_identity,
-    federated_shard_read_result_digest, read_permit_mac, verify_federated_shard_permit_mac,
+    ContractError, FederatedShardPermit, FederatedStoragePermitMacKey, ReclamationReceipt,
+    RemovalPermit, ReservationClass, ShardReadPermit, ShardReceipt, StorageProvider,
+    TombstoneReceipt, federated_provider_shard_identity, federated_shard_read_result_digest,
+    read_permit_mac, removal_permit_mac, verify_federated_shard_permit_mac,
 };
 use meshspan_domain::{FederationStorageAction, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::data_control_envelope::Message;
-use meshspan_protocol::v1::{GetShardRequest, PutShardBegin};
+use meshspan_protocol::v1::{
+    DeleteShardRequest, GetShardRequest, PutShardBegin, ReclaimShardRequest,
+};
 use meshspan_transport::{
     AcceptedStream, AuthenticatedFederationPeer, StreamKind, receive_data_control,
 };
 
+use super::removal::{reject_delete, reject_reclaim, send_delete_result, send_reclaim_result};
 use super::{AuthorisedGet, PreparedPut, RemoteShardService, reject_get, reject_put};
 use crate::DataPlaneError;
 use crate::capability::decode_federated_shard_permit;
-use crate::wire::{request_context, shard};
+use crate::wire::{request_context, shard, tombstone_receipt};
 
 /// Exact durable result which must receive a provider-swarm signature before acknowledgement.
 #[derive(Clone, Copy)]
@@ -35,6 +39,58 @@ pub struct FederatedShardOutcome {
 pub struct FederatedWriteEvidence {
     completed_at: UnixMicros,
     result_digest: [u8; 32],
+}
+
+/// Exact durable logical retirement retained by provider-local accounting across retries.
+#[derive(Clone, Copy)]
+pub struct FederatedRetirementEvidence {
+    tombstone: TombstoneReceipt,
+    affected_bytes: u64,
+    completed_at: UnixMicros,
+}
+
+impl FederatedRetirementEvidence {
+    /// Constructs validated durable logical-retirement evidence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero affected bytes, non-positive completion time or an empty result digest.
+    pub fn new(
+        tombstone: TombstoneReceipt,
+        affected_bytes: u64,
+        completed_at: UnixMicros,
+    ) -> Result<Self, ContractError> {
+        if affected_bytes == 0 || completed_at.get() <= 0 || tombstone.tombstone_digest == [0; 32] {
+            Err(ContractError::Corrupt)
+        } else {
+            Ok(Self {
+                tombstone,
+                affected_bytes,
+                completed_at,
+            })
+        }
+    }
+}
+
+/// Exact physical reclamation retained with its atomic quota release across retries.
+#[derive(Clone, Copy)]
+pub struct FederatedReclamationEvidence {
+    receipt: ReclamationReceipt,
+}
+
+impl FederatedReclamationEvidence {
+    /// Constructs validated durable physical-reclamation evidence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero reclaimed bytes or an empty durable result digest.
+    pub fn new(receipt: ReclamationReceipt) -> Result<Self, ContractError> {
+        if receipt.reclaimed_bytes == 0 || receipt.reclamation_digest == [0; 32] {
+            Err(ContractError::Corrupt)
+        } else {
+            Ok(Self { receipt })
+        }
+    }
 }
 
 impl FederatedWriteEvidence {
@@ -112,6 +168,43 @@ pub trait FederatedShardAuthority {
         receipt: ShardReceipt,
         completed_at: UnixMicros,
     ) -> Result<FederatedWriteEvidence, ContractError>;
+
+    /// Records a provider tombstone before logical retirement success may cross federation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale, conflicting, unavailable or corrupt capability and lifecycle evidence.
+    fn commit_retirement(
+        &mut self,
+        permit: &FederatedShardPermit,
+        capability_digest: [u8; 32],
+        provider_tombstone: TombstoneReceipt,
+        completed_at: UnixMicros,
+    ) -> Result<FederatedRetirementEvidence, ContractError>;
+
+    /// Resolves an exact logical tombstone to provider-local unlink authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown, substituted, unavailable or corrupt lifecycle evidence.
+    fn provider_tombstone(
+        &self,
+        permit: &FederatedShardPermit,
+        logical_tombstone: TombstoneReceipt,
+    ) -> Result<TombstoneReceipt, ContractError>;
+
+    /// Atomically records physical unlink and releases exact provider-local quota.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale, conflicting, unavailable or corrupt reclamation and quota evidence.
+    fn commit_reclamation(
+        &mut self,
+        permit: &FederatedShardPermit,
+        capability_digest: [u8; 32],
+        logical_tombstone: TombstoneReceipt,
+        provider_reclamation: ReclamationReceipt,
+    ) -> Result<FederatedReclamationEvidence, ContractError>;
 }
 
 impl<Provider: StorageProvider> RemoteShardService<Provider> {
@@ -153,6 +246,34 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             }
             Message::GetShardRequest(request) => {
                 self.serve_federated_get(
+                    &mut stream,
+                    FederatedServeContext {
+                        peer,
+                        permit_key,
+                        authority,
+                        limits,
+                        observed_at,
+                    },
+                    request,
+                )
+                .await
+            }
+            Message::DeleteShardRequest(request) => {
+                self.serve_federated_retire(
+                    &mut stream,
+                    FederatedServeContext {
+                        peer,
+                        permit_key,
+                        authority,
+                        limits,
+                        observed_at,
+                    },
+                    request,
+                )
+                .await
+            }
+            Message::ReclaimShardRequest(request) => {
+                self.serve_federated_reclaim(
                     &mut stream,
                     FederatedServeContext {
                         peer,
@@ -319,6 +440,149 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         }))
     }
 
+    async fn serve_federated_retire<Authority: FederatedShardAuthority>(
+        &mut self,
+        stream: &mut AcceptedStream,
+        context: FederatedServeContext<'_, Authority>,
+        request: DeleteShardRequest,
+    ) -> Result<Option<FederatedShardOutcome>, DataPlaneError> {
+        let permit = match self.authorise_federated_lifecycle(
+            &context,
+            LifecycleWireRequest {
+                header: request.header.as_ref(),
+                target_id: &request.target_id,
+                target_generation: request.target_generation,
+                shard: request.shard.as_ref(),
+                capability: &request.federation_capability,
+                capability_digest: &request.federation_capability_digest,
+            },
+            FederationStorageAction::Retire,
+        ) {
+            Ok(permit) => permit,
+            Err(error) => {
+                reject_delete(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        let capability_digest = digest(&request.federation_capability_digest)?;
+        let provider_shard = federated_provider_shard_identity(
+            permit.remote_mesh_id,
+            permit.scope_digest,
+            permit.shard,
+        );
+        let local_fence = self.provider.removal_authority_fence();
+        let mut removal = RemovalPermit {
+            operation_id: permit.operation_id,
+            mesh_id: permit.provider_mesh_id,
+            target_id: permit.target_id,
+            shard: provider_shard,
+            target_generation: permit.target_generation,
+            authority_epoch: local_fence.authority_epoch,
+            catalogue_revision: local_fence.catalogue_revision,
+            expires_at: permit.expires_at,
+            permit_digest: [0; 32],
+        };
+        removal.permit_digest = removal_permit_mac(&self.write_key, removal);
+        let provider_tombstone = match self.provider.tombstone(removal, context.observed_at) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                reject_delete(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        let evidence = match context.authority.commit_retirement(
+            &permit,
+            capability_digest,
+            provider_tombstone,
+            context.observed_at,
+        ) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                reject_delete(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        send_delete_result(stream, context.limits, Ok(evidence.tombstone)).await?;
+        Ok(Some(FederatedShardOutcome {
+            permit,
+            capability_digest,
+            affected_bytes: evidence.affected_bytes,
+            result_digest: evidence.tombstone.tombstone_digest,
+            completed_at: evidence.completed_at,
+        }))
+    }
+
+    async fn serve_federated_reclaim<Authority: FederatedShardAuthority>(
+        &mut self,
+        stream: &mut AcceptedStream,
+        context: FederatedServeContext<'_, Authority>,
+        request: ReclaimShardRequest,
+    ) -> Result<Option<FederatedShardOutcome>, DataPlaneError> {
+        let permit = match self.authorise_federated_lifecycle(
+            &context,
+            LifecycleWireRequest {
+                header: request.header.as_ref(),
+                target_id: &request.target_id,
+                target_generation: request.target_generation,
+                shard: request.shard.as_ref(),
+                capability: &request.federation_capability,
+                capability_digest: &request.federation_capability_digest,
+            },
+            FederationStorageAction::Reclaim,
+        ) {
+            Ok(permit) => permit,
+            Err(error) => {
+                reject_reclaim(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        let Ok(logical_tombstone) = tombstone_receipt(request.tombstone_receipt.as_ref()) else {
+            reject_reclaim(stream, context.limits, ContractError::InvalidInput).await?;
+            return Ok(None);
+        };
+        let provider_tombstone = match context
+            .authority
+            .provider_tombstone(&permit, logical_tombstone)
+        {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                reject_reclaim(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        let provider_reclamation = match self
+            .provider
+            .unlink_tombstoned(provider_tombstone, context.observed_at)
+        {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                reject_reclaim(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        let capability_digest = digest(&request.federation_capability_digest)?;
+        let evidence = match context.authority.commit_reclamation(
+            &permit,
+            capability_digest,
+            logical_tombstone,
+            provider_reclamation,
+        ) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                reject_reclaim(stream, context.limits, error).await?;
+                return Ok(None);
+            }
+        };
+        send_reclaim_result(stream, context.limits, Ok(evidence.receipt)).await?;
+        Ok(Some(FederatedShardOutcome {
+            permit,
+            capability_digest,
+            affected_bytes: evidence.receipt.reclaimed_bytes,
+            result_digest: evidence.receipt.reclamation_digest,
+            completed_at: evidence.receipt.bytes_unlinked_at,
+        }))
+    }
+
     fn authorise_federated_put<Authority: FederatedShardAuthority>(
         &self,
         peer: AuthenticatedFederationPeer,
@@ -408,6 +672,46 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             Err(ContractError::Unauthorized)
         }
     }
+
+    fn authorise_federated_lifecycle<Authority: FederatedShardAuthority>(
+        &self,
+        context: &FederatedServeContext<'_, Authority>,
+        request: LifecycleWireRequest<'_>,
+        expected_action: FederationStorageAction,
+    ) -> Result<FederatedShardPermit, ContractError> {
+        let permit = decode_federated_shard_permit(request.capability)
+            .map_err(|_| ContractError::Unauthorized)?;
+        let header = request.header.ok_or(ContractError::InvalidInput)?;
+        let requested_shard = request
+            .shard
+            .ok_or(ContractError::InvalidInput)
+            .and_then(|value| shard(value).map_err(|_| ContractError::InvalidInput))?;
+        let capability_digest = digest(request.capability_digest)?;
+        let request_context = request_context(header, permit.allocation_revision)
+            .map_err(|_| ContractError::InvalidInput)?;
+        let valid = permit.action == expected_action
+            && common_authority(
+                self,
+                context.peer,
+                context.permit_key,
+                context.authority,
+                context.observed_at,
+                &permit,
+                capability_digest,
+            )
+            && request_context.operation_id == permit.operation_id
+            && request_context.deadline > context.observed_at
+            && request_context.deadline <= permit.expires_at
+            && header.mesh_id.as_slice() == permit.remote_mesh_id.as_bytes()
+            && request.target_id == self.target_id.as_bytes()
+            && request.target_generation == self.target_generation
+            && requested_shard == permit.shard;
+        if valid {
+            Ok(permit)
+        } else {
+            Err(ContractError::Unauthorized)
+        }
+    }
 }
 
 fn logical_receipt(
@@ -430,6 +734,16 @@ struct FederatedServeContext<'a, Authority> {
     authority: &'a mut Authority,
     limits: WireLimits,
     observed_at: UnixMicros,
+}
+
+#[derive(Clone, Copy)]
+struct LifecycleWireRequest<'a> {
+    header: Option<&'a meshspan_protocol::v1::RequestHeader>,
+    target_id: &'a [u8],
+    target_generation: u64,
+    shard: Option<&'a meshspan_protocol::v1::ShardIdentity>,
+    capability: &'a [u8],
+    capability_digest: &'a [u8],
 }
 
 fn common_authority<Provider: StorageProvider, Authority: FederatedShardAuthority>(

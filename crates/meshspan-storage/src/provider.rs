@@ -6,10 +6,10 @@ use std::path::Path;
 
 use meshspan_contracts::{
     BoundedBytes, BoundedItems, ContractError, ContractKind, ContractLimits, ContractVersion,
-    ImplementationDescriptor, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalPermit,
-    RequestContext, ReserveStorageRequest, ScrubObservation, ScrubOutcome, ScrubPage,
-    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
-    TombstoneReceipt, verify_read_permit_mac, verify_removal_permit_mac,
+    ImplementationDescriptor, InventoryPage, PutShardRequest, ReclamationReceipt,
+    RemovalAuthorityFence, RemovalPermit, RequestContext, ReserveStorageRequest, ScrubObservation,
+    ScrubOutcome, ScrubPage, ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider,
+    StorageReservation, TombstoneReceipt, verify_read_permit_mac, verify_removal_permit_mac,
 };
 use meshspan_domain::{MeshId, RandomSource, Revision, UnixMicros};
 use thiserror::Error;
@@ -118,6 +118,13 @@ impl StoragePermitVerifier {
             && permit.authority_epoch == self.current_removal_authority_epoch
             && permit.catalogue_revision >= self.minimum_catalogue_revision
             && verify_removal_permit_mac(&self.key, permit)
+    }
+
+    const fn removal_authority_fence(&self) -> RemovalAuthorityFence {
+        RemovalAuthorityFence {
+            authority_epoch: self.current_removal_authority_epoch,
+            catalogue_revision: self.minimum_catalogue_revision,
+        }
     }
 }
 
@@ -523,6 +530,10 @@ impl StorageProvider for FolderShardStore {
         observed_at: UnixMicros,
     ) -> Result<BoundedBytes, ContractError> {
         FolderShardStore::get_exact(self, context, permit, observed_at).map_err(contract_error)
+    }
+
+    fn removal_authority_fence(&self) -> RemovalAuthorityFence {
+        self.permits.removal_authority_fence()
     }
 
     fn tombstone(

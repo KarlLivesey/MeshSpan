@@ -13,9 +13,9 @@ use meshspan_protocol::v1::{
 
 use crate::DataPlaneError;
 use crate::capability::{
-    decode_reclamation_receipt, decode_removal_permit, decode_shard_receipt,
-    decode_tombstone_receipt, encode_reclamation_receipt, encode_removal_permit,
-    encode_shard_receipt, encode_tombstone_receipt,
+    decode_reclamation_evidence, decode_reclamation_receipt, decode_removal_permit,
+    decode_shard_receipt, decode_tombstone_receipt, encode_reclamation_receipt,
+    encode_removal_permit, encode_shard_receipt, encode_tombstone_receipt,
 };
 
 pub(crate) const RECEIPT_FORMAT_VERSION: u32 = 1;
@@ -194,6 +194,13 @@ pub(crate) fn reclamation_receipt(
 ) -> Result<ReclamationReceipt, DataPlaneError> {
     let value = versioned_payload(value)?;
     decode_reclamation_receipt(&value.canonical_bytes).map_err(Into::into)
+}
+
+pub(crate) fn federated_reclamation_evidence(
+    value: Option<&VersionedPayload>,
+) -> Result<ReclamationReceipt, DataPlaneError> {
+    let value = versioned_payload(value)?;
+    decode_reclamation_evidence(&value.canonical_bytes).map_err(Into::into)
 }
 
 fn versioned_payload(

@@ -234,6 +234,7 @@ fn shard_control_requires_bound_authority_and_round_trips() -> Result<(), Box<dy
             shard: Some(valid_shard()),
             removal_permit: None,
             federation_capability_digest: Vec::new(),
+            federation_capability: Vec::new(),
         })),
     };
     assert_eq!(
@@ -256,6 +257,7 @@ fn shard_control_requires_bound_authority_and_round_trips() -> Result<(), Box<dy
                 shard: Some(valid_shard()),
                 tombstone_receipt: Some(versioned_payload()),
                 federation_capability_digest: Vec::new(),
+                federation_capability: Vec::new(),
             })),
         },
         DataControlEnvelope {

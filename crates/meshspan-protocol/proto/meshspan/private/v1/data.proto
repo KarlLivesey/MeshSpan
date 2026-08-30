@@ -66,6 +66,7 @@ message DeleteShardRequest {
   ShardIdentity shard = 4;
   VersionedPayload removal_permit = 5;
   bytes federation_capability_digest = 6;
+  bytes federation_capability = 7;
 }
 
 message DeleteShardResult {
@@ -80,6 +81,7 @@ message ReclaimShardRequest {
   ShardIdentity shard = 4;
   VersionedPayload tombstone_receipt = 5;
   bytes federation_capability_digest = 6;
+  bytes federation_capability = 7;
 }
 
 message ReclaimShardResult {

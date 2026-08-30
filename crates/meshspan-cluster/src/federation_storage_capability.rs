@@ -10,7 +10,7 @@ use meshspan_domain::{
     FederationGrantId, FederationStorageAction, FederationStorageAllocationId, TargetId, UnixMicros,
 };
 use meshspan_metadata::{
-    AuthoritativeRepository, FederationStorageAuthorityRequest,
+    AuthoritativeRepository, FederationStorageAdmissionError, FederationStorageAuthorityRequest,
     FederationStorageCapabilityLedgerError, FederationStorageCapabilityPresentation,
     FederationStorageQuotaDisposition, FederationStorageQuotaError,
     FederationStorageWriteReservation, FederationStorageWriteReservationRequest,
@@ -172,44 +172,43 @@ impl<'a, 'identity> FederationStorageCapabilityIssuer<'a, 'identity> {
             request.limits,
             request.observed_at,
         )?;
+        let presentation = FederationStorageCapabilityPresentation {
+            capability_digest: outbound.capability_digest(),
+            permit,
+            protocol_major: response_context.version.major,
+            protocol_minor: response_context.version.minor,
+            request_id: response_context.request_id,
+            trace_id: response_context.trace_id,
+            request_deadline: response_context.deadline,
+            response_replay_nonce: response_context.replay_nonce,
+            recorded_at: request.observed_at,
+        };
         let quota_disposition = if permit.action.reserves_capacity() {
-            if issuance.is_replay() {
-                Some(FederationStorageQuotaDisposition::Replayed)
-            } else {
-                Some(
-                    self.local_database
-                        .reserve_federated_storage_write(
-                            authority,
-                            FederationStorageWriteReservationRequest {
-                                operation_id: permit.operation_id,
-                                request_digest: permit.request_digest,
-                                capability_nonce: permit.capability_nonce,
-                                shard: permit.shard,
-                                action: permit.action,
-                                permit_digest: permit.permit_digest,
-                                expires_at: permit.expires_at,
-                                issued_at: permit.issued_at,
-                            },
-                        )?
-                        .0,
-                )
-            }
+            Some(
+                self.local_database
+                    .admit_federated_storage_write_capability(
+                        authority,
+                        FederationStorageWriteReservationRequest {
+                            operation_id: permit.operation_id,
+                            remote_mesh_id: permit.remote_mesh_id,
+                            scope_digest: permit.scope_digest,
+                            request_digest: permit.request_digest,
+                            capability_nonce: permit.capability_nonce,
+                            shard: permit.shard,
+                            action: permit.action,
+                            permit_digest: permit.permit_digest,
+                            expires_at: permit.expires_at,
+                            issued_at: permit.issued_at,
+                        },
+                        &presentation,
+                    )?
+                    .0,
+            )
         } else {
+            self.local_database
+                .record_federated_storage_capability(&presentation)?;
             None
         };
-        self.local_database.record_federated_storage_capability(
-            &FederationStorageCapabilityPresentation {
-                capability_digest: outbound.capability_digest(),
-                permit,
-                protocol_major: response_context.version.major,
-                protocol_minor: response_context.version.minor,
-                request_id: response_context.request_id,
-                trace_id: response_context.trace_id,
-                request_deadline: response_context.deadline,
-                response_replay_nonce: response_context.replay_nonce,
-                recorded_at: request.observed_at,
-            },
-        )?;
         Ok(IssuedFederationStorageCapability {
             outbound,
             permit,
@@ -474,7 +473,9 @@ impl PermitIssuance {
             && permit.maximum_bytes == parsed.maximum_bytes
             && permit.scope_digest == parsed.scope_digest
             && permit.request_digest == admitted.request_digest
-            && permit.expires_at > issue.observed_at;
+            && permit.expires_at > issue.observed_at
+            && permit.capability_nonce != admitted.request_replay_nonce
+            && permit.capability_nonce != issue.response_replay_nonce;
         if valid {
             Ok(Self {
                 capability_nonce: permit.capability_nonce,
@@ -497,10 +498,6 @@ impl PermitIssuance {
 
     const fn expires_at(self) -> UnixMicros {
         self.expires_at
-    }
-
-    const fn is_replay(self) -> bool {
-        self.replayed_permit_digest.is_some()
     }
 
     fn validate_permit(
@@ -606,6 +603,9 @@ pub enum FederationStorageCapabilityIssuerError {
     /// Durable signed-capability correlation could not be recorded safely.
     #[error("federated storage capability ledger failed")]
     CapabilityLedger(#[from] FederationStorageCapabilityLedgerError),
+    /// Capacity and its signed write capability could not be admitted atomically.
+    #[error("federated storage capability admission failed")]
+    Admission(#[from] FederationStorageAdmissionError),
     /// Signed bounded response construction failed.
     #[error("federated storage capability transport failed")]
     Transport(#[from] TransportError),

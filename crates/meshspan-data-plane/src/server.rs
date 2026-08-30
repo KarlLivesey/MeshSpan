@@ -5,7 +5,10 @@
 mod federation;
 mod removal;
 
-pub use federation::{FederatedShardAuthority, FederatedShardOutcome, FederatedWriteEvidence};
+pub use federation::{
+    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedShardAuthority,
+    FederatedShardOutcome, FederatedWriteEvidence,
+};
 
 use meshspan_contracts::{
     BoundedBytes, ContractError, PutShardRequest, RequestContext, ReservationClass,

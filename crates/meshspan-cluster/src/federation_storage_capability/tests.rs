@@ -132,6 +132,34 @@ fn provider_that_does_not_serve_reads_rejects_get() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+#[test]
+fn non_capacity_permit_replays_exactly_after_restart() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::open(true)?;
+    let request = fixture.request(RemoteShardAction::Retire, 20);
+    let admitted = fixture.admitted(&request, 66, 67)?;
+    let first = fixture.issue(
+        admitted,
+        issue_parameters(68, 69, 15, 20, wire_limits()?),
+        response_context(66, 68, 25)?,
+    )?;
+    assert_eq!(first.quota_disposition(), None);
+    let exact_permit = *first.permit();
+
+    fixture.reopen_local()?;
+    let retry = fixture.issue(
+        AdmittedRequest {
+            request_replay_nonce: [70; 32],
+            ..admitted
+        },
+        issue_parameters(71, 72, 16, 24, wire_limits()?),
+        response_context(66, 71, 25)?,
+    )?;
+    assert_eq!(retry.quota_disposition(), None);
+    assert_eq!(*retry.permit(), exact_permit);
+    assert!(fixture.usage()?.is_none());
+    Ok(())
+}
+
 fn response_capability(
     envelope: &meshspan_protocol::v1::FederationEnvelope,
 ) -> Result<&meshspan_protocol::v1::FederatedStorageCapability, &'static str> {

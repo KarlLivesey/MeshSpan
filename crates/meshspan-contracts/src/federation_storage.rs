@@ -7,7 +7,7 @@ use meshspan_domain::{
     FederationStorageAllocationId, MeshId, NodeId, OperationId, Revision, TargetId, UnixMicros,
 };
 
-use crate::{ContractError, ShardIdentity, ShardReceipt};
+use crate::{ContractError, ReclamationReceipt, ShardIdentity, ShardReceipt, TombstoneReceipt};
 
 const PERMIT_DOMAIN: &[u8] = b"meshspan.federation.shard-permit.v1";
 const PROVIDER_SHARD_NAMESPACE_DOMAIN: &[u8] = b"meshspan.federation.provider-shard-namespace.v1";
@@ -189,6 +189,51 @@ pub fn federated_shard_read_result_digest(
     digest.update(&content_digest);
     digest.update(&completed_at.get().to_be_bytes());
     digest.finalize().into()
+}
+
+/// Calculates provider result evidence for one durable federated shard retirement.
+#[must_use]
+pub fn federated_shard_retirement_result_digest(
+    permit: &FederatedShardPermit,
+    provider_tombstone: TombstoneReceipt,
+    retired_at: UnixMicros,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.federation.shard-retirement-result.v1");
+    digest.update(&permit.permit_digest);
+    encode_tombstone(&mut digest, provider_tombstone);
+    digest.update(&retired_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+/// Calculates provider result evidence for one physical federated shard reclamation.
+#[must_use]
+pub fn federated_shard_reclamation_result_digest(
+    permit: &FederatedShardPermit,
+    logical_tombstone: TombstoneReceipt,
+    provider_reclamation: ReclamationReceipt,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.federation.shard-reclamation-result.v1");
+    digest.update(&permit.permit_digest);
+    encode_tombstone(&mut digest, logical_tombstone);
+    encode_tombstone(&mut digest, provider_reclamation.tombstone);
+    digest.update(&provider_reclamation.bytes_unlinked_at.get().to_be_bytes());
+    digest.update(&provider_reclamation.reclaimed_bytes.to_be_bytes());
+    digest.update(&provider_reclamation.reclamation_digest);
+    digest.finalize().into()
+}
+
+fn encode_tombstone(digest: &mut blake3::Hasher, receipt: TombstoneReceipt) {
+    digest.update(&receipt.operation_id.as_bytes());
+    digest.update(&receipt.shard.manifest_digest);
+    digest.update(&receipt.shard.stripe_index.to_be_bytes());
+    digest.update(&receipt.shard.shard_index.to_be_bytes());
+    digest.update(&receipt.shard.generation.to_be_bytes());
+    digest.update(&receipt.target_id.as_bytes());
+    digest.update(&receipt.target_generation.to_be_bytes());
+    digest.update(&receipt.permit_digest);
+    digest.update(&receipt.tombstone_digest);
 }
 
 #[cfg(test)]

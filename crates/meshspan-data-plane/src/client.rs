@@ -22,9 +22,9 @@ use meshspan_transport::{
 use crate::DataPlaneError;
 use crate::capability::{encode_federated_shard_permit, encode_read_permit, encode_write_permit};
 use crate::wire::{
-    receipt, reclamation_receipt, remote_rejection, removal_permit_payload, request_context,
-    request_context_without_revision, require_durable, shard, tombstone_receipt,
-    tombstone_receipt_payload, wire_shard,
+    federated_reclamation_evidence, receipt, reclamation_receipt, remote_rejection,
+    removal_permit_payload, request_context, request_context_without_revision, require_durable,
+    shard, tombstone_receipt, tombstone_receipt_payload, wire_shard,
 };
 
 /// Writes one exact immutable shard and returns only a decoded durable provider receipt.
@@ -401,6 +401,7 @@ pub async fn tombstone_shard(
                 shard: Some(wire_shard(permit.shard)),
                 removal_permit: Some(removal_permit_payload(permit)),
                 federation_capability_digest: Vec::new(),
+                federation_capability: Vec::new(),
             })),
         },
         limits,
@@ -424,6 +425,71 @@ pub async fn tombstone_shard(
         || receipt.shard != permit.shard
         || receipt.permit_digest != permit.permit_digest
         || receipt.tombstone_digest != tombstone_receipt_digest(permit)
+    {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    Ok(receipt)
+}
+
+/// Durably retires one logical federated shard using an exact provider-issued capability.
+///
+/// # Errors
+///
+/// Rejects malformed or contradictory authority, transport failure, a typed provider rejection
+/// and any logical tombstone not bound to the exact operation, target, shard and permit.
+pub async fn retire_federated_shard(
+    connection: &quinn::Connection,
+    header: RequestHeader,
+    permit: FederatedShardPermit,
+    capability_digest: [u8; 32],
+    limits: WireLimits,
+) -> Result<TombstoneReceipt, DataPlaneError> {
+    let context = request_context(&header, permit.allocation_revision)?;
+    let deadline = UnixMicros::new(header.deadline_unix_micros);
+    let valid = permit.action == FederationStorageAction::Retire
+        && context.operation_id == permit.operation_id
+        && header.mesh_id.as_slice() == permit.remote_mesh_id.as_bytes()
+        && capability_digest != [0; 32]
+        && deadline.get() > 0
+        && deadline <= permit.expires_at;
+    if !valid {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    let (mut send, mut receive) = open_stream(connection, StreamKind::Data).await?;
+    send_data_control(
+        &mut send,
+        &DataControlEnvelope {
+            message: Some(Message::DeleteShardRequest(DeleteShardRequest {
+                header: Some(header),
+                target_id: permit.target_id.as_bytes().to_vec(),
+                target_generation: permit.target_generation,
+                shard: Some(wire_shard(permit.shard)),
+                removal_permit: None,
+                federation_capability_digest: capability_digest.to_vec(),
+                federation_capability: encode_federated_shard_permit(permit),
+            })),
+        },
+        limits,
+    )
+    .await?;
+    send.finish()
+        .map_err(meshspan_transport::TransportError::from)?;
+    let result = receive_data_control(&mut receive, limits)
+        .await?
+        .into_inner();
+    let Message::DeleteShardResult(result) =
+        result.message.ok_or(DataPlaneError::InvalidMessage)?
+    else {
+        return Err(DataPlaneError::InvalidMessage);
+    };
+    require_durable(result.result.as_ref())?;
+    let receipt = tombstone_receipt(result.receipt.as_ref())?;
+    if receipt.operation_id != permit.operation_id
+        || receipt.target_id != permit.target_id
+        || receipt.target_generation != permit.target_generation
+        || receipt.shard != permit.shard
+        || receipt.permit_digest != permit.permit_digest
+        || receipt.tombstone_digest == [0; 32]
     {
         return Err(DataPlaneError::InvalidMessage);
     }
@@ -457,6 +523,7 @@ pub async fn reclaim_shard(
                 shard: Some(wire_shard(tombstone.shard)),
                 tombstone_receipt: Some(tombstone_receipt_payload(tombstone)),
                 federation_capability_digest: Vec::new(),
+                federation_capability: Vec::new(),
             })),
         },
         limits,
@@ -481,6 +548,72 @@ pub async fn reclaim_shard(
                 receipt.bytes_unlinked_at,
                 receipt.reclaimed_bytes,
             )
+    {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    Ok(receipt)
+}
+
+/// Physically reclaims one previously retired federated shard using fresh exact authority.
+///
+/// # Errors
+///
+/// Rejects malformed or contradictory authority, transport failure, a typed provider rejection
+/// and any structurally invalid or differently scoped logical reclamation evidence.
+pub async fn reclaim_federated_shard(
+    connection: &quinn::Connection,
+    header: RequestHeader,
+    permit: FederatedShardPermit,
+    capability_digest: [u8; 32],
+    logical_tombstone: TombstoneReceipt,
+    limits: WireLimits,
+) -> Result<ReclamationReceipt, DataPlaneError> {
+    let context = request_context(&header, permit.allocation_revision)?;
+    let deadline = UnixMicros::new(header.deadline_unix_micros);
+    let valid = permit.action == FederationStorageAction::Reclaim
+        && context.operation_id == permit.operation_id
+        && header.mesh_id.as_slice() == permit.remote_mesh_id.as_bytes()
+        && logical_tombstone.shard == permit.shard
+        && logical_tombstone.target_id == permit.target_id
+        && logical_tombstone.target_generation == permit.target_generation
+        && capability_digest != [0; 32]
+        && deadline.get() > 0
+        && deadline <= permit.expires_at;
+    if !valid {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    let (mut send, mut receive) = open_stream(connection, StreamKind::Data).await?;
+    send_data_control(
+        &mut send,
+        &DataControlEnvelope {
+            message: Some(Message::ReclaimShardRequest(ReclaimShardRequest {
+                header: Some(header),
+                target_id: permit.target_id.as_bytes().to_vec(),
+                target_generation: permit.target_generation,
+                shard: Some(wire_shard(permit.shard)),
+                tombstone_receipt: Some(tombstone_receipt_payload(logical_tombstone)),
+                federation_capability_digest: capability_digest.to_vec(),
+                federation_capability: encode_federated_shard_permit(permit),
+            })),
+        },
+        limits,
+    )
+    .await?;
+    send.finish()
+        .map_err(meshspan_transport::TransportError::from)?;
+    let result = receive_data_control(&mut receive, limits)
+        .await?
+        .into_inner();
+    let Message::ReclaimShardResult(result) =
+        result.message.ok_or(DataPlaneError::InvalidMessage)?
+    else {
+        return Err(DataPlaneError::InvalidMessage);
+    };
+    require_durable(result.result.as_ref())?;
+    let receipt = federated_reclamation_evidence(result.receipt.as_ref())?;
+    if receipt.tombstone != logical_tombstone
+        || receipt.reclaimed_bytes == 0
+        || receipt.reclamation_digest == [0; 32]
     {
         return Err(DataPlaneError::InvalidMessage);
     }

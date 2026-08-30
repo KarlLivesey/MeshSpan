@@ -3,13 +3,19 @@
 //! Current metadata and node-local quota adapter around federated shard provider IO.
 
 use meshspan_contracts::{
-    ContractError, FederatedShardPermit, ShardReceipt, federated_shard_write_result_digest,
+    ContractError, FederatedShardPermit, ReclamationReceipt, ShardReceipt, TombstoneReceipt,
+    federated_shard_write_result_digest,
 };
-use meshspan_data_plane::{FederatedShardAuthority, FederatedWriteEvidence};
+use meshspan_data_plane::{
+    FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedShardAuthority,
+    FederatedWriteEvidence,
+};
 use meshspan_domain::{FederationStorageAction, UnixMicros};
 use meshspan_metadata::{
-    AuthoritativeRepository, FederationStorageAuthorityRequest, FederationStorageWriteCompletion,
-    FederationStorageWriteReservation, FederationStorageWriteState, LocalDatabase,
+    AuthoritativeRepository, FederationStorageAuthorityRequest, FederationStorageLifecycleError,
+    FederationStorageReclamationCompletion, FederationStorageRetirementCompletion,
+    FederationStorageWriteCompletion, FederationStorageWriteReservation,
+    FederationStorageWriteState, LocalDatabase,
 };
 
 /// Revalidates replicated bilateral authority and finalises node-local quota accounting.
@@ -116,6 +122,85 @@ impl FederatedShardAuthority for MetadataFederatedShardAuthority<'_> {
             })
             .map_err(|_| ContractError::Unavailable)?;
         write_evidence(&completed)
+    }
+
+    fn commit_retirement(
+        &mut self,
+        permit: &FederatedShardPermit,
+        capability_digest: [u8; 32],
+        provider_tombstone: TombstoneReceipt,
+        completed_at: UnixMicros,
+    ) -> Result<FederatedRetirementEvidence, ContractError> {
+        let (_, lifecycle) = self
+            .local_database
+            .record_federated_storage_retirement(&FederationStorageRetirementCompletion {
+                permit: *permit,
+                capability_digest,
+                provider_tombstone,
+                completed_at,
+            })
+            .map_err(|error| lifecycle_error(&error))?;
+        FederatedRetirementEvidence::new(
+            lifecycle.logical_tombstone,
+            lifecycle.charged_bytes,
+            lifecycle.retired_at,
+        )
+    }
+
+    fn provider_tombstone(
+        &self,
+        permit: &FederatedShardPermit,
+        logical_tombstone: TombstoneReceipt,
+    ) -> Result<TombstoneReceipt, ContractError> {
+        let lifecycle = self
+            .local_database
+            .federated_storage_lifecycle(
+                permit.remote_mesh_id,
+                permit.scope_digest,
+                permit.target_id,
+                permit.target_generation,
+                permit.shard,
+            )
+            .map_err(|error| lifecycle_error(&error))?
+            .ok_or(ContractError::Unauthorized)?;
+        if lifecycle.logical_tombstone == logical_tombstone {
+            Ok(lifecycle.provider_tombstone)
+        } else {
+            Err(ContractError::Conflict)
+        }
+    }
+
+    fn commit_reclamation(
+        &mut self,
+        permit: &FederatedShardPermit,
+        capability_digest: [u8; 32],
+        logical_tombstone: TombstoneReceipt,
+        provider_reclamation: ReclamationReceipt,
+    ) -> Result<FederatedReclamationEvidence, ContractError> {
+        let (_, lifecycle) = self
+            .local_database
+            .record_federated_storage_reclamation(&FederationStorageReclamationCompletion {
+                permit: *permit,
+                capability_digest,
+                logical_tombstone,
+                provider_reclamation,
+            })
+            .map_err(|error| lifecycle_error(&error))?;
+        FederatedReclamationEvidence::new(
+            lifecycle
+                .logical_reclamation
+                .ok_or(ContractError::Corrupt)?,
+        )
+    }
+}
+
+fn lifecycle_error(error: &FederationStorageLifecycleError) -> ContractError {
+    match error {
+        FederationStorageLifecycleError::Invalid => ContractError::InvalidInput,
+        FederationStorageLifecycleError::Conflict => ContractError::Conflict,
+        FederationStorageLifecycleError::CorruptState
+        | FederationStorageLifecycleError::Capability(_)
+        | FederationStorageLifecycleError::Database(_) => ContractError::Unavailable,
     }
 }
 

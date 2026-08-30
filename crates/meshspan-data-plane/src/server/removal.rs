@@ -109,7 +109,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
     }
 }
 
-async fn reject_delete(
+pub(super) async fn reject_delete(
     stream: &mut AcceptedStream,
     limits: WireLimits,
     error: ContractError,
@@ -117,7 +117,7 @@ async fn reject_delete(
     send_delete_result(stream, limits, Err(error)).await
 }
 
-async fn send_delete_result(
+pub(super) async fn send_delete_result(
     stream: &mut AcceptedStream,
     limits: WireLimits,
     result: Result<TombstoneReceipt, ContractError>,
@@ -137,7 +137,7 @@ async fn send_delete_result(
     .await
 }
 
-async fn reject_reclaim(
+pub(super) async fn reject_reclaim(
     stream: &mut AcceptedStream,
     limits: WireLimits,
     error: ContractError,
@@ -145,7 +145,7 @@ async fn reject_reclaim(
     send_reclaim_result(stream, limits, Err(error)).await
 }
 
-async fn send_reclaim_result(
+pub(super) async fn send_reclaim_result(
     stream: &mut AcceptedStream,
     limits: WireLimits,
     result: Result<ReclamationReceipt, ContractError>,
