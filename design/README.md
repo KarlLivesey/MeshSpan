@@ -35,7 +35,7 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 26. [stage-1-3-audit.md](stage-1-3-audit.md) — executable re-audit and federation retrofit gaps.
 27. [stage-4-5-decisions.md](stage-4-5-decisions.md) — accepted detailed folder-storage and filesystem decisions.
 28. [stage-4-evidence.md](stage-4-evidence.md) — original folder-storage implementation evidence.
-29. [stage-5-evidence.md](stage-5-evidence.md) — filesystem evidence and reopened completion gaps.
+29. [stage-5-evidence.md](stage-5-evidence.md) — filesystem and federation completion evidence.
 30. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
 31. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
 32. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.

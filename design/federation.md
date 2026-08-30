@@ -1,6 +1,6 @@
 # Federation between autonomous swarms
 
-Status: **accepted contract; Stages 0–4 complete, Stage 5 pending**.
+Status: **accepted contract; Stages 0–5 complete**.
 
 Federation lets independently administered MeshSpan swarms share selected data,
 write authority and storage without combining their consensus groups or user
@@ -156,7 +156,7 @@ relationship's removal is not itself proof that physical bytes were erased.
 | 2 | Persist relationships, trust roots, governance, grants, quotas, recovery succession, quarantine and exact outcomes. | Complete: migrations, typed commands, indexes, atomic receipts, exact historical reads, backup/restore and command/apply crash-boundary proofs pass. |
 | 3 | Authenticate swarms and carry bounded federation control/data streams over Quinn without joining consensus groups. | Complete: mutual mTLS connection and identity rotation, durable signed authority synchronisation, replay/fencing, independently framed history objects and a stopped/restarted non-empty import pass over real Quinn. |
 | 4 | Treat partner capacity as a capability-scoped remote provider with placement and availability classifications. | Complete: encrypted cross-swarm shard IO, bilateral quota enforcement, protection/read classification, signed lifecycle receipts, exact inventory and returning/revoked-provider tests pass over real Quinn/mTLS. |
-| 5 | Authorise remote principals and reconcile signed multi-writer branches into the owning swarm. | External-user permission vectors, offline delegation/revocation/quarantine, non-empty multi-swarm edit/heal proof and the reopened local-history corrections listed in the roadmap. |
+| 5 | Authorise remote principals and reconcile signed multi-writer branches into the owning swarm. | Complete: real home-session and bilateral-grant admission, signed disconnected edits, restart, paged Quinn history exchange, deterministic preservation, exact encrypted-content healing and durable revocation quarantine pass. |
 
 Stages 6 and later expose these contracts through the appliance UI and access
 services, place/repair federated shards, and add full multi-process, churn, power,

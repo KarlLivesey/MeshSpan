@@ -1,34 +1,25 @@
 # Stage 5 implementation evidence
 
-Status: reopened after completion audit and acceptance of autonomous-swarm
-federation. Existing evidence remains valid for the behaviour it actually proves.
+Status: complete on 2026-08-30 after the autonomous-swarm federation and local
+convergence completion audit.
 
 Stage 5 turns authoritative identity/metadata foundations into one protocol-neutral,
 copy-on-write filesystem service. This document records executable evidence only.
 
-## Reopened gaps
+## Completion-audit closure
 
-The prior completion claim exceeded the available evidence:
+| Audit gap | Executable closure |
+| --- | --- |
+| Existing-file edits on a newly forked branch | Lazy file-head materialisation is part of the publication transaction. `concurrent_file_edits_materialise_one_owned_recovered_copy` proves two edits of the inherited file converge without losing either version. |
+| Whole-volume history export and fixed batch ceiling | `history_export_includes_only_records_reachable_from_requested_heads`, `durable_history_pages_are_incremental_exact_and_restart_resumable` and the hostile-cursor vectors prove referenced-record-only, bounded keyset pages and restart continuation. |
+| Opaque in-process history transfer | `autonomous_swarms_reconcile_signed_disconnected_file_edits` transfers pages and immutable objects through the production signed Protobuf messages over a real mutually authenticated Quinn connection with page limit one. |
+| Empty-content healing proof | `prove_content_healing` transfers three encrypted shards, survives an interrupted fetch and complete receiving-store restart, then decrypts and reads exact `helloworld` bytes. |
+| Incomplete cross-record and origin validation | Federated mutation proposals bind every supported namespace mutation to exact rights and canonical payload bytes; accepting-swarm signatures, consensus admission receipts, referenced commit/intent/object/version/manifest validation and hostile substitution tests all fail closed before import becomes visible. |
+| Remote-principal multi-writer and revocation handling | The composed two-autonomous-swarm proof uses a real home session, bilateral grants and production mutation acceptance, persists disconnected non-empty edits across restart, transfers signed history, deterministically retains both admissible versions, then proves a later suspended-principal edit is durably quarantined and absent from replay. Partition migration 41 preserves prior quarantine evidence while adding the `PrincipalInactive` reason. |
 
-1. A newly forked writable branch does not materialise existing file heads, so the
-   proof covers disconnected creates but not modification of an existing file.
-2. History export selects all object revisions and file versions for a volume and
-   fails at its batch bound instead of fetching only referenced records through
-   resumable cursor pages.
-3. The cluster convergence service passes an opaque in-process bundle and has no
-   concrete signed Protobuf/Quinn encoding or handler for the existing private
-   branch/object transfer messages and required identity/delegation evidence.
-4. The final healing proof uses empty content whose test reader is unavailable;
-   it proves namespace/version identities but not exact non-empty bytes after
-   partition, restart and healing.
-5. Imported history needs complete cross-record validation binding branch/object
-   scope, parent versions, manifests, content evidence and authenticated origin.
-6. Federation additionally requires home-swarm principal authorisation, bilateral
-   restriction evaluation, signed offline grants, cross-swarm multi-writer
-   reconciliation and revocation quarantine.
-
-Stage 5 closes again only when the corresponding roadmap gates pass. Documentation
-of these gaps is not implementation evidence.
+The composed namespace proof and the encrypted-content healing proof deliberately
+exercise separate replaceable interfaces, then run together in the same
+`federation_session` integration target.
 
 ## Delivered foundation
 
@@ -604,5 +595,9 @@ of these gaps is not implementation evidence.
    recovered logical copy, imports never move local heads, and a second restart
    resolves the same durable merge receipt on both nodes.
 
-The original Stage 5 suites pass together, but they do not prove the reopened
-gates above. Stage 5 is therefore not complete.
+On 2026-08-30, the complete `federation_session` target passed both real-Quinn
+proofs concurrently in 13.25 seconds. The repository-wide local gate then passed
+all 15 lanes in 83.42 seconds with four workers: generated-contract drift, Rust
+format/lint, domain/capability, public API, metadata, consensus, private protocol,
+authenticated QUIC, storage/data-plane/filesystem, cluster/wire, workspace format,
+web lint/typecheck/tests and scheduler tests. Stage 5 is complete.

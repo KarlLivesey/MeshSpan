@@ -245,8 +245,8 @@ FED-005, FED-016–021, FED-024, FED-025.
 
 **Depends on:** Stages 2–4.
 
-**Status:** reopened. The existing filesystem foundation remains valid, but the completion audit
-found local convergence gaps and federation adds remote-principal/multi-writer obligations.
+**Status:** complete after the 2026-08-30 local-convergence and autonomous-swarm federation audit.
+All reopened gaps have executable closure evidence.
 See [`stage-5-evidence.md`](stage-5-evidence.md) and [`federation.md`](federation.md).
 
 Build:

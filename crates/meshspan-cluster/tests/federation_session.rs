@@ -10,6 +10,8 @@ mod branch_page_proof;
 mod content_layout_proof;
 #[path = "federation_session/history_sync_proof.rs"]
 mod history_sync_proof;
+#[path = "federation_session/multiwriter_proof.rs"]
+mod multiwriter_proof;
 #[path = "federation_session/storage_capability_proof.rs"]
 mod storage_capability_proof;
 
@@ -153,6 +155,43 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
 
     initial_connections.close_and_wait().await;
     rotated_connections.close_and_wait().await;
+    server.wait_idle().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn autonomous_swarms_reconcile_signed_disconnected_file_edits() -> Result<(), Box<dyn Error>>
+{
+    let certificates = Certificates::new()?;
+    let limits = transport_limits()?;
+    let server = server_endpoint(
+        loopback(),
+        certificates.server_credentials()?,
+        roots(&certificates.authority)?,
+        limits,
+    )?;
+    let connections = ConnectionPair::establish(
+        &server,
+        certificates.client_credentials()?,
+        roots(&certificates.authority)?,
+        limits,
+    )
+    .await?;
+    let client_key = SigningKey::from_bytes(&[4; 32]);
+    let server_key = SigningKey::from_bytes(&[5; 32]);
+    let mut authorities = MetadataAuthorities::active(&certificates, &client_key, &server_key)?;
+    let client_runtime = runtime(&certificates.client, &client_key, limits.wire)?;
+    let server_runtime = runtime(&certificates.server, &server_key, limits.wire)?;
+
+    Box::pin(multiwriter_proof::prove(
+        &mut authorities,
+        SessionRuntimes::new(&client_runtime, &server_runtime),
+        &connections,
+        &server_key,
+    ))
+    .await?;
+
+    connections.close_and_wait().await;
     server.wait_idle().await;
     Ok(())
 }
@@ -506,7 +545,7 @@ async fn prove_revoked_session_fails_closed(
 }
 
 struct MetadataAuthority {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     repository: AuthoritativeRepository,
     administrator_id: PrincipalId,
     relationship_id: FederationRelationshipId,
@@ -544,7 +583,7 @@ impl MetadataAuthority {
             remote_mesh_id,
         )?;
         Ok(Self {
-            _directory: directory,
+            directory,
             repository,
             administrator_id,
             relationship_id,
