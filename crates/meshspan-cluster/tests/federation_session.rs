@@ -89,7 +89,7 @@ async fn current_metadata_authority_admits_rotates_then_revokes_a_real_federatio
         &initial_connections,
         SessionExpectation::new(6, 3, 1),
     );
-    prove_initial_authority(&initial_proof).await?;
+    Box::pin(prove_initial_authority(&initial_proof)).await?;
 
     let rotated_client_key = SigningKey::from_bytes(&[10; 32]);
     authorities.rotate_remote(50, &certificates.rotated_client, &rotated_client_key)?;

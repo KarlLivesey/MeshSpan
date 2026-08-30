@@ -4,9 +4,10 @@
 
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
-    ErrorCode, FederatedBranchResult, FederatedContentLayoutPage, FederatedHistoryObjectHeader,
-    FederatedStorageCapability, FederationAuthorityPage, FederationEnvelope, FederationHeader,
-    FederationHello, FetchFederatedBranchPage, FetchFederatedContentLayout,
+    ErrorCode, FederatedBranchResult, FederatedContentLayoutPage, FederatedContentShardHeader,
+    FederatedContentShardRoute, FederatedHistoryObjectHeader, FederatedStorageCapability,
+    FederationAuthorityPage, FederationEnvelope, FederationHeader, FederationHello,
+    FetchFederatedBranchPage, FetchFederatedContentLayout, FetchFederatedContentShard,
     FetchFederatedHistoryObject, FetchFederatedStorageInventory, FetchFederationAuthority,
     ProposeFederatedBranch, ProtocolVersion, RemoteShardAction, RequestFederatedStorageCapability,
     ShardIdentity, VersionedPayload, WireError,
@@ -192,6 +193,20 @@ fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::
             limit: 1,
             signature: Vec::new(),
         }),
+        Message::FetchContentShard(FetchFederatedContentShard {
+            grant_id: vec![1; 16],
+            resource_scope: Some(payload()),
+            manifest_id: vec![2; 16],
+            export_token: vec![3; 32],
+            manifest_object_digest: vec![4; 32],
+            provider_node_id: vec![7; 16],
+            target_id: vec![5; 16],
+            target_generation: 1,
+            shard: Some(shard()),
+            expected_length: 16,
+            expected_digest: vec![6; 32],
+            signature: Vec::new(),
+        }),
         Message::RequestStorageCapability(RequestFederatedStorageCapability {
             grant_id: vec![1; 16],
             allocation_id: vec![4; 16],
@@ -222,9 +237,62 @@ fn unsigned_federation_requests_fail_closed() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
+fn content_shard_header_binds_exact_route_shape_and_frame_bound()
+-> Result<(), Box<dyn std::error::Error>> {
+    let limits = limits()?;
+    let valid = FederatedContentShardHeader {
+        grant_id: vec![1; 16],
+        resource_scope: Some(payload()),
+        manifest_id: vec![2; 16],
+        export_token: vec![3; 32],
+        manifest_object_digest: vec![4; 32],
+        provider_node_id: vec![9; 16],
+        target_id: vec![5; 16],
+        target_generation: 1,
+        shard: Some(shard()),
+        declared_length: 16,
+        content_digest: vec![6; 32],
+        maximum_frame_bytes: u64::try_from(limits.maximum_data_frame_bytes())?,
+        served_at_unix_micros: 7,
+        signature: vec![8; 64],
+    };
+    assert!(
+        encode_federation_frame(
+            &federation_envelope(Message::ContentShardHeader(valid.clone())),
+            limits
+        )
+        .is_ok()
+    );
+    let mut excessive_frame = valid.clone();
+    excessive_frame.maximum_frame_bytes += 1;
+    let mut missing_length = valid;
+    missing_length.declared_length = 0;
+    for invalid in [excessive_frame, missing_length] {
+        assert_eq!(
+            encode_federation_frame(
+                &federation_envelope(Message::ContentShardHeader(invalid)),
+                limits
+            ),
+            Err(WireContractError::InvalidMessage)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn content_layout_pages_are_bounded_and_terminal_shape_is_unambiguous()
 -> Result<(), Box<dyn std::error::Error>> {
     let page = |chunks: Vec<VersionedPayload>, next_cursor: Vec<u8>| {
+        let shard_routes = (0..chunks.len())
+            .map(|_| FederatedContentShardRoute {
+                provider_node_id: vec![7; 16],
+                target_id: vec![8; 16],
+                target_generation: 1,
+                shard: Some(shard()),
+                expected_length: 16,
+                expected_digest: vec![9; 32],
+            })
+            .collect();
         federation_envelope(Message::ContentLayoutPage(FederatedContentLayoutPage {
             grant_id: vec![1; 16],
             resource_scope: Some(payload()),
@@ -236,6 +304,7 @@ fn content_layout_pages_are_bounded_and_terminal_shape_is_unambiguous()
             next_cursor,
             page_digest: vec![3; 32],
             signature: vec![4; 64],
+            shard_routes,
         }))
     };
     let small_limits = WireLimits::new(4_096, 1_024, 2, 64)?;

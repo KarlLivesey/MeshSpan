@@ -13,12 +13,16 @@ mod federation_authority_exchange;
 mod federation_authority_page_source;
 mod federation_authority_receiver;
 mod federation_authority_sync;
+mod federation_body_exchange;
 mod federation_branch_authority;
 mod federation_branch_exchange;
 mod federation_branch_page_source;
+mod federation_content_healing;
 mod federation_content_layout_exchange;
 mod federation_content_layout_source;
 mod federation_content_layout_wire;
+mod federation_content_shard_exchange;
+mod federation_content_shard_source;
 mod federation_filesystem_content;
 mod federation_filesystem_history;
 mod federation_grant_authority;
@@ -107,6 +111,10 @@ pub use federation_branch_page_source::{
     FederationBranchPageFuture, FederationBranchPageQuery, FederationBranchPageRecords,
     FederationBranchPageSource, FederationBranchPageSourceError,
 };
+pub use federation_content_healing::{
+    FederationContentHealingError, FederationContentHealingRequest, HealedFederationContentShard,
+    heal_federated_content_shard,
+};
 pub use federation_content_layout_exchange::{
     FederationContentLayoutFetchRequest, FederationContentLayoutFetchServices,
     FederationContentLayoutServeRequest, FederationContentLayoutServices,
@@ -115,13 +123,26 @@ pub use federation_content_layout_exchange::{
 pub use federation_content_layout_source::{
     FederationContentLayoutFuture, FederationContentLayoutQuery, FederationContentLayoutRecords,
     FederationContentLayoutSource, FederationContentLayoutSourceError,
+    FederationContentRouteSource, FederationContentShardRoute,
 };
 pub use federation_content_layout_wire::{
     FederationContentLayoutWireError, decode_federated_content_layout_chunk,
     decode_federated_content_layout_header, version_federated_content_layout_chunk,
     version_federated_content_layout_header,
 };
-pub use federation_filesystem_content::FilesystemFederationContentSource;
+pub use federation_content_shard_exchange::{
+    FederationContentShardFetchRequest, FederationContentShardFetchServices,
+    FederationContentShardServeRequest, FederationContentShardServices,
+    ReceivedFederationContentShard, ServedFederationContentShard,
+};
+pub use federation_content_shard_source::{
+    FederationContentShard, FederationContentShardFuture, FederationContentShardQuery,
+    FederationContentShardSource, FederationContentShardSourceError,
+};
+pub use federation_filesystem_content::{
+    FederationContentShardProviderBinding, FilesystemFederationContentShardSource,
+    FilesystemFederationContentSource,
+};
 pub use federation_filesystem_history::FilesystemFederationHistorySource;
 pub use federation_grant_authority::{
     EffectiveFederationGrantAuthority, EffectiveFederationGrantAuthorityError,

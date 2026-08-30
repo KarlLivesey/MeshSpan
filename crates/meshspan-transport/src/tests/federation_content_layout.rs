@@ -7,7 +7,8 @@ use meshspan_domain::{DurationMicros, FederationRelationshipId, MeshId, UnixMicr
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
-    FederatedContentLayoutPage, FederationEnvelope, FetchFederatedContentLayout, VersionedPayload,
+    FederatedContentLayoutPage, FederatedContentShardRoute, FederationEnvelope,
+    FetchFederatedContentLayout, ShardIdentity, VersionedPayload,
 };
 use rustls::pki_types::CertificateDer;
 
@@ -266,6 +267,22 @@ fn layout_fetch() -> FetchFederatedContentLayout {
     }
 }
 
+fn route(index: u64) -> FederatedContentShardRoute {
+    FederatedContentShardRoute {
+        provider_node_id: vec![108; 16],
+        target_id: vec![109; 16],
+        target_generation: 1,
+        shard: Some(ShardIdentity {
+            manifest_digest: vec![110; 32],
+            stripe_index: index,
+            shard_index: 0,
+            generation: 1,
+        }),
+        expected_length: 16,
+        expected_digest: vec![111; 32],
+    }
+}
+
 fn layout_page() -> FederatedContentLayoutPage {
     FederatedContentLayoutPage {
         grant_id: vec![95; 16],
@@ -290,6 +307,7 @@ fn layout_page() -> FederatedContentLayoutPage {
         next_cursor: vec![100; 16],
         page_digest: Vec::new(),
         signature: Vec::new(),
+        shard_routes: vec![route(0), route(1)],
     }
 }
 

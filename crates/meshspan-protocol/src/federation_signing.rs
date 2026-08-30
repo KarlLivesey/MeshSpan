@@ -5,11 +5,12 @@
 use prost::Message;
 
 use crate::v1::{
-    FederatedBranchPage, FederatedContentLayoutPage, FederatedHistoryObjectHeader,
-    FederatedStorageCapability, FederatedStorageInventoryPage, FederatedStorageReceipt,
-    FederationAuthorityPage, FederationHeader, FederationHello, FederationWelcome,
-    FetchFederatedBranchPage, FetchFederatedContentLayout, FetchFederatedHistoryObject,
-    FetchFederatedStorageInventory, FetchFederationAuthority, RequestFederatedStorageCapability,
+    FederatedBranchPage, FederatedContentLayoutPage, FederatedContentShardHeader,
+    FederatedHistoryObjectHeader, FederatedStorageCapability, FederatedStorageInventoryPage,
+    FederatedStorageReceipt, FederationAuthorityPage, FederationHeader, FederationHello,
+    FederationWelcome, FetchFederatedBranchPage, FetchFederatedContentLayout,
+    FetchFederatedContentShard, FetchFederatedHistoryObject, FetchFederatedStorageInventory,
+    FetchFederationAuthority, RequestFederatedStorageCapability,
 };
 
 const HELLO_DOMAIN: &[u8] = b"meshspan.federation.hello.v1\0";
@@ -26,6 +27,8 @@ const CONTENT_LAYOUT_FETCH_DOMAIN: &[u8] = b"meshspan.federation.content-layout-
 const CONTENT_LAYOUT_PAGE_DOMAIN: &[u8] = b"meshspan.federation.content-layout-page.v1\0";
 const CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN: &[u8] =
     b"meshspan.federation.content-layout-page-digest.v1\0";
+const CONTENT_SHARD_FETCH_DOMAIN: &[u8] = b"meshspan.federation.content-shard-fetch.v1\0";
+const CONTENT_SHARD_HEADER_DOMAIN: &[u8] = b"meshspan.federation.content-shard-header.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DOMAIN: &[u8] =
     b"meshspan.federation.storage-capability-request.v1\0";
 const STORAGE_CAPABILITY_REQUEST_DIGEST_DOMAIN: &[u8] =
@@ -203,6 +206,28 @@ pub fn federation_content_layout_page_digest_payload(page: &FederatedContentLayo
     payload
 }
 
+/// Returns the exact bytes signed by one federated encrypted-shard requester.
+#[must_use]
+pub fn federation_content_shard_fetch_signing_payload(
+    header: &FederationHeader,
+    request: &FetchFederatedContentShard,
+) -> Vec<u8> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    signing_payload(CONTENT_SHARD_FETCH_DOMAIN, header, &unsigned)
+}
+
+/// Returns the exact bytes signed by one federated encrypted-shard response.
+#[must_use]
+pub fn federation_content_shard_header_signing_payload(
+    header: &FederationHeader,
+    response: &FederatedContentShardHeader,
+) -> Vec<u8> {
+    let mut unsigned = response.clone();
+    unsigned.signature.clear();
+    signing_payload(CONTENT_SHARD_HEADER_DOMAIN, header, &unsigned)
+}
+
 /// Returns the exact bytes signed by a remote-storage capability requester.
 #[must_use]
 pub fn federation_storage_capability_request_signing_payload(
@@ -338,10 +363,10 @@ fn append_part(payload: &mut Vec<u8>, part: &[u8]) {
 #[cfg(test)]
 mod tests {
     use crate::v1::{
-        FederatedBranchPage, FederatedContentLayoutPage, FederatedStorageCapability,
-        FederatedStorageInventoryPage, FederatedStorageReceipt, FederationAuthorityPage,
-        FederationHeader, FederationHello, ProtocolVersion, RemoteShardAction,
-        RequestFederatedStorageCapability, ShardIdentity, VersionedPayload,
+        FederatedBranchPage, FederatedContentLayoutPage, FederatedContentShardRoute,
+        FederatedStorageCapability, FederatedStorageInventoryPage, FederatedStorageReceipt,
+        FederationAuthorityPage, FederationHeader, FederationHello, ProtocolVersion,
+        RemoteShardAction, RequestFederatedStorageCapability, ShardIdentity, VersionedPayload,
     };
 
     use super::{
@@ -521,6 +546,19 @@ mod tests {
             next_cursor: vec![35; 16],
             page_digest: vec![36; 32],
             signature: vec![37; 64],
+            shard_routes: vec![FederatedContentShardRoute {
+                provider_node_id: vec![40; 16],
+                target_id: vec![41; 16],
+                target_generation: 1,
+                shard: Some(ShardIdentity {
+                    manifest_digest: vec![42; 32],
+                    stripe_index: 0,
+                    shard_index: 0,
+                    generation: 1,
+                }),
+                expected_length: 16,
+                expected_digest: vec![43; 32],
+            }],
         };
         let digest = federation_content_layout_page_digest_payload(&page);
         let signing = federation_content_layout_page_signing_payload(&header, &page);
@@ -540,6 +578,9 @@ mod tests {
         assert_ne!(federation_content_layout_page_digest_payload(&page), digest);
         page.chunks[0].canonical_bytes[0] ^= 1;
         page.manifest_id[0] ^= 1;
+        assert_ne!(federation_content_layout_page_digest_payload(&page), digest);
+        page.manifest_id[0] ^= 1;
+        page.shard_routes[0].target_id[0] ^= 1;
         assert_ne!(federation_content_layout_page_digest_payload(&page), digest);
     }
 

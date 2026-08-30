@@ -5,7 +5,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use meshspan_domain::{ContentManifestId, FederationResourceScope, UnixMicros};
+use meshspan_contracts::{BoundedItems, ShardIdentity, ShardReceipt};
+use meshspan_domain::{ContentManifestId, FederationResourceScope, NodeId, TargetId, UnixMicros};
 use meshspan_filesystem::{ContentLayoutTransferHeader, ContentLayoutTransferPage};
 use thiserror::Error;
 
@@ -39,6 +40,39 @@ pub struct FederationContentLayoutRecords {
     pub header: ContentLayoutTransferHeader,
     /// Bounded provider-neutral identities, absent only for a valid empty file.
     pub page: Option<ContentLayoutTransferPage>,
+    /// Exact committed provider receipts corresponding one-for-one with the portable chunks.
+    pub placements: BoundedItems<ShardReceipt>,
+}
+
+/// Exact provider route which lets a receiver connect directly to the storage worker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FederationContentShardRoute {
+    /// Current source node which owns the target incarnation.
+    pub provider_node_id: NodeId,
+    /// Exact provider target.
+    pub target_id: TargetId,
+    /// Exact target incarnation fence.
+    pub target_generation: u64,
+    /// Exact immutable shard identity.
+    pub shard: ShardIdentity,
+    /// Exact encrypted byte length.
+    pub expected_length: u64,
+    /// Exact encrypted byte digest.
+    pub expected_digest: [u8; 32],
+}
+
+/// Current topology boundary which resolves a committed target receipt to its serving node.
+pub trait FederationContentRouteSource: Send + Sync {
+    /// Returns the exact current node for one target incarnation, or no route when it moved.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when current topology cannot be proved.
+    fn provider_node(
+        &self,
+        target_id: TargetId,
+        target_generation: u64,
+    ) -> Result<Option<NodeId>, FederationContentLayoutSourceError>;
 }
 
 /// Source which cannot be reached before mTLS, signature and bilateral grant admission.

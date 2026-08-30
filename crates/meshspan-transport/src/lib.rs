@@ -7,6 +7,7 @@ mod federation;
 mod federation_authority_page;
 mod federation_branch_page;
 mod federation_content_layout;
+mod federation_content_shard;
 mod federation_hello;
 mod federation_history_object;
 mod federation_negotiation;
@@ -53,6 +54,12 @@ pub use federation_content_layout::{
     FederationContentLayoutPageExpectation, OutboundFederationContentLayoutFetch,
     OutboundFederationContentLayoutPage, signed_federation_content_layout_fetch,
     signed_federation_content_layout_page,
+};
+pub use federation_content_shard::{
+    AuthenticatedFederationContentShardFetch, AuthenticatedFederationContentShardHeader,
+    FederationContentShardExpectation, OutboundFederationContentShardFetch,
+    OutboundFederationContentShardHeader, signed_federation_content_shard_fetch,
+    signed_federation_content_shard_header,
 };
 pub use federation_hello::{
     FederationHelloConfig, FederationHelloContext, FederationLocalIdentity,

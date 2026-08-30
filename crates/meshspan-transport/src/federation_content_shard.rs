@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Signed, grant-bound portable content-layout pages over authenticated relationships.
+//! Signed, exactly correlated headers for bounded federated encrypted-shard streams.
 
 use ed25519_dalek::{Signature, Signer, VerifyingKey};
-use meshspan_domain::UnixMicros;
+use meshspan_domain::{OperationId, UnixMicros};
 use meshspan_protocol::v1::federation_envelope::Message;
 use meshspan_protocol::v1::{
-    FederatedContentLayoutPage, FederationEnvelope, FederationHeader, FetchFederatedContentLayout,
-    VersionedPayload,
+    FederatedContentShardHeader, FederationEnvelope, FederationHeader, FetchFederatedContentShard,
 };
 use meshspan_protocol::{
     ValidatedFederationEnvelope, WireLimits, encode_federation_frame,
-    federation_content_layout_fetch_signing_payload, federation_content_layout_page_digest_payload,
-    federation_content_layout_page_signing_payload,
+    federation_content_shard_fetch_signing_payload,
+    federation_content_shard_header_signing_payload,
 };
-use sha2::{Digest, Sha256};
 
 use crate::federation_authority_page::{exact, federation_header};
 use crate::{
@@ -22,66 +20,69 @@ use crate::{
     FederationPeerRegistry, FederationReplayGuard, TransportError,
 };
 
-/// Signed layout fetch plus exact response and key-transit expectations.
+/// Signed encrypted-shard fetch and the exact response it permits.
 #[derive(Clone, Debug, PartialEq)]
-pub struct OutboundFederationContentLayoutFetch {
+pub struct OutboundFederationContentShardFetch {
     envelope: FederationEnvelope,
-    expectation: FederationContentLayoutPageExpectation,
+    expectation: FederationContentShardExpectation,
 }
 
-impl OutboundFederationContentLayoutFetch {
-    /// Returns the exact signed wire request.
+impl OutboundFederationContentShardFetch {
+    /// Returns the exact signed request envelope.
     #[must_use]
     pub const fn envelope(&self) -> &FederationEnvelope {
         &self.envelope
     }
 
-    /// Returns the exact state against which the corresponding page is authenticated.
+    /// Returns the complete request correlation required of the response.
     #[must_use]
-    pub const fn expectation(&self) -> &FederationContentLayoutPageExpectation {
+    pub const fn expectation(&self) -> &FederationContentShardExpectation {
         &self.expectation
     }
 }
 
-/// Layout fetch whose TLS peer, relationship fence, signature and nonce all agree.
+/// Fetch whose signature, mTLS peer, authority epoch and replay nonce agree.
 #[derive(Clone, Debug)]
-pub struct AuthenticatedFederationContentLayoutFetch {
+pub struct AuthenticatedFederationContentShardFetch {
     binding: crate::FederationPeerBinding,
     header: FederationHeader,
-    request: FetchFederatedContentLayout,
-    transit_binding: [u8; 32],
+    request: FetchFederatedContentShard,
 }
 
-impl AuthenticatedFederationContentLayoutFetch {
-    /// Returns the exact admitted relationship.
-    #[must_use]
-    pub const fn relationship_id(&self) -> meshspan_domain::FederationRelationshipId {
-        self.binding.relationship_id
-    }
-
+impl AuthenticatedFederationContentShardFetch {
     /// Returns the certificate-authenticated requesting swarm.
     #[must_use]
     pub const fn remote_mesh_id(&self) -> meshspan_domain::MeshId {
         self.binding.remote_mesh_id
     }
 
-    /// Returns the structurally validated signed request.
-    #[must_use]
-    pub const fn request(&self) -> &FetchFederatedContentLayout {
-        &self.request
-    }
-
-    /// Returns the digest binding content-key transit to this exact authorised request.
-    #[must_use]
-    pub const fn transit_binding(&self) -> [u8; 32] {
-        self.transit_binding
-    }
-
-    /// Constructs an exactly correlated response context with a fresh responder nonce.
+    /// Returns the exact operation identity carried by the signed request header.
     ///
     /// # Errors
     ///
-    /// Rejects a reflected response nonce or malformed request correlation fields.
+    /// Rejects an invalid identifier despite prior structural validation.
+    pub fn operation_id(&self) -> Result<OperationId, TransportError> {
+        OperationId::from_bytes(exact(&self.header.operation_id)?)
+            .map_err(|_| TransportError::UntrustedFederationPeer)
+    }
+
+    /// Returns the exclusive signed request deadline.
+    #[must_use]
+    pub const fn deadline(&self) -> UnixMicros {
+        UnixMicros::new(self.header.deadline_unix_micros)
+    }
+
+    /// Returns the structurally validated request.
+    #[must_use]
+    pub const fn request(&self) -> &FetchFederatedContentShard {
+        &self.request
+    }
+
+    /// Builds the exact response context while preventing nonce reflection.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a reflected nonce or malformed request context.
     pub fn response_context(
         &self,
         replay_nonce: [u8; 32],
@@ -102,177 +103,153 @@ impl AuthenticatedFederationContentLayoutFetch {
     }
 }
 
-/// Exact local request state against which one remote layout page is authenticated.
+/// Exact signed request state against which one response is authenticated.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FederationContentLayoutPageExpectation {
+pub struct FederationContentShardExpectation {
     local_identity: FederationLocalIdentityBinding,
     request_context: FederationExchangeContext,
-    grant_id: Vec<u8>,
-    resource_scope: Option<VersionedPayload>,
-    manifest_id: Vec<u8>,
-    export_token: Vec<u8>,
-    manifest_object_digest: Vec<u8>,
-    transit_binding: [u8; 32],
+    request: FetchFederatedContentShard,
 }
 
-impl FederationContentLayoutPageExpectation {
-    /// Returns the digest binding content-key transit to the exact signed request.
-    #[must_use]
-    pub const fn transit_binding(&self) -> [u8; 32] {
-        self.transit_binding
-    }
-}
-
-/// Signed layout page ready for bounded federation framing.
+/// Signed encrypted-shard response header ready for federation framing.
 #[derive(Clone, Debug, PartialEq)]
-pub struct OutboundFederationContentLayoutPage {
+pub struct OutboundFederationContentShardHeader {
     envelope: FederationEnvelope,
 }
 
-impl OutboundFederationContentLayoutPage {
-    /// Returns the exact signed wire response.
+impl OutboundFederationContentShardHeader {
+    /// Returns the exact signed response envelope.
     #[must_use]
     pub const fn envelope(&self) -> &FederationEnvelope {
         &self.envelope
     }
 }
 
-/// Layout page whose TLS peer, request, digest, signature and nonce all agree.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AuthenticatedFederationContentLayoutPage {
-    page: FederatedContentLayoutPage,
+/// Authenticated immutable shard identity and independently bounded transfer shape.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticatedFederationContentShardHeader {
+    header: FederatedContentShardHeader,
 }
 
-impl AuthenticatedFederationContentLayoutPage {
-    /// Returns the exact content manifest identity.
+impl AuthenticatedFederationContentShardHeader {
+    /// Returns the exact response header after signature and correlation validation.
     #[must_use]
-    pub fn manifest_id(&self) -> &[u8] {
-        &self.page.manifest_id
+    pub const fn as_inner(&self) -> &FederatedContentShardHeader {
+        &self.header
     }
 
-    /// Returns the independently versioned portable layout header.
+    /// Returns the exact encrypted-byte length.
     #[must_use]
-    pub const fn layout_header(&self) -> Option<&VersionedPayload> {
-        self.page.layout_header.as_ref()
+    pub const fn declared_length(&self) -> u64 {
+        self.header.declared_length
     }
 
-    /// Returns the bounded provider-neutral layout records.
+    /// Returns the exact encrypted-byte digest.
     #[must_use]
-    pub fn chunks(&self) -> &[VersionedPayload] {
-        &self.page.chunks
+    pub fn content_digest(&self) -> &[u8] {
+        &self.header.content_digest
     }
 
-    /// Returns one signed exact provider route for each portable chunk record.
+    /// Returns the negotiated upper bound for each following frame.
     #[must_use]
-    pub fn shard_routes(&self) -> &[meshspan_protocol::v1::FederatedContentShardRoute] {
-        &self.page.shard_routes
-    }
-
-    /// Returns the opaque signed continuation, empty only at the end.
-    #[must_use]
-    pub fn next_cursor(&self) -> &[u8] {
-        &self.page.next_cursor
+    pub const fn maximum_frame_bytes(&self) -> u64 {
+        self.header.maximum_frame_bytes
     }
 }
 
-/// Constructs and signs one bounded content-layout fetch.
+/// Constructs and signs one exact federated encrypted-shard request.
 ///
 /// # Errors
 ///
-/// Rejects stale deadlines or any request outside negotiated wire bounds.
-pub fn signed_federation_content_layout_fetch(
+/// Rejects stale deadlines or any request outside the negotiated wire contract.
+pub fn signed_federation_content_shard_fetch(
     identity: &FederationLocalIdentity<'_>,
     context: FederationExchangeContext,
-    mut request: FetchFederatedContentLayout,
+    mut request: FetchFederatedContentShard,
     limits: WireLimits,
     now: UnixMicros,
-) -> Result<OutboundFederationContentLayoutFetch, TransportError> {
+) -> Result<OutboundFederationContentShardFetch, TransportError> {
     let binding = identity.binding();
     validate_deadline(binding, context, now)?;
     let header = federation_header(binding, context);
     request.signature.clear();
-    let transit_binding = content_layout_transit_binding(&header, &request);
     request.signature = identity
         .signing_key()
-        .sign(&federation_content_layout_fetch_signing_payload(
+        .sign(&federation_content_shard_fetch_signing_payload(
             &header, &request,
         ))
         .to_bytes()
         .to_vec();
-    let expectation = FederationContentLayoutPageExpectation {
+    let expectation = FederationContentShardExpectation {
         local_identity: binding,
         request_context: context,
-        grant_id: request.grant_id.clone(),
-        resource_scope: request.resource_scope.clone(),
-        manifest_id: request.manifest_id.clone(),
-        export_token: request.export_token.clone(),
-        manifest_object_digest: request.manifest_object_digest.clone(),
-        transit_binding,
+        request: request.clone(),
     };
     let envelope = FederationEnvelope {
         header: Some(header),
-        message: Some(Message::FetchContentLayout(request)),
+        message: Some(Message::FetchContentShard(request)),
     };
     encode_federation_frame(&envelope, limits)?;
-    Ok(OutboundFederationContentLayoutFetch {
+    Ok(OutboundFederationContentShardFetch {
         envelope,
         expectation,
     })
 }
 
-/// Constructs and signs one bounded content-layout page.
+/// Constructs and signs one exact federated encrypted-shard response header.
 ///
 /// # Errors
 ///
-/// Rejects stale deadlines or any page outside negotiated wire bounds.
-pub fn signed_federation_content_layout_page(
+/// Rejects stale deadlines, a dishonest service instant or an invalid wire shape.
+pub fn signed_federation_content_shard_header(
     identity: &FederationLocalIdentity<'_>,
     context: FederationExchangeContext,
-    mut page: FederatedContentLayoutPage,
+    mut response: FederatedContentShardHeader,
     limits: WireLimits,
     now: UnixMicros,
-) -> Result<OutboundFederationContentLayoutPage, TransportError> {
+) -> Result<OutboundFederationContentShardHeader, TransportError> {
     let binding = identity.binding();
     validate_deadline(binding, context, now)?;
+    if response.served_at_unix_micros != now.get() {
+        return Err(TransportError::InvalidConfiguration);
+    }
     let header = federation_header(binding, context);
-    page.page_digest.clear();
-    page.signature.clear();
-    page.page_digest = content_layout_page_digest(&page).to_vec();
-    page.signature = identity
+    response.signature.clear();
+    response.signature = identity
         .signing_key()
-        .sign(&federation_content_layout_page_signing_payload(
-            &header, &page,
+        .sign(&federation_content_shard_header_signing_payload(
+            &header, &response,
         ))
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {
         header: Some(header),
-        message: Some(Message::ContentLayoutPage(page)),
+        message: Some(Message::ContentShardHeader(response)),
     };
     encode_federation_frame(&envelope, limits)?;
-    Ok(OutboundFederationContentLayoutPage { envelope })
+    Ok(OutboundFederationContentShardHeader { envelope })
 }
 
 impl FederationPeerRegistry {
-    /// Authenticates one layout fetch against current TLS and relationship authority.
+    /// Authenticates one encrypted-shard fetch against current mTLS relationship authority.
     ///
     /// # Errors
     ///
-    /// Rejects stale authority, identity substitution, invalid signatures or replay.
-    pub fn authenticate_content_layout_fetch(
+    /// Rejects identity, signature, epoch, deadline or replay substitution.
+    pub fn authenticate_content_shard_fetch(
         &self,
         connection: &quinn::Connection,
         envelope: &ValidatedFederationEnvelope,
         now: UnixMicros,
         replay: &mut FederationReplayGuard,
-    ) -> Result<AuthenticatedFederationContentLayoutFetch, TransportError> {
+    ) -> Result<AuthenticatedFederationContentShardFetch, TransportError> {
         let (binding, _) = self.connection_binding(connection, now)?;
         let envelope = envelope.as_inner();
         let header = envelope
             .header
             .as_ref()
             .ok_or(TransportError::UntrustedFederationPeer)?;
-        let Message::FetchContentLayout(request) = envelope
+        let Message::FetchContentShard(request) = envelope
             .message
             .as_ref()
             .ok_or(TransportError::UntrustedFederationPeer)?
@@ -282,49 +259,47 @@ impl FederationPeerRegistry {
         verify_request_header(binding, header)?;
         replay.check(binding.relationship_id, header, now)?;
         verify_fetch_signature(binding.verifying_key, header, request)?;
-        let transit_binding = content_layout_transit_binding(header, request);
         replay.record(binding.relationship_id, header)?;
-        Ok(AuthenticatedFederationContentLayoutFetch {
+        Ok(AuthenticatedFederationContentShardFetch {
             binding,
             header: header.clone(),
             request: request.clone(),
-            transit_binding,
         })
     }
 
-    /// Authenticates one layout page against the exact request and current TLS peer.
+    /// Authenticates one encrypted-shard header against the exact request and current TLS peer.
     ///
     /// # Errors
     ///
-    /// Rejects correlation, grant, scope, manifest, digest, signature, authority or replay
-    /// substitution.
-    pub fn authenticate_content_layout_page(
+    /// Rejects correlation, identity, route, digest, signature, time or replay substitution.
+    pub fn authenticate_content_shard_header(
         &self,
         connection: &quinn::Connection,
         envelope: &ValidatedFederationEnvelope,
-        expected: &FederationContentLayoutPageExpectation,
+        expected: &FederationContentShardExpectation,
         now: UnixMicros,
         replay: &mut FederationReplayGuard,
-    ) -> Result<AuthenticatedFederationContentLayoutPage, TransportError> {
+    ) -> Result<AuthenticatedFederationContentShardHeader, TransportError> {
         let (binding, _) = self.connection_binding(connection, now)?;
         let envelope = envelope.as_inner();
         let header = envelope
             .header
             .as_ref()
             .ok_or(TransportError::UntrustedFederationPeer)?;
-        let Message::ContentLayoutPage(page) = envelope
+        let Message::ContentShardHeader(response) = envelope
             .message
             .as_ref()
             .ok_or(TransportError::UntrustedFederationPeer)?
         else {
             return Err(TransportError::UntrustedFederationPeer);
         };
-        verify_page_shape(binding, header, page, expected)?;
+        verify_response_shape(binding, header, response, expected, now)?;
         replay.check(binding.relationship_id, header, now)?;
-        verify_page_digest(page)?;
-        verify_page_signature(binding.verifying_key, header, page)?;
+        verify_header_signature(binding.verifying_key, header, response)?;
         replay.record(binding.relationship_id, header)?;
-        Ok(AuthenticatedFederationContentLayoutPage { page: page.clone() })
+        Ok(AuthenticatedFederationContentShardHeader {
+            header: response.clone(),
+        })
     }
 }
 
@@ -358,26 +333,28 @@ fn verify_request_header(
 fn verify_fetch_signature(
     verifying_key: [u8; 32],
     header: &FederationHeader,
-    request: &FetchFederatedContentLayout,
+    request: &FetchFederatedContentShard,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&request.signature)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
         .verify_strict(
-            &federation_content_layout_fetch_signing_payload(header, request),
+            &federation_content_shard_fetch_signing_payload(header, request),
             &Signature::from_bytes(&signature),
         )
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
-fn verify_page_shape(
+fn verify_response_shape(
     binding: crate::FederationPeerBinding,
     header: &FederationHeader,
-    page: &FederatedContentLayoutPage,
-    expected: &FederationContentLayoutPageExpectation,
+    response: &FederatedContentShardHeader,
+    expected: &FederationContentShardExpectation,
+    now: UnixMicros,
 ) -> Result<(), TransportError> {
     let local = expected.local_identity;
     let context = expected.request_context;
+    let request = &expected.request;
     let valid = binding.relationship_id == local.relationship_id
         && binding.local_mesh_id == local.local_mesh_id
         && binding.remote_mesh_id == local.remote_mesh_id
@@ -392,11 +369,19 @@ fn verify_page_shape(
         && exact::<16>(&header.trace_id).ok() == Some(context.trace_id)
         && header.deadline_unix_micros == context.deadline.get()
         && exact::<32>(&header.replay_nonce).is_ok_and(|nonce| nonce != context.replay_nonce)
-        && page.grant_id == expected.grant_id
-        && page.resource_scope == expected.resource_scope
-        && page.manifest_id == expected.manifest_id
-        && page.export_token == expected.export_token
-        && page.manifest_object_digest == expected.manifest_object_digest;
+        && response.grant_id == request.grant_id
+        && response.resource_scope == request.resource_scope
+        && response.manifest_id == request.manifest_id
+        && response.export_token == request.export_token
+        && response.manifest_object_digest == request.manifest_object_digest
+        && response.provider_node_id == request.provider_node_id
+        && response.target_id == request.target_id
+        && response.target_generation == request.target_generation
+        && response.shard == request.shard
+        && response.declared_length == request.expected_length
+        && response.content_digest == request.expected_digest
+        && response.served_at_unix_micros <= now.get()
+        && response.served_at_unix_micros < context.deadline.get();
     if valid {
         Ok(())
     } else {
@@ -404,39 +389,17 @@ fn verify_page_shape(
     }
 }
 
-fn verify_page_digest(page: &FederatedContentLayoutPage) -> Result<(), TransportError> {
-    if exact::<32>(&page.page_digest)? == content_layout_page_digest(page) {
-        Ok(())
-    } else {
-        Err(TransportError::UntrustedFederationPeer)
-    }
-}
-
-fn verify_page_signature(
+fn verify_header_signature(
     verifying_key: [u8; 32],
     header: &FederationHeader,
-    page: &FederatedContentLayoutPage,
+    response: &FederatedContentShardHeader,
 ) -> Result<(), TransportError> {
-    let signature = exact::<64>(&page.signature)?;
+    let signature = exact::<64>(&response.signature)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
         .verify_strict(
-            &federation_content_layout_page_signing_payload(header, page),
+            &federation_content_shard_header_signing_payload(header, response),
             &Signature::from_bytes(&signature),
         )
         .map_err(|_| TransportError::UntrustedFederationPeer)
-}
-
-fn content_layout_page_digest(page: &FederatedContentLayoutPage) -> [u8; 32] {
-    Sha256::digest(federation_content_layout_page_digest_payload(page)).into()
-}
-
-fn content_layout_transit_binding(
-    header: &FederationHeader,
-    request: &FetchFederatedContentLayout,
-) -> [u8; 32] {
-    Sha256::digest(federation_content_layout_fetch_signing_payload(
-        header, request,
-    ))
-    .into()
 }

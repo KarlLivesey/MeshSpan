@@ -167,6 +167,21 @@ pub struct BoundedItemsError {
 pub struct BoundedBytes(Vec<u8>);
 
 impl BoundedBytes {
+    /// Takes ownership of bytes only when they fit the operation-specific maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BoundedBytesError`] without copying when the value exceeds the supplied limit.
+    pub fn from_vec(value: Vec<u8>, maximum_bytes: usize) -> Result<Self, BoundedBytesError> {
+        if value.len() > maximum_bytes {
+            return Err(BoundedBytesError {
+                actual: value.len(),
+                maximum: maximum_bytes,
+            });
+        }
+        Ok(Self(value))
+    }
+
     /// Copies bytes only when they fit the operation-specific maximum.
     ///
     /// # Errors
@@ -215,6 +230,11 @@ mod bounded_tests {
 
     #[test]
     fn bounded_values_reject_only_excessive_allocations() {
+        assert!(BoundedBytes::from_vec(vec![1, 2], 1).is_err());
+        assert_eq!(
+            BoundedBytes::from_vec(vec![1, 2], 2).map(|value| value.len()),
+            Ok(2)
+        );
         assert!(BoundedBytes::copy_from(&[1, 2], 1).is_err());
         assert_eq!(
             BoundedBytes::copy_from(&[1, 2], 2).map(|value| value.len()),
