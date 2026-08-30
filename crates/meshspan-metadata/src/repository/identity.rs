@@ -734,27 +734,23 @@ fn validate_activation_session(
         return Err(RepositoryError::InvalidCommand);
     };
     let actual_assurance = parse_assurance(stored.2)?;
-    let factors = super::session::active_factor_state(transaction, &stored.0, now)?;
+    let Some(factors) = super::session::active_factor_state(transaction, &stored.0, now)? else {
+        return Err(RepositoryError::InvalidCommand);
+    };
     if stored.1.as_slice() != principal
         || stored.3 != to_i64(identity_revision.get())?
         || stored.4 > now.get()
         || stored.5 != expires_at.get()
         || stored.5 <= now.get()
         || stored.6.is_some()
-        || factors.is_none_or(|state| {
-            state.assurance != actual_assurance
-                || !super::session::meets_assurance(
-                    state.assurance,
-                    state.latest_authenticated_at,
-                    assurance,
-                    now,
-                )
-        })
+        || factors.assurance != actual_assurance
     {
-        Err(RepositoryError::InvalidCommand)
-    } else {
-        Ok(())
+        return Err(RepositoryError::InvalidCommand);
     }
+    if !super::session::meets_assurance(transaction, factors, assurance, now)? {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    Ok(())
 }
 
 fn require_policy(transaction: &Transaction<'_>, policy: [u8; 16]) -> Result<(), RepositoryError> {

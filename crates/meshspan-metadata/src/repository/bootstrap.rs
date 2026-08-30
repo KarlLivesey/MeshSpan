@@ -6,7 +6,7 @@ use meshspan_domain::Revision;
 use rusqlite::{Transaction, params};
 
 use super::apply::to_i64;
-use super::{EntityKind, EntityReference, RepositoryError, identity};
+use super::{EntityKind, EntityReference, RepositoryError, authentication_policy, identity};
 use crate::{BootstrapMesh, CommandContext};
 
 const PRINCIPAL_USER: u8 = 1;
@@ -35,6 +35,12 @@ pub(super) fn bootstrap(
     let mesh = persist_mesh(transaction, context, command, revision)?;
     persist_initial_topology(transaction, partition_id, context, command, revision)?;
     persist_administrator_role(transaction, context, command, revision)?;
+    authentication_policy::bootstrap_defaults(
+        transaction,
+        command.administrator_id,
+        context.occurred_at,
+        revision,
+    )?;
     Ok(EntityReference {
         kind: EntityKind::Mesh,
         id: mesh,

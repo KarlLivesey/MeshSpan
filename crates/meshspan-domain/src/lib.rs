@@ -19,7 +19,8 @@ mod topology;
 
 pub use access::{
     AccessActivation, AccessActivationError, AccessActivationPolicy, AccessActivationRequest,
-    AccessWindow, ActivationSubject, AssuranceLevel, AuthenticationMethodKind,
+    AccessWindow, ActivationSubject, AssuranceLevel, AuthenticationFactorClasses,
+    AuthenticationFactorClassesError, AuthenticationMethodKind, AuthenticationOperationClass,
     AuthenticationService, GroupGraph, GroupGraphError, MembershipChange, OwnerSet, OwnerSetError,
     Rights, RightsError,
 };
@@ -48,14 +49,14 @@ pub use partitioning::{
     MetadataOperationFamily, RootDelegatedRoute,
 };
 pub use primitives::{
-    ActivationId, ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationMethodId, BackupId,
-    BranchId, ClaimId, ComponentInstanceId, ContentManifestId, DurationMicros, FaultGroupClassId,
-    FaultGroupId, FederationGrantId, FederationRelationshipId, FederationStorageAllocationId,
-    FederationSuccessionId, FileVersionId, GrantId, GroupId, HandleId, HostId, IdentifierError,
-    JoinGrantId, LockId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
-    OperationId, OwnerSetId, PartitionId, PrincipalId, QuarantineId, QuorumPlanId, RecoveryCodeId,
-    Revision, RevisionError, RoleId, ScopeId, SessionId, SnapshotId, SnapshotScheduleId, StageId,
-    TagId, TargetId, UnixMicros, VolumeId,
+    ActivationId, ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationMethodId,
+    AuthenticationPolicyId, BackupId, BranchId, ClaimId, ComponentInstanceId, ContentManifestId,
+    DurationMicros, FaultGroupClassId, FaultGroupId, FederationGrantId, FederationRelationshipId,
+    FederationStorageAllocationId, FederationSuccessionId, FileVersionId, GrantId, GroupId,
+    HandleId, HostId, IdentifierError, JoinGrantId, LockId, MeshId, NamespaceCommitId, NodeId,
+    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuarantineId,
+    QuorumPlanId, RecoveryCodeId, Revision, RevisionError, RoleId, ScopeId, SessionId, SnapshotId,
+    SnapshotScheduleId, StageId, TagId, TargetId, UnixMicros, VolumeId,
 };
 pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};

@@ -155,11 +155,11 @@ pub(super) fn evaluate(
         ));
     }
     if !super::session::meets_assurance(
-        assurance,
-        factors.latest_authenticated_at,
+        database.connection(),
+        factors,
         request.required_assurance,
         request.now,
-    ) {
+    )? {
         return Ok(SessionAccessDecision::Denied(
             SessionAccessDenial::InsufficientAssurance,
         ));

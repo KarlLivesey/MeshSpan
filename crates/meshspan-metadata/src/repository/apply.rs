@@ -9,12 +9,13 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
-    authentication_method, authentication_method_creation, bootstrap, cleanup_attestation,
-    cleanup_completion, cleanup_inventory, cleanup_permit, cleanup_reclamation, cluster, component,
-    federation_grant, federation_mutation_admission, federation_principal, federation_quarantine,
-    federation_relationship, federation_storage_allocation, federation_succession, identity,
-    namespace, retention, root_delegation, routing, session, snapshot_schedule, tags,
-    user_snapshot, version_cleanup, volume_head,
+    authentication_method, authentication_method_creation, authentication_policy, bootstrap,
+    cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
+    cleanup_reclamation, cluster, component, federation_grant, federation_mutation_admission,
+    federation_principal, federation_quarantine, federation_relationship,
+    federation_storage_allocation, federation_succession, identity, namespace, retention,
+    root_delegation, routing, session, snapshot_schedule, tags, user_snapshot, version_cleanup,
+    volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -524,6 +525,7 @@ fn is_identity_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ActivateGroup(_)
             | AuthoritativeCommand::RevokeAccessActivation(_)
             | AuthoritativeCommand::CreateAuthenticationMethod(_)
+            | AuthoritativeCommand::ConfigureAuthenticationPolicy(_)
             | AuthoritativeCommand::RevokeAuthenticationMethod(_)
             | AuthoritativeCommand::IssueAuthenticationSession(_)
             | AuthoritativeCommand::RevokeAuthenticationSession(_)
@@ -572,6 +574,9 @@ fn execute_identity_command(
         }
         AuthoritativeCommand::CreateAuthenticationMethod(value) => {
             authentication_method_creation::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ConfigureAuthenticationPolicy(value) => {
+            authentication_policy::configure(transaction, context, *value, revision)
         }
         AuthoritativeCommand::RevokeAuthenticationMethod(value) => {
             authentication_method::revoke(transaction, context, value, revision)
@@ -868,6 +873,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RevokeAuthenticationSession(_) => 46,
         AuthoritativeCommand::CreateAuthenticationMethod(_) => 74,
         AuthoritativeCommand::RevokeAuthenticationMethod(_) => 75,
+        AuthoritativeCommand::ConfigureAuthenticationPolicy(_) => 76,
         AuthoritativeCommand::SetObjectGrantInheritance(_) => 47,
         AuthoritativeCommand::RemoveGroupMember(_) => 48,
         AuthoritativeCommand::RevokePermissionGrant(_) => 49,

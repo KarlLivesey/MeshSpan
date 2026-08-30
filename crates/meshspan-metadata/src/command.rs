@@ -9,7 +9,8 @@ use meshspan_contracts::{
 };
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
-    AuthenticationMethodId, AuthenticationService, ComponentInstanceId, ContentManifestId,
+    AuthenticationFactorClasses, AuthenticationMethodId, AuthenticationOperationClass,
+    AuthenticationPolicyId, AuthenticationService, ComponentInstanceId, ContentManifestId,
     DelegatedMetadataScope, DelegationAdmission, DurationMicros, FileVersionId, GrantId, GroupId,
     HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily,
     NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
@@ -128,6 +129,8 @@ pub enum AuthoritativeCommand {
     RevokeAccessActivation(RevokeAccessActivation),
     /// Creates one typed authentication method without persisting plaintext credentials.
     CreateAuthenticationMethod(CreateAuthenticationMethod),
+    /// Appends and selects one immutable service/operation authentication policy.
+    ConfigureAuthenticationPolicy(ConfigureAuthenticationPolicy),
     /// Revokes one exact authentication method immediately.
     RevokeAuthenticationMethod(RevokeAuthenticationMethod),
     /// Issues one bounded authentication session after an accepted authentication ceremony.
@@ -258,6 +261,7 @@ impl AuthoritativeCommand {
             Self::ActivateGroup(value) => value.update_digest(digest),
             Self::RevokeAccessActivation(value) => value.update_digest(digest),
             Self::CreateAuthenticationMethod(value) => value.update_digest(digest),
+            Self::ConfigureAuthenticationPolicy(value) => value.update_digest(digest),
             Self::RevokeAuthenticationMethod(value) => value.update_digest(digest),
             Self::IssueAuthenticationSession(value) => value.update_digest(digest),
             Self::RevokeAuthenticationSession(value) => value.update_digest(digest),
@@ -1194,6 +1198,27 @@ pub struct RevokeAuthenticationMethod {
     pub reason: String,
 }
 
+/// One complete immutable replacement for a service/operation authentication policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigureAuthenticationPolicy {
+    /// Stable identity allocated to this immutable policy revision.
+    pub policy_id: AuthenticationPolicyId,
+    /// Connector family governed by the policy.
+    pub service: AuthenticationService,
+    /// Operation family governed by the policy.
+    pub operation_class: AuthenticationOperationClass,
+    /// Exact currently selected policy sequence.
+    pub expected_policy_sequence: u64,
+    /// Method classes which may contribute to the authentication proof.
+    pub allowed_factor_classes: AuthenticationFactorClasses,
+    /// Minimum number of distinct current methods required.
+    pub minimum_factor_count: u8,
+    /// Maximum lifetime of a session used for this operation family.
+    pub maximum_session_duration: DurationMicros,
+    /// Maximum age of the latest factor when recent step-up is required.
+    pub maximum_step_up_age: Option<DurationMicros>,
+}
+
 /// Accepted authentication ceremony converted into a mesh-wide bounded session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IssueAuthenticationSession {
@@ -2113,6 +2138,20 @@ digest_simple_record!(
         digest.identifier(value.method_id.as_bytes());
         digest.identifier(value.principal_id.as_bytes());
         digest.bytes(value.reason.as_bytes());
+    }
+);
+digest_simple_record!(
+    ConfigureAuthenticationPolicy,
+    b"configure-authentication-policy",
+    |value, digest| {
+        digest.identifier(value.policy_id.as_bytes());
+        digest.byte(value.service.scope_bit());
+        digest.byte(value.operation_class.code());
+        digest.unsigned(value.expected_policy_sequence);
+        digest.byte(value.allowed_factor_classes.bits());
+        digest.byte(value.minimum_factor_count);
+        digest.unsigned(value.maximum_session_duration.get());
+        digest.optional_unsigned(value.maximum_step_up_age.map(DurationMicros::get));
     }
 );
 digest_simple_record!(

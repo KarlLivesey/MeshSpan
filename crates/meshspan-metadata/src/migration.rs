@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 45;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 46;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 7;
 
-const PARTITION_MIGRATIONS: [Migration; 45] = [
+const PARTITION_MIGRATIONS: [Migration; 46] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -191,8 +191,12 @@ const PARTITION_MIGRATIONS: [Migration; 45] = [
         sql: include_str!("../schema/partition/044_authentication_credential_constraints.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 45,
         sql: include_str!("../schema/partition/045_authentication_session_factors.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/046_authentication_policies.sql"),
     },
 ];
 
@@ -640,6 +644,11 @@ pub(crate) fn partition_authentication_credential_constraints_migration_digest()
 #[cfg(test)]
 pub(crate) fn partition_authentication_session_factors_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[44].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_authentication_policy_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[45].sql)
 }
 
 #[cfg(test)]
