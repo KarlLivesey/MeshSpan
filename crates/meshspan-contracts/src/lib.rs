@@ -8,6 +8,7 @@ mod common;
 mod component;
 mod conformance;
 mod data;
+mod federation_storage;
 mod filesystem;
 mod observability;
 mod security;
@@ -39,6 +40,10 @@ pub use conformance::{
 pub use data::{
     CodingLayout, CodingLayoutError, CodingScheme, PlacementPlan, PlacementPolicy,
     PlacementRequest, ReconstructionRequest,
+};
+pub use federation_storage::{
+    FederatedShardPermit, FederatedStoragePermitMacKey, federated_shard_permit_mac,
+    verify_federated_shard_permit_mac,
 };
 pub use filesystem::{
     namespace_reconciliation_result_digest, namespace_snapshot_restore_result_digest,

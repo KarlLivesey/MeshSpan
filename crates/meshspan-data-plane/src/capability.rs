@@ -2,6 +2,10 @@
 
 //! Canonical fixed-width encodings for opaque private-wire storage capabilities.
 
+mod federation;
+
+pub use federation::{decode_federated_shard_permit, encode_federated_shard_permit};
+
 use meshspan_contracts::{
     ReclamationReceipt, RemovalPermit, ReservationClass, ShardIdentity, ShardReadPermit,
     ShardReceipt, ShardWritePermit, StorageReservation, TombstoneReceipt,
