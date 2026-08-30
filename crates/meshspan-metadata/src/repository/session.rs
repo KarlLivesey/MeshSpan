@@ -52,6 +52,98 @@ pub struct ApiKeySessionReplay {
     pub key_id: ApiKeyId,
 }
 
+/// Exact durable result of a self-service session revocation retry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionRevocationReplay {
+    /// Digest of the original authoritative result receipt.
+    pub result_digest: [u8; 32],
+    /// Stable session identity revoked by the operation.
+    pub session_id: SessionId,
+    /// Owning user which performed the self-revocation.
+    pub principal_id: PrincipalId,
+    /// Authoritative instant at which the session became unusable.
+    pub revoked_at: UnixMicros,
+}
+
+/// Resolves a committed self-revocation only when all presented evidence identifies it exactly.
+pub(super) fn resolve_revocation_replay(
+    database: &crate::PartitionDatabase,
+    operation_id: OperationId,
+    expected_session_id: SessionId,
+    token_digest: [u8; 32],
+    csrf_digest: [u8; 32],
+) -> Result<Option<SessionRevocationReplay>, RepositoryError> {
+    let Some(receipt) = super::receipt::resolve_operation(database, operation_id)? else {
+        return Ok(None);
+    };
+    if receipt.entity.kind != EntityKind::AuthenticationSession
+        || receipt.entity.id != expected_session_id.as_bytes()
+    {
+        return Err(RepositoryError::OperationConflict);
+    }
+    let operation = operation_id.as_bytes();
+    let session = expected_session_id.as_bytes();
+    let stored = database.connection().query_row(
+        "SELECT operation.actor_principal_id, operation.operation_kind,
+                operation.started_at, session.user_principal_id, session.token_digest,
+                session.csrf_digest, session.revoked_at, session.revision
+         FROM operations AS operation
+         JOIN authentication_sessions AS session ON session.session_id = ?2
+         WHERE operation.operation_id = ?1",
+        params![operation.as_slice(), session.as_slice()],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        },
+    )?;
+    let (
+        actor,
+        operation_kind,
+        started_at,
+        principal,
+        stored_token,
+        stored_csrf,
+        revoked_at,
+        revision,
+    ) = stored;
+    let revoked_at = revoked_at.ok_or(RepositoryError::OperationConflict)?;
+    if operation_kind != 46
+        || actor != principal
+        || revoked_at != started_at
+        || u64::try_from(revision).ok() != Some(receipt.committed_revision.get())
+        || !constant_time_equal(&stored_token, &token_digest)
+        || !constant_time_equal(&stored_csrf, &csrf_digest)
+    {
+        return Err(RepositoryError::OperationConflict);
+    }
+    Ok(Some(SessionRevocationReplay {
+        result_digest: receipt.result_digest,
+        session_id: expected_session_id,
+        principal_id: PrincipalId::from_bytes(fixed_bytes(principal)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        revoked_at: UnixMicros::new(revoked_at),
+    }))
+}
+
+fn constant_time_equal(stored: &[u8], presented: &[u8; 32]) -> bool {
+    stored.len() == presented.len()
+        && stored
+            .iter()
+            .zip(presented)
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
+            == 0
+}
+
 /// Resolves one already-committed, single-factor API-key session operation.
 pub(super) fn resolve_api_key_replay(
     database: &crate::PartitionDatabase,

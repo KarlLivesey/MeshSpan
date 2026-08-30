@@ -112,6 +112,12 @@ where
         Self { authority }
     }
 
+    /// Returns the authority so adjacent authentication lifecycle services can be composed.
+    #[must_use]
+    pub fn into_authority(self) -> A {
+        self.authority
+    }
+
     /// Authenticates and commits one exact API-key browser session.
     ///
     /// # Errors

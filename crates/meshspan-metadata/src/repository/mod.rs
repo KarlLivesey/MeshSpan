@@ -152,7 +152,7 @@ pub use reachability::{
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use retention::VersionRetentionPolicy;
-pub use session::ApiKeySessionReplay;
+pub use session::{ApiKeySessionReplay, SessionRevocationReplay};
 pub use session_access::{
     BrowserSessionAccessRequest, BrowserSessionProtection, SessionAccessCapability,
     SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
@@ -515,6 +515,27 @@ impl AuthoritativeRepository {
         operation_id: OperationId,
     ) -> Result<Option<ApiKeySessionReplay>, RepositoryError> {
         session::resolve_api_key_replay(&self.database, operation_id)
+    }
+
+    /// Resolves an exact durable self-service session revocation retry.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the operation, session, credential evidence or persisted result differs.
+    pub fn resolve_session_revocation(
+        &self,
+        operation_id: OperationId,
+        expected_session_id: meshspan_domain::SessionId,
+        token_digest: [u8; 32],
+        csrf_digest: [u8; 32],
+    ) -> Result<Option<SessionRevocationReplay>, RepositoryError> {
+        session::resolve_revocation_replay(
+            &self.database,
+            operation_id,
+            expected_session_id,
+            token_digest,
+            csrf_digest,
+        )
     }
 
     /// Evaluates one exact connector-neutral namespace operation against committed authority.

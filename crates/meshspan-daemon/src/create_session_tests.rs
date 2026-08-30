@@ -1,27 +1,35 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode};
-use meshspan_api_contract::{CreateSessionRequest, decode_create_session_request};
+use axum::http::header::COOKIE;
+use axum::http::{HeaderValue, Request, StatusCode};
+use meshspan_api_contract::{
+    CreateSessionRequest, RevokeCurrentSessionResponse, decode_create_session_request,
+};
 use meshspan_domain::{
     AuthenticationOperationClass, AuthenticationService, ClaimBundle, EntropyError,
     InitialBootstrapMaterial, OperationId, RandomSource, Revision, UnixMicros,
 };
 use meshspan_metadata::{
     ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthoritativeCommand,
-    AuthoritativeRepository, BootstrapAppliance, BootstrapMesh, CommandContext,
-    CreateAuthenticationMethod, LogPosition, NewAuthenticationCredential, PartitionDatabase,
-    RecordName, RepositoryError,
+    AuthoritativeRepository, BootstrapAppliance, BootstrapMesh, BrowserSessionAccessRequest,
+    CommandContext, CreateAuthenticationMethod, LogPosition, NewAuthenticationCredential,
+    PartitionDatabase, RecordName, RepositoryError, SessionAccessDecision, SessionRevocationReplay,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
 use crate::{
-    CreateSessionError, CreateSessionService, SessionAuthority, SessionAuthorityError,
-    SessionCommit, session_api_router,
+    BrowserSessionAuthority, BrowserSessionAuthorityError, CreateSessionError,
+    CreateSessionService, GatewaySessionIdentity, RevokeCurrentSessionService, SessionAuthority,
+    SessionAuthorityError, SessionCommit, SessionRevocationAuthority,
+    SessionRevocationAuthorityError, SessionRevocationCommit, revoke_current_session_api_router,
+    session_api_router,
 };
 
 const OPERATION_TEXT: &str = "00000000-0000-4000-8000-000000000011";
+const REVOCATION_OPERATION_TEXT: &str = "00000000-0000-4000-8000-000000000012";
 
 #[test]
 fn api_key_session_commits_exact_delivery_intent_and_changed_retry_conflicts()
@@ -116,6 +124,81 @@ async fn public_http_session_round_trip_commits_and_replays_real_sqlite_state()
     Ok(())
 }
 
+#[tokio::test]
+async fn public_revocation_commits_then_replays_after_the_session_is_unusable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
+    let bootstrap_operation = OperationId::from_bytes([8; 16])?;
+    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let directory = tempdir()?;
+    let database = PartitionDatabase::open(
+        &directory.path().join("root.sqlite3"),
+        material.partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut authority = RepositorySessionAuthority {
+        repository: AuthoritativeRepository::new(database),
+        next_index: 1,
+    };
+    bootstrap(&mut authority, &material, bootstrap_operation)?;
+    let mut creation = CreateSessionService::new(authority);
+    let issued_at = UnixMicros::new(i64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros(),
+    )?);
+    let created = creation.create(
+        &request(&material.api_key.expose_encoded(), false)?,
+        issued_at,
+    )?;
+    let bearer = created.bearer.expose_encoded();
+    let cookie = format!("meshspan_session={}", bearer.as_str());
+    let csrf = created.csrf.expose_encoded();
+    let gateway = GatewaySessionIdentity::new(material.node_id, 1)?;
+    let router = revoke_current_session_api_router(RevokeCurrentSessionService::new(
+        creation.into_authority(),
+        gateway,
+    ))?;
+
+    let first = router
+        .clone()
+        .oneshot(revocation_request(
+            &cookie,
+            &csrf,
+            REVOCATION_OPERATION_TEXT,
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        first.headers().get("set-cookie"),
+        Some(&HeaderValue::from_static(
+            "meshspan_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"
+        ))
+    );
+    let first_body = to_bytes(first.into_body(), 2_048).await?;
+    let result = serde_json::from_slice::<RevokeCurrentSessionResponse>(&first_body)?;
+    assert_eq!(result.operation_id.as_str(), REVOCATION_OPERATION_TEXT);
+
+    let replay = router
+        .clone()
+        .oneshot(revocation_request(
+            &cookie,
+            &csrf,
+            REVOCATION_OPERATION_TEXT,
+        )?)
+        .await?;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(to_bytes(replay.into_body(), 2_048).await?, first_body);
+
+    let different_operation = router
+        .oneshot(revocation_request(
+            &cookie,
+            &csrf,
+            "00000000-0000-4000-8000-000000000013",
+        )?)
+        .await?;
+    assert_eq!(different_operation.status(), StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
 fn bootstrap(
     authority: &mut RepositorySessionAuthority,
     material: &InitialBootstrapMaterial,
@@ -188,6 +271,19 @@ fn http_request(
     }))?;
     Ok(Request::post("/api/latest/sessions")
         .header("content-type", "application/json")
+        .body(Body::from(body))?)
+}
+
+fn revocation_request(
+    cookie: &str,
+    csrf: &str,
+    operation_id: &str,
+) -> Result<Request<Body>, Box<dyn std::error::Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({ "operation_id": operation_id }))?;
+    Ok(Request::post("/api/latest/sessions/current/revocations")
+        .header("content-type", "application/json")
+        .header(COOKIE, cookie)
+        .header("meshspan-csrf-token", csrf)
         .body(Body::from(body))?)
 }
 
@@ -266,6 +362,71 @@ impl SessionAuthority for RepositorySessionAuthority {
     }
 }
 
+impl BrowserSessionAuthority for RepositorySessionAuthority {
+    fn evaluate_browser_session(
+        &self,
+        request: BrowserSessionAccessRequest,
+    ) -> Result<SessionAccessDecision, BrowserSessionAuthorityError> {
+        self.repository
+            .evaluate_browser_session_access(request)
+            .map_err(|error| match map_repository_error(&error) {
+                SessionAuthorityError::Unavailable => BrowserSessionAuthorityError::Unavailable,
+                SessionAuthorityError::Conflict | SessionAuthorityError::Failed => {
+                    BrowserSessionAuthorityError::Failed
+                }
+            })
+    }
+}
+
+impl SessionRevocationAuthority for RepositorySessionAuthority {
+    fn resolve_revocation(
+        &self,
+        operation_id: OperationId,
+        session_id: meshspan_domain::SessionId,
+        token_digest: [u8; 32],
+        csrf_digest: [u8; 32],
+    ) -> Result<Option<SessionRevocationReplay>, SessionRevocationAuthorityError> {
+        self.repository
+            .resolve_session_revocation(operation_id, session_id, token_digest, csrf_digest)
+            .map_err(|error| map_revocation_repository_error(&error))
+    }
+
+    fn commit_or_resolve_revocation(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<SessionRevocationCommit, SessionRevocationAuthorityError> {
+        let request_digest = command.request_digest(context);
+        if let Some(receipt) = self
+            .repository
+            .resolve_operation(context.operation_id)
+            .map_err(|error| map_revocation_repository_error(&error))?
+        {
+            if receipt.request_digest != request_digest {
+                return Err(SessionRevocationAuthorityError::Conflict);
+            }
+            return Ok(SessionRevocationCommit {
+                result_digest: receipt.result_digest,
+            });
+        }
+        let receipt = self
+            .repository
+            .apply_committed(
+                LogPosition {
+                    index: self.next_index,
+                    term: 1,
+                },
+                context,
+                command,
+            )
+            .map_err(|error| map_revocation_repository_error(&error))?;
+        self.next_index = self.next_index.saturating_add(1);
+        Ok(SessionRevocationCommit {
+            result_digest: receipt.result_digest,
+        })
+    }
+}
+
 fn map_repository_error(error: &RepositoryError) -> SessionAuthorityError {
     match error {
         RepositoryError::OperationConflict => SessionAuthorityError::Conflict,
@@ -273,6 +434,16 @@ fn map_repository_error(error: &RepositoryError) -> SessionAuthorityError {
             SessionAuthorityError::Unavailable
         }
         _ => SessionAuthorityError::Failed,
+    }
+}
+
+fn map_revocation_repository_error(error: &RepositoryError) -> SessionRevocationAuthorityError {
+    match error {
+        RepositoryError::OperationConflict => SessionRevocationAuthorityError::Conflict,
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            SessionRevocationAuthorityError::Unavailable
+        }
+        _ => SessionRevocationAuthorityError::Failed,
     }
 }
 

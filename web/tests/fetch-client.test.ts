@@ -278,6 +278,56 @@ describe("generated current session", () => {
   });
 });
 
+describe("generated current-session revocation", () => {
+  it("validates input and sends the session-bound CSRF token", async () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input, init) => {
+        expect(readRequestUrl(input)).toBe(
+          "https://node.example/api/latest/sessions/current/revocations",
+        );
+        expect(init?.method).toBe("POST");
+        expect(new Headers(init?.headers).get("MeshSpan-CSRF-Token")).toBe(
+          SESSION_CSRF,
+        );
+        return Promise.resolve(
+          jsonResponse({
+            operation_id: SETUP_OPERATION_ID,
+            revoked_at_epoch_micros: 70_000_000,
+            session_id: "00000000-0000-4000-8000-000000000007",
+          }),
+        );
+      },
+    });
+
+    await expect(
+      client.revokeCurrentSession(
+        { operation_id: SETUP_OPERATION_ID },
+        SESSION_CSRF,
+      ),
+    ).resolves.toMatchObject({ operation_id: SETUP_OPERATION_ID });
+  });
+
+  it("rejects an invalid CSRF token before Fetch", async () => {
+    let called = false;
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async () => {
+        called = true;
+        return Promise.resolve(jsonResponse({}));
+      },
+    });
+
+    await expect(
+      client.revokeCurrentSession(
+        { operation_id: SETUP_OPERATION_ID },
+        "invalid",
+      ),
+    ).rejects.toThrow("request has an invalid MeshSpan CSRF token");
+    expect(called).toBe(false);
+  });
+});
+
 function validSetupRequest() {
   return {
     administrator_name: "Administrator",

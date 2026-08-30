@@ -40,6 +40,13 @@ export type {
   GetSetupStatusResponse,
   GetSetupStatusResponses,
   HealthResponse,
+  RevokeCurrentSessionData,
+  RevokeCurrentSessionError,
+  RevokeCurrentSessionErrors,
+  RevokeCurrentSessionRequest,
+  RevokeCurrentSessionResponse,
+  RevokeCurrentSessionResponse2,
+  RevokeCurrentSessionResponses,
   SetupStatusResponse,
 } from "./types.gen";
 export * from "./fetch.gen";

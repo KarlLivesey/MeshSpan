@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
-    CreateSessionResponse, CurrentSessionResponse, HealthResponse, SetupStatusResponse, schema,
+    CreateSessionResponse, CurrentSessionResponse, HealthResponse, RevokeCurrentSessionRequest,
+    RevokeCurrentSessionResponse, SetupStatusResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -72,6 +73,8 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
                 "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
                 "HealthResponse": response_component::<HealthResponse>(),
+                "RevokeCurrentSessionRequest": request_component::<RevokeCurrentSessionRequest>(),
+                "RevokeCurrentSessionResponse": response_component::<RevokeCurrentSessionResponse>(),
                 "SetupStatusResponse": response_component::<SetupStatusResponse>()
             }
         }
@@ -88,6 +91,10 @@ fn paths() -> Value {
         ("/setup/meshes".to_owned(), create_mesh_path()),
         ("/sessions".to_owned(), create_session_path()),
         ("/sessions/current".to_owned(), current_session_path()),
+        (
+            "/sessions/current/revocations".to_owned(),
+            revoke_current_session_path(),
+        ),
     ]))
 }
 
@@ -203,6 +210,33 @@ fn current_session_path() -> Value {
             "responses": {
                 "200": json_response("Current browser session", "#/components/schemas/CurrentSessionResponse"),
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn revoke_current_session_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "revokeCurrentSession",
+            "summary": "Revoke the current authenticated browser session",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-session revocation",
+                "#/components/schemas/RevokeCurrentSessionRequest"
+            ),
+            "responses": {
+                "200": json_response(
+                    "Session authoritatively revoked",
+                    "#/components/schemas/RevokeCurrentSessionResponse"
+                ),
+                "400": json_response("Malformed or structurally invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Operation identifier conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
                 "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
             }

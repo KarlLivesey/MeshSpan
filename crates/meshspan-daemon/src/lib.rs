@@ -21,6 +21,8 @@ mod create_session_tests;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
+mod revoke_session;
+mod revoke_session_api;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
@@ -49,6 +51,13 @@ pub use create_session::{
 pub use current_session_api::{
     CurrentSessionApiError, CurrentSessionController, CurrentSessionError,
     current_session_api_router,
+};
+pub use revoke_session::{
+    RevokeCurrentSessionError, RevokeCurrentSessionService, SessionRevocationAuthority,
+    SessionRevocationAuthorityError, SessionRevocationCommit,
+};
+pub use revoke_session_api::{
+    RevokeCurrentSessionApiError, RevokeCurrentSessionController, revoke_current_session_api_router,
 };
 pub use setup_api::{
     CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,

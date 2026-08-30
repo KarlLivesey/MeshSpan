@@ -1969,12 +1969,9 @@ fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
         session_id,
         principal_id: ids.user,
     });
-    apply(
-        &mut repository,
-        6,
-        context(95, ids.user, 96, 202, Some(5))?,
-        &revoke,
-    )?;
+    let revoke_context = context(95, ids.user, 96, 202, Some(5))?;
+    apply(&mut repository, 6, revoke_context, &revoke)?;
+    assert_session_revocation_replay(&repository, revoke_context, session_id, ids.user)?;
     assert!(matches!(
         repository.apply_committed(
             LogPosition { index: 7, term: 1 },
@@ -1996,6 +1993,26 @@ fn authentication_sessions_are_bounded_self_issued_and_immediately_revocable()
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )?;
     assert_eq!(stored, (vec![89; 32], 2, 202, 6));
+    Ok(())
+}
+
+fn assert_session_revocation_replay(
+    repository: &AuthoritativeRepository,
+    context: CommandContext,
+    session_id: SessionId,
+    principal_id: PrincipalId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let replay = repository
+        .resolve_session_revocation(context.operation_id, session_id, [89; 32], [90; 32])?
+        .ok_or("revocation replay missing")?;
+    assert_eq!(replay.session_id, session_id);
+    assert_eq!(replay.principal_id, principal_id);
+    assert_eq!(replay.revoked_at, UnixMicros::new(202));
+    assert!(matches!(
+        repository
+            .resolve_session_revocation(context.operation_id, session_id, [91; 32], [90; 32],),
+        Err(RepositoryError::OperationConflict)
+    ));
     Ok(())
 }
 
