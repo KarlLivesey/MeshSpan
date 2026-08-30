@@ -6,6 +6,7 @@ mod api_http;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
+mod browser_session;
 mod claim_file;
 mod claim_service;
 #[cfg(test)]
@@ -21,6 +22,9 @@ mod setup_api;
 mod setup_api_tests;
 
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
+pub use browser_session::{
+    BrowserRequestProtection, BrowserSessionError, BrowserSessionEvidence, parse_browser_session,
+};
 pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,

@@ -9,7 +9,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::{Request, State};
 use axum::http::header::SET_COOKIE;
-use axum::http::{HeaderName, HeaderValue, Response, StatusCode};
+use axum::http::{HeaderValue, Response, StatusCode};
 use axum::routing::post;
 use meshspan_api_contract::{
     ApiErrorCode, BoundaryError, CreateSessionRequest, MAX_CREATE_SESSION_BYTES,
@@ -23,12 +23,12 @@ use crate::api_http::{
     boundary_issues, current_time, error_response, has_json_content_type, internal_error_response,
     issue, json_response, request_identifier,
 };
+use crate::browser_session::{CSRF_HEADER, SESSION_COOKIE_NAME};
 use crate::{
     CreateSessionError, CreateSessionResult, CreateSessionService, SessionAuthority,
     SessionAuthorityError,
 };
 
-const CSRF_HEADER: HeaderName = HeaderName::from_static("meshspan-csrf-token");
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// Synchronous session application boundary executed on a blocking worker.
@@ -208,7 +208,8 @@ fn success_response(
 ) -> Result<Response<Body>, ()> {
     let body = encode_create_session_response(&result.response).map_err(|_| ())?;
     let mut cookie = result.bearer.expose_encoded();
-    cookie.insert_str(0, "meshspan_session=");
+    cookie.insert(0, '=');
+    cookie.insert_str(0, SESSION_COOKIE_NAME);
     cookie.push_str("; Path=/; Secure; HttpOnly; SameSite=Strict");
     if result.persistent_cookie {
         let lifetime = result
