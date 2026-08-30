@@ -134,11 +134,13 @@ pub fn verify_federated_shard_permit_mac(
 #[must_use]
 pub fn federated_provider_shard_identity(
     remote_mesh_id: MeshId,
+    scope_digest: [u8; 32],
     shard: ShardIdentity,
 ) -> ShardIdentity {
     let mut digest = blake3::Hasher::new();
     digest.update(PROVIDER_SHARD_NAMESPACE_DOMAIN);
     digest.update(&remote_mesh_id.as_bytes());
+    digest.update(&scope_digest);
     digest.update(&shard.manifest_digest);
     digest.update(&shard.stripe_index.to_be_bytes());
     digest.update(&shard.shard_index.to_be_bytes());
@@ -228,15 +230,19 @@ mod tests {
     fn provider_shard_namespace_is_stable_and_tenant_specific()
     -> Result<(), Box<dyn std::error::Error>> {
         let shard = permit()?.shard;
-        let first = federated_provider_shard_identity(MeshId::from_bytes([1; 16])?, shard);
+        let first = federated_provider_shard_identity(MeshId::from_bytes([1; 16])?, [3; 32], shard);
         assert_eq!(
             first,
-            federated_provider_shard_identity(MeshId::from_bytes([1; 16])?, shard)
+            federated_provider_shard_identity(MeshId::from_bytes([1; 16])?, [3; 32], shard)
         );
         assert_ne!(first, shard);
         assert_ne!(
             first,
-            federated_provider_shard_identity(MeshId::from_bytes([2; 16])?, shard)
+            federated_provider_shard_identity(MeshId::from_bytes([2; 16])?, [3; 32], shard)
+        );
+        assert_ne!(
+            first,
+            federated_provider_shard_identity(MeshId::from_bytes([1; 16])?, [4; 32], shard)
         );
         assert_eq!(first.stripe_index, shard.stripe_index);
         assert_eq!(first.shard_index, shard.shard_index);

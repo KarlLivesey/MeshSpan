@@ -206,7 +206,11 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         };
         let prepared = PreparedPut {
             context: provider_context,
-            shard: federated_provider_shard_identity(permit.remote_mesh_id, permit.shard),
+            shard: federated_provider_shard_identity(
+                permit.remote_mesh_id,
+                permit.scope_digest,
+                permit.shard,
+            ),
             reservation_class,
         };
         let provider_shard = prepared.shard;
@@ -267,7 +271,11 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             .as_ref()
             .ok_or(DataPlaneError::InvalidMessage)?;
         let provider_context = request_context(header, permit.allocation_revision)?;
-        let provider_shard = federated_provider_shard_identity(permit.remote_mesh_id, permit.shard);
+        let provider_shard = federated_provider_shard_identity(
+            permit.remote_mesh_id,
+            permit.scope_digest,
+            permit.shard,
+        );
         let mut read_permit = ShardReadPermit {
             operation_id: permit.operation_id,
             mesh_id: permit.provider_mesh_id,
