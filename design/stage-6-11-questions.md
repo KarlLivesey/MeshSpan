@@ -70,6 +70,43 @@ different security properties.
 unlisted with an unguessable URL, and restricted with normal authentication.
 Each may target either the live object or an exact pinned version.
 
+### 6.7 Which browser and accessibility baseline must `0.1.0` prove?
+
+**Why:** The panels are the appliance's primary interface. A nominally working
+page is not sufficient if setup, file recovery or administration fails for a
+keyboard user, a screen reader or a phone-sized viewport.
+
+**Recommendation:** Support the current stable Chromium, Firefox and Safari
+engines at release time, with automated Chromium/Firefox/WebKit journeys. Require
+WCAG 2.2 AA for every core setup, file and administration flow, keyboard-only
+operation, screen-reader-understandable live status, reduced motion and responsive
+phone layouts. Older browsers receive an explicit unsupported-client response
+rather than a partially working control panel.
+
+### 6.8 Must `0.1.0` integrate an external identity provider?
+
+**Why:** OIDC, LDAP and Active Directory are valuable in larger organisations,
+but each adds deployment, group-mapping, revocation and outage semantics to the
+first useful release.
+
+**Recommendation:** No. Ship the complete self-contained authentication set from
+6.2 and preserve the versioned authentication-method interface. Defer OIDC first,
+then LDAP/Active Directory, until a later stage with explicit identity-linking,
+group-source and provider-outage contracts. Never partially emulate a directory.
+
+### 6.9 How should audit history be retained, searched and exported?
+
+**Why:** Recovery and security investigations require durable evidence, but an
+unbounded audit log can consume the appliance and a mutable log cannot prove what
+happened.
+
+**Recommendation:** Keep hash-linked, append-only audit records under a configurable
+retention policy with a conservative non-zero minimum. Search uses indexed filters
+and opaque cursors under current permissions. Administrators can export a bounded
+signed JSON Lines stream with schema/version metadata. Pressure may archive or
+expire only records allowed by policy and must leave an audited retention event;
+it may never silently truncate protected recovery evidence.
+
 ## Stage 7 — embedded SMB
 
 ### 7.1 Which SMB dialects must `0.1.0` support?
@@ -126,6 +163,42 @@ browsing.
 gateway evaluates the local identity and federated authority, then accesses the
 shared namespace as a qualified remote principal. Passwords, factors and raw
 sessions never cross the federation link.
+
+### 7.7 Which authentication profile should the first SMB service use?
+
+**Why:** SMB clients need an interoperable mechanism, but reusing web passwords or
+inventing a second user database would weaken mesh-wide identity and revocation.
+
+**Recommendation:** Use SPNEGO/NTLMv2 initially with a separately generated,
+high-entropy, independently revocable SMB credential attached to the same MeshSpan
+principal. Creating or rotating it requires recent strong web/API authentication.
+Do not reuse the web password, copy credentials between swarms or claim partial
+Kerberos/Active Directory support. Keep the authentication adapter boundary ready
+for a later complete Kerberos profile.
+
+### 7.8 How should volumes and folders become SMB shares?
+
+**Why:** Publishing the entire swarm implicitly is surprising, while making every
+gateway define independent shares would create configuration drift.
+
+**Recommendation:** An authorised administrator explicitly publishes a volume or
+folder as one uniquely named SMB export. The export, rights and service policy are
+replicated configuration and therefore appear consistently on every eligible
+gateway. Unpublishing removes new tree connections but preserves the exact durable
+handle and staged-write semantics already accepted for active clients.
+
+### 7.9 Which optional filesystem metadata must the first SMB profile preserve?
+
+**Why:** The earlier SMB recommendation includes named streams and attributes,
+while the accepted Stage 5 filesystem scope defers named streams, extended
+attributes and links. That conflict must be resolved before the adapter is built.
+
+**Recommendation:** Add bounded alternate data streams and the portable basic/DOS
+attribute and timestamp subset to the common filesystem contract because ordinary
+SMB clients may rely on them. Keep symbolic links, hard links, arbitrary extended
+attributes, device files and platform-specific metadata extensions deferred.
+Unsupported operations return precise SMB status codes and never create hidden
+provider-side state.
 
 ## Stage 8 — protection and erasure coding
 
@@ -196,6 +269,20 @@ policy. Every participant may impose stricter local ceilings or refuse placement
 but cannot weaken the owner's promise. Effective placement is the intersection
 of all applicable contracts.
 
+### 8.8 How should very small files avoid one provider file per shard?
+
+**Why:** Per-shard filesystem objects make metadata and directory operations the
+bottleneck long before storage or network throughput, especially on low-power
+nodes.
+
+**Recommendation:** Keep each logical file, chunk and shard independently
+identified, encrypted and checksummed, but allow the folder provider to place
+small immutable shard records into bounded immutable packs with a separately
+authenticated index. Repacking and garbage collection are copy-on-write and
+receipt-backed. Packing thresholds and pack sizes are selected by Stage 8
+benchmarks; they are provider details and never alter namespace or coding
+semantics.
+
 ## Stage 9 — healing, scrub, rebalance and drain
 
 ### 9.1 When should a failing storage target be automatically quarantined?
@@ -254,6 +341,19 @@ debounce can destroy recoverability.
 recovery margin, briefly debounce a safe degraded layout, use a longer debounce
 with excess redundancy, and increase suspicion after repeated flaps so repair
 cannot be postponed indefinitely.
+
+### 9.7 What should automatic rebalance optimise, and when should it stop moving data?
+
+**Why:** Optimising for a perfectly even byte count can cause endless movement,
+wear and foreground latency while ignoring failure independence and usable
+headroom.
+
+**Recommendation:** Satisfy integrity and failure-policy proof first, then required
+locality and repair reserve, then improve capacity headroom and measured service
+performance. Use capacity-normalised targets, movement cost and hysteresis; do not
+move an already safe layout for a negligible score improvement. Rebalance yields
+to urgent repair and foreground IO, and every planned move remains resumable and
+copy-on-write.
 
 ## Stage 10 — certificates, packaging and operations
 
@@ -333,6 +433,55 @@ trust identifies an autonomous swarm and must survive public certificate changes
 **Recommendation:** Yes. ACME covers user-facing HTTPS only. Federation uses its
 recovery-root-chained rotating identity. HTTPS renewal must never revoke a
 federation relationship or alter swarm identity.
+
+### 10.9 May administrators install certificates issued outside MeshSpan?
+
+**Why:** Internal enterprise CAs and existing certificate operations may make
+ACME or the mesh-local CA inappropriate, but imported private keys still need the
+same cluster-wide protection and rotation safety.
+
+**Recommendation:** Yes. Accept a validated certificate chain plus matching key
+through a strongly authenticated operation, envelope it separately to eligible
+gateways and activate it make-before-break. MeshSpan reports expiry and mismatch
+but does not pretend it can renew an imported certificate unless a configured
+replaceable certificate provider owns that renewal.
+
+### 10.10 What backup behaviour should be enabled by default?
+
+**Why:** A recovery feature that depends on somebody remembering an occasional
+manual export will fail when it is needed, while copying one unverified database
+file is not a recoverable metadata snapshot.
+
+**Recommendation:** Automatically create encrypted, integrity-checked metadata
+snapshots bound to exact committed positions and keep several generations on
+eligible protected storage targets. Offer an explicit encrypted export to offline
+or administrator-selected storage and regularly verify restore prerequisites
+without exposing recovery secrets. Retention is configurable; no vendor cloud is
+required or contacted.
+
+### 10.11 How should appliance software updates be applied?
+
+**Why:** Fully automatic updates reduce maintenance but can spread a bad build;
+fully manual per-node replacement violates the appliance goal and complicates
+mixed-version safety.
+
+**Recommendation:** Download only signed/provenanced artefacts, present one
+mesh-wide update operation and perform a compatibility-checked rolling rollout
+that preserves quorum and gateway service. Default to notifying and requiring one
+administrator approval. Permit an explicit automatic security-update policy, but
+never silently cross an incompatible schema/protocol boundary or skip the verified
+backup and rollback plan.
+
+### 10.12 May operational telemetry leave the appliance by default?
+
+**Why:** Metrics and diagnostics improve support, but topology, filenames, users
+and failure history can be sensitive and MeshSpan has no need for a vendor service.
+
+**Recommendation:** No outbound product telemetry by default. Keep bounded local
+metrics, events and redacted diagnostic bundles. Administrators may explicitly
+configure scrape exporters, email and generic webhooks; each uses an allow-listed,
+documented schema, durable deduplication and secret/content redaction. Disabling an
+exporter never reduces local healing or status correctness.
 
 ## Stage 11 — `0.1.0` proof
 
@@ -415,3 +564,16 @@ adds substantial complexity.
 boundaries plus manually constructed delegated groups without dual writers.
 Automatic load-triggered split, merge and rebalancing remains a future
 optimisation, while scale tests prove current interfaces do not prevent it.
+
+### 11.9 Must an independent security review block `0.1.0`?
+
+**Why:** Internal fuzzing, model checking and adversarial tests are mandatory but
+can share the implementation team's blind spots. Conversely, requiring a formal
+commercial audit may make an early community release impossible.
+
+**Recommendation:** Require a documented threat-model review by somebody who did
+not author the reviewed subsystem, protocol fuzzing with retained corpora,
+dependency/advisory/licence gates and closure of every critical/high finding
+before `0.1.0`. Treat a paid third-party penetration test as strongly preferred
+release evidence rather than an absolute blocker until the project has the means
+to obtain one. Never describe `0.1.0` as independently audited unless it was.
