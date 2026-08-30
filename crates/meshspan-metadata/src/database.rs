@@ -251,6 +251,7 @@ mod tests {
         partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
+        partition_authentication_credential_constraints_migration_digest,
         partition_authentication_method_events_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
@@ -297,7 +298,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 43);
+        assert_eq!(database.check_integrity()?.schema_version, 44);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -347,7 +348,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            43
+            44
         );
         Ok(())
     }
@@ -1261,6 +1262,18 @@ mod tests {
                 0xc9, 0x7a, 0x73, 0x66, 0x3a, 0x1d, 0xb7, 0x1a, 0x37, 0xd5, 0x76, 0xce, 0x35, 0x68,
                 0x07, 0x01, 0x8c, 0x95, 0x4b, 0x66, 0xb0, 0x78, 0x24, 0x73, 0x71, 0x9e, 0xf0, 0xe1,
                 0x4f, 0x51, 0x44, 0xc6,
+            ]
+        );
+    }
+
+    #[test]
+    fn authentication_credential_constraints_migration_digest_is_committed() {
+        assert_eq!(
+            partition_authentication_credential_constraints_migration_digest(),
+            [
+                0xe8, 0xf8, 0x06, 0x50, 0x0b, 0x39, 0x16, 0xf0, 0x6b, 0x49, 0x73, 0xcb, 0xa2, 0x62,
+                0x73, 0x34, 0xc7, 0x06, 0x1f, 0x8a, 0xea, 0xed, 0xb0, 0xd5, 0xca, 0x73, 0xff, 0x80,
+                0xea, 0x3a, 0x45, 0x47,
             ]
         );
     }

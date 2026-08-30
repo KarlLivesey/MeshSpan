@@ -156,6 +156,10 @@ define_identifier!(
     "Stable identity of one user authentication method."
 );
 define_identifier!(ApiKeyId, "Stable public identity of one API key.");
+define_identifier!(
+    RecoveryCodeId,
+    "Stable public identity of one single-use recovery code."
+);
 define_identifier!(SessionId, "Stable identity of one authentication session.");
 define_identifier!(
     ActivationPolicyId,

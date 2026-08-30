@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 43;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 44;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 7;
 
-const PARTITION_MIGRATIONS: [Migration; 43] = [
+const PARTITION_MIGRATIONS: [Migration; 44] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -183,8 +183,12 @@ const PARTITION_MIGRATIONS: [Migration; 43] = [
         sql: include_str!("../schema/partition/042_typed_authentication_methods.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 43,
         sql: include_str!("../schema/partition/043_authentication_method_events.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/044_authentication_credential_constraints.sql"),
     },
 ];
 
@@ -622,6 +626,11 @@ pub(crate) fn partition_typed_authentication_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn partition_authentication_method_events_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[42].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_authentication_credential_constraints_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[43].sql)
 }
 
 #[cfg(test)]
