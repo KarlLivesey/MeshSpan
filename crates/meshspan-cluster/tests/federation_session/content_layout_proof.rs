@@ -34,7 +34,9 @@ use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
     UsageLimit,
 };
-use meshspan_transport::{FederationExchangeContext, FederationReplayGuard};
+use meshspan_transport::{
+    FederationExchangeContext, FederationReplayGuard, StreamKind, accept_stream,
+};
 use tempfile::tempdir;
 
 use super::branch_page_proof::{BranchFixture, StaticBranchAuthority, publication};
@@ -608,6 +610,16 @@ async fn prove_content_healing(
         receiver.seal_content_recovery_layout(local_request, header)?,
         content.manifest
     );
+    prove_interrupted_transfer_can_retry(
+        proof,
+        fixture,
+        client_grants,
+        content,
+        export_token,
+        manifest_object_digest,
+        routes[0],
+    )
+    .await?;
     heal_route(
         proof,
         fixture,
@@ -678,6 +690,49 @@ async fn prove_content_healing(
         read_exact(&mut receiver, resumed_request, content)?,
         b"helloworld"
     );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prove_interrupted_transfer_can_retry(
+    proof: &SessionProof<'_>,
+    fixture: &BranchFixture,
+    client_grants: &StaticBranchAuthority,
+    content: PublishedContentReference,
+    export_token: [u8; 32],
+    manifest_object_digest: [u8; 32],
+    route: meshspan_cluster::FederationContentShardRoute,
+) -> Result<(), Box<dyn Error>> {
+    let request = content_shard_request(
+        proof,
+        fixture,
+        content,
+        export_token,
+        manifest_object_digest,
+        route,
+        200,
+    )?;
+    let mut client_replay = replay_guard()?;
+    let fetch = proof.client_runtime.fetch_content_shard(
+        proof.client_connection,
+        FederationContentShardFetchServices::new(proof.client_authority, client_grants),
+        request,
+        &mut client_replay,
+    );
+    let interrupt = async {
+        let stream = accept_stream(proof.server_connection).await?;
+        if stream.kind != StreamKind::Federation {
+            return Err(FederationSessionError::WrongStream);
+        }
+        drop(stream);
+        Ok(())
+    };
+    let (fetch, interrupted) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(fetch, interrupt)
+    })
+    .await?;
+    interrupted?;
+    assert!(fetch.is_err());
     Ok(())
 }
 
