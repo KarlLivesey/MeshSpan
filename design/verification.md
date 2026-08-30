@@ -7,16 +7,16 @@ state; they do not merely exercise lines or check that a process survived.
 
 Proposed budgets on a standard development runner after warm build:
 
-| Lane | Target | Local role |
-| --- | ---: | --- |
-| Format and generated-file check | 30 seconds | required, parallel |
-| Rust lint/type/build partitions | 3 minutes each | required, parallel |
-| Rust domain/unit partitions | 2 minutes each | required, parallel |
-| Web format/type/lint/unit | 3 minutes | required, parallel |
-| Schema/protocol compatibility | 2 minutes | required, parallel |
-| Affected process integration shards | 5 minutes each | required, parallel |
-| Complete virtual end-to-end matrix | 15 minutes | scheduled/release until optimised |
-| Hardware, power and soak | hours/days | scheduled/release only |
+| Lane                                |         Target | Local role                        |
+| ----------------------------------- | -------------: | --------------------------------- |
+| Format and generated-file check     |     30 seconds | required, parallel                |
+| Rust lint/type/build partitions     | 3 minutes each | required, parallel                |
+| Rust domain/unit partitions         | 2 minutes each | required, parallel                |
+| Web format/type/lint/unit           |      3 minutes | required, parallel                |
+| Schema/protocol compatibility       |      2 minutes | required, parallel                |
+| Affected process integration shards | 5 minutes each | required, parallel                |
+| Complete virtual end-to-end matrix  |     15 minutes | scheduled/release until optimised |
+| Hardware, power and soak            |     hours/days | scheduled/release only            |
 
 Budgets are gates against accidental serialisation, not reasons to skip proof.
 When a lane grows, split by independent responsibility or remove duplicated
@@ -291,7 +291,8 @@ Release gates include:
 - supported container deployment;
 - heterogeneous HDD/SSD/USB, sizes, CPU and network rates;
 - real SMB clients and browsers;
-- upgrade, rollback, backup and catastrophic-restore drills.
+- upgrade, backup, catastrophic-restore and every explicitly supported recovery
+  drill; pre-`1.0` downgrade/rollback is not implied.
 
 Expected file digests and operation receipts are stored outside the system under
 test. The lab proves both survival within policy and exact, honest failure beyond
@@ -342,7 +343,7 @@ A release candidate records:
 - exact artefact checksums and provenance;
 - every required suite, environment, duration and result;
 - unresolved defects and explicitly deferred features;
-- upgrade/rollback and recovery paths tested;
+- upgrade and every explicitly supported recovery path tested;
 - measured MUP targets and soak duration.
 
 One aggregate pass/fail indicator alone is not this evidence. Failed or skipped

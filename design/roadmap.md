@@ -34,7 +34,7 @@ Deliverables:
   policy UI, eventual/strong acknowledgement presets, performance gates and
   release platforms.
 - autonomous-swarm federation contracts covering horizontal sharing, acyclic
-  governance, remote principals, bilateral restrictions, multi-writer branches,
+  governance, downstream delegation, bilateral restrictions, multi-writer branches,
   remote capacity, revocation/quarantine and ownership recovery.
 
 Exit evidence:
@@ -118,7 +118,8 @@ Build:
   non-production compatibility lane;
 - authoritative federation relationships, rotating trust identities, governance
   edges, resource grants, delegated ceilings, bilateral quotas, offline validity,
-  remote-principal projections, successor designations and quarantine records;
+  receiving-swarm principal projections, downstream delegation chains, successor
+  designations and quarantine records;
 - typed idempotent commands and receipts for connect/approve, renew, restrict,
   revoke, recover, transfer ownership and retire a relationship;
 - a root-owned partition/delegation directory with immutable epochs, scoped
@@ -265,8 +266,9 @@ Build:
   branches can edit existing content, not only create new names;
 - referenced-record-only, cursor-paged history exchange with concrete signed
   Protobuf/Quinn codecs and handlers rather than one opaque in-memory bundle;
-- remote-principal authorisation, signed offline delegation, deterministic
-  cross-swarm multi-writer reconciliation and revocation quarantine;
+- receiving-swarm local-principal authorisation inside an upstream swarm grant,
+  signed downstream/offline delegation, deterministic cross-swarm multi-writer
+  reconciliation and revocation quarantine;
 - fail-closed cross-record import validation binding commits, identities,
   delegations, versions, manifests and content evidence;
 - filesystem routing by stable scope/partition epoch, including stale-route retry
@@ -299,13 +301,44 @@ Exit evidence:
 Requirements: FS-001–013, COW-001–009, CON-001–015, IAM-005–011, ACL-003–008,
 AUTH-006, SIM-008, SIM-009, FED-005, FED-007–015, FED-022–025.
 
+## Pre-Stage 6 — accepted-decision retrofit
+
+**Depends on:** Stages 1–5. **Required before Stage 6 starts.**
+
+The executed Stage 1–5 evidence predates D-074–D-077. It remains valid for the
+underlying consensus, persistence, transport, storage and filesystem behaviour,
+but the superseded authentication/federation policy is not grandfathered.
+
+Build and re-prove:
+
+- remove password-login generated API models, fixtures and handlers;
+- replace password/client-certificate/SMB-specific method shapes with passkey,
+  TOTP, recovery-code and scoped API-key records;
+- replace `manage_sharing` and owner-imported remote-principal authority with
+  swarm-targeted grants plus monotonic downstream delegation;
+- update schema, canonical messages, migrations, signatures, receipts and
+  hostile/restart fixtures for the new delegation chain;
+- add the persistent single-use claim-bundle record and local protected output
+  contract; and
+- report one-machine backing-device protection independently from machine HA.
+
+Exit evidence:
+
+- repository search and generated-contract drift prove no password,
+  client-certificate or SMB-only user credential surface remains;
+- A-to-B-to-C tests prove C cannot address A directly, each hop only narrows and
+  expiry/revocation quarantine propagates after restart/disconnection;
+- current Stage 1–5 suites pass without weakening their existing evidence; and
+- the implementation/status audit identifies no accepted Stage 6 prerequisite
+  as already complete merely because a superseded scaffold existed.
+
 ## Stage 6 — usable HTTPS appliance slice
 
-**Depends on:** Stage 5.
+**Depends on:** the accepted-decision retrofit.
 
 Build:
 
-- first-start create/join experience and headless equivalents;
+- first-start claim-bundle create/join experience and headless equivalents;
 - HTTPS authentication, session, CSRF and step-up flows;
 - user file browser with upload/download/create/rename/delete;
 - administrator panels for users, groups, owners, grants, nodes, targets, fault
@@ -329,7 +362,7 @@ Exit evidence:
   user/share creation and an HTTPS file round trip without exposing process
   roles, consensus, shards or placement internals.
 
-Requirements: SIM-001–007, ACC-003–005, AUTH-001–009, OPS-001–016,
+Requirements: SIM-001–010, ACC-003–005, AUTH-001–011, OPS-001–020,
 API-001–005, EXT-006.
 
 ## Stage 7 — embedded SMB appliance slice
@@ -339,11 +372,12 @@ independent contributor branch; it merges before dependent storage work.
 
 Build:
 
-- chosen initial SMB dialect/profile inside the Rust daemon;
+- SMB 3.1.1-only profile inside the Rust daemon;
 - negotiation, authentication, tree connect, durable session/handle semantics
   required by that profile;
 - mapping from SMB operations and status codes to the common filesystem service;
-- separately revocable SMB-scoped credentials;
+- ordinary MeshSpan API-key authentication with an SMB-login scope and no
+  service-specific credential record;
 - resource-aware connections, streams, buffers and worker scheduling.
 
 First vertical proof:
@@ -360,7 +394,7 @@ Exit evidence:
 - no Samba, FUSE, external service, raw provider-folder access or SMB-specific
   permission database is present.
 
-Requirements: ACC-001–004, ACC-006, ACC-007, TST-004.
+Requirements: ACC-001–004, ACC-006, ACC-007, ACC-010, ACC-011, TST-004.
 
 ## Stage 8 — protection policies and erasure coding
 
@@ -370,6 +404,8 @@ Build:
 
 - administrator-defined overlapping fault groups and scenario evaluator;
 - automatic layout selection from user failure promises and eligible capacity;
+- separate data-survival and service-availability evaluation over overlapping
+  machine shared-failure groups;
 - streaming erasure encode/decode behind a coding interface;
 - immutable stripe manifests and mixed layouts within a volume;
 - degraded verified reads;
@@ -393,8 +429,8 @@ Exit evidence:
 
 - exhaustive small-topology property tests agree with a simple placement oracle;
 - heterogeneous target sizes do not weaken fault independence;
-- one-node layout is explicitly unprotected and upgrades data online as nodes
-  and fault groups become available.
+- one-machine layouts report proved backing-device protection separately from
+  absent machine/power/location survival and upgrade online as resources arrive.
 
 Requirements: TOP-006–010, DAT-001–008, DAT-019, EC-001–008, LOC-001–011,
 ACK-001–010, TST-005.
@@ -410,7 +446,8 @@ Build:
 - automatic repair priority and safe bandwidth/resource control;
 - rebalancing after growth or topology change;
 - target, node and fault-group drain with authoritative safe-to-detach proof;
-- returning-node inventory reconciliation.
+- fast returning-target service after focused probes plus background inventory
+  reconciliation; returning voters remain learners until caught up.
 
 First vertical proof:
 
@@ -438,8 +475,12 @@ Build:
 - per-node encrypted certificate/private-key distribution and rotation;
 - operational health, protection, capacity, security and audit panels;
 - native artefacts for accepted platforms and a minimal container image;
-- signed release automation, checksums, provenance and dependency update policy;
-- upgrade, migration, rollback and metadata backup/restore flows.
+- complete local signed release/update scripts, checksums, provenance and
+  dependency update policy without GitHub Actions;
+- mesh-wide rolling update, migration, automatic metadata backup/restore and
+  explicitly unsupported pre-`1.0` downgrade handling;
+- automated external-certificate publication plus bounded local metrics and
+  optional authenticated exporters.
 
 Exit evidence:
 
@@ -447,8 +488,8 @@ Exit evidence:
 - every gateway installs the same generation without broadcasting plaintext key
   material;
 - published artefacts execute the complete HTTPS and SMB acceptance cycle;
-- automated dependency/toolchain updates merge only after required local-equivalent
-  gates pass.
+- dependency/toolchain update candidates run the complete applicable automated
+  suite before acceptance.
 
 Requirements: PKI-001–007, PER-003–007, REL-001, REL-003, TST-007.
 
@@ -475,21 +516,51 @@ Required evidence:
   other eventual zones do not hold acknowledgement;
 - real HTTPS and SMB full cycles for users, groups, permissions, volumes, files,
   failures, repair and deletion;
-- backup/restore plus supported upgrade/rollback from published artefacts;
+- backup/restore plus upgrade and every explicitly supported recovery path from
+  published artefacts;
 - ACME challenge, renewal and gateway-key-distribution cycles;
 - long-duration repair/certificate/churn soak;
 - heterogeneous-drive and foreground/degraded/repair performance results against
   the accepted targets;
 - container and accepted native artefacts with signed tag, checksums and
   provenance.
+- a seven-day release-candidate soak with reproducible out-of-band evidence and
+  an independent security review closing every critical/high finding.
 
 Requirements: all non-deferred requirement IDs.
 
-## Post-MUP boundaries
+## Stage 12 — automatic metadata-group scaling
+
+**Depends on:** Stage 11 measurement evidence. **Required before `1.0`.**
+
+This is deliberately not a `0.1.0` blocker, but it is near-term pre-`1.0` work,
+not an indefinite optimisation.
+
+Build:
+
+- capacity-normalised load/headroom measurements per authoritative group;
+- automatic group creation and directly routed operation/key-range delegation;
+- online split, merge and rebalance with epoch-fenced single-writer handoff;
+- automatic eligible voter placement against shared-failure groups; and
+- stable hysteresis using measured migration cost, locality and resource class.
+
+Exit evidence:
+
+- deterministic and process tests interrupt every prepare, copy, fence,
+  activation and retirement boundary without dual writers or unroutable scopes;
+- split/merge decisions improve a measured bottleneck and reverse safely when
+  load changes;
+- Raspberry Pi-class and server-class groups use measured capacity rather than
+  node count or one hardware-independent operations threshold; and
+- ordinary filesystem/API semantics and root-owned swarm identity/enrolment/
+  federation authority remain unchanged.
+
+Requirements: SCL-010, SCL-013, SCL-014, DEF-005.
+
+## Other post-MUP boundaries
 
 After the first useful product is proven, separately designed extensions may
 include additional access adapters, direct-shard clients, disconnected
 application-specific semantic merge handlers, more storage-provider
-implementations, native Windows hosting and automatic volume/subtree metadata
-partition creation, split, merge and rebalancing. None may bypass the filesystem,
+implementations and native Windows hosting. None may bypass the filesystem,
 authority, lifecycle or access-control contracts established above.

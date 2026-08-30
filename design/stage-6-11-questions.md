@@ -1,11 +1,12 @@
 # Stage 6–11 design questions
 
-Status: **open for review**.
+Status: **answered and superseded by
+[`stage-6-11-decisions.md`](stage-6-11-decisions.md)**.
 
-These are the remaining product decisions for Stages 6–11. Decisions already
-locked in the requirements, protocol, federation contract and Stage 4–5 design
-are deliberately not repeated. Each question includes why the answer matters
-and a recommended starting position.
+This is the historical review packet used to reach the accepted Stage 6–11
+decisions. Its recommendations are not current authority where they differ from
+the accepted answers. See [`stage-6-11-decisions.md`](stage-6-11-decisions.md)
+for the resulting contract.
 
 Answers may reference the question identifiers, for example `6.1 yes`,
 `7.3 amend`, or `10.1 option B`.

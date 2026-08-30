@@ -1,6 +1,9 @@
 # Stage 1–3 implementation audit
 
-Status: Stages 1–3 complete after the Stage 3 federation closure on 2026-08-30.
+Status: Stages 1–3 executable evidence complete for the tested contract on
+2026-08-30; the D-074–D-077 accepted-decision retrofit in `roadmap.md` is now
+required before Stage 6 and supersedes the tested password/direct-remote-principal
+shapes.
 
 This audit checks roadmap claims against production code and behavioural tests.
 Schemas, message shapes, design prose and unused helpers are not implementation
@@ -49,21 +52,21 @@ passed in 80.23 seconds with four workers.
 ### Stage 2 closure gates
 
 1. [x] Typed, audited and idempotent tag create/attach/detach commands prove tags
-   never affect authority and attach only to logical objects or principals.
+       never affect authority and attach only to logical objects or principals.
 2. [x] One atomic owner replacement command rejects an empty/inactive owner set and
-   proves exact replay, conflicting reuse and restart recovery.
+       proves exact replay, conflicting reuse and restart recovery.
 3. [x] The complete Stage 2 vertical, crash-boundary, migration, integrity,
-   backup/restore and indexed-query suites pass together.
+       backup/restore and indexed-query suites pass together.
 4. [x] Authoritative relationship, identity, governance, bilateral-grant,
-   remote-principal, succession and quarantine transitions are signed,
-   idempotent, indexed and fail closed on stale or substituted evidence.
+       remote-principal, succession and quarantine transitions are signed,
+       idempotent, indexed and fail closed on stale or substituted evidence.
 5. [x] Direct and transitive governance and succession cycles are rejected
-   atomically, including signed three-swarm ancestry.
+       atomically, including signed three-swarm ancestry.
 6. [x] Every federation command transition and compound apply boundary retains
-   the exact old state after injected failure and then commits cleanly.
+       the exact old state after injected failure and then commits cleanly.
 7. [x] Verified backup/restore retains complete federation histories and the
-   permanent root delegation directory; create, handoff, abort and child-route
-   projection transitions preserve a single writer.
+       permanent root delegation directory; create, handoff, abort and child-route
+       projection transitions preserve a single writer.
 
 ## Stage 3 repairs already merged
 
@@ -106,30 +109,30 @@ store can export the imported commit.
 ### Stage 3 closure gates
 
 1. [x] Persist the canonical active stable or joint quorum plan with its proof,
-   restore and independently recompile it, and fail closed on missing, stale or
-   corrupt plan state. Crash every plan-transition persistence boundary.
+       restore and independently recompile it, and fail closed on missing, stale or
+       corrupt plan state. Crash every plan-transition persistence boundary.
 2. [x] Start one voter, admit additional node identities through the authoritative
-   join transaction, replicate them as learners, derive exact current-incarnation
-   catch-up evidence and automatically commit joint then stable promotion.
+       join transaction, replicate them as learners, derive exact current-incarnation
+       catch-up evidence and automatically commit joint then stable promotion.
 3. [x] Restart during each promotion phase and continue from durable state without
-   manual membership repair or a hard-coded replacement plan.
+       manual membership repair or a hard-coded replacement plan.
 4. [x] Run the same real process cycle for one, two and three voters, including
-   leader loss and return where the declared plan permits progress.
+       leader loss and return where the declared plan permits progress.
 5. [x] Run two independent partition databases and consensus authorities, transfer
-   one scope through prepare/freeze/activate records, and prove every mutation is
-   accepted by at most one authority throughout the handoff.
+       one scope through prepare/freeze/activate records, and prove every mutation is
+       accepted by at most one authority throughout the handoff.
 6. [x] Re-run multi-way partition, stale-incarnation, corrupt-snapshot, saturated
-   bulk-stream and complete local gates with exact expected outcomes.
+       bulk-stream and complete local gates with exact expected outcomes.
 7. [x] Mutually authenticate autonomous swarms from current relationship metadata, rotate both
-   identities and fail closed after committed relationship revocation without admitting either
-   swarm to local membership or consensus authority.
+       identities and fail closed after committed relationship revocation without admitting either
+       swarm to local membership or consensus authority.
 8. [x] Synchronise bounded signed remote-authority pages and reject stale cursors, changed
-   authority, replay, excessive pages and incomplete snapshots without exposing partial state.
+       authority, replay, excessive pages and incomplete snapshots without exposing partial state.
 9. [x] Transfer canonical namespace commits and separately framed immutable bodies over mTLS
-   Quinn, with exact grant/resource/export/digest binding and fresh replay-protected contexts.
+       Quinn, with exact grant/resource/export/digest binding and fresh replay-protected contexts.
 10. [x] Stop a non-empty history transfer after page one, reopen durable receiver state, resume its
-    exact cursor and missing-object sequence, atomically import the complete graph and retain the
-    exact completion receipt across restart.
+        exact cursor and missing-object sequence, atomically import the complete graph and retain the
+        exact completion receipt across restart.
 
 All original and federation closure gates now pass. On 2026-08-30,
 `npm run check:stage3-adversarial` passed all four non-empty lanes in 9.00 seconds and the complete

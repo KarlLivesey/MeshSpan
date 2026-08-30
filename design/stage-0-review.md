@@ -1,7 +1,9 @@
 # Stage 0 decision review
 
-Status: O-001 and O-005 are accepted as decisions D-054 and D-056. Remaining
-recommendations stay open until their named roadmap gates.
+Status: **historical review packet**. Its accepted or amended outcomes are now
+recorded by D-054, D-056 and D-074–D-082. Only O-008's measured automatic
+metadata-group heuristics remain open; the feature itself is required before
+`1.0`.
 
 This packet converts the remaining broad questions into seven decisions that can
 be accepted, amended or deferred to a named roadmap gate. Defaults minimise the
@@ -9,15 +11,15 @@ operator surface; advanced options do not create alternate product paths.
 
 ## Decision summary
 
-| ID | Recommendation | Needed before |
-| --- | --- | --- |
-| O-001 (accepted D-054) | Build a small MeshSpan-owned consensus core around mechanically proved flexible quorum plans; use established systems as references and differential oracles | Stage 3 |
-| O-002 | Offer plain failure presets; keep arbitrary simultaneous fault scenarios in Advanced | Stage 6 UI, Stage 8 enforcement |
-| O-003 | Implement a bounded SMB 3.1.1/3.0.2 profile over TCP 445; never SMB1 | Stage 7 |
-| O-004 | Use fixed CoW logical extents with benchmark-selected size/layout profiles; no content-defined chunking initially | Stage 8 |
-| O-005 (accepted D-056) | Use envelope encryption, offline recovery/root material and rotatable online intermediates | Stage 3 identity skeleton; Stage 10 full recovery |
-| O-006 | Adopt the measurable MUP gates below on low-power and server reference classes | Stage 1 harness; Stage 11 release |
-| O-007 | Ship native Linux/macOS and multi-architecture OCI artefacts for x86-64 and ARM64 | Stage 10 |
+| ID                     | Recommendation                                                                                                                                               | Needed before                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| O-001 (accepted D-054) | Build a small MeshSpan-owned consensus core around mechanically proved flexible quorum plans; use established systems as references and differential oracles | Stage 3                                           |
+| O-002                  | Offer plain failure presets; keep arbitrary simultaneous fault scenarios in Advanced                                                                         | Stage 6 UI, Stage 8 enforcement                   |
+| O-003                  | Implement a bounded SMB 3.1.1-only profile over TCP 445; never SMB1                                                                                          | Stage 7                                           |
+| O-004                  | Use fixed CoW logical extents with benchmark-selected size/layout profiles; no content-defined chunking initially                                            | Stage 8                                           |
+| O-005 (accepted D-056) | Use envelope encryption, offline recovery/root material and rotatable online intermediates                                                                   | Stage 3 identity skeleton; Stage 10 full recovery |
+| O-006                  | Adopt the measurable MUP gates below on low-power and server reference classes                                                                               | Stage 1 harness; Stage 11 release                 |
+| O-007                  | Ship native Linux/macOS and multi-architecture OCI artefacts for x86-64 and ARM64                                                                            | Stage 10                                          |
 
 ## O-001 — consensus implementation (accepted as D-054)
 
@@ -123,7 +125,7 @@ predicates and advanced `excluded` placement remain under Advanced/API.
 
 ### Dialects and transport
 
-- Offer SMB 3.1.1 and SMB 3.0.2 over direct TCP on port 445.
+- Offer SMB 3.1.1 only over direct TCP on port 445.
 - Prefer 3.1.1 and implement its mandatory pre-authentication integrity.
 - Never offer SMB1, NetBIOS transport, SMB 2.0.2 or SMB 2.1.
 - SMB over QUIC, RDMA/Direct and multichannel are later measured extensions, not
@@ -135,10 +137,9 @@ predicates and advanced `excluded` placement remain under Advanced/API.
 - Per-export encryption is supported; new exports default to required. Relaxing
   encryption is an explicit audited advanced setting with a clear network-risk
   warning.
-- Initial self-contained authentication is SPNEGO/NTLMv2 using a separately
-  revocable high-entropy SMB credential. Its required verifier is encrypted,
-  never used for web/API login and rotatable from a strongly authenticated web
-  session.
+- Initial self-contained authentication is SPNEGO/NTLMv2 using an ordinary
+  MeshSpan API key whose scopes permit SMB login. It remains the same method
+  record used by other services rather than a separate SMB credential kind.
 - Guest and anonymous access are absent.
 - Kerberos/Active Directory integration is deferred behind the authentication
   contract, not emulated partially.
@@ -179,11 +180,11 @@ justify it.
 The on-disk/wire format records explicit byte sizes and geometry; it never
 hard-codes one global default. Stage 8 benchmarks these starting candidates:
 
-| Workload candidate | Logical extent/stripe size | Purpose |
-| --- | ---: | --- |
-| Small/random | 1 MiB | bound read-modify-write amplification |
-| General | 4 MiB | default balance for ordinary files |
-| Large sequential | 16 MiB | reduce manifest and per-stripe overhead |
+| Workload candidate | Logical extent/stripe size | Purpose                                 |
+| ------------------ | -------------------------: | --------------------------------------- |
+| Small/random       |                      1 MiB | bound read-modify-write amplification   |
+| General            |                      4 MiB | default balance for ordinary files      |
+| Large sequential   |                     16 MiB | reduce manifest and per-stripe overhead |
 
 Candidate systematic Reed–Solomon geometries use `1 <= k <= 16`,
 `0 <= m <= 8` and at most 24 slices per generation. These are implementation
@@ -256,14 +257,14 @@ Measure two documented reference classes:
 Proposed release gates after warm-up and excluding an explicitly reported client
 network limit:
 
-| Behaviour | Low-power gate | Server gate |
-| --- | ---: | ---: |
-| Healthy large sequential HTTPS/SMB | >= 70% of measured direct-path ceiling and >= 80 MiB/s | >= 70% of direct-path ceiling and >= 700 MiB/s |
-| One-node eventual metadata operation p95 | <= 25 ms | <= 10 ms |
-| Three-voter LAN metadata operation p95 | <= 100 ms | <= 50 ms |
-| Control-leader loss to new converged-control availability p95 | <= 5 s | <= 3 s |
-| Foreground p95 under repair | <= 2x healthy p95 | <= 2x healthy p95 |
-| Idle authenticated connections without swapping | >= 1,000 | >= 10,000 |
+| Behaviour                                                     |                                         Low-power gate |                                    Server gate |
+| ------------------------------------------------------------- | -----------------------------------------------------: | ---------------------------------------------: |
+| Healthy large sequential HTTPS/SMB                            | >= 70% of measured direct-path ceiling and >= 80 MiB/s | >= 70% of direct-path ceiling and >= 700 MiB/s |
+| One-node eventual metadata operation p95                      |                                               <= 25 ms |                                       <= 10 ms |
+| Three-voter LAN metadata operation p95                        |                                              <= 100 ms |                                       <= 50 ms |
+| Control-leader loss to new converged-control availability p95 |                                                 <= 5 s |                                         <= 3 s |
+| Foreground p95 under repair                                   |                                      <= 2x healthy p95 |                              <= 2x healthy p95 |
+| Idle authenticated connections without swapping               |                                               >= 1,000 |                                      >= 10,000 |
 
 Additional gates:
 
@@ -287,13 +288,13 @@ client so regressions cannot hide behind incomparable runs.
 
 Mandatory release artefacts:
 
-| Platform | Artefact |
-| --- | --- |
-| Linux x86-64 | self-contained archive and service definition |
-| Linux ARM64 | self-contained archive and service definition, including Raspberry Pi class |
-| macOS Apple Silicon | signed/notarised installer package and archive |
-| macOS Intel | signed/notarised installer package and archive |
-| OCI Linux amd64/arm64 | one multi-architecture image and immutable digest |
+| Platform              | Artefact                                                                    |
+| --------------------- | --------------------------------------------------------------------------- |
+| Linux x86-64          | self-contained archive and service definition                               |
+| Linux ARM64           | self-contained archive and service definition, including Raspberry Pi class |
+| macOS Apple Silicon   | signed/notarised installer package and archive                              |
+| macOS Intel           | signed/notarised installer package and archive                              |
+| OCI Linux amd64/arm64 | one multi-architecture image and immutable digest                           |
 
 Native packages install the same daemon and embedded web assets. They may
 configure a system service and permission to bind HTTPS/SMB ports, but do not
