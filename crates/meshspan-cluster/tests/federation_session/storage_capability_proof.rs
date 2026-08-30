@@ -12,7 +12,7 @@ use meshspan_cluster::{
 };
 use meshspan_contracts::{
     BoundedBytes, FederatedShardPermit, FederatedStoragePermitMacKey, ShardReceipt,
-    StoragePermitMacKey, verify_federated_shard_permit_mac,
+    StoragePermitMacKey, federated_provider_shard_identity, verify_federated_shard_permit_mac,
 };
 use meshspan_data_plane::{
     DataPlaneError, RemoteShardService, decode_federated_shard_permit, get_federated_shard,
@@ -151,6 +151,22 @@ pub(super) async fn prove_storage_capability_exchange(
         &mut server_replay,
     )
     .await?;
+    prove_provider_namespace(service, proof.client_mesh, issued.presented.permit.shard)?;
+    Ok(())
+}
+
+fn prove_provider_namespace(
+    service: RemoteShardService<FolderShardStore>,
+    remote_mesh_id: meshspan_domain::MeshId,
+    logical_shard: meshspan_contracts::ShardIdentity,
+) -> Result<(), Box<dyn Error>> {
+    let inventory = service.into_provider().inventory(None, 2)?;
+    assert_eq!(inventory.entries.len(), 1);
+    assert_eq!(
+        inventory.entries.as_slice()[0].shard,
+        federated_provider_shard_identity(remote_mesh_id, logical_shard)
+    );
+    assert_ne!(inventory.entries.as_slice()[0].shard, logical_shard);
     Ok(())
 }
 

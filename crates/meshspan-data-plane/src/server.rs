@@ -270,9 +270,12 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             stream,
             limits,
             observed_at,
-            context,
-            permit,
-            self.maximum_shard_bytes,
+            AuthorisedGet {
+                context,
+                permit,
+                response_shard: permit.shard,
+                maximum_bytes: self.maximum_shard_bytes,
+            },
         )
         .await?;
         Ok(())
@@ -283,18 +286,19 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         stream: &mut AcceptedStream,
         limits: WireLimits,
         observed_at: UnixMicros,
-        context: RequestContext,
-        permit: ShardReadPermit,
-        maximum_bytes: usize,
+        request: AuthorisedGet,
     ) -> Result<Option<ReadEvidence>, DataPlaneError> {
-        let bytes = match self.provider.get_exact(context, permit, observed_at) {
+        let bytes = match self
+            .provider
+            .get_exact(request.context, request.permit, observed_at)
+        {
             Ok(value) => value,
             Err(error) => {
                 reject_get(stream, limits, error).await?;
                 return Ok(None);
             }
         };
-        if bytes.len() > maximum_bytes {
+        if bytes.len() > request.maximum_bytes {
             reject_get(stream, limits, ContractError::ResourceExhausted).await?;
             return Ok(None);
         }
@@ -303,7 +307,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             &mut stream.send,
             &DataControlEnvelope {
                 message: Some(Message::GetShardHeader(GetShardHeader {
-                    shard: Some(wire_shard(permit.shard)),
+                    shard: Some(wire_shard(request.response_shard)),
                     length: bytes.len() as u64,
                     digest: digest.to_vec(),
                     maximum_frame_bytes: limits.maximum_data_frame_bytes() as u64,
@@ -379,6 +383,14 @@ struct PreparedPut {
     context: RequestContext,
     shard: ShardIdentity,
     reservation_class: ReservationClass,
+}
+
+#[derive(Clone, Copy)]
+struct AuthorisedGet {
+    context: RequestContext,
+    permit: ShardReadPermit,
+    response_shard: ShardIdentity,
+    maximum_bytes: usize,
 }
 
 #[derive(Clone, Copy)]

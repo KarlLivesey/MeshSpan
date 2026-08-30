@@ -4,8 +4,8 @@
 
 use meshspan_contracts::{
     ContractError, FederatedShardPermit, FederatedStoragePermitMacKey, ReservationClass,
-    ShardReadPermit, ShardReceipt, StorageProvider, federated_shard_read_result_digest,
-    read_permit_mac, verify_federated_shard_permit_mac,
+    ShardReadPermit, ShardReceipt, StorageProvider, federated_provider_shard_identity,
+    federated_shard_read_result_digest, read_permit_mac, verify_federated_shard_permit_mac,
 };
 use meshspan_domain::{FederationStorageAction, UnixMicros};
 use meshspan_protocol::WireLimits;
@@ -15,7 +15,7 @@ use meshspan_transport::{
     AcceptedStream, AuthenticatedFederationPeer, StreamKind, receive_data_control,
 };
 
-use super::{PreparedPut, RemoteShardService, reject_get, reject_put};
+use super::{AuthorisedGet, PreparedPut, RemoteShardService, reject_get, reject_put};
 use crate::DataPlaneError;
 use crate::capability::decode_federated_shard_permit;
 use crate::wire::{request_context, shard};
@@ -206,9 +206,10 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         };
         let prepared = PreparedPut {
             context: provider_context,
-            shard: permit.shard,
+            shard: federated_provider_shard_identity(permit.remote_mesh_id, permit.shard),
             reservation_class,
         };
+        let provider_shard = prepared.shard;
         let mut write_evidence = None;
         let receipt = self
             .serve_prepared_put(
@@ -218,6 +219,7 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
                 begin,
                 prepared,
                 |receipt| {
+                    let receipt = logical_receipt(receipt, provider_shard, permit.shard)?;
                     write_evidence = Some(context.authority.commit_write(
                         &permit,
                         receipt,
@@ -265,12 +267,13 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             .as_ref()
             .ok_or(DataPlaneError::InvalidMessage)?;
         let provider_context = request_context(header, permit.allocation_revision)?;
+        let provider_shard = federated_provider_shard_identity(permit.remote_mesh_id, permit.shard);
         let mut read_permit = ShardReadPermit {
             operation_id: permit.operation_id,
             mesh_id: permit.provider_mesh_id,
             target_id: permit.target_id,
             target_generation: permit.target_generation,
-            shard: permit.shard,
+            shard: provider_shard,
             authorization_revision: permit.allocation_revision,
             expires_at: permit.expires_at,
             permit_digest: [0; 32],
@@ -286,9 +289,12 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
                 stream,
                 context.limits,
                 context.observed_at,
-                provider_context,
-                read_permit,
-                maximum_bytes,
+                AuthorisedGet {
+                    context: provider_context,
+                    permit: read_permit,
+                    response_shard: permit.shard,
+                    maximum_bytes,
+                },
             )
             .await?;
         Ok(evidence.map(|evidence| FederatedShardOutcome {
@@ -394,6 +400,20 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
             Err(ContractError::Unauthorized)
         }
     }
+}
+
+fn logical_receipt(
+    receipt: ShardReceipt,
+    provider_shard: meshspan_contracts::ShardIdentity,
+    logical_shard: meshspan_contracts::ShardIdentity,
+) -> Result<ShardReceipt, ContractError> {
+    if receipt.shard != provider_shard {
+        return Err(ContractError::Conflict);
+    }
+    Ok(ShardReceipt {
+        shard: logical_shard,
+        ..receipt
+    })
 }
 
 struct FederatedServeContext<'a, Authority> {

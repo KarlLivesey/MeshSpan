@@ -10,6 +10,7 @@ use meshspan_domain::{
 use crate::{ContractError, ShardIdentity, ShardReceipt};
 
 const PERMIT_DOMAIN: &[u8] = b"meshspan.federation.shard-permit.v1";
+const PROVIDER_SHARD_NAMESPACE_DOMAIN: &[u8] = b"meshspan.federation.provider-shard-namespace.v1";
 
 /// Secret 256-bit key used only for provider-side federated shard permits.
 ///
@@ -125,6 +126,29 @@ pub fn verify_federated_shard_permit_mac(
         == blake3::Hash::from_bytes(permit.permit_digest)
 }
 
+/// Derives the provider-local shard identity for one remote swarm's logical shard.
+///
+/// A remote swarm controls its logical shard identifiers. Namespacing them before provider IO
+/// prevents one authenticated federation tenant from colliding with or retiring another tenant's
+/// physical shard. The logical identity remains unchanged at the federation wire boundary.
+#[must_use]
+pub fn federated_provider_shard_identity(
+    remote_mesh_id: MeshId,
+    shard: ShardIdentity,
+) -> ShardIdentity {
+    let mut digest = blake3::Hasher::new();
+    digest.update(PROVIDER_SHARD_NAMESPACE_DOMAIN);
+    digest.update(&remote_mesh_id.as_bytes());
+    digest.update(&shard.manifest_digest);
+    digest.update(&shard.stripe_index.to_be_bytes());
+    digest.update(&shard.shard_index.to_be_bytes());
+    digest.update(&shard.generation.to_be_bytes());
+    ShardIdentity {
+        manifest_digest: digest.finalize().into(),
+        ..shard
+    }
+}
+
 /// Calculates durable provider result evidence for one federated shard write.
 #[must_use]
 pub fn federated_shard_write_result_digest(
@@ -173,9 +197,9 @@ mod tests {
     };
 
     use super::{
-        FederatedShardPermit, FederatedStoragePermitMacKey, federated_shard_permit_mac,
-        federated_shard_read_result_digest, federated_shard_write_result_digest,
-        verify_federated_shard_permit_mac,
+        FederatedShardPermit, FederatedStoragePermitMacKey, federated_provider_shard_identity,
+        federated_shard_permit_mac, federated_shard_read_result_digest,
+        federated_shard_write_result_digest, verify_federated_shard_permit_mac,
     };
     use crate::{ShardIdentity, ShardReceipt};
 
@@ -198,6 +222,26 @@ mod tests {
     #[test]
     fn secret_key_rejects_zero_sentinel() {
         assert!(FederatedStoragePermitMacKey::from_bytes([0; 32]).is_err());
+    }
+
+    #[test]
+    fn provider_shard_namespace_is_stable_and_tenant_specific()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let shard = permit()?.shard;
+        let first = federated_provider_shard_identity(MeshId::from_bytes([1; 16])?, shard);
+        assert_eq!(
+            first,
+            federated_provider_shard_identity(MeshId::from_bytes([1; 16])?, shard)
+        );
+        assert_ne!(first, shard);
+        assert_ne!(
+            first,
+            federated_provider_shard_identity(MeshId::from_bytes([2; 16])?, shard)
+        );
+        assert_eq!(first.stripe_index, shard.stripe_index);
+        assert_eq!(first.shard_index, shard.shard_index);
+        assert_eq!(first.generation, shard.generation);
+        Ok(())
     }
 
     #[test]
