@@ -11,7 +11,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+sha2.workspace = true
 thiserror.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

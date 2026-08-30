@@ -3,6 +3,7 @@
 //! Pure `MeshSpan` domain types, decisions and deterministic state transitions.
 
 mod access;
+mod claim;
 mod federation;
 mod federation_access;
 mod federation_graph;
@@ -21,6 +22,7 @@ pub use access::{
     AccessWindow, ActivationSubject, AssuranceLevel, GroupGraph, GroupGraphError, MembershipChange,
     OwnerSet, OwnerSetError, Rights, RightsError,
 };
+pub use claim::{ClaimBundle, ClaimBundleError, ENCODED_CLAIM_BUNDLE_LENGTH};
 pub use federation::{
     DEFAULT_FEDERATION_OFFLINE_DURATION, FederatedPrincipal, FederationAccess, FederationPolicy,
     FederationPolicyError, FederationPreset, FederationResourceScope, NamespaceFederationPolicy,
