@@ -1,17 +1,10 @@
 # Stage 4 implementation evidence
 
-Status: original local-provider scope complete on 2026-08-28; Stage 4 reopened for
-federated partner capacity.
+Status: complete, including federated partner capacity, on 2026-08-30.
 
 Stage 4 turns registered existing folders into private immutable-shard providers.
 This document records executable evidence only; accepted design prose is not an
 implementation claim.
-
-The existing evidence does not implement the accepted federation contract. Stage
-4 still needs capability-scoped partner-swarm capacity, bilateral quota
-intersection, separate protection/ordinary-read classification, encrypted remote
-shard lifecycle receipts, reconnect/revocation handling and real cross-swarm
-provider tests. See [`federation.md`](federation.md).
 
 ## Delivered foundation
 
@@ -93,6 +86,33 @@ provider tests. See [`federation.md`](federation.md).
   physical-reclamation operations. Its real folder-provider proof rejects a
   forged removal permit and proves exact tombstone and reclamation replay across
   different observed times without double-accounting released capacity.
+- Provider-local quota slices are derived only from current replicated
+  relationship, bilateral grant, allocation, node, target-incarnation and time
+  authority. The node-local WAL/FULL-sync ledger reserves before IO, records the
+  exact signed capability presentation, survives restart and resolves a lost
+  response without spending capacity twice.
+- Partner shard identities are derived from the remote mesh and opaque scope as
+  well as the logical shard. Two tenants or scopes cannot collide in one target,
+  and namespace names, users and volume keys never cross the storage boundary.
+- Real Quinn/mTLS proofs execute encrypted put, verified read, repair, full-byte
+  scrub, logical retirement and physical reclamation. Every operation receives a
+  separately signed replay-safe receipt, and every exact retry returns its
+  original durable result rather than performing the transition twice.
+- A signed bounded inventory protocol pages only the authenticated tenant's
+  active logical catalogue. Before publication, each record is revalidated
+  against current replicated allocation authority and an exact provider-catalogue
+  lookup. Malformed cursors, mixed tenants and catalogue disagreement fail
+  closed.
+- The real partner-provider proof enforces the effective 50-byte bilateral
+  ceiling by rejecting a 51-byte request without a quota hold. A protection-only
+  allocation accepts and durably stores an encrypted shard but cannot issue an
+  ordinary-read capability; a read-serving allocation completes the full read
+  cycle.
+- The provider target is closed and reopened from its original marker, journal
+  and packed bytes before inventory resumes. Relationship revocation then fences
+  sessions and remote inventory immediately while the protection-only shard
+  remains present and mutually consistent in both local catalogues. Removal does
+  not claim those retained bytes erased.
 
 ## Closure gates
 
@@ -109,8 +129,10 @@ provider tests. See [`federation.md`](federation.md).
 6. [x] Reusable provider conformance plus real IO/process proofs for restart,
    `ENOSPC`, short/partial writes, lost flush results, corruption, path/media
    replacement, stale incarnation and three-process remote transfer.
+7. [x] Capability-scoped partner capacity with bilateral limits, distinct
+   protection/read classifications, all six signed shard lifecycle operations,
+   bounded exact inventory, target return and revocation-with-retention proof.
 
-Every original Stage 4 gate is checked. The complete local suite, including the
-six-target three-process proof, passes together; its warm four-worker run completed
-in 6.74 seconds. Stage 4 remains reopened until the federation gates in the roadmap
-have executable evidence.
+Every Stage 4 gate is checked. The complete local suite, including the six-target
+three-process proof and the real bilateral federation session, passes together;
+the four-worker run completed in 126.28 seconds on 2026-08-30.
