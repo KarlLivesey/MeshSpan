@@ -173,15 +173,7 @@ fn session_consumes_exact_typed_factors_and_rolls_back_a_replay()
     )?;
 
     let database = &repository.database;
-    let session_shape: (i64, i64) = database.connection().query_row(
-        "SELECT assurance,
-                (SELECT count(*) FROM authentication_session_factors AS factor
-                 WHERE factor.session_id = session.session_id)
-         FROM authentication_sessions AS session",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    assert_eq!(session_shape, (2, 2));
+    assert_session_delivery(database)?;
     let passkey_state: (i64, i64, i64) = database.connection().query_row(
         "SELECT signature_counter, backup_state, revision FROM webauthn_credentials",
         [],
@@ -235,6 +227,31 @@ fn session_consumes_exact_typed_factors_and_rolls_back_a_replay()
     Ok(())
 }
 
+fn assert_session_delivery(database: &PartitionDatabase) -> Result<(), rusqlite::Error> {
+    let session_shape: (i64, i64, Vec<u8>, String, i64) = database.connection().query_row(
+        "SELECT assurance,
+                (SELECT count(*) FROM authentication_session_factors AS factor
+                 WHERE factor.session_id = session.session_id),
+                csrf_digest, client_label, persistent_cookie
+         FROM authentication_sessions AS session",
+        [],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    assert_eq!(
+        session_shape,
+        (2, 2, vec![42; 32], "Office browser".to_owned(), 1)
+    );
+    Ok(())
+}
+
 fn configure_session_policy(
     repository: &mut AuthoritativeRepository,
     administrator: meshspan_domain::PrincipalId,
@@ -278,6 +295,9 @@ fn single_passkey_session(
             session_id: SessionId::from_bytes([identity_seed; 16])?,
             principal_id,
             token_digest: [identity_seed.wrapping_add(1); 32],
+            csrf_digest: [identity_seed.wrapping_add(2); 32],
+            client_label: crate::SessionClientLabel::Value("Office browser".to_owned()),
+            persistent_cookie: true,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(
                 vec![SessionAuthenticationFactor::Passkey {
@@ -394,6 +414,9 @@ fn session_command(
             session_id: SessionId::from_bytes([fixture.identity_seed; 16])?,
             principal_id: fixture.principal_id,
             token_digest: [fixture.identity_seed.wrapping_add(1); 32],
+            csrf_digest: [fixture.identity_seed.wrapping_add(2); 32],
+            client_label: crate::SessionClientLabel::Value("Office browser".to_owned()),
+            persistent_cookie: true,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(
                 vec![

@@ -205,6 +205,13 @@ fn openapi_document_is_31_licensed_bounded_and_deterministic() {
         first.value()["components"]["schemas"]["CreateSessionRequest"]["additionalProperties"],
         false
     );
+    let session_headers =
+        &first.value()["paths"]["/sessions"]["post"]["responses"]["201"]["headers"];
+    assert_eq!(session_headers["Set-Cookie"]["required"], true);
+    assert_eq!(
+        session_headers["MeshSpan-CSRF-Token"]["schema"]["pattern"],
+        r"^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$"
+    );
 }
 
 #[test]

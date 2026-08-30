@@ -152,6 +152,7 @@ pub use reachability::{
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use retention::VersionRetentionPolicy;
+pub use session::ApiKeySessionReplay;
 pub use session_access::{
     SessionAccessCapability, SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
 };
@@ -500,6 +501,19 @@ impl AuthoritativeRepository {
         operation_id: OperationId,
     ) -> Result<Option<CommandReceipt>, RepositoryError> {
         receipt::resolve_operation(&self.database, operation_id)
+    }
+
+    /// Resolves the durable delivery facts for one prior API-key session operation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if the operation targets another command family or retained session state is
+    /// malformed, revoked or no longer a single API-key ceremony.
+    pub fn resolve_api_key_session(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<ApiKeySessionReplay>, RepositoryError> {
+        session::resolve_api_key_replay(&self.database, operation_id)
     }
 
     /// Evaluates one exact connector-neutral namespace operation against committed authority.

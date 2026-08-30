@@ -99,6 +99,12 @@ impl ApiKeyBundle {
         encode(PREFIX, &self.key_id.as_bytes(), &self.secret)
     }
 
+    /// Exposes fixed secret bytes only to sibling domain-separated credential derivations.
+    #[must_use]
+    pub(crate) fn secret_bytes(&self) -> &[u8; SECRET_BYTES] {
+        &self.secret
+    }
+
     fn from_parts(
         key_id: [u8; 16],
         secret: Zeroizing<[u8; SECRET_BYTES]>,

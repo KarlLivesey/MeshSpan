@@ -40,15 +40,21 @@ import {
 
 const MAX_JSON_RESPONSE_BYTES = 65_536;
 const SCHEMA_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const CSRF_TOKEN_PATTERN = ${regexLiteral(routes.createSession.csrfPattern)};
 
 export type MeshSpanFetchClientOptions = Readonly<{
   baseUrl: string;
   fetch?: typeof globalThis.fetch;
 }>;
 
+export type CreateSessionResult = Readonly<{
+  csrfToken: string;
+  session: CreateSessionResponse;
+}>;
+
 export interface MeshSpanFetchClient {
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
-  createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResponse>;
+  createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
@@ -97,9 +103,9 @@ export function createMeshSpanFetchClient(
         zCreateMeshSetupResponse2,
       );
     },
-    async createSession(request): Promise<CreateSessionResponse> {
+    async createSession(request): Promise<CreateSessionResult> {
       const body = zCreateSessionBody.parse(request);
-      return requestJson(
+      const response = await requestJsonResponse(
         context,
         ${JSON.stringify(routes.createSession.route)},
         {
@@ -109,6 +115,10 @@ export function createMeshSpanFetchClient(
         },
         zCreateSessionResponse2,
       );
+      return {
+        csrfToken: readCsrfToken(response.headers),
+        session: response.body,
+      };
     },
     async getHealth(): Promise<HealthResponse> {
       return requestJson(
@@ -143,6 +153,20 @@ async function requestJson<T>(
   request: RequestInit,
   parser: JsonParser<T>,
 ): Promise<T> {
+  return (await requestJsonResponse(context, route, request, parser)).body;
+}
+
+type JsonResponse<T> = Readonly<{
+  body: T;
+  headers: Headers;
+}>;
+
+async function requestJsonResponse<T>(
+  context: RequestContext,
+  route: string,
+  request: RequestInit,
+  parser: JsonParser<T>,
+): Promise<JsonResponse<T>> {
   const headers = new Headers(request.headers);
   headers.set("Accept", "application/json");
   const response = await context.fetch(resolveRoute(context.apiRoot, route), {
@@ -161,7 +185,15 @@ async function requestJson<T>(
     );
   }
 
-  return parser.parse(value);
+  return { body: parser.parse(value), headers: response.headers };
+}
+
+function readCsrfToken(headers: Headers): string {
+  const token = headers.get("MeshSpan-CSRF-Token");
+  if (token === null || !CSRF_TOKEN_PATTERN.test(token)) {
+    throw new TypeError("response has an invalid MeshSpan CSRF token");
+  }
+  return token;
 }
 
 function normalizeApiRoot(value: string): URL {
@@ -295,16 +327,53 @@ function readRequiredRoutes(document) {
       if (operations.has(operationId)) {
         throw new Error(`duplicate operationId: ${operationId}`);
       }
-      operations.set(operationId, { method: method.toUpperCase(), route });
+      operations.set(operationId, {
+        method: method.toUpperCase(),
+        operation,
+        route,
+      });
     }
   }
   return {
     createMeshSetup: requireOperation(operations, "createMeshSetup"),
-    createSession: requireOperation(operations, "createSession"),
+    createSession: readSessionOperation(
+      requireOperation(operations, "createSession"),
+    ),
     getHealth: requireOperation(operations, "getHealth"),
     getOpenApi: requireOperation(operations, "getOpenApi"),
     getSetupStatus: requireOperation(operations, "getSetupStatus"),
   };
+}
+
+function readSessionOperation(operation) {
+  const responses = requireRecord(
+    operation.operation.responses,
+    "createSession.responses",
+  );
+  const created = requireRecord(
+    responses["201"],
+    "createSession.responses.201",
+  );
+  const headers = requireRecord(
+    created.headers,
+    "createSession.responses.201.headers",
+  );
+  const csrf = requireRecord(
+    headers["MeshSpan-CSRF-Token"],
+    "createSession CSRF header",
+  );
+  const schema = requireRecord(csrf.schema, "createSession CSRF header schema");
+  if (typeof schema.pattern !== "string" || schema.pattern.length > 256) {
+    throw new Error("createSession CSRF header requires one bounded pattern");
+  }
+  return { ...operation, csrfPattern: schema.pattern };
+}
+
+function regexLiteral(pattern) {
+  if (/[\r\n]/u.test(pattern)) {
+    throw new Error("regular expression pattern must occupy one line");
+  }
+  return `/${pattern.replaceAll("/", "\\/")}/u`;
 }
 
 function requireOperation(operations, operationId) {

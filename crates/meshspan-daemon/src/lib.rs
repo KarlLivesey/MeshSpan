@@ -2,6 +2,10 @@
 
 //! Daemon process composition, configuration and local secret presentation.
 
+mod api_http;
+mod auth_api;
+#[cfg(test)]
+mod auth_api_tests;
 mod claim_file;
 mod claim_service;
 #[cfg(test)]
@@ -9,10 +13,14 @@ mod claim_service_tests;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;
+mod create_session;
+#[cfg(test)]
+mod create_session_tests;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 
+pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
 pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,
@@ -21,6 +29,10 @@ pub use claim_service::{
 pub use create_mesh_setup::{
     BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, CreateMeshSetupError,
     CreateMeshSetupService,
+};
+pub use create_session::{
+    CreateSessionError, CreateSessionResult, CreateSessionService, SessionAuthority,
+    SessionAuthorityError, SessionCommit,
 };
 pub use setup_api::{
     CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,

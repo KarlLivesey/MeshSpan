@@ -303,6 +303,9 @@ fn assert_rejected_session_issue(
             session_id: SessionId::from_bytes([86; 16])?,
             principal_id: user,
             token_digest: [87; 32],
+            csrf_digest: [88; 32],
+            client_label: crate::SessionClientLabel::Missing,
+            persistent_cookie: false,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(
                 vec![SessionAuthenticationFactor::ApiKey {

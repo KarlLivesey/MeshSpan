@@ -374,6 +374,10 @@ export type CreateSessionErrors = {
    */
   409: ApiError;
   /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
    * Bounded admission rejected the request
    */
   429: ApiError;
@@ -381,6 +385,10 @@ export type CreateSessionErrors = {
    * Outgoing contract failure
    */
   500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
 };
 
 export type CreateSessionError = CreateSessionErrors[keyof CreateSessionErrors];

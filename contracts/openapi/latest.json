@@ -665,6 +665,22 @@
                   "const": "latest",
                   "type": "string"
                 }
+              },
+              "MeshSpan-CSRF-Token": {
+                "required": true,
+                "schema": {
+                  "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "x-meshspan-sensitive": true
+              },
+              "Set-Cookie": {
+                "required": true,
+                "schema": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "x-meshspan-sensitive": true
               }
             }
           },
@@ -746,6 +762,32 @@
               }
             }
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "429": {
             "content": {
               "application/json": {
@@ -781,6 +823,32 @@
               }
             },
             "description": "Outgoing contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication authority temporarily unavailable",
             "headers": {
               "MeshSpan-API-Schema": {
                 "required": true,

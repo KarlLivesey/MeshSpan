@@ -23,10 +23,16 @@ import {
 
 const MAX_JSON_RESPONSE_BYTES = 65_536;
 const SCHEMA_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const CSRF_TOKEN_PATTERN = /^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/u;
 
 export type MeshSpanFetchClientOptions = Readonly<{
   baseUrl: string;
   fetch?: typeof globalThis.fetch;
+}>;
+
+export type CreateSessionResult = Readonly<{
+  csrfToken: string;
+  session: CreateSessionResponse;
 }>;
 
 export interface MeshSpanFetchClient {
@@ -35,7 +41,7 @@ export interface MeshSpanFetchClient {
   ): Promise<CreateMeshSetupResponse>;
   createSession(
     request: CreateSessionRequestWritable,
-  ): Promise<CreateSessionResponse>;
+  ): Promise<CreateSessionResult>;
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
@@ -84,9 +90,9 @@ export function createMeshSpanFetchClient(
         zCreateMeshSetupResponse2,
       );
     },
-    async createSession(request): Promise<CreateSessionResponse> {
+    async createSession(request): Promise<CreateSessionResult> {
       const body = zCreateSessionBody.parse(request);
-      return requestJson(
+      const response = await requestJsonResponse(
         context,
         "/sessions",
         {
@@ -96,6 +102,10 @@ export function createMeshSpanFetchClient(
         },
         zCreateSessionResponse2,
       );
+      return {
+        csrfToken: readCsrfToken(response.headers),
+        session: response.body,
+      };
     },
     async getHealth(): Promise<HealthResponse> {
       return requestJson(
@@ -130,6 +140,20 @@ async function requestJson<T>(
   request: RequestInit,
   parser: JsonParser<T>,
 ): Promise<T> {
+  return (await requestJsonResponse(context, route, request, parser)).body;
+}
+
+type JsonResponse<T> = Readonly<{
+  body: T;
+  headers: Headers;
+}>;
+
+async function requestJsonResponse<T>(
+  context: RequestContext,
+  route: string,
+  request: RequestInit,
+  parser: JsonParser<T>,
+): Promise<JsonResponse<T>> {
   const headers = new Headers(request.headers);
   headers.set("Accept", "application/json");
   const response = await context.fetch(resolveRoute(context.apiRoot, route), {
@@ -148,7 +172,15 @@ async function requestJson<T>(
     );
   }
 
-  return parser.parse(value);
+  return { body: parser.parse(value), headers: response.headers };
+}
+
+function readCsrfToken(headers: Headers): string {
+  const token = headers.get("MeshSpan-CSRF-Token");
+  if (token === null || !CSRF_TOKEN_PATTERN.test(token)) {
+    throw new TypeError("response has an invalid MeshSpan CSRF token");
+  }
+  return token;
 }
 
 function normalizeApiRoot(value: string): URL {

@@ -1076,6 +1076,7 @@ dependencies = [
  "axum",
  "getrandom 0.4.3",
  "meshspan-api-contract",
+ "meshspan-contracts",
  "meshspan-domain",
  "meshspan-metadata",
  "serde_json",

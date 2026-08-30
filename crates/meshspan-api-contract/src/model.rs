@@ -40,6 +40,24 @@ pub struct SessionId(
     String,
 );
 
+impl SessionId {
+    /// Constructs canonical UUID text from already validated versioned UUID bytes.
+    #[must_use]
+    pub fn from_uuid_bytes(value: [u8; 16]) -> Option<Self> {
+        let version = value[6] >> 4;
+        if !(1..=8).contains(&version) || value[8] >> 6 != 2 {
+            return None;
+        }
+        Some(Self(format_uuid(value)))
+    }
+
+    /// Returns the canonical UUID text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// An optional property that distinguishes omission from an explicit JSON null.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum NullableField<T> {
@@ -100,6 +118,27 @@ impl<T: JsonSchema> JsonSchema for NullableField<T> {
 pub struct SessionLabel(
     #[schemars(length(min = 1, max = 80), pattern(r"^[^\x00-\x1f\x7f]+$"))] String,
 );
+
+impl SessionLabel {
+    /// Returns the untrusted label candidate for authoritative validation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+fn format_uuid(value: [u8; 16]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(36);
+    for (index, byte) in value.into_iter().enumerate() {
+        if [4, 6, 8, 10].contains(&index) {
+            output.push('-');
+        }
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}
 
 /// Primary proof accepted when creating an authenticated session.
 #[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]

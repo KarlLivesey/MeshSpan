@@ -12,6 +12,8 @@ const RESPONSE_HEADERS = {
 };
 const SETUP_OPERATION_ID = "00000000-0000-4000-8000-000000000001";
 const SETUP_CLAIM = `meshspan-claim-v1.${"1".repeat(32)}.${"2".repeat(64)}`;
+const SESSION_API_KEY = `meshspan-key-v1.${"3".repeat(32)}.${"4".repeat(64)}`;
+const SESSION_CSRF = `meshspan-csrf-v1.${"5".repeat(32)}.${"6".repeat(64)}`;
 
 describe("generated native Fetch client requests", () => {
   it("uses the generated route and validates the response", async () => {
@@ -219,6 +221,37 @@ describe("generated first-mesh setup", () => {
   });
 });
 
+describe("generated session delivery", () => {
+  it("returns the validated body and independently validated CSRF header", async () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async () =>
+        Promise.resolve(
+          jsonResponse(validSessionResponse(), 201, {
+            "MeshSpan-CSRF-Token": SESSION_CSRF,
+          }),
+        ),
+    });
+
+    await expect(client.createSession(validSessionRequest())).resolves.toEqual({
+      csrfToken: SESSION_CSRF,
+      session: validSessionResponse(),
+    });
+  });
+
+  it("rejects a successful body without the required CSRF header", async () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async () =>
+        Promise.resolve(jsonResponse(validSessionResponse(), 201)),
+    });
+
+    await expect(client.createSession(validSessionRequest())).rejects.toThrow(
+      "response has an invalid MeshSpan CSRF token",
+    );
+  });
+});
+
 function validSetupRequest() {
   return {
     administrator_name: "Administrator",
@@ -236,6 +269,23 @@ function validSetupResponse() {
     mesh_id: "00000000-0000-4000-8000-000000000002",
     node_id: "00000000-0000-4000-8000-000000000003",
     operation_id: SETUP_OPERATION_ID,
+  } as const;
+}
+
+function validSessionRequest() {
+  return {
+    authentication: { method: "api_key", secret: SESSION_API_KEY },
+    operation_id: SETUP_OPERATION_ID,
+    remember: false,
+  } as const;
+}
+
+function validSessionResponse() {
+  return {
+    assurance: "single_factor",
+    expires_at_epoch_micros: 60_000_000,
+    operation_id: SETUP_OPERATION_ID,
+    session_id: "00000000-0000-4000-8000-000000000007",
   } as const;
 }
 
@@ -258,9 +308,13 @@ function readStringBody(body: BodyInit | null | undefined): string {
   return body;
 }
 
-function jsonResponse(value: unknown, statusCode = 200): Response {
+function jsonResponse(
+  value: unknown,
+  statusCode = 200,
+  additionalHeaders: Readonly<Record<string, string>> = {},
+): Response {
   return new Response(JSON.stringify(value), {
-    headers: RESPONSE_HEADERS,
+    headers: { ...RESPONSE_HEADERS, ...additionalHeaders },
     status: statusCode,
   });
 }

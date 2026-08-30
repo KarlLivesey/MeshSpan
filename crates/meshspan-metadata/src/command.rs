@@ -1256,12 +1256,29 @@ pub struct IssueAuthenticationSession {
     pub principal_id: PrincipalId,
     /// Digest of the bearer token; raw tokens never enter authoritative metadata.
     pub token_digest: [u8; 32],
+    /// Digest of the independently presented CSRF token for browser mutations.
+    pub csrf_digest: [u8; 32],
+    /// Optional bounded device/session label selected by the user.
+    pub client_label: SessionClientLabel,
+    /// Whether the browser may persist the cookie beyond the current browser session.
+    pub persistent_cookie: bool,
     /// Connector family for which this session was established.
     pub service: AuthenticationService,
     /// Exact current method evidence accepted by the authentication ceremony.
     pub factors: BoundedItems<SessionAuthenticationFactor>,
     /// Exclusive absolute expiry.
     pub expires_at: UnixMicros,
+}
+
+/// Exact public three-state session-label intent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionClientLabel {
+    /// The property was omitted.
+    Missing,
+    /// The property was explicitly null.
+    Null,
+    /// The property supplied one non-empty label.
+    Value(String),
 }
 
 /// Exact typed credential evidence accepted as one session factor.
@@ -2197,6 +2214,16 @@ digest_simple_record!(
         digest.identifier(value.session_id.as_bytes());
         digest.identifier(value.principal_id.as_bytes());
         digest.bytes(&value.token_digest);
+        digest.bytes(&value.csrf_digest);
+        match &value.client_label {
+            SessionClientLabel::Missing => digest.byte(1),
+            SessionClientLabel::Null => digest.byte(2),
+            SessionClientLabel::Value(label) => {
+                digest.byte(3);
+                digest.bytes(label.as_bytes());
+            }
+        }
+        digest.boolean(value.persistent_cookie);
         digest.byte(value.service.scope_bit());
         digest.unsigned(u64::try_from(value.factors.len()).unwrap_or(u64::MAX));
         for factor in value.factors.as_slice() {

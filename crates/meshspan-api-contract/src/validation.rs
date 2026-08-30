@@ -13,7 +13,8 @@ use crate::{
     CreateSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
 };
 
-const MAX_CREATE_SESSION_BYTES: usize = 2_048;
+/// Maximum accepted body size for one session-creation request.
+pub const MAX_CREATE_SESSION_BYTES: usize = 2_048;
 /// Maximum accepted body size for one first-mesh setup request.
 pub const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
 
