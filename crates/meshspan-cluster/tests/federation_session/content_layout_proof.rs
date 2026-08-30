@@ -192,14 +192,7 @@ async fn prove_advertised_content_layout(
         },
         StoragePermitMacKey::from_bytes(STORAGE_PERMIT_KEY)?,
     )?;
-    let shard_routes = first
-        .received
-        .routes
-        .as_slice()
-        .iter()
-        .chain(second.received.routes.as_slice())
-        .copied()
-        .collect::<Vec<_>>();
+    let shard_routes = shard_routes(&first.received, &second.received);
     prove_content_healing(
         proof,
         fixture,
@@ -215,6 +208,18 @@ async fn prove_advertised_content_layout(
         &shard_routes,
     )
     .await?;
+    prove_substituted_route_fails_closed(
+        proof,
+        fixture,
+        client_grants,
+        server_grants,
+        &shard_source,
+        content,
+        export_token,
+        manifest_object_digest,
+        shard_routes[0],
+    )
+    .await?;
     Ok(())
 }
 
@@ -222,6 +227,19 @@ fn chunk_indexes(page: &meshspan_filesystem::ContentLayoutTransferPage) -> Vec<u
     page.chunks()
         .iter()
         .map(|chunk| chunk.chunk_index)
+        .collect()
+}
+
+fn shard_routes(
+    first: &meshspan_cluster::ReceivedFederationContentLayoutPage,
+    second: &meshspan_cluster::ReceivedFederationContentLayoutPage,
+) -> Vec<meshspan_cluster::FederationContentShardRoute> {
+    first
+        .routes
+        .as_slice()
+        .iter()
+        .chain(second.routes.as_slice())
+        .copied()
         .collect()
 }
 
@@ -680,23 +698,15 @@ async fn heal_route(
 ) -> Result<(), Box<dyn Error>> {
     let mut client_replay = replay_guard()?;
     let mut server_replay = replay_guard()?;
-    let remote = FederationContentShardFetchRequest {
-        relationship_id: proof.relationship_id,
-        grant_id: fixture.grant_id,
-        resource: fixture.resource,
-        manifest_id: content.manifest.manifest_id,
+    let remote = content_shard_request(
+        proof,
+        fixture,
+        content,
         export_token,
         manifest_object_digest,
-        provider_node_id: route.provider_node_id,
-        target_id: route.target_id,
-        target_generation: route.target_generation,
-        shard: route.shard,
-        expected_length: route.expected_length,
-        expected_digest: route.expected_digest,
-        maximum_shard_bytes: 1_024,
-        context: exchange_context(seed)?,
-        now: NOW,
-    };
+        route,
+        seed,
+    )?;
     let heal = heal_federated_content_shard(
         proof.client_runtime,
         proof.client_connection,
@@ -723,6 +733,89 @@ async fn heal_route(
     assert_eq!(healed.chunk_index, route.shard.stripe_index);
     assert_eq!(healed.byte_count, usize::try_from(route.expected_length)?);
     assert_eq!(served.byte_count, healed.byte_count);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn content_shard_request(
+    proof: &SessionProof<'_>,
+    fixture: &BranchFixture,
+    content: PublishedContentReference,
+    export_token: [u8; 32],
+    manifest_object_digest: [u8; 32],
+    route: meshspan_cluster::FederationContentShardRoute,
+    seed: u8,
+) -> Result<FederationContentShardFetchRequest, Box<dyn Error>> {
+    Ok(FederationContentShardFetchRequest {
+        relationship_id: proof.relationship_id,
+        grant_id: fixture.grant_id,
+        resource: fixture.resource,
+        manifest_id: content.manifest.manifest_id,
+        export_token,
+        manifest_object_digest,
+        provider_node_id: route.provider_node_id,
+        target_id: route.target_id,
+        target_generation: route.target_generation,
+        shard: route.shard,
+        expected_length: route.expected_length,
+        expected_digest: route.expected_digest,
+        maximum_shard_bytes: 1_024,
+        context: exchange_context(seed)?,
+        now: NOW,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prove_substituted_route_fails_closed(
+    proof: &SessionProof<'_>,
+    fixture: &BranchFixture,
+    client_grants: &StaticBranchAuthority,
+    server_grants: &StaticBranchAuthority,
+    source: &FilesystemFederationContentShardSource<FolderShardStore>,
+    content: PublishedContentReference,
+    export_token: [u8; 32],
+    manifest_object_digest: [u8; 32],
+    mut route: meshspan_cluster::FederationContentShardRoute,
+) -> Result<(), Box<dyn Error>> {
+    route.provider_node_id = NodeId::from_bytes([212; 16])?;
+    let request = content_shard_request(
+        proof,
+        fixture,
+        content,
+        export_token,
+        manifest_object_digest,
+        route,
+        239,
+    )?;
+    let mut client_replay = replay_guard()?;
+    let mut server_replay = replay_guard()?;
+    let attempts = async {
+        tokio::join!(
+            proof.client_runtime.fetch_content_shard(
+                proof.client_connection,
+                FederationContentShardFetchServices::new(proof.client_authority, client_grants),
+                request,
+                &mut client_replay,
+            ),
+            proof.server_runtime.serve_content_shard(
+                proof.server_connection,
+                FederationContentShardServices::new(proof.server_authority, server_grants, source,),
+                FederationContentShardServeRequest {
+                    response_replay_nonce: [244; 32],
+                    now: NOW,
+                },
+                &mut server_replay,
+            )
+        )
+    };
+    let (fetch, serve) = tokio::time::timeout(Duration::from_secs(2), attempts).await?;
+    assert!(fetch.is_err());
+    assert!(matches!(
+        serve,
+        Err(FederationSessionError::ContentShard(
+            meshspan_cluster::FederationContentShardSourceError::InvalidQuery
+        ))
+    ));
     Ok(())
 }
 
