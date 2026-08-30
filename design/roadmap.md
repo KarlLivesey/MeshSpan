@@ -305,6 +305,9 @@ AUTH-006, SIM-008, SIM-009, FED-005, FED-007–015, FED-022–025.
 
 **Depends on:** Stages 1–5. **Required before Stage 6 starts.**
 
+**Status:** complete. See
+[`pre-stage-6-retrofit-evidence.md`](pre-stage-6-retrofit-evidence.md).
+
 The executed Stage 1–5 evidence predates D-074–D-077. It remains valid for the
 underlying consensus, persistence, transport, storage and filesystem behaviour,
 but the superseded authentication/federation policy is not grandfathered.

@@ -1,9 +1,8 @@
 # Stage 1–3 implementation audit
 
-Status: Stages 1–3 executable evidence complete for the tested contract on
-2026-08-30; the D-074–D-077 accepted-decision retrofit in `roadmap.md` is now
-required before Stage 6 and supersedes the tested password/direct-remote-principal
-shapes.
+Status: Stages 1–3 executable evidence and the D-074–D-077 accepted-decision
+retrofit are complete on 2026-08-30. See
+[`pre-stage-6-retrofit-evidence.md`](pre-stage-6-retrofit-evidence.md).
 
 This audit checks roadmap claims against production code and behavioural tests.
 Schemas, message shapes, design prose and unused helpers are not implementation
@@ -43,7 +42,8 @@ Migration, crash, integrity, backup/restore and bounded-query tests also pass.
 
 The original audit repairs and federation retrofit have typed authoritative
 commands and executable evidence. Relationships, identities, signed governance
-ancestry, bilateral grants, projected principals, succession, quarantine and
+ancestry, bilateral swarm grants, recipient-local assignments, actor lifecycle attestations,
+succession, quarantine and
 permanent-root scope routing retain exact history and survive restart and
 verified backup/restore. Every federation lifecycle command and compound apply
 boundary has deterministic old-or-new crash evidence. The complete local gate
@@ -58,7 +58,7 @@ passed in 80.23 seconds with four workers.
 3. [x] The complete Stage 2 vertical, crash-boundary, migration, integrity,
        backup/restore and indexed-query suites pass together.
 4. [x] Authoritative relationship, identity, governance, bilateral-grant,
-       remote-principal, succession and quarantine transitions are signed,
+       recipient-assignment, actor-attestation, succession and quarantine transitions are signed,
        idempotent, indexed and fail closed on stale or substituted evidence.
 5. [x] Direct and transitive governance and succession cycles are rejected
        atomically, including signed three-swarm ancestry.
@@ -137,5 +137,5 @@ store can export the imported commit.
 All original and federation closure gates now pass. On 2026-08-30,
 `npm run check:stage3-adversarial` passed all four non-empty lanes in 9.00 seconds and the complete
 four-worker `npm run check` gate passed in 109.90 seconds. Stage 3 is complete; remote shard
-placement remains Stage 4, while remote-principal multi-writer reconciliation and quarantine
+placement remains Stage 4, while swarm-targeted multi-writer reconciliation and quarantine
 remain Stage 5.

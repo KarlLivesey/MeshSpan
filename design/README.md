@@ -36,10 +36,11 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 27. [stage-4-5-decisions.md](stage-4-5-decisions.md) — accepted detailed folder-storage and filesystem decisions.
 28. [stage-4-evidence.md](stage-4-evidence.md) — original folder-storage implementation evidence.
 29. [stage-5-evidence.md](stage-5-evidence.md) — filesystem and federation completion evidence.
-30. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
-31. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
-32. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
-33. [stage-6-11-decisions.md](stage-6-11-decisions.md) — accepted HTTPS, SMB, protection, operations and MUP decisions.
+30. [pre-stage-6-retrofit-evidence.md](pre-stage-6-retrofit-evidence.md) — accepted authentication, federation and topology retrofit proof.
+31. [decisions.md](decisions.md) — accepted, proposed and unresolved design decisions.
+32. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
+33. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
+34. [stage-6-11-decisions.md](stage-6-11-decisions.md) — accepted HTTPS, SMB, protection, operations and MUP decisions.
 
 ## Document rules
 

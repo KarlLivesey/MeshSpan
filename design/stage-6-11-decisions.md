@@ -4,12 +4,9 @@ Status: **accepted in discussion on 2026-08-30**.
 
 This document records the accepted product decisions for the HTTPS appliance,
 embedded SMB service, protection, healing, operations and `0.1.0` proof. It is a
-contract, not an implementation claim. Existing code and evidence remain subject
-to the retrofit notes in the roadmap and this document.
-
-The current generated public-API scaffold still contains password login models.
-Those models are implementation debt and must be removed with their generated
-types/tests before Stage 6 can pass; their presence is not an accepted exception.
+contract, not an implementation claim. The prerequisite accepted-decision
+retrofit is complete and recorded in
+[`pre-stage-6-retrofit-evidence.md`](pre-stage-6-retrofit-evidence.md).
 
 ## 1. Claim and authentication
 
