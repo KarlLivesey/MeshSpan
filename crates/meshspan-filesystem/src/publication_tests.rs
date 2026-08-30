@@ -3452,30 +3452,24 @@ fn concurrent_file_edits_materialise_one_owned_recovered_copy()
     };
     let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
     store.publish_root_file(&first)?;
-    store.connection.execute(
-        "INSERT INTO branch_namespace_heads(
-            branch_id, volume_id, namespace_commit_id, head_sequence
-         ) VALUES (?1, ?2, ?3, 1)",
-        params![
-            fork_branch.as_bytes().as_slice(),
-            first.file.volume_id.as_bytes().as_slice(),
-            first.namespace_commit_id.as_bytes().as_slice(),
-        ],
-    )?;
-    store.connection.execute(
-        "INSERT INTO branch_files(
-            branch_id, object_id, volume_id, current_version_id, head_sequence
-         ) VALUES (?1, ?2, ?3, ?4, 1)",
-        params![
-            fork_branch.as_bytes().as_slice(),
-            first.file.object_id.as_bytes().as_slice(),
-            first.file.volume_id.as_bytes().as_slice(),
-            first.file.version_id.as_bytes().as_slice(),
-        ],
-    )?;
+    store.ensure_namespace_branch(fork_branch, first.file.volume_id, first.namespace_commit_id)?;
+    assert!(super::load_file_head(&store.connection, fork_branch, first.file.object_id)?.is_none());
+    assert!(matches!(
+        super::namespace::publish(
+            &mut store.connection,
+            &office,
+            Some(super::namespace::NamespaceFaultPoint::DirectoryNodes),
+        ),
+        Err(PublicationError::InjectedFault)
+    ));
+    assert!(super::load_file_head(&store.connection, fork_branch, first.file.object_id)?.is_none());
     store
         .publish_root_file(&office)
         .map_err(|error| format!("office publication: {error:?}"))?;
+    let fork_head = super::load_file_head(&store.connection, fork_branch, first.file.object_id)?
+        .ok_or("fork file head was not materialised")?;
+    assert_eq!(fork_head.current_version_id, Some(office.file.version_id));
+    assert_eq!(fork_head.sequence, 2);
     store
         .publish_root_file(&home)
         .map_err(|error| format!("home publication: {error:?}"))?;
