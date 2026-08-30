@@ -11,8 +11,8 @@ use super::{
     RepositoryError,
 };
 use crate::{
-    AuthoritativeCommand, BootstrapMesh, CommandContext, CreateApiKeyAuthenticationMethod,
-    PartitionDatabase, RecordName, RevokeAuthenticationMethod,
+    AuthoritativeCommand, BootstrapMesh, CommandContext, CreateAuthenticationMethod,
+    NewAuthenticationCredential, PartitionDatabase, RecordName, RevokeAuthenticationMethod,
 };
 
 #[test]
@@ -35,10 +35,15 @@ fn api_key_creation_is_atomic_restart_safe_and_exactly_replayable()
     assert_eq!(applied.entity.id, method_id.as_bytes());
 
     let substituted = match &create {
-        AuthoritativeCommand::CreateApiKeyAuthenticationMethod(value) => {
+        AuthoritativeCommand::CreateAuthenticationMethod(value) => {
             let mut changed = value.clone();
-            changed.scopes = 0b111;
-            AuthoritativeCommand::CreateApiKeyAuthenticationMethod(changed)
+            changed.credential = NewAuthenticationCredential::ApiKey {
+                key_id: ApiKeyId::from_bytes([10; 16])?,
+                key_digest: [11; 32],
+                scopes: 0b111,
+                valid_from: UnixMicros::new(20),
+            };
+            AuthoritativeCommand::CreateAuthenticationMethod(changed)
         }
         _ => return Err("unexpected command family".into()),
     };
@@ -57,24 +62,28 @@ fn api_key_creation_is_atomic_restart_safe_and_exactly_replayable()
 
     let invalid_context = context(12, administrator, 13, 26, Some(Revision::new(2)))?;
     let mut invalid = match &create {
-        AuthoritativeCommand::CreateApiKeyAuthenticationMethod(value) => value.clone(),
+        AuthoritativeCommand::CreateAuthenticationMethod(value) => value.clone(),
         _ => return Err("unexpected command family".into()),
     };
     invalid.method_id = AuthenticationMethodId::from_bytes([14; 16])?;
-    invalid.key_id = ApiKeyId::from_bytes([15; 16])?;
-    invalid.key_digest = [0; 32];
+    invalid.credential = NewAuthenticationCredential::ApiKey {
+        key_id: ApiKeyId::from_bytes([15; 16])?,
+        key_digest: [0; 32],
+        scopes: 0b101,
+        valid_from: UnixMicros::new(20),
+    };
     assert!(matches!(
         repository.apply_committed(
             position(4),
             invalid_context,
-            &AuthoritativeCommand::CreateApiKeyAuthenticationMethod(invalid),
+            &AuthoritativeCommand::CreateAuthenticationMethod(invalid),
         ),
         Err(RepositoryError::InvalidCommand)
     ));
     assert_eq!(repository.current_revision()?, Revision::new(2));
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        43
+        44
     );
     Ok(())
 }
@@ -146,7 +155,7 @@ fn api_key_revocation_is_audited_restart_safe_and_exactly_replayable()
             administrator.as_bytes().to_vec(),
         )
     );
-    assert_eq!(database.check_integrity()?.schema_version, 43);
+    assert_eq!(database.check_integrity()?.schema_version, 44);
     Ok(())
 }
 
@@ -288,22 +297,24 @@ fn api_key_command(
     method_id: AuthenticationMethodId,
     administrator: PrincipalId,
 ) -> Result<AuthoritativeCommand, meshspan_domain::IdentifierError> {
-    Ok(AuthoritativeCommand::CreateApiKeyAuthenticationMethod(
-        CreateApiKeyAuthenticationMethod {
+    Ok(AuthoritativeCommand::CreateAuthenticationMethod(
+        CreateAuthenticationMethod {
             method_id,
             principal_id: administrator,
-            key_id: ApiKeyId::from_bytes([10; 16])?,
             label: "Primary headless key".to_owned(),
             service_scope: 1 | 2 | 4,
-            scopes: 0b101,
-            key_digest: [11; 32],
-            valid_from: UnixMicros::new(20),
-            valid_until: Some(UnixMicros::new(200)),
+            expires_at: Some(UnixMicros::new(200)),
+            credential: NewAuthenticationCredential::ApiKey {
+                key_id: ApiKeyId::from_bytes([10; 16])?,
+                key_digest: [11; 32],
+                scopes: 0b101,
+                valid_from: UnixMicros::new(20),
+            },
         },
     ))
 }
 
-fn bootstrap(
+pub(super) fn bootstrap(
     repository: &mut AuthoritativeRepository,
     administrator: PrincipalId,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -327,7 +338,7 @@ fn bootstrap(
     Ok(())
 }
 
-fn context(
+pub(super) fn context(
     operation: u8,
     actor: PrincipalId,
     audit: u8,
@@ -343,6 +354,6 @@ fn context(
     })
 }
 
-const fn position(index: u64) -> LogPosition {
+pub(super) const fn position(index: u64) -> LogPosition {
     LogPosition { index, term: 1 }
 }

@@ -6,6 +6,9 @@ mod access_evaluation;
 mod access_query;
 mod apply;
 mod authentication_method;
+mod authentication_method_creation;
+#[cfg(test)]
+mod authentication_method_creation_tests;
 #[cfg(test)]
 mod authentication_method_tests;
 mod backup;

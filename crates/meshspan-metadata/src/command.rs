@@ -2,6 +2,8 @@
 
 //! Typed authoritative state-machine commands and canonical request digests.
 
+use std::fmt;
+
 use meshspan_contracts::{
     BoundedItems, ReclamationReceipt, RemovalPermit, ShardIdentity, TombstoneReceipt,
 };
@@ -10,8 +12,8 @@ use meshspan_domain::{
     AuthenticationMethodId, ComponentInstanceId, ContentManifestId, DelegatedMetadataScope,
     DelegationAdmission, DurationMicros, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
     JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId,
-    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision,
-    Rights, RoleId, ScopeId, SessionId, SnapshotId, SnapshotScheduleId, TagId, TargetId,
+    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, RecoveryCodeId,
+    Revision, Rights, RoleId, ScopeId, SessionId, SnapshotId, SnapshotScheduleId, TagId, TargetId,
     UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
@@ -124,8 +126,8 @@ pub enum AuthoritativeCommand {
     ActivateGroup(ActivateGroup),
     /// Revokes one exact current access activation.
     RevokeAccessActivation(RevokeAccessActivation),
-    /// Creates one scoped API-key authentication method without persisting plaintext.
-    CreateApiKeyAuthenticationMethod(CreateApiKeyAuthenticationMethod),
+    /// Creates one typed authentication method without persisting plaintext credentials.
+    CreateAuthenticationMethod(CreateAuthenticationMethod),
     /// Revokes one exact authentication method immediately.
     RevokeAuthenticationMethod(RevokeAuthenticationMethod),
     /// Issues one bounded authentication session after an accepted authentication ceremony.
@@ -255,7 +257,7 @@ impl AuthoritativeCommand {
             Self::ActivateGrant(value) => value.update_digest(digest),
             Self::ActivateGroup(value) => value.update_digest(digest),
             Self::RevokeAccessActivation(value) => value.update_digest(digest),
-            Self::CreateApiKeyAuthenticationMethod(value) => value.update_digest(digest),
+            Self::CreateAuthenticationMethod(value) => value.update_digest(digest),
             Self::RevokeAuthenticationMethod(value) => value.update_digest(digest),
             Self::IssueAuthenticationSession(value) => value.update_digest(digest),
             Self::RevokeAuthenticationSession(value) => value.update_digest(digest),
@@ -1031,27 +1033,154 @@ pub struct RevokeAccessActivation {
     pub reason: String,
 }
 
-/// One login-capable, protocol-neutral scoped API-key method.
+/// One typed, protocol-neutral authentication method.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateApiKeyAuthenticationMethod {
+pub struct CreateAuthenticationMethod {
     /// Stable common authentication-method identity.
     pub method_id: AuthenticationMethodId,
-    /// User who owns and may authenticate with the key.
+    /// User who owns and may authenticate with the method.
     pub principal_id: PrincipalId,
-    /// Stable public key identity; the secret is never authoritative metadata.
-    pub key_id: ApiKeyId,
     /// Human-readable bounded method label.
     pub label: String,
     /// Non-empty protocol-compatibility bitset: HTTPS 1, headless API 2, SMB 4.
     pub service_scope: u8,
-    /// Non-empty, server-defined least-privilege capability bitset.
-    pub scopes: u64,
-    /// Digest of the secret key; plaintext never enters consensus or SQLite.
-    pub key_digest: [u8; 32],
-    /// Inclusive first instant at which authentication is accepted.
-    pub valid_from: UnixMicros,
-    /// Exclusive expiry, or no automatic expiry.
-    pub valid_until: Option<UnixMicros>,
+    /// Exclusive method expiry, or no automatic expiry.
+    pub expires_at: Option<UnixMicros>,
+    /// Exactly one credential family and its bounded typed evidence.
+    pub credential: NewAuthenticationCredential,
+}
+
+/// Credential evidence admitted atomically with its common method.
+#[derive(Clone, Eq, PartialEq)]
+pub enum NewAuthenticationCredential {
+    /// One `WebAuthn` public-key credential.
+    Passkey {
+        /// Opaque authenticator credential identity.
+        credential_id: Vec<u8>,
+        /// Accepted COSE public-key algorithm identifier.
+        public_key_algorithm: i32,
+        /// Canonical public-key bytes interpreted by the passkey verifier.
+        public_key: Vec<u8>,
+        /// Initial authenticator signature counter.
+        signature_counter: u64,
+        /// Optional authenticator GUID/AAGUID.
+        authenticator_guid: Option<[u8; 16]>,
+        /// Bounded authenticator transport bitset.
+        transports: u8,
+        /// Whether the credential is eligible for backup/synchronisation.
+        backup_eligible: bool,
+        /// Whether it is currently reported as backed up.
+        backup_state: bool,
+    },
+    /// One encrypted TOTP seed and its exact verification parameters.
+    Totp {
+        /// Authenticated-encryption envelope; never plaintext seed material.
+        secret_ciphertext: Vec<u8>,
+        /// Accepted hash algorithm.
+        algorithm: TotpAlgorithm,
+        /// Decimal code digits.
+        digits: u8,
+        /// Timestep in seconds.
+        period_seconds: u16,
+        /// Number of adjacent time steps accepted by policy.
+        accepted_step_window: u8,
+    },
+    /// One non-empty bounded set of independently single-use recovery codes.
+    RecoveryCodes {
+        /// Digest-only code records.
+        codes: BoundedItems<NewRecoveryCode>,
+    },
+    /// One login-capable scoped API key.
+    ApiKey {
+        /// Stable public identity; the secret itself remains outside metadata.
+        key_id: ApiKeyId,
+        /// Digest of the high-entropy secret key.
+        key_digest: [u8; 32],
+        /// Non-empty, server-defined least-privilege capability bitset.
+        scopes: u64,
+        /// Inclusive first instant at which authentication is accepted.
+        valid_from: UnixMicros,
+    },
+}
+
+impl fmt::Debug for NewAuthenticationCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Passkey {
+                credential_id,
+                public_key_algorithm,
+                public_key,
+                signature_counter,
+                authenticator_guid,
+                transports,
+                backup_eligible,
+                backup_state,
+            } => formatter
+                .debug_struct("Passkey")
+                .field("credential_id_length", &credential_id.len())
+                .field("public_key_algorithm", public_key_algorithm)
+                .field("public_key_length", &public_key.len())
+                .field("signature_counter", signature_counter)
+                .field("authenticator_guid", authenticator_guid)
+                .field("transports", transports)
+                .field("backup_eligible", backup_eligible)
+                .field("backup_state", backup_state)
+                .finish(),
+            Self::Totp {
+                secret_ciphertext,
+                algorithm,
+                digits,
+                period_seconds,
+                accepted_step_window,
+            } => formatter
+                .debug_struct("Totp")
+                .field("secret_ciphertext", &"[REDACTED]")
+                .field("ciphertext_length", &secret_ciphertext.len())
+                .field("algorithm", algorithm)
+                .field("digits", digits)
+                .field("period_seconds", period_seconds)
+                .field("accepted_step_window", accepted_step_window)
+                .finish(),
+            Self::RecoveryCodes { codes } => formatter
+                .debug_struct("RecoveryCodes")
+                .field("code_count", &codes.len())
+                .field("code_digests", &"[REDACTED]")
+                .finish(),
+            Self::ApiKey {
+                key_id,
+                scopes,
+                valid_from,
+                ..
+            } => formatter
+                .debug_struct("ApiKey")
+                .field("key_id", key_id)
+                .field("key_digest", &"[REDACTED]")
+                .field("scopes", scopes)
+                .field("valid_from", valid_from)
+                .finish(),
+        }
+    }
+}
+
+/// Accepted TOTP hash algorithm.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum TotpAlgorithm {
+    /// HMAC-SHA-1 for interoperability with existing authenticators.
+    Sha1 = 1,
+    /// HMAC-SHA-256.
+    Sha256 = 2,
+    /// HMAC-SHA-512.
+    Sha512 = 3,
+}
+
+/// One digest-only single-use recovery code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NewRecoveryCode {
+    /// Stable public code identity.
+    pub code_id: RecoveryCodeId,
+    /// Digest of the high-entropy code; plaintext never enters metadata.
+    pub code_digest: [u8; 32],
 }
 
 /// Immediate revocation of one exact authentication method.
@@ -1801,18 +1930,70 @@ digest_simple_record!(
     }
 );
 digest_simple_record!(
-    CreateApiKeyAuthenticationMethod,
-    b"create-api-key-authentication-method",
+    CreateAuthenticationMethod,
+    b"create-authentication-method",
     |value, digest| {
         digest.identifier(value.method_id.as_bytes());
         digest.identifier(value.principal_id.as_bytes());
-        digest.identifier(value.key_id.as_bytes());
         digest.bytes(value.label.as_bytes());
         digest.byte(value.service_scope);
-        digest.unsigned(value.scopes);
-        digest.bytes(&value.key_digest);
-        digest.signed(value.valid_from.get());
-        digest.optional_instant(value.valid_until);
+        digest.optional_instant(value.expires_at);
+        match &value.credential {
+            NewAuthenticationCredential::Passkey {
+                credential_id,
+                public_key_algorithm,
+                public_key,
+                signature_counter,
+                authenticator_guid,
+                transports,
+                backup_eligible,
+                backup_state,
+            } => {
+                digest.byte(1);
+                digest.bytes(credential_id);
+                digest.signed(i64::from(*public_key_algorithm));
+                digest.bytes(public_key);
+                digest.unsigned(*signature_counter);
+                digest.optional_identifier(*authenticator_guid);
+                digest.byte(*transports);
+                digest.boolean(*backup_eligible);
+                digest.boolean(*backup_state);
+            }
+            NewAuthenticationCredential::Totp {
+                secret_ciphertext,
+                algorithm,
+                digits,
+                period_seconds,
+                accepted_step_window,
+            } => {
+                digest.byte(2);
+                digest.bytes(secret_ciphertext);
+                digest.byte(*algorithm as u8);
+                digest.byte(*digits);
+                digest.unsigned(u64::from(*period_seconds));
+                digest.byte(*accepted_step_window);
+            }
+            NewAuthenticationCredential::RecoveryCodes { codes } => {
+                digest.byte(3);
+                digest.unsigned(u64::try_from(codes.len()).unwrap_or(u64::MAX));
+                for code in codes.as_slice() {
+                    digest.identifier(code.code_id.as_bytes());
+                    digest.bytes(&code.code_digest);
+                }
+            }
+            NewAuthenticationCredential::ApiKey {
+                key_id,
+                key_digest,
+                scopes,
+                valid_from,
+            } => {
+                digest.byte(4);
+                digest.identifier(key_id.as_bytes());
+                digest.bytes(key_digest);
+                digest.unsigned(*scopes);
+                digest.signed(valid_from.get());
+            }
+        }
     }
 );
 digest_simple_record!(
