@@ -201,7 +201,6 @@ fn validate_snapshot(
             && record.grant.authority_epoch() == relationship.authority_epoch
             && parties.contains(&record.grant.issuer_mesh_id())
             && parties.contains(&record.grant.recipient_mesh_id())
-            && parties.contains(&record.grant.resource().authority_mesh_id())
             && record.revision > snapshot.after_revision
             && record.revision <= snapshot.authority_revision
             && previous.is_none_or(|value| value < key);

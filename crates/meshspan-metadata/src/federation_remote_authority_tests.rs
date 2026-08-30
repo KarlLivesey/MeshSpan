@@ -86,6 +86,36 @@ fn cache_applies_delta_replays_exactly_and_survives_restart()
 }
 
 #[test]
+fn cache_retains_downstream_grants_without_importing_owner_consensus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = TempDir::new()?;
+    let mut database = LocalDatabase::open(
+        &directory.path().join("local.sqlite3"),
+        node(7)?,
+        UnixMicros::new(1),
+    )?;
+    let mut update = snapshot(Revision::ZERO, 5, 3, &[])?;
+    update.grants.push(downstream_grant_record(
+        relationship_id()?,
+        mesh(2)?,
+        mesh(1)?,
+        3,
+        20,
+        4,
+    )?);
+    database.install_remote_federation_authority(&update, UnixMicros::new(10))?;
+    let cached = database
+        .remote_federation_grant_authority(relationship_id()?, grant_id(20)?)?
+        .ok_or("downstream grant missing")?;
+    assert_eq!(
+        cached.grant.grant.route().meshes(),
+        &[mesh(3)?, mesh(2)?, mesh(1)?]
+    );
+    assert_eq!(cached.grant.grant.upstream_grant_id(), Some(grant_id(19)?));
+    Ok(())
+}
+
+#[test]
 fn cache_rejects_stale_and_changed_replay_input() -> Result<(), Box<dyn std::error::Error>> {
     let directory = TempDir::new()?;
     let mut database = LocalDatabase::open(
@@ -332,6 +362,58 @@ fn grant_record(
             None,
             FederationResourceScope::StorageCapacity {
                 provider_mesh_id: local_mesh_id,
+            },
+            FederationPolicy::intersect(&policies)?,
+            authority_epoch,
+            UnixMicros::new(10),
+            Some(UnixMicros::new(100)),
+        )?,
+        restrictions,
+        state: FederationGrantState::Active,
+        issued_at: UnixMicros::new(9),
+        termination: None,
+        predecessor_grant_id: None,
+        successor_grant_id: None,
+        revision: Revision::new(revision),
+    })
+}
+
+fn downstream_grant_record(
+    relationship_id: FederationRelationshipId,
+    local_mesh_id: MeshId,
+    remote_mesh_id: MeshId,
+    authority_epoch: u64,
+    seed: u8,
+    revision: u64,
+) -> Result<FederationGrantRecord, Box<dyn std::error::Error>> {
+    let owner = mesh(3)?;
+    let mut restrictions = vec![
+        FederationGrantRestriction {
+            imposing_mesh_id: owner,
+            policy: storage_policy(50, false)?,
+        },
+        FederationGrantRestriction {
+            imposing_mesh_id: local_mesh_id,
+            policy: storage_policy(50, false)?,
+        },
+        FederationGrantRestriction {
+            imposing_mesh_id: remote_mesh_id,
+            policy: storage_policy(50, false)?,
+        },
+    ];
+    restrictions.sort_by_key(|restriction| restriction.imposing_mesh_id);
+    let policies = restrictions
+        .iter()
+        .map(|restriction| restriction.policy)
+        .collect::<Vec<_>>();
+    Ok(FederationGrantRecord {
+        grant: FederationGrant::new(
+            grant_id(seed)?,
+            relationship_id,
+            FederationGrantRoute::from_meshes(vec![owner, local_mesh_id, remote_mesh_id])?,
+            Some(grant_id(seed.saturating_sub(1))?),
+            FederationResourceScope::StorageCapacity {
+                provider_mesh_id: owner,
             },
             FederationPolicy::intersect(&policies)?,
             authority_epoch,

@@ -308,14 +308,20 @@ fn validate_upstream_lineage(
     connection: &Connection,
     record: &FederationGrantRecord,
 ) -> Result<(), RepositoryError> {
+    let local_mesh_id = local_mesh_id(connection)?;
     let mut seen = BTreeSet::from([record.grant.grant_id()]);
     let mut child = record.clone();
     while let Some(upstream_grant_id) = child.grant.upstream_grant_id() {
         if !seen.insert(upstream_grant_id) {
             return Err(RepositoryError::CorruptState);
         }
-        let upstream =
-            load_record(connection, upstream_grant_id)?.ok_or(RepositoryError::CorruptState)?;
+        let Some(upstream) = load_record(connection, upstream_grant_id)? else {
+            return if child.grant.recipient_mesh_id() == local_mesh_id {
+                Ok(())
+            } else {
+                Err(RepositoryError::CorruptState)
+            };
+        };
         let expected_route = upstream
             .grant
             .route()
@@ -549,14 +555,16 @@ fn is_current_authority(
     if !relationship_is_current(connection, record)? {
         return Ok(false);
     }
+    let local_mesh_id = local_mesh_id(connection)?;
     let mut seen = BTreeSet::from([record.grant.grant_id()]);
     let mut child = record.clone();
     while let Some(upstream_grant_id) = child.grant.upstream_grant_id() {
         if !seen.insert(upstream_grant_id) {
             return Err(RepositoryError::CorruptState);
         }
-        let upstream =
-            load_record(connection, upstream_grant_id)?.ok_or(RepositoryError::CorruptState)?;
+        let Some(upstream) = load_record(connection, upstream_grant_id)? else {
+            return Ok(child.grant.recipient_mesh_id() == local_mesh_id);
+        };
         let expected_route = upstream
             .grant
             .route()
@@ -576,6 +584,15 @@ fn is_current_authority(
         child = upstream;
     }
     Ok(true)
+}
+
+fn local_mesh_id(connection: &Connection) -> Result<meshspan_domain::MeshId, RepositoryError> {
+    let bytes = connection.query_row(
+        "SELECT mesh_id FROM meshes WHERE (SELECT count(*) FROM meshes) = 1",
+        [],
+        |row| row.get::<_, Vec<u8>>(0),
+    )?;
+    parse_mesh(&bytes)
 }
 
 fn relationship_is_current(

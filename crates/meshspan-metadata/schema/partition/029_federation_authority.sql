@@ -105,7 +105,12 @@ CREATE TABLE federation_grants (
         REFERENCES federation_relationships(relationship_id) ON DELETE RESTRICT,
     issuer_mesh_id BLOB NOT NULL CHECK (length(issuer_mesh_id) = 16),
     recipient_mesh_id BLOB NOT NULL CHECK (length(recipient_mesh_id) = 16),
-    upstream_grant_id BLOB REFERENCES federation_grants(grant_id) ON DELETE RESTRICT,
+    -- A recipient persists the opaque predecessor identity without importing the
+    -- predecessor swarm's consensus rows. The issuing swarm must retain and
+    -- validate the referenced grant locally before creating this delegation.
+    upstream_grant_id BLOB CHECK (
+        upstream_grant_id IS NULL OR length(upstream_grant_id) = 16
+    ),
     route_depth INTEGER NOT NULL CHECK (route_depth BETWEEN 0 AND 62),
     resource_kind INTEGER NOT NULL CHECK (resource_kind BETWEEN 1 AND 4),
     authority_mesh_id BLOB NOT NULL CHECK (length(authority_mesh_id) = 16),

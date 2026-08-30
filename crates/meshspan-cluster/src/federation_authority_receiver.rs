@@ -318,7 +318,6 @@ impl FederationRemoteAuthoritySnapshotReceiver {
             && record.grant.authority_epoch() == peer.authority_epoch
             && parties.contains(&record.grant.issuer_mesh_id())
             && parties.contains(&record.grant.recipient_mesh_id())
-            && parties.contains(&record.grant.resource().authority_mesh_id())
             && record.revision > self.after_revision
             && self
                 .authority_revision

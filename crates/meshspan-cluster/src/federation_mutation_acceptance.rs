@@ -119,7 +119,7 @@ impl FederationMutationAcceptanceAuthority for MetadataFederationMutationAccepta
         let exact_actor = grant.recipient_mesh_id() == connection.local_identity.local_mesh_id
             && grant.issuer_mesh_id() == connection.local_identity.remote_mesh_id
             && authority.created_by() == session.principal_id;
-        let exact_scope = grant.resource().authority_mesh_id()
+        let exact_scope = grant.route().issuer_mesh_id()
             == connection.local_identity.remote_mesh_id
             && authority.is_within(grant.resource());
         let local_assignment = self.repository.evaluate_federation_grant_assignment(

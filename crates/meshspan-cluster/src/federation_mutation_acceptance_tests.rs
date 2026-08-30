@@ -145,6 +145,7 @@ struct FixtureIds {
     partition: PartitionId,
     local_mesh: MeshId,
     remote_mesh: MeshId,
+    owner_mesh: MeshId,
     relationship: FederationRelationshipId,
     grant: FederationGrantId,
     group_assignment: FederationAssignmentId,
@@ -176,6 +177,7 @@ impl Fixture {
             partition: PartitionId::from_bytes([3; 16])?,
             local_mesh: MeshId::from_bytes([4; 16])?,
             remote_mesh: MeshId::from_bytes([5; 16])?,
+            owner_mesh: MeshId::from_bytes([28; 16])?,
             relationship: FederationRelationshipId::from_bytes([6; 16])?,
             grant: FederationGrantId::from_bytes([7; 16])?,
             group_assignment: FederationAssignmentId::from_bytes([23; 16])?,
@@ -287,7 +289,7 @@ impl Fixture {
             self.ids.administrator,
             &AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
                 grant: record.grant.clone(),
-                restrictions: BoundedItems::new(record.restrictions.clone(), 2)?,
+                restrictions: BoundedItems::new(record.restrictions.clone(), 3)?,
             }),
         )?;
         self.apply(
@@ -476,7 +478,11 @@ impl Fixture {
             ),
             None,
         ));
-        let restrictions = vec![
+        let mut restrictions = vec![
+            FederationGrantRestriction {
+                imposing_mesh_id: self.ids.owner_mesh,
+                policy,
+            },
             FederationGrantRestriction {
                 imposing_mesh_id: self.ids.local_mesh,
                 policy,
@@ -486,14 +492,19 @@ impl Fixture {
                 policy,
             },
         ];
+        restrictions.sort_by_key(|restriction| restriction.imposing_mesh_id);
         Ok(FederationGrantRecord {
             grant: FederationGrant::new(
                 self.ids.grant,
                 self.ids.relationship,
-                FederationGrantRoute::direct(self.ids.remote_mesh, self.ids.local_mesh)?,
-                None,
+                FederationGrantRoute::from_meshes(vec![
+                    self.ids.owner_mesh,
+                    self.ids.remote_mesh,
+                    self.ids.local_mesh,
+                ])?,
+                Some(FederationGrantId::from_bytes([29; 16])?),
                 FederationResourceScope::Volume {
-                    owner_mesh_id: self.ids.remote_mesh,
+                    owner_mesh_id: self.ids.owner_mesh,
                     volume_id: self.ids.volume,
                 },
                 policy,

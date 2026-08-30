@@ -236,7 +236,6 @@ fn decode_grant(
         || record.grant.authority_epoch() != authority_epoch
         || !parties.contains(&record.grant.issuer_mesh_id())
         || !parties.contains(&record.grant.recipient_mesh_id())
-        || !parties.contains(&record.grant.resource().authority_mesh_id())
         || record.revision != revision
         || revision > authority_revision
     {

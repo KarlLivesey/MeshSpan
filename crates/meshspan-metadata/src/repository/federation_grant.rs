@@ -337,6 +337,9 @@ fn validate_upstream(
             .then_some(())
             .ok_or(RepositoryError::InvalidCommand);
     };
+    if local_mesh_id(transaction)? == grant.recipient_mesh_id() {
+        return Ok(());
+    }
     let upstream = load_grant_authority(transaction, upstream_grant_id)?;
     let expected_route = upstream
         .route
@@ -356,6 +359,15 @@ fn validate_upstream(
         return Err(RepositoryError::InvalidCommand);
     }
     Ok(())
+}
+
+fn local_mesh_id(connection: &Connection) -> Result<MeshId, RepositoryError> {
+    let bytes = connection.query_row(
+        "SELECT mesh_id FROM meshes WHERE (SELECT count(*) FROM meshes) = 1",
+        [],
+        |row| row.get::<_, Vec<u8>>(0),
+    )?;
+    parse_mesh(&bytes)
 }
 
 fn policy_allows_downstream(policy: FederationPolicy) -> bool {

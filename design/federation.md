@@ -86,6 +86,12 @@ envelope, because B could already copy readable data; C does not thereby gain a
 direct relationship or connection right to A. Every hop remains attributable and
 inherits upstream expiry, revocation, ownership and restrictions.
 
+The B↔C relationship authenticates only that immediate transport and service
+hop. The immutable route still begins at owner A. C persists the opaque upstream
+grant identity but does not import A's or B's consensus rows; B must retain and
+validate its full upstream authority before issuing the child grant. Consequently
+C can request the shared resource only from B, while B remains accountable to A.
+
 ## Resource ownership and multi-writer operation
 
 Every swarm is the intrinsic root principal for each volume, folder, file and

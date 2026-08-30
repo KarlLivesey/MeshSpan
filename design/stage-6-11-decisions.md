@@ -76,6 +76,10 @@ types/tests before Stage 6 can pass; their presence is not an accepted exception
   narrow the effective rights, bounds and validity it received. Revocation and
   expiry propagate through the chain with the already accepted disconnected-work
   quarantine rules.
+- The immediate relationship authenticates only its adjacent transport/service
+  hop. A downstream recipient stores the owner-rooted route and opaque upstream
+  grant identity without importing upstream consensus; its issuer must retain
+  and validate the full predecessor chain.
 - A remains authority for its content, ACL and canonical protection promise. B
   may keep additional caches or copies but cannot redefine A's promise. A may
   adopt signed B placement receipts as evidence for A's policy.

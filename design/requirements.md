@@ -174,7 +174,9 @@ Status: **draft for review**.
 - **FED-009** The receiving swarm MUST decide which of its principals receive equal or narrower
   rights and MAY re-export through itself to another swarm with equal or narrower rights. A
   downstream swarm MUST NOT thereby become authorised to connect directly to an upstream owner,
-  and no delegation hop may expand rights, bounds or validity.
+  and no delegation hop may expand rights, bounds or validity. The downstream recipient MUST NOT
+  import upstream consensus state: it persists the immutable route and opaque predecessor identity,
+  while the immediate issuer MUST prove and retain the complete upstream authority before issuing.
 - **FED-010** Every shared volume, folder or file MUST retain exactly one owning swarm responsible
   for its ACL policy and canonical converged history, independently of data placement and the swarm
   that accepted an offline edit. That owning swarm is the intrinsic root principal for every
