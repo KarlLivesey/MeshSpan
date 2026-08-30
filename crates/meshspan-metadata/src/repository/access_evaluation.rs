@@ -104,6 +104,7 @@ pub(super) struct Session {
     id: SessionId,
     principal_id: PrincipalId,
     assurance: AssuranceLevel,
+    latest_authenticated_at: UnixMicros,
     identity_revision: Revision,
     expires_at: UnixMicros,
 }
@@ -155,7 +156,12 @@ pub(super) fn evaluate(
     if session.identity_revision != revisions.identity {
         return Ok(AccessDecision::Denied(AccessDenial::StaleIdentity));
     }
-    if session.assurance < request.required_assurance {
+    if !super::session::meets_assurance(
+        session.assurance,
+        session.latest_authenticated_at,
+        request.required_assurance,
+        request.now,
+    ) {
         return Ok(AccessDecision::Denied(AccessDenial::InsufficientAssurance));
     }
     if revisions.gateway == Revision::ZERO {

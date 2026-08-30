@@ -116,7 +116,7 @@ fn membership_removal_is_immediate_audited_and_reversible() -> Result<(), Box<dy
             .items,
         vec![user]
     );
-    assert_eq!(fixture.repository.current_revision()?, Revision::new(16));
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(22));
     assert_membership_history(&fixture, inner, user)
 }
 
@@ -221,8 +221,8 @@ fn assert_grant_revocation_evidence(
     assert_eq!(evidence.1, 210);
     assert_eq!(evidence.2, fixture.administrator.as_bytes());
     assert_eq!(evidence.3, "access review completed");
-    assert_eq!(evidence.4, 13);
-    assert_eq!(fixture.repository.current_revision()?, Revision::new(14));
+    assert_eq!(evidence.4, 15);
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(18));
     Ok(())
 }
 
@@ -240,13 +240,13 @@ fn assert_grant_revocation_survives_restart(
         AccessDecision::Denied(AccessDenial::MissingRights)
     );
     let replay = fixture.repository.apply_committed(
-        LogPosition { index: 15, term: 1 },
+        LogPosition { index: 19, term: 1 },
         CommandContext {
-            operation_id: OperationId::from_bytes([113; 16])?,
+            operation_id: OperationId::from_bytes([115; 16])?,
             actor_principal_id: administrator,
-            audit_event_id: AuditEventId::from_bytes([193; 16])?,
+            audit_event_id: AuditEventId::from_bytes([195; 16])?,
             occurred_at: UnixMicros::new(210),
-            expected_revision: Some(Revision::new(12)),
+            expected_revision: Some(Revision::new(14)),
         },
         &AuthoritativeCommand::RevokePermissionGrant(RevokePermissionGrant {
             grant_id,
@@ -254,8 +254,8 @@ fn assert_grant_revocation_survives_restart(
         }),
     )?;
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
-    assert_eq!(replay.committed_revision, Revision::new(13));
-    assert_eq!(fixture.repository.current_revision()?, Revision::new(14));
+    assert_eq!(replay.committed_revision, Revision::new(15));
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(18));
     Ok(())
 }
 
@@ -340,13 +340,13 @@ fn activation_revocation_supports_self_service_and_administrator_recovery()
             reason: "emergency access closed".to_owned(),
         }),
     )?;
-    assert_activation_evidence(&fixture, activation_id, user, "task finished", 15)?;
+    assert_activation_evidence(&fixture, activation_id, user, "task finished", 17)?;
     assert_activation_evidence(
         &fixture,
         second_activation,
         administrator,
         "emergency access closed",
-        18,
+        22,
     )
 }
 
@@ -384,9 +384,9 @@ fn assert_membership_history(
                 2,
                 Some("left the recovery team".to_owned()),
                 fixture.administrator.as_bytes().to_vec(),
-                13,
+                15,
             ),
-            (1, None, fixture.administrator.as_bytes().to_vec(), 15),
+            (1, None, fixture.administrator.as_bytes().to_vec(), 19),
         ]
     );
     Ok(())
@@ -410,7 +410,7 @@ fn assert_activation_evidence(
     assert_eq!(evidence.1, expected_actor.as_bytes());
     assert_eq!(evidence.2, expected_reason);
     assert_eq!(evidence.3, expected_revision);
-    assert_eq!(fixture.repository.current_revision()?, Revision::new(18));
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(22));
     Ok(())
 }
 

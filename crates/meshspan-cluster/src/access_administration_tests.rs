@@ -2,16 +2,17 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AssuranceLevel, AuditEventId, GrantId, HostId, MeshId, NodeId, ObjectId, OperationId,
-    OwnerSetId, PartitionId, PrincipalId, Revision, Rights, RoleId, SessionId, UnixMicros,
-    VolumeId,
+    ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId, AuthenticationService, GrantId,
+    HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision,
+    Rights, RoleId, SessionId, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::FilesystemAccessContext;
 use meshspan_metadata::{
     AccessDenial, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh, CommandContext,
-    CreateUser, CreateVolume, GrantInheritance, GrantPermission, IssueAuthenticationSession,
-    LogPosition, PageLimit, PartitionDatabase, PermissionScope, RecordName, RevokePermissionGrant,
-    SessionAccessDenial,
+    CreateAuthenticationMethod, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    IssueAuthenticationSession, LogPosition, NewAuthenticationCredential, PageLimit,
+    PartitionDatabase, PermissionScope, RecordName, RevokePermissionGrant, SessionAccessDenial,
+    SessionAuthenticationFactor, TotpAlgorithm,
 };
 
 use crate::{
@@ -44,7 +45,7 @@ fn administration_pages_recheck_object_self_and_system_authority_before_disclosu
     assert_authentication_precedes_projection_validation(&fixture)?;
     apply(
         &mut fixture.repository,
-        7,
+        11,
         fixture.ids.administrator,
         &AuthoritativeCommand::RevokePermissionGrant(RevokePermissionGrant {
             grant_id: fixture.ids.grant,
@@ -141,30 +142,98 @@ fn issue_sessions(
     repository: &mut AuthoritativeRepository,
     ids: TestIds,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let administrator_factors = create_factors(repository, 5, ids.administrator, 40, true)?;
+    let user_factors = create_factors(repository, 7, ids.user, 50, false)?;
     apply(
         repository,
-        5,
+        9,
         ids.administrator,
         &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
             session_id: SessionId::from_bytes([14; 16])?,
             principal_id: ids.administrator,
             token_digest: ids.administrator_token,
-            assurance: AssuranceLevel::RecentStepUp,
+            service: AuthenticationService::Https,
+            factors: administrator_factors,
             expires_at: UnixMicros::new(500),
         }),
     )?;
     apply(
         repository,
-        6,
+        10,
         ids.user,
         &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
             session_id: SessionId::from_bytes([15; 16])?,
             principal_id: ids.user,
             token_digest: ids.user_token,
-            assurance: AssuranceLevel::MultiFactor,
+            service: AuthenticationService::Https,
+            factors: user_factors,
             expires_at: UnixMicros::new(500),
         }),
     )
+}
+
+fn create_factors(
+    repository: &mut AuthoritativeRepository,
+    first_revision: u64,
+    principal_id: PrincipalId,
+    seed: u8,
+    include_totp: bool,
+) -> Result<BoundedItems<SessionAuthenticationFactor>, Box<dyn std::error::Error>> {
+    let api_method_id = AuthenticationMethodId::from_bytes([seed; 16])?;
+    let totp_method_id = AuthenticationMethodId::from_bytes([seed.wrapping_add(1); 16])?;
+    let key_id = ApiKeyId::from_bytes([seed.wrapping_add(2); 16])?;
+    apply(
+        repository,
+        first_revision,
+        principal_id,
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: api_method_id,
+            principal_id,
+            label: "API key".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::ApiKey {
+                key_id,
+                key_digest: [seed.wrapping_add(3); 32],
+                scopes: AuthenticationService::Https.api_key_login_scope(),
+                valid_from: UnixMicros::new(100),
+            },
+        }),
+    )?;
+    apply(
+        repository,
+        first_revision + 1,
+        principal_id,
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: totp_method_id,
+            principal_id,
+            label: "TOTP".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::Totp {
+                secret_ciphertext: vec![seed.wrapping_add(4); 64],
+                algorithm: TotpAlgorithm::Sha256,
+                digits: 6,
+                period_seconds: 30,
+                accepted_step_window: 1,
+            },
+        }),
+    )?;
+    let mut factors = vec![SessionAuthenticationFactor::ApiKey {
+        method_id: api_method_id,
+        credential_generation: 1,
+        method_revision: Revision::new(first_revision),
+        key_id,
+    }];
+    if include_totp {
+        factors.push(SessionAuthenticationFactor::Totp {
+            method_id: totp_method_id,
+            credential_generation: 1,
+            method_revision: Revision::new(first_revision + 1),
+            accepted_step: 0,
+        });
+    }
+    Ok(BoundedItems::new(factors, 8)?)
 }
 
 fn assert_authorised_views(fixture: &Fixture) -> Result<(), Box<dyn std::error::Error>> {

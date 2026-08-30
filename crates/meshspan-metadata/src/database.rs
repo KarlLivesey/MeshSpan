@@ -253,6 +253,7 @@ mod tests {
         partition_active_quorum_plan_migration_digest,
         partition_authentication_credential_constraints_migration_digest,
         partition_authentication_method_events_migration_digest,
+        partition_authentication_session_factors_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
         partition_component_rollout_migration_digest,
@@ -298,7 +299,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 44);
+        assert_eq!(database.check_integrity()?.schema_version, 45);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -348,7 +349,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            44
+            45
         );
         Ok(())
     }
@@ -1276,6 +1277,62 @@ mod tests {
                 0xea, 0x3a, 0x45, 0x47,
             ]
         );
+    }
+
+    #[test]
+    fn authentication_session_factors_migration_digest_is_committed() {
+        assert_eq!(
+            partition_authentication_session_factors_migration_digest(),
+            [
+                0xe4, 0x69, 0x83, 0xf1, 0xb0, 0x9c, 0x32, 0xb7, 0x83, 0x0e, 0x50, 0x3a, 0x4e, 0x00,
+                0x27, 0x7d, 0xa4, 0x57, 0xd8, 0x7a, 0xf8, 0xda, 0x41, 0xec, 0x14, 0x01, 0xb0, 0x57,
+                0x30, 0xb0, 0x9c, 0x4d,
+            ]
+        );
+    }
+
+    #[test]
+    fn authentication_session_migration_revokes_unbound_legacy_sessions_atomically()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("legacy-sessions.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 44, 10)?;
+        let principal = [80_u8; 16];
+        connection.execute(
+            "INSERT INTO principals(
+                principal_id, principal_kind, display_name, canonical_name,
+                state, created_at, revision
+             ) VALUES (?1, 1, 'Legacy user', 'legacy user', 1, 10, 1)",
+            [principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO users(principal_id, primary_email) VALUES (?1, NULL)",
+            [principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO authentication_sessions(
+                session_id, token_digest, user_principal_id, assurance,
+                identity_revision, issued_at, expires_at, revoked_at, revision
+             ) VALUES (?1, ?2, ?3, 3, 1, 10, 100, NULL, 1)",
+            params![
+                [81_u8; 16].as_slice(),
+                [82_u8; 32].as_slice(),
+                principal.as_slice(),
+            ],
+        )?;
+
+        migrate_partition(&mut connection, 20)?;
+        let sessions: i64 =
+            connection.query_row("SELECT count(*) FROM authentication_sessions", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(sessions, 0);
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            45
+        );
+        Ok(())
     }
 
     #[test]

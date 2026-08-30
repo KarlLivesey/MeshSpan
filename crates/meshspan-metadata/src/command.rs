@@ -9,12 +9,12 @@ use meshspan_contracts::{
 };
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
-    AuthenticationMethodId, ComponentInstanceId, ContentManifestId, DelegatedMetadataScope,
-    DelegationAdmission, DurationMicros, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
-    JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId,
-    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, RecoveryCodeId,
-    Revision, Rights, RoleId, ScopeId, SessionId, SnapshotId, SnapshotScheduleId, TagId, TargetId,
-    UnixMicros, VolumeId,
+    AuthenticationMethodId, AuthenticationService, ComponentInstanceId, ContentManifestId,
+    DelegatedMetadataScope, DelegationAdmission, DurationMicros, FileVersionId, GrantId, GroupId,
+    HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
+    PrincipalId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId, SessionId, SnapshotId,
+    SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -1195,7 +1195,7 @@ pub struct RevokeAuthenticationMethod {
 }
 
 /// Accepted authentication ceremony converted into a mesh-wide bounded session.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IssueAuthenticationSession {
     /// Stable session identity.
     pub session_id: SessionId,
@@ -1203,10 +1203,120 @@ pub struct IssueAuthenticationSession {
     pub principal_id: PrincipalId,
     /// Digest of the bearer token; raw tokens never enter authoritative metadata.
     pub token_digest: [u8; 32],
-    /// Assurance established by the ceremony.
-    pub assurance: AssuranceLevel,
+    /// Connector family for which this session was established.
+    pub service: AuthenticationService,
+    /// Exact current method evidence accepted by the authentication ceremony.
+    pub factors: BoundedItems<SessionAuthenticationFactor>,
     /// Exclusive absolute expiry.
     pub expires_at: UnixMicros,
+}
+
+/// Exact typed credential evidence accepted as one session factor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionAuthenticationFactor {
+    /// Accepted `WebAuthn` assertion and its monotonic authenticator state.
+    Passkey {
+        /// Common authentication-method identity.
+        method_id: AuthenticationMethodId,
+        /// Exact credential generation observed by the verifier.
+        credential_generation: u64,
+        /// Exact method revision observed by the verifier.
+        method_revision: Revision,
+        /// Credential identity whose assertion was accepted.
+        credential_id: Vec<u8>,
+        /// Signature counter reported by the accepted assertion.
+        signature_counter: u64,
+        /// Current authenticator backup-state flag.
+        backup_state: bool,
+    },
+    /// Accepted TOTP code bound to one time step.
+    Totp {
+        /// Common authentication-method identity.
+        method_id: AuthenticationMethodId,
+        /// Exact credential generation observed by the verifier.
+        credential_generation: u64,
+        /// Exact method revision observed by the verifier.
+        method_revision: Revision,
+        /// Time step whose code was accepted; must advance monotonically.
+        accepted_step: u64,
+    },
+    /// Accepted single-use recovery code.
+    RecoveryCode {
+        /// Common authentication-method identity.
+        method_id: AuthenticationMethodId,
+        /// Exact credential generation observed by the verifier.
+        credential_generation: u64,
+        /// Exact method revision observed by the verifier.
+        method_revision: Revision,
+        /// Exact code record consumed by this transaction.
+        code_id: RecoveryCodeId,
+    },
+    /// Accepted scoped API key.
+    ApiKey {
+        /// Common authentication-method identity.
+        method_id: AuthenticationMethodId,
+        /// Exact credential generation observed by the verifier.
+        credential_generation: u64,
+        /// Exact method revision observed by the verifier.
+        method_revision: Revision,
+        /// Public key identity resolved by the verifier.
+        key_id: ApiKeyId,
+    },
+}
+
+impl SessionAuthenticationFactor {
+    /// Returns the common method identity independently of credential family.
+    #[must_use]
+    pub const fn method_id(&self) -> AuthenticationMethodId {
+        match self {
+            Self::Passkey { method_id, .. }
+            | Self::Totp { method_id, .. }
+            | Self::RecoveryCode { method_id, .. }
+            | Self::ApiKey { method_id, .. } => *method_id,
+        }
+    }
+
+    /// Returns the exact credential generation observed by the verifier.
+    #[must_use]
+    pub const fn credential_generation(&self) -> u64 {
+        match self {
+            Self::Passkey {
+                credential_generation,
+                ..
+            }
+            | Self::Totp {
+                credential_generation,
+                ..
+            }
+            | Self::RecoveryCode {
+                credential_generation,
+                ..
+            }
+            | Self::ApiKey {
+                credential_generation,
+                ..
+            } => *credential_generation,
+        }
+    }
+
+    /// Returns the exact method revision observed by the verifier.
+    #[must_use]
+    pub const fn method_revision(&self) -> Revision {
+        match self {
+            Self::Passkey {
+                method_revision, ..
+            }
+            | Self::Totp {
+                method_revision, ..
+            }
+            | Self::RecoveryCode {
+                method_revision, ..
+            }
+            | Self::ApiKey {
+                method_revision, ..
+            } => *method_revision,
+        }
+    }
 }
 
 /// Immediate revocation of one exact session belonging to one exact user.
@@ -2012,7 +2122,38 @@ digest_simple_record!(
         digest.identifier(value.session_id.as_bytes());
         digest.identifier(value.principal_id.as_bytes());
         digest.bytes(&value.token_digest);
-        digest.byte(assurance_code(value.assurance));
+        digest.byte(value.service.scope_bit());
+        digest.unsigned(u64::try_from(value.factors.len()).unwrap_or(u64::MAX));
+        for factor in value.factors.as_slice() {
+            digest.identifier(factor.method_id().as_bytes());
+            digest.unsigned(factor.credential_generation());
+            digest.unsigned(factor.method_revision().get());
+            match factor {
+                SessionAuthenticationFactor::Passkey {
+                    credential_id,
+                    signature_counter,
+                    backup_state,
+                    ..
+                } => {
+                    digest.byte(1);
+                    digest.bytes(credential_id);
+                    digest.unsigned(*signature_counter);
+                    digest.boolean(*backup_state);
+                }
+                SessionAuthenticationFactor::Totp { accepted_step, .. } => {
+                    digest.byte(2);
+                    digest.unsigned(*accepted_step);
+                }
+                SessionAuthenticationFactor::RecoveryCode { code_id, .. } => {
+                    digest.byte(3);
+                    digest.identifier(code_id.as_bytes());
+                }
+                SessionAuthenticationFactor::ApiKey { key_id, .. } => {
+                    digest.byte(4);
+                    digest.identifier(key_id.as_bytes());
+                }
+            }
+        }
         digest.signed(value.expires_at.get());
     }
 );

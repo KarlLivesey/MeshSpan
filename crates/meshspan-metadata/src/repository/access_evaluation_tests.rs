@@ -3,15 +3,17 @@
 use super::{AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository, LogPosition};
 use crate::{
     ActivateGrant, AddGroupMember, AuthoritativeCommand, BootstrapMesh, CommandContext,
-    CreateActivationPolicy, CreateGroup, CreateObject, CreateUser, CreateVolume, GrantInheritance,
-    GrantPermission, IssueAuthenticationSession, NamespaceObjectKind, PartitionDatabase,
-    PermissionScope, RecordName, SetObjectGrantInheritance,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateGroup, CreateObject, CreateUser,
+    CreateVolume, GrantInheritance, GrantPermission, IssueAuthenticationSession,
+    NamespaceObjectKind, NewAuthenticationCredential, PartitionDatabase, PermissionScope,
+    RecordName, SessionAuthenticationFactor, SetObjectGrantInheritance, TotpAlgorithm,
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ActivationId, ActivationPolicyId, AssuranceLevel, AuditEventId, DurationMicros, GrantId,
-    GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId,
-    Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
+    ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
+    AuthenticationMethodId, AuthenticationService, DurationMicros, GrantId, GroupId, HostId,
+    MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, Rights,
+    RoleId, SessionId, UnixMicros, VolumeId,
 };
 use std::collections::BTreeSet;
 
@@ -110,17 +112,11 @@ fn every_defined_right_is_independently_granted_and_bound_into_capability_eviden
             }),
         )?;
     }
-    apply(
+    issue_session(
         &mut fixture,
         user,
-        200,
-        AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
-            session_id: SessionId::from_bytes([73; 16])?,
-            principal_id: user,
-            token_digest: [74; 32],
-            assurance: AssuranceLevel::MultiFactor,
-            expires_at: UnixMicros::new(900),
-        }),
+        SessionId::from_bytes([73; 16])?,
+        [74; 32],
     )?;
 
     let mut evidence = BTreeSet::new();
@@ -215,10 +211,10 @@ fn sessions_are_fenced_by_identity_assurance_gateway_and_object()
     )?;
     let mut access = request(&fixture, [48; 32], Rights::READ_DATA, 200);
     access.required_assurance = AssuranceLevel::RecentStepUp;
-    assert_eq!(
+    assert!(matches!(
         fixture.repository.evaluate_access(access)?,
-        AccessDecision::Denied(AccessDenial::InsufficientAssurance)
-    );
+        AccessDecision::Granted(_)
+    ));
     access.required_assurance = AssuranceLevel::SingleFactor;
     access.gateway_incarnation = 2;
     assert_eq!(
@@ -562,6 +558,48 @@ pub(super) fn issue_session(
     session_id: SessionId,
     token_digest: [u8; 32],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let seed = session_id.as_bytes()[0];
+    let api_method_id = AuthenticationMethodId::from_bytes([seed; 16])?;
+    let totp_method_id = AuthenticationMethodId::from_bytes([seed.wrapping_add(1); 16])?;
+    let api_revision = fixture.next_revision;
+    apply(
+        fixture,
+        principal,
+        118,
+        AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: api_method_id,
+            principal_id: principal,
+            label: "Session API key".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::ApiKey {
+                key_id: ApiKeyId::from_bytes([seed.wrapping_add(2); 16])?,
+                key_digest: [seed.wrapping_add(3); 32],
+                scopes: AuthenticationService::Https.api_key_login_scope(),
+                valid_from: UnixMicros::new(100),
+            },
+        }),
+    )?;
+    let totp_revision = fixture.next_revision;
+    apply(
+        fixture,
+        principal,
+        119,
+        AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: totp_method_id,
+            principal_id: principal,
+            label: "Session TOTP".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::Totp {
+                secret_ciphertext: vec![seed.wrapping_add(4); 64],
+                algorithm: TotpAlgorithm::Sha256,
+                digits: 6,
+                period_seconds: 30,
+                accepted_step_window: 1,
+            },
+        }),
+    )?;
     apply(
         fixture,
         principal,
@@ -570,7 +608,24 @@ pub(super) fn issue_session(
             session_id,
             principal_id: principal,
             token_digest,
-            assurance: AssuranceLevel::MultiFactor,
+            service: AuthenticationService::Https,
+            factors: BoundedItems::new(
+                vec![
+                    SessionAuthenticationFactor::ApiKey {
+                        method_id: api_method_id,
+                        credential_generation: 1,
+                        method_revision: Revision::new(api_revision),
+                        key_id: ApiKeyId::from_bytes([seed.wrapping_add(2); 16])?,
+                    },
+                    SessionAuthenticationFactor::Totp {
+                        method_id: totp_method_id,
+                        credential_generation: 1,
+                        method_revision: Revision::new(totp_revision),
+                        accepted_step: 0,
+                    },
+                ],
+                8,
+            )?,
             expires_at: UnixMicros::new(900),
         }),
     )

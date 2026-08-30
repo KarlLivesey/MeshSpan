@@ -708,29 +708,52 @@ fn validate_activation_session(
     expires_at: meshspan_domain::UnixMicros,
     now: meshspan_domain::UnixMicros,
 ) -> Result<(), RepositoryError> {
+    type StoredActivationSession = (Vec<u8>, Vec<u8>, i64, i64, i64, i64, Option<i64>);
     let principal = principal.as_bytes();
     let identity_revision = read_identity_revision(transaction)?;
-    let valid: i64 = transaction.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM authentication_sessions
-            WHERE token_digest = ?1 AND user_principal_id = ?2 AND assurance = ?3
-              AND identity_revision = ?4 AND issued_at <= ?5 AND expires_at = ?6
-              AND expires_at > ?5 AND revoked_at IS NULL
-         )",
-        params![
-            authentication_digest.as_slice(),
-            principal.as_slice(),
-            assurance_code(assurance),
-            to_i64(identity_revision.get())?,
-            now.get(),
-            expires_at.get(),
-        ],
-        |row| row.get(0),
-    )?;
-    if valid == 1 {
-        Ok(())
-    } else {
+    let stored: Option<StoredActivationSession> = transaction
+        .query_row(
+            "SELECT session_id, user_principal_id, assurance, identity_revision,
+                    issued_at, expires_at, revoked_at
+             FROM authentication_sessions WHERE token_digest = ?1",
+            [authentication_digest.as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some(stored) = stored else {
+        return Err(RepositoryError::InvalidCommand);
+    };
+    let actual_assurance = parse_assurance(stored.2)?;
+    let factors = super::session::active_factor_state(transaction, &stored.0, now)?;
+    if stored.1.as_slice() != principal
+        || stored.3 != to_i64(identity_revision.get())?
+        || stored.4 > now.get()
+        || stored.5 != expires_at.get()
+        || stored.5 <= now.get()
+        || stored.6.is_some()
+        || factors.is_none_or(|state| {
+            state.assurance != actual_assurance
+                || !super::session::meets_assurance(
+                    state.assurance,
+                    state.latest_authenticated_at,
+                    assurance,
+                    now,
+                )
+        })
+    {
         Err(RepositoryError::InvalidCommand)
+    } else {
+        Ok(())
     }
 }
 

@@ -73,6 +73,8 @@ mod root_delegation_evidence;
 mod routing;
 mod session;
 mod session_access;
+#[cfg(test)]
+mod session_tests;
 mod snapshot;
 mod snapshot_schedule;
 mod tags;
@@ -91,7 +93,7 @@ pub use access_query::{
     AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
     PermissionGrantRecord, ScopedGrantCursor, SubjectGrantCursor,
 };
-pub use authentication_method::{ApiKeyAuthentication, AuthenticationService};
+pub use authentication_method::ApiKeyAuthentication;
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -129,6 +131,7 @@ pub use kernel::{
     RepositoryConformanceVector, run_repository_conformance,
 };
 pub use membership::AuthoritativeMembership;
+pub use meshspan_domain::AuthenticationService;
 pub use query::{
     GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
     PrincipalRecord,

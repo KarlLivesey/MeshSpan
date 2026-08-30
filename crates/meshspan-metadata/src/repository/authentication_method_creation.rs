@@ -4,17 +4,13 @@
 
 use std::collections::BTreeSet;
 
-use meshspan_domain::Revision;
+use meshspan_domain::{AuthenticationMethodKind, Revision};
 use rusqlite::{Transaction, params};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{CommandContext, CreateAuthenticationMethod, NewAuthenticationCredential};
 
-const PASSKEY_METHOD: i64 = 1;
-const TOTP_METHOD: i64 = 2;
-const RECOVERY_METHOD: i64 = 3;
-const API_KEY_METHOD: i64 = 4;
 const ACTIVE: i64 = 1;
 const SMB_SERVICE: u8 = 4;
 const MAXIMUM_SERVICE_SCOPE: u8 = 7;
@@ -314,7 +310,7 @@ fn validate(
             {
                 return Err(RepositoryError::InvalidCommand);
             }
-            Ok(PASSKEY_METHOD)
+            Ok(AuthenticationMethodKind::Passkey as i64)
         }
         NewAuthenticationCredential::Totp {
             secret_ciphertext,
@@ -331,14 +327,14 @@ fn validate(
             {
                 return Err(RepositoryError::InvalidCommand);
             }
-            Ok(TOTP_METHOD)
+            Ok(AuthenticationMethodKind::Totp as i64)
         }
         NewAuthenticationCredential::RecoveryCodes { codes } => {
             validate_recovery_codes(codes)?;
             if command.service_scope & SMB_SERVICE != 0 {
                 return Err(RepositoryError::InvalidCommand);
             }
-            Ok(RECOVERY_METHOD)
+            Ok(AuthenticationMethodKind::RecoveryCode as i64)
         }
         NewAuthenticationCredential::ApiKey {
             key_digest,
@@ -353,7 +349,7 @@ fn validate(
             {
                 return Err(RepositoryError::InvalidCommand);
             }
-            Ok(API_KEY_METHOD)
+            Ok(AuthenticationMethodKind::ApiKey as i64)
         }
     }
 }

@@ -19,8 +19,9 @@ mod topology;
 
 pub use access::{
     AccessActivation, AccessActivationError, AccessActivationPolicy, AccessActivationRequest,
-    AccessWindow, ActivationSubject, AssuranceLevel, GroupGraph, GroupGraphError, MembershipChange,
-    OwnerSet, OwnerSetError, Rights, RightsError,
+    AccessWindow, ActivationSubject, AssuranceLevel, AuthenticationMethodKind,
+    AuthenticationService, GroupGraph, GroupGraphError, MembershipChange, OwnerSet, OwnerSetError,
+    Rights, RightsError,
 };
 pub use claim::{ClaimBundle, ClaimBundleError, ENCODED_CLAIM_BUNDLE_LENGTH};
 pub use federation::{

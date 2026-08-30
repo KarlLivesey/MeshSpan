@@ -2,8 +2,8 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, ObjectId, OperationId, OwnerSetId, PrincipalId, Revision, Rights, SessionId,
-    UnixMicros,
+    ApiKeyId, AuditEventId, AuthenticationMethodId, AuthenticationService, ObjectId, OperationId,
+    OwnerSetId, PrincipalId, Revision, Rights, SessionId, UnixMicros,
 };
 use rusqlite::{ErrorCode, params};
 use tempfile::tempdir;
@@ -18,7 +18,7 @@ use super::{
 };
 use crate::{
     AuthoritativeCommand, ChangePrincipalState, CommandContext, PrincipalLifecycleState,
-    ReplaceObjectOwners,
+    ReplaceObjectOwners, SessionAuthenticationFactor,
 };
 
 const ROOT_OBJECT: [u8; 16] = [23; 16];
@@ -303,7 +303,16 @@ fn assert_rejected_session_issue(
             session_id: SessionId::from_bytes([86; 16])?,
             principal_id: user,
             token_digest: [87; 32],
-            assurance: meshspan_domain::AssuranceLevel::MultiFactor,
+            service: AuthenticationService::Https,
+            factors: BoundedItems::new(
+                vec![SessionAuthenticationFactor::ApiKey {
+                    method_id: AuthenticationMethodId::from_bytes([88; 16])?,
+                    credential_generation: 1,
+                    method_revision: Revision::new(1),
+                    key_id: ApiKeyId::from_bytes([89; 16])?,
+                }],
+                8,
+            )?,
             expires_at: UnixMicros::new(900),
         });
     assert_rejected(fixture, user, 220, 233, &command)
@@ -342,7 +351,7 @@ fn assert_terminal_state(
         .principal(principal_id)?
         .ok_or("missing retired principal")?;
     assert_eq!(principal.state, 3);
-    assert_eq!(principal.revision, Revision::new(17));
+    assert_eq!(principal.revision, Revision::new(21));
     let retired_at: i64 = fixture.repository.database.connection().query_row(
         "SELECT retired_at FROM principals WHERE principal_id = ?1",
         [principal_id.as_bytes().as_slice()],
@@ -373,10 +382,10 @@ fn assert_lifecycle_history(
         rows.collect::<Result<Vec<_>, _>>()?,
         vec![
             (1, None, 1, None, 2),
-            (2, Some(1), 2, Some("leave started".to_owned()), 13),
-            (3, Some(2), 1, Some("returned early".to_owned()), 14),
-            (2, Some(1), 2, Some("account closure".to_owned()), 16),
-            (4, Some(2), 3, Some("retention complete".to_owned()), 17),
+            (2, Some(1), 2, Some("leave started".to_owned()), 15),
+            (3, Some(2), 1, Some("returned early".to_owned()), 16),
+            (2, Some(1), 2, Some("account closure".to_owned()), 20),
+            (4, Some(2), 3, Some("retention complete".to_owned()), 21),
         ]
     );
     Ok(())
@@ -396,7 +405,7 @@ fn assert_lifecycle_ledger_is_immutable_and_consistent(
     assert_constraint_violation(
         &fixture.repository.database.connection().execute(
             "UPDATE principal_lifecycle_events SET reason = reason
-             WHERE principal_id = ?1 AND revision = 13",
+             WHERE principal_id = ?1 AND revision = 15",
             [principal_id.as_bytes().as_slice()],
         ),
         "principal lifecycle events are immutable",
@@ -419,16 +428,16 @@ fn assert_retirement_survives_restart_and_replay(
         Vec::new(),
     )?);
     let replay = fixture.repository.apply_committed(
-        LogPosition { index: 18, term: 1 },
-        context(117, administrator, 260, 16)?,
+        LogPosition { index: 22, term: 1 },
+        context(121, administrator, 260, 20)?,
         &command,
     )?;
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
-    assert_eq!(replay.committed_revision, Revision::new(17));
-    assert_eq!(fixture.repository.current_revision()?, Revision::new(17));
+    assert_eq!(replay.committed_revision, Revision::new(21));
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(21));
     let rejected = fixture.repository.apply_committed(
-        LogPosition { index: 19, term: 1 },
-        context(234, administrator, 270, 17)?,
+        LogPosition { index: 23, term: 1 },
+        context(234, administrator, 270, 21)?,
         &AuthoritativeCommand::ChangePrincipalState(state_command(
             user,
             PrincipalLifecycleState::Active,

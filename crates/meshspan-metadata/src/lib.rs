@@ -46,8 +46,8 @@ pub use command::{
     RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode,
     RevokeAccessActivation, RevokeAuthenticationMethod, RevokeAuthenticationSession,
     RevokePermissionGrant, RouteAttestation, RunSnapshotSchedule, SealVersionCleanupInventory,
-    SetObjectGrantInheritance, SnapshotExpiryReason, TagTarget, TotpAlgorithm,
-    VersionCleanupAttestation, VersionCleanupItemPlacement,
+    SessionAuthenticationFactor, SetObjectGrantInheritance, SnapshotExpiryReason, TagTarget,
+    TotpAlgorithm, VersionCleanupAttestation, VersionCleanupItemPlacement,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use federation_command::{
