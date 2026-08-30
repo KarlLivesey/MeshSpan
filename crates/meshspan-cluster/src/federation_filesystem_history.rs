@@ -76,14 +76,14 @@ fn load_page(
     state_directory: &Path,
     query: FederationBranchPageQuery,
 ) -> Result<FederationBranchPageRecords, FederationBranchPageSourceError> {
-    validate_authority(query.authority, query.resource, query.now)?;
+    validate_authority(&query.authority, query.resource, query.now)?;
     let volume_id = volume_scope(query.resource)?;
-    let expires_at = export_expiry(query.authority, query.now)?;
+    let expires_at = export_expiry(&query.authority, query.now)?;
     let mut store = VersionPublicationStore::open(state_directory, query.now)
         .map_err(|error| map_publication_error(&error))?;
     let page = store
         .namespace_history_page(NamespaceHistoryPageRequest {
-            scope_binding: authority_binding(query.authority, query.resource),
+            scope_binding: authority_binding(&query.authority, query.resource),
             volume_id,
             requested_heads: query.requested_heads,
             known_commits: query.known_commits,
@@ -113,14 +113,14 @@ fn load_object(
     state_directory: &Path,
     query: &FederationHistoryObjectQuery,
 ) -> Result<FederationHistoryObject, FederationHistoryObjectSourceError> {
-    validate_authority(query.authority, query.resource, query.now)
+    validate_authority(&query.authority, query.resource, query.now)
         .map_err(map_page_error_to_object)?;
     volume_scope(query.resource).map_err(map_page_error_to_object)?;
     let store = VersionPublicationStore::open(state_directory, query.now)
         .map_err(|error| map_publication_object_error(&error))?;
     let record = store
         .namespace_history_object(NamespaceHistoryObjectRequest {
-            scope_binding: authority_binding(query.authority, query.resource),
+            scope_binding: authority_binding(&query.authority, query.resource),
             export_token: query.export_token,
             object_digest: query.object_digest,
             now: query.now,
@@ -132,11 +132,11 @@ fn load_object(
 }
 
 fn validate_authority(
-    authority: EffectiveFederationGrantAuthority,
+    authority: &EffectiveFederationGrantAuthority,
     resource: FederationResourceScope,
     now: UnixMicros,
 ) -> Result<(), FederationBranchPageSourceError> {
-    let grant = authority.grant;
+    let grant = &authority.grant;
     if grant.resource() != resource
         || !grant_allows_history_read(authority)
         || now < grant.valid_from()
@@ -162,7 +162,7 @@ pub(crate) fn volume_scope(
 }
 
 fn export_expiry(
-    authority: EffectiveFederationGrantAuthority,
+    authority: &EffectiveFederationGrantAuthority,
     now: UnixMicros,
 ) -> Result<UnixMicros, FederationBranchPageSourceError> {
     let session_expiry = now
@@ -182,18 +182,30 @@ fn export_expiry(
 }
 
 pub(crate) fn authority_binding(
-    authority: EffectiveFederationGrantAuthority,
+    authority: &EffectiveFederationGrantAuthority,
     resource: FederationResourceScope,
 ) -> [u8; 32] {
-    let grant = authority.grant;
-    let subject = grant.subject();
+    let grant = &authority.grant;
     let scope = version_federation_resource_scope(resource);
     let mut digest = Sha256::new();
     digest.update(AUTHORITY_BINDING_DOMAIN);
     digest.update(grant.grant_id().as_bytes());
     digest.update(grant.relationship_id().as_bytes());
-    digest.update(subject.home_mesh_id().as_bytes());
-    digest.update(subject.principal_id().as_bytes());
+    digest.update(
+        u64::try_from(grant.route().meshes().len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for mesh_id in grant.route().meshes() {
+        digest.update(mesh_id.as_bytes());
+    }
+    match grant.upstream_grant_id() {
+        Some(grant_id) => {
+            digest.update([1]);
+            digest.update(grant_id.as_bytes());
+        }
+        None => digest.update([0]),
+    }
     digest.update(grant.authority_epoch().to_be_bytes());
     digest.update(grant.valid_from().get().to_be_bytes());
     update_optional_time(&mut digest, grant.valid_until());

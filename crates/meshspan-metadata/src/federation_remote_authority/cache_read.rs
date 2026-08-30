@@ -234,7 +234,8 @@ fn decode_grant(
     if record.grant.grant_id() != grant_id
         || record.grant.relationship_id() != relationship_id
         || record.grant.authority_epoch() != authority_epoch
-        || !parties.contains(&record.grant.subject().home_mesh_id())
+        || !parties.contains(&record.grant.issuer_mesh_id())
+        || !parties.contains(&record.grant.recipient_mesh_id())
         || !parties.contains(&record.grant.resource().authority_mesh_id())
         || record.revision != revision
         || revision > authority_revision

@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::EffectiveFederationGrantAuthority;
 
 /// Exact authority and signed export identity admitted before local body lookup.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederationHistoryObjectQuery {
     /// Current bilateral grant authority.
     pub authority: EffectiveFederationGrantAuthority,

@@ -7,10 +7,10 @@ use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId, AuthenticationService,
     BranchId, ContentManifestId, FederatedPrincipal, FederationAccess, FederationGrant,
-    FederationGrantId, FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
-    FederationResourceScope, FileVersionId, HostId, MeshId, NamespaceCommitId,
-    NamespaceFederationPolicy, NodeId, ObjectId, ObjectRevisionId, OperationId, PartitionId,
-    PrincipalId, Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
+    FederationGrantId, FederationGrantRoute, FederationPolicy, FederationRelationshipId,
+    FederationRelationshipKind, FederationResourceScope, FileVersionId, HostId, MeshId,
+    NamespaceCommitId, NamespaceFederationPolicy, NodeId, ObjectId, ObjectRevisionId, OperationId,
+    PartitionId, PrincipalId, Revision, Rights, RoleId, SessionId, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     FilePublication, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
@@ -55,7 +55,7 @@ fn committed_session_and_bilateral_authority_sign_exact_proposal_then_revoke_imm
     assert_eq!(acknowledgement.payload_digest, proposal.payload_digest());
     assert_eq!(acknowledgement.evidence.grant_id(), fixture.ids.grant);
     assert_eq!(
-        acknowledgement.evidence.subject(),
+        acknowledgement.evidence.actor(),
         FederatedPrincipal::new(fixture.ids.local_mesh, fixture.ids.user)
     );
     assert_eq!(
@@ -202,7 +202,7 @@ impl Fixture {
             27,
             self.ids.administrator,
             &AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
-                grant: record.grant,
+                grant: record.grant.clone(),
                 restrictions: BoundedItems::new(record.restrictions.clone(), 2)?,
             }),
         )?;
@@ -339,7 +339,8 @@ impl Fixture {
             grant: FederationGrant::new(
                 self.ids.grant,
                 self.ids.relationship,
-                FederatedPrincipal::new(self.ids.local_mesh, self.ids.user),
+                FederationGrantRoute::direct(self.ids.remote_mesh, self.ids.local_mesh)?,
+                None,
                 FederationResourceScope::Volume {
                     owner_mesh_id: self.ids.remote_mesh,
                     volume_id: self.ids.volume,

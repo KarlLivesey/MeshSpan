@@ -316,7 +316,8 @@ impl FederationRemoteAuthoritySnapshotReceiver {
         let parties = [peer.local_mesh_id, peer.remote_mesh_id];
         let valid = record.grant.relationship_id() == peer.relationship_id
             && record.grant.authority_epoch() == peer.authority_epoch
-            && parties.contains(&record.grant.subject().home_mesh_id())
+            && parties.contains(&record.grant.issuer_mesh_id())
+            && parties.contains(&record.grant.recipient_mesh_id())
             && parties.contains(&record.grant.resource().authority_mesh_id())
             && record.revision > self.after_revision
             && self

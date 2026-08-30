@@ -237,7 +237,7 @@ pub(super) fn active_authority(
         && relationship.relationship_id == request.relationship_id
         && relationship.remote_mesh_id == request.remote_mesh_id
         && grant.relationship_id() == request.relationship_id
-        && grant.subject().home_mesh_id() == request.remote_mesh_id
+        && grant.recipient_mesh_id() == request.remote_mesh_id
         && grant.authority_epoch() == relationship.authority_epoch
         && provider_mesh_id == relationship.local_mesh_id
         && allocation.allocation_id() == request.allocation_id

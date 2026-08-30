@@ -295,7 +295,7 @@ fn verify_stored(
     connection: &Connection,
     stored: &StoredQuarantine,
 ) -> Result<(), RepositoryError> {
-    if stored.signer_mesh_id != stored.record.evidence.subject().home_mesh_id() {
+    if stored.signer_mesh_id != stored.record.evidence.actor().home_mesh_id() {
         return Err(RepositoryError::CorruptState);
     }
     let command = RetainFederatedMutationQuarantine {

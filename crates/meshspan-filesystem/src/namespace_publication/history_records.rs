@@ -258,7 +258,7 @@ pub(super) fn validate_acknowledgement(
         || acknowledgement.signature == [0; 64]
         || acknowledgement.source_operation_id != authority.operation_id()
         || acknowledgement.payload_digest != mutation_digest
-        || evidence.subject().principal_id() != authority.created_by()
+        || evidence.actor().principal_id() != authority.created_by()
         || evidence.accepted_at() < authority.created_at()
         || evidence.required_rights() != authority.required_rights()
         || evidence.storage_bytes() != 0

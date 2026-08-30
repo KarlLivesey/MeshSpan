@@ -2,7 +2,7 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId,
+    AuditEventId, DurationMicros, FederationGrant, FederationGrantId, FederationGrantRoute,
     FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
     FederationResourceScope, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId,
     Revision, RoleId, StorageFederationPolicy, StorageParticipation, UnixMicros,
@@ -649,7 +649,8 @@ fn grant(
     Ok(FederationGrant::new(
         grant_id,
         ids.relationship,
-        FederatedPrincipal::new(ids.local_mesh, ids.administrator),
+        FederationGrantRoute::direct(ids.remote_mesh, ids.local_mesh)?,
+        None,
         FederationResourceScope::StorageCapacity {
             provider_mesh_id: ids.remote_mesh,
         },
@@ -687,6 +688,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         bytes,
         StorageParticipation::new(counts_towards_protection, true),
+        false,
         Some(DurationMicros::new(20)),
     )?))
 }

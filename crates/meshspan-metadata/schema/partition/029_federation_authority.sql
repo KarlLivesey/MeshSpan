@@ -94,15 +94,19 @@ WHERE state = 1;
 CREATE INDEX federation_governance_by_parent
 ON federation_governance_edges(parent_mesh_id, state, child_mesh_id);
 
--- A grant binds an exact remote principal to one owner-qualified resource.
+-- A grant binds one exact recipient swarm to one owner-qualified resource.
+-- Local users and groups are assigned by the recipient's ordinary ACL and do
+-- not become principals administered by the resource authority.
 -- Effective policy is reconstructed by intersecting every active restriction;
 -- no side can broaden another side's ceiling.
 CREATE TABLE federation_grants (
     grant_id BLOB PRIMARY KEY CHECK (length(grant_id) = 16),
     relationship_id BLOB NOT NULL
         REFERENCES federation_relationships(relationship_id) ON DELETE RESTRICT,
-    subject_home_mesh_id BLOB NOT NULL CHECK (length(subject_home_mesh_id) = 16),
-    subject_principal_id BLOB NOT NULL CHECK (length(subject_principal_id) = 16),
+    issuer_mesh_id BLOB NOT NULL CHECK (length(issuer_mesh_id) = 16),
+    recipient_mesh_id BLOB NOT NULL CHECK (length(recipient_mesh_id) = 16),
+    upstream_grant_id BLOB REFERENCES federation_grants(grant_id) ON DELETE RESTRICT,
+    route_depth INTEGER NOT NULL CHECK (route_depth BETWEEN 0 AND 62),
     resource_kind INTEGER NOT NULL CHECK (resource_kind BETWEEN 1 AND 4),
     authority_mesh_id BLOB NOT NULL CHECK (length(authority_mesh_id) = 16),
     volume_id BLOB,
@@ -115,7 +119,8 @@ CREATE TABLE federation_grants (
     issued_at INTEGER NOT NULL,
     revoked_at INTEGER,
     revision INTEGER NOT NULL CHECK (revision > 0),
-    CHECK (subject_home_mesh_id <> authority_mesh_id),
+    CHECK (issuer_mesh_id <> recipient_mesh_id),
+    CHECK ((route_depth = 0) = (upstream_grant_id IS NULL)),
     CHECK (valid_until IS NULL OR valid_until > valid_from),
     CHECK ((state IN (1, 2) AND revoked_at IS NULL) OR (state = 3 AND revoked_at IS NOT NULL)),
     CHECK (
@@ -126,15 +131,30 @@ CREATE TABLE federation_grants (
     )
 ) STRICT;
 
-CREATE INDEX federation_grants_by_subject
+CREATE INDEX federation_grants_by_recipient
 ON federation_grants(
-    subject_home_mesh_id, subject_principal_id, state, valid_until, grant_id
+    recipient_mesh_id, state, valid_until, grant_id
 );
+
+CREATE INDEX federation_grants_by_upstream
+ON federation_grants(upstream_grant_id, state, grant_id)
+WHERE upstream_grant_id IS NOT NULL;
 
 CREATE INDEX federation_grants_by_resource
 ON federation_grants(
     authority_mesh_id, resource_kind, volume_id, object_id, state, grant_id
 );
+
+-- Complete signed ancestry in authority-to-recipient order. The unique mesh
+-- constraint prevents a direct or transitive cycle inside one route.
+CREATE TABLE federation_grant_route_hops (
+    grant_id BLOB NOT NULL REFERENCES federation_grants(grant_id) ON DELETE RESTRICT,
+    hop_index INTEGER NOT NULL CHECK (hop_index BETWEEN 0 AND 63),
+    mesh_id BLOB NOT NULL CHECK (length(mesh_id) = 16),
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    PRIMARY KEY (grant_id, hop_index),
+    UNIQUE (grant_id, mesh_id)
+) STRICT;
 
 -- Exactly one restriction per imposing swarm. Namespace and storage policy
 -- shapes are disjoint so malformed mixtures fail at the storage boundary.
@@ -158,7 +178,7 @@ CREATE TABLE federation_grant_restrictions (
             AND (rights & ~8191) = 0 AND allows_downstream_delegation IN (0, 1)
             AND maximum_storage_bytes IS NULL
             AND counts_towards_protection IS NULL AND serves_reads IS NULL)
-        OR (policy_kind = 2 AND rights IS NULL AND allows_downstream_delegation IS NULL
+        OR (policy_kind = 2 AND rights IS NULL AND allows_downstream_delegation IN (0, 1)
             AND maximum_storage_bytes IS NOT NULL AND maximum_storage_bytes > 0
             AND counts_towards_protection IN (0, 1) AND serves_reads IN (0, 1))
     )

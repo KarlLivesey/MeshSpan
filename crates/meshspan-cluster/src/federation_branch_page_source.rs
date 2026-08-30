@@ -76,7 +76,7 @@ pub enum FederationBranchPageSourceError {
     Corrupt,
 }
 
-pub(crate) fn grant_allows_history_read(authority: EffectiveFederationGrantAuthority) -> bool {
+pub(crate) fn grant_allows_history_read(authority: &EffectiveFederationGrantAuthority) -> bool {
     match authority.grant.policy() {
         meshspan_domain::FederationPolicy::Namespace(policy) => {
             policy.access().rights().contains(Rights::READ_DATA)

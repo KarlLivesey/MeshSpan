@@ -4,8 +4,7 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    FederatedPrincipal, FederationGrant, FederationGrantId, FederationPolicy,
-    FederationResourceScope, MeshId,
+    FederationGrant, FederationGrantId, FederationPolicy, FederationResourceScope, MeshId,
 };
 
 use crate::command::CanonicalDigest;
@@ -57,7 +56,7 @@ pub struct RevokeFederationGrant {
 impl IssueFederationGrant {
     pub(crate) fn update_digest(&self, digest: &mut CanonicalDigest) {
         digest.bytes(b"issue-federation-grant");
-        digest_grant(digest, self.grant);
+        digest_grant(digest, &self.grant);
         digest_restrictions(digest, &self.restrictions);
     }
 }
@@ -66,7 +65,7 @@ impl ReplaceFederationGrant {
     pub(crate) fn update_digest(&self, digest: &mut CanonicalDigest) {
         digest.bytes(b"replace-federation-grant");
         digest.identifier(self.predecessor_grant_id.as_bytes());
-        digest_grant(digest, self.grant);
+        digest_grant(digest, &self.grant);
         digest_restrictions(digest, &self.restrictions);
         digest.boolean(self.restricts_authority);
         digest.bytes(self.reason.as_bytes());
@@ -99,20 +98,19 @@ pub(crate) fn policy_digest(policy: FederationPolicy) -> [u8; 32] {
     digest.finish()
 }
 
-fn digest_grant(digest: &mut CanonicalDigest, grant: FederationGrant) {
+fn digest_grant(digest: &mut CanonicalDigest, grant: &FederationGrant) {
     digest.identifier(grant.grant_id().as_bytes());
     digest.identifier(grant.relationship_id().as_bytes());
-    digest_principal(digest, grant.subject());
+    digest.unsigned(u64::try_from(grant.route().meshes().len()).unwrap_or(u64::MAX));
+    for mesh_id in grant.route().meshes() {
+        digest.identifier(mesh_id.as_bytes());
+    }
+    digest.optional_identifier(grant.upstream_grant_id().map(FederationGrantId::as_bytes));
     digest_resource(digest, grant.resource());
     digest_policy(digest, grant.policy());
     digest.unsigned(grant.authority_epoch());
     digest.signed(grant.valid_from().get());
     digest.optional_instant(grant.valid_until());
-}
-
-fn digest_principal(digest: &mut CanonicalDigest, principal: FederatedPrincipal) {
-    digest.identifier(principal.home_mesh_id().as_bytes());
-    digest.identifier(principal.principal_id().as_bytes());
 }
 
 pub(crate) fn digest_resource(digest: &mut CanonicalDigest, resource: FederationResourceScope) {
@@ -169,6 +167,7 @@ pub(crate) fn digest_policy(digest: &mut CanonicalDigest, policy: FederationPoli
             digest.unsigned(policy.maximum_storage_bytes());
             digest.boolean(policy.participation().counts_towards_protection());
             digest.boolean(policy.participation().serves_reads());
+            digest.boolean(policy.allows_downstream_delegation());
             digest.optional_unsigned(
                 policy
                     .maximum_offline_duration()

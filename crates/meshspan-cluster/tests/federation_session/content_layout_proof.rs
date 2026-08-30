@@ -58,8 +58,8 @@ pub(super) async fn prove_federated_content_layout(
     publish_namespace(&source_state, content)?;
 
     let history = FilesystemFederationHistorySource::new(&source_state);
-    let client_grants = StaticBranchAuthority::admit(fixture.authority);
-    let server_grants = StaticBranchAuthority::admit(fixture.authority);
+    let client_grants = StaticBranchAuthority::admit(fixture.authority.clone());
+    let server_grants = StaticBranchAuthority::admit(fixture.authority.clone());
     let (export_token, manifest_object_digest) = advertised_manifest(
         proof,
         fixture,

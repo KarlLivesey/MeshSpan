@@ -387,20 +387,22 @@ mod tests {
         )?;
         connection.execute(
             "INSERT INTO federation_grants(
-                grant_id, relationship_id, subject_home_mesh_id, subject_principal_id,
+                grant_id, relationship_id, issuer_mesh_id, recipient_mesh_id,
+                upstream_grant_id, route_depth,
                 resource_kind, authority_mesh_id, volume_id, object_id, authority_epoch,
                 valid_from, valid_until, state, effective_policy_digest, issued_at,
                 revoked_at, revision
-             ) VALUES (?1, ?2, ?3, ?4, 4, ?5, NULL, NULL, 1, 1, NULL, 3, ?6, 3, 7, 7)",
+             ) VALUES (?1, ?2, ?3, ?4, NULL, 0, 4, ?3, NULL, NULL, 1,
+                       1, NULL, 3, ?5, 3, 7, 7)",
             params![
                 grant.as_slice(),
                 relationship.as_slice(),
-                local_mesh.as_slice(),
-                [54_u8; 16].as_slice(),
                 remote_mesh.as_slice(),
+                local_mesh.as_slice(),
                 [55_u8; 32].as_slice(),
             ],
         )?;
+        seed_grant_route(&connection, grant, remote_mesh, local_mesh, 7)?;
 
         migrate_partition(&mut connection, 20)?;
         let termination: (i64, Option<String>, i64, i64) = connection.query_row(
@@ -503,21 +505,23 @@ mod tests {
         )?;
         connection.execute(
             "INSERT INTO federation_grants(
-                grant_id, relationship_id, subject_home_mesh_id, subject_principal_id,
+                grant_id, relationship_id, issuer_mesh_id, recipient_mesh_id,
+                upstream_grant_id, route_depth,
                 resource_kind, authority_mesh_id, volume_id, object_id, authority_epoch,
                 valid_from, valid_until, state, effective_policy_digest, issued_at,
                 revoked_at, revision
-             ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, NULL, 1, 1, NULL, 1, ?7, 2, NULL, 1)",
+             ) VALUES (?1, ?2, ?3, ?4, NULL, 0, 1, ?3, ?5, NULL, 1,
+                       1, NULL, 1, ?6, 2, NULL, 1)",
             params![
                 [4_u8; 16].as_slice(),
                 [3_u8; 16].as_slice(),
                 [2_u8; 16].as_slice(),
-                [5_u8; 16].as_slice(),
                 [1_u8; 16].as_slice(),
                 [6_u8; 16].as_slice(),
                 [7_u8; 32].as_slice(),
             ],
         )?;
+        seed_grant_route(connection, [4; 16], [2; 16], [1; 16], 1)?;
         connection.execute(
             "INSERT INTO federation_quarantine(
                 quarantine_id, relationship_id, operation_id, grant_id,
@@ -558,6 +562,24 @@ mod tests {
              ) VALUES (?1, 1, 1, NULL, 1, NULL, ?2, 12, 1)",
             params![[8_u8; 16].as_slice(), [1_u8; 16].as_slice()],
         )?;
+        Ok(())
+    }
+
+    fn seed_grant_route(
+        connection: &rusqlite::Connection,
+        grant_id: [u8; 16],
+        issuer_mesh_id: [u8; 16],
+        recipient_mesh_id: [u8; 16],
+        revision: i64,
+    ) -> rusqlite::Result<()> {
+        for (hop_index, mesh_id) in [(0_i64, issuer_mesh_id), (1_i64, recipient_mesh_id)] {
+            connection.execute(
+                "INSERT INTO federation_grant_route_hops(
+                    grant_id, hop_index, mesh_id, revision
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                params![grant_id.as_slice(), hop_index, mesh_id.as_slice(), revision],
+            )?;
+        }
         Ok(())
     }
 

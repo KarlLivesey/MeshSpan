@@ -4,10 +4,10 @@ use ed25519_dalek::{Signer, SigningKey};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AuditEventId, DurationMicros, FederatedMutationEvidence, FederatedPrincipal, FederationGrant,
-    FederationGrantId, FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
-    FederationResourceScope, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId,
-    QuarantineId, QuarantineReason, Revision, Rights, RoleId, StorageFederationPolicy,
-    StorageParticipation, UnixMicros,
+    FederationGrantId, FederationGrantRoute, FederationPolicy, FederationRelationshipId,
+    FederationRelationshipKind, FederationResourceScope, HostId, MeshId, NodeId, OperationId,
+    PartitionId, PrincipalId, QuarantineId, QuarantineReason, Revision, Rights, RoleId,
+    StorageFederationPolicy, StorageParticipation, UnixMicros,
 };
 use tempfile::tempdir;
 
@@ -470,7 +470,8 @@ impl Fixture {
                 grant: FederationGrant::new(
                     self.ids.grant,
                     self.ids.relationship,
-                    FederatedPrincipal::new(self.ids.local_mesh, self.ids.administrator),
+                    FederationGrantRoute::direct(self.ids.remote_mesh, self.ids.local_mesh)?,
+                    None,
                     FederationResourceScope::StorageCapacity {
                         provider_mesh_id: self.ids.remote_mesh,
                     },
@@ -655,6 +656,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         maximum_storage_bytes,
         StorageParticipation::new(true, true),
+        false,
         Some(DurationMicros::new(96)),
     )?))
 }

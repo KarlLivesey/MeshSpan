@@ -2,9 +2,9 @@
 
 use ed25519_dalek::SigningKey;
 use meshspan_domain::{
-    DurationMicros, FederatedPrincipal, FederationGrant, FederationGrantId, FederationPolicy,
+    DurationMicros, FederationGrant, FederationGrantId, FederationGrantRoute, FederationPolicy,
     FederationRelationshipId, FederationRelationshipKind, FederationResourceScope, MeshId,
-    PrincipalId, Revision, StorageFederationPolicy, StorageParticipation, UnixMicros,
+    Revision, StorageFederationPolicy, StorageParticipation, UnixMicros,
 };
 use meshspan_metadata::{
     FederationGovernanceDirection, FederationGrantRecord, FederationGrantRestriction,
@@ -232,7 +232,11 @@ fn grant_payload(
         grant: FederationGrant::new(
             grant_id(seed)?,
             authority.peer.relationship_id,
-            FederatedPrincipal::new(authority.peer.local_mesh_id, principal(seed)?),
+            FederationGrantRoute::direct(
+                authority.peer.remote_mesh_id,
+                authority.peer.local_mesh_id,
+            )?,
+            None,
             FederationResourceScope::StorageCapacity {
                 provider_mesh_id: authority.peer.remote_mesh_id,
             },
@@ -279,6 +283,7 @@ fn storage_policy(
     Ok(FederationPolicy::Storage(StorageFederationPolicy::new(
         maximum_bytes,
         StorageParticipation::new(protects, true),
+        false,
         Some(DurationMicros::new(100)),
     )?))
 }
@@ -293,8 +298,4 @@ fn mesh(seed: u8) -> Result<MeshId, Box<dyn std::error::Error>> {
 
 fn grant_id(seed: u8) -> Result<FederationGrantId, Box<dyn std::error::Error>> {
     Ok(FederationGrantId::from_bytes([seed; 16])?)
-}
-
-fn principal(seed: u8) -> Result<PrincipalId, Box<dyn std::error::Error>> {
-    Ok(PrincipalId::from_bytes([seed; 16])?)
 }

@@ -52,7 +52,7 @@ pub(super) fn classify(
     verify_side_signature(
         connection,
         evidence.relationship_id(),
-        evidence.subject().home_mesh_id(),
+        evidence.actor().home_mesh_id(),
         acknowledgement.signer_generation,
         &acknowledgement.signing_payload(),
         acknowledgement.signature,
@@ -67,14 +67,14 @@ pub(super) fn classify(
             evidence.relationship_id(),
         )?;
         if relationship.local_mesh_id != evidence.resource().authority_mesh_id()
-            || relationship.remote_mesh_id != evidence.subject().home_mesh_id()
+            || relationship.remote_mesh_id != evidence.actor().home_mesh_id()
         {
             return Err(RepositoryError::InvalidCommand);
         }
         let projection = federation_principal::projection_connection(
             connection,
             evidence.relationship_id(),
-            evidence.subject(),
+            evidence.actor(),
         )?
         .ok_or(RepositoryError::InvalidCommand)?;
         if projection.state != FederatedPrincipalState::Active {

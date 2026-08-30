@@ -119,8 +119,8 @@ pub(super) fn persist(
             acknowledgement.source_operation_id.as_bytes().as_slice(),
             evidence.grant_id().as_bytes().as_slice(),
             evidence.relationship_id().as_bytes().as_slice(),
-            evidence.subject().home_mesh_id().as_bytes().as_slice(),
-            evidence.subject().principal_id().as_bytes().as_slice(),
+            evidence.actor().home_mesh_id().as_bytes().as_slice(),
+            evidence.actor().principal_id().as_bytes().as_slice(),
             resource_kind,
             authority_mesh_id.as_bytes().as_slice(),
             volume_id.as_bytes().as_slice(),
@@ -173,7 +173,7 @@ fn validate(
         || acknowledgement.signature == [0; 64]
         || acknowledgement.source_operation_id != authority.operation_id()
         || acknowledgement.payload_digest != record.digest()
-        || evidence.subject().principal_id() != authority.created_by()
+        || evidence.actor().principal_id() != authority.created_by()
         || evidence.accepted_at() < authority.created_at()
         || evidence.required_rights() != authority.required_rights()
         || evidence.storage_bytes() != 0

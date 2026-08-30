@@ -221,7 +221,7 @@ pub(super) fn admitted_history_grant(
     if authority.grant.grant_id() != grant_id
         || authority.grant.relationship_id() != relationship_id
         || authority.grant.resource() != resource
-        || !grant_allows_history_read(authority)
+        || !grant_allows_history_read(&authority)
     {
         Err(FederationSessionError::AuthorityUnavailable)
     } else {

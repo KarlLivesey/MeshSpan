@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FederatedPrincipal, FederationAccess, FederationGrant,
-    FederationGrantId, FederationPolicy, FederationPreset, FederationRelationshipId,
+    BranchId, ContentManifestId, FederationAccess, FederationGrant, FederationGrantId,
+    FederationGrantRoute, FederationPolicy, FederationPreset, FederationRelationshipId,
     FederationResourceScope, FileVersionId, MeshId, NamespaceCommitId, NamespaceFederationPolicy,
     ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
 };
@@ -31,7 +31,7 @@ async fn real_store_pages_after_restart_and_fences_changed_authority()
     let authority = test_authority(publication.file.volume_id, Revision::new(4))?;
     let source = FilesystemFederationHistorySource::new(directory.path());
     let first = source
-        .branch_page(query(&publication, authority, Vec::new()))
+        .branch_page(query(&publication, authority.clone(), Vec::new()))
         .await?;
     assert_eq!(first.branch_commits.len(), 1);
     assert!(first.immutable_object_digests.is_empty());
@@ -46,14 +46,18 @@ async fn real_store_pages_after_restart_and_fences_changed_authority()
         ..authority
     };
     let second = restarted
-        .branch_page(query(&publication, refreshed, first.next_cursor.clone()))
+        .branch_page(query(
+            &publication,
+            refreshed.clone(),
+            first.next_cursor.clone(),
+        ))
         .await?;
     assert!(second.branch_commits.is_empty());
     assert_eq!(second.immutable_object_digests.len(), 1);
     let digest = second.immutable_object_digests[0];
     let object = restarted
         .history_object(FederationHistoryObjectQuery {
-            authority: refreshed,
+            authority: refreshed.clone(),
             resource: refreshed.grant.resource(),
             export_token: first.export_token,
             object_digest: digest,
@@ -86,7 +90,8 @@ async fn narrower_scope_is_rejected_until_a_non_leaking_projection_exists()
     let grant = FederationGrant::new(
         authority.grant.grant_id(),
         authority.grant.relationship_id(),
-        authority.grant.subject(),
+        authority.grant.route().clone(),
+        authority.grant.upstream_grant_id(),
         resource,
         authority.grant.policy(),
         authority.grant.authority_epoch(),
@@ -116,9 +121,10 @@ fn query(
     authority: EffectiveFederationGrantAuthority,
     cursor: Vec<u8>,
 ) -> FederationBranchPageQuery {
+    let resource = authority.grant.resource();
     FederationBranchPageQuery {
         authority,
-        resource: authority.grant.resource(),
+        resource,
         requested_heads: vec![publication.namespace_commit_id],
         known_commits: Vec::new(),
         cursor,
@@ -139,10 +145,8 @@ fn test_authority(
     let grant = FederationGrant::new(
         FederationGrantId::from_bytes([3; 16])?,
         relationship_id,
-        FederatedPrincipal::new(
-            MeshId::from_bytes([4; 16])?,
-            PrincipalId::from_bytes([5; 16])?,
-        ),
+        FederationGrantRoute::direct(MeshId::from_bytes([1; 16])?, MeshId::from_bytes([4; 16])?)?,
+        None,
         resource,
         FederationPolicy::Namespace(NamespaceFederationPolicy::new(
             FederationAccess::from_preset(FederationPreset::View),

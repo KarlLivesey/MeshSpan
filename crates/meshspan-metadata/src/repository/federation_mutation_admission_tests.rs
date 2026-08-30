@@ -5,9 +5,10 @@ use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AuditEventId, FederatedMutationAcknowledgement, FederatedMutationAdmission,
     FederatedMutationEvidence, FederatedPrincipal, FederationAccess, FederationGrant,
-    FederationGrantId, FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
-    FederationResourceScope, HostId, MeshId, NamespaceFederationPolicy, NodeId, OperationId,
-    PartitionId, PrincipalId, QuarantineReason, Revision, Rights, RoleId, UnixMicros, VolumeId,
+    FederationGrantId, FederationGrantRoute, FederationPolicy, FederationRelationshipId,
+    FederationRelationshipKind, FederationResourceScope, HostId, MeshId, NamespaceFederationPolicy,
+    NodeId, OperationId, PartitionId, PrincipalId, QuarantineReason, Revision, Rights, RoleId,
+    UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
@@ -321,7 +322,8 @@ fn prepare(
     let grant = FederationGrant::new(
         ids.grant,
         ids.relationship,
-        FederatedPrincipal::new(ids.remote_mesh, ids.remote_principal),
+        FederationGrantRoute::direct(ids.local_mesh, ids.remote_mesh)?,
+        None,
         FederationResourceScope::Volume {
             owner_mesh_id: ids.local_mesh,
             volume_id: ids.volume,

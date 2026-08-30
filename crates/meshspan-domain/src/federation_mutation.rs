@@ -40,8 +40,8 @@ impl FederatedMutationAcknowledgement {
 fn append_evidence(payload: &mut Vec<u8>, evidence: FederatedMutationEvidence) {
     payload.extend_from_slice(&evidence.grant_id().as_bytes());
     payload.extend_from_slice(&evidence.relationship_id().as_bytes());
-    payload.extend_from_slice(&evidence.subject().home_mesh_id().as_bytes());
-    payload.extend_from_slice(&evidence.subject().principal_id().as_bytes());
+    payload.extend_from_slice(&evidence.actor().home_mesh_id().as_bytes());
+    payload.extend_from_slice(&evidence.actor().principal_id().as_bytes());
     append_resource(payload, evidence.resource());
     payload.extend_from_slice(&evidence.authority_epoch().to_be_bytes());
     payload.extend_from_slice(&evidence.accepted_at().get().to_be_bytes());

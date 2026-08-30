@@ -6,9 +6,9 @@ use std::collections::BTreeSet;
 
 use meshspan_domain::{
     DurationMicros, FederatedMutationAdmission, FederatedMutationEvidence, FederationAccess,
-    FederationGrant, FederationGrantError, FederationGrantId, FederationPolicy,
-    FederationResourceScope, MeshId, NamespaceFederationPolicy, Revision, StorageFederationPolicy,
-    UnixMicros, classify_federated_mutation,
+    FederationGrant, FederationGrantError, FederationGrantId, FederationGrantRoute,
+    FederationPolicy, FederationResourceScope, MeshId, NamespaceFederationPolicy, Revision,
+    StorageFederationPolicy, UnixMicros, classify_federated_mutation,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -30,14 +30,16 @@ struct RelationshipAuthority {
     authority_epoch: u64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct StoredGrantAuthority {
     relationship_id: meshspan_domain::FederationRelationshipId,
-    subject_home_mesh_id: MeshId,
-    subject_principal_id: meshspan_domain::PrincipalId,
+    route: FederationGrantRoute,
+    upstream_grant_id: Option<FederationGrantId>,
     resource: FederationResourceScope,
     policy: FederationPolicy,
     authority_epoch: u64,
+    valid_from: UnixMicros,
+    valid_until: Option<UnixMicros>,
 }
 
 pub(super) fn classify_persisted_mutation(
@@ -50,7 +52,7 @@ pub(super) fn classify_persisted_mutation(
         .termination
         .as_ref()
         .map(|termination| termination.terminated_at);
-    classify_federated_mutation(record.grant, evidence, revoked_at).map_err(|error| {
+    classify_federated_mutation(&record.grant, evidence, revoked_at).map_err(|error| {
         if error == FederationGrantError::EvidenceMismatch {
             RepositoryError::InvalidCommand
         } else {
@@ -94,11 +96,11 @@ fn issue(
     command: &IssueFederationGrant,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
-    let relationship = load_relationship_authority(transaction, command.grant)?;
+    let relationship = load_relationship_authority(transaction, &command.grant)?;
     validate_and_persist(
         transaction,
         context,
-        command.grant,
+        &command.grant,
         command.restrictions.as_slice(),
         relationship,
         revision,
@@ -117,17 +119,17 @@ fn replace(
         return Err(RepositoryError::InvalidCommand);
     }
     let predecessor = load_grant_authority(transaction, command.predecessor_grant_id)?;
-    validate_successor_identity(predecessor, command.grant)?;
+    validate_successor_identity(&predecessor, &command.grant)?;
     if command.restricts_authority
         && !policy_is_no_broader(command.grant.policy(), predecessor.policy)
     {
         return Err(RepositoryError::InvalidCommand);
     }
-    let relationship = load_relationship_authority(transaction, command.grant)?;
+    let relationship = load_relationship_authority(transaction, &command.grant)?;
     validate_and_persist(
         transaction,
         context,
-        command.grant,
+        &command.grant,
         command.restrictions.as_slice(),
         relationship,
         revision,
@@ -227,12 +229,13 @@ fn persist_termination(
 fn validate_and_persist(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    grant: FederationGrant,
+    grant: &FederationGrant,
     restrictions: &[FederationGrantRestriction],
     relationship: RelationshipAuthority,
     revision: Revision,
 ) -> Result<(), RepositoryError> {
     validate_parties(grant, relationship)?;
+    validate_upstream(transaction, grant)?;
     reject_retired_authority(transaction, grant)?;
     validate_restrictions(grant, restrictions, relationship)?;
     persist_grant(transaction, context, grant, revision)?;
@@ -244,7 +247,7 @@ fn validate_and_persist(
 
 fn reject_retired_authority(
     connection: &Connection,
-    grant: FederationGrant,
+    grant: &FederationGrant,
 ) -> Result<(), RepositoryError> {
     let retired: i64 = connection.query_row(
         "SELECT EXISTS(
@@ -252,7 +255,7 @@ fn reject_retired_authority(
             WHERE state = 3 AND retiring_mesh_id IN (?1, ?2)
          )",
         params![
-            grant.subject().home_mesh_id().as_bytes().as_slice(),
+            grant.recipient_mesh_id().as_bytes().as_slice(),
             grant.resource().authority_mesh_id().as_bytes().as_slice(),
         ],
         |row| row.get(0),
@@ -265,33 +268,92 @@ fn reject_retired_authority(
 }
 
 fn validate_parties(
-    grant: FederationGrant,
+    grant: &FederationGrant,
     relationship: RelationshipAuthority,
 ) -> Result<(), RepositoryError> {
     let parties = [relationship.local_mesh_id, relationship.remote_mesh_id];
     if grant.authority_epoch() != relationship.authority_epoch
-        || !parties.contains(&grant.subject().home_mesh_id())
-        || !parties.contains(&grant.resource().authority_mesh_id())
-        || grant.subject().home_mesh_id() == grant.resource().authority_mesh_id()
+        || !parties.contains(&grant.issuer_mesh_id())
+        || !parties.contains(&grant.recipient_mesh_id())
     {
         return Err(RepositoryError::InvalidCommand);
     }
     Ok(())
 }
 
+fn validate_upstream(
+    transaction: &Transaction<'_>,
+    grant: &FederationGrant,
+) -> Result<(), RepositoryError> {
+    let Some(upstream_grant_id) = grant.upstream_grant_id() else {
+        return (grant.route().downstream_depth() == 0)
+            .then_some(())
+            .ok_or(RepositoryError::InvalidCommand);
+    };
+    let upstream = load_grant_authority(transaction, upstream_grant_id)?;
+    let expected_route = upstream
+        .route
+        .delegate_to(grant.recipient_mesh_id())
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    if expected_route != *grant.route()
+        || upstream.resource != grant.resource()
+        || !policy_is_no_broader(grant.policy(), upstream.policy)
+        || !validity_is_no_broader(
+            grant.valid_from(),
+            grant.valid_until(),
+            upstream.valid_from,
+            upstream.valid_until,
+        )
+        || !policy_allows_downstream(upstream.policy)
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    Ok(())
+}
+
+fn policy_allows_downstream(policy: FederationPolicy) -> bool {
+    match policy {
+        FederationPolicy::Namespace(policy) => policy.access().allows_downstream_delegation(),
+        FederationPolicy::Storage(policy) => policy.allows_downstream_delegation(),
+    }
+}
+
+fn validity_is_no_broader(
+    next_from: UnixMicros,
+    next_until: Option<UnixMicros>,
+    prior_from: UnixMicros,
+    prior_until: Option<UnixMicros>,
+) -> bool {
+    next_from >= prior_from
+        && match (next_until, prior_until) {
+            (Some(next), Some(prior)) => next <= prior,
+            (Some(_), None) | (None, None) => true,
+            (None, Some(_)) => false,
+        }
+}
+
 fn validate_restrictions(
-    grant: FederationGrant,
+    grant: &FederationGrant,
     restrictions: &[FederationGrantRestriction],
     relationship: RelationshipAuthority,
 ) -> Result<(), RepositoryError> {
-    if restrictions.len() != 2 {
+    if !(2..=meshspan_domain::MAXIMUM_FEDERATION_ROUTE_MESHES).contains(&restrictions.len()) {
         return Err(RepositoryError::InvalidCommand);
     }
     let imposing = restrictions
         .iter()
         .map(|value| value.imposing_mesh_id)
         .collect::<BTreeSet<_>>();
-    if imposing != BTreeSet::from([relationship.local_mesh_id, relationship.remote_mesh_id]) {
+    let relationship_parties = [relationship.local_mesh_id, relationship.remote_mesh_id];
+    if !relationship_parties
+        .iter()
+        .all(|mesh_id| imposing.contains(mesh_id))
+        || !grant
+            .route()
+            .meshes()
+            .iter()
+            .all(|mesh_id| imposing.contains(mesh_id))
+    {
         return Err(RepositoryError::InvalidCommand);
     }
     let policies = restrictions
@@ -309,22 +371,31 @@ fn validate_restrictions(
 fn persist_grant(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    grant: FederationGrant,
+    grant: &FederationGrant,
     revision: Revision,
 ) -> Result<(), RepositoryError> {
     let (resource_kind, authority, volume, object) = resource_columns(grant.resource());
     transaction.execute(
         "INSERT INTO federation_grants(
-            grant_id, relationship_id, subject_home_mesh_id, subject_principal_id,
+            grant_id, relationship_id, issuer_mesh_id, recipient_mesh_id,
+            upstream_grant_id, route_depth,
             resource_kind, authority_mesh_id, volume_id, object_id, authority_epoch,
             valid_from, valid_until, state, effective_policy_digest, issued_at,
             revoked_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, NULL, ?14)",
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+            1, ?14, ?15, NULL, ?16
+         )",
         params![
             grant.grant_id().as_bytes().as_slice(),
             grant.relationship_id().as_bytes().as_slice(),
-            grant.subject().home_mesh_id().as_bytes().as_slice(),
-            grant.subject().principal_id().as_bytes().as_slice(),
+            grant.issuer_mesh_id().as_bytes().as_slice(),
+            grant.recipient_mesh_id().as_bytes().as_slice(),
+            grant.upstream_grant_id().map(FederationGrantId::as_bytes),
+            to_i64(
+                u64::try_from(grant.route().downstream_depth())
+                    .map_err(|_| RepositoryError::CapacityExceeded)?
+            )?,
             resource_kind,
             authority.as_bytes().as_slice(),
             volume.map(meshspan_domain::VolumeId::as_bytes),
@@ -337,6 +408,19 @@ fn persist_grant(
             to_i64(revision.get())?,
         ],
     )?;
+    for (hop_index, mesh_id) in grant.route().meshes().iter().enumerate() {
+        transaction.execute(
+            "INSERT INTO federation_grant_route_hops(
+                grant_id, hop_index, mesh_id, revision
+             ) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                grant.grant_id().as_bytes().as_slice(),
+                to_i64(u64::try_from(hop_index).map_err(|_| RepositoryError::CapacityExceeded)?)?,
+                mesh_id.as_bytes().as_slice(),
+                to_i64(revision.get())?,
+            ],
+        )?;
+    }
     Ok(())
 }
 
@@ -369,10 +453,11 @@ fn persist_restriction(
                 grant_id, imposing_mesh_id, policy_kind, rights, allows_downstream_delegation,
                 maximum_storage_bytes, counts_towards_protection, serves_reads,
                 maximum_offline_micros, policy_digest, revision
-             ) VALUES (?1, ?2, 2, NULL, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
+             ) VALUES (?1, ?2, 2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 grant_id.as_bytes().as_slice(),
                 restriction.imposing_mesh_id.as_bytes().as_slice(),
+                policy.allows_downstream_delegation(),
                 to_i64(policy.maximum_storage_bytes())?,
                 policy.participation().counts_towards_protection(),
                 policy.participation().serves_reads(),
@@ -387,7 +472,7 @@ fn persist_restriction(
 
 fn load_relationship_authority(
     transaction: &Transaction<'_>,
-    grant: FederationGrant,
+    grant: &FederationGrant,
 ) -> Result<RelationshipAuthority, RepositoryError> {
     let row = transaction
         .query_row(
@@ -421,9 +506,10 @@ fn load_grant_authority(
 ) -> Result<StoredGrantAuthority, RepositoryError> {
     let row = transaction
         .query_row(
-            "SELECT relationship_id, subject_home_mesh_id, subject_principal_id,
+            "SELECT relationship_id, issuer_mesh_id, recipient_mesh_id,
+                    upstream_grant_id, route_depth,
                     resource_kind, authority_mesh_id, volume_id, object_id,
-                    authority_epoch, effective_policy_digest
+                    authority_epoch, valid_from, valid_until, effective_policy_digest
              FROM federation_grants WHERE grant_id = ?1 AND state = 1",
             [grant_id.as_bytes().as_slice()],
             |row| {
@@ -431,29 +517,70 @@ fn load_grant_authority(
                     row.get::<_, Vec<u8>>(0)?,
                     row.get::<_, Vec<u8>>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Vec<u8>>(4)?,
-                    row.get::<_, Option<Vec<u8>>>(5)?,
-                    row.get::<_, Option<Vec<u8>>>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                    row.get::<_, Option<Vec<u8>>>(7)?,
+                    row.get::<_, Option<Vec<u8>>>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Vec<u8>>(12)?,
                 ))
             },
         )
         .optional()?
         .ok_or(RepositoryError::InvalidCommand)?;
     let policy = load_effective_policy(transaction, grant_id)?;
-    if row.8.as_slice() != policy_digest(policy) {
+    if row.12.as_slice() != policy_digest(policy) {
+        return Err(RepositoryError::CorruptState);
+    }
+    let route = load_route(transaction, grant_id)?;
+    let stored_depth = usize::try_from(row.4).map_err(|_| RepositoryError::CorruptState)?;
+    if parse_mesh(&row.1)? != route.issuer_mesh_id()
+        || parse_mesh(&row.2)? != route.recipient_mesh_id()
+        || stored_depth != route.downstream_depth()
+    {
         return Err(RepositoryError::CorruptState);
     }
     Ok(StoredGrantAuthority {
         relationship_id: parse_relationship(&row.0)?,
-        subject_home_mesh_id: parse_mesh(&row.1)?,
-        subject_principal_id: parse_principal(&row.2)?,
-        resource: parse_resource(row.3, &row.4, row.5.as_deref(), row.6.as_deref())?,
+        route,
+        upstream_grant_id: row.3.as_deref().map(parse_federation_grant).transpose()?,
+        resource: parse_resource(row.5, &row.6, row.7.as_deref(), row.8.as_deref())?,
         policy,
-        authority_epoch: positive(row.7)?,
+        authority_epoch: positive(row.9)?,
+        valid_from: UnixMicros::new(row.10),
+        valid_until: row.11.map(UnixMicros::new),
     })
+}
+
+pub(super) fn load_route(
+    connection: &Connection,
+    grant_id: FederationGrantId,
+) -> Result<FederationGrantRoute, RepositoryError> {
+    let mut statement = connection.prepare(
+        "SELECT hop_index, mesh_id FROM federation_grant_route_hops
+         WHERE grant_id = ?1 ORDER BY hop_index",
+    )?;
+    let rows = statement.query_map([grant_id.as_bytes().as_slice()], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+    })?;
+    let mut meshes = Vec::new();
+    for row in rows {
+        let (hop_index, mesh_id) = row?;
+        if hop_index
+            != i64::try_from(meshes.len()).map_err(|_| RepositoryError::CapacityExceeded)?
+        {
+            return Err(RepositoryError::CorruptState);
+        }
+        meshes.push(parse_mesh(&mesh_id)?);
+        if meshes.len() > meshspan_domain::MAXIMUM_FEDERATION_ROUTE_MESHES {
+            return Err(RepositoryError::CapacityExceeded);
+        }
+    }
+    FederationGrantRoute::from_meshes(meshes).map_err(|_| RepositoryError::CorruptState)
 }
 
 fn load_effective_policy(
@@ -503,7 +630,7 @@ pub(super) fn load_restrictions(
             policy,
         });
     }
-    if restrictions.len() != 2 {
+    if !(2..=meshspan_domain::MAXIMUM_FEDERATION_ROUTE_MESHES).contains(&restrictions.len()) {
         return Err(RepositoryError::CorruptState);
     }
     Ok(restrictions)
@@ -519,7 +646,7 @@ pub(super) fn validate_stored_restriction_parties(
         .map(|restriction| restriction.imposing_mesh_id)
         .collect::<BTreeSet<_>>();
     let expected = BTreeSet::from([parse_mesh(local_mesh)?, parse_mesh(remote_mesh)?]);
-    if actual == expected {
+    if expected.iter().all(|mesh_id| actual.contains(mesh_id)) {
         Ok(())
     } else {
         Err(RepositoryError::CorruptState)
@@ -527,12 +654,12 @@ pub(super) fn validate_stored_restriction_parties(
 }
 
 fn validate_successor_identity(
-    predecessor: StoredGrantAuthority,
-    successor: FederationGrant,
+    predecessor: &StoredGrantAuthority,
+    successor: &FederationGrant,
 ) -> Result<(), RepositoryError> {
     if predecessor.relationship_id != successor.relationship_id()
-        || predecessor.subject_home_mesh_id != successor.subject().home_mesh_id()
-        || predecessor.subject_principal_id != successor.subject().principal_id()
+        || predecessor.route != *successor.route()
+        || predecessor.upstream_grant_id != successor.upstream_grant_id()
         || predecessor.resource != successor.resource()
     {
         return Err(RepositoryError::InvalidCommand);
@@ -556,6 +683,7 @@ pub(super) fn policy_is_no_broader(next: FederationPolicy, prior: FederationPoli
                 && (!next.participation().counts_towards_protection()
                     || prior.participation().counts_towards_protection())
                 && (!next.participation().serves_reads() || prior.participation().serves_reads())
+                && (!next.allows_downstream_delegation() || prior.allows_downstream_delegation())
                 && duration_is_no_broader(
                     next.maximum_offline_duration(),
                     prior.maximum_offline_duration(),
@@ -651,9 +779,14 @@ fn parse_policy(
                 parse_bool(counts_towards_protection)?,
                 parse_bool(serves_reads)?,
             );
-            StorageFederationPolicy::new(bytes, participation, offline)
-                .map(FederationPolicy::Storage)
-                .map_err(|_| RepositoryError::CorruptState)
+            StorageFederationPolicy::new(
+                bytes,
+                participation,
+                parse_bool(allows_downstream_delegation)?,
+                offline,
+            )
+            .map(FederationPolicy::Storage)
+            .map_err(|_| RepositoryError::CorruptState)
         }
         _ => Err(RepositoryError::CorruptState),
     }
@@ -717,10 +850,8 @@ pub(super) fn parse_relationship(
     parse_id(value, meshspan_domain::FederationRelationshipId::from_bytes)
 }
 
-pub(super) fn parse_principal(
-    value: &[u8],
-) -> Result<meshspan_domain::PrincipalId, RepositoryError> {
-    parse_id(value, meshspan_domain::PrincipalId::from_bytes)
+fn parse_federation_grant(value: &[u8]) -> Result<FederationGrantId, RepositoryError> {
+    parse_id(value, FederationGrantId::from_bytes)
 }
 
 fn parse_volume(value: &[u8]) -> Result<meshspan_domain::VolumeId, RepositoryError> {

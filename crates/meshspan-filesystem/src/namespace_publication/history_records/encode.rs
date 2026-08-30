@@ -63,8 +63,8 @@ fn encode_acknowledgement(bytes: &mut Vec<u8>, value: &FederatedMutationAcknowle
     let evidence = value.evidence;
     identifier(bytes, evidence.grant_id().as_bytes());
     identifier(bytes, evidence.relationship_id().as_bytes());
-    identifier(bytes, evidence.subject().home_mesh_id().as_bytes());
-    identifier(bytes, evidence.subject().principal_id().as_bytes());
+    identifier(bytes, evidence.actor().home_mesh_id().as_bytes());
+    identifier(bytes, evidence.actor().principal_id().as_bytes());
     encode_resource(bytes, evidence.resource());
     bytes.extend_from_slice(&evidence.authority_epoch().to_be_bytes());
     bytes.extend_from_slice(&evidence.accepted_at().get().to_be_bytes());

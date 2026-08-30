@@ -49,11 +49,13 @@ fn every_side_can_only_narrow_effective_policy() -> Result<(), Box<dyn std::erro
     let storage_offered = FederationPolicy::Storage(StorageFederationPolicy::new(
         100,
         StorageParticipation::new(true, true),
+        true,
         None,
     )?);
     let storage_accepted = FederationPolicy::Storage(StorageFederationPolicy::new(
         50,
         StorageParticipation::new(true, false),
+        false,
         None,
     )?);
     let storage = FederationPolicy::intersect(&[storage_offered, storage_accepted])?;
@@ -73,7 +75,7 @@ fn absent_and_contradictory_policy_fails_closed() -> Result<(), Box<dyn std::err
         Err(FederationPolicyError::MissingRestriction)
     );
     assert_eq!(
-        StorageFederationPolicy::new(0, StorageParticipation::new(true, false), None),
+        StorageFederationPolicy::new(0, StorageParticipation::new(true, false), false, None),
         Err(FederationPolicyError::InvalidStorage)
     );
     let namespace = FederationPolicy::Namespace(NamespaceFederationPolicy::new(
@@ -83,6 +85,7 @@ fn absent_and_contradictory_policy_fails_closed() -> Result<(), Box<dyn std::err
     let storage = FederationPolicy::Storage(StorageFederationPolicy::new(
         1,
         StorageParticipation::default(),
+        false,
         None,
     )?);
     assert_eq!(

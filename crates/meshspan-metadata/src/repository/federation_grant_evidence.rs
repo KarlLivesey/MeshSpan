@@ -4,12 +4,15 @@
 
 use std::collections::BTreeSet;
 
-use meshspan_domain::{FederationGrant, FederationGrantId, FederationPolicy, Revision, UnixMicros};
+use meshspan_domain::{
+    FederationGrant, FederationGrantId, FederationGrantRoute, FederationPolicy, Revision,
+    UnixMicros,
+};
 use rusqlite::{Connection, OptionalExtension};
 
 use super::RepositoryError;
 use super::federation_grant::{
-    load_restrictions, parse_mesh, parse_principal, parse_relationship, parse_resource,
+    load_restrictions, load_route, parse_mesh, parse_relationship, parse_resource,
     policy_is_no_broader, positive, validate_stored_restriction_parties,
 };
 use crate::federation_grant_command::policy_digest;
@@ -86,8 +89,10 @@ struct SuccessionEdge {
 
 struct RawGrant {
     relationship_id: Vec<u8>,
-    subject_home_mesh_id: Vec<u8>,
-    subject_principal_id: Vec<u8>,
+    issuer_mesh_id: Vec<u8>,
+    recipient_mesh_id: Vec<u8>,
+    upstream_grant_id: Option<Vec<u8>>,
+    route_depth: i64,
     resource_kind: i64,
     authority_mesh_id: Vec<u8>,
     volume_id: Option<Vec<u8>>,
@@ -152,7 +157,8 @@ fn load_record(
 ) -> Result<Option<FederationGrantRecord>, RepositoryError> {
     let row = connection
         .query_row(
-            "SELECT g.relationship_id, g.subject_home_mesh_id, g.subject_principal_id,
+            "SELECT g.relationship_id, g.issuer_mesh_id, g.recipient_mesh_id,
+                    g.upstream_grant_id, g.route_depth,
                     g.resource_kind, g.authority_mesh_id, g.volume_id, g.object_id,
                     g.authority_epoch, g.valid_from, g.valid_until,
                     g.effective_policy_digest, g.state, g.issued_at, g.revoked_at, g.revision,
@@ -164,22 +170,24 @@ fn load_record(
             |row| {
                 Ok(RawGrant {
                     relationship_id: row.get(0)?,
-                    subject_home_mesh_id: row.get(1)?,
-                    subject_principal_id: row.get(2)?,
-                    resource_kind: row.get(3)?,
-                    authority_mesh_id: row.get(4)?,
-                    volume_id: row.get(5)?,
-                    object_id: row.get(6)?,
-                    authority_epoch: row.get(7)?,
-                    valid_from: row.get(8)?,
-                    valid_until: row.get(9)?,
-                    effective_policy_digest: row.get(10)?,
-                    state: row.get(11)?,
-                    issued_at: row.get(12)?,
-                    revoked_at: row.get(13)?,
-                    revision: row.get(14)?,
-                    local_mesh_id: row.get(15)?,
-                    remote_mesh_id: row.get(16)?,
+                    issuer_mesh_id: row.get(1)?,
+                    recipient_mesh_id: row.get(2)?,
+                    upstream_grant_id: row.get(3)?,
+                    route_depth: row.get(4)?,
+                    resource_kind: row.get(5)?,
+                    authority_mesh_id: row.get(6)?,
+                    volume_id: row.get(7)?,
+                    object_id: row.get(8)?,
+                    authority_epoch: row.get(9)?,
+                    valid_from: row.get(10)?,
+                    valid_until: row.get(11)?,
+                    effective_policy_digest: row.get(12)?,
+                    state: row.get(13)?,
+                    issued_at: row.get(14)?,
+                    revoked_at: row.get(15)?,
+                    revision: row.get(16)?,
+                    local_mesh_id: row.get(17)?,
+                    remote_mesh_id: row.get(18)?,
                 })
             },
         )
@@ -204,13 +212,22 @@ fn reconstruct_record(
     if row.effective_policy_digest.as_slice() != policy_digest(policy) {
         return Err(RepositoryError::CorruptState);
     }
+    let route = load_route(connection, grant_id)?;
+    if parse_mesh(&row.issuer_mesh_id)? != route.issuer_mesh_id()
+        || parse_mesh(&row.recipient_mesh_id)? != route.recipient_mesh_id()
+        || usize::try_from(row.route_depth).map_err(|_| RepositoryError::CorruptState)?
+            != route.downstream_depth()
+    {
+        return Err(RepositoryError::CorruptState);
+    }
     let grant = FederationGrant::new(
         grant_id,
         parse_relationship(&row.relationship_id)?,
-        meshspan_domain::FederatedPrincipal::new(
-            parse_mesh(&row.subject_home_mesh_id)?,
-            parse_principal(&row.subject_principal_id)?,
-        ),
+        route,
+        row.upstream_grant_id
+            .as_deref()
+            .map(parse_grant)
+            .transpose()?,
         parse_resource(
             row.resource_kind,
             &row.authority_mesh_id,
@@ -420,7 +437,8 @@ fn validate_edge_evidence(
             }
             let successor = load_successor_authority(connection, edge.successor)?;
             if successor.relationship_id != grant.relationship_id()
-                || successor.subject != grant.subject()
+                || successor.route != *grant.route()
+                || successor.upstream_grant_id != grant.upstream_grant_id()
                 || successor.resource != grant.resource()
                 || successor.authority_epoch != grant.authority_epoch()
                 || successor.issued_at != edge.succeeded_at
@@ -436,7 +454,8 @@ fn validate_edge_evidence(
 
 struct SuccessorAuthority {
     relationship_id: meshspan_domain::FederationRelationshipId,
-    subject: meshspan_domain::FederatedPrincipal,
+    route: FederationGrantRoute,
+    upstream_grant_id: Option<FederationGrantId>,
     resource: meshspan_domain::FederationResourceScope,
     authority_epoch: u64,
     policy: FederationPolicy,
@@ -449,7 +468,7 @@ fn load_successor_authority(
 ) -> Result<SuccessorAuthority, RepositoryError> {
     let row = connection
         .query_row(
-            "SELECT relationship_id, subject_home_mesh_id, subject_principal_id,
+            "SELECT relationship_id, upstream_grant_id,
                     resource_kind, authority_mesh_id, volume_id, object_id,
                     authority_epoch, effective_policy_digest, issued_at
              FROM federation_grants WHERE grant_id = ?1",
@@ -457,15 +476,14 @@ fn load_successor_authority(
             |row| {
                 Ok((
                     row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
                     row.get::<_, Option<Vec<u8>>>(5)?,
-                    row.get::<_, Option<Vec<u8>>>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, Vec<u8>>(8)?,
-                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Vec<u8>>(7)?,
+                    row.get::<_, i64>(8)?,
                 ))
             },
         )
@@ -478,19 +496,17 @@ fn load_successor_authority(
         .collect::<Vec<_>>();
     let policy =
         FederationPolicy::intersect(&policies).map_err(|_| RepositoryError::CorruptState)?;
-    if row.8.as_slice() != policy_digest(policy) {
+    if row.7.as_slice() != policy_digest(policy) {
         return Err(RepositoryError::CorruptState);
     }
     Ok(SuccessorAuthority {
         relationship_id: parse_relationship(&row.0)?,
-        subject: meshspan_domain::FederatedPrincipal::new(
-            parse_mesh(&row.1)?,
-            parse_principal(&row.2)?,
-        ),
-        resource: parse_resource(row.3, &row.4, row.5.as_deref(), row.6.as_deref())?,
-        authority_epoch: positive(row.7)?,
+        route: load_route(connection, grant_id)?,
+        upstream_grant_id: row.1.as_deref().map(parse_grant).transpose()?,
+        resource: parse_resource(row.2, &row.3, row.4.as_deref(), row.5.as_deref())?,
+        authority_epoch: positive(row.6)?,
         policy,
-        issued_at: UnixMicros::new(row.9),
+        issued_at: UnixMicros::new(row.8),
     })
 }
 
@@ -513,7 +529,7 @@ fn is_current_authority(
             WHERE state = 3 AND retiring_mesh_id IN (?1, ?2)
          )",
         rusqlite::params![
-            record.grant.subject().home_mesh_id().as_bytes().as_slice(),
+            record.grant.recipient_mesh_id().as_bytes().as_slice(),
             record
                 .grant
                 .resource()

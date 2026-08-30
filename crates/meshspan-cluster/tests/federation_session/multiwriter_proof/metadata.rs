@@ -14,8 +14,8 @@ use meshspan_cluster::{
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ApiKeyId, AssuranceLevel, AuthenticationMethodId, AuthenticationService, FederatedPrincipal,
-    FederationAccess, FederationGrant, FederationGrantId, FederationPolicy,
+    ApiKeyId, AssuranceLevel, AuthenticationMethodId, AuthenticationService, FederationAccess,
+    FederationGrant, FederationGrantId, FederationGrantRoute, FederationPolicy,
     FederationResourceScope, MeshId, OperationId, PartitionId, PrincipalId, Revision, Rights,
     SessionId, UnixMicros, VolumeId,
 };
@@ -159,7 +159,7 @@ fn configure_authoritative_state(
         }),
     )?;
     issue_home_session(authorities, user)?;
-    let record = grant_record(authorities, user, grant, volume)?;
+    let record = grant_record(authorities, grant, volume)?;
     issue_grant(
         &mut authorities.server.repository,
         authorities.server.administrator_id,
@@ -397,7 +397,6 @@ fn assert_identity_orientation(
 
 fn grant_record(
     authorities: &MetadataAuthorities,
-    user: PrincipalId,
     grant_id: FederationGrantId,
     volume_id: VolumeId,
 ) -> Result<FederationGrantRecord, Box<dyn Error>> {
@@ -424,7 +423,8 @@ fn grant_record(
         grant: FederationGrant::new(
             grant_id,
             authorities.relationship_id,
-            FederatedPrincipal::new(authorities.server_mesh, user),
+            FederationGrantRoute::direct(authorities.client_mesh, authorities.server_mesh)?,
+            None,
             FederationResourceScope::Volume {
                 owner_mesh_id: authorities.client_mesh,
                 volume_id,
@@ -455,7 +455,7 @@ fn issue_grant(
         administrator,
         occurred_at,
         &AuthoritativeCommand::IssueFederationGrant(IssueFederationGrant {
-            grant: record.grant,
+            grant: record.grant.clone(),
             restrictions: BoundedItems::new(record.restrictions.clone(), 2)?,
         }),
     )

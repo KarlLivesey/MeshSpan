@@ -270,7 +270,7 @@ fn validate_grant(
         .ok_or(FederationStorageInventoryExchangeError::AuthorityUnavailable)?;
     let grant = record.grant;
     let valid = grant.relationship_id() == relationship_id
-        && grant.subject().home_mesh_id() == remote_mesh_id
+        && grant.recipient_mesh_id() == remote_mesh_id
         && grant.resource()
             == FederationResourceScope::StorageCapacity {
                 provider_mesh_id: local_mesh_id,

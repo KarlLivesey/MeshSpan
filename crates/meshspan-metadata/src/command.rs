@@ -2484,7 +2484,7 @@ impl CanonicalDigest {
         }
     }
 
-    fn optional_identifier(&mut self, value: Option<[u8; 16]>) {
+    pub(crate) fn optional_identifier(&mut self, value: Option<[u8; 16]>) {
         match value {
             Some(value) => {
                 self.byte(1);
