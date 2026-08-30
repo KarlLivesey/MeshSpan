@@ -6,7 +6,8 @@
 mod namespace;
 
 pub use namespace::{
-    NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
+    FederatedNamespaceMutationProposal, NamespaceHistoryCommitRecord,
+    NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
     NamespaceHistoryMutationAuthority, NamespaceHistoryMutationDecision,
     NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
     NamespaceHistoryReceiveCompletion, NamespaceHistoryReceivePreparation,
@@ -1129,6 +1130,17 @@ impl VersionPublicationStore {
         namespace::file_federated_mutation_digest(publication)
     }
 
+    /// Derives the complete canonical mutation authority an accepting swarm must authorise.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed publication input or an unencodable canonical history record.
+    pub fn root_file_federated_mutation_proposal(
+        publication: &RootFilePublication,
+    ) -> Result<FederatedNamespaceMutationProposal, PublicationError> {
+        namespace::file_federated_mutation_proposal(publication)
+    }
+
     /// Atomically publishes one remotely authorised file mutation and its signed acceptance proof.
     ///
     /// # Errors
@@ -1173,6 +1185,17 @@ impl VersionPublicationStore {
         publication: &DirectoryPublication,
     ) -> Result<[u8; 32], PublicationError> {
         namespace::directory_federated_mutation_digest(publication)
+    }
+
+    /// Derives complete canonical mutation authority for one directory creation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed publication input or an unencodable canonical history record.
+    pub fn directory_federated_mutation_proposal(
+        publication: &DirectoryPublication,
+    ) -> Result<FederatedNamespaceMutationProposal, PublicationError> {
+        namespace::directory_federated_mutation_proposal(publication)
     }
 
     /// Atomically creates one remotely authorised directory and stores its signed acceptance proof.
@@ -1278,6 +1301,18 @@ impl VersionPublicationStore {
         namespace::rename_federated_mutation_digest(&self.connection, publication)
     }
 
+    /// Builds the immutable authority facts and payload digest for an exact current rename.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or stale source state, cycles, corruption or an unencodable record.
+    pub fn rename_federated_mutation_proposal(
+        &self,
+        publication: &NamespaceRenamePublication,
+    ) -> Result<FederatedNamespaceMutationProposal, crate::HandleError> {
+        namespace::rename_federated_mutation_proposal(&self.connection, publication)
+    }
+
     /// Atomically applies one remotely authorised rename and stores its signed acceptance proof.
     ///
     /// # Errors
@@ -1343,6 +1378,18 @@ impl VersionPublicationStore {
         publication: &NamespaceUnlinkPublication,
     ) -> Result<[u8; 32], crate::HandleError> {
         namespace::unlink_federated_mutation_digest(&self.connection, publication)
+    }
+
+    /// Builds the immutable authority facts and payload digest for an exact current unlink.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, stale or non-empty target state, corruption or an unencodable record.
+    pub fn unlink_federated_mutation_proposal(
+        &self,
+        publication: &NamespaceUnlinkPublication,
+    ) -> Result<FederatedNamespaceMutationProposal, crate::HandleError> {
+        namespace::unlink_federated_mutation_proposal(&self.connection, publication)
     }
 
     /// Atomically applies one remotely authorised unlink and stores its signed acceptance proof.

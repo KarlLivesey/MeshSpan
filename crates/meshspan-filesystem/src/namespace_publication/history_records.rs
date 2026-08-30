@@ -47,6 +47,36 @@ pub struct NamespaceHistoryMutationAuthority {
     required_rights: Rights,
 }
 
+/// Canonical pre-publication facts which an accepting swarm may authorise and sign.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederatedNamespaceMutationProposal {
+    authority: NamespaceHistoryMutationAuthority,
+    payload_digest: [u8; 32],
+}
+
+impl FederatedNamespaceMutationProposal {
+    pub(in crate::publication) fn from_record(
+        record: &NamespaceHistoryCommitRecord,
+    ) -> Result<Self, NamespaceHistoryRecordError> {
+        Ok(Self {
+            authority: record.mutation_authority()?,
+            payload_digest: record.mutation_digest()?,
+        })
+    }
+
+    /// Returns the exact immutable operation, actor, scope and rights being authorised.
+    #[must_use]
+    pub const fn authority(&self) -> &NamespaceHistoryMutationAuthority {
+        &self.authority
+    }
+
+    /// Returns the canonical immutable mutation digest covered by the accepting-swarm signature.
+    #[must_use]
+    pub const fn payload_digest(&self) -> [u8; 32] {
+        self.payload_digest
+    }
+}
+
 impl NamespaceHistoryMutationAuthority {
     /// Returns the immutable namespace commit identity.
     #[must_use]

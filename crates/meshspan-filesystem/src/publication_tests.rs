@@ -14,6 +14,8 @@ fn federated_file_publication_persists_and_transfers_its_exact_signed_proof()
     let target_directory = tempdir()?;
     let publication = initial_root_publication()?;
     let digest = VersionPublicationStore::root_file_federated_mutation_digest(&publication)?;
+    let proposal = VersionPublicationStore::root_file_federated_mutation_proposal(&publication)?;
+    assert_federated_file_proposal(&proposal, &publication, digest);
     let acknowledgement = mutation_acknowledgement(
         publication.file.operation_id,
         publication.file.created_by,
@@ -100,6 +102,28 @@ fn federated_file_publication_persists_and_transfers_its_exact_signed_proof()
     Ok(())
 }
 
+fn assert_federated_file_proposal(
+    proposal: &super::FederatedNamespaceMutationProposal,
+    publication: &RootFilePublication,
+    digest: [u8; 32],
+) {
+    assert_eq!(proposal.payload_digest(), digest);
+    assert_eq!(
+        proposal.authority().operation_id(),
+        publication.file.operation_id
+    );
+    assert_eq!(
+        proposal.authority().created_by(),
+        publication.file.created_by
+    );
+    assert_eq!(
+        proposal.authority().required_rights(),
+        Rights::TRAVERSE
+            .union(Rights::CREATE_CHILD)
+            .union(Rights::WRITE_DATA)
+    );
+}
+
 #[test]
 fn every_federated_namespace_mutation_shape_binds_the_required_rights()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -121,6 +145,13 @@ fn every_federated_namespace_mutation_shape_binds_the_required_rights()
     store.publish_federated_root_file(&file, &file_acknowledgement)?;
 
     let rename = root_file_rename(&file, "renamed")?;
+    let rename_proposal = store.rename_federated_mutation_proposal(&rename)?;
+    assert_eq!(
+        rename_proposal.authority().required_rights(),
+        Rights::TRAVERSE
+            .union(Rights::RENAME)
+            .union(Rights::CREATE_CHILD)
+    );
     let rename_acknowledgement = mutation_acknowledgement(
         rename.operation_id,
         rename.created_by,
@@ -129,20 +160,25 @@ fn every_federated_namespace_mutation_shape_binds_the_required_rights()
         Rights::TRAVERSE
             .union(Rights::RENAME)
             .union(Rights::CREATE_CHILD),
-        store.rename_federated_mutation_digest(&rename)?,
+        rename_proposal.payload_digest(),
     )?;
     store.rename_federated_namespace(&rename, &rename_acknowledgement)?;
 
     let mut unlink = root_file_unlink(&file)?;
     unlink.expected_namespace_commit_id = rename.namespace_commit_id;
     unlink.path = rename.target.clone();
+    let unlink_proposal = store.unlink_federated_mutation_proposal(&unlink)?;
+    assert_eq!(
+        unlink_proposal.authority().required_rights(),
+        Rights::TRAVERSE.union(Rights::DELETE)
+    );
     let unlink_acknowledgement = mutation_acknowledgement(
         unlink.operation_id,
         unlink.created_by,
         unlink.volume_id,
         unlink.created_at,
         Rights::TRAVERSE.union(Rights::DELETE),
-        store.unlink_federated_mutation_digest(&unlink)?,
+        unlink_proposal.payload_digest(),
     )?;
     store.unlink_federated_namespace(&unlink, &unlink_acknowledgement)?;
 
