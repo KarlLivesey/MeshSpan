@@ -10,6 +10,8 @@ mod history_export;
 mod history_import;
 #[path = "namespace_publication/history_records.rs"]
 mod history_records;
+#[path = "namespace_publication/lazy_file_head.rs"]
+mod lazy_file_head;
 #[path = "namespace_publication/reconciliation_apply.rs"]
 mod reconciliation_apply;
 #[path = "namespace_publication/rename.rs"]
@@ -343,6 +345,7 @@ fn publish_inner(
     let base = load_base(&transaction, intent)?;
     let leaf = base.directories.last().ok_or(PublicationError::Corrupt)?;
     validate_old_entry(&transaction, publication, &leaf.editor)?;
+    lazy_file_head::materialize(&transaction, publication.file)?;
     let head_sequence = base.head_sequence;
     let namespace = mutate_directory_path(base.directories, publication)?;
     for record in &namespace.created_nodes {
