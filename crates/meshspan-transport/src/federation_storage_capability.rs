@@ -137,6 +137,7 @@ impl OutboundFederationStorageCapability {
 pub struct AuthenticatedFederationStorageCapability {
     capability: FederatedStorageCapability,
     capability_digest: [u8; 32],
+    receipt_expectation: FederationStorageReceiptExpectation,
 }
 
 impl AuthenticatedFederationStorageCapability {
@@ -147,6 +148,31 @@ impl AuthenticatedFederationStorageCapability {
     }
 
     /// Returns the digest which every lifecycle receipt must echo exactly.
+    #[must_use]
+    pub const fn capability_digest(&self) -> [u8; 32] {
+        self.capability_digest
+    }
+
+    /// Returns the exact authority and correlation required for a later lifecycle receipt.
+    #[must_use]
+    pub const fn receipt_expectation(&self) -> &FederationStorageReceiptExpectation {
+        &self.receipt_expectation
+    }
+}
+
+/// Exact issued capability state against which a lifecycle receipt is authenticated.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederationStorageReceiptExpectation {
+    pub(crate) local_identity: FederationLocalIdentityBinding,
+    pub(crate) request_context: FederationExchangeContext,
+    pub(crate) capability: FederatedStorageCapability,
+    pub(crate) capability_digest: [u8; 32],
+    pub(crate) capability_response_nonce: [u8; 32],
+    pub(crate) issued_at: UnixMicros,
+}
+
+impl FederationStorageReceiptExpectation {
+    /// Returns the exact digest that the provider receipt must echo.
     #[must_use]
     pub const fn capability_digest(&self) -> [u8; 32] {
         self.capability_digest
@@ -293,9 +319,18 @@ impl FederationPeerRegistry {
         replay.check(binding.relationship_id, header, now)?;
         verify_capability_signature(binding.verifying_key, header, capability)?;
         replay.record(binding.relationship_id, header)?;
+        let capability_digest = storage_capability_digest(capability);
         Ok(AuthenticatedFederationStorageCapability {
             capability: capability.clone(),
-            capability_digest: storage_capability_digest(capability),
+            capability_digest,
+            receipt_expectation: FederationStorageReceiptExpectation {
+                local_identity: expected.local_identity,
+                request_context: expected.request_context,
+                capability: capability.clone(),
+                capability_digest,
+                capability_response_nonce: exact(&header.replay_nonce)?,
+                issued_at: now,
+            },
         })
     }
 }

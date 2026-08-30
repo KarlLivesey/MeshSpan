@@ -6,7 +6,8 @@ use ed25519_dalek::SigningKey;
 use meshspan_domain::{DurationMicros, FederationRelationshipId, MeshId, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::{
-    FederatedStorageCapability, RemoteShardAction, RequestFederatedStorageCapability, ShardIdentity,
+    FederatedStorageCapability, FederatedStorageReceipt, RemoteShardAction,
+    RequestFederatedStorageCapability, ShardIdentity,
 };
 use rustls::pki_types::CertificateDer;
 
@@ -14,6 +15,7 @@ use crate::{
     FederationExchangeContext, FederationLocalIdentity, FederationLocalIdentityBinding,
     FederationPeerRegistry, FederationReplayGuard, TransportError,
     signed_federation_storage_capability, signed_federation_storage_capability_request,
+    signed_federation_storage_receipt,
 };
 
 use super::{AuthorityPageProof, certificate_fingerprint, validated_federation, version};
@@ -107,6 +109,7 @@ pub(super) fn prove_storage_capability_response(
     )?;
     assert_eq!(authenticated.capability().maximum_bytes, 1_024);
     assert_ne!(authenticated.capability_digest(), [0; 32]);
+    let receipt_expectation = authenticated.receipt_expectation().clone();
     assert!(matches!(
         proof.registry.authenticate_storage_capability(
             proof.connection,
@@ -117,7 +120,88 @@ pub(super) fn prove_storage_capability_response(
         ),
         Err(TransportError::ReplayedFederationMessage)
     ));
-    prove_signed_hostile_capabilities(proof, request.expectation(), response_context)
+    prove_signed_hostile_capabilities(proof, request.expectation(), response_context)?;
+    prove_storage_receipt(proof, &receipt_expectation, request_context)
+}
+
+fn prove_storage_receipt(
+    proof: &AuthorityPageProof<'_>,
+    expectation: &crate::FederationStorageReceiptExpectation,
+    request_context: FederationExchangeContext,
+) -> Result<(), Box<dyn Error>> {
+    let receipt_context = FederationExchangeContext::new(
+        request_context.version,
+        request_context.request_id,
+        request_context.operation_id,
+        request_context.trace_id,
+        request_context.deadline,
+        [117; 32],
+    )?;
+    let signed = signed_federation_storage_receipt(
+        proof.server_identity,
+        receipt_context,
+        receipt(expectation.capability_digest()),
+        proof.limits,
+        UnixMicros::new(1_600_000),
+    )?;
+    let validated = validated_federation(signed.envelope(), proof.limits)?;
+    let mut replay = federation_replay()?;
+    let authenticated = proof.registry.authenticate_storage_receipt(
+        proof.connection,
+        &validated,
+        expectation,
+        UnixMicros::new(1_600_000),
+        &mut replay,
+    )?;
+    assert_eq!(authenticated.receipt().affected_bytes, 1_024);
+    assert_eq!(authenticated.receipt().result_digest, vec![120; 32]);
+    assert!(matches!(
+        proof.registry.authenticate_storage_receipt(
+            proof.connection,
+            &validated,
+            expectation,
+            UnixMicros::new(1_600_001),
+            &mut replay,
+        ),
+        Err(TransportError::ReplayedFederationMessage)
+    ));
+    prove_hostile_receipts(proof, expectation, receipt_context)
+}
+
+fn prove_hostile_receipts(
+    proof: &AuthorityPageProof<'_>,
+    expectation: &crate::FederationStorageReceiptExpectation,
+    context: FederationExchangeContext,
+) -> Result<(), Box<dyn Error>> {
+    let mut wrong_capability = receipt(expectation.capability_digest());
+    wrong_capability.capability_digest[0] ^= 1;
+    let mut excessive = receipt(expectation.capability_digest());
+    excessive.affected_bytes = 1_025;
+    let mut wrong_action = receipt(expectation.capability_digest());
+    wrong_action.action = RemoteShardAction::Get.into();
+    let mut predates_issue = receipt(expectation.capability_digest());
+    predates_issue.completed_at_unix_micros = 1_499_999;
+    for hostile in [wrong_capability, excessive, wrong_action, predates_issue] {
+        let signed = signed_federation_storage_receipt(
+            proof.server_identity,
+            context,
+            hostile,
+            proof.limits,
+            UnixMicros::new(1_600_000),
+        )?;
+        let mut replay = federation_replay()?;
+        assert!(matches!(
+            proof.registry.authenticate_storage_receipt(
+                proof.connection,
+                &validated_federation(signed.envelope(), proof.limits)?,
+                expectation,
+                UnixMicros::new(1_600_000),
+                &mut replay,
+            ),
+            Err(TransportError::UntrustedFederationPeer)
+        ));
+    }
+    Ok(())
 }
 
 fn prove_signed_hostile_capabilities(
@@ -255,6 +339,21 @@ fn capability() -> FederatedStorageCapability {
         valid_until_unix_micros: 1_900_000,
         capability_nonce: vec![116; 32],
         canonical_capability: b"exact-data-plane-permit".to_vec(),
+        signature: Vec::new(),
+    }
+}
+
+fn receipt(capability_digest: [u8; 32]) -> FederatedStorageReceipt {
+    FederatedStorageReceipt {
+        grant_id: vec![101; 16],
+        target_id: vec![102; 16],
+        target_generation: 7,
+        shard: Some(shard()),
+        action: RemoteShardAction::Put.into(),
+        affected_bytes: 1_024,
+        completed_at_unix_micros: 1_550_000,
+        capability_digest: capability_digest.to_vec(),
+        result_digest: vec![120; 32],
         signature: Vec::new(),
     }
 }
