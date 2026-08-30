@@ -6,7 +6,6 @@ mod command;
 mod database;
 mod federation_command;
 mod federation_grant_command;
-mod federation_mutation;
 mod federation_principal_command;
 mod federation_quarantine_command;
 mod federation_remote_authority;
@@ -54,7 +53,6 @@ pub use federation_command::{
 pub use federation_grant_command::{
     FederationGrantRestriction, IssueFederationGrant, ReplaceFederationGrant, RevokeFederationGrant,
 };
-pub use federation_mutation::FederatedMutationAcknowledgement;
 pub use federation_principal_command::{
     FederatedPrincipalKind, FederatedPrincipalState, UpsertFederatedPrincipalProjection,
 };

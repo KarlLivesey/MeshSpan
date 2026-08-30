@@ -23,7 +23,8 @@ use crate::NamespaceHistoryBundle;
 
 const MAXIMUM_COMMIT_RECORD_BYTES: usize = 2 * 1_024 * 1_024;
 const COMMIT_DOMAIN: &[u8] = b"meshspan.filesystem.history-commit\0";
-const COMMIT_FORMAT_VERSION: u8 = 1;
+const LOCAL_COMMIT_FORMAT_VERSION: u8 = 1;
+const FEDERATED_COMMIT_FORMAT_VERSION: u8 = 2;
 
 /// One canonical immutable mutation record suitable for a bounded control page.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,29 +139,32 @@ impl NamespaceHistoryCommitRecord {
         &self,
     ) -> Result<NamespaceHistoryMutationAuthority, NamespaceHistoryRecordError> {
         let record = self.decoded()?;
-        let intent = &record.intent;
-        let required_rights = mutation_rights(intent);
-        Ok(NamespaceHistoryMutationAuthority {
-            commit_id: record.commit.commit_id,
-            operation_id: record.commit.operation_id,
-            volume_id: record.commit.volume_id,
-            object_id: intent.object_id,
-            target_ancestors: intent
-                .ancestors
-                .iter()
-                .map(|transition| transition.object_id())
-                .collect(),
-            source_ancestors: intent.rename.as_ref().map(|rename| {
-                rename
-                    .source_ancestors
-                    .iter()
-                    .map(|transition| transition.object_id())
-                    .collect()
-            }),
-            created_by: record.created_by,
-            created_at: record.created_at,
-            required_rights,
-        })
+        Ok(authority_from_record(&record))
+    }
+
+    /// Returns the digest signed by a federated acknowledgement, excluding that acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an internally inconsistent canonical record.
+    pub fn mutation_digest(&self) -> Result<[u8; 32], NamespaceHistoryRecordError> {
+        let mut record = self.decoded()?;
+        record.acknowledgement = None;
+        Ok(blake3::hash(&encode_commit(&record)?).into())
+    }
+
+    /// Returns the signed accepting-swarm acknowledgement carried by this record, if any.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an internally inconsistent canonical record.
+    pub fn federated_acknowledgement(
+        &self,
+    ) -> Result<
+        Option<meshspan_domain::FederatedMutationAcknowledgement>,
+        NamespaceHistoryRecordError,
+    > {
+        Ok(self.decoded()?.acknowledgement)
     }
 
     pub(in crate::publication) fn from_commit(
@@ -186,6 +190,53 @@ impl NamespaceHistoryCommitRecord {
     ) -> Result<TransferredMutationCommit, NamespaceHistoryRecordError> {
         decode_commit(&self.canonical_bytes)
     }
+}
+
+fn authority_from_record(record: &TransferredMutationCommit) -> NamespaceHistoryMutationAuthority {
+    let intent = &record.intent;
+    NamespaceHistoryMutationAuthority {
+        commit_id: record.commit.commit_id,
+        operation_id: record.commit.operation_id,
+        volume_id: record.commit.volume_id,
+        object_id: intent.object_id,
+        target_ancestors: intent
+            .ancestors
+            .iter()
+            .map(|transition| transition.object_id())
+            .collect(),
+        source_ancestors: intent.rename.as_ref().map(|rename| {
+            rename
+                .source_ancestors
+                .iter()
+                .map(|transition| transition.object_id())
+                .collect()
+        }),
+        created_by: record.created_by,
+        created_at: record.created_at,
+        required_rights: mutation_rights(intent),
+    }
+}
+
+pub(super) fn validate_acknowledgement(
+    record: &TransferredMutationCommit,
+    acknowledgement: &meshspan_domain::FederatedMutationAcknowledgement,
+    mutation_digest: [u8; 32],
+) -> Result<(), NamespaceHistoryRecordError> {
+    let authority = authority_from_record(record);
+    let evidence = acknowledgement.evidence;
+    if acknowledgement.signer_generation == 0
+        || acknowledgement.signature == [0; 64]
+        || acknowledgement.source_operation_id != authority.operation_id()
+        || acknowledgement.payload_digest != mutation_digest
+        || evidence.subject().principal_id() != authority.created_by()
+        || evidence.accepted_at() < authority.created_at()
+        || evidence.required_rights() != authority.required_rights()
+        || evidence.storage_bytes() != 0
+        || !authority.is_within(evidence.resource())
+    {
+        return Err(NamespaceHistoryRecordError::Invalid);
+    }
+    Ok(())
 }
 
 fn mutation_rights(intent: &crate::BranchMutationIntent) -> Rights {
@@ -443,6 +494,7 @@ mod tests {
             created_at,
             commit_digest: stored_commit_digest(&stored, request_digest),
             intent,
+            acknowledgement: None,
         })
     }
 

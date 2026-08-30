@@ -2,11 +2,13 @@
 
 //! Authoritative verification and historical classification of remote mutation acknowledgements.
 
-use meshspan_domain::{FederatedMutationAdmission, QuarantineReason};
+use meshspan_domain::{
+    FederatedMutationAcknowledgement, FederatedMutationAdmission, QuarantineReason,
+};
 
 use super::federation_succession_trust::verify_side_signature;
 use super::{RepositoryError, federation_grant, federation_principal};
-use crate::{FederatedMutationAcknowledgement, FederatedPrincipalState};
+use crate::FederatedPrincipalState;
 
 pub(super) fn classify(
     connection: &rusqlite::Connection,

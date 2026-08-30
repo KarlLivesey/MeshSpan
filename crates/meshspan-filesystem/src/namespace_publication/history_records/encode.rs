@@ -3,9 +3,13 @@
 //! Canonical encoder for one immutable mutation commit and replay intent.
 
 use meshspan_domain::ObjectRevisionId;
+use meshspan_domain::{FederatedMutationAcknowledgement, FederationResourceScope};
 
 use super::super::transfer::TransferredMutationCommit;
-use super::{COMMIT_DOMAIN, COMMIT_FORMAT_VERSION, NamespaceHistoryRecordError};
+use super::{
+    COMMIT_DOMAIN, FEDERATED_COMMIT_FORMAT_VERSION, LOCAL_COMMIT_FORMAT_VERSION,
+    NamespaceHistoryRecordError,
+};
 use crate::{
     BranchMutation, BranchMutationIntent, BranchRenameIntent, DirectoryRevisionTransition,
     NamespacePath, ReconciliationCommitPayload,
@@ -25,7 +29,11 @@ pub(super) fn encode_commit(
     }
     let mut bytes = Vec::with_capacity(512);
     bytes.extend_from_slice(COMMIT_DOMAIN);
-    bytes.push(COMMIT_FORMAT_VERSION);
+    bytes.push(if record.acknowledgement.is_some() {
+        FEDERATED_COMMIT_FORMAT_VERSION
+    } else {
+        LOCAL_COMMIT_FORMAT_VERSION
+    });
     identifier(&mut bytes, record.commit.commit_id.as_bytes());
     identifier(&mut bytes, record.commit.branch_id.as_bytes());
     identifier(&mut bytes, record.commit.volume_id.as_bytes());
@@ -40,7 +48,68 @@ pub(super) fn encode_commit(
     bytes.extend_from_slice(&record.created_at.get().to_be_bytes());
     digest(&mut bytes, record.commit_digest);
     encode_intent(&mut bytes, &record.intent)?;
+    if let Some(acknowledgement) = record.acknowledgement {
+        let mut bare = record.clone();
+        bare.acknowledgement = None;
+        let mutation_digest = blake3::hash(&encode_commit(&bare)?).into();
+        super::validate_acknowledgement(record, &acknowledgement, mutation_digest)?;
+        encode_acknowledgement(&mut bytes, &acknowledgement);
+    }
     Ok(bytes)
+}
+
+fn encode_acknowledgement(bytes: &mut Vec<u8>, value: &FederatedMutationAcknowledgement) {
+    identifier(bytes, value.source_operation_id.as_bytes());
+    let evidence = value.evidence;
+    identifier(bytes, evidence.grant_id().as_bytes());
+    identifier(bytes, evidence.relationship_id().as_bytes());
+    identifier(bytes, evidence.subject().home_mesh_id().as_bytes());
+    identifier(bytes, evidence.subject().principal_id().as_bytes());
+    encode_resource(bytes, evidence.resource());
+    bytes.extend_from_slice(&evidence.authority_epoch().to_be_bytes());
+    bytes.extend_from_slice(&evidence.accepted_at().get().to_be_bytes());
+    bytes.extend_from_slice(&evidence.required_rights().bits().to_be_bytes());
+    bytes.extend_from_slice(&evidence.storage_bytes().to_be_bytes());
+    digest(bytes, value.payload_digest);
+    bytes.extend_from_slice(&value.signer_generation.to_be_bytes());
+    bytes.extend_from_slice(&value.signature);
+}
+
+fn encode_resource(bytes: &mut Vec<u8>, resource: FederationResourceScope) {
+    match resource {
+        FederationResourceScope::Volume {
+            owner_mesh_id,
+            volume_id,
+        } => {
+            bytes.push(1);
+            identifier(bytes, owner_mesh_id.as_bytes());
+            identifier(bytes, volume_id.as_bytes());
+        }
+        FederationResourceScope::Subtree {
+            owner_mesh_id,
+            volume_id,
+            root_object_id,
+        } => {
+            bytes.push(2);
+            identifier(bytes, owner_mesh_id.as_bytes());
+            identifier(bytes, volume_id.as_bytes());
+            identifier(bytes, root_object_id.as_bytes());
+        }
+        FederationResourceScope::File {
+            owner_mesh_id,
+            volume_id,
+            object_id,
+        } => {
+            bytes.push(3);
+            identifier(bytes, owner_mesh_id.as_bytes());
+            identifier(bytes, volume_id.as_bytes());
+            identifier(bytes, object_id.as_bytes());
+        }
+        FederationResourceScope::StorageCapacity { provider_mesh_id } => {
+            bytes.push(4);
+            identifier(bytes, provider_mesh_id.as_bytes());
+        }
+    }
 }
 
 fn encode_intent(

@@ -338,6 +338,8 @@ fn persist_commits(
             if let Some(existing) = load_reconciliation_commit(transaction, commit_id)? {
                 if existing != record.commit
                     || load_branch_intent(transaction, commit_id)?.as_ref() != Some(&record.intent)
+                    || super::super::federated_mutation::load(transaction, commit_id)?
+                        != record.acknowledgement
                 {
                     return Err(PublicationError::OperationConflict);
                 }
@@ -361,6 +363,13 @@ fn persist_commits(
                 persist_stored_commit(transaction, &stored, record.commit.request_digest)?;
                 persist_imported_evidence(transaction, record)?;
                 persist_branch_intent(transaction, &record.intent)?;
+                if let Some(acknowledgement) = record.acknowledgement {
+                    super::super::federated_mutation::persist(
+                        transaction,
+                        commit_id,
+                        &acknowledgement,
+                    )?;
+                }
                 if load_reconciliation_commit(transaction, commit_id)?.as_ref()
                     != Some(&record.commit)
                 {

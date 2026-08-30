@@ -378,42 +378,44 @@ pub(super) fn persist_file_intent(
     transaction: &Transaction<'_>,
     publication: &RootFilePublication,
 ) -> Result<(), PublicationError> {
-    persist_branch_intent(
-        transaction,
-        &BranchMutationIntent {
-            commit_id: publication.namespace_commit_id,
-            path: publication.path.path().clone(),
-            ancestors: publication.path.ancestors().to_vec(),
-            object_id: publication.file.object_id,
-            object_revision_id: publication.file_object_revision_id,
-            prior_object_revision_id: publication.expected_file_object_revision_id,
-            entry_generation: publication.entry_generation,
-            mutation: BranchMutation::File {
-                version_id: publication.file.version_id,
-            },
-            rename: None,
+    persist_branch_intent(transaction, &file_intent(publication))
+}
+
+pub(super) fn file_intent(publication: &RootFilePublication) -> BranchMutationIntent {
+    BranchMutationIntent {
+        commit_id: publication.namespace_commit_id,
+        path: publication.path.path().clone(),
+        ancestors: publication.path.ancestors().to_vec(),
+        object_id: publication.file.object_id,
+        object_revision_id: publication.file_object_revision_id,
+        prior_object_revision_id: publication.expected_file_object_revision_id,
+        entry_generation: publication.entry_generation,
+        mutation: BranchMutation::File {
+            version_id: publication.file.version_id,
         },
-    )
+        rename: None,
+    }
 }
 
 pub(super) fn persist_directory_intent(
     transaction: &Transaction<'_>,
     publication: &DirectoryPublication,
 ) -> Result<(), PublicationError> {
-    persist_branch_intent(
-        transaction,
-        &BranchMutationIntent {
-            commit_id: publication.namespace_commit_id,
-            path: publication.path.path().clone(),
-            ancestors: publication.path.ancestors().to_vec(),
-            object_id: publication.directory_object_id,
-            object_revision_id: publication.directory_object_revision_id,
-            prior_object_revision_id: None,
-            entry_generation: publication.entry_generation,
-            mutation: BranchMutation::CreateDirectory,
-            rename: None,
-        },
-    )
+    persist_branch_intent(transaction, &directory_intent(publication))
+}
+
+pub(super) fn directory_intent(publication: &DirectoryPublication) -> BranchMutationIntent {
+    BranchMutationIntent {
+        commit_id: publication.namespace_commit_id,
+        path: publication.path.path().clone(),
+        ancestors: publication.path.ancestors().to_vec(),
+        object_id: publication.directory_object_id,
+        object_revision_id: publication.directory_object_revision_id,
+        prior_object_revision_id: None,
+        entry_generation: publication.entry_generation,
+        mutation: BranchMutation::CreateDirectory,
+        rename: None,
+    }
 }
 
 pub(in crate::publication) fn persist_branch_intent(

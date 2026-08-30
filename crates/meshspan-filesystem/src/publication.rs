@@ -17,8 +17,9 @@ use std::fs;
 use std::path::Path;
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId, ObjectId,
-    ObjectRevisionId, OperationId, PrincipalId, SnapshotId, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, FederatedMutationAcknowledgement, FileVersionId, HandleId,
+    NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, SnapshotId,
+    UnixMicros, VolumeId,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
@@ -34,7 +35,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 35] = [
+const MIGRATIONS: [Migration; 36] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -175,8 +176,12 @@ const MIGRATIONS: [Migration; 35] = [
         version: 35,
         sql: include_str!("../schema/branch/035_namespace_history_imports.sql"),
     },
+    Migration {
+        version: 36,
+        sql: include_str!("../schema/branch/036_federated_mutation_acknowledgements.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 35;
+const SCHEMA_VERSION: u32 = 36;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -1052,6 +1057,31 @@ impl VersionPublicationStore {
         namespace::publish(&mut self.connection, publication, None)
     }
 
+    /// Derives the immutable mutation digest an accepting swarm must sign before publication.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed publication input or an unencodable canonical history record.
+    pub fn root_file_federated_mutation_digest(
+        publication: &RootFilePublication,
+    ) -> Result<[u8; 32], PublicationError> {
+        namespace::file_federated_mutation_digest(publication)
+    }
+
+    /// Atomically publishes one remotely authorised file mutation and its signed acceptance proof.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any invalid acknowledgement binding, stale state, replay mismatch or persistence
+    /// failure without committing either the mutation or acknowledgement.
+    pub fn publish_federated_root_file(
+        &mut self,
+        publication: &RootFilePublication,
+        acknowledgement: &FederatedMutationAcknowledgement,
+    ) -> Result<NamespacePublicationReceipt, PublicationError> {
+        namespace::publish_federated(&mut self.connection, publication, acknowledgement)
+    }
+
     pub(crate) fn publish_root_file_and_open(
         &mut self,
         publication: &RootFilePublication,
@@ -1071,6 +1101,31 @@ impl VersionPublicationStore {
         publication: &DirectoryPublication,
     ) -> Result<DirectoryPublicationReceipt, PublicationError> {
         namespace::create_directory(&mut self.connection, publication, None)
+    }
+
+    /// Derives the immutable mutation digest an accepting swarm must sign before directory creation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed publication input or an unencodable canonical history record.
+    pub fn directory_federated_mutation_digest(
+        publication: &DirectoryPublication,
+    ) -> Result<[u8; 32], PublicationError> {
+        namespace::directory_federated_mutation_digest(publication)
+    }
+
+    /// Atomically creates one remotely authorised directory and stores its signed acceptance proof.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any invalid acknowledgement binding, stale state, replay mismatch or persistence
+    /// failure without committing either the mutation or acknowledgement.
+    pub fn create_federated_directory(
+        &mut self,
+        publication: &DirectoryPublication,
+        acknowledgement: &FederatedMutationAcknowledgement,
+    ) -> Result<DirectoryPublicationReceipt, PublicationError> {
+        namespace::create_federated_directory(&mut self.connection, publication, acknowledgement)
     }
 
     pub(crate) fn adapter_directory_parent(
@@ -1150,6 +1205,32 @@ impl VersionPublicationStore {
         namespace::rename_namespace(&mut self.connection, publication, None)
     }
 
+    /// Derives the immutable mutation digest for the exact current rename source revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or stale source state, cycles, corruption or an unencodable record.
+    pub fn rename_federated_mutation_digest(
+        &self,
+        publication: &NamespaceRenamePublication,
+    ) -> Result<[u8; 32], crate::HandleError> {
+        namespace::rename_federated_mutation_digest(&self.connection, publication)
+    }
+
+    /// Atomically applies one remotely authorised rename and stores its signed acceptance proof.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any invalid acknowledgement binding, stale state, replay mismatch, handle conflict
+    /// or persistence failure without committing either the mutation or acknowledgement.
+    pub fn rename_federated_namespace(
+        &mut self,
+        publication: &NamespaceRenamePublication,
+        acknowledgement: &FederatedMutationAcknowledgement,
+    ) -> Result<NamespaceRenameReceipt, crate::HandleError> {
+        namespace::rename_federated_namespace(&mut self.connection, publication, acknowledgement)
+    }
+
     pub(crate) fn adapter_rename_targets(
         &self,
         branch_id: BranchId,
@@ -1189,6 +1270,32 @@ impl VersionPublicationStore {
         publication: &NamespaceUnlinkPublication,
     ) -> Result<NamespaceUnlinkReceipt, crate::HandleError> {
         namespace::unlink_namespace(&mut self.connection, publication, None)
+    }
+
+    /// Derives the immutable mutation digest for the exact current unlink target revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, stale or non-empty target state, corruption or an unencodable record.
+    pub fn unlink_federated_mutation_digest(
+        &self,
+        publication: &NamespaceUnlinkPublication,
+    ) -> Result<[u8; 32], crate::HandleError> {
+        namespace::unlink_federated_mutation_digest(&self.connection, publication)
+    }
+
+    /// Atomically applies one remotely authorised unlink and stores its signed acceptance proof.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any invalid acknowledgement binding, stale state, replay mismatch, handle conflict
+    /// or persistence failure without committing either the mutation or acknowledgement.
+    pub fn unlink_federated_namespace(
+        &mut self,
+        publication: &NamespaceUnlinkPublication,
+        acknowledgement: &FederatedMutationAcknowledgement,
+    ) -> Result<NamespaceUnlinkReceipt, crate::HandleError> {
+        namespace::unlink_federated_namespace(&mut self.connection, publication, acknowledgement)
     }
 
     pub(crate) fn adapter_unlink_target(

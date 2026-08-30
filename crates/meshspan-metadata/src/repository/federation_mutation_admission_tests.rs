@@ -3,21 +3,21 @@
 use ed25519_dalek::{Signer, SigningKey};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, FederatedMutationAdmission, FederatedMutationEvidence, FederatedPrincipal,
-    FederationAccess, FederationGrant, FederationGrantId, FederationPolicy,
-    FederationRelationshipId, FederationRelationshipKind, FederationResourceScope, HostId, MeshId,
-    NamespaceFederationPolicy, NodeId, OperationId, PartitionId, PrincipalId, QuarantineReason,
-    Revision, Rights, RoleId, UnixMicros, VolumeId,
+    AuditEventId, FederatedMutationAcknowledgement, FederatedMutationAdmission,
+    FederatedMutationEvidence, FederatedPrincipal, FederationAccess, FederationGrant,
+    FederationGrantId, FederationPolicy, FederationRelationshipId, FederationRelationshipKind,
+    FederationResourceScope, HostId, MeshId, NamespaceFederationPolicy, NodeId, OperationId,
+    PartitionId, PrincipalId, QuarantineReason, Revision, Rights, RoleId, UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
 use super::{AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
     ApproveFederationRelationship, AuthoritativeCommand, BootstrapMesh, CommandContext,
-    FederatedMutationAcknowledgement, FederatedPrincipalKind, FederatedPrincipalState,
-    FederationGovernanceDirection, FederationGrantRestriction, FederationTrustIdentity,
-    IssueFederationGrant, PartitionDatabase, ProposeFederationRelationship, RecordName,
-    RevokeFederationGrant, UpsertFederatedPrincipalProjection,
+    FederatedPrincipalKind, FederatedPrincipalState, FederationGovernanceDirection,
+    FederationGrantRestriction, FederationTrustIdentity, IssueFederationGrant, PartitionDatabase,
+    ProposeFederationRelationship, RecordName, RevokeFederationGrant,
+    UpsertFederatedPrincipalProjection,
 };
 
 #[test]

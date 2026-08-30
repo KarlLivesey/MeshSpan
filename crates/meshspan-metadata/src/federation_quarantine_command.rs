@@ -2,9 +2,8 @@
 
 //! Typed commands for immutable, invisible federated mutation quarantine.
 
-use meshspan_domain::{OperationId, QuarantineId};
+use meshspan_domain::{FederatedMutationAcknowledgement, OperationId, QuarantineId};
 
-use crate::FederatedMutationAcknowledgement;
 use crate::command::CanonicalDigest;
 
 /// Retains one remote-acknowledged mutation which authoritative replay classifies as inadmissible.

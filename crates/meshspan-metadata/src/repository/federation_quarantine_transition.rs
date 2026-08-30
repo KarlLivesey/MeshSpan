@@ -89,7 +89,7 @@ fn retain(
 
 fn classify_for_command(
     transaction: &Transaction<'_>,
-    acknowledgement: &crate::FederatedMutationAcknowledgement,
+    acknowledgement: &meshspan_domain::FederatedMutationAcknowledgement,
 ) -> Result<QuarantineReason, RepositoryError> {
     match federation_mutation_admission::classify(transaction, acknowledgement)? {
         FederatedMutationAdmission::Quarantined(reason) => Ok(reason),

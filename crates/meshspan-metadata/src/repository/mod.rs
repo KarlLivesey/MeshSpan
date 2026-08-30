@@ -375,7 +375,7 @@ impl AuthoritativeRepository {
     /// Fails closed for absent/corrupt authority, an unknown principal, or an invalid signature.
     pub fn classify_federated_mutation_acknowledgement(
         &self,
-        acknowledgement: &crate::FederatedMutationAcknowledgement,
+        acknowledgement: &meshspan_domain::FederatedMutationAcknowledgement,
     ) -> Result<meshspan_domain::FederatedMutationAdmission, RepositoryError> {
         federation_mutation_admission::classify(self.database.connection(), acknowledgement)
     }

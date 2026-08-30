@@ -6,6 +6,7 @@ mod access;
 mod federation;
 mod federation_access;
 mod federation_graph;
+mod federation_mutation;
 mod federation_storage;
 mod lifecycle;
 mod operation;
@@ -30,6 +31,7 @@ pub use federation_access::{
     QuarantineReason, classify_federated_mutation,
 };
 pub use federation_graph::{FederationGraph, FederationGraphError, FederationRelationshipKind};
+pub use federation_mutation::FederatedMutationAcknowledgement;
 pub use federation_storage::{
     FederationStorageAction, FederationStorageActionError, FederationStorageAllocation,
     FederationStorageAllocationError,
