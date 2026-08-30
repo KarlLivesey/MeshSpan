@@ -921,6 +921,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-daemon"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "meshspan-domain",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "meshspan-data-plane"
 version = "0.1.0"
 dependencies = [
@@ -999,7 +1009,6 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "cap-std",
- "getrandom 0.4.3",
  "meshspan-contracts",
  "meshspan-domain",
  "rusqlite",

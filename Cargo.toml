@@ -7,6 +7,7 @@ members = [
     "crates/meshspan-contracts",
     "crates/meshspan-consensus",
     "crates/meshspan-data-plane",
+    "crates/meshspan-daemon",
     "crates/meshspan-domain",
     "crates/meshspan-filesystem",
     "crates/meshspan-metadata",
