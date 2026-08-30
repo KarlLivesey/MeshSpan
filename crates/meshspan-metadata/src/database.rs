@@ -240,7 +240,7 @@ mod tests {
 
     use super::{LocalDatabase, MetadataStoreError, PartitionDatabase, open_connection};
     use crate::migration::{
-        local_federation_authority_cache_migration_digest,
+        local_claim_bundle_migration_digest, local_federation_authority_cache_migration_digest,
         local_federation_storage_capability_migration_digest,
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
@@ -563,13 +563,88 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 6);
+        assert_eq!(database.schema_version(), 7);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
             LocalDatabase::open(&file_path, second, UnixMicros::new(11)),
             Err(MetadataStoreError::IdentityMismatch)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn local_claim_schema_retains_only_one_active_digest_bound_to_a_node_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("local-claim.sqlite3");
+        let node = NodeId::from_bytes([5; 16])?;
+        let database = LocalDatabase::open(&file_path, node, UnixMicros::new(10))?;
+
+        let plaintext_columns: i64 = database.connection().query_row(
+            "SELECT count(*) FROM pragma_table_info('local_claim_bundles')
+             WHERE name IN ('secret', 'claim_secret', 'bundle')",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(plaintext_columns, 0);
+
+        database.connection().execute(
+            "INSERT INTO local_claim_bundles(
+                claim_id, node_public_key_fingerprint, secret_digest, state,
+                created_at, consumed_at, rotated_at, revision
+             ) VALUES (?1, ?2, ?3, 1, 20, NULL, NULL, 1)",
+            params![
+                [1_u8; 16].as_slice(),
+                [2_u8; 32].as_slice(),
+                [3_u8; 32].as_slice(),
+            ],
+        )?;
+        assert!(
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO local_claim_bundles(
+                        claim_id, node_public_key_fingerprint, secret_digest, state,
+                        created_at, consumed_at, rotated_at, revision
+                     ) VALUES (?1, ?2, ?3, 1, 21, NULL, NULL, 2)",
+                    params![
+                        [4_u8; 16].as_slice(),
+                        [5_u8; 32].as_slice(),
+                        [6_u8; 32].as_slice(),
+                    ],
+                )
+                .is_err()
+        );
+        database.connection().execute(
+            "UPDATE local_claim_bundles
+             SET state = 3, rotated_at = 21, revision = 2
+             WHERE claim_id = ?1",
+            [[1_u8; 16].as_slice()],
+        )?;
+        database.connection().execute(
+            "INSERT INTO local_claim_bundles(
+                claim_id, node_public_key_fingerprint, secret_digest, state,
+                created_at, consumed_at, rotated_at, revision
+             ) VALUES (?1, ?2, ?3, 1, 21, NULL, NULL, 2)",
+            params![
+                [4_u8; 16].as_slice(),
+                [5_u8; 32].as_slice(),
+                [6_u8; 32].as_slice(),
+            ],
+        )?;
+        assert!(
+            database
+                .connection()
+                .execute(
+                    "UPDATE local_claim_bundles
+                     SET state = 2, consumed_at = NULL, revision = 3
+                     WHERE claim_id = ?1",
+                    [[4_u8; 16].as_slice()],
+                )
+                .is_err()
+        );
+        assert_eq!(database.check_integrity()?.schema_version, 7);
         Ok(())
     }
 
@@ -846,6 +921,18 @@ mod tests {
                 0xd2, 0x59, 0x59, 0x77, 0x59, 0xf3, 0x4d, 0x9b, 0x13, 0xc5, 0x70, 0x6e, 0x01, 0x78,
                 0xae, 0xbf, 0xd7, 0x86, 0x01, 0x85, 0xad, 0x37, 0x81, 0x53, 0x9d, 0x86, 0x05, 0x5c,
                 0x09, 0x0f, 0x15, 0xcc,
+            ]
+        );
+    }
+
+    #[test]
+    fn local_claim_migration_digest_is_a_committed_compatibility_value() {
+        assert_eq!(
+            local_claim_bundle_migration_digest(),
+            [
+                0x7c, 0xd7, 0x7b, 0x8e, 0x91, 0x06, 0xc7, 0x88, 0x36, 0xa8, 0xec, 0x0d, 0xc3, 0xad,
+                0xe2, 0x65, 0xc8, 0xab, 0x35, 0x69, 0x5f, 0x45, 0x9a, 0x6a, 0xed, 0x9f, 0xef, 0x1e,
+                0x06, 0x01, 0x10, 0x90,
             ]
         );
     }
