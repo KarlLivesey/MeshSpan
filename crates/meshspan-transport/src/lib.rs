@@ -10,6 +10,7 @@ mod federation_hello;
 mod federation_history_object;
 mod federation_negotiation;
 mod federation_storage_capability;
+mod federation_storage_inventory;
 mod federation_storage_receipt;
 mod identity;
 mod snapshot;
@@ -65,6 +66,12 @@ pub use federation_storage_capability::{
     FederationStorageCapabilityExpectation, FederationStorageReceiptExpectation,
     OutboundFederationStorageCapability, OutboundFederationStorageCapabilityRequest,
     signed_federation_storage_capability, signed_federation_storage_capability_request,
+};
+pub use federation_storage_inventory::{
+    AuthenticatedFederationStorageInventoryFetch, AuthenticatedFederationStorageInventoryPage,
+    FederationStorageInventoryPageExpectation, OutboundFederationStorageInventoryFetch,
+    OutboundFederationStorageInventoryPage, signed_federation_storage_inventory_fetch,
+    signed_federation_storage_inventory_page,
 };
 pub use federation_storage_receipt::{
     AuthenticatedFederationStorageReceipt, OutboundFederationStorageReceipt,

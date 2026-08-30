@@ -20,6 +20,8 @@ use crate::{
 
 use super::{AuthorityPageProof, certificate_fingerprint, validated_federation, version};
 
+mod inventory;
+
 pub(super) fn prove_signed_storage_capability_request(
     registry: &FederationPeerRegistry,
     connection: &quinn::Connection,
@@ -66,7 +68,8 @@ pub(super) fn prove_signed_storage_capability_request(
         ),
         Err(TransportError::ReplayedFederationMessage)
     ));
-    reject_tampered_request(registry, connection, outbound.envelope(), limits)
+    reject_tampered_request(registry, connection, outbound.envelope(), limits)?;
+    inventory::prove_signed_storage_inventory_fetch(registry, connection, &identity, limits)
 }
 
 pub(super) fn prove_storage_capability_response(
@@ -121,7 +124,8 @@ pub(super) fn prove_storage_capability_response(
         Err(TransportError::ReplayedFederationMessage)
     ));
     prove_signed_hostile_capabilities(proof, request.expectation(), response_context)?;
-    prove_storage_receipt(proof, &receipt_expectation, request_context)
+    prove_storage_receipt(proof, &receipt_expectation, request_context)?;
+    inventory::prove_storage_inventory_page(proof, &client_identity)
 }
 
 fn prove_storage_receipt(
