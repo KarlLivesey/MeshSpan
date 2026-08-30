@@ -12,7 +12,7 @@ use super::authentication_policy::{self, SessionPolicyEvidence};
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{
     CommandContext, IssueAuthenticationSession, RevokeAuthenticationSession,
-    SessionAuthenticationFactor,
+    SessionAuthenticationFactor, SessionClientLabel,
 };
 
 const ACTIVE: i64 = 1;
@@ -44,15 +44,17 @@ pub(super) fn issue(
     let session = command.session_id.as_bytes();
     transaction.execute(
         "INSERT INTO authentication_sessions(
-            session_id, token_digest, csrf_digest, client_label, persistent_cookie,
+            session_id, token_digest, csrf_digest, client_label_state, client_label,
+            persistent_cookie,
             user_principal_id, service, assurance, identity_revision, issued_at,
             expires_at, revoked_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13)",
         params![
             session.as_slice(),
             command.token_digest.as_slice(),
             command.csrf_digest.as_slice(),
-            command.client_label,
+            client_label_state(&command.client_label),
+            client_label_value(&command.client_label),
             command.persistent_cookie,
             command.principal_id.as_bytes().as_slice(),
             command.service.scope_bit(),
@@ -530,7 +532,7 @@ fn validate_session_shape(
     if command.token_digest == [0; 32]
         || command.csrf_digest == [0; 32]
         || command.token_digest == command.csrf_digest
-        || command.client_label.as_ref().is_some_and(|label| {
+        || matches!(&command.client_label, SessionClientLabel::Value(label) if {
             let characters = label.chars().count();
             characters == 0
                 || characters > MAXIMUM_CLIENT_LABEL_CHARACTERS
@@ -544,6 +546,21 @@ fn validate_session_shape(
         Err(RepositoryError::InvalidCommand)
     } else {
         Ok(())
+    }
+}
+
+const fn client_label_state(label: &SessionClientLabel) -> u8 {
+    match label {
+        SessionClientLabel::Missing => 1,
+        SessionClientLabel::Null => 2,
+        SessionClientLabel::Value(_) => 3,
+    }
+}
+
+fn client_label_value(label: &SessionClientLabel) -> Option<&str> {
+    match label {
+        SessionClientLabel::Missing | SessionClientLabel::Null => None,
+        SessionClientLabel::Value(value) => Some(value),
     }
 }
 

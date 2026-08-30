@@ -72,7 +72,8 @@ pub use primitives::{
 pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};
 pub use session_token::{
-    ENCODED_SESSION_TOKEN_LENGTH, SessionTokenBundle, SessionTokenBundleError,
+    ENCODED_CSRF_TOKEN_LENGTH, ENCODED_SESSION_TOKEN_LENGTH, SessionCsrfBundle, SessionTokenBundle,
+    SessionTokenBundleError,
 };
 pub use topology::{
     FailureScenario, FailureTerm, FaultGroupMember, ProtectionError, ProtectionLayout,

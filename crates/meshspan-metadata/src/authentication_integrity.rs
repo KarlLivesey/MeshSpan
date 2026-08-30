@@ -152,10 +152,11 @@ fn invalid_session_shape(connection: &Connection) -> Result<i64, rusqlite::Error
             WHERE session.csrf_digest = zeroblob(32)
                OR session.csrf_digest = session.token_digest
                OR session.persistent_cookie NOT IN (0, 1)
-               OR (session.client_label IS NOT NULL AND (
-                   length(session.client_label) NOT BETWEEN 1 AND 80
-                   OR session.client_label <> trim(session.client_label)
-               ))
+               OR (session.client_label_state IN (1, 2) AND session.client_label IS NOT NULL)
+               OR (session.client_label_state = 3 AND (
+                   session.client_label IS NULL
+                   OR length(session.client_label) NOT BETWEEN 1 AND 80
+                   OR session.client_label <> trim(session.client_label)))
                OR (SELECT count(*) FROM authentication_session_factors
                    WHERE session_id = session.session_id) NOT BETWEEN 1 AND 8
                OR (SELECT min(factor_sequence) FROM authentication_session_factors

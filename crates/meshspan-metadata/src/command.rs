@@ -1259,7 +1259,7 @@ pub struct IssueAuthenticationSession {
     /// Digest of the independently presented CSRF token for browser mutations.
     pub csrf_digest: [u8; 32],
     /// Optional bounded device/session label selected by the user.
-    pub client_label: Option<String>,
+    pub client_label: SessionClientLabel,
     /// Whether the browser may persist the cookie beyond the current browser session.
     pub persistent_cookie: bool,
     /// Connector family for which this session was established.
@@ -1268,6 +1268,17 @@ pub struct IssueAuthenticationSession {
     pub factors: BoundedItems<SessionAuthenticationFactor>,
     /// Exclusive absolute expiry.
     pub expires_at: UnixMicros,
+}
+
+/// Exact public three-state session-label intent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionClientLabel {
+    /// The property was omitted.
+    Missing,
+    /// The property was explicitly null.
+    Null,
+    /// The property supplied one non-empty label.
+    Value(String),
 }
 
 /// Exact typed credential evidence accepted as one session factor.
@@ -2204,7 +2215,14 @@ digest_simple_record!(
         digest.identifier(value.principal_id.as_bytes());
         digest.bytes(&value.token_digest);
         digest.bytes(&value.csrf_digest);
-        digest.optional_text(value.client_label.as_deref());
+        match &value.client_label {
+            SessionClientLabel::Missing => digest.byte(1),
+            SessionClientLabel::Null => digest.byte(2),
+            SessionClientLabel::Value(label) => {
+                digest.byte(3);
+                digest.bytes(label.as_bytes());
+            }
+        }
         digest.boolean(value.persistent_cookie);
         digest.byte(value.service.scope_bit());
         digest.unsigned(u64::try_from(value.factors.len()).unwrap_or(u64::MAX));
@@ -2510,16 +2528,6 @@ impl CanonicalDigest {
             Some(value) => {
                 self.byte(1);
                 self.name(value);
-            }
-            None => self.byte(0),
-        }
-    }
-
-    fn optional_text(&mut self, value: Option<&str>) {
-        match value {
-            Some(value) => {
-                self.byte(1);
-                self.bytes(value.as_bytes());
             }
             None => self.byte(0),
         }

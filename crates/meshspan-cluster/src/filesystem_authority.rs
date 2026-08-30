@@ -234,7 +234,7 @@ mod tests {
                 principal_id: user_id,
                 token_digest,
                 csrf_digest: [71; 32],
-                client_label: None,
+                client_label: meshspan_metadata::SessionClientLabel::Missing,
                 persistent_cookie: false,
                 service: AuthenticationService::Https,
                 factors: BoundedItems::new(

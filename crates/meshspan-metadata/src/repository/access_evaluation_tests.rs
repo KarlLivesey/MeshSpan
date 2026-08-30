@@ -609,7 +609,7 @@ pub(super) fn issue_session(
             principal_id: principal,
             token_digest,
             csrf_digest: [seed.wrapping_add(3); 32],
-            client_label: None,
+            client_label: crate::SessionClientLabel::Missing,
             persistent_cookie: false,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(

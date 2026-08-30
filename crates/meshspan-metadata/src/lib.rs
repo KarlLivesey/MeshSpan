@@ -50,8 +50,9 @@ pub use command::{
     RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode,
     RevokeAccessActivation, RevokeAuthenticationMethod, RevokeAuthenticationSession,
     RevokePermissionGrant, RouteAttestation, RunSnapshotSchedule, SealVersionCleanupInventory,
-    SessionAuthenticationFactor, SetObjectGrantInheritance, SnapshotExpiryReason, TagTarget,
-    TotpAlgorithm, VersionCleanupAttestation, VersionCleanupItemPlacement,
+    SessionAuthenticationFactor, SessionClientLabel, SetObjectGrantInheritance,
+    SnapshotExpiryReason, TagTarget, TotpAlgorithm, VersionCleanupAttestation,
+    VersionCleanupItemPlacement,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use federation_actor_attestation_command::{

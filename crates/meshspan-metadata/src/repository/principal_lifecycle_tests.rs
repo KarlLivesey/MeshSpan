@@ -304,7 +304,7 @@ fn assert_rejected_session_issue(
             principal_id: user,
             token_digest: [87; 32],
             csrf_digest: [88; 32],
-            client_label: None,
+            client_label: crate::SessionClientLabel::Missing,
             persistent_cookie: false,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(

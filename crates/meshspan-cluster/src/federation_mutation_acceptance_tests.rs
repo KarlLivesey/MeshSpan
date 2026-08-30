@@ -405,7 +405,7 @@ impl Fixture {
                 principal_id: self.ids.user,
                 token_digest: [15; 32],
                 csrf_digest: [16; 32],
-                client_label: None,
+                client_label: meshspan_metadata::SessionClientLabel::Missing,
                 persistent_cookie: false,
                 service: AuthenticationService::Https,
                 factors: BoundedItems::new(

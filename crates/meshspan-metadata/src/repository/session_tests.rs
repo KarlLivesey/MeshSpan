@@ -296,7 +296,7 @@ fn single_passkey_session(
             principal_id,
             token_digest: [identity_seed.wrapping_add(1); 32],
             csrf_digest: [identity_seed.wrapping_add(2); 32],
-            client_label: Some("Office browser".to_owned()),
+            client_label: crate::SessionClientLabel::Value("Office browser".to_owned()),
             persistent_cookie: true,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(
@@ -415,7 +415,7 @@ fn session_command(
             principal_id: fixture.principal_id,
             token_digest: [fixture.identity_seed.wrapping_add(1); 32],
             csrf_digest: [fixture.identity_seed.wrapping_add(2); 32],
-            client_label: Some("Office browser".to_owned()),
+            client_label: crate::SessionClientLabel::Value("Office browser".to_owned()),
             persistent_cookie: true,
             service: AuthenticationService::Https,
             factors: BoundedItems::new(

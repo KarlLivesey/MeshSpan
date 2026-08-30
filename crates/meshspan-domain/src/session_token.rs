@@ -10,9 +10,12 @@ use crate::secret_text::{SECRET_BYTES, decode, derive, encode};
 use crate::{ApiKeyBundle, OperationId, SessionId};
 
 const PREFIX: &str = "meshspan-session-v1.";
+const CSRF_PREFIX: &str = "meshspan-csrf-v1.";
 
 /// Exact byte length of one canonical encoded session token.
 pub const ENCODED_SESSION_TOKEN_LENGTH: usize = PREFIX.len() + 97;
+/// Exact byte length of one canonical encoded CSRF presentation token.
+pub const ENCODED_CSRF_TOKEN_LENGTH: usize = CSRF_PREFIX.len() + 97;
 
 /// Secret-bearing opaque session token whose plaintext is never persisted.
 ///
@@ -97,6 +100,75 @@ impl SessionTokenBundle {
     }
 }
 
+/// Secret-bearing CSRF token independently presented by browser code.
+///
+/// The type deliberately implements neither `Debug` nor `Display`.
+pub struct SessionCsrfBundle {
+    session_id: SessionId,
+    secret: Zeroizing<[u8; SECRET_BYTES]>,
+}
+
+impl SessionCsrfBundle {
+    /// Derives exact-retry-stable CSRF material independently of the bearer token.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the cryptographically negligible nil identity or zero-secret output.
+    pub fn derive(
+        api_key: &ApiKeyBundle,
+        operation_id: OperationId,
+    ) -> Result<Self, SessionTokenBundleError> {
+        let session = SessionTokenBundle::derive(api_key, operation_id)?;
+        let secret = Zeroizing::new(derive(
+            b"meshspan.authentication.csrf-secret.v1",
+            api_key.secret_bytes(),
+            operation_id,
+        ));
+        Self::from_parts(session.session_id.as_bytes(), secret)
+    }
+
+    /// Parses one exact lowercase canonical CSRF token.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another version, whitespace, uppercase/non-hex material or zero values.
+    pub fn parse(value: &str) -> Result<Self, SessionTokenBundleError> {
+        let (session_id, secret) =
+            decode(value, CSRF_PREFIX).ok_or(SessionTokenBundleError::InvalidEncoding)?;
+        Self::from_parts(session_id, Zeroizing::new(secret))
+    }
+
+    /// Returns the session identity to which this CSRF token is bound.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the verifier stored beside the authoritative session.
+    #[must_use]
+    pub fn token_digest(&self) -> [u8; 32] {
+        Sha256::digest(self.secret.as_ref()).into()
+    }
+
+    /// Explicitly exposes the token only to the browser response boundary.
+    #[must_use]
+    pub fn expose_encoded(&self) -> Zeroizing<String> {
+        encode(CSRF_PREFIX, &self.session_id.as_bytes(), &self.secret)
+    }
+
+    fn from_parts(
+        session_id: [u8; 16],
+        secret: Zeroizing<[u8; SECRET_BYTES]>,
+    ) -> Result<Self, SessionTokenBundleError> {
+        let session_id =
+            SessionId::from_bytes(session_id).map_err(|_| SessionTokenBundleError::Invalid)?;
+        if secret.as_ref() == [0; SECRET_BYTES] {
+            return Err(SessionTokenBundleError::Invalid);
+        }
+        Ok(Self { session_id, secret })
+    }
+}
+
 /// Failure to derive or parse opaque session-token material.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum SessionTokenBundleError {
@@ -110,7 +182,10 @@ pub enum SessionTokenBundleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ENCODED_SESSION_TOKEN_LENGTH, SessionTokenBundle, SessionTokenBundleError};
+    use super::{
+        ENCODED_CSRF_TOKEN_LENGTH, ENCODED_SESSION_TOKEN_LENGTH, SessionCsrfBundle,
+        SessionTokenBundle, SessionTokenBundleError,
+    };
     use crate::{ApiKeyBundle, EntropyError, OperationId, RandomSource};
 
     #[test]
@@ -127,6 +202,14 @@ mod tests {
         let parsed = SessionTokenBundle::parse(&encoded)?;
         assert_eq!(parsed.session_id(), first.session_id());
         assert_eq!(parsed.token_digest(), first.token_digest());
+        let csrf = SessionCsrfBundle::derive(&api_key, operation_id)?;
+        assert_eq!(csrf.session_id(), first.session_id());
+        assert_ne!(csrf.token_digest(), first.token_digest());
+        let csrf_encoded = csrf.expose_encoded();
+        assert_eq!(csrf_encoded.len(), ENCODED_CSRF_TOKEN_LENGTH);
+        let parsed_csrf = SessionCsrfBundle::parse(&csrf_encoded)?;
+        assert_eq!(parsed_csrf.session_id(), first.session_id());
+        assert_eq!(parsed_csrf.token_digest(), csrf.token_digest());
         Ok(())
     }
 
