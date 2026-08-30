@@ -242,7 +242,8 @@ mod tests {
 
     use super::{LocalDatabase, MetadataStoreError, PartitionDatabase, open_connection};
     use crate::migration::{
-        local_claim_bundle_migration_digest, local_federation_authority_cache_migration_digest,
+        local_authentication_ceremony_migration_digest, local_claim_bundle_migration_digest,
+        local_federation_authority_cache_migration_digest,
         local_federation_storage_capability_migration_digest,
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
@@ -594,7 +595,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 8);
+        assert_eq!(database.schema_version(), 9);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -675,7 +676,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(database.check_integrity()?.schema_version, 8);
+        assert_eq!(database.check_integrity()?.schema_version, 9);
         Ok(())
     }
 
@@ -972,6 +973,14 @@ mod tests {
                 0xeb, 0xb2, 0xed, 0x6b, 0x07, 0x6e, 0xd1, 0xa5, 0xb5, 0xf2, 0xd0, 0x9d, 0xb1, 0x14,
                 0xd2, 0x19, 0x89, 0xe6, 0x78, 0x84, 0x62, 0x80, 0xf9, 0xbd, 0x3f, 0x28, 0xa4, 0xcb,
                 0xf4, 0xd4, 0xfe, 0x87,
+            ]
+        );
+        assert_eq!(
+            local_authentication_ceremony_migration_digest(),
+            [
+                0x18, 0x3e, 0x9a, 0x32, 0x42, 0xd5, 0xd1, 0xef, 0xe4, 0xe1, 0x37, 0x4f, 0xa5, 0xef,
+                0x1f, 0x67, 0x0e, 0x01, 0xca, 0x80, 0xd7, 0x69, 0x9e, 0x8b, 0xb7, 0x8e, 0xb5, 0xfd,
+                0x42, 0x64, 0xf2, 0xf9,
             ]
         );
     }
