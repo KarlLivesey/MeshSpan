@@ -58,6 +58,35 @@ impl SessionId {
     }
 }
 
+/// A globally qualified principal's local UUID within the current swarm.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct PrincipalId(
+    #[schemars(
+        length(equal = 36),
+        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    String,
+);
+
+impl PrincipalId {
+    /// Constructs canonical UUID text from already validated versioned UUID bytes.
+    #[must_use]
+    pub fn from_uuid_bytes(value: [u8; 16]) -> Option<Self> {
+        let version = value[6] >> 4;
+        if !(1..=8).contains(&version) || value[8] >> 6 != 2 {
+            return None;
+        }
+        Some(Self(format_uuid(value)))
+    }
+
+    /// Returns the canonical UUID text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// An optional property that distinguishes omission from an explicit JSON null.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum NullableField<T> {
@@ -237,6 +266,21 @@ pub struct CreateSessionResponse {
     pub expires_at_epoch_micros: i64,
     /// Assurance reached by the accepted authentication factors.
     pub assurance: AssuranceLevel,
+}
+
+/// Current caller identity and coarse panel-navigation authority.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentSessionResponse {
+    /// Current committed session identity.
+    pub session_id: SessionId,
+    /// Current authenticated user principal.
+    pub principal_id: PrincipalId,
+    /// Exclusive authoritative session expiry as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_i64))]
+    pub expires_at_epoch_micros: i64,
+    /// Whether the current role projection permits entering administration.
+    pub administration_available: bool,
 }
 
 /// Cheap readiness state returned without authentication.

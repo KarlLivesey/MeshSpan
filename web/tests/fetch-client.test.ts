@@ -252,6 +252,32 @@ describe("generated session delivery", () => {
   });
 });
 
+describe("generated current session", () => {
+  it("validates the authenticated identity and administration projection", async () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input) => {
+        expect(readRequestUrl(input)).toBe(
+          "https://node.example/api/latest/sessions/current",
+        );
+        return Promise.resolve(
+          jsonResponse({
+            administration_available: true,
+            expires_at_epoch_micros: 60_000_000,
+            principal_id: "00000000-0000-4000-8000-000000000008",
+            session_id: "00000000-0000-4000-8000-000000000007",
+          }),
+        );
+      },
+    });
+
+    await expect(client.getCurrentSession()).resolves.toMatchObject({
+      administration_available: true,
+      principal_id: "00000000-0000-4000-8000-000000000008",
+    });
+  });
+});
+
 function validSetupRequest() {
   return {
     administrator_name: "Administrator",

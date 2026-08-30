@@ -2,12 +2,12 @@
 
 //! Deterministic `OpenAPI` 3.1 document generation.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
     ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
-    CreateSessionResponse, HealthResponse, SetupStatusResponse, schema,
+    CreateSessionResponse, CurrentSessionResponse, HealthResponse, SetupStatusResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -70,6 +70,7 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "CreateMeshSetupResponse": response_component::<CreateMeshSetupResponse>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
+                "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
                 "HealthResponse": response_component::<HealthResponse>(),
                 "SetupStatusResponse": response_component::<SetupStatusResponse>()
             }
@@ -80,93 +81,130 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
 }
 
 fn paths() -> Value {
+    Value::Object(Map::from_iter([
+        ("/health".to_owned(), health_path()),
+        ("/openapi.json".to_owned(), openapi_path()),
+        ("/setup/status".to_owned(), setup_status_path()),
+        ("/setup/meshes".to_owned(), create_mesh_path()),
+        ("/sessions".to_owned(), create_session_path()),
+        ("/sessions/current".to_owned(), current_session_path()),
+    ]))
+}
+
+fn health_path() -> Value {
     json!({
-        "/health": {
-            "get": {
-                "operationId": "getHealth",
-                "summary": "Read bounded process readiness",
-                "x-meshspan-access": "anonymous",
-                "responses": {
-                    "200": json_response("Process readiness", "#/components/schemas/HealthResponse"),
-                    "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
-                }
+        "get": {
+            "operationId": "getHealth",
+            "summary": "Read bounded process readiness",
+            "x-meshspan-access": "anonymous",
+            "responses": {
+                "200": json_response("Process readiness", "#/components/schemas/HealthResponse"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
             }
-        },
-        "/openapi.json": {
-            "get": {
-                "operationId": "getOpenApi",
-                "summary": "Read this exact API contract",
-                "x-meshspan-access": "anonymous",
-                "responses": {
-                    "200": {
-                        "description": "This exact OpenAPI 3.1 document",
-                        "headers": response_headers(),
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": true,
-                                    "x-meshspan-intentionally-extensible": true
-                                }
+        }
+    })
+}
+
+fn openapi_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getOpenApi",
+            "summary": "Read this exact API contract",
+            "x-meshspan-access": "anonymous",
+            "responses": {
+                "200": {
+                    "description": "This exact OpenAPI 3.1 document",
+                    "headers": response_headers(),
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "additionalProperties": true,
+                                "x-meshspan-intentionally-extensible": true
                             }
                         }
                     }
                 }
             }
-        },
-        "/setup/status": {
-            "get": {
-                "operationId": "getSetupStatus",
-                "summary": "Read first-start state without exposing claim material",
-                "x-meshspan-access": "anonymous",
-                "responses": {
-                    "200": json_response("First-start state", "#/components/schemas/SetupStatusResponse"),
-                    "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
-                }
+        }
+    })
+}
+
+fn setup_status_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getSetupStatus",
+            "summary": "Read first-start state without exposing claim material",
+            "x-meshspan-access": "anonymous",
+            "responses": {
+                "200": json_response("First-start state", "#/components/schemas/SetupStatusResponse"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError")
             }
-        },
-        "/setup/meshes": {
-            "post": {
-                "operationId": "createMeshSetup",
-                "summary": "Create the first mesh using the node's single-use claim",
-                "x-meshspan-access": "claim",
-                "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
-                "requestBody": json_request("First-mesh setup", "#/components/schemas/CreateMeshSetupRequest"),
-                "responses": {
-                    "201": json_response("Committed first mesh", "#/components/schemas/CreateMeshSetupResponse"),
-                    "400": json_response("Invalid request", "#/components/schemas/ApiError"),
-                    "401": json_response("First-boot claim rejected", "#/components/schemas/ApiError"),
-                    "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
-                    "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
-                    "503": json_response("Bootstrap authority temporarily unavailable", "#/components/schemas/ApiError"),
-                    "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
-                }
+        }
+    })
+}
+
+fn create_mesh_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createMeshSetup",
+            "summary": "Create the first mesh using the node's single-use claim",
+            "x-meshspan-access": "claim",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request("First-mesh setup", "#/components/schemas/CreateMeshSetupRequest"),
+            "responses": {
+                "201": json_response("Committed first mesh", "#/components/schemas/CreateMeshSetupResponse"),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("First-boot claim rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "503": json_response("Bootstrap authority temporarily unavailable", "#/components/schemas/ApiError"),
+                "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
             }
-        },
-        "/sessions": {
-            "post": {
-                "operationId": "createSession",
-                "summary": "Start a bounded authentication ceremony",
-                "x-meshspan-access": "anonymous",
-                "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": "#/components/schemas/CreateSessionRequest" }
-                        }
+        }
+    })
+}
+
+fn create_session_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createSession",
+            "summary": "Start a bounded authentication ceremony",
+            "x-meshspan-access": "anonymous",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/CreateSessionRequest" }
                     }
-                },
-                "responses": {
-                    "201": session_response(),
-                    "400": json_response("Malformed or structurally invalid request", "#/components/schemas/ApiError"),
-                    "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
-                    "409": json_response("Operation identifier conflict", "#/components/schemas/ApiError"),
-                    "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
-                    "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
-                    "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
-                    "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
                 }
+            },
+            "responses": {
+                "201": session_response(),
+                "400": json_response("Malformed or structurally invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Operation identifier conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn current_session_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getCurrentSession",
+            "summary": "Read the current authenticated browser session",
+            "x-meshspan-access": "authenticated",
+            "responses": {
+                "200": json_response("Current browser session", "#/components/schemas/CurrentSessionResponse"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
             }
         }
     })
