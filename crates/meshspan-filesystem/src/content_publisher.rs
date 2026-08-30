@@ -15,6 +15,7 @@ use meshspan_contracts::{
 };
 use meshspan_domain::{MeshId, OperationId, RandomSource, TargetId};
 
+use crate::content_transfer::provider_operation_id;
 use crate::{
     CompletedStage, ContentCatalogError, ContentChunkCipher, ContentChunkLimits,
     ContentEncryptionKey, ContentKeyEnvelopeCipher, ContentPublicationError,
@@ -290,7 +291,8 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
                 ciphertext_length: u64::try_from(encrypted.ciphertext.len())
                     .map_err(|_| ContentPublicationError::InvalidInput)?,
                 ciphertext_digest: encrypted.ciphertext_digest,
-                provider_operation_id: provider_operation_id(request.operation_id, index)?,
+                provider_operation_id: provider_operation_id(request.operation_id, index)
+                    .map_err(|_| ContentPublicationError::Corrupt)?,
             });
             if page.len() == PREPARE_PAGE_ITEMS {
                 self.catalog
@@ -617,22 +619,6 @@ fn verify_spool(
     } else {
         Ok(())
     }
-}
-
-fn provider_operation_id(
-    operation_id: OperationId,
-    chunk_index: u64,
-) -> Result<OperationId, ContentPublicationError> {
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.content.provider-operation.v1\0");
-    digest.update(&operation_id.as_bytes());
-    digest.update(&chunk_index.to_be_bytes());
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest.finalize().as_bytes()[..16]);
-    if bytes == [0; 16] {
-        bytes[15] = 1;
-    }
-    OperationId::from_bytes(bytes).map_err(|_| ContentPublicationError::Corrupt)
 }
 
 fn spool_name(operation_id: OperationId) -> String {

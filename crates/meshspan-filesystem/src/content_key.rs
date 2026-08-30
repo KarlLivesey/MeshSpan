@@ -180,6 +180,19 @@ impl ContentKeyEnvelopeCipher {
     }
 }
 
+impl WrappedContentKey {
+    pub(crate) fn valid_for(self, manifest_id: ContentManifestId) -> bool {
+        self.key_generation != 0
+            && self.envelope_digest
+                == envelope_digest(
+                    manifest_id,
+                    self.key_generation,
+                    self.nonce,
+                    self.ciphertext,
+                )
+    }
+}
+
 /// Unwraps under the prior generation and wraps under the replacement generation.
 ///
 /// # Errors
