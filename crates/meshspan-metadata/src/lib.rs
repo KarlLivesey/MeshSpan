@@ -20,6 +20,9 @@ mod federation_storage_lifecycle;
 mod federation_storage_quota;
 mod federation_storage_scrub;
 mod federation_succession_command;
+mod local_claim;
+#[cfg(test)]
+mod local_claim_tests;
 mod migration;
 mod name;
 mod repository;
@@ -97,6 +100,10 @@ pub use federation_storage_scrub::{
 pub use federation_succession_command::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, DesignateFederationSuccessor,
     FederationSuccessionEdge, RevokeFederationSuccessorDesignation,
+};
+pub use local_claim::{
+    LocalClaimError, LocalClaimMutationDisposition, LocalClaimRecord, LocalClaimState,
+    NewLocalClaim,
 };
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
