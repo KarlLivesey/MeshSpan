@@ -3,6 +3,8 @@
 //! Pure `MeshSpan` domain types, decisions and deterministic state transitions.
 
 mod access;
+mod api_key;
+mod bootstrap_material;
 mod claim;
 mod federation;
 mod federation_access;
@@ -16,6 +18,7 @@ mod partitioning;
 mod primitives;
 mod routing;
 mod seams;
+mod secret_text;
 mod topology;
 
 pub use access::{
@@ -25,6 +28,8 @@ pub use access::{
     AuthenticationService, GroupGraph, GroupGraphError, MembershipChange, OwnerSet, OwnerSetError,
     Rights, RightsError,
 };
+pub use api_key::{ApiKeyBundle, ApiKeyBundleError, ENCODED_API_KEY_LENGTH};
+pub use bootstrap_material::{InitialBootstrapMaterial, InitialBootstrapMaterialError};
 pub use claim::{ClaimBundle, ClaimBundleError, ENCODED_CLAIM_BUNDLE_LENGTH};
 pub use federation::{
     DEFAULT_FEDERATION_OFFLINE_DURATION, FederatedPrincipal, FederationAccess, FederationPolicy,
