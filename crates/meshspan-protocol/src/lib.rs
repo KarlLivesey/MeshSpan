@@ -11,7 +11,7 @@ pub use federation_signing::{
     federation_authority_page_signing_payload, federation_branch_fetch_signing_payload,
     federation_branch_page_digest_payload, federation_branch_page_signing_payload,
     federation_hello_signing_payload, federation_history_object_fetch_signing_payload,
-    federation_history_object_header_signing_payload,
+    federation_history_object_header_signing_payload, federation_storage_capability_digest_payload,
     federation_storage_capability_request_signing_payload,
     federation_storage_capability_signing_payload,
     federation_storage_inventory_fetch_signing_payload,

@@ -25,6 +25,8 @@ const HISTORY_OBJECT_HEADER_DOMAIN: &[u8] = b"meshspan.federation.history-object
 const STORAGE_CAPABILITY_REQUEST_DOMAIN: &[u8] =
     b"meshspan.federation.storage-capability-request.v1\0";
 const STORAGE_CAPABILITY_DOMAIN: &[u8] = b"meshspan.federation.storage-capability.v1\0";
+const STORAGE_CAPABILITY_DIGEST_DOMAIN: &[u8] =
+    b"meshspan.federation.storage-capability-digest.v1\0";
 const STORAGE_RECEIPT_DOMAIN: &[u8] = b"meshspan.federation.storage-receipt.v1\0";
 const STORAGE_INVENTORY_FETCH_DOMAIN: &[u8] = b"meshspan.federation.storage-inventory-fetch.v1\0";
 const STORAGE_INVENTORY_PAGE_DOMAIN: &[u8] = b"meshspan.federation.storage-inventory-page.v1\0";
@@ -177,6 +179,23 @@ pub fn federation_storage_capability_signing_payload(
     signing_payload(STORAGE_CAPABILITY_DOMAIN, header, &unsigned)
 }
 
+/// Returns canonical domain-separated capability content for lifecycle receipt correlation.
+#[must_use]
+pub fn federation_storage_capability_digest_payload(
+    capability: &FederatedStorageCapability,
+) -> Vec<u8> {
+    let encoded = capability.encode_to_vec();
+    let mut payload = Vec::with_capacity(
+        STORAGE_CAPABILITY_DIGEST_DOMAIN
+            .len()
+            .saturating_add(8)
+            .saturating_add(encoded.len()),
+    );
+    payload.extend_from_slice(STORAGE_CAPABILITY_DIGEST_DOMAIN);
+    append_part(&mut payload, &encoded);
+    payload
+}
+
 /// Returns the exact bytes signed by a remote-storage lifecycle result.
 #[must_use]
 pub fn federation_storage_receipt_signing_payload(
@@ -262,7 +281,8 @@ mod tests {
     use super::{
         federation_authority_page_digest_payload, federation_authority_page_signing_payload,
         federation_branch_page_digest_payload, federation_branch_page_signing_payload,
-        federation_hello_signing_payload, federation_storage_capability_signing_payload,
+        federation_hello_signing_payload, federation_storage_capability_digest_payload,
+        federation_storage_capability_signing_payload,
         federation_storage_inventory_page_digest_payload,
         federation_storage_inventory_page_signing_payload,
         federation_storage_receipt_signing_payload,
@@ -449,10 +469,15 @@ mod tests {
         };
         let capability_payload =
             federation_storage_capability_signing_payload(&header, &capability);
+        let capability_digest = federation_storage_capability_digest_payload(&capability);
         capability.signature = vec![20; 64];
         assert_eq!(
             federation_storage_capability_signing_payload(&header, &capability),
             capability_payload
+        );
+        assert_ne!(
+            federation_storage_capability_digest_payload(&capability),
+            capability_digest
         );
         capability.maximum_bytes += 1;
         assert_ne!(
