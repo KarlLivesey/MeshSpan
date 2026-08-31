@@ -229,10 +229,7 @@ function membershipFetch(seen: string[]): typeof globalThis.fetch {
     }
     if (init?.method === "POST") {
       return Promise.resolve(
-        response(
-          { membership: membership(), operation_id: OPERATION_ID },
-          201,
-        ),
+        response({ membership: membership(), operation_id: OPERATION_ID }, 201),
       );
     }
     return Promise.resolve(
