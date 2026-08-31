@@ -1407,6 +1407,100 @@ export const zHealthResponse = z
   .strict();
 
 /**
+ * ListAuthenticationMethodsResponse
+ *
+ * One bounded current-user authentication-method page.
+ */
+export const zListAuthenticationMethodsResponse = z
+  .strictObject({
+    methods: z
+      .array(
+        z
+          .strictObject({
+            created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+            details: z.union([
+              z
+                .object({
+                  backup_eligible: z.boolean(),
+                  backup_state: z.boolean(),
+                  kind: z.literal("passkey"),
+                })
+                .strict(),
+              z
+                .object({
+                  kind: z.literal("totp"),
+                })
+                .strict(),
+              z
+                .object({
+                  kind: z.literal("recovery_codes"),
+                  remaining_codes: z.int().gte(0).lte(64),
+                })
+                .strict(),
+              z
+                .object({
+                  key_id: z
+                    .string()
+                    .length(36)
+                    .regex(
+                      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                    ),
+                  kind: z.literal("api_key"),
+                  scopes: z
+                    .array(
+                      z.union([
+                        z.literal("https_session"),
+                        z.literal("headless_api"),
+                        z.literal("smb_session"),
+                      ]),
+                    )
+                    .min(1)
+                    .max(3),
+                  valid_from_epoch_micros: z.int().gte(0).lte(9007199254740991),
+                })
+                .strict(),
+            ]),
+            expires_at_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
+              .nullable(),
+            label: z
+              .string()
+              .min(1)
+              .max(80)
+              .regex(/^[^\x00-\x1f\x7f]+$/),
+            last_used_at_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
+              .nullable(),
+            method_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            revision: z.int().gte(1).lte(9007199254740991),
+            state: z.union([
+              z.literal("active"),
+              z.literal("suspended"),
+              z.literal("revoked"),
+            ]),
+          })
+          .strict(),
+      )
+      .max(256),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/users\/current\/authentication-methods/)
+      .nullable(),
+  })
+  .strict();
+
+/**
  * ListDirectoryResponse
  *
  * One immutable, bounded directory page.
@@ -2663,6 +2757,24 @@ export const zWriteUploadRangePath = z
  * Durable range acknowledgement and exact resulting checkpoint
  */
 export const zWriteUploadRangeResponse2 = zWriteUploadRangeResponse;
+
+export const zListCurrentUserAuthenticationMethodsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One secret-free authentication-method page
+ */
+export const zListCurrentUserAuthenticationMethodsResponse =
+  zListAuthenticationMethodsResponse;
 
 /**
  * Current-user API-key issuance

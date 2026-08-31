@@ -2690,6 +2690,231 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "ListAuthenticationMethodsResponse": {
+        "additionalProperties": false,
+        "description": "One bounded current-user authentication-method page.",
+        "properties": {
+          "methods": {
+            "description": "Stable ordered, secret-free authentication methods.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Secret-free current state of one independently revocable authentication method.",
+              "properties": {
+                "created_at_epoch_micros": {
+                  "description": "Authoritative creation instant as epoch microseconds.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "details": {
+                  "description": "Method-specific public projection.",
+                  "oneOf": [
+                    {
+                      "description": "One `WebAuthn` credential.",
+                      "properties": {
+                        "backup_eligible": {
+                          "description": "Whether the authenticator reports that the credential can be backed up.",
+                          "type": "boolean"
+                        },
+                        "backup_state": {
+                          "description": "Last authoritative backed-up state reported by the authenticator.",
+                          "type": "boolean"
+                        },
+                        "kind": {
+                          "const": "passkey",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "backup_eligible",
+                        "backup_state"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "description": "One time-based one-time-password seed.",
+                      "properties": {
+                        "kind": {
+                          "const": "totp",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "description": "One independently replaceable set of single-use recovery codes.",
+                      "properties": {
+                        "kind": {
+                          "const": "recovery_codes",
+                          "type": "string"
+                        },
+                        "remaining_codes": {
+                          "description": "Number of codes which have not yet been consumed.",
+                          "format": "uint8",
+                          "maximum": 64,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "remaining_codes"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "description": "One scoped API key whose secret is never returned by inventory reads.",
+                      "properties": {
+                        "key_id": {
+                          "description": "Public identity embedded in the key.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "api_key",
+                          "type": "string"
+                        },
+                        "scopes": {
+                          "description": "Connectors through which the key may authenticate.",
+                          "items": {
+                            "description": "One connector through which an issued API key may authenticate.",
+                            "oneOf": [
+                              {
+                                "const": "https_session",
+                                "description": "Exchange the key for an HTTPS browser session.",
+                                "type": "string"
+                              },
+                              {
+                                "const": "headless_api",
+                                "description": "Authenticate directly to the headless public API.",
+                                "type": "string"
+                              },
+                              {
+                                "const": "smb_session",
+                                "description": "Authenticate an embedded SMB 3.1.1 session.",
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          "maxItems": 3,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "valid_from_epoch_micros": {
+                          "description": "Inclusive first accepted instant as epoch microseconds.",
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "key_id",
+                        "scopes",
+                        "valid_from_epoch_micros"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "expires_at_epoch_micros": {
+                  "description": "Exclusive expiry, or null when the method has no automatic expiry.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "label": {
+                  "description": "User-facing label assigned at registration or issuance.",
+                  "maxLength": 80,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+                  "type": "string"
+                },
+                "last_used_at_epoch_micros": {
+                  "description": "Last successful use, or null before first use.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "method_id": {
+                  "description": "Common stable method identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Last authoritative metadata revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "state": {
+                  "description": "Current authoritative lifecycle state.",
+                  "oneOf": [
+                    {
+                      "const": "active",
+                      "description": "The method may currently authenticate within its other bounds.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "suspended",
+                      "description": "The method is reversibly unavailable.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "revoked",
+                      "description": "The method is permanently unusable.",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "method_id",
+                "label",
+                "state",
+                "details",
+                "created_at_epoch_micros",
+                "last_used_at_epoch_micros",
+                "expires_at_epoch_micros",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "next_page_url": {
+            "description": "Ready-to-follow relative URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/users/current/authentication-methods",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "methods",
+          "next_page_url"
+        ],
+        "title": "ListAuthenticationMethodsResponse",
+        "type": "object"
+      },
       "ListDirectoryResponse": {
         "additionalProperties": false,
         "description": "One immutable, bounded directory page.",
@@ -8232,6 +8457,168 @@
         },
         "summary": "Write one independently idempotent bounded raw upload range",
         "x-meshspan-access": "authenticated-csrf"
+      }
+    },
+    "/users/current/authentication-methods": {
+      "get": {
+        "operationId": "listCurrentUserAuthenticationMethods",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAuthenticationMethodsResponse"
+                }
+              }
+            },
+            "description": "One secret-free authentication-method page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List one bounded page of the current user's authentication methods",
+        "x-meshspan-access": "authenticated"
       }
     },
     "/users/current/authentication-methods/api-keys": {

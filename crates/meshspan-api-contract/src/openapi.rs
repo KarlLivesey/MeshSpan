@@ -17,12 +17,13 @@ use crate::{
     CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
     CreateTotpRegistrationResponse, CreateUserRequest, CurrentSessionResponse, DeleteObjectRequest,
-    DeleteObjectResponse, GetObjectResponse, HealthResponse, ListDirectoryResponse,
-    ListGroupMembershipsResponse, ListPrincipalsResponse, ListUploadRangesResponse,
-    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
-    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
-    StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
+    DeleteObjectResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
+    ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
+    ListUploadRangesResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
+    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
+    SetupStatusResponse, StepUpCurrentSessionRequest, UploadStatusResponse,
+    WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -131,6 +132,7 @@ fn components() -> Value {
         schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
         schema_response::<GetObjectResponse>("GetObjectResponse"),
         schema_response::<HealthResponse>("HealthResponse"),
+        schema_response::<ListAuthenticationMethodsResponse>("ListAuthenticationMethodsResponse"),
         schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
         schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
         schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
@@ -216,6 +218,10 @@ fn paths() -> Value {
             create_passkey_challenge_path(),
         ),
         (
+            "/users/current/authentication-methods".to_owned(),
+            list_authentication_methods_path(),
+        ),
+        (
             "/users/current/authentication-methods/passkeys/registration-challenges".to_owned(),
             create_passkey_registration_challenge_path(),
         ),
@@ -253,6 +259,24 @@ fn paths() -> Value {
             revoke_current_session_path(),
         ),
     ])))
+}
+
+fn list_authentication_methods_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listCurrentUserAuthenticationMethods",
+            "summary": "List one bounded page of the current user's authentication methods",
+            "x-meshspan-access": "authenticated",
+            "parameters": [cursor_parameter(), limit_parameter()],
+            "responses": {
+                "200": json_response("One secret-free authentication-method page", "#/components/schemas/ListAuthenticationMethodsResponse"),
+                "400": json_response("Invalid query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn administration_paths() -> [(String, Value); 4] {
