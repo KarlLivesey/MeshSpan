@@ -14,6 +14,8 @@ version.workspace = true
 bytes.workspace = true
 ed25519-dalek.workspace = true
 meshspan-domain = { path = "../meshspan-domain" }
+meshspan-quinn-rustls = { path = "../meshspan-quinn-rustls" }
+meshspan-rustls-provider = { path = "../meshspan-rustls-provider" }
 meshspan-protocol = { path = "../meshspan-protocol" }
 quinn.workspace = true
 rustls.workspace = true

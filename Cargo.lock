@@ -21,6 +21,7 @@ dependencies = [
  "cipher",
  "cpubits",
  "cpufeatures",
+ "zeroize",
 ]
 
 [[package]]
@@ -331,6 +332,7 @@ dependencies = [
  "cipher",
  "cpufeatures",
  "rand_core",
+ "zeroize",
 ]
 
 [[package]]
@@ -1259,6 +1261,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-quinn-rustls"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "bytes",
+ "getrandom 0.4.3",
+ "hkdf",
+ "hmac",
+ "quinn-proto",
+ "rustls",
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
 name = "meshspan-rustls-provider"
 version = "0.1.0"
 dependencies = [
@@ -1296,6 +1313,8 @@ dependencies = [
  "ed25519-dalek",
  "meshspan-domain",
  "meshspan-protocol",
+ "meshspan-quinn-rustls",
+ "meshspan-rustls-provider",
  "quinn",
  "rcgen",
  "rustls",
@@ -1511,7 +1530,6 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls",
  "socket2",
  "thiserror",
  "tokio",
@@ -1532,7 +1550,6 @@ dependencies = [
  "rand_pcg",
  "ring",
  "rustc-hash",
- "rustls",
  "rustls-pki-types",
  "slab",
  "thiserror",
@@ -1755,7 +1772,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "once_cell",
- "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",

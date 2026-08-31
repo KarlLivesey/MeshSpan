@@ -6,7 +6,6 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use quinn::{ClientConfig, Connection, Endpoint, ServerConfig, TransportConfig, VarInt};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
@@ -16,6 +15,7 @@ use rustls::{
 use thiserror::Error;
 
 use meshspan_protocol::WireLimits;
+use meshspan_quinn_rustls::{QuicClientConfig, QuicServerConfig, endpoint_config, server_config};
 
 const ALPN: &[u8] = b"meshspan-private/1";
 
@@ -97,19 +97,23 @@ pub fn server_endpoint(
     client_roots: RootCertStore,
     limits: TransportLimits,
 ) -> Result<Endpoint, TransportError> {
-    let verifier = WebPkiClientVerifier::builder(Arc::new(client_roots))
-        .build()
-        .map_err(|_| TransportError::InvalidConfiguration)?;
-    let mut tls = RustlsServerConfig::builder()
+    let provider = Arc::new(meshspan_rustls_provider::provider());
+    let verifier =
+        WebPkiClientVerifier::builder_with_provider(Arc::new(client_roots), provider.clone())
+            .build()
+            .map_err(|_| TransportError::InvalidConfiguration)?;
+    let mut tls = RustlsServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|_| TransportError::InvalidConfiguration)?
         .with_client_cert_verifier(verifier)
         .with_single_cert(credentials.certificate_chain, credentials.private_key)
         .map_err(|_| TransportError::InvalidConfiguration)?;
     tls.alpn_protocols = vec![ALPN.to_vec()];
     let crypto =
         QuicServerConfig::try_from(tls).map_err(|_| TransportError::InvalidConfiguration)?;
-    let mut server = ServerConfig::with_crypto(Arc::new(crypto));
+    let mut server = server_config(Arc::new(crypto))?;
     server.transport_config(transport_config(limits)?);
-    Endpoint::server(server, bind_address).map_err(TransportError::Io)
+    endpoint(bind_address, Some(server))
 }
 
 /// Creates a client endpoint presenting its node certificate and trusting `server_roots`.
@@ -123,7 +127,10 @@ pub fn client_endpoint(
     server_roots: RootCertStore,
     limits: TransportLimits,
 ) -> Result<Endpoint, TransportError> {
-    let mut tls = RustlsClientConfig::builder()
+    let provider = Arc::new(meshspan_rustls_provider::provider());
+    let mut tls = RustlsClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|_| TransportError::InvalidConfiguration)?
         .with_root_certificates(server_roots)
         .with_client_auth_cert(credentials.certificate_chain, credentials.private_key)
         .map_err(|_| TransportError::InvalidConfiguration)?;
@@ -132,7 +139,7 @@ pub fn client_endpoint(
         QuicClientConfig::try_from(tls).map_err(|_| TransportError::InvalidConfiguration)?;
     let mut client = ClientConfig::new(Arc::new(crypto));
     client.transport_config(transport_config(limits)?);
-    let mut endpoint = Endpoint::client(bind_address).map_err(TransportError::Io)?;
+    let mut endpoint = endpoint(bind_address, None)?;
     endpoint.set_default_client_config(client);
     Ok(endpoint)
 }
@@ -168,6 +175,20 @@ fn transport_config(limits: TransportLimits) -> Result<Arc<TransportConfig>, Tra
     Ok(Arc::new(transport))
 }
 
+fn endpoint(
+    bind_address: SocketAddr,
+    server: Option<ServerConfig>,
+) -> Result<Endpoint, TransportError> {
+    let socket = std::net::UdpSocket::bind(bind_address).map_err(TransportError::Io)?;
+    Endpoint::new(
+        endpoint_config()?,
+        server,
+        socket,
+        Arc::new(quinn::TokioRuntime),
+    )
+    .map_err(TransportError::Io)
+}
+
 /// Stable transport boundary failures without certificate or message contents.
 #[derive(Debug, Error)]
 pub enum TransportError {
@@ -180,6 +201,9 @@ pub enum TransportError {
     /// UDP endpoint creation or binding failed.
     #[error("private transport socket failed")]
     Io(#[source] io::Error),
+    /// Operating-system entropy for QUIC reset or validation-token keys was unavailable.
+    #[error("private transport endpoint key generation failed")]
+    EndpointKeys(#[from] meshspan_quinn_rustls::EndpointKeyError),
     /// A connection could not be initiated.
     #[error("private transport connection setup failed")]
     Connect(#[from] quinn::ConnectError),

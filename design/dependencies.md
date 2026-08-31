@@ -53,6 +53,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `meshspan-otp` (workspace)         |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-protobuf` (workspace)    |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-passkey` (workspace)     |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-quinn-rustls` (workspace) |           0.1.0 | `GPL-2.0-only`             |
 | `meshspan-rustls-provider` (workspace) |        0.1.0 | `GPL-2.0-only`             |
 | `sync_wrapper` (workspace)         |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                             |           0.14.0 | `Apache-2.0 OR MIT`        |
@@ -90,14 +91,19 @@ ChaCha20-Poly1305 traffic protection. RFC 9001 AES and ChaCha packet/header vect
 rejection and a real mutually authenticated Rustls handshake are executable tests. Broader
 algorithm support is not implied and requires equivalent standards and interoperability proof.
 
-The current application Rustls/Quinn graph still resolves `ring`, whose declared licence is
+The workspace `meshspan-quinn-rustls` package binds caller-supplied Rustls configurations to the
+public cryptography traits in current stable Quinn. It also supplies stateless-reset, retry and
+address-validation-token protection without enabling Quinn's Ring or AWS-LC adapters. This keeps
+the QUIC transport on maintained upstream Quinn while making the provider boundary explicit and
+independently testable. The real transport suite proves mutual TLS, topology binding, independent
+streams, saturation isolation, snapshots and federation framing through this adapter.
+
+The production Rustls/Quinn dependency graph no longer resolves `ring`, whose declared licence is
 `Apache-2.0 AND ISC`. No MeshSpan release artefact may ship while that conjunctive Apache-2.0
 dependency remains. Downgrading is forbidden, and AWS-LC is not a licence solution because its
-current sys crate also includes an Apache-2.0-only conjunct. The replacement must be a maintained,
-portable Rustls/QUIC cryptography provider with complete hostile, standards and interoperability
-proof; experimental providers which explicitly disclaim production readiness are not admissible.
-The provider primitive is now present without `ring`; the remaining blocker is the current-stable
-Quinn adapter/endpoint boundary and removal of `ring`-backed certificate generation from tests.
+current sys crate also includes an Apache-2.0-only conjunct. The remaining `ring` resolution is
+test-only certificate generation through `rcgen`; it must be removed before the dependency gate is
+closed. Experimental providers which explicitly disclaim production readiness are not admissible.
 
 | Web/runtime dependency  | Version | Declared licence |
 | ----------------------- | ------: | ---------------- |
