@@ -123,7 +123,7 @@ pub(crate) fn abort(
 
 pub(crate) fn begin_commit(
     sessions: &mut UploadSessionStore,
-    stages: &DurableStageStore,
+    stages: &mut DurableStageStore,
     request: &UploadCommitRequest,
 ) -> Result<UploadCommitTransition, UploadServiceError> {
     let session = sessions.load(request.upload_id)?;
@@ -134,6 +134,13 @@ pub(crate) fn begin_commit(
             && !crate::staging::covers(&checkpoint.initialised_ranges, request.final_length))
     {
         return Err(UploadServiceError::Incomplete);
+    }
+    if let Some(expected_digest) = request.expected_content_digest {
+        let mut sink = std::io::sink();
+        let completed = stages.stream_complete(request.publication.completion, &mut sink)?;
+        if completed.content_digest != expected_digest {
+            return Err(UploadServiceError::ContentMismatch);
+        }
     }
     let transition = commit_transition(request);
     sessions.begin_commit(transition)?;
@@ -198,6 +205,15 @@ fn commit_transition(request: &UploadCommitRequest) -> UploadCommitTransition {
     digest.update(&request.expected_sequence.to_be_bytes());
     digest.update(&request.final_length.to_be_bytes());
     digest.update(&[u8::from(request.sparse)]);
+    match request.expected_content_digest {
+        Some(expected) => {
+            digest.update(&[1]);
+            digest.update(&expected);
+        }
+        None => {
+            digest.update(&[0]);
+        }
+    }
     digest.update(&crate::commit_service::commit_request_digest(
         &request.publication,
     ));
@@ -261,6 +277,9 @@ pub enum UploadServiceError {
     /// The selected exact checkpoint does not initialise the complete non-sparse file.
     #[error("upload checkpoint is incomplete")]
     Incomplete,
+    /// The complete logical byte stream differs from the caller's declared digest.
+    #[error("upload content digest does not match")]
+    ContentMismatch,
     /// Current identity, permission, fence, lifecycle or expiry does not permit the operation.
     #[error("upload authority is stale")]
     StaleAuthority,

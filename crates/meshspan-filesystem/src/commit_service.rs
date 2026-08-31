@@ -278,7 +278,7 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         request: &crate::UploadCommitRequest,
     ) -> Result<crate::UploadCommitReceipt, FilesystemCommitError> {
         let transition =
-            crate::upload_service::begin_commit(&mut self.uploads, &self.stages, request)?;
+            crate::upload_service::begin_commit(&mut self.uploads, &mut self.stages, request)?;
         let publication = self.commit_root_file(&request.publication)?;
         let session = crate::upload_service::finish_commit(&mut self.uploads, transition)?;
         Ok(crate::UploadCommitReceipt {

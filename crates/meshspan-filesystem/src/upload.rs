@@ -232,6 +232,8 @@ pub struct UploadCommitRequest {
     pub final_length: u64,
     /// Whether uncovered ranges are explicit logical zeroes.
     pub sparse: bool,
+    /// Optional independently verified BLAKE3 digest of the complete logical byte stream.
+    pub expected_content_digest: Option<[u8; 32]>,
     /// Complete pre-authorised namespace and immutable-content plan.
     pub publication: RootFileCommitRequest,
     /// Authoritative commit instant.

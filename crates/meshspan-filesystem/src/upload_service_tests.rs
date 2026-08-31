@@ -151,6 +151,21 @@ fn incomplete_commit_stays_writable_then_publishes_once_atomically()
 
     service.write_upload(&write_request(&begin, 51, 0, b"hello")?)?;
     commit = commit_request(&begin, 2, UnixMicros::new(6))?;
+    commit.expected_content_digest = Some([99; 32]);
+    assert!(matches!(
+        service.commit_upload(&commit),
+        Err(FilesystemCommitError::Upload(
+            UploadServiceError::ContentMismatch
+        ))
+    ));
+    assert_eq!(
+        service
+            .upload_status(status_request(&begin, UnixMicros::new(6)))?
+            .session
+            .state,
+        UploadState::Active
+    );
+    commit.expected_content_digest = Some(blake3::hash(b"helloworld").into());
     let applied = service.commit_upload(&commit)?;
     assert_eq!(
         applied.publication.disposition,
@@ -282,6 +297,7 @@ fn commit_request(
         expected_sequence: sequence,
         final_length: 10,
         sparse: false,
+        expected_content_digest: None,
         publication,
         observed_at,
     })
