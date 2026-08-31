@@ -71,6 +71,9 @@ mod identity;
 mod kernel;
 mod membership;
 mod namespace;
+mod passkey_registration;
+#[cfg(test)]
+mod passkey_registration_tests;
 mod query;
 mod quorum_plan;
 mod reachability;
@@ -142,6 +145,7 @@ pub use kernel::{
 };
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
+pub use passkey_registration::PasskeyRegistrationProfile;
 pub use query::{
     GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
     PrincipalRecord,
@@ -659,6 +663,21 @@ impl AuthoritativeRepository {
             service,
             now,
         )
+    }
+
+    /// Returns the current active user identity and a bounded passkey-exclusion hint.
+    ///
+    /// The credential list is a browser convenience only. Authoritative creation still enforces
+    /// global credential uniqueness, including when a user owns more than the returned bound.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when identity or credential evidence is malformed.
+    pub fn passkey_registration_profile(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+    ) -> Result<Option<PasskeyRegistrationProfile>, RepositoryError> {
+        passkey_registration::profile(&self.database, principal_id)
     }
 
     /// Returns the current immutable authentication policy for one service and operation class.
