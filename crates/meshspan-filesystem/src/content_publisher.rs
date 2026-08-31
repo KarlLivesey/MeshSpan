@@ -571,10 +571,7 @@ fn read_operation_id(
     digest.update(&chunk_index.to_be_bytes());
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&digest.finalize().as_bytes()[..16]);
-    if bytes == [0; 16] {
-        bytes[15] = 1;
-    }
-    OperationId::from_bytes(bytes).map_err(|_| ContentReadError::Corrupt)
+    OperationId::from_bytes(meshspan_domain::uuid_v8(bytes)).map_err(|_| ContentReadError::Corrupt)
 }
 
 fn read_plaintext(

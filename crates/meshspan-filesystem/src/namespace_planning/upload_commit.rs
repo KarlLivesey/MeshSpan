@@ -311,9 +311,7 @@ fn derive_identifier<T>(
     digest.update(&ordinal.to_be_bytes());
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&digest.finalize().as_bytes()[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    constructor(bytes).map_err(|_| HandleError::InvalidInput)
+    constructor(meshspan_domain::uuid_v8(bytes)).map_err(|_| HandleError::InvalidInput)
 }
 
 fn derive_generation(operation_id: OperationId) -> u64 {

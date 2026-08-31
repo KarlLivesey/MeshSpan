@@ -44,6 +44,7 @@ mod file_read_api;
 #[cfg(test)]
 mod file_read_api_tests;
 mod multi_factor_session;
+mod namespace_mutation_api;
 mod native_api_authentication;
 #[cfg(test)]
 mod native_api_authentication_tests;
@@ -172,6 +173,11 @@ pub use directory_listing_api::{
 pub use file_read_api::{
     FileRangeReader, FileReadApiError, FileReadController, FileReadError, FileReadResult,
     FileReadService, file_read_api_router,
+};
+pub use namespace_mutation_api::{
+    NativeNamespaceMutationApiError, NativeNamespaceMutationController,
+    NativeNamespaceMutationError, NativeNamespaceMutationService,
+    native_namespace_mutation_api_router,
 };
 pub use native_api_authentication::{
     FileApiAuthenticationError, NativeApiAuthenticator, NativeApiKeyAuthenticator,
