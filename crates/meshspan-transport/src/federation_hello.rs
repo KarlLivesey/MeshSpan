@@ -255,7 +255,7 @@ pub fn signed_federation_hello(
     };
     hello.signature = identity
         .signing_key()
-        .sign(&federation_hello_signing_payload(&header, &hello))
+        .sign(&federation_hello_signing_payload(&header, &hello)?)
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {

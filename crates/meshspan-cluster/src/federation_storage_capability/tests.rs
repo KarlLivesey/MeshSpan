@@ -291,7 +291,7 @@ impl Fixture {
         replay_seed: u8,
     ) -> Result<AdmittedRequest<'a>, Box<dyn std::error::Error>> {
         let actual_digest: [u8; 32] = Sha256::digest(
-            federation_storage_capability_request_digest_payload(request),
+            federation_storage_capability_request_digest_payload(request)?,
         )
         .into();
         Ok(AdmittedRequest {

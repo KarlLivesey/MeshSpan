@@ -11,12 +11,11 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-prost.workspace = true
+meshspan-protobuf.workspace = true
 thiserror.workspace = true
 
 [build-dependencies]
-prost-build = "0.14.4"
-protoc-bin-vendored = "3.2.0"
+meshspan-protobuf = { workspace = true, features = ["codegen"] }
 
 [dev-dependencies]
 serde.workspace = true

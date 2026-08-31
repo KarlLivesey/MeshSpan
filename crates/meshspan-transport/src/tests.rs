@@ -1000,10 +1000,11 @@ fn federation_hello_variant(
     let Some(FederationMessage::Hello(hello)) = envelope.message.as_ref() else {
         unreachable!("fixture hello")
     };
-    let signature = signing_key
-        .sign(&federation_hello_signing_payload(header, hello))
-        .to_bytes()
-        .to_vec();
+    let payload = match federation_hello_signing_payload(header, hello) {
+        Ok(payload) => payload,
+        Err(error) => unreachable!("valid federation hello fixture failed to encode: {error}"),
+    };
+    let signature = signing_key.sign(&payload).to_bytes().to_vec();
     let Some(FederationMessage::Hello(hello)) = envelope.message.as_mut() else {
         unreachable!("fixture hello")
     };
@@ -1033,10 +1034,11 @@ fn welcome_variant(
     let Some(FederationMessage::Welcome(welcome)) = envelope.message.as_ref() else {
         unreachable!("fixture welcome")
     };
-    let signature = signing_key
-        .sign(&federation_welcome_signing_payload(header, welcome))
-        .to_bytes()
-        .to_vec();
+    let payload = match federation_welcome_signing_payload(header, welcome) {
+        Ok(payload) => payload,
+        Err(error) => unreachable!("valid federation welcome fixture failed to encode: {error}"),
+    };
+    let signature = signing_key.sign(&payload).to_bytes().to_vec();
     welcome_mut(&mut envelope).signature = signature;
     envelope
 }

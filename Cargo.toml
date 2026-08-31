@@ -11,6 +11,7 @@ members = [
     "crates/meshspan-domain",
     "crates/meshspan-filesystem",
     "crates/meshspan-metadata",
+    "crates/meshspan-protobuf",
     "crates/meshspan-protocol",
     "crates/meshspan-storage",
     "crates/meshspan-transport",
@@ -34,7 +35,7 @@ cap-std = "4.0.3"
 chacha20poly1305 = "0.11.0"
 ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
-prost = "0.14.4"
+meshspan-protobuf = { path = "crates/meshspan-protobuf" }
 quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14.9", default-features = false, features = ["ring"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }

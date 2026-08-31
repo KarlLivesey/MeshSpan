@@ -333,12 +333,10 @@ fn verify_signature(
         .as_slice()
         .try_into()
         .map_err(|_| TransportError::UntrustedFederationPeer)?;
+    let payload = federation_hello_signing_payload(header, hello)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_hello_signing_payload(header, hello),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 

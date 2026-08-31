@@ -2,7 +2,7 @@
 
 //! Allocation-safe framing that always runs semantic validation.
 
-use prost::Message;
+use meshspan_protobuf::{DecodeLimits, Encoder, Message};
 use thiserror::Error;
 
 use crate::v1::{ControlEnvelope, DataControlEnvelope, DataFrame, FederationEnvelope};
@@ -201,7 +201,9 @@ pub fn decode_control_frame(
     limits: WireLimits,
 ) -> Result<ValidatedControlEnvelope, WireContractError> {
     let payload = payload_after_prefix(frame, limits.control_bytes)?;
-    let envelope = ControlEnvelope::decode(payload).map_err(|_| WireContractError::Malformed)?;
+    let envelope =
+        ControlEnvelope::decode_with_limits(payload, protobuf_limits(limits.control_bytes, limits))
+            .map_err(|_| WireContractError::Malformed)?;
     validate_control_envelope(&envelope, limits)?;
     Ok(ValidatedControlEnvelope(envelope))
 }
@@ -229,8 +231,11 @@ pub fn decode_data_control_frame(
     limits: WireLimits,
 ) -> Result<ValidatedDataControlEnvelope, WireContractError> {
     let payload = payload_after_prefix(frame, limits.control_bytes)?;
-    let envelope =
-        DataControlEnvelope::decode(payload).map_err(|_| WireContractError::Malformed)?;
+    let envelope = DataControlEnvelope::decode_with_limits(
+        payload,
+        protobuf_limits(limits.control_bytes, limits),
+    )
+    .map_err(|_| WireContractError::Malformed)?;
     validate_data_control_envelope(&envelope, limits)?;
     Ok(ValidatedDataControlEnvelope(envelope))
 }
@@ -258,7 +263,11 @@ pub fn decode_federation_frame(
     limits: WireLimits,
 ) -> Result<ValidatedFederationEnvelope, WireContractError> {
     let payload = payload_after_prefix(frame, limits.control_bytes)?;
-    let envelope = FederationEnvelope::decode(payload).map_err(|_| WireContractError::Malformed)?;
+    let envelope = FederationEnvelope::decode_with_limits(
+        payload,
+        protobuf_limits(limits.control_bytes, limits),
+    )
+    .map_err(|_| WireContractError::Malformed)?;
     validate_federation_envelope(&envelope, limits)?;
     Ok(ValidatedFederationEnvelope(envelope))
 }
@@ -294,7 +303,8 @@ pub fn decode_data_frame(
         .checked_add(32)
         .ok_or(WireContractError::FrameTooLarge)?;
     let payload = payload_after_prefix(frame, encoded_limit)?;
-    let data_frame = DataFrame::decode(payload).map_err(|_| WireContractError::Malformed)?;
+    let data_frame = DataFrame::decode_with_limits(payload, protobuf_limits(encoded_limit, limits))
+        .map_err(|_| WireContractError::Malformed)?;
     validate_data_frame(&data_frame, limits)?;
     Ok(ValidatedDataFrame(data_frame))
 }
@@ -303,7 +313,9 @@ fn encode_prefixed(
     message: &impl Message,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, WireContractError> {
-    let encoded_length = message.encoded_len();
+    let encoded_length = message
+        .encoded_length()
+        .map_err(|_| WireContractError::FrameTooLarge)?;
     if encoded_length == 0 || encoded_length > maximum_bytes {
         return Err(WireContractError::FrameTooLarge);
     }
@@ -311,12 +323,28 @@ fn encode_prefixed(
     let capacity = encoded_length
         .checked_add(FRAME_PREFIX_BYTES)
         .ok_or(WireContractError::FrameTooLarge)?;
-    let mut encoded = Vec::with_capacity(capacity);
+    let mut encoded = Vec::new();
+    encoded
+        .try_reserve_exact(capacity)
+        .map_err(|_| WireContractError::FrameTooLarge)?;
     encoded.extend_from_slice(&prefix.to_be_bytes());
     message
-        .encode(&mut encoded)
+        .encode_fields(&mut Encoder::new(&mut encoded))
         .map_err(|_| WireContractError::Malformed)?;
+    if encoded.len() != capacity {
+        return Err(WireContractError::Malformed);
+    }
     Ok(encoded)
+}
+
+const fn protobuf_limits(maximum_message_bytes: usize, limits: WireLimits) -> DecodeLimits {
+    DecodeLimits {
+        maximum_message_bytes,
+        maximum_field_bytes: maximum_message_bytes,
+        maximum_fields: limits.items,
+        maximum_repeated_items: limits.items,
+        maximum_depth: 64,
+    }
 }
 
 fn payload_after_prefix(frame: &[u8], maximum_bytes: usize) -> Result<&[u8], WireContractError> {

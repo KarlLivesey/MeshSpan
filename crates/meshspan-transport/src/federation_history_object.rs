@@ -165,7 +165,7 @@ pub fn signed_federation_history_object_fetch(
         .signing_key()
         .sign(&federation_history_object_fetch_signing_payload(
             &header, &request,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let expectation = FederationHistoryObjectExpectation {
@@ -207,7 +207,7 @@ pub fn signed_federation_history_object_header(
         .signing_key()
         .sign(&federation_history_object_header_signing_payload(
             &header, &response,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {
@@ -324,12 +324,10 @@ fn verify_fetch_signature(
     request: &FetchFederatedHistoryObject,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&request.signature)?;
+    let payload = federation_history_object_fetch_signing_payload(header, request)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_history_object_fetch_signing_payload(header, request),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
@@ -372,11 +370,9 @@ fn verify_header_signature(
     response: &FederatedHistoryObjectHeader,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&response.signature)?;
+    let payload = federation_history_object_header_signing_payload(header, response)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_history_object_header_signing_payload(header, response),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }

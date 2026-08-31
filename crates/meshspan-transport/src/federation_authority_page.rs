@@ -152,7 +152,7 @@ pub fn signed_federation_authority_fetch(
         .signing_key()
         .sign(&federation_authority_fetch_signing_payload(
             &header, &request,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {
@@ -292,10 +292,10 @@ pub fn signed_federation_authority_page(
         page_digest: Vec::new(),
         signature: Vec::new(),
     };
-    page.page_digest = authority_page_digest(&page).to_vec();
+    page.page_digest = authority_page_digest(&page)?.to_vec();
     page.signature = identity
         .signing_key()
-        .sign(&federation_authority_page_signing_payload(&header, &page))
+        .sign(&federation_authority_page_signing_payload(&header, &page)?)
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {
@@ -417,12 +417,10 @@ fn verify_authority_fetch_signature(
     request: &FetchFederationAuthority,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&request.signature)?;
+    let payload = federation_authority_fetch_signing_payload(header, request)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_authority_fetch_signing_payload(header, request),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
@@ -457,7 +455,7 @@ fn verify_authority_page_shape(
 }
 
 fn verify_authority_page_digest(page: &FederationAuthorityPage) -> Result<(), TransportError> {
-    let expected = authority_page_digest(page);
+    let expected = authority_page_digest(page)?;
     if exact::<32>(&page.page_digest)? == expected {
         Ok(())
     } else {
@@ -471,17 +469,15 @@ fn verify_authority_page_signature(
     page: &FederationAuthorityPage,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&page.signature)?;
+    let payload = federation_authority_page_signing_payload(header, page)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_authority_page_signing_payload(header, page),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
-fn authority_page_digest(page: &FederationAuthorityPage) -> [u8; 32] {
-    Sha256::digest(federation_authority_page_digest_payload(page)).into()
+fn authority_page_digest(page: &FederationAuthorityPage) -> Result<[u8; 32], TransportError> {
+    Ok(Sha256::digest(federation_authority_page_digest_payload(page)?).into())
 }
 
 pub(crate) fn exact<const SIZE: usize>(value: &[u8]) -> Result<[u8; SIZE], TransportError> {

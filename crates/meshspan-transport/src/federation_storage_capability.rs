@@ -230,7 +230,7 @@ pub fn signed_federation_storage_capability_request(
         .signing_key()
         .sign(&federation_storage_capability_request_signing_payload(
             &header, &request,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let expectation =
@@ -278,10 +278,10 @@ pub fn signed_federation_storage_capability(
         .sign(&federation_storage_capability_signing_payload(
             &header,
             &capability,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
-    let capability_digest = storage_capability_digest(&capability);
+    let capability_digest = storage_capability_digest(&capability)?;
     let envelope = FederationEnvelope {
         header: Some(header),
         message: Some(Message::StorageCapability(capability)),
@@ -325,7 +325,7 @@ impl FederationPeerRegistry {
         let operation_id = OperationId::from_bytes(exact(&header.operation_id)?)
             .map_err(|_| TransportError::UntrustedFederationPeer)?;
         let request_digest: [u8; 32] = Sha256::digest(
-            federation_storage_capability_request_digest_payload(request),
+            federation_storage_capability_request_digest_payload(request)?,
         )
         .into();
         replay.record(binding.relationship_id, header)?;
@@ -369,7 +369,7 @@ impl FederationPeerRegistry {
         replay.check(binding.relationship_id, header, now)?;
         verify_capability_signature(binding.verifying_key, header, capability)?;
         replay.record(binding.relationship_id, header)?;
-        let capability_digest = storage_capability_digest(capability);
+        let capability_digest = storage_capability_digest(capability)?;
         Ok(AuthenticatedFederationStorageCapability {
             capability: capability.clone(),
             capability_digest,
@@ -436,11 +436,8 @@ fn verify_capability_request_signature(
     header: &FederationHeader,
     request: &RequestFederatedStorageCapability,
 ) -> Result<(), TransportError> {
-    verify_signature(
-        verifying_key,
-        &request.signature,
-        &federation_storage_capability_request_signing_payload(header, request),
-    )
+    let payload = federation_storage_capability_request_signing_payload(header, request)?;
+    verify_signature(verifying_key, &request.signature, &payload)
 }
 
 fn verify_capability_signature(
@@ -448,11 +445,8 @@ fn verify_capability_signature(
     header: &FederationHeader,
     capability: &FederatedStorageCapability,
 ) -> Result<(), TransportError> {
-    verify_signature(
-        verifying_key,
-        &capability.signature,
-        &federation_storage_capability_signing_payload(header, capability),
-    )
+    let payload = federation_storage_capability_signing_payload(header, capability)?;
+    verify_signature(verifying_key, &capability.signature, &payload)
 }
 
 fn verify_signature(
@@ -503,8 +497,10 @@ fn verify_capability_response_shape(
     trusted_if(valid)
 }
 
-fn storage_capability_digest(capability: &FederatedStorageCapability) -> [u8; 32] {
-    Sha256::digest(federation_storage_capability_digest_payload(capability)).into()
+fn storage_capability_digest(
+    capability: &FederatedStorageCapability,
+) -> Result<[u8; 32], TransportError> {
+    Ok(Sha256::digest(federation_storage_capability_digest_payload(capability)?).into())
 }
 
 fn trusted_if(valid: bool) -> Result<(), TransportError> {
