@@ -15,8 +15,11 @@ members = [
     "crates/meshspan-passkey",
     "crates/meshspan-protobuf",
     "crates/meshspan-protocol",
+    "crates/meshspan-quinn-rustls",
+    "crates/meshspan-rustls-provider",
     "crates/meshspan-storage",
     "crates/meshspan-sync-wrapper",
+    "crates/meshspan-test-certificates",
     "crates/meshspan-transport",
 ]
 resolver = "3"
@@ -30,22 +33,27 @@ rust-version = "1.98"
 version = "0.1.0"
 
 [workspace.dependencies]
+aes = { version = "0.9.3", features = ["zeroize"] }
+aes-gcm = "0.11.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 boon = "0.6.1"
 bytes = "1.12.1"
 blake3 = "1.8.7"
 cap-std = "4.0.3"
 chacha20poly1305 = "0.11.0"
+chacha20 = { version = "0.10.2", features = ["zeroize"] }
 ed25519-dalek = "3.0.0"
-getrandom = "0.4.3"
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
 hmac = "0.13.0"
+hkdf = "0.13.0"
 meshspan-protobuf = { path = "crates/meshspan-protobuf" }
-p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
-quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
-rcgen = { version = "0.14.9", default-features = false, features = ["ring"] }
+p256 = { version = "0.14.0", default-features = false, features = ["ecdh", "ecdsa", "pkcs8", "std"] }
+quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio"] }
+quinn-proto = { version = "0.11.17", default-features = false }
+rcgen = { version = "0.14.9", default-features = false }
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
 rustix = { version = "1.1.4", features = ["fs"] }
-rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.43", default-features = false, features = ["custom-provider", "std"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

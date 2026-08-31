@@ -39,14 +39,11 @@ use meshspan_metadata::{
 };
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::ProtocolVersion;
+use meshspan_test_certificates::CertificateAuthority;
 use meshspan_transport::{
     FederationHelloConfig, FederationHelloContext, FederationNegotiationConfig,
     FederationReplayGuard, FederationWelcomeNonces, NodeCredentials, TransportError,
     TransportLimits, client_endpoint, connect, server_endpoint,
-};
-use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose,
 };
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -910,20 +907,13 @@ struct Certificates {
 
 impl Certificates {
     fn new() -> Result<Self, Box<dyn Error>> {
-        let mut parameters = CertificateParams::new(Vec::<String>::new())?;
-        parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        parameters
-            .key_usages
-            .extend([KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign]);
-        let authority_key = KeyPair::generate()?;
-        let authority = parameters.self_signed(&authority_key)?;
-        let authority_der = authority.der().clone();
-        let issuer = Issuer::new(parameters, authority_key);
-        let (server, server_key) = leaf(&issuer)?;
-        let (client, client_key) = leaf(&issuer)?;
-        let (rotated_client, rotated_client_key) = leaf(&issuer)?;
+        let authority = CertificateAuthority::new()?;
+        let (server, server_key) = certificate_parts(authority.issue_node(CERTIFICATE_NAME)?);
+        let (client, client_key) = certificate_parts(authority.issue_node(CERTIFICATE_NAME)?);
+        let (rotated_client, rotated_client_key) =
+            certificate_parts(authority.issue_node(CERTIFICATE_NAME)?);
         Ok(Self {
-            authority: authority_der,
+            authority: CertificateDer::from(authority.certificate_der().to_vec()),
             server,
             server_key,
             client,
@@ -946,20 +936,11 @@ impl Certificates {
     }
 }
 
-fn leaf(
-    issuer: &Issuer<'_, KeyPair>,
-) -> Result<(CertificateDer<'static>, Vec<u8>), Box<dyn Error>> {
-    let mut parameters = CertificateParams::new(vec![CERTIFICATE_NAME.to_owned()])?;
-    parameters
-        .key_usages
-        .push(KeyUsagePurpose::DigitalSignature);
-    parameters.extended_key_usages.extend([
-        ExtendedKeyUsagePurpose::ServerAuth,
-        ExtendedKeyUsagePurpose::ClientAuth,
-    ]);
-    let key = KeyPair::generate()?;
-    let certificate: Certificate = parameters.signed_by(&key, issuer)?;
-    Ok((certificate.der().clone(), key.serialize_der()))
+fn certificate_parts(
+    issued: meshspan_test_certificates::IssuedCertificate,
+) -> (CertificateDer<'static>, Vec<u8>) {
+    let (certificate, private_key) = issued.into_parts();
+    (CertificateDer::from(certificate), private_key)
 }
 
 fn credentials(

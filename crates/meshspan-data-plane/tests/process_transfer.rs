@@ -24,13 +24,10 @@ use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
     UsageLimit,
 };
+use meshspan_test_certificates::CertificateAuthority;
 use meshspan_transport::{
     NodeCredentials, PeerBinding, PeerRegistry, TransportLimits, accept_stream,
     certificate_fingerprint, client_endpoint, connect, server_endpoint,
-};
-use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose,
 };
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -401,22 +398,17 @@ struct ProcessCertificates {
 
 impl ProcessCertificates {
     fn write(directory: &Path) -> Result<Self, Box<dyn Error>> {
-        let mut parameters = CertificateParams::new(Vec::<String>::new())?;
-        parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        parameters
-            .key_usages
-            .extend([KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign]);
-        let authority_key = KeyPair::generate()?;
-        let authority_certificate = parameters.self_signed(&authority_key)?.der().clone();
-        let issuer = Issuer::new(parameters, authority_key);
+        let authority = CertificateAuthority::new()?;
+        let authority_certificate = CertificateDer::from(authority.certificate_der().to_vec());
         let authority_path = directory.join("authority.der");
         fs::write(&authority_path, authority_certificate.as_ref())?;
-        let (client_certificate, client_key) = leaf(&issuer)?;
+        let (client_certificate, client_key) =
+            certificate_parts(authority.issue_node(CERTIFICATE_NAME)?);
         let client_certificate_path = directory.join("client.der");
         fs::write(&client_certificate_path, client_certificate.as_ref())?;
         let mut servers = Vec::with_capacity(3);
         for number in 1_u8..=3 {
-            let (certificate, key) = leaf(&issuer)?;
+            let (certificate, key) = certificate_parts(authority.issue_node(CERTIFICATE_NAME)?);
             let certificate_path = directory.join(format!("server-{number}.der"));
             let private_key_path = directory.join(format!("server-{number}.key"));
             fs::write(&certificate_path, certificate.as_ref())?;
@@ -438,20 +430,11 @@ impl ProcessCertificates {
     }
 }
 
-fn leaf(
-    issuer: &Issuer<'_, KeyPair>,
-) -> Result<(CertificateDer<'static>, Vec<u8>), Box<dyn Error>> {
-    let mut parameters = CertificateParams::new(vec![CERTIFICATE_NAME.to_owned()])?;
-    parameters
-        .key_usages
-        .push(KeyUsagePurpose::DigitalSignature);
-    parameters.extended_key_usages.extend([
-        ExtendedKeyUsagePurpose::ServerAuth,
-        ExtendedKeyUsagePurpose::ClientAuth,
-    ]);
-    let key = KeyPair::generate()?;
-    let certificate: Certificate = parameters.signed_by(&key, issuer)?;
-    Ok((certificate.der().clone(), key.serialize_der()))
+fn certificate_parts(
+    issued: meshspan_test_certificates::IssuedCertificate,
+) -> (CertificateDer<'static>, Vec<u8>) {
+    let (certificate, private_key) = issued.into_parts();
+    (CertificateDer::from(certificate), private_key)
 }
 
 fn write_permit(

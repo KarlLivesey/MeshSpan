@@ -31,13 +31,10 @@ use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
     UsageLimit,
 };
+use meshspan_test_certificates::CertificateAuthority;
 use meshspan_transport::{
     AuthenticatedPeer, NodeCredentials, PeerBinding, PeerRegistry, TransportLimits, accept_stream,
     certificate_fingerprint, client_endpoint, connect, server_endpoint,
-};
-use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose,
 };
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -472,18 +469,13 @@ struct Certificates {
 
 impl Certificates {
     fn new() -> Result<Self, Box<dyn Error>> {
-        let mut parameters = CertificateParams::new(Vec::<String>::new())?;
-        parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        parameters
-            .key_usages
-            .extend([KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign]);
-        let authority_key = KeyPair::generate()?;
-        let authority = parameters.self_signed(&authority_key)?.der().clone();
-        let issuer = Issuer::new(parameters, authority_key);
-        let (server_certificate, server_key) = leaf(&issuer)?;
-        let (client_certificate, client_key) = leaf(&issuer)?;
+        let authority = CertificateAuthority::new()?;
+        let (server_certificate, server_key) =
+            certificate_parts(authority.issue_node(CERTIFICATE_NAME)?);
+        let (client_certificate, client_key) =
+            certificate_parts(authority.issue_node(CERTIFICATE_NAME)?);
         Ok(Self {
-            authority,
+            authority: CertificateDer::from(authority.certificate_der().to_vec()),
             server_certificate,
             server_key,
             client_certificate,
@@ -492,20 +484,11 @@ impl Certificates {
     }
 }
 
-fn leaf(
-    issuer: &Issuer<'_, KeyPair>,
-) -> Result<(CertificateDer<'static>, Vec<u8>), Box<dyn Error>> {
-    let mut parameters = CertificateParams::new(vec![CERTIFICATE_NAME.to_owned()])?;
-    parameters
-        .key_usages
-        .push(KeyUsagePurpose::DigitalSignature);
-    parameters.extended_key_usages.extend([
-        ExtendedKeyUsagePurpose::ServerAuth,
-        ExtendedKeyUsagePurpose::ClientAuth,
-    ]);
-    let key = KeyPair::generate()?;
-    let certificate: Certificate = parameters.signed_by(&key, issuer)?;
-    Ok((certificate.der().clone(), key.serialize_der()))
+fn certificate_parts(
+    issued: meshspan_test_certificates::IssuedCertificate,
+) -> (CertificateDer<'static>, Vec<u8>) {
+    let (certificate, private_key) = issued.into_parts();
+    (CertificateDer::from(certificate), private_key)
 }
 
 fn credentials(

@@ -44,12 +44,18 @@ source/advisory policy automation arrive before a release artefact is built.
 
 | Rust dependency                    | Resolved version | Declared licence           |
 | ---------------------------------- | ---------------: | -------------------------- |
+| `aes`                              |            0.9.3 | `MIT OR Apache-2.0`        |
+| `aes-gcm`                          |           0.11.1 | `Apache-2.0 OR MIT`        |
 | `axum`                             |            0.8.9 | `MIT`                      |
+| `chacha20`                         |           0.10.2 | `MIT OR Apache-2.0`        |
 | `jsonschema`                       |           0.52.0 | `MIT`                      |
 | `hmac`                             |           0.13.0 | `MIT OR Apache-2.0`        |
 | `meshspan-otp` (workspace)         |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-protobuf` (workspace)    |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-passkey` (workspace)     |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-quinn-rustls` (workspace) |           0.1.0 | `GPL-2.0-only`             |
+| `meshspan-rustls-provider` (workspace) |        0.1.0 | `GPL-2.0-only`             |
+| `meshspan-test-certificates` (workspace) |       0.1.0 | `GPL-2.0-only`             |
 | `sync_wrapper` (workspace)         |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                             |           0.14.0 | `Apache-2.0 OR MIT`        |
 | `rusqlite`                         |           0.40.2 | `MIT`                      |
@@ -78,12 +84,31 @@ Apache-2.0-only, so it cannot ship in a `GPL-2.0-only` combined artefact. Cargo 
 transitive package name to MeshSpan's allocation-free implementation; its unsafe surface is limited
 to the documented pinned projection and `Sync` proof and is exercised by the normal local gate.
 
-The current Rustls/Quinn graph still resolves `ring`, whose declared licence is
+The workspace `meshspan-rustls-provider` package is the narrow, independently extractable
+`GPL-2.0-only` Rustls provider boundary. It uses the current stable RustCrypto AES, AES-GCM,
+ChaCha20, ChaCha20-Poly1305, P-256, HMAC and SHA-2 releases under their MIT options. Its initial
+profile is TLS 1.3 only, with P-256 ECDHE and ECDSA identities plus AES-128-GCM and
+ChaCha20-Poly1305 traffic protection. RFC 9001 AES and ChaCha packet/header vectors, tamper
+rejection and a real mutually authenticated Rustls handshake are executable tests. Broader
+algorithm support is not implied and requires equivalent standards and interoperability proof.
+
+The workspace `meshspan-quinn-rustls` package binds caller-supplied Rustls configurations to the
+public cryptography traits in current stable Quinn. It also supplies stateless-reset, retry and
+address-validation-token protection without enabling Quinn's Ring or AWS-LC adapters. This keeps
+the QUIC transport on maintained upstream Quinn while making the provider boundary explicit and
+independently testable. The real transport suite proves mutual TLS, topology binding, independent
+streams, saturation isolation, snapshots and federation framing through this adapter.
+
+The production Rustls/Quinn dependency graph no longer resolves `ring`, whose declared licence is
 `Apache-2.0 AND ISC`. No MeshSpan release artefact may ship while that conjunctive Apache-2.0
 dependency remains. Downgrading is forbidden, and AWS-LC is not a licence solution because its
-current sys crate also includes an Apache-2.0-only conjunct. The replacement must be a maintained,
-portable Rustls/QUIC cryptography provider with complete hostile, standards and interoperability
-proof; experimental providers which explicitly disclaim production readiness are not admissible.
+current sys crate also includes an Apache-2.0-only conjunct. Test certificate generation uses the
+workspace `meshspan-test-certificates` package: current RustCrypto P-256 owns key generation and
+signing while current `rcgen` performs DER construction with all of its crypto-provider features
+disabled. Supported Linux, macOS and Windows target graphs therefore contain no `ring`. Upstream
+`quinn-proto` still declares a target-specific Ring dependency for unsupported browser-WASM builds;
+MeshSpan does not publish a browser-WASM daemon. Experimental providers which explicitly disclaim
+production readiness are not admissible.
 
 | Web/runtime dependency  | Version | Declared licence |
 | ----------------------- | ------: | ---------------- |

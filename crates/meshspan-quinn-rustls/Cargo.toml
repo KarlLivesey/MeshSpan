@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-quinn-rustls"
+description = "Provider-neutral Rustls adapter and endpoint keys for Quinn"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+bytes.workspace = true
+getrandom.workspace = true
+hkdf.workspace = true
+hmac.workspace = true
+quinn-proto.workspace = true
+rustls = { version = "0.23.43", default-features = false, features = ["custom-provider", "std"] }
+sha2.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true
