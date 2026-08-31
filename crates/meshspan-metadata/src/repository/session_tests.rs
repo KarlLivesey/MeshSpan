@@ -267,6 +267,23 @@ fn step_up_atomically_replaces_the_source_and_consumes_one_fresh_factor()
             )?
             .is_none()
     );
+    assert_replacement_lifecycle(&mut repository, administrator, &replacement)?;
+    assert!(matches!(
+        repository.apply_committed(
+            position(7),
+            context(87, administrator, 88, 132, Some(Revision::new(6)))?,
+            &step_up,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
+
+fn assert_replacement_lifecycle(
+    repository: &mut AuthoritativeRepository,
+    administrator: meshspan_domain::PrincipalId,
+    replacement: &crate::AuthenticationSessionReplay,
+) -> Result<(), Box<dyn std::error::Error>> {
     let active = super::session::active_factor_state(
         repository.database.connection(),
         &replacement.session_id.as_bytes(),
@@ -290,14 +307,6 @@ fn step_up_atomically_replaces_the_source_and_consumes_one_fresh_factor()
             [72; 32],
         ),
         Err(RepositoryError::OperationConflict)
-    ));
-    assert!(matches!(
-        repository.apply_committed(
-            position(7),
-            context(87, administrator, 88, 132, Some(Revision::new(6)))?,
-            &step_up,
-        ),
-        Err(RepositoryError::InvalidCommand)
     ));
     Ok(())
 }
