@@ -52,6 +52,18 @@ fn api_key_session_commits_exact_delivery_intent_and_changed_retry_conflicts()
     let api_key = material.api_key.expose_encoded();
     let session_request = request(&api_key, false)?;
     let mut service = CreateSessionService::new(authority);
+    let mut mismatched_identity = api_key.as_bytes().to_vec();
+    let identity_index = "meshspan-key-v1.".len();
+    mismatched_identity[identity_index] = if mismatched_identity[identity_index] == b'a' {
+        b'b'
+    } else {
+        b'a'
+    };
+    let mismatched_identity = String::from_utf8(mismatched_identity)?;
+    assert!(matches!(
+        service.create(&request(&mismatched_identity, false)?, UnixMicros::new(20)),
+        Err(CreateSessionError::Rejected)
+    ));
     let first = service.create(&session_request, UnixMicros::new(20))?;
     let retry = service.create(&session_request, UnixMicros::new(20))?;
     assert_eq!(first.response.session_id, retry.response.session_id);
@@ -296,6 +308,7 @@ pub(super) struct RepositorySessionAuthority {
 impl SessionAuthority for RepositorySessionAuthority {
     fn authenticate_api_key(
         &self,
+        key_id: meshspan_domain::ApiKeyId,
         digest: [u8; 32],
         now: UnixMicros,
     ) -> Result<Option<ApiKeyAuthentication>, SessionAuthorityError> {
@@ -306,6 +319,7 @@ impl SessionAuthority for RepositorySessionAuthority {
                 AuthenticationService::Https.api_key_login_scope(),
                 now,
             )
+            .map(|authentication| authentication.filter(|value| value.key_id == key_id))
             .map_err(|error| map_repository_error(&error))
     }
 

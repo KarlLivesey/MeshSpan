@@ -40,7 +40,7 @@ where
         let api_key = ApiKeyBundle::parse(secret)?;
         let primary = self
             .authority
-            .authenticate_api_key(api_key.secret_digest(), now)?
+            .authenticate_api_key(api_key.key_id(), api_key.secret_digest(), now)?
             .ok_or(CreateSessionError::Rejected)?;
         let bearer = SessionTokenBundle::derive(&api_key, operation_id)?;
         let csrf = SessionCsrfBundle::derive(&api_key, operation_id)?;
