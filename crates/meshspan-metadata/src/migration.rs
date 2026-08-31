@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 48;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 49;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 10;
 
-const PARTITION_MIGRATIONS: [Migration; 48] = [
+const PARTITION_MIGRATIONS: [Migration; 49] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -203,8 +203,12 @@ const PARTITION_MIGRATIONS: [Migration; 48] = [
         sql: include_str!("../schema/partition/047_authentication_session_delivery.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 48,
         sql: include_str!("../schema/partition/048_totp_session_replay_steps.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/049_authentication_session_rotation.sql"),
     },
 ];
 
@@ -679,6 +683,11 @@ pub(crate) fn partition_authentication_session_delivery_migration_digest() -> [u
 #[cfg(test)]
 pub(crate) fn partition_totp_session_replay_steps_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[47].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_authentication_session_rotation_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[48].sql)
 }
 
 #[cfg(test)]

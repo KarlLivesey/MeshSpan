@@ -555,6 +555,27 @@ impl AuthoritativeRepository {
         session::resolve_session_replay(&self.database, operation_id)
     }
 
+    /// Resolves one exact committed step-up using the now-revoked source presentation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another command family/source and fails closed for malformed retained evidence.
+    pub fn resolve_step_up_session(
+        &self,
+        operation_id: OperationId,
+        expected_source: meshspan_domain::SessionId,
+        source_token_digest: [u8; 32],
+        source_csrf_digest: [u8; 32],
+    ) -> Result<Option<AuthenticationSessionReplay>, RepositoryError> {
+        session::resolve_step_up_replay(
+            &self.database,
+            operation_id,
+            expected_source,
+            source_token_digest,
+            source_csrf_digest,
+        )
+    }
+
     /// Resolves an exact durable self-service session revocation retry.
     ///
     /// # Errors
