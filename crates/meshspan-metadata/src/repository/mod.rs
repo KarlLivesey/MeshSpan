@@ -106,7 +106,7 @@ pub use access_query::{
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
-    TotpVerificationMaterial,
+    RecoveryCodeVerificationMaterial, TotpVerificationMaterial,
 };
 pub use authentication_policy::AuthenticationPolicy;
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
@@ -715,6 +715,33 @@ impl AuthoritativeRepository {
         authentication_method::totp_verification_materials(
             self.database.connection(),
             principal_id,
+            service,
+            now,
+        )
+    }
+
+    /// Resolves one exact recovery-code verifier for an already-authenticated user.
+    ///
+    /// Absence and ordinary digest, lifecycle, expiry or service rejection return `None`.
+    /// A used code remains visible only as typed evidence so an exact committed retry can be
+    /// distinguished from a forbidden new consumption.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when matching persisted evidence is malformed.
+    pub fn recovery_code_verification_material(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        code_id: meshspan_domain::RecoveryCodeId,
+        presented_digest: [u8; 32],
+        service: AuthenticationService,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Option<RecoveryCodeVerificationMaterial>, RepositoryError> {
+        authentication_method::recovery_code_verification_material(
+            self.database.connection(),
+            principal_id,
+            code_id,
+            presented_digest,
             service,
             now,
         )

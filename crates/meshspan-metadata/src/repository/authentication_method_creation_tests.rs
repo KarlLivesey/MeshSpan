@@ -205,7 +205,7 @@ fn totp(method_id: AuthenticationMethodId, owner: PrincipalId) -> AuthoritativeC
     )
 }
 
-fn recovery(
+pub(super) fn recovery(
     method_id: AuthenticationMethodId,
     owner: PrincipalId,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {

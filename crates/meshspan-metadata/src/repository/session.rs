@@ -104,6 +104,8 @@ pub struct AuthenticationSessionReplay {
     pub service: AuthenticationService,
     /// Assurance derived from the committed factor combination.
     pub assurance: AssuranceLevel,
+    /// Original authoritative factor-acceptance instant.
+    pub issued_at: UnixMicros,
     /// Original exclusive expiry returned to the caller.
     pub expires_at: UnixMicros,
     /// Explicit revocation instant, when the original session has since been fenced.
@@ -228,6 +230,7 @@ pub(super) fn resolve_session_replay(
         persistent_cookie: parse_boolean(common.5)?,
         service: parse_service(common.6)?,
         assurance: parse_assurance(common.7)?,
+        issued_at: UnixMicros::new(common.8),
         expires_at: UnixMicros::new(common.9),
         revoked_at: common.10.map(UnixMicros::new),
         factors,

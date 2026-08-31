@@ -4,7 +4,7 @@
 
 use meshspan_domain::{
     ApiKeyId, AuthenticationMethodId, AuthenticationMethodKind, AuthenticationService, OperationId,
-    PrincipalId, Revision, UnixMicros,
+    PrincipalId, RecoveryCodeId, Revision, UnixMicros,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 
@@ -98,6 +98,140 @@ pub struct TotpVerificationMaterial {
     pub period_seconds: u16,
     /// Number of adjacent time steps accepted by policy.
     pub accepted_step_window: u8,
+}
+
+/// Exact digest-matched recovery-code evidence for one already-authenticated user.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecoveryCodeVerificationMaterial {
+    /// User account to which the recovery-code set belongs.
+    pub principal_id: PrincipalId,
+    /// Common authentication-method identity for the set.
+    pub method_id: AuthenticationMethodId,
+    /// Exact public identity embedded in the presented code.
+    pub code_id: RecoveryCodeId,
+    /// Credential generation used to fence replacement sets and sessions.
+    pub credential_generation: u64,
+    /// Current authoritative method revision.
+    pub revision: Revision,
+    /// Consumption instant, or `None` when the code remains unused.
+    pub used_at: Option<UnixMicros>,
+}
+
+/// Resolves one digest-matched recovery code through current authority bounds.
+pub(super) fn recovery_code_verification_material(
+    connection: &rusqlite::Connection,
+    principal_id: PrincipalId,
+    code_id: RecoveryCodeId,
+    presented_digest: [u8; 32],
+    service: AuthenticationService,
+    now: UnixMicros,
+) -> Result<Option<RecoveryCodeVerificationMaterial>, RepositoryError> {
+    if presented_digest == [0; 32] {
+        return Ok(None);
+    }
+    let stored = connection
+        .query_row(
+            "SELECT method.method_id, method.user_principal_id, method.method_kind,
+                    method.service_scope, method.state, method.created_at, method.expires_at,
+                    method.credential_generation, method.revision, recovery.code_id,
+                    recovery.created_at, recovery.used_at, recovery.revision, principal.state
+             FROM recovery_codes AS recovery
+             JOIN authentication_methods AS method USING(method_id)
+             JOIN principals AS principal ON principal.principal_id = method.user_principal_id
+             WHERE recovery.code_digest = ?1 AND recovery.code_id = ?2 LIMIT 2",
+            params![presented_digest.as_slice(), code_id.as_bytes().as_slice()],
+            |row| {
+                Ok(StoredRecoveryCode {
+                    method_id: row.get(0)?,
+                    principal_id: row.get(1)?,
+                    method_kind: row.get(2)?,
+                    service_scope: row.get(3)?,
+                    method_state: row.get(4)?,
+                    method_created_at: row.get(5)?,
+                    method_expires_at: row.get(6)?,
+                    credential_generation: row.get(7)?,
+                    method_revision: row.get(8)?,
+                    code_id: row.get(9)?,
+                    code_created_at: row.get(10)?,
+                    used_at: row.get(11)?,
+                    code_revision: row.get(12)?,
+                    principal_state: row.get(13)?,
+                })
+            },
+        )
+        .optional()?;
+    stored
+        .map(|stored| validate_recovery_code_material(stored, principal_id, code_id, service, now))
+        .transpose()
+        .map(Option::flatten)
+}
+
+struct StoredRecoveryCode {
+    method_id: Vec<u8>,
+    principal_id: Vec<u8>,
+    method_kind: i64,
+    service_scope: i64,
+    method_state: i64,
+    method_created_at: i64,
+    method_expires_at: Option<i64>,
+    credential_generation: i64,
+    method_revision: i64,
+    code_id: Vec<u8>,
+    code_created_at: i64,
+    used_at: Option<i64>,
+    code_revision: i64,
+    principal_state: i64,
+}
+
+fn validate_recovery_code_material(
+    stored: StoredRecoveryCode,
+    expected_principal: PrincipalId,
+    expected_code: RecoveryCodeId,
+    service: AuthenticationService,
+    now: UnixMicros,
+) -> Result<Option<RecoveryCodeVerificationMaterial>, RepositoryError> {
+    let principal_id = PrincipalId::from_bytes(fixed(stored.principal_id)?)
+        .map_err(|_| RepositoryError::CorruptState)?;
+    let code_id = RecoveryCodeId::from_bytes(fixed(stored.code_id)?)
+        .map_err(|_| RepositoryError::CorruptState)?;
+    let service_scope = u8::try_from(stored.service_scope)
+        .ok()
+        .filter(|scope| (1..=MAXIMUM_SERVICE_SCOPE).contains(scope))
+        .ok_or(RepositoryError::CorruptState)?;
+    let credential_generation = positive_u64(stored.credential_generation)?;
+    let method_revision = positive_u64(stored.method_revision)?;
+    positive_u64(stored.code_revision)?;
+    if code_id != expected_code
+        || stored.method_kind != AuthenticationMethodKind::RecoveryCode as i64
+        || !(1..=3).contains(&stored.method_state)
+        || !(1..=3).contains(&stored.principal_state)
+        || stored.code_created_at < stored.method_created_at
+        || stored
+            .method_expires_at
+            .is_some_and(|end| end <= stored.method_created_at)
+        || stored
+            .used_at
+            .is_some_and(|used_at| used_at < stored.code_created_at)
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    if principal_id != expected_principal
+        || stored.method_state != ACTIVE
+        || stored.principal_state != ACTIVE
+        || service_scope & service.scope_bit() == 0
+        || stored.method_expires_at.is_some_and(|end| now.get() >= end)
+    {
+        return Ok(None);
+    }
+    Ok(Some(RecoveryCodeVerificationMaterial {
+        principal_id,
+        method_id: AuthenticationMethodId::from_bytes(fixed(stored.method_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        code_id,
+        credential_generation,
+        revision: Revision::new(method_revision),
+        used_at: stored.used_at.map(UnixMicros::new),
+    }))
 }
 
 /// Resolves every bounded active TOTP method for one already-authenticated user.
