@@ -480,8 +480,39 @@ fn collect_issues(error: &ValidationError<'_, '_>, issues: &mut Vec<ValidationIs
 }
 
 fn constraint(error: &ValidationError<'_, '_>) -> String {
-    error
-        .kind
-        .keyword_path()
-        .map_or_else(|| "schema".to_owned(), |path| path.keyword.to_owned())
+    error.kind.keyword_path().map_or_else(
+        || "schema".to_owned(),
+        |path| public_constraint(path.keyword),
+    )
+}
+
+fn public_constraint(keyword: &str) -> String {
+    let mut output = String::with_capacity(keyword.len().min(64));
+    for character in keyword.chars() {
+        if output.len() >= 64 {
+            break;
+        }
+        if character.is_ascii_uppercase() {
+            if !output.is_empty() && !output.ends_with('_') {
+                output.push('_');
+            }
+            output.push(character.to_ascii_lowercase());
+        } else if character.is_ascii_lowercase() || character.is_ascii_digit() {
+            output.push(character);
+        } else if !output.is_empty() && !output.ends_with('_') {
+            output.push('_');
+        }
+    }
+    while output.ends_with('_') {
+        output.pop();
+    }
+    if output
+        .as_bytes()
+        .first()
+        .is_none_or(|character| !character.is_ascii_lowercase())
+    {
+        "schema".to_owned()
+    } else {
+        output
+    }
 }

@@ -22,6 +22,9 @@ mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
 mod passkey_challenge;
+mod passkey_challenge_api;
+#[cfg(test)]
+mod passkey_challenge_api_tests;
 mod passkey_challenge_configuration;
 mod passkey_challenge_state;
 #[cfg(test)]
@@ -59,6 +62,9 @@ pub use current_session_api::{
 };
 pub use passkey_challenge::{
     PasskeyCeremonyStore, PasskeyCeremonyStoreError, PasskeyChallengeError, PasskeyChallengeService,
+};
+pub use passkey_challenge_api::{
+    CreatePasskeyChallengeController, PasskeyChallengeApiError, passkey_challenge_api_router,
 };
 pub use passkey_challenge_configuration::{
     PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
