@@ -4,6 +4,8 @@
 
 mod api_key_management;
 mod api_key_validation;
+mod authentication_method_listing;
+mod authentication_method_listing_validation;
 mod directory_listing;
 mod directory_listing_validation;
 mod file_read;
@@ -30,6 +32,8 @@ mod totp_validation;
 mod validation;
 
 #[cfg(test)]
+mod authentication_method_listing_tests;
+#[cfg(test)]
 mod file_upload_tests;
 #[cfg(test)]
 mod group_membership_administration_tests;
@@ -49,6 +53,14 @@ pub use api_key_validation::{
     validate_create_api_key_request_value, validate_create_api_key_response_value,
     validate_revoke_authentication_method_request_value,
     validate_revoke_authentication_method_response_value,
+};
+pub use authentication_method_listing::{
+    AuthenticationMethodCursor, AuthenticationMethodDetails, AuthenticationMethodState,
+    AuthenticationMethodSummary, ListAuthenticationMethodsQuery, ListAuthenticationMethodsResponse,
+};
+pub use authentication_method_listing_validation::{
+    encode_list_authentication_methods_response, validate_list_authentication_methods_query,
+    validate_list_authentication_methods_query_value,
 };
 pub use directory_listing::{
     DirectoryCursor, DirectoryEntryKind, FileVersionId, ListDirectoryQuery, ListDirectoryResponse,

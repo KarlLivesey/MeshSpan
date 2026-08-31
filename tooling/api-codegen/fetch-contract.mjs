@@ -21,6 +21,15 @@ export function parseContract(sourceText) {
 
 export function readRequiredRoutes(document) {
   const operations = collectOperations(document);
+  const createSession = readSessionOperation(
+    requireOperation(operations, "createSession"),
+  );
+  const stepUpCurrentSession = readSessionOperation(
+    requireOperation(operations, "stepUpCurrentSession"),
+  );
+  if (stepUpCurrentSession.csrfPattern !== createSession.csrfPattern) {
+    throw new Error("session rotation must preserve the CSRF token contract");
+  }
   return {
     abortUpload: requireOperation(operations, "abortUpload"),
     addGroupMember: requireOperation(operations, "addGroupMember"),
@@ -33,9 +42,31 @@ export function readRequiredRoutes(document) {
       "createCurrentUserApiKey",
     ),
     createMeshSetup: requireOperation(operations, "createMeshSetup"),
-    createSession: readSessionOperation(
-      requireOperation(operations, "createSession"),
+    createPasskeyChallenge: requireOperation(
+      operations,
+      "createPasskeyChallenge",
     ),
+    createCurrentUserPasskey: requireOperation(
+      operations,
+      "createCurrentUserPasskey",
+    ),
+    createCurrentUserPasskeyRegistrationChallenge: requireOperation(
+      operations,
+      "createCurrentUserPasskeyRegistrationChallenge",
+    ),
+    createCurrentUserRecoveryCodes: requireOperation(
+      operations,
+      "createCurrentUserRecoveryCodes",
+    ),
+    createCurrentUserTotp: requireOperation(
+      operations,
+      "createCurrentUserTotp",
+    ),
+    createCurrentUserTotpRegistrationChallenge: requireOperation(
+      operations,
+      "createCurrentUserTotpRegistrationChallenge",
+    ),
+    createSession,
     createUser: requireOperation(operations, "createUser"),
     deleteObject: requireOperation(operations, "deleteObject"),
     getHealth: requireOperation(operations, "getHealth"),
@@ -47,6 +78,10 @@ export function readRequiredRoutes(document) {
     listDirectory: requireOperation(operations, "listDirectory"),
     listGroups: requireOperation(operations, "listGroups"),
     listGroupMembers: requireOperation(operations, "listGroupMembers"),
+    listCurrentUserAuthenticationMethods: requireOperation(
+      operations,
+      "listCurrentUserAuthenticationMethods",
+    ),
     listUploadRanges: requireOperation(operations, "listUploadRanges"),
     listUsers: requireOperation(operations, "listUsers"),
     readFile: requireOperation(operations, "readFile"),
@@ -57,6 +92,7 @@ export function readRequiredRoutes(document) {
       operations,
       "revokeCurrentUserAuthenticationMethod",
     ),
+    stepUpCurrentSession,
     writeUploadRange: requireOperation(operations, "writeUploadRange"),
   };
 }

@@ -670,6 +670,9 @@ fn openapi_document_is_31_licensed_bounded_and_deterministic() {
         session_headers["MeshSpan-CSRF-Token"]["schema"]["pattern"],
         r"^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$"
     );
+    let step_up_headers = &first.value()["paths"]["/sessions/current/step-ups"]["post"]["responses"]
+        ["201"]["headers"];
+    assert_eq!(step_up_headers, session_headers);
     let challenge = &first.value()["paths"]["/sessions/passkey/challenges"]["post"];
     assert_eq!(challenge["operationId"], "createPasskeyChallenge");
     assert_eq!(challenge["x-meshspan-access"], "anonymous");

@@ -57,7 +57,8 @@ administrator to operate a separate certificate system.
 
 MeshSpan is a clean-slate, pre-alpha project. No compatibility or stability guarantee applies
 before version 1.0. The executable foundations through Stage 5 and the accepted authentication,
-federation and topology retrofit are complete. Stage 6 is next. See the
+federation and topology retrofit are complete. Stage 6 is in progress: the native HTTPS file API,
+session authentication and current-user security-method flows are implemented. See the
 [retrofit evidence](design/pre-stage-6-retrofit-evidence.md),
 [federation contract](design/federation.md) and [roadmap](design/roadmap.md).
 The accepted requirements, architecture and implementation order are in the

@@ -1255,6 +1255,91 @@ export type HealthResponse = {
 };
 
 /**
+ * ListAuthenticationMethodsResponse
+ *
+ * One bounded current-user authentication-method page.
+ */
+export type ListAuthenticationMethodsResponse = {
+  /**
+   * Stable ordered, secret-free authentication methods.
+   */
+  methods: Array<{
+    /**
+     * Authoritative creation instant as epoch microseconds.
+     */
+    created_at_epoch_micros: number;
+    /**
+     * Method-specific public projection.
+     */
+    details:
+      | {
+          /**
+           * Whether the authenticator reports that the credential can be backed up.
+           */
+          backup_eligible: boolean;
+          /**
+           * Last authoritative backed-up state reported by the authenticator.
+           */
+          backup_state: boolean;
+          kind: "passkey";
+        }
+      | {
+          kind: "totp";
+        }
+      | {
+          kind: "recovery_codes";
+          /**
+           * Number of codes which have not yet been consumed.
+           */
+          remaining_codes: number;
+        }
+      | {
+          /**
+           * Public identity embedded in the key.
+           */
+          key_id: string;
+          kind: "api_key";
+          /**
+           * One connector through which an issued API key may authenticate.
+           */
+          scopes: Array<"https_session" | "headless_api" | "smb_session">;
+          /**
+           * Inclusive first accepted instant as epoch microseconds.
+           */
+          valid_from_epoch_micros: number;
+        };
+    /**
+     * Exclusive expiry, or null when the method has no automatic expiry.
+     */
+    expires_at_epoch_micros: number | null;
+    /**
+     * User-facing label assigned at registration or issuance.
+     */
+    label: string;
+    /**
+     * Last successful use, or null before first use.
+     */
+    last_used_at_epoch_micros: number | null;
+    /**
+     * Common stable method identity.
+     */
+    method_id: string;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+    /**
+     * Current authoritative lifecycle state.
+     */
+    state: "active" | "suspended" | "revoked";
+  }>;
+  /**
+   * Ready-to-follow relative URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+};
+
+/**
  * ListDirectoryResponse
  *
  * One immutable, bounded directory page.
@@ -3142,6 +3227,48 @@ export type WriteUploadRangeResponses = {
 
 export type WriteUploadRangeResponse2 =
   WriteUploadRangeResponses[keyof WriteUploadRangeResponses];
+
+export type ListCurrentUserAuthenticationMethodsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/users/current/authentication-methods";
+};
+
+export type ListCurrentUserAuthenticationMethodsErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListCurrentUserAuthenticationMethodsError =
+  ListCurrentUserAuthenticationMethodsErrors[keyof ListCurrentUserAuthenticationMethodsErrors];
+
+export type ListCurrentUserAuthenticationMethodsResponses = {
+  /**
+   * One secret-free authentication-method page
+   */
+  200: ListAuthenticationMethodsResponse;
+};
+
+export type ListCurrentUserAuthenticationMethodsResponse =
+  ListCurrentUserAuthenticationMethodsResponses[keyof ListCurrentUserAuthenticationMethodsResponses];
 
 export type CreateCurrentUserApiKeyData = {
   /**

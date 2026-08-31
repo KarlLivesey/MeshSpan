@@ -9,6 +9,9 @@ mod authentication_method;
 mod authentication_method_creation;
 #[cfg(test)]
 mod authentication_method_creation_tests;
+mod authentication_method_query;
+#[cfg(test)]
+mod authentication_method_query_tests;
 #[cfg(test)]
 mod authentication_method_tests;
 mod authentication_policy;
@@ -109,6 +112,9 @@ pub use access_query::{
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
     RecoveryCodeVerificationMaterial, TotpVerificationMaterial,
+};
+pub use authentication_method_query::{
+    AuthenticationMethodCursor, AuthenticationMethodRecord, AuthenticationMethodRecordDetails,
 };
 pub use authentication_policy::AuthenticationPolicy;
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
@@ -974,6 +980,25 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<PrincipalRecord, PrincipalCursor>, RepositoryError> {
         query::principals(&self.database, kind, after, limit)
+    }
+
+    /// Returns one stable, bounded page of one user's authentication methods without secrets.
+    ///
+    /// # Errors
+    ///
+    /// Rejects cursor-owner substitution, malformed credential projections and database failures.
+    pub fn authentication_methods(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        after: Option<AuthenticationMethodCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<AuthenticationMethodRecord, AuthenticationMethodCursor>, RepositoryError> {
+        authentication_method_query::authentication_methods(
+            &self.database,
+            principal_id,
+            after,
+            limit,
+        )
     }
 
     /// Returns one stable, bounded page of active namespace children.
