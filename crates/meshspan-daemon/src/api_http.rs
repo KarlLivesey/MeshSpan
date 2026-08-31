@@ -110,6 +110,10 @@ pub(crate) fn issue(path: &str, constraint: &str) -> ApiErrorIssue {
 }
 
 pub(crate) fn has_json_content_type(headers: &HeaderMap) -> bool {
+    has_content_type(headers, "application/json")
+}
+
+pub(crate) fn has_content_type(headers: &HeaderMap, expected: &str) -> bool {
     let mut values = headers.get_all(CONTENT_TYPE).iter();
     let Some(value) = values.next() else {
         return false;
@@ -121,7 +125,7 @@ pub(crate) fn has_json_content_type(headers: &HeaderMap) -> bool {
         value
             .split(';')
             .next()
-            .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"))
+            .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case(expected))
     })
 }
 

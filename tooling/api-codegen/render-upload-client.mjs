@@ -23,14 +23,17 @@ export function renderUploadClientInterface() {
   return `abortUpload(
     uploadId: string,
     request: AbortUploadRequest,
+    csrfToken?: string,
   ): Promise<AbortUploadResponse>;
   beginUpload(
     volumeId: string,
     request: BeginUploadRequest,
+    csrfToken?: string,
   ): Promise<BeginUploadResponse>;
   commitUpload(
     uploadId: string,
     request: CommitUploadRequest,
+    csrfToken?: string,
   ): Promise<CommitUploadResponse>;
   getUpload(uploadId: string): Promise<UploadStatusResponse>;
   listUploadRanges(
@@ -38,6 +41,7 @@ export function renderUploadClientInterface() {
   ): Promise<ListUploadRangesResponse>;
   writeUploadRange(
     request: WriteUploadRangeRequest,
+    csrfToken?: string,
   ): Promise<WriteUploadRangeResponse>;`;
 }
 
@@ -51,7 +55,7 @@ export function renderUploadClientMethods(routes) {
 }
 
 function renderUploadLifecycleMethods(routes) {
-  return `async abortUpload(uploadId, request): Promise<AbortUploadResponse> {
+  return `async abortUpload(uploadId, request, csrfToken): Promise<AbortUploadResponse> {
       const path = zAbortUploadPath.parse({ upload_id: uploadId });
       const body = zAbortUploadBody.parse(request);
       return requestJson(
@@ -63,13 +67,13 @@ function renderUploadLifecycleMethods(routes) {
         ),
         {
           body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
+          headers: mutationHeaders("application/json", csrfToken),
           method: ${JSON.stringify(routes.abortUpload.method)},
         },
         zAbortUploadResponse2,
       );
     },
-    async beginUpload(volumeId, request): Promise<BeginUploadResponse> {
+    async beginUpload(volumeId, request, csrfToken): Promise<BeginUploadResponse> {
       const path = zBeginUploadPath.parse({ volume_id: volumeId });
       const body = zBeginUploadBody.parse(request);
       validateNamespacePath(body.path);
@@ -82,13 +86,13 @@ function renderUploadLifecycleMethods(routes) {
         ),
         {
           body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
+          headers: mutationHeaders("application/json", csrfToken),
           method: ${JSON.stringify(routes.beginUpload.method)},
         },
         zBeginUploadResponse2,
       );
     },
-    async commitUpload(uploadId, request): Promise<CommitUploadResponse> {
+    async commitUpload(uploadId, request, csrfToken): Promise<CommitUploadResponse> {
       const path = zCommitUploadPath.parse({ upload_id: uploadId });
       const body = zCommitUploadBody.parse(request);
       return requestJson(
@@ -100,7 +104,7 @@ function renderUploadLifecycleMethods(routes) {
         ),
         {
           body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
+          headers: mutationHeaders("application/json", csrfToken),
           method: ${JSON.stringify(routes.commitUpload.method)},
         },
         zCommitUploadResponse2,
@@ -145,7 +149,7 @@ function renderUploadReadMethods(routes) {
 }
 
 function renderUploadRangeMethod(routes) {
-  return `async writeUploadRange(request): Promise<WriteUploadRangeResponse> {
+  return `async writeUploadRange(request, csrfToken): Promise<WriteUploadRangeResponse> {
       const path = zWriteUploadRangePath.parse({
         offset: request.offset,
         upload_id: request.uploadId,
@@ -176,8 +180,9 @@ function renderUploadRangeMethod(routes) {
         {
           body,
           headers: {
-            ...headers,
-            "Content-Type": "application/octet-stream",
+            ...mutationHeaders("application/octet-stream", csrfToken),
+            "MeshSpan-Content-BLAKE3": headers["MeshSpan-Content-BLAKE3"],
+            "MeshSpan-Operation-Id": headers["MeshSpan-Operation-Id"],
             "MeshSpan-Stage-Fence": String(headers["MeshSpan-Stage-Fence"]),
           },
           method: ${JSON.stringify(routes.writeUploadRange.method)},

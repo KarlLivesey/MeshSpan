@@ -48,6 +48,9 @@ mod native_api_authentication;
 #[cfg(test)]
 mod native_api_authentication_tests;
 mod native_query;
+mod native_upload_api;
+#[cfg(test)]
+mod native_upload_api_tests;
 mod object_stat_api;
 #[cfg(test)]
 mod object_stat_api_tests;
@@ -161,7 +164,8 @@ pub use current_session_api::{
 };
 pub use directory_listing_api::{
     DirectoryLister, DirectoryListingApiError, DirectoryListingController, DirectoryListingError,
-    DirectoryListingService, FileApiAuthenticator, FileApiFailure, directory_listing_api_router,
+    DirectoryListingService, FileApiFailure, NativeFileApiAuthenticator,
+    NativeFileRequestProtection, directory_listing_api_router,
 };
 pub use file_read_api::{
     FileRangeReader, FileReadApiError, FileReadController, FileReadError, FileReadResult,
@@ -170,6 +174,10 @@ pub use file_read_api::{
 pub use native_api_authentication::{
     FileApiAuthenticationError, NativeApiAuthenticator, NativeApiKeyAuthenticator,
     NativeApiKeyAuthority, NativeApiKeyAuthorityError,
+};
+pub use native_upload_api::{
+    NativeUploadApiError, NativeUploadController, NativeUploadError, UploadRangeCursor,
+    UploadRangePageRequest, UploadRangeWriteRequest, native_upload_api_router,
 };
 pub use object_stat_api::{
     ObjectStatApiError, ObjectStatController, ObjectStatError, ObjectStatReader, ObjectStatService,

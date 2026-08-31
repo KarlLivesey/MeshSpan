@@ -1987,6 +1987,12 @@ export type AbortUploadData = {
    * Exact fenced upload abandonment intent
    */
   body: AbortUploadRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
   path: {
     upload_id: string;
   };
@@ -2046,6 +2052,12 @@ export type CommitUploadData = {
    * Exact private checkpoint publication intent
    */
   body: CommitUploadRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
   path: {
     upload_id: string;
   };
@@ -2166,6 +2178,10 @@ export type WriteUploadRangeData = {
     "MeshSpan-Operation-Id": string;
     "MeshSpan-Stage-Fence": number;
     "MeshSpan-Content-BLAKE3": string;
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
   };
   path: {
     upload_id: string;
@@ -2756,6 +2772,12 @@ export type BeginUploadData = {
    * Bounded durable upload intent
    */
   body: BeginUploadRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
   path: {
     volume_id: string;
   };

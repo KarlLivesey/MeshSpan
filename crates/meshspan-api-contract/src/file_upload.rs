@@ -22,6 +22,12 @@ pub struct UploadId(
 );
 
 impl UploadId {
+    /// Parses exact canonical versioned UUID text.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        crate::directory_listing::parse_public_uuid(value).map(Self)
+    }
+
     /// Constructs canonical UUID text from validated versioned UUID bytes.
     #[must_use]
     pub fn from_uuid_bytes(value: [u8; 16]) -> Option<Self> {
@@ -127,6 +133,17 @@ pub struct UploadRangeCursor(
 );
 
 impl UploadRangeCursor {
+    /// Constructs one bounded cursor from its already URL-safe encoded form.
+    #[must_use]
+    pub fn from_encoded(value: String) -> Option<Self> {
+        let valid = !value.is_empty()
+            && value.len() <= 1024
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._~-".contains(&byte));
+        valid.then_some(Self(value))
+    }
+
     /// Returns the opaque cursor text.
     #[must_use]
     pub fn as_str(&self) -> &str {

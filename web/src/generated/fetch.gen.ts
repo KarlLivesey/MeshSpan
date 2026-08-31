@@ -147,14 +147,17 @@ export interface MeshSpanFetchClient {
   abortUpload(
     uploadId: string,
     request: AbortUploadRequest,
+    csrfToken?: string,
   ): Promise<AbortUploadResponse>;
   beginUpload(
     volumeId: string,
     request: BeginUploadRequest,
+    csrfToken?: string,
   ): Promise<BeginUploadResponse>;
   commitUpload(
     uploadId: string,
     request: CommitUploadRequest,
+    csrfToken?: string,
   ): Promise<CommitUploadResponse>;
   getUpload(uploadId: string): Promise<UploadStatusResponse>;
   listUploadRanges(
@@ -162,6 +165,7 @@ export interface MeshSpanFetchClient {
   ): Promise<ListUploadRangesResponse>;
   writeUploadRange(
     request: WriteUploadRangeRequest,
+    csrfToken?: string,
   ): Promise<WriteUploadRangeResponse>;
   createCurrentUserApiKey(
     request: CreateApiKeyRequest,
@@ -227,7 +231,11 @@ export function createMeshSpanFetchClient(
   };
 
   return {
-    async abortUpload(uploadId, request): Promise<AbortUploadResponse> {
+    async abortUpload(
+      uploadId,
+      request,
+      csrfToken,
+    ): Promise<AbortUploadResponse> {
       const path = zAbortUploadPath.parse({ upload_id: uploadId });
       const body = zAbortUploadBody.parse(request);
       return requestJson(
@@ -239,13 +247,17 @@ export function createMeshSpanFetchClient(
         ),
         {
           body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
+          headers: mutationHeaders("application/json", csrfToken),
           method: "POST",
         },
         zAbortUploadResponse2,
       );
     },
-    async beginUpload(volumeId, request): Promise<BeginUploadResponse> {
+    async beginUpload(
+      volumeId,
+      request,
+      csrfToken,
+    ): Promise<BeginUploadResponse> {
       const path = zBeginUploadPath.parse({ volume_id: volumeId });
       const body = zBeginUploadBody.parse(request);
       validateNamespacePath(body.path);
@@ -258,13 +270,17 @@ export function createMeshSpanFetchClient(
         ),
         {
           body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
+          headers: mutationHeaders("application/json", csrfToken),
           method: "POST",
         },
         zBeginUploadResponse2,
       );
     },
-    async commitUpload(uploadId, request): Promise<CommitUploadResponse> {
+    async commitUpload(
+      uploadId,
+      request,
+      csrfToken,
+    ): Promise<CommitUploadResponse> {
       const path = zCommitUploadPath.parse({ upload_id: uploadId });
       const body = zCommitUploadBody.parse(request);
       return requestJson(
@@ -276,7 +292,7 @@ export function createMeshSpanFetchClient(
         ),
         {
           body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
+          headers: mutationHeaders("application/json", csrfToken),
           method: "POST",
         },
         zCommitUploadResponse2,
@@ -315,7 +331,10 @@ export function createMeshSpanFetchClient(
         zListUploadRangesResponse2,
       );
     },
-    async writeUploadRange(request): Promise<WriteUploadRangeResponse> {
+    async writeUploadRange(
+      request,
+      csrfToken,
+    ): Promise<WriteUploadRangeResponse> {
       const path = zWriteUploadRangePath.parse({
         offset: request.offset,
         upload_id: request.uploadId,
@@ -346,8 +365,9 @@ export function createMeshSpanFetchClient(
         {
           body,
           headers: {
-            ...headers,
-            "Content-Type": "application/octet-stream",
+            ...mutationHeaders("application/octet-stream", csrfToken),
+            "MeshSpan-Content-BLAKE3": headers["MeshSpan-Content-BLAKE3"],
+            "MeshSpan-Operation-Id": headers["MeshSpan-Operation-Id"],
             "MeshSpan-Stage-Fence": String(headers["MeshSpan-Stage-Fence"]),
           },
           method: "PUT",
@@ -643,6 +663,22 @@ async function requestFileRange(
   );
   const bytes = await readBoundedBytes(response.body, maximumBytes);
   return { bytes, fileVersionId: version, offset };
+}
+
+function mutationHeaders(
+  contentType: string,
+  csrfToken?: string,
+): Record<string, string> {
+  if (csrfToken === undefined) {
+    return { "Content-Type": contentType };
+  }
+  if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
+    throw new TypeError("request has an invalid MeshSpan CSRF token");
+  }
+  return {
+    "Content-Type": contentType,
+    "MeshSpan-CSRF-Token": csrfToken,
+  };
 }
 
 function readCsrfToken(headers: Headers): string {

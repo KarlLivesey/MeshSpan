@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
-    FileApiAuthenticator, GatewaySessionIdentity,
+    GatewaySessionIdentity, NativeFileApiAuthenticator, NativeFileRequestProtection,
 };
 
 const BEARER_SCHEME: &str = "Bearer";
@@ -82,13 +82,14 @@ impl<A> NativeApiKeyAuthenticator<A> {
     }
 }
 
-impl<A> FileApiAuthenticator for NativeApiKeyAuthenticator<A>
+impl<A> NativeFileApiAuthenticator for NativeApiKeyAuthenticator<A>
 where
     A: NativeApiKeyAuthority + Send + 'static,
 {
-    fn authenticate_file_read(
+    fn authenticate_file_request(
         &self,
         headers: &HeaderMap,
+        _protection: NativeFileRequestProtection,
         now: UnixMicros,
     ) -> Result<FilesystemAccessContext, FileApiAuthenticationError> {
         let key = parse_bearer(headers)?;
@@ -124,14 +125,15 @@ impl<B, H> NativeApiAuthenticator<B, H> {
     }
 }
 
-impl<B, H> FileApiAuthenticator for NativeApiAuthenticator<B, H>
+impl<B, H> NativeFileApiAuthenticator for NativeApiAuthenticator<B, H>
 where
     B: BrowserSessionAuthority + Send + 'static,
     H: NativeApiKeyAuthority + Send + 'static,
 {
-    fn authenticate_file_read(
+    fn authenticate_file_request(
         &self,
         headers: &HeaderMap,
+        protection: NativeFileRequestProtection,
         now: UnixMicros,
     ) -> Result<FilesystemAccessContext, FileApiAuthenticationError> {
         let has_authorization = headers.contains_key(AUTHORIZATION);
@@ -139,9 +141,11 @@ where
             return Err(FileApiAuthenticationError::Rejected);
         }
         if has_authorization {
-            self.headless.authenticate_file_read(headers, now)
+            self.headless
+                .authenticate_file_request(headers, protection, now)
         } else {
-            self.browser.authenticate_file_read(headers, now)
+            self.browser
+                .authenticate_file_request(headers, protection, now)
         }
     }
 }

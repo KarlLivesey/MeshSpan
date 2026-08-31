@@ -9,6 +9,7 @@ const FILE_VERSION = "05050505-0505-4505-8505-050505050505";
 const VOLUME_ID = "01010101-0101-4101-8101-010101010101";
 const UPLOAD_ID = "06060606-0606-4606-8606-060606060606";
 const OPERATION_ID = "07070707-0707-4707-8707-070707070707";
+const CSRF_TOKEN = `meshspan-csrf-v1.${"8".repeat(32)}.${"9".repeat(64)}`;
 const CONTRACT_HEADERS = {
   "MeshSpan-API-Schema": `sha256:${"a".repeat(64)}`,
   "MeshSpan-API-Version": "latest",
@@ -121,6 +122,38 @@ describe("generated native resumable upload client", () => {
     expect(new Uint8Array(requests[1]?.init?.body as ArrayBuffer)).toEqual(
       Uint8Array.from([1, 2, 3]),
     );
+  });
+});
+
+describe("generated native upload browser protection", () => {
+  it("adds browser CSRF only to upload mutations", async () => {
+    const observedHeaders: Headers[] = [];
+    const responses = [
+      jsonResponse(uploadStatus()),
+      jsonResponse(uploadStatus()),
+    ];
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (_input, init) => {
+        observedHeaders.push(new Headers(init?.headers));
+        return Promise.resolve(responses.shift() ?? jsonResponse({}));
+      },
+    });
+
+    await client.beginUpload(
+      VOLUME_ID,
+      {
+        disposition: { mode: "create_new" },
+        maximum_bytes: 1024,
+        operation_id: OPERATION_ID,
+        path: "reports/accounts.csv",
+      },
+      CSRF_TOKEN,
+    );
+    await client.getUpload(UPLOAD_ID);
+
+    expect(observedHeaders[0]?.get("MeshSpan-CSRF-Token")).toBe(CSRF_TOKEN);
+    expect(observedHeaders[1]?.has("MeshSpan-CSRF-Token")).toBe(false);
   });
 });
 
@@ -258,6 +291,13 @@ describe("generated native file client rejection", () => {
         uploadId: UPLOAD_ID,
       }),
     ).rejects.toThrow("upload range must not be empty");
+    await expect(
+      client.abortUpload(
+        UPLOAD_ID,
+        { operation_id: OPERATION_ID, stage_fence: 1 },
+        "not-a-csrf-token",
+      ),
+    ).rejects.toThrow("invalid MeshSpan CSRF token");
     expect(calls).toBe(0);
   });
 });

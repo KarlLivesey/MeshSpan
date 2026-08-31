@@ -22,6 +22,12 @@ pub struct OperationId(
 );
 
 impl OperationId {
+    /// Parses exact canonical versioned UUID text.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        crate::directory_listing::parse_public_uuid(value).map(Self)
+    }
+
     /// Returns the validated canonical UUID text.
     #[must_use]
     pub fn as_str(&self) -> &str {

@@ -99,7 +99,23 @@ function renderFileReadRuntime() {
 }
 
 function renderContractRuntime() {
-  return `function readCsrfToken(headers: Headers): string {
+  return `function mutationHeaders(
+  contentType: string,
+  csrfToken?: string,
+): Record<string, string> {
+  if (csrfToken === undefined) {
+    return { "Content-Type": contentType };
+  }
+  if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
+    throw new TypeError("request has an invalid MeshSpan CSRF token");
+  }
+  return {
+    "Content-Type": contentType,
+    "MeshSpan-CSRF-Token": csrfToken,
+  };
+}
+
+function readCsrfToken(headers: Headers): string {
   const token = headers.get("MeshSpan-CSRF-Token");
   if (token === null || !CSRF_TOKEN_PATTERN.test(token)) {
     throw new TypeError("response has an invalid MeshSpan CSRF token");

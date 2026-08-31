@@ -229,8 +229,8 @@ fn begin_upload_path() -> Value {
         "post": {
             "operationId": "beginUpload",
             "summary": "Begin one durable private resumable file upload",
-            "x-meshspan-access": "authenticated",
-            "parameters": [volume_parameter()],
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [volume_parameter(), optional_csrf_parameter()],
             "requestBody": json_request(
                 "Bounded durable upload intent",
                 "#/components/schemas/BeginUploadRequest"
@@ -300,7 +300,7 @@ fn write_upload_range_path() -> Value {
         "put": {
             "operationId": "writeUploadRange",
             "summary": "Write one independently idempotent bounded raw upload range",
-            "x-meshspan-access": "authenticated",
+            "x-meshspan-access": "authenticated-csrf",
             "parameters": [
                 upload_parameter(),
                 {
@@ -320,7 +320,8 @@ fn write_upload_range_path() -> Value {
                     "minLength": 64,
                     "maxLength": 64,
                     "pattern": "^[0-9a-f]{64}$"
-                }))
+                })),
+                optional_csrf_parameter()
             ],
             "requestBody": {
                 "required": true,
@@ -349,8 +350,8 @@ fn commit_upload_path() -> Value {
         "post": {
             "operationId": "commitUpload",
             "summary": "Atomically publish one complete exact upload checkpoint",
-            "x-meshspan-access": "authenticated",
-            "parameters": [upload_parameter()],
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [upload_parameter(), optional_csrf_parameter()],
             "requestBody": json_request(
                 "Exact private checkpoint publication intent",
                 "#/components/schemas/CommitUploadRequest"
@@ -369,8 +370,8 @@ fn abort_upload_path() -> Value {
         "post": {
             "operationId": "abortUpload",
             "summary": "Permanently abandon one unpublished upload",
-            "x-meshspan-access": "authenticated",
-            "parameters": [upload_parameter()],
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [upload_parameter(), optional_csrf_parameter()],
             "requestBody": json_request(
                 "Exact fenced upload abandonment intent",
                 "#/components/schemas/AbortUploadRequest"
@@ -468,6 +469,20 @@ fn upload_header(name: &str, schema: &Value) -> Value {
         "in": "header",
         "required": true,
         "schema": schema
+    })
+}
+
+fn optional_csrf_parameter() -> Value {
+    json!({
+        "name": "MeshSpan-CSRF-Token",
+        "in": "header",
+        "required": false,
+        "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+        "schema": {
+            "type": "string",
+            "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$"
+        },
+        "x-meshspan-sensitive": true
     })
 }
 

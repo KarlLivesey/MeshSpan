@@ -4438,6 +4438,17 @@
               "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
               "type": "string"
             }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
           }
         ],
         "requestBody": {
@@ -4688,7 +4699,7 @@
           }
         },
         "summary": "Permanently abandon one unpublished upload",
-        "x-meshspan-access": "authenticated"
+        "x-meshspan-access": "authenticated-csrf"
       }
     },
     "/uploads/{upload_id}/commits": {
@@ -4705,6 +4716,17 @@
               "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
               "type": "string"
             }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
           }
         ],
         "requestBody": {
@@ -4955,7 +4977,7 @@
           }
         },
         "summary": "Atomically publish one complete exact upload checkpoint",
-        "x-meshspan-access": "authenticated"
+        "x-meshspan-access": "authenticated-csrf"
       }
     },
     "/uploads/{upload_id}/ranges": {
@@ -5291,6 +5313,17 @@
               "pattern": "^[0-9a-f]{64}$",
               "type": "string"
             }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
           }
         ],
         "requestBody": {
@@ -5543,7 +5576,7 @@
           }
         },
         "summary": "Write one independently idempotent bounded raw upload range",
-        "x-meshspan-access": "authenticated"
+        "x-meshspan-access": "authenticated-csrf"
       }
     },
     "/users/current/authentication-methods/api-keys": {
@@ -7857,6 +7890,17 @@
               "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
               "type": "string"
             }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
           }
         ],
         "requestBody": {
@@ -8107,7 +8151,7 @@
           }
         },
         "summary": "Begin one durable private resumable file upload",
-        "x-meshspan-access": "authenticated"
+        "x-meshspan-access": "authenticated-csrf"
       }
     }
   },

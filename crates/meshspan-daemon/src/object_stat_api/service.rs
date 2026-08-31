@@ -13,7 +13,10 @@ use thiserror::Error;
 
 use super::codec::response;
 use crate::create_mesh_setup::parse_uuid;
-use crate::{FileApiAuthenticationError, FileApiAuthenticator, FileApiFailure};
+use crate::{
+    FileApiAuthenticationError, FileApiFailure, NativeFileApiAuthenticator,
+    NativeFileRequestProtection,
+};
 
 /// Narrow connector-neutral stat capability used by the HTTP boundary.
 pub trait ObjectStatReader: Send + 'static {
@@ -84,7 +87,7 @@ pub trait ObjectStatController: Send + 'static {
 
 impl<A, F, M> ObjectStatController for ObjectStatService<A, F, M>
 where
-    A: FileApiAuthenticator,
+    A: NativeFileApiAuthenticator,
     F: ObjectStatReader,
     M: Fn(&F::Error) -> FileApiFailure + Send + 'static,
 {
@@ -97,7 +100,11 @@ where
     ) -> Result<GetObjectResponse, ObjectStatError> {
         meshspan_api_contract::validate_get_object_query(&query)
             .map_err(|_| ObjectStatError::InvalidInput)?;
-        let context = self.authenticator.authenticate_file_read(headers, now)?;
+        let context = self.authenticator.authenticate_file_request(
+            headers,
+            NativeFileRequestProtection::Read,
+            now,
+        )?;
         let api_volume = ApiVolumeId::parse(volume_id).ok_or(ObjectStatError::InvalidInput)?;
         let volume = VolumeId::from_bytes(
             parse_uuid(api_volume.as_str()).map_err(|_| ObjectStatError::InvalidInput)?,

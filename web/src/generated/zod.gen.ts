@@ -1850,6 +1850,15 @@ export const zGetUploadResponse = zUploadStatusResponse;
  */
 export const zAbortUploadBody = zAbortUploadRequest;
 
+export const zAbortUploadHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
 export const zAbortUploadPath = z
   .object({
     upload_id: z
@@ -1870,6 +1879,15 @@ export const zAbortUploadResponse2 = zAbortUploadResponse;
  * Exact private checkpoint publication intent
  */
 export const zCommitUploadBody = zCommitUploadRequest;
+
+export const zCommitUploadHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
 
 export const zCommitUploadPath = z
   .object({
@@ -1930,6 +1948,10 @@ export const zWriteUploadRangeHeaders = z
       .string()
       .length(64)
       .regex(/^[0-9a-f]{64}$/),
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
   })
   .strict();
 
@@ -2133,6 +2155,15 @@ export const zGetObjectResponse2 = zGetObjectResponse;
  * Bounded durable upload intent
  */
 export const zBeginUploadBody = zBeginUploadRequest;
+
+export const zBeginUploadHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
 
 export const zBeginUploadPath = z
   .object({

@@ -25,8 +25,8 @@ use meshspan_filesystem::{
 use tower::ServiceExt;
 
 use crate::{
-    FileApiAuthenticationError, FileApiAuthenticator, FileApiFailure, ObjectStatReader,
-    ObjectStatService, object_stat_api_router,
+    FileApiAuthenticationError, FileApiFailure, NativeFileApiAuthenticator,
+    NativeFileRequestProtection, ObjectStatReader, ObjectStatService, object_stat_api_router,
 };
 
 const VOLUME_ID: &str = "01010101-0101-4101-8101-010101010101";
@@ -106,10 +106,11 @@ enum TestStatError {
 
 struct HeaderAuthenticator;
 
-impl FileApiAuthenticator for HeaderAuthenticator {
-    fn authenticate_file_read(
+impl NativeFileApiAuthenticator for HeaderAuthenticator {
+    fn authenticate_file_request(
         &self,
         headers: &HeaderMap,
+        _protection: NativeFileRequestProtection,
         now: UnixMicros,
     ) -> Result<FilesystemAccessContext, FileApiAuthenticationError> {
         if headers.get(AUTHORIZATION) != Some(&HeaderValue::from_static("MeshSpan proof")) {
