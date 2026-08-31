@@ -283,6 +283,343 @@
         "title": "CreatePasskeyChallengeResponse",
         "type": "object"
       },
+      "CreatePasskeyRegistrationChallengeRequest": {
+        "additionalProperties": false,
+        "description": "One idempotent request for browser-ready current-user registration options.",
+        "properties": {
+          "operation_id": {
+            "description": "Client-generated identity making challenge creation exactly replayable on this gateway.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "title": "CreatePasskeyRegistrationChallengeRequest",
+        "type": "object"
+      },
+      "CreatePasskeyRegistrationChallengeResponse": {
+        "additionalProperties": false,
+        "description": "Browser-ready options for registering a current user's passkey.",
+        "properties": {
+          "attestation": {
+            "description": "Attestation conveyance policy.",
+            "oneOf": [
+              {
+                "const": "none",
+                "description": "Request privacy-preserving none attestation.",
+                "type": "string"
+              }
+            ]
+          },
+          "challenge": {
+            "description": "Canonical unpadded base64url random challenge.",
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "challenge_id": {
+            "description": "Stable gateway-local challenge identity supplied with completion.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "exclude_credentials": {
+            "description": "Existing current-user credentials the authenticator should not duplicate.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One existing credential the browser should exclude from registration.",
+              "properties": {
+                "id": {
+                  "description": "Canonical unpadded base64url credential identity.",
+                  "maxLength": 1366,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "`WebAuthn` credential type.",
+                  "oneOf": [
+                    {
+                      "const": "public-key",
+                      "description": "A public-key credential.",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "id"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "operation_id": {
+            "description": "Challenge-creation operation whose exact result this response represents.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "public_key_parameters": {
+            "description": "Exact supported public-key algorithms.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One algorithm offered to the authenticator.",
+              "properties": {
+                "algorithm": {
+                  "description": "COSE algorithm identifier; the initial profile supports ES256 only.",
+                  "format": "int32",
+                  "maximum": -7,
+                  "minimum": -7,
+                  "type": "integer"
+                },
+                "type": {
+                  "description": "`WebAuthn` credential type.",
+                  "oneOf": [
+                    {
+                      "const": "public-key",
+                      "description": "A public-key credential.",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "algorithm"
+              ],
+              "type": "object"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          },
+          "relying_party_id": {
+            "description": "Exact relying-party identifier against which authenticator data is verified.",
+            "maxLength": 253,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$",
+            "type": "string"
+          },
+          "relying_party_name": {
+            "description": "Human-readable relying-party name shown by authenticators.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "type": "string"
+          },
+          "resident_key": {
+            "description": "Discoverable credential policy.",
+            "oneOf": [
+              {
+                "const": "required",
+                "description": "Require a discoverable credential for account-name-free authentication.",
+                "type": "string"
+              }
+            ]
+          },
+          "timeout_milliseconds": {
+            "description": "Browser hint; server expiry remains authoritative.",
+            "format": "uint32",
+            "maximum": 600000,
+            "minimum": 30000,
+            "type": "integer"
+          },
+          "user_display_name": {
+            "description": "Human-readable current-user display name.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "Stable opaque `WebAuthn` user handle encoded as canonical unpadded base64url.",
+            "maxLength": 22,
+            "minLength": 22,
+            "pattern": "^[A-Za-z0-9_-]{22}$",
+            "type": "string"
+          },
+          "user_name": {
+            "description": "Stable current-user account name shown by authenticators.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "type": "string"
+          },
+          "user_verification": {
+            "description": "Authenticator-local verification policy.",
+            "oneOf": [
+              {
+                "const": "required",
+                "description": "Require a PIN, biometric or equivalent authenticator-local verification.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "challenge_id",
+          "challenge",
+          "relying_party_id",
+          "relying_party_name",
+          "user_id",
+          "user_name",
+          "user_display_name",
+          "timeout_milliseconds",
+          "user_verification",
+          "resident_key",
+          "attestation",
+          "public_key_parameters",
+          "exclude_credentials"
+        ],
+        "title": "CreatePasskeyRegistrationChallengeResponse",
+        "type": "object"
+      },
+      "CreatePasskeyRegistrationRequest": {
+        "additionalProperties": false,
+        "description": "One exact registration response bound to a gateway-issued challenge.",
+        "properties": {
+          "attestation_object": {
+            "description": "Canonical unpadded base64url CBOR attestation object.",
+            "maxLength": 21846,
+            "minLength": 2,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "challenge_id": {
+            "description": "Gateway-issued registration challenge consumed exactly once.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "client_data_json": {
+            "description": "Canonical unpadded base64url collected-client-data JSON.",
+            "maxLength": 5462,
+            "minLength": 2,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "credential_id": {
+            "description": "Canonical unpadded base64url credential identity.",
+            "maxLength": 1366,
+            "minLength": 2,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "label": {
+            "description": "User-visible method label.",
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Client-generated identity for the authoritative method creation.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "transports": {
+            "description": "Deduplicated bounded transports reported by the browser.",
+            "items": {
+              "description": "Authenticator transports reported for a newly registered credential.",
+              "oneOf": [
+                {
+                  "const": "usb",
+                  "description": "USB-connected authenticator.",
+                  "type": "string"
+                },
+                {
+                  "const": "nfc",
+                  "description": "Near-field-communication authenticator.",
+                  "type": "string"
+                },
+                {
+                  "const": "ble",
+                  "description": "Bluetooth Low Energy authenticator.",
+                  "type": "string"
+                },
+                {
+                  "const": "smart-card",
+                  "description": "Smart-card authenticator.",
+                  "type": "string"
+                },
+                {
+                  "const": "hybrid",
+                  "description": "Hybrid/cross-device authenticator transport.",
+                  "type": "string"
+                },
+                {
+                  "const": "internal",
+                  "description": "Platform authenticator built into the client device.",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 6,
+            "type": "array"
+          }
+        },
+        "required": [
+          "operation_id",
+          "challenge_id",
+          "label",
+          "credential_id",
+          "client_data_json",
+          "attestation_object",
+          "transports"
+        ],
+        "title": "CreatePasskeyRegistrationRequest",
+        "type": "object"
+      },
+      "CreatePasskeyRegistrationResponse": {
+        "additionalProperties": false,
+        "description": "Durable result of registering one current-user passkey.",
+        "properties": {
+          "created_at_epoch_micros": {
+            "description": "Authoritative creation instant as epoch microseconds.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "method_id": {
+            "description": "Newly created independently revocable authentication method.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact idempotency identity whose committed outcome was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "method_id",
+          "created_at_epoch_micros"
+        ],
+        "title": "CreatePasskeyRegistrationResponse",
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "additionalProperties": false,
         "description": "Input for exchanging accepted authentication proofs for a session.",
@@ -1821,6 +2158,464 @@
         },
         "summary": "Read first-start state without exposing claim material",
         "x-meshspan-access": "anonymous"
+      }
+    },
+    "/users/current/authentication-methods/passkeys": {
+      "post": {
+        "operationId": "createCurrentUserPasskey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePasskeyRegistrationRequest"
+              }
+            }
+          },
+          "description": "Current-user passkey registration response",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePasskeyRegistrationResponse"
+                }
+              }
+            },
+            "description": "Committed passkey authentication method",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry, duplicate credential or ceremony conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bounded admission rejected the request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Verify and register a current-user passkey",
+        "x-meshspan-access": "authenticated-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/users/current/authentication-methods/passkeys/registration-challenges": {
+      "post": {
+        "operationId": "createCurrentUserPasskeyRegistrationChallenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePasskeyRegistrationChallengeRequest"
+              }
+            }
+          },
+          "description": "Current-user passkey registration challenge",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePasskeyRegistrationChallengeResponse"
+                }
+              }
+            },
+            "description": "Browser-ready passkey creation options",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or ceremony conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bounded admission rejected the request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create browser-ready options for registering a current-user passkey",
+        "x-meshspan-access": "authenticated-csrf",
+        "x-meshspan-idempotency": "operation-id-and-gateway-local-ceremony"
       }
     }
   },

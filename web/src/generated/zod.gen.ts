@@ -167,6 +167,163 @@ export const zCreatePasskeyChallengeResponse = z
   .strict();
 
 /**
+ * CreatePasskeyRegistrationChallengeRequest
+ *
+ * One idempotent request for browser-ready current-user registration options.
+ */
+export const zCreatePasskeyRegistrationChallengeRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreatePasskeyRegistrationChallengeResponse
+ *
+ * Browser-ready options for registering a current user's passkey.
+ */
+export const zCreatePasskeyRegistrationChallengeResponse = z
+  .strictObject({
+    attestation: z.literal("none"),
+    challenge: z
+      .string()
+      .length(43)
+      .regex(/^[A-Za-z0-9_-]{43}$/),
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    exclude_credentials: z
+      .array(
+        z
+          .strictObject({
+            id: z
+              .string()
+              .min(2)
+              .max(1366)
+              .regex(/^[A-Za-z0-9_-]+$/),
+            type: z.literal("public-key"),
+          })
+          .strict(),
+      )
+      .max(64),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    public_key_parameters: z
+      .array(
+        z
+          .strictObject({
+            algorithm: z.int().gte(-7).lte(-7),
+            type: z.literal("public-key"),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(8),
+    relying_party_id: z
+      .string()
+      .min(1)
+      .max(253)
+      .regex(/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/),
+    relying_party_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    resident_key: z.literal("required"),
+    timeout_milliseconds: z.int().gte(30000).lte(600000),
+    user_display_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    user_id: z
+      .string()
+      .length(22)
+      .regex(/^[A-Za-z0-9_-]{22}$/),
+    user_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    user_verification: z.literal("required"),
+  })
+  .strict();
+
+/**
+ * CreatePasskeyRegistrationRequest
+ *
+ * One exact registration response bound to a gateway-issued challenge.
+ */
+export const zCreatePasskeyRegistrationRequest = z
+  .strictObject({
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    label: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    transports: z
+      .array(
+        z.union([
+          z.literal("usb"),
+          z.literal("nfc"),
+          z.literal("ble"),
+          z.literal("smart-card"),
+          z.literal("hybrid"),
+          z.literal("internal"),
+        ]),
+      )
+      .max(6),
+  })
+  .strict();
+
+/**
+ * CreatePasskeyRegistrationResponse
+ *
+ * Durable result of registering one current-user passkey.
+ */
+export const zCreatePasskeyRegistrationResponse = z
+  .strictObject({
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -391,6 +548,60 @@ export const zCreateMeshSetupRequestWritable = z
   .strict();
 
 /**
+ * CreatePasskeyRegistrationRequest
+ *
+ * One exact registration response bound to a gateway-issued challenge.
+ */
+export const zCreatePasskeyRegistrationRequestWritable = z
+  .strictObject({
+    attestation_object: z
+      .string()
+      .min(2)
+      .max(21846)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    client_data_json: z
+      .string()
+      .min(2)
+      .max(5462)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    credential_id: z
+      .string()
+      .min(2)
+      .max(1366)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    label: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    transports: z
+      .array(
+        z.union([
+          z.literal("usb"),
+          z.literal("nfc"),
+          z.literal("ble"),
+          z.literal("smart-card"),
+          z.literal("hybrid"),
+          z.literal("internal"),
+        ]),
+      )
+      .max(6),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -509,3 +720,27 @@ export const zCreateMeshSetupResponse2 = zCreateMeshSetupResponse;
  * First-start state
  */
 export const zGetSetupStatusResponse = zSetupStatusResponse;
+
+/**
+ * Current-user passkey registration response
+ */
+export const zCreateCurrentUserPasskeyBody =
+  zCreatePasskeyRegistrationRequestWritable;
+
+/**
+ * Committed passkey authentication method
+ */
+export const zCreateCurrentUserPasskeyResponse =
+  zCreatePasskeyRegistrationResponse;
+
+/**
+ * Current-user passkey registration challenge
+ */
+export const zCreateCurrentUserPasskeyRegistrationChallengeBody =
+  zCreatePasskeyRegistrationChallengeRequest;
+
+/**
+ * Browser-ready passkey creation options
+ */
+export const zCreateCurrentUserPasskeyRegistrationChallengeResponse =
+  zCreatePasskeyRegistrationChallengeResponse;

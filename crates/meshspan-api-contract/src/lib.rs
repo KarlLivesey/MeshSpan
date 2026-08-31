@@ -4,6 +4,8 @@
 
 mod model;
 mod openapi;
+mod passkey_registration;
+mod passkey_validation;
 mod schema;
 mod validation;
 
@@ -17,17 +19,34 @@ pub use model::{
     SetupStatusResponse,
 };
 pub use openapi::{OPENAPI_PATH, OpenApiDocument, generate_openapi};
+pub use passkey_registration::{
+    AuthenticationMethodId, AuthenticationMethodLabel, CreatePasskeyRegistrationChallengeRequest,
+    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
+    CreatePasskeyRegistrationResponse, PasskeyAttestation, PasskeyCredentialDescriptor,
+    PasskeyCredentialParameter, PasskeyCredentialType, PasskeyResidentKey, PasskeyTransport,
+};
+pub use passkey_validation::{
+    MAX_CREATE_PASSKEY_CHALLENGE_BYTES, MAX_CREATE_PASSKEY_REGISTRATION_BYTES,
+    MAX_CREATE_PASSKEY_REGISTRATION_CHALLENGE_BYTES, decode_create_passkey_challenge_request,
+    decode_create_passkey_registration_challenge_request,
+    decode_create_passkey_registration_request, encode_create_passkey_challenge_response,
+    encode_create_passkey_registration_challenge_response,
+    encode_create_passkey_registration_response, validate_create_passkey_challenge_request_value,
+    validate_create_passkey_challenge_response_value,
+    validate_create_passkey_registration_challenge_request_value,
+    validate_create_passkey_registration_challenge_response_value,
+    validate_create_passkey_registration_request_value,
+    validate_create_passkey_registration_response_value,
+};
 pub use validation::{
-    BoundaryError, MAX_CREATE_MESH_SETUP_BYTES, MAX_CREATE_PASSKEY_CHALLENGE_BYTES,
-    MAX_CREATE_SESSION_BYTES, MAX_REVOKE_CURRENT_SESSION_BYTES, ValidationIssue,
-    decode_create_mesh_setup_request, decode_create_passkey_challenge_request,
+    BoundaryError, MAX_CREATE_MESH_SETUP_BYTES, MAX_CREATE_SESSION_BYTES,
+    MAX_REVOKE_CURRENT_SESSION_BYTES, ValidationIssue, decode_create_mesh_setup_request,
     decode_create_session_request, decode_revoke_current_session_request, encode_api_error,
-    encode_create_mesh_setup_response, encode_create_passkey_challenge_response,
-    encode_create_session_response, encode_current_session_response,
-    encode_revoke_current_session_response, encode_setup_status_response, validate_api_error_value,
+    encode_create_mesh_setup_response, encode_create_session_response,
+    encode_current_session_response, encode_revoke_current_session_response,
+    encode_setup_status_response, validate_api_error_value,
     validate_create_mesh_setup_request_value, validate_create_mesh_setup_response_value,
-    validate_create_passkey_challenge_request_value,
-    validate_create_passkey_challenge_response_value, validate_create_session_request_value,
-    validate_create_session_response_value, validate_revoke_current_session_request_value,
-    validate_revoke_current_session_response_value, validate_setup_status_response_value,
+    validate_create_session_request_value, validate_create_session_response_value,
+    validate_revoke_current_session_request_value, validate_revoke_current_session_response_value,
+    validate_setup_status_response_value,
 };

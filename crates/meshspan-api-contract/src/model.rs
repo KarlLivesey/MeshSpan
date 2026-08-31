@@ -185,7 +185,7 @@ impl SessionLabel {
     }
 }
 
-fn format_uuid(value: [u8; 16]) -> String {
+pub(crate) fn format_uuid(value: [u8; 16]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(36);
     for (index, byte) in value.into_iter().enumerate() {
