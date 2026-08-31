@@ -402,6 +402,102 @@ export const zCreatePasskeyRegistrationResponse = z
   .strict();
 
 /**
+ * CreateRecoveryCodesRequest
+ *
+ * One idempotent request to replace the current user's recovery-code set.
+ */
+export const zCreateRecoveryCodesRequest = z
+  .strictObject({
+    label: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateRecoveryCodesResponse
+ *
+ * One exactly replayable recovery-code set returned only by its issuance operation.
+ */
+export const zCreateRecoveryCodesResponse = z
+  .strictObject({
+    codes: z.tuple([
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+    ]),
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -476,6 +572,109 @@ export const zCreateSessionResponse = z
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
     session_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationChallengeRequest
+ *
+ * One idempotent request to create TOTP registration material.
+ */
+export const zCreateTotpRegistrationChallengeRequest = z
+  .strictObject({
+    label: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationChallengeResponse
+ *
+ * One exactly replayable TOTP seed presentation.
+ */
+export const zCreateTotpRegistrationChallengeResponse = z
+  .strictObject({
+    algorithm: z.literal("SHA1"),
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    digits: z.int().gte(6).lte(6),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    period_seconds: z.int().gte(30).lte(30),
+    provisioning_uri: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^otpauth:\/\/totp\/[^\x00-\x20\x7f]+$/)
+      .readonly(),
+    secret: z
+      .string()
+      .length(32)
+      .regex(/^[A-Z2-7]{32}$/)
+      .readonly(),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationRequest
+ *
+ * One idempotent request confirming a newly presented TOTP seed.
+ */
+export const zCreateTotpRegistrationRequest = z
+  .strictObject({
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationResponse
+ *
+ * Durable result of confirming one independently revocable TOTP method.
+ */
+export const zCreateTotpRegistrationResponse = z
+  .strictObject({
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
       .string()
       .length(36)
       .regex(
@@ -630,6 +829,34 @@ export const zSetupStatusResponse = z
   .strict();
 
 /**
+ * StepUpCurrentSessionRequest
+ *
+ * Input for atomically rotating the current browser session after a fresh factor.
+ */
+export const zStepUpCurrentSessionRequest = z
+  .strictObject({
+    additional_factor: z.union([
+      z
+        .strictObject({
+          method: z.literal("totp"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          method: z.literal("recovery_code"),
+        })
+        .strict(),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateApiKeyResponse
  *
  * One exactly replayable API-key issuance result.
@@ -765,6 +992,30 @@ export const zCreatePasskeyRegistrationRequestWritable = z
   .strict();
 
 /**
+ * CreateRecoveryCodesResponse
+ *
+ * One exactly replayable recovery-code set returned only by its issuance operation.
+ */
+export const zCreateRecoveryCodesResponseWritable = z
+  .strictObject({
+    codes: z.tuple([]),
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -828,6 +1079,88 @@ export const zCreateSessionRequestWritable = z
   .strict();
 
 /**
+ * CreateTotpRegistrationChallengeResponse
+ *
+ * One exactly replayable TOTP seed presentation.
+ */
+export const zCreateTotpRegistrationChallengeResponseWritable = z
+  .strictObject({
+    algorithm: z.literal("SHA1"),
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    digits: z.int().gte(6).lte(6),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    period_seconds: z.int().gte(30).lte(30),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationRequest
+ *
+ * One idempotent request confirming a newly presented TOTP seed.
+ */
+export const zCreateTotpRegistrationRequestWritable = z
+  .strictObject({
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    code: z
+      .string()
+      .length(6)
+      .regex(/^\d{6}$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * StepUpCurrentSessionRequest
+ *
+ * Input for atomically rotating the current browser session after a fresh factor.
+ */
+export const zStepUpCurrentSessionRequestWritable = z
+  .strictObject({
+    additional_factor: z.union([
+      z
+        .strictObject({
+          code: z.string().min(6).max(8),
+          method: z.literal("totp"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          code: z.string().min(8).max(128),
+          method: z.literal("recovery_code"),
+        })
+        .strict(),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * Process readiness
  */
 export const zGetHealthResponse = zHealthResponse;
@@ -858,6 +1191,16 @@ export const zRevokeCurrentSessionBody = zRevokeCurrentSessionRequest;
  * Session authoritatively revoked
  */
 export const zRevokeCurrentSessionResponse2 = zRevokeCurrentSessionResponse;
+
+/**
+ * Current-session step-up
+ */
+export const zStepUpCurrentSessionBody = zStepUpCurrentSessionRequestWritable;
+
+/**
+ * Committed replacement session; the source session is revoked
+ */
+export const zStepUpCurrentSessionResponse = zCreateSessionResponse;
 
 /**
  * Passkey challenge creation
@@ -917,6 +1260,40 @@ export const zCreateCurrentUserPasskeyRegistrationChallengeBody =
  */
 export const zCreateCurrentUserPasskeyRegistrationChallengeResponse =
   zCreatePasskeyRegistrationChallengeResponse;
+
+/**
+ * Current-user recovery-code issuance
+ */
+export const zCreateCurrentUserRecoveryCodesBody = zCreateRecoveryCodesRequest;
+
+/**
+ * Committed recovery-code set with exactly replayable one-time secrets
+ */
+export const zCreateCurrentUserRecoveryCodesResponse =
+  zCreateRecoveryCodesResponse;
+
+/**
+ * Current-user TOTP registration confirmation
+ */
+export const zCreateCurrentUserTotpBody =
+  zCreateTotpRegistrationRequestWritable;
+
+/**
+ * Committed TOTP authentication method
+ */
+export const zCreateCurrentUserTotpResponse = zCreateTotpRegistrationResponse;
+
+/**
+ * Current-user TOTP registration material
+ */
+export const zCreateCurrentUserTotpRegistrationChallengeBody =
+  zCreateTotpRegistrationChallengeRequest;
+
+/**
+ * Exactly replayable TOTP registration material
+ */
+export const zCreateCurrentUserTotpRegistrationChallengeResponse =
+  zCreateTotpRegistrationChallengeResponse;
 
 /**
  * Authentication-method revocation

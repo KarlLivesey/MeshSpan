@@ -18,6 +18,7 @@ meshspan-api-contract = { path = "../meshspan-api-contract" }
 meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-metadata = { path = "../meshspan-metadata" }
+meshspan-otp = { path = "../meshspan-otp" }
 meshspan-passkey = { path = "../meshspan-passkey" }
 serde_json.workspace = true
 sha2.workspace = true

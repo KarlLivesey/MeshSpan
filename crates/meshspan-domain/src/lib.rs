@@ -16,6 +16,7 @@ mod lifecycle;
 mod operation;
 mod partitioning;
 mod primitives;
+mod recovery_code;
 mod routing;
 mod seams;
 mod secret_text;
@@ -71,6 +72,10 @@ pub use primitives::{
     ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuarantineId,
     QuorumPlanId, RecoveryCodeId, Revision, RevisionError, RoleId, ScopeId, SessionId, SnapshotId,
     SnapshotScheduleId, StageId, TagId, TargetId, UnixMicros, VolumeId,
+};
+pub use recovery_code::{
+    ENCODED_RECOVERY_CODE_LENGTH, RecoveryCodeBundle, RecoveryCodeBundleError,
+    RecoveryCodeIssuanceKey, RecoveryCodeIssuanceKeyError,
 };
 pub use routing::{HandoffEvidence, RouteError, RouteState, ScopeRoute};
 pub use seams::{Clock, EntropyError, RandomSource};

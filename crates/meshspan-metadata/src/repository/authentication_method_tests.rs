@@ -2,7 +2,7 @@
 
 use meshspan_domain::{
     ApiKeyId, AuditEventId, AuthenticationMethodId, HostId, MeshId, NodeId, OperationId,
-    PartitionId, PrincipalId, Revision, RoleId, UnixMicros,
+    PartitionId, PrincipalId, RecoveryCodeId, Revision, RoleId, UnixMicros,
 };
 use tempfile::tempdir;
 
@@ -83,7 +83,7 @@ fn api_key_creation_is_atomic_restart_safe_and_exactly_replayable()
     assert_eq!(repository.current_revision()?, Revision::new(2));
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        47
+        49
     );
     Ok(())
 }
@@ -167,7 +167,7 @@ fn api_key_revocation_is_audited_restart_safe_and_exactly_replayable()
             administrator.as_bytes().to_vec(),
         )
     );
-    assert_eq!(database.check_integrity()?.schema_version, 47);
+    assert_eq!(database.check_integrity()?.schema_version, 49);
     Ok(())
 }
 
@@ -389,6 +389,105 @@ fn passkey_material_fails_closed_for_matching_corrupt_key_shape()
         ),
         Err(RepositoryError::CorruptState)
     ));
+    Ok(())
+}
+
+#[test]
+fn recovery_code_material_is_principal_bound_digest_matched_and_consumption_visible()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let partition_id = PartitionId::from_bytes([1; 16])?;
+    let administrator = PrincipalId::from_bytes([2; 16])?;
+    let database = PartitionDatabase::open(
+        &directory.path().join("recovery-code-verifier.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap(&mut repository, administrator)?;
+    let method_id = AuthenticationMethodId::from_bytes([58; 16])?;
+    repository.apply_committed(
+        position(2),
+        context(50, administrator, 51, 20, Some(Revision::new(1)))?,
+        &super::authentication_method_creation_tests::recovery(method_id, administrator)?,
+    )?;
+    let code_id = RecoveryCodeId::from_bytes([14; 16])?;
+    let material = repository
+        .recovery_code_verification_material(
+            administrator,
+            code_id,
+            [15; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(21),
+        )?
+        .ok_or("current recovery code was withheld")?;
+    assert_eq!(material.principal_id, administrator);
+    assert_eq!(material.method_id, method_id);
+    assert_eq!(material.code_id, code_id);
+    assert_eq!(material.credential_generation, 1);
+    assert_eq!(material.revision, Revision::new(2));
+    assert_eq!(material.used_at, None);
+
+    for rejected in [
+        repository.recovery_code_verification_material(
+            administrator,
+            code_id,
+            [0; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(21),
+        )?,
+        repository.recovery_code_verification_material(
+            administrator,
+            code_id,
+            [16; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(21),
+        )?,
+        repository.recovery_code_verification_material(
+            PrincipalId::from_bytes([3; 16])?,
+            code_id,
+            [15; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(21),
+        )?,
+        repository.recovery_code_verification_material(
+            administrator,
+            code_id,
+            [15; 32],
+            AuthenticationService::Smb,
+            UnixMicros::new(21),
+        )?,
+        repository.recovery_code_verification_material(
+            administrator,
+            code_id,
+            [15; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(200),
+        )?,
+    ] {
+        assert_eq!(rejected, None);
+    }
+
+    let database = repository.into_database();
+    database.connection().execute(
+        "UPDATE recovery_codes SET used_at = 22, revision = 3
+         WHERE method_id = ?1 AND code_id = ?2",
+        rusqlite::params![
+            method_id.as_bytes().as_slice(),
+            code_id.as_bytes().as_slice()
+        ],
+    )?;
+    let repository = AuthoritativeRepository::new(database);
+    let used = repository
+        .recovery_code_verification_material(
+            administrator,
+            code_id,
+            [15; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(23),
+        )?
+        .ok_or("used recovery-code replay evidence was withheld")?;
+    assert_eq!(used.used_at, Some(UnixMicros::new(22)));
     Ok(())
 }
 

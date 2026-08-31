@@ -141,6 +141,8 @@ pub enum AuthoritativeCommand {
     RevokeAuthenticationMethod(RevokeAuthenticationMethod),
     /// Issues one bounded authentication session after an accepted authentication ceremony.
     IssueAuthenticationSession(IssueAuthenticationSession),
+    /// Atomically replaces one current session after a fresh additional factor.
+    StepUpAuthenticationSession(StepUpAuthenticationSession),
     /// Revokes one exact authentication session immediately.
     RevokeAuthenticationSession(RevokeAuthenticationSession),
     /// Creates a versioned desired component configuration.
@@ -279,6 +281,7 @@ impl AuthoritativeCommand {
             Self::ConfigureAuthenticationPolicy(value) => value.update_digest(digest),
             Self::RevokeAuthenticationMethod(value) => value.update_digest(digest),
             Self::IssueAuthenticationSession(value) => value.update_digest(digest),
+            Self::StepUpAuthenticationSession(value) => value.update_digest(digest),
             Self::RevokeAuthenticationSession(value) => value.update_digest(digest),
             Self::CreateComponent(value) => value.update_digest(digest),
             Self::ConfigureComponent(value) => value.update_digest(digest),
@@ -1270,6 +1273,25 @@ pub struct IssueAuthenticationSession {
     pub expires_at: UnixMicros,
 }
 
+/// Atomic current-session replacement after one fresh additional factor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StepUpAuthenticationSession {
+    /// Exact live session whose retained primary proof is carried into the replacement.
+    pub source_session_id: SessionId,
+    /// Stable replacement session identity.
+    pub replacement_session_id: SessionId,
+    /// User authenticated by the source session.
+    pub principal_id: PrincipalId,
+    /// Digest of the replacement bearer token.
+    pub token_digest: [u8; 32],
+    /// Digest of the replacement CSRF token.
+    pub csrf_digest: [u8; 32],
+    /// Fresh TOTP or recovery-code evidence accepted by the step-up ceremony.
+    pub additional_factor: SessionAuthenticationFactor,
+    /// Exclusive absolute replacement expiry.
+    pub expires_at: UnixMicros,
+}
+
 /// Exact public three-state session-label intent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SessionClientLabel {
@@ -2255,6 +2277,33 @@ digest_simple_record!(
                     digest.identifier(key_id.as_bytes());
                 }
             }
+        }
+        digest.signed(value.expires_at.get());
+    }
+);
+digest_simple_record!(
+    StepUpAuthenticationSession,
+    b"step-up-authentication-session",
+    |value, digest| {
+        digest.identifier(value.source_session_id.as_bytes());
+        digest.identifier(value.replacement_session_id.as_bytes());
+        digest.identifier(value.principal_id.as_bytes());
+        digest.bytes(&value.token_digest);
+        digest.bytes(&value.csrf_digest);
+        digest.identifier(value.additional_factor.method_id().as_bytes());
+        digest.unsigned(value.additional_factor.credential_generation());
+        digest.unsigned(value.additional_factor.method_revision().get());
+        match &value.additional_factor {
+            SessionAuthenticationFactor::Totp { accepted_step, .. } => {
+                digest.byte(2);
+                digest.unsigned(*accepted_step);
+            }
+            SessionAuthenticationFactor::RecoveryCode { code_id, .. } => {
+                digest.byte(3);
+                digest.identifier(code_id.as_bytes());
+            }
+            SessionAuthenticationFactor::Passkey { .. }
+            | SessionAuthenticationFactor::ApiKey { .. } => digest.byte(0),
         }
         digest.signed(value.expires_at.get());
     }

@@ -270,6 +270,16 @@ pub struct CreateSessionRequest {
     pub remember: bool,
 }
 
+/// Input for atomically rotating the current browser session after a fresh factor.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepUpCurrentSessionRequest {
+    /// Client-generated idempotency key for the exact rotation.
+    pub operation_id: OperationId,
+    /// Fresh TOTP or single-use recovery proof; the current session supplies the primary proof.
+    pub additional_factor: SessionAdditionalFactor,
+}
+
 /// Input for creating one short-lived passkey authentication challenge.
 #[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

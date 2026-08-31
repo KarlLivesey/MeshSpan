@@ -11,7 +11,8 @@ use thiserror::Error;
 use crate::{
     ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
     CreateSessionResponse, CurrentSessionResponse, RevokeCurrentSessionRequest,
-    RevokeCurrentSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
+    RevokeCurrentSessionResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
+    model::MAX_ERROR_ISSUES, schema,
 };
 
 /// Maximum accepted body size for one session-creation request.
@@ -20,6 +21,8 @@ pub const MAX_CREATE_SESSION_BYTES: usize = 2_048;
 pub const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
 /// Maximum accepted body size for one current-session revocation request.
 pub const MAX_REVOKE_CURRENT_SESSION_BYTES: usize = 256;
+/// Maximum accepted body size for one current-session step-up request.
+pub const MAX_STEP_UP_CURRENT_SESSION_BYTES: usize = 512;
 
 static API_ERROR_VALIDATOR: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
@@ -37,6 +40,8 @@ static REVOKE_CURRENT_SESSION_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidat
 static REVOKE_CURRENT_SESSION_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
 static SETUP_STATUS_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static STEP_UP_CURRENT_SESSION_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
 
 pub(crate) struct CompiledValidator {
@@ -89,6 +94,33 @@ pub fn decode_create_mesh_setup_request(
 /// Returns every discovered issue up to the public issue limit.
 pub fn validate_create_mesh_setup_request_value(value: &Value) -> Result<(), BoundaryError> {
     validate(create_mesh_setup_request_validator()?, value)
+}
+
+/// Validates and decodes one bounded current-session step-up request.
+///
+/// # Errors
+///
+/// Rejects excessive, malformed, schema-invalid or unexpectedly undecodable input.
+pub fn decode_step_up_current_session_request(
+    bytes: &[u8],
+) -> Result<StepUpCurrentSessionRequest, BoundaryError> {
+    if bytes.len() > MAX_STEP_UP_CURRENT_SESSION_BYTES {
+        return Err(BoundaryError::BodyTooLarge {
+            limit: MAX_STEP_UP_CURRENT_SESSION_BYTES,
+        });
+    }
+    let value = serde_json::from_slice(bytes).map_err(|_| BoundaryError::MalformedJson)?;
+    validate_step_up_current_session_request_value(&value)?;
+    serde_json::from_value(value).map_err(|_| BoundaryError::DecodeMismatch)
+}
+
+/// Validates raw current-session step-up input.
+///
+/// # Errors
+///
+/// Returns bounded structural issues or an invalid authoritative schema.
+pub fn validate_step_up_current_session_request_value(value: &Value) -> Result<(), BoundaryError> {
+    validate(step_up_current_session_request_validator()?, value)
 }
 
 /// Validates and encodes a committed first-mesh setup response before transmission.
@@ -343,6 +375,14 @@ fn setup_status_response_validator() -> Result<&'static CompiledValidator, Bound
     validator_from(
         SETUP_STATUS_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<SetupStatusResponse>())),
+    )
+}
+
+fn step_up_current_session_request_validator() -> Result<&'static CompiledValidator, BoundaryError>
+{
+    validator_from(
+        STEP_UP_CURRENT_SESSION_REQUEST_VALIDATOR
+            .get_or_init(|| compile(&schema::request_schema::<StepUpCurrentSessionRequest>())),
     )
 }
 

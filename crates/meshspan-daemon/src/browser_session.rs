@@ -44,6 +44,13 @@ pub fn parse_browser_session(
     headers: &HeaderMap,
     protection: BrowserRequestProtection,
 ) -> Result<BrowserSessionEvidence, BrowserSessionError> {
+    parse_browser_session_material(headers, protection).map(|(evidence, _)| evidence)
+}
+
+pub(crate) fn parse_browser_session_material(
+    headers: &HeaderMap,
+    protection: BrowserRequestProtection,
+) -> Result<(BrowserSessionEvidence, SessionTokenBundle), BrowserSessionError> {
     let bearer = parse_session_cookie(headers)?;
     let csrf = parse_csrf(headers)?;
     if protection == BrowserRequestProtection::Mutation && csrf.is_none() {
@@ -55,11 +62,14 @@ pub fn parse_browser_session(
     {
         return Err(BrowserSessionError);
     }
-    Ok(BrowserSessionEvidence {
-        session_id: bearer.session_id(),
-        token_digest: bearer.token_digest(),
-        csrf_digest: csrf.as_ref().map(SessionCsrfBundle::token_digest),
-    })
+    Ok((
+        BrowserSessionEvidence {
+            session_id: bearer.session_id(),
+            token_digest: bearer.token_digest(),
+            csrf_digest: csrf.as_ref().map(SessionCsrfBundle::token_digest),
+        },
+        bearer,
+    ))
 }
 
 fn parse_session_cookie(headers: &HeaderMap) -> Result<SessionTokenBundle, BrowserSessionError> {

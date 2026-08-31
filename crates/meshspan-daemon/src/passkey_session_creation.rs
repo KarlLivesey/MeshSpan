@@ -21,7 +21,7 @@ use crate::{
     PreparedPasskeyProof, SessionAuthority, SessionAuthorityError,
 };
 
-impl<A, P> CreateSessionService<A, P>
+impl<A, P, T> CreateSessionService<A, P, T>
 where
     A: SessionAuthority,
     P: PasskeySessionCeremony,

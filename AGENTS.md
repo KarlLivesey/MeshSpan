@@ -170,6 +170,9 @@ abstractions solely to make the crate independently publishable.
   narrate syntax.
 - No new dependency without a concrete need, maintenance/legal review and a
   reason the standard library or current workspace cannot do the job cleanly.
+- An obsolete release line which no longer receives upstream security or bug
+  fixes is never an acceptable compatibility solution. Use a maintained
+  release, adapt the boundary, replace the dependency or own the required code.
 - Dependency and generated-code licences must be recorded and compatible with
   distributing the complete MeshSpan artefacts as `GPL-2.0-only`.
 

@@ -289,6 +289,7 @@ fn authorise(
         AuthoritativeCommand::ActivateFederationGrantAssignment(value) => Some(value.principal_id),
         AuthoritativeCommand::CreateAuthenticationMethod(value) => Some(value.principal_id),
         AuthoritativeCommand::IssueAuthenticationSession(value) => Some(value.principal_id),
+        AuthoritativeCommand::StepUpAuthenticationSession(value) => Some(value.principal_id),
         _ => None,
     };
     if matches!(command, AuthoritativeCommand::ConsumeJoinGrant(_)) {
@@ -555,6 +556,7 @@ fn is_identity_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ConfigureAuthenticationPolicy(_)
             | AuthoritativeCommand::RevokeAuthenticationMethod(_)
             | AuthoritativeCommand::IssueAuthenticationSession(_)
+            | AuthoritativeCommand::StepUpAuthenticationSession(_)
             | AuthoritativeCommand::RevokeAuthenticationSession(_)
     )
 }
@@ -610,6 +612,9 @@ fn execute_identity_command(
         }
         AuthoritativeCommand::IssueAuthenticationSession(value) => {
             session::issue(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::StepUpAuthenticationSession(value) => {
+            session::step_up(transaction, context, value, revision)
         }
         AuthoritativeCommand::RevokeAuthenticationSession(value) => {
             session::revoke(transaction, context, *value, revision)
@@ -898,6 +903,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ConfirmVersionCleanupReclamation(_) => 44,
         AuthoritativeCommand::IssueAuthenticationSession(_) => 45,
         AuthoritativeCommand::RevokeAuthenticationSession(_) => 46,
+        AuthoritativeCommand::StepUpAuthenticationSession(_) => 81,
         AuthoritativeCommand::CreateAuthenticationMethod(_) => 74,
         AuthoritativeCommand::RevokeAuthenticationMethod(_) => 75,
         AuthoritativeCommand::ConfigureAuthenticationPolicy(_) => 76,

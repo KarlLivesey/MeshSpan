@@ -11,9 +11,10 @@ use tempfile::tempdir;
 use super::authentication_method_tests::{bootstrap, context, position};
 use super::{AuthoritativeRepository, RepositoryError};
 use crate::{
-    AuthoritativeCommand, ConfigureAuthenticationPolicy, CreateAuthenticationMethod,
-    IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode, PartitionDatabase,
-    SessionAuthenticationFactor,
+    AuthenticationSessionReplayCredential, AuthoritativeCommand, ConfigureAuthenticationPolicy,
+    CreateAuthenticationMethod, IssueAuthenticationSession, NewAuthenticationCredential,
+    NewRecoveryCode, PartitionDatabase, RevokeAuthenticationSession, SessionAuthenticationFactor,
+    StepUpAuthenticationSession,
 };
 
 #[test]
@@ -181,6 +182,136 @@ fn current_privileged_policy_controls_step_up_age_without_a_caller_claim()
 }
 
 #[test]
+fn step_up_atomically_replaces_the_source_and_consumes_one_fresh_factor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let partition_id = meshspan_domain::PartitionId::from_bytes([1; 16])?;
+    let administrator = meshspan_domain::PrincipalId::from_bytes([2; 16])?;
+    let database = PartitionDatabase::open(
+        &directory.path().join("session-step-up.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap(&mut repository, administrator)?;
+    let passkey_method = AuthenticationMethodId::from_bytes([20; 16])?;
+    let recovery_method = AuthenticationMethodId::from_bytes([30; 16])?;
+    let recovery_code = RecoveryCodeId::from_bytes([31; 16])?;
+    create_passkey(&mut repository, administrator, passkey_method)?;
+    create_recovery_codes(
+        &mut repository,
+        administrator,
+        recovery_method,
+        recovery_code,
+    )?;
+    let source = single_passkey_session(administrator, passkey_method, 70, 500)?;
+    repository.apply_committed(
+        position(4),
+        context(71, administrator, 72, 120, Some(Revision::new(3)))?,
+        &source,
+    )?;
+    let step_up = AuthoritativeCommand::StepUpAuthenticationSession(StepUpAuthenticationSession {
+        source_session_id: SessionId::from_bytes([70; 16])?,
+        replacement_session_id: SessionId::from_bytes([80; 16])?,
+        principal_id: administrator,
+        token_digest: [81; 32],
+        csrf_digest: [82; 32],
+        additional_factor: SessionAuthenticationFactor::RecoveryCode {
+            method_id: recovery_method,
+            credential_generation: 1,
+            method_revision: Revision::new(3),
+            code_id: recovery_code,
+        },
+        expires_at: UnixMicros::new(510),
+    });
+    repository.apply_committed(
+        position(5),
+        context(83, administrator, 84, 130, Some(Revision::new(4)))?,
+        &step_up,
+    )?;
+
+    let source = repository
+        .resolve_authentication_session(meshspan_domain::OperationId::from_bytes([71; 16])?)?
+        .ok_or("source session missing")?;
+    assert_eq!(source.revoked_at, Some(UnixMicros::new(130)));
+    let replacement = repository
+        .resolve_authentication_session(meshspan_domain::OperationId::from_bytes([83; 16])?)?
+        .ok_or("replacement session missing")?;
+    assert_eq!(
+        replacement.source_session_id,
+        Some(SessionId::from_bytes([70; 16])?)
+    );
+    assert_eq!(replacement.session_id, SessionId::from_bytes([80; 16])?);
+    assert_eq!(replacement.assurance, AssuranceLevel::MultiFactor);
+    assert_eq!(replacement.issued_at, UnixMicros::new(130));
+    assert_eq!(replacement.factors.len(), 2);
+    assert_eq!(
+        repository
+            .resolve_step_up_session(
+                meshspan_domain::OperationId::from_bytes([83; 16])?,
+                SessionId::from_bytes([70; 16])?,
+                [71; 32],
+                [72; 32],
+            )?
+            .ok_or("exact source presentation did not resolve")?
+            .session_id,
+        replacement.session_id
+    );
+    assert!(
+        repository
+            .resolve_step_up_session(
+                meshspan_domain::OperationId::from_bytes([83; 16])?,
+                SessionId::from_bytes([70; 16])?,
+                [99; 32],
+                [72; 32],
+            )?
+            .is_none()
+    );
+    assert_replacement_lifecycle(&mut repository, administrator, &replacement)?;
+    assert!(matches!(
+        repository.apply_committed(
+            position(7),
+            context(87, administrator, 88, 132, Some(Revision::new(6)))?,
+            &step_up,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
+
+fn assert_replacement_lifecycle(
+    repository: &mut AuthoritativeRepository,
+    administrator: meshspan_domain::PrincipalId,
+    replacement: &crate::AuthenticationSessionReplay,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let active = super::session::active_factor_state(
+        repository.database.connection(),
+        &replacement.session_id.as_bytes(),
+        UnixMicros::new(131),
+    )?
+    .ok_or("replacement factors are not current")?;
+    assert_eq!(active.latest_authenticated_at, UnixMicros::new(130));
+    repository.apply_committed(
+        position(6),
+        context(85, administrator, 86, 131, Some(Revision::new(5)))?,
+        &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
+            session_id: replacement.session_id,
+            principal_id: administrator,
+        }),
+    )?;
+    assert!(matches!(
+        repository.resolve_step_up_session(
+            meshspan_domain::OperationId::from_bytes([83; 16])?,
+            SessionId::from_bytes([70; 16])?,
+            [71; 32],
+            [72; 32],
+        ),
+        Err(RepositoryError::OperationConflict)
+    ));
+    Ok(())
+}
+
+#[test]
 fn session_consumes_exact_typed_factors_and_rolls_back_a_replay()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
@@ -213,6 +344,20 @@ fn session_consumes_exact_typed_factors_and_rolls_back_a_replay()
         context(41, administrator, 42, 120, Some(Revision::new(3)))?,
         &session,
     )?;
+
+    let retained = repository
+        .resolve_authentication_session(meshspan_domain::OperationId::from_bytes([41; 16])?)?
+        .ok_or("multi-factor replay missing")?;
+    assert_eq!(retained.assurance, AssuranceLevel::MultiFactor);
+    assert_eq!(retained.factors.len(), 2);
+    assert!(matches!(
+        retained.factors[0].credential,
+        AuthenticationSessionReplayCredential::Passkey(_)
+    ));
+    assert_eq!(
+        retained.factors[1].credential,
+        AuthenticationSessionReplayCredential::RecoveryCode(recovery_code)
+    );
 
     let database = &repository.database;
     assert_session_delivery(database)?;

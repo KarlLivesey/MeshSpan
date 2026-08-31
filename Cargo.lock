@@ -1095,6 +1095,7 @@ dependencies = [
  "meshspan-contracts",
  "meshspan-domain",
  "meshspan-metadata",
+ "meshspan-otp",
  "meshspan-passkey",
  "p256",
  "serde_json",

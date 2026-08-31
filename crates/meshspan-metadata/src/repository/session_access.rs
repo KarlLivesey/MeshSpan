@@ -78,6 +78,8 @@ pub struct SessionAccessCapability {
     pub gateway_revision: Revision,
     /// Exclusive session expiry.
     pub expires_at: UnixMicros,
+    /// Whether replacement browser cookies may retain bounded persistence.
+    pub persistent_cookie: bool,
     /// Exclusive system-management expiry, or none when the user is not a current manager.
     pub system_management_expires_at: Option<UnixMicros>,
     /// Canonical evidence digest for response validators and audit binding.
@@ -101,7 +103,7 @@ pub enum SessionAccessDecision {
     Denied(SessionAccessDenial),
 }
 
-type StoredSession = (Vec<u8>, Vec<u8>, i64, i64, i64, i64, i64, Option<i64>);
+type StoredSession = (Vec<u8>, Vec<u8>, i64, i64, i64, i64, i64, Option<i64>, i64);
 
 pub(super) fn evaluate(
     database: &PartitionDatabase,
@@ -112,8 +114,20 @@ pub(super) fn evaluate(
             SessionAccessDenial::Unavailable,
         ));
     }
-    let node = request.gateway_node_id.as_bytes();
-    let stored: Option<StoredSession> = database
+    let stored = load_stored_session(database, request)?;
+    let Some(stored) = stored else {
+        return Ok(SessionAccessDecision::Denied(
+            SessionAccessDenial::Unavailable,
+        ));
+    };
+    evaluate_stored_session(database, request, &stored)
+}
+
+fn load_stored_session(
+    database: &PartitionDatabase,
+    request: SessionAccessRequest,
+) -> Result<Option<StoredSession>, RepositoryError> {
+    database
         .connection()
         .query_row(
             "SELECT s.session_id, s.user_principal_id, s.assurance, s.identity_revision,
@@ -124,7 +138,8 @@ pub(super) fn evaluate(
                        AND (r.system_rights & ?2) = ?2
                        AND (rg.valid_from IS NULL OR rg.valid_from <= ?3)
                        AND (rg.valid_until IS NULL OR rg.valid_until > ?3)
-                       AND rg.activation_policy_id IS NULL)
+                       AND rg.activation_policy_id IS NULL),
+                    s.persistent_cookie
              FROM authentication_sessions s
              JOIN principals p ON p.principal_id = s.user_principal_id
              JOIN nodes n ON n.node_id = ?4 AND n.current_incarnation = ?5 AND n.state = 2
@@ -136,7 +151,7 @@ pub(super) fn evaluate(
                 UNBOUNDED_EXPIRY,
                 SYSTEM_MANAGE_RIGHT,
                 request.now.get(),
-                node.as_slice(),
+                request.gateway_node_id.as_bytes().as_slice(),
                 to_i64(request.gateway_incarnation)?,
                 request.token_digest.as_slice(),
             ],
@@ -150,15 +165,19 @@ pub(super) fn evaluate(
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
                 ))
             },
         )
-        .optional()?;
-    let Some(stored) = stored else {
-        return Ok(SessionAccessDecision::Denied(
-            SessionAccessDenial::Unavailable,
-        ));
-    };
+        .optional()
+        .map_err(RepositoryError::from)
+}
+
+fn evaluate_stored_session(
+    database: &PartitionDatabase,
+    request: SessionAccessRequest,
+    stored: &StoredSession,
+) -> Result<SessionAccessDecision, RepositoryError> {
     let assurance = assurance(stored.2)?;
     let Some(factors) =
         super::session::active_factor_state(database.connection(), &stored.0, request.now)?
@@ -199,6 +218,7 @@ pub(super) fn evaluate(
         identity_revision,
         gateway_revision: revision(stored.6)?,
         expires_at,
+        persistent_cookie: boolean(stored.8)?,
         system_management_expires_at,
         capability_digest: [0; 32],
     };
@@ -264,6 +284,7 @@ fn capability_digest(capability: SessionAccessCapability) -> [u8; 32] {
     digest.update(capability.identity_revision.get().to_be_bytes());
     digest.update(capability.gateway_revision.get().to_be_bytes());
     digest.update(capability.expires_at.get().to_be_bytes());
+    digest.update([u8::from(capability.persistent_cookie)]);
     digest.update(
         capability
             .system_management_expires_at
@@ -288,6 +309,14 @@ fn revision(value: i64) -> Result<Revision, RepositoryError> {
         Err(RepositoryError::CorruptState)
     } else {
         Ok(Revision::new(value))
+    }
+}
+
+fn boolean(value: i64) -> Result<bool, RepositoryError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(RepositoryError::CorruptState),
     }
 }
 

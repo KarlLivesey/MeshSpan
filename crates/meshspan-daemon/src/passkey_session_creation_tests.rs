@@ -6,13 +6,16 @@ use meshspan_api_contract::{
     CreatePasskeyChallengeRequest, CreateSessionRequest, SessionAuthentication,
     decode_create_session_request,
 };
+use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AuditEventId, AuthenticationMethodId, AuthenticationService, ClaimBundle, DurationMicros,
-    InitialBootstrapMaterial, NodeId, OperationId, Revision, UnixMicros,
+    InitialBootstrapMaterial, NodeId, OperationId, RecoveryCodeBundle, RecoveryCodeIssuanceKey,
+    Revision, UnixMicros,
 };
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, CommandContext, CreateAuthenticationMethod,
-    LocalDatabase, LogPosition, NewAuthenticationCredential, PartitionDatabase,
+    LocalDatabase, LogPosition, NewAuthenticationCredential, NewRecoveryCode, PartitionDatabase,
+    TotpAlgorithm,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::{TempDir, tempdir};
@@ -24,7 +27,8 @@ use crate::passkey_test_support::{
 };
 use crate::{
     CreateSessionService, PasskeyCeremonyKey, PasskeyChallengeConfiguration,
-    PasskeyChallengeService, PasskeySessionService, session_api_router,
+    PasskeyChallengeService, PasskeySessionService, TotpEnvelopeKey, TotpSecretBinding,
+    TotpSecretCipher, TotpSessionVerifier, session_api_router,
 };
 
 const CHALLENGE_OPERATION: &str = "00000000-0000-4000-8000-000000000071";
@@ -63,6 +67,70 @@ fn passkey_session_commits_and_exactly_replays_after_gateway_restart()
         )?
         .ok_or("passkey material missing")?;
     assert_eq!(material.signature_counter, 7);
+    Ok(())
+}
+
+#[test]
+fn passkey_and_totp_commit_once_and_replay_after_both_local_and_time_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new(UnixMicros::new(20))?;
+    let request = fixture.session_request_with_totp(false, "755224")?;
+    let passkeys = fixture.open_passkeys()?;
+    let totp =
+        TotpSessionVerifier::new(TotpSecretCipher::new(TotpEnvelopeKey::from_bytes([8; 32])?));
+    let mut service = CreateSessionService::with_factors(fixture.authority, passkeys, totp);
+    let first = service.create(&request, UnixMicros::new(30))?;
+    assert_eq!(
+        first.response.assurance,
+        meshspan_api_contract::AssuranceLevel::MultiFactor
+    );
+
+    fixture.authority = service.into_authority();
+    let passkeys = fixture.open_passkeys()?;
+    let totp =
+        TotpSessionVerifier::new(TotpSecretCipher::new(TotpEnvelopeKey::from_bytes([8; 32])?));
+    let mut restarted = CreateSessionService::with_factors(fixture.authority, passkeys, totp);
+    let replay = restarted.create(&request, UnixMicros::new(180_000_000))?;
+    assert_eq!(replay.response, first.response);
+    assert_eq!(replay.bearer.token_digest(), first.bearer.token_digest());
+    assert_eq!(replay.csrf.token_digest(), first.csrf.token_digest());
+    Ok(())
+}
+
+#[test]
+fn passkey_and_recovery_code_commit_both_mutable_factors_once()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new(UnixMicros::new(20))?;
+    let request = fixture.session_request_with_recovery(false)?;
+    let passkeys = fixture.open_passkeys()?;
+    let mut service = CreateSessionService::with_passkeys(fixture.authority, passkeys);
+    let first = service.create(&request, UnixMicros::new(30))?;
+    assert_eq!(
+        first.response.assurance,
+        meshspan_api_contract::AssuranceLevel::MultiFactor
+    );
+
+    fixture.authority = service.into_authority();
+    let passkeys = fixture.open_passkeys()?;
+    let mut restarted = CreateSessionService::with_passkeys(fixture.authority, passkeys);
+    let replay = restarted.create(&request, UnixMicros::new(40))?;
+    assert_eq!(replay.response, first.response);
+    assert_eq!(replay.bearer.token_digest(), first.bearer.token_digest());
+    assert_eq!(replay.csrf.token_digest(), first.csrf.token_digest());
+
+    let code = RecoveryCodeBundle::parse(&fixture.recovery_code)?;
+    let recovery = restarted
+        .into_authority()
+        .repository
+        .recovery_code_verification_material(
+            fixture.material.administrator_id,
+            code.code_id(),
+            code.secret_digest(),
+            AuthenticationService::Https,
+            UnixMicros::new(41),
+        )?
+        .ok_or("recovery-code evidence missing")?;
+    assert_eq!(recovery.used_at, Some(UnixMicros::new(30)));
     Ok(())
 }
 
@@ -107,6 +175,7 @@ struct Fixture {
     authority: RepositorySessionAuthority,
     challenge_id: String,
     challenge: String,
+    recovery_code: String,
 }
 
 impl Fixture {
@@ -126,6 +195,8 @@ impl Fixture {
         };
         bootstrap(&mut authority, &material, bootstrap_operation)?;
         enrol_passkey(&mut authority, &material)?;
+        enrol_totp(&mut authority, &material)?;
+        let recovery_code = enrol_recovery_code(&mut authority, &material)?;
         let local_path = directory.path().join("local.sqlite3");
         let response = create_challenge(&local_path, material.node_id, challenge_created_at)?;
         Ok(Self {
@@ -136,6 +207,7 @@ impl Fixture {
             authority,
             challenge_id: response.challenge_id.as_str().to_owned(),
             challenge: response.challenge,
+            recovery_code,
         })
     }
 
@@ -186,6 +258,43 @@ impl Fixture {
         });
         Ok(decode_create_session_request(&serde_json::to_vec(&value)?)?)
     }
+
+    fn session_request_with_totp(
+        &self,
+        remember: bool,
+        code: &str,
+    ) -> Result<CreateSessionRequest, Box<dyn std::error::Error>> {
+        let request = self.session_request(remember)?;
+        let value = serde_json::json!({
+            "operation_id": request.operation_id,
+            "authentication": request.authentication,
+            "additional_factor": {
+                "method": "totp",
+                "code": code
+            },
+            "client_label": null,
+            "remember": remember
+        });
+        Ok(decode_create_session_request(&serde_json::to_vec(&value)?)?)
+    }
+
+    fn session_request_with_recovery(
+        &self,
+        remember: bool,
+    ) -> Result<CreateSessionRequest, Box<dyn std::error::Error>> {
+        let request = self.session_request(remember)?;
+        let value = serde_json::json!({
+            "operation_id": request.operation_id,
+            "authentication": request.authentication,
+            "additional_factor": {
+                "method": "recovery_code",
+                "code": self.recovery_code
+            },
+            "client_label": null,
+            "remember": remember
+        });
+        Ok(decode_create_session_request(&serde_json::to_vec(&value)?)?)
+    }
 }
 
 fn enrol_passkey(
@@ -221,6 +330,100 @@ fn enrol_passkey(
     )?;
     authority.next_index = 3;
     Ok(())
+}
+
+fn enrol_totp(
+    authority: &mut RepositorySessionAuthority,
+    material: &InitialBootstrapMaterial,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let method_id = AuthenticationMethodId::from_bytes([12; 16])?;
+    let secret_ciphertext = TotpSecretCipher::new(TotpEnvelopeKey::from_bytes([8; 32])?).encrypt(
+        TotpSecretBinding {
+            method_id,
+            principal_id: material.administrator_id,
+            algorithm: 1,
+            digits: 6,
+            period_seconds: 30,
+            accepted_step_window: 1,
+        },
+        b"12345678901234567890",
+        &mut CountingRandom::default(),
+    )?;
+    let revision = authority.repository.current_revision()?;
+    authority.repository.apply_committed(
+        LogPosition {
+            index: authority.next_index,
+            term: 1,
+        },
+        CommandContext {
+            operation_id: OperationId::from_bytes([13; 16])?,
+            actor_principal_id: material.administrator_id,
+            audit_event_id: AuditEventId::from_bytes([14; 16])?,
+            occurred_at: UnixMicros::new(21),
+            expected_revision: Some(revision),
+        },
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id,
+            principal_id: material.administrator_id,
+            label: "TOTP".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::Totp {
+                secret_ciphertext,
+                algorithm: TotpAlgorithm::Sha1,
+                digits: 6,
+                period_seconds: 30,
+                accepted_step_window: 1,
+            },
+        }),
+    )?;
+    authority.next_index = authority.next_index.saturating_add(1);
+    Ok(())
+}
+
+fn enrol_recovery_code(
+    authority: &mut RepositorySessionAuthority,
+    material: &InitialBootstrapMaterial,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let operation_id = OperationId::from_bytes([15; 16])?;
+    let code = RecoveryCodeBundle::derive_issued(
+        &RecoveryCodeIssuanceKey::from_bytes([16; 32])?,
+        material.administrator_id,
+        operation_id,
+        1,
+    )?;
+    let revision = authority.repository.current_revision()?;
+    authority.repository.apply_committed(
+        LogPosition {
+            index: authority.next_index,
+            term: 1,
+        },
+        CommandContext {
+            operation_id,
+            actor_principal_id: material.administrator_id,
+            audit_event_id: AuditEventId::from_bytes([17; 16])?,
+            occurred_at: UnixMicros::new(22),
+            expected_revision: Some(revision),
+        },
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: AuthenticationMethodId::from_bytes([18; 16])?,
+            principal_id: material.administrator_id,
+            label: "Recovery code".to_owned(),
+            service_scope: AuthenticationService::Https.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::RecoveryCodes {
+                codes: BoundedItems::new(
+                    vec![NewRecoveryCode {
+                        code_id: code.code_id(),
+                        code_digest: code.secret_digest(),
+                    }],
+                    64,
+                )?,
+            },
+        }),
+    )?;
+    authority.next_index = authority.next_index.saturating_add(1);
+    Ok(code.expose_encoded().to_string())
 }
 
 fn create_challenge(

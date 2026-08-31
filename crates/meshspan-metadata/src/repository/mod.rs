@@ -106,6 +106,7 @@ pub use access_query::{
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
+    RecoveryCodeVerificationMaterial, TotpVerificationMaterial,
 };
 pub use authentication_policy::AuthenticationPolicy;
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
@@ -148,7 +149,8 @@ pub use kernel::{
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
 pub use passkey_registration::{
-    AuthenticationMethodCreationReplay, PasskeyRegistrationProfile, PasskeyRegistrationReplay,
+    AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
+    PasskeyRegistrationProfile, PasskeyRegistrationReplay,
 };
 pub use query::{
     GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
@@ -160,7 +162,10 @@ pub use reachability::{
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use retention::VersionRetentionPolicy;
-pub use session::{ApiKeySessionReplay, PasskeySessionReplay, SessionRevocationReplay};
+pub use session::{
+    ApiKeySessionReplay, AuthenticationSessionReplay, AuthenticationSessionReplayCredential,
+    AuthenticationSessionReplayFactor, PasskeySessionReplay, SessionRevocationReplay,
+};
 pub use session_access::{
     BrowserSessionAccessRequest, BrowserSessionProtection, SessionAccessCapability,
     SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
@@ -538,6 +543,39 @@ impl AuthoritativeRepository {
         session::resolve_passkey_replay(&self.database, operation_id)
     }
 
+    /// Resolves one exact committed session with its complete ordered factor evidence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects operations for another entity and fails closed for malformed retained evidence.
+    pub fn resolve_authentication_session(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<AuthenticationSessionReplay>, RepositoryError> {
+        session::resolve_session_replay(&self.database, operation_id)
+    }
+
+    /// Resolves one exact committed step-up using the now-revoked source presentation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another command family/source and fails closed for malformed retained evidence.
+    pub fn resolve_step_up_session(
+        &self,
+        operation_id: OperationId,
+        expected_source: meshspan_domain::SessionId,
+        source_token_digest: [u8; 32],
+        source_csrf_digest: [u8; 32],
+    ) -> Result<Option<AuthenticationSessionReplay>, RepositoryError> {
+        session::resolve_step_up_replay(
+            &self.database,
+            operation_id,
+            expected_source,
+            source_token_digest,
+            source_csrf_digest,
+        )
+    }
+
     /// Resolves an exact durable self-service session revocation retry.
     ///
     /// # Errors
@@ -681,6 +719,55 @@ impl AuthoritativeRepository {
         )
     }
 
+    /// Resolves every bounded active TOTP verifier for one already-authenticated user.
+    ///
+    /// The returned seeds remain encrypted. Absence and ordinary inactive, expired or
+    /// service-policy rejection produce an empty list.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when matching persisted evidence is malformed or exceeds its hard bound.
+    pub fn totp_verification_materials(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        service: AuthenticationService,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Vec<TotpVerificationMaterial>, RepositoryError> {
+        authentication_method::totp_verification_materials(
+            self.database.connection(),
+            principal_id,
+            service,
+            now,
+        )
+    }
+
+    /// Resolves one exact recovery-code verifier for an already-authenticated user.
+    ///
+    /// Absence and ordinary digest, lifecycle, expiry or service rejection return `None`.
+    /// A used code remains visible only as typed evidence so an exact committed retry can be
+    /// distinguished from a forbidden new consumption.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when matching persisted evidence is malformed.
+    pub fn recovery_code_verification_material(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        code_id: meshspan_domain::RecoveryCodeId,
+        presented_digest: [u8; 32],
+        service: AuthenticationService,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Option<RecoveryCodeVerificationMaterial>, RepositoryError> {
+        authentication_method::recovery_code_verification_material(
+            self.database.connection(),
+            principal_id,
+            code_id,
+            presented_digest,
+            service,
+            now,
+        )
+    }
+
     /// Returns the current active user identity and a bounded passkey-exclusion hint.
     ///
     /// The credential list is a browser convenience only. Authoritative creation still enforces
@@ -694,6 +781,18 @@ impl AuthoritativeRepository {
         principal_id: meshspan_domain::PrincipalId,
     ) -> Result<Option<PasskeyRegistrationProfile>, RepositoryError> {
         passkey_registration::profile(&self.database, principal_id)
+    }
+
+    /// Returns the current active user identity for a non-passkey registration ceremony.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when replicated identity evidence is malformed.
+    pub fn authentication_registration_profile(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+    ) -> Result<Option<AuthenticationRegistrationProfile>, RepositoryError> {
+        passkey_registration::authentication_profile(&self.database, principal_id)
     }
 
     /// Resolves one exact committed passkey-registration operation.

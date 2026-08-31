@@ -9,10 +9,14 @@ use crate::{
     ApiError, CreateApiKeyRequest, CreateApiKeyResponse, CreateMeshSetupRequest,
     CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
     CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreateSessionRequest,
-    CreateSessionResponse, CurrentSessionResponse, HealthResponse,
+    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse,
+    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
+    CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
+    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
+    CreateTotpRegistrationResponse, CurrentSessionResponse, HealthResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse, schema,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -81,15 +85,22 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "CreatePasskeyRegistrationChallengeResponse": response_component::<CreatePasskeyRegistrationChallengeResponse>(),
                 "CreatePasskeyRegistrationRequest": request_component::<CreatePasskeyRegistrationRequest>(),
                 "CreatePasskeyRegistrationResponse": response_component::<CreatePasskeyRegistrationResponse>(),
+                "CreateRecoveryCodesRequest": request_component::<CreateRecoveryCodesRequest>(),
+                "CreateRecoveryCodesResponse": response_component::<CreateRecoveryCodesResponse>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
+                "CreateTotpRegistrationChallengeRequest": request_component::<CreateTotpRegistrationChallengeRequest>(),
+                "CreateTotpRegistrationChallengeResponse": response_component::<CreateTotpRegistrationChallengeResponse>(),
+                "CreateTotpRegistrationRequest": request_component::<CreateTotpRegistrationRequest>(),
+                "CreateTotpRegistrationResponse": response_component::<CreateTotpRegistrationResponse>(),
                 "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
                 "HealthResponse": response_component::<HealthResponse>(),
                 "RevokeCurrentSessionRequest": request_component::<RevokeCurrentSessionRequest>(),
                 "RevokeCurrentSessionResponse": response_component::<RevokeCurrentSessionResponse>(),
                 "RevokeAuthenticationMethodRequest": request_component::<RevokeAuthenticationMethodRequest>(),
                 "RevokeAuthenticationMethodResponse": response_component::<RevokeAuthenticationMethodResponse>(),
-                "SetupStatusResponse": response_component::<SetupStatusResponse>()
+                "SetupStatusResponse": response_component::<SetupStatusResponse>(),
+                "StepUpCurrentSessionRequest": request_component::<StepUpCurrentSessionRequest>()
             }
         }
     });
@@ -117,8 +128,20 @@ fn paths() -> Value {
             create_passkey_registration_path(),
         ),
         (
+            "/users/current/authentication-methods/totp/registration-challenges".to_owned(),
+            create_totp_registration_challenge_path(),
+        ),
+        (
+            "/users/current/authentication-methods/totp".to_owned(),
+            create_totp_registration_path(),
+        ),
+        (
             "/users/current/authentication-methods/api-keys".to_owned(),
             create_api_key_path(),
+        ),
+        (
+            "/users/current/authentication-methods/recovery-codes".to_owned(),
+            create_recovery_codes_path(),
         ),
         (
             "/users/current/authentication-methods/{method_id}/revocations".to_owned(),
@@ -126,10 +149,42 @@ fn paths() -> Value {
         ),
         ("/sessions/current".to_owned(), current_session_path()),
         (
+            "/sessions/current/step-ups".to_owned(),
+            step_up_current_session_path(),
+        ),
+        (
             "/sessions/current/revocations".to_owned(),
             revoke_current_session_path(),
         ),
     ]))
+}
+
+fn step_up_current_session_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "stepUpCurrentSession",
+            "summary": "Atomically rotate the current browser session after a fresh factor",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-session step-up",
+                "#/components/schemas/StepUpCurrentSessionRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Committed replacement session; the source session is revoked",
+                    "#/components/schemas/CreateSessionResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or rotation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn revoke_authentication_method_path() -> Value {
@@ -186,6 +241,34 @@ fn create_api_key_path() -> Value {
                 "201": json_response(
                     "Committed API key with its exactly replayable one-time secret",
                     "#/components/schemas/CreateApiKeyResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or issuance conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_recovery_codes_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserRecoveryCodes",
+            "summary": "Replace the current user's single-use recovery-code set",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-user recovery-code issuance",
+                "#/components/schemas/CreateRecoveryCodesRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Committed recovery-code set with exactly replayable one-time secrets",
+                    "#/components/schemas/CreateRecoveryCodesResponse"
                 ),
                 "400": json_response("Invalid request", "#/components/schemas/ApiError"),
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
@@ -376,6 +459,62 @@ fn create_passkey_registration_path() -> Value {
                 "400": json_response("Invalid request", "#/components/schemas/ApiError"),
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
                 "409": json_response("Changed retry, duplicate credential or ceremony conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_totp_registration_challenge_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserTotpRegistrationChallenge",
+            "summary": "Create registration material for a current-user TOTP method",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-gateway-local-ceremony",
+            "requestBody": json_request(
+                "Current-user TOTP registration material",
+                "#/components/schemas/CreateTotpRegistrationChallengeRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Exactly replayable TOTP registration material",
+                    "#/components/schemas/CreateTotpRegistrationChallengeResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or ceremony conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_totp_registration_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserTotp",
+            "summary": "Confirm and register a current-user TOTP method",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-user TOTP registration confirmation",
+                "#/components/schemas/CreateTotpRegistrationRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Committed TOTP authentication method",
+                    "#/components/schemas/CreateTotpRegistrationResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or ceremony conflict", "#/components/schemas/ApiError"),
                 "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),

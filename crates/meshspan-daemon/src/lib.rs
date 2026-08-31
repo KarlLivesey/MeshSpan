@@ -37,6 +37,7 @@ mod create_session_tests;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
+mod multi_factor_session;
 mod passkey_challenge;
 mod passkey_challenge_api;
 #[cfg(test)]
@@ -64,11 +65,44 @@ mod passkey_session_creation_tests;
 mod passkey_session_tests;
 #[cfg(test)]
 mod passkey_test_support;
+mod recovery_code_issuance;
+mod recovery_code_issuance_api;
+#[cfg(test)]
+mod recovery_code_issuance_api_tests;
+mod recovery_code_issuance_contract;
+mod recovery_code_issuance_model;
+#[cfg(test)]
+mod recovery_code_issuance_tests;
+mod recovery_code_session_creation;
+#[cfg(test)]
+mod recovery_code_session_creation_tests;
 mod revoke_session;
 mod revoke_session_api;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
+mod step_up_session;
+mod step_up_session_api;
+#[cfg(test)]
+mod step_up_session_api_tests;
+#[cfg(test)]
+mod step_up_session_tests;
+mod totp_registration;
+mod totp_registration_api;
+#[cfg(test)]
+mod totp_registration_api_tests;
+mod totp_registration_configuration;
+mod totp_registration_contract;
+mod totp_registration_model;
+mod totp_registration_state;
+#[cfg(test)]
+mod totp_registration_tests;
+mod totp_secret;
+mod totp_session;
+mod totp_session_contract;
+mod totp_session_creation;
+#[cfg(test)]
+mod totp_session_creation_tests;
 
 pub use api_key_issuance::ApiKeyIssuanceService;
 pub use api_key_issuance_api::{
@@ -130,6 +164,7 @@ pub use passkey_registration_configuration::{
     PasskeyRegistrationConfiguration, PasskeyRegistrationConfigurationError,
 };
 pub use passkey_registration_contract::{
+    AuthenticationRegistrationStore, AuthenticationRegistrationStoreError,
     PasskeyRegistrationAuthority, PasskeyRegistrationAuthorityError, PasskeyRegistrationCommit,
     PasskeyRegistrationError, PasskeyRegistrationStore, PasskeyRegistrationStoreError,
 };
@@ -139,6 +174,14 @@ pub use passkey_session::{
 };
 pub use passkey_session_contract::{
     DisabledPasskeyProof, DisabledPasskeySessions, PasskeySessionCeremony, PreparedPasskeyProof,
+};
+pub use recovery_code_issuance::RecoveryCodeIssuanceService;
+pub use recovery_code_issuance_api::{
+    RecoveryCodeIssuanceApiError, RecoveryCodeIssuanceController, recovery_code_issuance_api_router,
+};
+pub use recovery_code_issuance_contract::{
+    RecoveryCodeIssuanceAuthority, RecoveryCodeIssuanceAuthorityError, RecoveryCodeIssuanceCommit,
+    RecoveryCodeIssuanceError,
 };
 pub use revoke_session::{
     RevokeCurrentSessionError, RevokeCurrentSessionService, SessionRevocationAuthority,
@@ -150,6 +193,30 @@ pub use revoke_session_api::{
 pub use setup_api::{
     CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,
     SetupStatusSource, setup_api_router, setup_api_router_with_creation,
+};
+pub use step_up_session::{
+    StepUpCurrentSessionError, StepUpCurrentSessionService, StepUpSessionAuthority,
+};
+pub use step_up_session_api::{
+    StepUpCurrentSessionApiError, StepUpCurrentSessionController,
+    step_up_current_session_api_router,
+};
+pub use totp_registration::TotpRegistrationService;
+pub use totp_registration_api::{
+    TotpRegistrationApiError, TotpRegistrationController, totp_registration_api_router,
+};
+pub use totp_registration_configuration::{
+    TotpRegistrationConfiguration, TotpRegistrationConfigurationError,
+};
+pub use totp_registration_contract::{
+    TotpRegistrationAuthority, TotpRegistrationAuthorityError, TotpRegistrationCommit,
+    TotpRegistrationError,
+};
+pub use totp_registration_state::{TotpCeremonyKey, TotpRegistrationStateError};
+pub use totp_secret::{TotpEnvelopeKey, TotpSecretBinding, TotpSecretCipher, TotpSecretError};
+pub use totp_session::TotpSessionVerifier;
+pub use totp_session_contract::{
+    DisabledTotpFactors, TotpFactorVerifier, TotpSessionError, VerifiedTotpFactor,
 };
 
 use meshspan_domain::{EntropyError, RandomSource};

@@ -13,7 +13,7 @@ use super::authentication_policy::{self, SessionPolicyEvidence};
 use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{
     CommandContext, IssueAuthenticationSession, RevokeAuthenticationSession,
-    SessionAuthenticationFactor, SessionClientLabel,
+    SessionAuthenticationFactor, SessionClientLabel, StepUpAuthenticationSession,
 };
 
 const ACTIVE: i64 = 1;
@@ -81,6 +81,250 @@ pub struct PasskeySessionReplay {
     pub credential_generation: u64,
     /// Opaque passkey credential identity used by the original operation.
     pub credential_id: Vec<u8>,
+}
+
+/// Exact durable facts for one session operation independently of its factor combination.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticationSessionReplay {
+    /// Digest of the original authoritative result receipt.
+    pub result_digest: [u8; 32],
+    /// Stable session identity bound to the operation.
+    pub session_id: SessionId,
+    /// Source session atomically replaced by this step-up, when applicable.
+    pub source_session_id: Option<SessionId>,
+    /// User which authenticated the original operation.
+    pub principal_id: PrincipalId,
+    /// Stored bearer verifier.
+    pub token_digest: [u8; 32],
+    /// Stored CSRF verifier.
+    pub csrf_digest: [u8; 32],
+    /// Exact missing, null or value label intent.
+    pub client_label: SessionClientLabel,
+    /// Exact cookie-persistence intent.
+    pub persistent_cookie: bool,
+    /// Connector family bound to the session.
+    pub service: AuthenticationService,
+    /// Assurance derived from the committed factor combination.
+    pub assurance: AssuranceLevel,
+    /// Original authoritative factor-acceptance instant.
+    pub issued_at: UnixMicros,
+    /// Original exclusive expiry returned to the caller.
+    pub expires_at: UnixMicros,
+    /// Explicit revocation instant, when the original session has since been fenced.
+    pub revoked_at: Option<UnixMicros>,
+    /// Ordered exact factor evidence retained by the committed session.
+    pub factors: Vec<AuthenticationSessionReplayFactor>,
+}
+
+/// One exact factor retained by a committed session operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticationSessionReplayFactor {
+    /// Common authentication-method identity.
+    pub method_id: AuthenticationMethodId,
+    /// Exact credential family.
+    pub kind: AuthenticationMethodKind,
+    /// Credential generation consumed by the operation.
+    pub credential_generation: u64,
+    /// Method revision consumed by the operation.
+    pub method_revision: Revision,
+    /// Family-specific public replay evidence.
+    pub credential: AuthenticationSessionReplayCredential,
+}
+
+/// Family-specific non-secret evidence needed to validate an exact session retry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AuthenticationSessionReplayCredential {
+    /// Opaque passkey credential identity.
+    Passkey(Vec<u8>),
+    /// Exact TOTP step atomically consumed by the session.
+    Totp {
+        /// Monotonic RFC 6238 counter accepted by authority.
+        accepted_step: u64,
+    },
+    /// Exact single-use recovery-code identity.
+    RecoveryCode(meshspan_domain::RecoveryCodeId),
+    /// Exact public API-key identity.
+    ApiKey(ApiKeyId),
+}
+
+/// Resolves one already-committed session with every ordered factor.
+pub(super) fn resolve_session_replay(
+    database: &crate::PartitionDatabase,
+    operation_id: OperationId,
+) -> Result<Option<AuthenticationSessionReplay>, RepositoryError> {
+    let Some(receipt) = super::receipt::resolve_operation(database, operation_id)? else {
+        return Ok(None);
+    };
+    if receipt.entity.kind != EntityKind::AuthenticationSession {
+        return Err(RepositoryError::OperationConflict);
+    }
+    let session_id = receipt.entity.id;
+    let common = database.connection().query_row(
+        "SELECT user_principal_id, token_digest, csrf_digest, client_label_state,
+                client_label, persistent_cookie, service, assurance, issued_at,
+                expires_at, revoked_at, source_session_id
+         FROM authentication_sessions WHERE session_id = ?1",
+        [session_id.as_slice()],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<Vec<u8>>>(11)?,
+            ))
+        },
+    )?;
+    let mut statement = database.connection().prepare(
+        "SELECT factor_sequence, method_id, method_kind, credential_generation,
+                method_revision, credential_reference, authenticated_at
+         FROM authentication_session_factors
+         WHERE session_id = ?1 ORDER BY factor_sequence LIMIT ?2",
+    )?;
+    let rows = statement.query_map(
+        params![
+            session_id.as_slice(),
+            i64::try_from(MAXIMUM_FACTORS + 1).map_err(|_| RepositoryError::CapacityExceeded)?
+        ],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        },
+    )?;
+    let mut factors = Vec::new();
+    for row in rows {
+        let (sequence, method, kind, generation, revision, reference, authenticated_at) = row?;
+        if sequence
+            != i64::try_from(factors.len() + 1).map_err(|_| RepositoryError::CapacityExceeded)?
+            || authenticated_at > common.8
+            || (common.11.is_none() && authenticated_at != common.8)
+            || factors.len() >= MAXIMUM_FACTORS
+        {
+            return Err(RepositoryError::CorruptState);
+        }
+        factors.push(parse_replay_factor(
+            method, kind, generation, revision, reference,
+        )?);
+    }
+    if factors.is_empty() || common.9 <= common.8 {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(Some(AuthenticationSessionReplay {
+        result_digest: receipt.result_digest,
+        session_id: SessionId::from_bytes(session_id).map_err(|_| RepositoryError::CorruptState)?,
+        source_session_id: common
+            .11
+            .map(fixed_bytes)
+            .transpose()?
+            .map(SessionId::from_bytes)
+            .transpose()
+            .map_err(|_| RepositoryError::CorruptState)?,
+        principal_id: PrincipalId::from_bytes(fixed_bytes(common.0)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        token_digest: fixed_bytes(common.1)?,
+        csrf_digest: fixed_bytes(common.2)?,
+        client_label: parse_client_label(common.3, common.4)?,
+        persistent_cookie: parse_boolean(common.5)?,
+        service: parse_service(common.6)?,
+        assurance: parse_assurance(common.7)?,
+        issued_at: UnixMicros::new(common.8),
+        expires_at: UnixMicros::new(common.9),
+        revoked_at: common.10.map(UnixMicros::new),
+        factors,
+    }))
+}
+
+pub(super) fn resolve_step_up_replay(
+    database: &crate::PartitionDatabase,
+    operation_id: OperationId,
+    expected_source: SessionId,
+    source_token_digest: [u8; 32],
+    source_csrf_digest: [u8; 32],
+) -> Result<Option<AuthenticationSessionReplay>, RepositoryError> {
+    if source_token_digest == [0; 32]
+        || source_csrf_digest == [0; 32]
+        || source_token_digest == source_csrf_digest
+    {
+        return Ok(None);
+    }
+    let Some(replay) = resolve_session_replay(database, operation_id)? else {
+        return Ok(None);
+    };
+    if replay.source_session_id != Some(expected_source) {
+        return Err(RepositoryError::OperationConflict);
+    }
+    if replay.revoked_at.is_some() {
+        return Err(RepositoryError::OperationConflict);
+    }
+    let stored: Option<(Vec<u8>, Vec<u8>)> = database
+        .connection()
+        .query_row(
+            "SELECT token_digest, csrf_digest FROM authentication_sessions
+             WHERE session_id = ?1",
+            [expected_source.as_bytes().as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((token, csrf)) = stored else {
+        return Err(RepositoryError::CorruptState);
+    };
+    if fixed_bytes::<32>(token)? != source_token_digest
+        || fixed_bytes::<32>(csrf)? != source_csrf_digest
+    {
+        return Ok(None);
+    }
+    Ok(Some(replay))
+}
+
+fn parse_replay_factor(
+    method: Vec<u8>,
+    kind: i64,
+    generation: i64,
+    revision: i64,
+    reference: Vec<u8>,
+) -> Result<AuthenticationSessionReplayFactor, RepositoryError> {
+    let kind = parse_method_kind(kind)?;
+    let credential = match kind {
+        AuthenticationMethodKind::Passkey if !reference.is_empty() && reference.len() <= 1_024 => {
+            AuthenticationSessionReplayCredential::Passkey(reference)
+        }
+        AuthenticationMethodKind::Totp => AuthenticationSessionReplayCredential::Totp {
+            accepted_step: u64::from_be_bytes(fixed_bytes(reference)?),
+        },
+        AuthenticationMethodKind::RecoveryCode => {
+            AuthenticationSessionReplayCredential::RecoveryCode(
+                meshspan_domain::RecoveryCodeId::from_bytes(fixed_bytes(reference)?)
+                    .map_err(|_| RepositoryError::CorruptState)?,
+            )
+        }
+        AuthenticationMethodKind::ApiKey => AuthenticationSessionReplayCredential::ApiKey(
+            ApiKeyId::from_bytes(fixed_bytes(reference)?)
+                .map_err(|_| RepositoryError::CorruptState)?,
+        ),
+        AuthenticationMethodKind::Passkey => return Err(RepositoryError::CorruptState),
+    };
+    Ok(AuthenticationSessionReplayFactor {
+        method_id: AuthenticationMethodId::from_bytes(fixed_bytes(method)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        kind,
+        credential_generation: parse_positive(generation)?,
+        method_revision: Revision::new(parse_positive(revision)?),
+        credential,
+    })
 }
 
 /// Exact durable result of a self-service session revocation retry.
@@ -422,6 +666,324 @@ pub(super) fn issue(
         kind: EntityKind::AuthenticationSession,
         id: session,
     })
+}
+
+pub(super) fn step_up(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &StepUpAuthenticationSession,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    validate_step_up_shape(command, context)?;
+    require_active_user(transaction, command.principal_id.as_bytes())?;
+    let source = load_step_up_source(transaction, command, context.occurred_at)?;
+    let primary = load_source_primary(transaction, command.source_session_id)?;
+    let additional = admit_step_up_factor(transaction, context, command, &source, &primary)?;
+    authentication_policy::validate_session_establishment(
+        transaction,
+        source.service,
+        [primary.kind, additional.kind],
+        context.occurred_at,
+        command.expires_at,
+    )?;
+    let replacement = step_up_issue_shape(command, &source)?;
+    reject_duplicate_session(transaction, &replacement)?;
+    insert_step_up_session(transaction, context, command, &source, revision)?;
+    persist_step_up_factors(
+        transaction,
+        context,
+        &replacement,
+        &primary,
+        &command.additional_factor,
+        additional,
+        revision,
+    )?;
+    let revoked = transaction.execute(
+        "UPDATE authentication_sessions SET revoked_at = ?1, revision = ?2
+         WHERE session_id = ?3 AND revoked_at IS NULL AND expires_at > ?1",
+        params![
+            context.occurred_at.get(),
+            to_i64(revision.get())?,
+            command.source_session_id.as_bytes().as_slice(),
+        ],
+    )?;
+    if revoked != 1 {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    Ok(EntityReference {
+        kind: EntityKind::AuthenticationSession,
+        id: command.replacement_session_id.as_bytes(),
+    })
+}
+
+struct StepUpSource {
+    service: AuthenticationService,
+    client_label: SessionClientLabel,
+    persistent_cookie: bool,
+}
+
+type StoredStepUpSource = (
+    Vec<u8>,
+    i64,
+    i64,
+    Option<String>,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+);
+
+struct SourcePrimary {
+    method_id: AuthenticationMethodId,
+    kind: AuthenticationMethodKind,
+    credential_reference: Vec<u8>,
+    credential_generation: u64,
+    method_revision: Revision,
+    authenticated_at: UnixMicros,
+}
+
+fn validate_step_up_shape(
+    command: &StepUpAuthenticationSession,
+    context: CommandContext,
+) -> Result<(), RepositoryError> {
+    if command.source_session_id == command.replacement_session_id
+        || command.token_digest == [0; 32]
+        || command.csrf_digest == [0; 32]
+        || command.token_digest == command.csrf_digest
+        || command.expires_at <= context.occurred_at
+        || command.additional_factor.method_revision().get() == 0
+        || command.additional_factor.credential_generation() == 0
+        || matches!(
+            command.additional_factor,
+            SessionAuthenticationFactor::Passkey { .. }
+                | SessionAuthenticationFactor::ApiKey { .. }
+        )
+    {
+        Err(RepositoryError::InvalidCommand)
+    } else {
+        Ok(())
+    }
+}
+
+fn load_step_up_source(
+    transaction: &Transaction<'_>,
+    command: &StepUpAuthenticationSession,
+    now: UnixMicros,
+) -> Result<StepUpSource, RepositoryError> {
+    let stored: Option<StoredStepUpSource> = transaction
+        .query_row(
+            "SELECT user_principal_id, service, client_label_state, client_label,
+                        persistent_cookie, issued_at, expires_at, revoked_at
+                 FROM authentication_sessions WHERE session_id = ?1",
+            [command.source_session_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((principal, service, label_state, label, persistent, issued, expires, revoked)) =
+        stored
+    else {
+        return Err(RepositoryError::InvalidCommand);
+    };
+    if principal.as_slice() != command.principal_id.as_bytes().as_slice()
+        || issued > now.get()
+        || expires <= issued
+        || expires <= now.get()
+        || revoked.is_some()
+        || active_factor_state(transaction, &command.source_session_id.as_bytes(), now)?.is_none()
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    Ok(StepUpSource {
+        service: parse_service(service)?,
+        client_label: parse_client_label(label_state, label)?,
+        persistent_cookie: parse_boolean(persistent)?,
+    })
+}
+
+fn load_source_primary(
+    transaction: &Transaction<'_>,
+    source_session_id: SessionId,
+) -> Result<SourcePrimary, RepositoryError> {
+    let mut statement = transaction.prepare(
+        "SELECT factor.method_id, factor.method_kind, factor.credential_reference,
+                factor.credential_generation, method.revision, factor.authenticated_at
+         FROM authentication_session_factors AS factor
+         JOIN authentication_methods AS method USING(method_id)
+         WHERE factor.session_id = ?1 AND factor.method_kind IN (1, 4)
+         ORDER BY factor.factor_sequence LIMIT 2",
+    )?;
+    let rows = statement.query_map([source_session_id.as_bytes().as_slice()], |row| {
+        Ok((
+            row.get::<_, Vec<u8>>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Vec<u8>>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+        ))
+    })?;
+    let records = rows.collect::<Result<Vec<_>, _>>()?;
+    let [(method, kind, reference, generation, revision, authenticated_at)] = records.as_slice()
+    else {
+        return Err(RepositoryError::InvalidCommand);
+    };
+    Ok(SourcePrimary {
+        method_id: AuthenticationMethodId::from_bytes(fixed_bytes(method.clone())?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        kind: parse_method_kind(*kind)?,
+        credential_reference: reference.clone(),
+        credential_generation: parse_positive(*generation)?,
+        method_revision: Revision::new(parse_positive(*revision)?),
+        authenticated_at: UnixMicros::new(*authenticated_at),
+    })
+}
+
+fn admit_step_up_factor(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &StepUpAuthenticationSession,
+    source: &StepUpSource,
+    primary: &SourcePrimary,
+) -> Result<AdmittedFactor, RepositoryError> {
+    if command.additional_factor.method_id() == primary.method_id {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let replacement = step_up_issue_shape(command, source)?;
+    let stored = load_method(
+        transaction,
+        command.additional_factor.method_id().as_bytes(),
+    )?;
+    let kind = validate_method(&stored, context, &replacement, &command.additional_factor)?;
+    if kind.is_primary() {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    validate_typed_factor(
+        transaction,
+        context.occurred_at,
+        source.service,
+        &command.additional_factor,
+        kind,
+    )?;
+    Ok(AdmittedFactor {
+        kind,
+        method_revision: Revision::new(parse_positive(stored.revision)?),
+    })
+}
+
+fn step_up_issue_shape(
+    command: &StepUpAuthenticationSession,
+    source: &StepUpSource,
+) -> Result<IssueAuthenticationSession, RepositoryError> {
+    Ok(IssueAuthenticationSession {
+        session_id: command.replacement_session_id,
+        principal_id: command.principal_id,
+        token_digest: command.token_digest,
+        csrf_digest: command.csrf_digest,
+        client_label: source.client_label.clone(),
+        persistent_cookie: source.persistent_cookie,
+        service: source.service,
+        factors: meshspan_contracts::BoundedItems::new(
+            vec![command.additional_factor.clone()],
+            MAXIMUM_FACTORS,
+        )
+        .map_err(|_| RepositoryError::InvalidCommand)?,
+        expires_at: command.expires_at,
+    })
+}
+
+fn insert_step_up_session(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &StepUpAuthenticationSession,
+    source: &StepUpSource,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    transaction.execute(
+        "INSERT INTO authentication_sessions(
+            session_id, token_digest, csrf_digest, client_label_state, client_label,
+            persistent_cookie, user_principal_id, service, assurance, identity_revision,
+            issued_at, expires_at, revoked_at, revision, source_session_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14)",
+        params![
+            command.replacement_session_id.as_bytes().as_slice(),
+            command.token_digest.as_slice(),
+            command.csrf_digest.as_slice(),
+            client_label_state(&source.client_label),
+            client_label_value(&source.client_label),
+            source.persistent_cookie,
+            command.principal_id.as_bytes().as_slice(),
+            source.service.scope_bit(),
+            assurance_code(AssuranceLevel::MultiFactor),
+            current_identity_revision(transaction)?,
+            context.occurred_at.get(),
+            command.expires_at.get(),
+            to_i64(revision.get())?,
+            command.source_session_id.as_bytes().as_slice(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn persist_step_up_factors(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    replacement: &IssueAuthenticationSession,
+    primary: &SourcePrimary,
+    additional: &SessionAuthenticationFactor,
+    admitted: AdmittedFactor,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let primary_first = primary.method_id < additional.method_id();
+    let primary_index = usize::from(!primary_first);
+    let additional_index = usize::from(primary_first);
+    persist_copied_primary(transaction, replacement, primary, primary_index, revision)?;
+    persist_factor(
+        transaction,
+        context,
+        replacement,
+        additional,
+        admitted,
+        additional_index,
+        revision,
+    )
+}
+
+fn persist_copied_primary(
+    transaction: &Transaction<'_>,
+    replacement: &IssueAuthenticationSession,
+    primary: &SourcePrimary,
+    index: usize,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    transaction.execute(
+        "INSERT INTO authentication_session_factors(
+            session_id, factor_sequence, method_id, method_kind, credential_reference,
+            credential_generation, method_revision, authenticated_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            replacement.session_id.as_bytes().as_slice(),
+            i64::try_from(index + 1).map_err(|_| RepositoryError::CapacityExceeded)?,
+            primary.method_id.as_bytes().as_slice(),
+            primary.kind as u8,
+            primary.credential_reference.as_slice(),
+            to_i64(primary.credential_generation)?,
+            to_i64(primary.method_revision.get())?,
+            primary.authenticated_at.get(),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -997,7 +1559,9 @@ const fn factor_kind(factor: &SessionAuthenticationFactor) -> AuthenticationMeth
 fn credential_reference(factor: &SessionAuthenticationFactor) -> Vec<u8> {
     match factor {
         SessionAuthenticationFactor::Passkey { credential_id, .. } => credential_id.clone(),
-        SessionAuthenticationFactor::Totp { method_id, .. } => method_id.as_bytes().to_vec(),
+        SessionAuthenticationFactor::Totp { accepted_step, .. } => {
+            accepted_step.to_be_bytes().to_vec()
+        }
         SessionAuthenticationFactor::RecoveryCode { code_id, .. } => code_id.as_bytes().to_vec(),
         SessionAuthenticationFactor::ApiKey { key_id, .. } => key_id.as_bytes().to_vec(),
     }
@@ -1031,7 +1595,8 @@ pub(super) fn active_factor_state(
                 factor.credential_generation, factor.authenticated_at,
                 method.method_kind, method.user_principal_id = session.user_principal_id,
                 method.service_scope, method.state, method.created_at, method.expires_at,
-                method.credential_generation, session.service, session.issued_at
+                method.credential_generation, session.service, session.issued_at,
+                session.source_session_id
          FROM authentication_session_factors AS factor
          JOIN authentication_sessions AS session USING(session_id)
          JOIN authentication_methods AS method USING(method_id)
@@ -1053,6 +1618,7 @@ pub(super) fn active_factor_state(
             current_generation: row.get(11)?,
             service: row.get(12)?,
             issued_at: row.get(13)?,
+            source_session_id: row.get(14)?,
         })
     })?;
     let mut factors = Vec::new();
@@ -1080,6 +1646,7 @@ struct StoredSessionFactor {
     current_generation: i64,
     service: i64,
     issued_at: i64,
+    source_session_id: Option<Vec<u8>>,
 }
 
 fn validate_current_factors(
@@ -1143,14 +1710,18 @@ fn validate_factor_shape(
         || factor.method_kind != factor.factor_kind
         || factor.owner_matches != 1
         || !(1..=3).contains(&factor.method_state)
-        || factor.authenticated_at != factor.issued_at
+        || factor.authenticated_at > factor.issued_at
+        || (factor.source_session_id.is_none() && factor.authenticated_at != factor.issued_at)
+        || factor
+            .source_session_id
+            .as_ref()
+            .is_some_and(|source| source.len() != 16)
         || factor.method_created_at > factor.authenticated_at
         || factor
             .method_expires_at
             .is_some_and(|expiry| expiry <= factor.method_created_at)
         || current_generation < expected_generation
-        || factor.credential_reference.is_empty()
-        || factor.credential_reference.len() > 1_024
+        || !valid_credential_reference(kind, &factor.credential_reference)
     {
         return Err(RepositoryError::CorruptState);
     }
@@ -1206,7 +1777,6 @@ fn validate_current_credential(
                 SELECT 1 FROM authentication_session_factors AS factor
                 JOIN totp_credentials AS credential USING(method_id)
                 WHERE factor.session_id = ?1 AND factor.factor_sequence = ?2
-                  AND factor.credential_reference = factor.method_id
              )",
             params![session_id, factor.sequence],
             |row| row.get(0),
@@ -1260,6 +1830,16 @@ fn validate_current_credential(
     }
 }
 
+fn valid_credential_reference(kind: AuthenticationMethodKind, reference: &[u8]) -> bool {
+    match kind {
+        AuthenticationMethodKind::Passkey => !reference.is_empty() && reference.len() <= 1_024,
+        AuthenticationMethodKind::Totp => reference.len() == 8,
+        AuthenticationMethodKind::RecoveryCode | AuthenticationMethodKind::ApiKey => {
+            reference.len() == 16
+        }
+    }
+}
+
 /// Applies current service/operation policy to exact session evidence.
 pub(super) fn meets_assurance(
     connection: &Connection,
@@ -1287,6 +1867,15 @@ fn parse_service(value: i64) -> Result<AuthenticationService, RepositoryError> {
         1 => Ok(AuthenticationService::Https),
         2 => Ok(AuthenticationService::HeadlessApi),
         4 => Ok(AuthenticationService::Smb),
+        _ => Err(RepositoryError::CorruptState),
+    }
+}
+
+fn parse_assurance(value: i64) -> Result<AssuranceLevel, RepositoryError> {
+    match value {
+        1 => Ok(AssuranceLevel::SingleFactor),
+        2 => Ok(AssuranceLevel::MultiFactor),
+        3 => Ok(AssuranceLevel::RecentStepUp),
         _ => Err(RepositoryError::CorruptState),
     }
 }

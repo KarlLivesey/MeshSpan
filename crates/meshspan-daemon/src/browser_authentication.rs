@@ -270,6 +270,7 @@ mod tests {
                 identity_revision: Revision::new(1),
                 gateway_revision: Revision::new(1),
                 expires_at: UnixMicros::new(100),
+                persistent_cookie: false,
                 system_management_expires_at: None,
                 capability_digest: [9; 32],
             }))

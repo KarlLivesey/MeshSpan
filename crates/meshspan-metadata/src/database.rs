@@ -248,8 +248,8 @@ mod tests {
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
         local_federation_storage_scrub_migration_digest, local_migration_digest,
-        local_setup_operation_migration_digest, migrate_local, migrate_local_through,
-        migrate_partition, migrate_partition_through,
+        local_setup_operation_migration_digest, local_totp_registration_ceremony_migration_digest,
+        migrate_local, migrate_local_through, migrate_partition, migrate_partition_through,
         partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
@@ -258,6 +258,7 @@ mod tests {
         partition_authentication_policy_migration_digest,
         partition_authentication_session_delivery_migration_digest,
         partition_authentication_session_factors_migration_digest,
+        partition_authentication_session_rotation_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
         partition_component_rollout_migration_digest,
@@ -280,6 +281,7 @@ mod tests {
         partition_snapshot_retention_selection_migration_digest,
         partition_snapshot_root_removals_migration_digest,
         partition_snapshot_schedules_migration_digest,
+        partition_totp_session_replay_steps_migration_digest,
         partition_typed_authentication_migration_digest,
         partition_version_cleanup_attestations_migration_digest,
         partition_version_cleanup_completions_migration_digest,
@@ -303,7 +305,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 47);
+        assert_eq!(database.check_integrity()?.schema_version, 49);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -353,7 +355,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            47
+            49
         );
         Ok(())
     }
@@ -595,7 +597,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 9);
+        assert_eq!(database.schema_version(), 10);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -676,7 +678,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(database.check_integrity()?.schema_version, 9);
+        assert_eq!(database.check_integrity()?.schema_version, 10);
         Ok(())
     }
 
@@ -981,6 +983,14 @@ mod tests {
                 0x18, 0x3e, 0x9a, 0x32, 0x42, 0xd5, 0xd1, 0xef, 0xe4, 0xe1, 0x37, 0x4f, 0xa5, 0xef,
                 0x1f, 0x67, 0x0e, 0x01, 0xca, 0x80, 0xd7, 0x69, 0x9e, 0x8b, 0xb7, 0x8e, 0xb5, 0xfd,
                 0x42, 0x64, 0xf2, 0xf9,
+            ]
+        );
+        assert_eq!(
+            local_totp_registration_ceremony_migration_digest(),
+            [
+                0x58, 0xf9, 0xa8, 0x28, 0x1a, 0xd5, 0xeb, 0x99, 0x47, 0x1a, 0x7f, 0xad, 0x97, 0x57,
+                0x44, 0x7e, 0x1f, 0x08, 0x8b, 0xc8, 0x66, 0x8d, 0x4a, 0xdd, 0xd8, 0x63, 0xd2, 0x3a,
+                0xf4, 0x2d, 0x46, 0xa4,
             ]
         );
     }
@@ -1358,6 +1368,30 @@ mod tests {
     }
 
     #[test]
+    fn totp_session_replay_steps_migration_digest_is_committed() {
+        assert_eq!(
+            partition_totp_session_replay_steps_migration_digest(),
+            [
+                0xa8, 0xcc, 0xd5, 0x16, 0xa9, 0xa1, 0xd6, 0x9b, 0x77, 0xc1, 0x9e, 0x0e, 0xbd, 0xf0,
+                0xe6, 0x6a, 0x62, 0x22, 0x65, 0x28, 0xaf, 0x2f, 0x78, 0x6a, 0xce, 0xfb, 0x81, 0x90,
+                0xec, 0x80, 0x2e, 0xd5,
+            ]
+        );
+    }
+
+    #[test]
+    fn authentication_session_rotation_migration_digest_is_committed() {
+        assert_eq!(
+            partition_authentication_session_rotation_migration_digest(),
+            [
+                0x2a, 0x62, 0xce, 0xf0, 0x3a, 0xfb, 0x3f, 0xfc, 0x4f, 0x92, 0xd4, 0x26, 0x60, 0xc2,
+                0x33, 0x34, 0x78, 0xfc, 0x9d, 0x4b, 0x4d, 0xe8, 0xfc, 0x91, 0xcd, 0x55, 0xd0, 0x3a,
+                0x53, 0x2b, 0xf6, 0xde,
+            ]
+        );
+    }
+
+    #[test]
     fn authentication_policy_migration_seeds_complete_existing_mesh_defaults()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;
@@ -1421,7 +1455,7 @@ mod tests {
         assert_eq!(policy_id, expected);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            47
+            49
         );
         Ok(())
     }
@@ -1465,9 +1499,168 @@ mod tests {
         assert_eq!(sessions, 0);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            47
+            49
         );
         Ok(())
+    }
+
+    #[test]
+    fn totp_replay_step_migration_invalidates_ambiguous_sessions_and_preserves_others()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("totp-replay-step-migration.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 47, 10)?;
+
+        let principal = [100_u8; 16];
+        let totp_method = [101_u8; 16];
+        let api_key_method = [102_u8; 16];
+        let api_key = [103_u8; 16];
+        connection.execute(
+            "INSERT INTO principals(
+                principal_id, principal_kind, display_name, canonical_name,
+                state, created_at, retired_at, revision
+             ) VALUES (?1, 1, 'Test user', 'test user', 1, 1, NULL, 1)",
+            [principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO users(principal_id, primary_email) VALUES (?1, NULL)",
+            [principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO authentication_methods(
+                method_id, user_principal_id, method_kind, label, service_scope,
+                state, created_at, last_used_at, expires_at, credential_generation, revision
+             ) VALUES (?1, ?2, 2, 'TOTP', 1, 1, 1, NULL, NULL, 1, 1)",
+            params![totp_method.as_slice(), principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO authentication_methods(
+                method_id, user_principal_id, method_kind, label, service_scope,
+                state, created_at, last_used_at, expires_at, credential_generation, revision
+             ) VALUES (?1, ?2, 4, 'API key', 1, 1, 1, NULL, NULL, 1, 1)",
+            params![api_key_method.as_slice(), principal.as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO totp_credentials(
+                method_id, secret_ciphertext, algorithm, digits, period_seconds,
+                accepted_step_window, revision, last_accepted_step
+             ) VALUES (?1, ?2, 1, 6, 30, 1, 1, NULL)",
+            params![totp_method.as_slice(), [1_u8; 32].as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO api_keys(
+                method_id, key_id, key_digest, scopes, valid_from,
+                valid_until, last_used_at, revision
+             ) VALUES (?1, ?2, ?3, 1, 1, NULL, NULL, 1)",
+            params![
+                api_key_method.as_slice(),
+                api_key.as_slice(),
+                [2_u8; 32].as_slice()
+            ],
+        )?;
+
+        insert_legacy_session(&connection, [104; 16], [105; 32], [106; 32], principal, 2)?;
+        insert_legacy_factor(&connection, [104; 16], 1, api_key_method, 4, api_key)?;
+        insert_legacy_factor(&connection, [104; 16], 2, totp_method, 2, totp_method)?;
+        insert_legacy_session(&connection, [107; 16], [108; 32], [109; 32], principal, 1)?;
+        insert_legacy_factor(&connection, [107; 16], 1, api_key_method, 4, api_key)?;
+
+        migrate_partition(&mut connection, 20)?;
+        assert_eq!(session_exists(&connection, [104; 16])?, 0);
+        assert_eq!(session_exists(&connection, [107; 16])?, 1);
+
+        insert_legacy_session(&connection, [110; 16], [111; 32], [112; 32], principal, 2)?;
+        connection.execute(
+            "INSERT INTO authentication_session_factors(
+                session_id, factor_sequence, method_id, method_kind, credential_reference,
+                credential_generation, method_revision, authenticated_at, revision
+             ) VALUES (?1, 1, ?2, 2, ?3, 1, 1, 5, 1)",
+            params![
+                [110_u8; 16].as_slice(),
+                totp_method.as_slice(),
+                0_u64.to_be_bytes().as_slice()
+            ],
+        )?;
+        insert_legacy_factor(&connection, [110; 16], 2, api_key_method, 4, api_key)?;
+        insert_legacy_session(&connection, [113; 16], [114; 32], [115; 32], principal, 2)?;
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO authentication_session_factors(
+                        session_id, factor_sequence, method_id, method_kind,
+                        credential_reference, credential_generation, method_revision,
+                        authenticated_at, revision
+                     ) VALUES (?1, 1, ?2, 2, ?3, 1, 1, 5, 1)",
+                    params![
+                        [113_u8; 16].as_slice(),
+                        totp_method.as_slice(),
+                        totp_method.as_slice()
+                    ],
+                )
+                .is_err()
+        );
+        Ok(())
+    }
+
+    fn insert_legacy_session(
+        connection: &rusqlite::Connection,
+        session_id: [u8; 16],
+        token_digest: [u8; 32],
+        csrf_digest: [u8; 32],
+        principal_id: [u8; 16],
+        assurance: u8,
+    ) -> Result<(), rusqlite::Error> {
+        connection.execute(
+            "INSERT INTO authentication_sessions(
+                session_id, token_digest, user_principal_id, service, assurance,
+                identity_revision, issued_at, expires_at, revoked_at, revision,
+                csrf_digest, client_label_state, client_label, persistent_cookie
+             ) VALUES (?1, ?2, ?3, 1, ?4, 1, 5, 10, NULL, 1, ?5, 1, NULL, 0)",
+            params![
+                session_id.as_slice(),
+                token_digest.as_slice(),
+                principal_id.as_slice(),
+                assurance,
+                csrf_digest.as_slice()
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_legacy_factor(
+        connection: &rusqlite::Connection,
+        session_id: [u8; 16],
+        sequence: u8,
+        method_id: [u8; 16],
+        method_kind: u8,
+        credential_reference: [u8; 16],
+    ) -> Result<(), rusqlite::Error> {
+        connection.execute(
+            "INSERT INTO authentication_session_factors(
+                session_id, factor_sequence, method_id, method_kind, credential_reference,
+                credential_generation, method_revision, authenticated_at, revision
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 1, 1, 5, 1)",
+            params![
+                session_id.as_slice(),
+                sequence,
+                method_id.as_slice(),
+                method_kind,
+                credential_reference.as_slice()
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn session_exists(
+        connection: &rusqlite::Connection,
+        session_id: [u8; 16],
+    ) -> Result<i64, rusqlite::Error> {
+        connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM authentication_sessions WHERE session_id = ?1)",
+            [session_id.as_slice()],
+            |row| row.get(0),
+        )
     }
 
     #[test]

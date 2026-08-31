@@ -144,3 +144,33 @@ fn changed_creation_expiry_and_persisted_substitution_fail_closed()
     assert!(database.authentication_ceremony(challenge_id).is_err());
     Ok(())
 }
+
+#[test]
+fn totp_registration_has_a_distinct_restart_safe_ceremony_kind()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("totp-registration.sqlite3");
+    let node_id = NodeId::from_bytes([21; 16])?;
+    let challenge_id = AuthenticationChallengeId::from_bytes([22; 16])?;
+    let creation_operation_id = OperationId::from_bytes([23; 16])?;
+    let mut database = LocalDatabase::open(&file_path, node_id, UnixMicros::new(1))?;
+    database.create_authentication_ceremony(&NewAuthenticationCeremony {
+        challenge_id,
+        creation_operation_id,
+        kind: AuthenticationCeremonyKind::TotpRegistration,
+        request_digest: [24; 32],
+        protected_state: ProtectedAuthenticationState::new(vec![25; 64])?,
+        created_at: UnixMicros::new(100),
+        expires_at: UnixMicros::new(200),
+    })?;
+    drop(database);
+
+    let database = LocalDatabase::open(&file_path, node_id, UnixMicros::new(110))?;
+    let record = database
+        .authentication_ceremony_by_creation(creation_operation_id)?
+        .ok_or("TOTP registration ceremony missing after restart")?;
+    assert_eq!(record.challenge_id, challenge_id);
+    assert_eq!(record.kind, AuthenticationCeremonyKind::TotpRegistration);
+    assert_eq!(database.schema_version(), 10);
+    Ok(())
+}

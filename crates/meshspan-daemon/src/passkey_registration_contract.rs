@@ -13,8 +13,8 @@ use thiserror::Error;
 use crate::passkey_registration_state::PasskeyRegistrationStateError;
 use crate::{BrowserAuthenticationError, BrowserSessionAuthority};
 
-/// Node-local crash-safe registration ceremony persistence.
-pub trait PasskeyRegistrationStore {
+/// Node-local crash-safe persistence shared by authentication-method registration ceremonies.
+pub trait AuthenticationRegistrationStore {
     /// Resolves an earlier challenge-creation operation.
     ///
     /// # Errors
@@ -23,7 +23,7 @@ pub trait PasskeyRegistrationStore {
     fn ceremony_by_creation(
         &self,
         operation_id: OperationId,
-    ) -> Result<Option<AuthenticationCeremonyRecord>, PasskeyRegistrationStoreError>;
+    ) -> Result<Option<AuthenticationCeremonyRecord>, AuthenticationRegistrationStoreError>;
 
     /// Resolves one exact registration challenge.
     ///
@@ -33,7 +33,7 @@ pub trait PasskeyRegistrationStore {
     fn ceremony(
         &self,
         challenge_id: AuthenticationChallengeId,
-    ) -> Result<Option<AuthenticationCeremonyRecord>, PasskeyRegistrationStoreError>;
+    ) -> Result<Option<AuthenticationCeremonyRecord>, AuthenticationRegistrationStoreError>;
 
     /// Durably creates or exactly replays one challenge.
     ///
@@ -43,7 +43,7 @@ pub trait PasskeyRegistrationStore {
     fn create_ceremony(
         &mut self,
         ceremony: &NewAuthenticationCeremony,
-    ) -> Result<AuthenticationCeremonyDisposition, PasskeyRegistrationStoreError>;
+    ) -> Result<AuthenticationCeremonyDisposition, AuthenticationRegistrationStoreError>;
 
     /// Reserves one exact browser response before verification.
     ///
@@ -56,7 +56,7 @@ pub trait PasskeyRegistrationStore {
         operation_id: OperationId,
         response_digest: [u8; 32],
         now: UnixMicros,
-    ) -> Result<AuthenticationCeremonyDisposition, PasskeyRegistrationStoreError>;
+    ) -> Result<AuthenticationCeremonyDisposition, AuthenticationRegistrationStoreError>;
 
     /// Records the exact durable metadata result.
     ///
@@ -69,7 +69,7 @@ pub trait PasskeyRegistrationStore {
         operation_id: OperationId,
         result_digest: [u8; 32],
         now: UnixMicros,
-    ) -> Result<AuthenticationCeremonyDisposition, PasskeyRegistrationStoreError>;
+    ) -> Result<AuthenticationCeremonyDisposition, AuthenticationRegistrationStoreError>;
 
     /// Marks the registration terminal only after authority is durable.
     ///
@@ -81,14 +81,14 @@ pub trait PasskeyRegistrationStore {
         challenge_id: AuthenticationChallengeId,
         operation_id: OperationId,
         now: UnixMicros,
-    ) -> Result<AuthenticationCeremonyDisposition, PasskeyRegistrationStoreError>;
+    ) -> Result<AuthenticationCeremonyDisposition, AuthenticationRegistrationStoreError>;
 }
 
-impl PasskeyRegistrationStore for LocalDatabase {
+impl AuthenticationRegistrationStore for LocalDatabase {
     fn ceremony_by_creation(
         &self,
         operation_id: OperationId,
-    ) -> Result<Option<AuthenticationCeremonyRecord>, PasskeyRegistrationStoreError> {
+    ) -> Result<Option<AuthenticationCeremonyRecord>, AuthenticationRegistrationStoreError> {
         self.authentication_ceremony_by_creation(operation_id)
             .map_err(map_store_error)
     }
@@ -96,7 +96,7 @@ impl PasskeyRegistrationStore for LocalDatabase {
     fn ceremony(
         &self,
         challenge_id: AuthenticationChallengeId,
-    ) -> Result<Option<AuthenticationCeremonyRecord>, PasskeyRegistrationStoreError> {
+    ) -> Result<Option<AuthenticationCeremonyRecord>, AuthenticationRegistrationStoreError> {
         self.authentication_ceremony(challenge_id)
             .map_err(map_store_error)
     }
@@ -104,7 +104,7 @@ impl PasskeyRegistrationStore for LocalDatabase {
     fn create_ceremony(
         &mut self,
         ceremony: &NewAuthenticationCeremony,
-    ) -> Result<AuthenticationCeremonyDisposition, PasskeyRegistrationStoreError> {
+    ) -> Result<AuthenticationCeremonyDisposition, AuthenticationRegistrationStoreError> {
         self.create_authentication_ceremony(ceremony)
             .map_err(map_store_error)
     }
@@ -115,7 +115,7 @@ impl PasskeyRegistrationStore for LocalDatabase {
         operation_id: OperationId,
         response_digest: [u8; 32],
         now: UnixMicros,
-    ) -> Result<AuthenticationCeremonyDisposition, PasskeyRegistrationStoreError> {
+    ) -> Result<AuthenticationCeremonyDisposition, AuthenticationRegistrationStoreError> {
         self.begin_authentication_verification(challenge_id, operation_id, response_digest, now)
             .map_err(map_store_error)
     }
@@ -126,7 +126,7 @@ impl PasskeyRegistrationStore for LocalDatabase {
         operation_id: OperationId,
         result_digest: [u8; 32],
         now: UnixMicros,
-    ) -> Result<AuthenticationCeremonyDisposition, PasskeyRegistrationStoreError> {
+    ) -> Result<AuthenticationCeremonyDisposition, AuthenticationRegistrationStoreError> {
         self.record_authentication_authority_commit(challenge_id, operation_id, result_digest, now)
             .map_err(map_store_error)
     }
@@ -136,11 +136,16 @@ impl PasskeyRegistrationStore for LocalDatabase {
         challenge_id: AuthenticationChallengeId,
         operation_id: OperationId,
         now: UnixMicros,
-    ) -> Result<AuthenticationCeremonyDisposition, PasskeyRegistrationStoreError> {
+    ) -> Result<AuthenticationCeremonyDisposition, AuthenticationRegistrationStoreError> {
         self.complete_authentication_ceremony(challenge_id, operation_id, now)
             .map_err(map_store_error)
     }
 }
+
+/// Compatibility-facing passkey name over the common registration journal contract.
+pub trait PasskeyRegistrationStore: AuthenticationRegistrationStore {}
+
+impl<T> PasskeyRegistrationStore for T where T: AuthenticationRegistrationStore + ?Sized {}
 
 /// Replicated reads and mutation required by current-user passkey registration.
 pub trait PasskeyRegistrationAuthority: BrowserSessionAuthority {
@@ -195,7 +200,7 @@ pub struct PasskeyRegistrationCommit {
 
 /// Closed local registration-journal failures.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum PasskeyRegistrationStoreError {
+pub enum AuthenticationRegistrationStoreError {
     /// Challenge expiry won the verification reservation race.
     #[error("passkey registration challenge expired")]
     Expired,
@@ -206,6 +211,9 @@ pub enum PasskeyRegistrationStoreError {
     #[error("passkey registration store failed closed")]
     Failed,
 }
+
+/// Passkey-facing name retained for its public error surface.
+pub type PasskeyRegistrationStoreError = AuthenticationRegistrationStoreError;
 
 /// Closed replicated-authority registration failures.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -268,12 +276,14 @@ impl From<PasskeyRegistrationStateError> for PasskeyRegistrationError {
     }
 }
 
-const fn map_store_error(error: AuthenticationCeremonyError) -> PasskeyRegistrationStoreError {
+const fn map_store_error(
+    error: AuthenticationCeremonyError,
+) -> AuthenticationRegistrationStoreError {
     match error {
-        AuthenticationCeremonyError::Expired => PasskeyRegistrationStoreError::Expired,
-        AuthenticationCeremonyError::Conflict => PasskeyRegistrationStoreError::Conflict,
+        AuthenticationCeremonyError::Expired => AuthenticationRegistrationStoreError::Expired,
+        AuthenticationCeremonyError::Conflict => AuthenticationRegistrationStoreError::Conflict,
         AuthenticationCeremonyError::Store | AuthenticationCeremonyError::Invalid => {
-            PasskeyRegistrationStoreError::Failed
+            AuthenticationRegistrationStoreError::Failed
         }
     }
 }

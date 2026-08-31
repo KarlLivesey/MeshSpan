@@ -17,6 +17,19 @@ const PASSKEY: i64 = 1;
 const MAXIMUM_EXCLUDED_CREDENTIALS: usize = 64;
 const MAXIMUM_CREDENTIAL_ID_BYTES: usize = 1_024;
 
+/// Current authoritative user identity shared by authentication-method registration ceremonies.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticationRegistrationProfile {
+    /// Exact active user owning the future method.
+    pub principal_id: PrincipalId,
+    /// Stable canonical account name shown to an authenticator where applicable.
+    pub user_name: String,
+    /// Current human-readable display name.
+    pub display_name: String,
+    /// Identity revision bound into the registration ceremony.
+    pub identity_revision: Revision,
+}
+
 /// Current authoritative user details needed to create browser registration options.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PasskeyRegistrationProfile {
@@ -54,12 +67,9 @@ pub(super) fn profile(
     database: &PartitionDatabase,
     principal_id: PrincipalId,
 ) -> Result<Option<PasskeyRegistrationProfile>, RepositoryError> {
-    let Some(principal) = query::principal(database, principal_id)? else {
+    let Some(principal) = authentication_profile(database, principal_id)? else {
         return Ok(None);
     };
-    if principal.kind != PrincipalKind::User || principal.state != ACTIVE {
-        return Ok(None);
-    }
     let principal_bytes = principal_id.as_bytes();
     let mut statement = database.connection().prepare(
         "SELECT credential.credential_id
@@ -88,11 +98,29 @@ pub(super) fn profile(
         exclude_credential_ids.push(credential_id);
     }
     Ok(Some(PasskeyRegistrationProfile {
+        principal_id: principal.principal_id,
+        user_name: principal.user_name,
+        display_name: principal.display_name,
+        identity_revision: principal.identity_revision,
+        exclude_credential_ids,
+    }))
+}
+
+pub(super) fn authentication_profile(
+    database: &PartitionDatabase,
+    principal_id: PrincipalId,
+) -> Result<Option<AuthenticationRegistrationProfile>, RepositoryError> {
+    let Some(principal) = query::principal(database, principal_id)? else {
+        return Ok(None);
+    };
+    if principal.kind != PrincipalKind::User || principal.state != ACTIVE {
+        return Ok(None);
+    }
+    Ok(Some(AuthenticationRegistrationProfile {
         principal_id,
         user_name: principal.canonical_name,
         display_name: principal.display_name,
         identity_revision: principal.revision,
-        exclude_credential_ids,
     }))
 }
 

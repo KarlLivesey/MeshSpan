@@ -349,6 +349,57 @@ export type CreatePasskeyRegistrationResponse = {
 };
 
 /**
+ * CreateRecoveryCodesRequest
+ *
+ * One idempotent request to replace the current user's recovery-code set.
+ */
+export type CreateRecoveryCodesRequest = {
+  /**
+   * Human-readable independently revocable method label.
+   */
+  label: string;
+  /**
+   * Client-generated identity binding exact retries.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreateRecoveryCodesResponse
+ *
+ * One exactly replayable recovery-code set returned only by its issuance operation.
+ */
+export type CreateRecoveryCodesResponse = {
+  /**
+   * Ten independent, single-use secret-bearing recovery codes.
+   */
+  codes: [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  /**
+   * Authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Independently revocable common authentication-method identity.
+   */
+  method_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -415,6 +466,98 @@ export type CreateSessionResponse = {
    * Newly created session identifier.
    */
   session_id: string;
+};
+
+/**
+ * CreateTotpRegistrationChallengeRequest
+ *
+ * One idempotent request to create TOTP registration material.
+ */
+export type CreateTotpRegistrationChallengeRequest = {
+  /**
+   * Human-readable independently revocable method label.
+   */
+  label: string;
+  /**
+   * Client-generated identity making creation exactly replayable on this gateway.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreateTotpRegistrationChallengeResponse
+ *
+ * One exactly replayable TOTP seed presentation.
+ */
+export type CreateTotpRegistrationChallengeResponse = {
+  /**
+   * Interoperable HMAC-SHA-1 TOTP profile; SHA-1 is not used as a general digest.
+   */
+  algorithm: "SHA1";
+  /**
+   * Stable gateway-local ceremony identity supplied with confirmation.
+   */
+  challenge_id: string;
+  /**
+   * Exact decimal code width.
+   */
+  digits: number;
+  /**
+   * Exclusive ceremony expiry as epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Challenge-creation operation whose exact result this response represents.
+   */
+  operation_id: string;
+  /**
+   * Exact TOTP timestep in seconds.
+   */
+  period_seconds: number;
+  /**
+   * Standard authenticator provisioning URI encoding the same seed and parameters.
+   */
+  readonly provisioning_uri: string;
+  /**
+   * Canonical RFC 4648 base32 seed without padding.
+   */
+  readonly secret: string;
+};
+
+/**
+ * CreateTotpRegistrationRequest
+ *
+ * One idempotent request confirming a newly presented TOTP seed.
+ */
+export type CreateTotpRegistrationRequest = {
+  /**
+   * Exact short-lived registration ceremony being confirmed.
+   */
+  challenge_id: string;
+  /**
+   * Client-generated identity binding exact confirmation retries.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreateTotpRegistrationResponse
+ *
+ * Durable result of confirming one independently revocable TOTP method.
+ */
+export type CreateTotpRegistrationResponse = {
+  /**
+   * Authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Newly created common authentication-method identity.
+   */
+  method_id: string;
+  /**
+   * Exact confirmation operation whose result was resolved.
+   */
+  operation_id: string;
 };
 
 /**
@@ -542,6 +685,28 @@ export type SetupStatusResponse = {
 };
 
 /**
+ * StepUpCurrentSessionRequest
+ *
+ * Input for atomically rotating the current browser session after a fresh factor.
+ */
+export type StepUpCurrentSessionRequest = {
+  /**
+   * Fresh TOTP or single-use recovery proof; the current session supplies the primary proof.
+   */
+  additional_factor:
+    | {
+        method: "totp";
+      }
+    | {
+        method: "recovery_code";
+      };
+  /**
+   * Client-generated idempotency key for the exact rotation.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateApiKeyResponse
  *
  * One exactly replayable API-key issuance result.
@@ -648,6 +813,30 @@ export type CreatePasskeyRegistrationRequestWritable = {
 };
 
 /**
+ * CreateRecoveryCodesResponse
+ *
+ * One exactly replayable recovery-code set returned only by its issuance operation.
+ */
+export type CreateRecoveryCodesResponseWritable = {
+  /**
+   * Ten independent, single-use secret-bearing recovery codes.
+   */
+  codes: [];
+  /**
+   * Authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Independently revocable common authentication-method identity.
+   */
+  method_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -722,6 +911,88 @@ export type CreateSessionRequestWritable = {
    * Whether the caller requests the policy's longer-lived session profile.
    */
   remember: boolean;
+};
+
+/**
+ * CreateTotpRegistrationChallengeResponse
+ *
+ * One exactly replayable TOTP seed presentation.
+ */
+export type CreateTotpRegistrationChallengeResponseWritable = {
+  /**
+   * Interoperable HMAC-SHA-1 TOTP profile; SHA-1 is not used as a general digest.
+   */
+  algorithm: "SHA1";
+  /**
+   * Stable gateway-local ceremony identity supplied with confirmation.
+   */
+  challenge_id: string;
+  /**
+   * Exact decimal code width.
+   */
+  digits: number;
+  /**
+   * Exclusive ceremony expiry as epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Challenge-creation operation whose exact result this response represents.
+   */
+  operation_id: string;
+  /**
+   * Exact TOTP timestep in seconds.
+   */
+  period_seconds: number;
+};
+
+/**
+ * CreateTotpRegistrationRequest
+ *
+ * One idempotent request confirming a newly presented TOTP seed.
+ */
+export type CreateTotpRegistrationRequestWritable = {
+  /**
+   * Exact short-lived registration ceremony being confirmed.
+   */
+  challenge_id: string;
+  /**
+   * Current six-digit code proving the authenticator stored the seed.
+   */
+  code: string;
+  /**
+   * Client-generated identity binding exact confirmation retries.
+   */
+  operation_id: string;
+};
+
+/**
+ * StepUpCurrentSessionRequest
+ *
+ * Input for atomically rotating the current browser session after a fresh factor.
+ */
+export type StepUpCurrentSessionRequestWritable = {
+  /**
+   * Fresh TOTP or single-use recovery proof; the current session supplies the primary proof.
+   */
+  additional_factor:
+    | {
+        /**
+         * Six-to-eight digit TOTP value.
+         */
+        code: string;
+        method: "totp";
+      }
+    | {
+        /**
+         * Opaque recovery code consumed atomically on success.
+         */
+        code: string;
+        method: "recovery_code";
+      };
+  /**
+   * Client-generated idempotency key for the exact rotation.
+   */
+  operation_id: string;
 };
 
 export type GetHealthData = {
@@ -901,6 +1172,60 @@ export type RevokeCurrentSessionResponses = {
 
 export type RevokeCurrentSessionResponse2 =
   RevokeCurrentSessionResponses[keyof RevokeCurrentSessionResponses];
+
+export type StepUpCurrentSessionData = {
+  /**
+   * Current-session step-up
+   */
+  body: StepUpCurrentSessionRequestWritable;
+  path?: never;
+  query?: never;
+  url: "/sessions/current/step-ups";
+};
+
+export type StepUpCurrentSessionErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or rotation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type StepUpCurrentSessionError =
+  StepUpCurrentSessionErrors[keyof StepUpCurrentSessionErrors];
+
+export type StepUpCurrentSessionResponses = {
+  /**
+   * Committed replacement session; the source session is revoked
+   */
+  201: CreateSessionResponse;
+};
+
+export type StepUpCurrentSessionResponse =
+  StepUpCurrentSessionResponses[keyof StepUpCurrentSessionResponses];
 
 export type CreatePasskeyChallengeData = {
   /**
@@ -1190,6 +1515,168 @@ export type CreateCurrentUserPasskeyRegistrationChallengeResponses = {
 
 export type CreateCurrentUserPasskeyRegistrationChallengeResponse =
   CreateCurrentUserPasskeyRegistrationChallengeResponses[keyof CreateCurrentUserPasskeyRegistrationChallengeResponses];
+
+export type CreateCurrentUserRecoveryCodesData = {
+  /**
+   * Current-user recovery-code issuance
+   */
+  body: CreateRecoveryCodesRequest;
+  path?: never;
+  query?: never;
+  url: "/users/current/authentication-methods/recovery-codes";
+};
+
+export type CreateCurrentUserRecoveryCodesErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or issuance conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateCurrentUserRecoveryCodesError =
+  CreateCurrentUserRecoveryCodesErrors[keyof CreateCurrentUserRecoveryCodesErrors];
+
+export type CreateCurrentUserRecoveryCodesResponses = {
+  /**
+   * Committed recovery-code set with exactly replayable one-time secrets
+   */
+  201: CreateRecoveryCodesResponse;
+};
+
+export type CreateCurrentUserRecoveryCodesResponse =
+  CreateCurrentUserRecoveryCodesResponses[keyof CreateCurrentUserRecoveryCodesResponses];
+
+export type CreateCurrentUserTotpData = {
+  /**
+   * Current-user TOTP registration confirmation
+   */
+  body: CreateTotpRegistrationRequestWritable;
+  path?: never;
+  query?: never;
+  url: "/users/current/authentication-methods/totp";
+};
+
+export type CreateCurrentUserTotpErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or ceremony conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateCurrentUserTotpError =
+  CreateCurrentUserTotpErrors[keyof CreateCurrentUserTotpErrors];
+
+export type CreateCurrentUserTotpResponses = {
+  /**
+   * Committed TOTP authentication method
+   */
+  201: CreateTotpRegistrationResponse;
+};
+
+export type CreateCurrentUserTotpResponse =
+  CreateCurrentUserTotpResponses[keyof CreateCurrentUserTotpResponses];
+
+export type CreateCurrentUserTotpRegistrationChallengeData = {
+  /**
+   * Current-user TOTP registration material
+   */
+  body: CreateTotpRegistrationChallengeRequest;
+  path?: never;
+  query?: never;
+  url: "/users/current/authentication-methods/totp/registration-challenges";
+};
+
+export type CreateCurrentUserTotpRegistrationChallengeErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or ceremony conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateCurrentUserTotpRegistrationChallengeError =
+  CreateCurrentUserTotpRegistrationChallengeErrors[keyof CreateCurrentUserTotpRegistrationChallengeErrors];
+
+export type CreateCurrentUserTotpRegistrationChallengeResponses = {
+  /**
+   * Exactly replayable TOTP registration material
+   */
+  201: CreateTotpRegistrationChallengeResponse;
+};
+
+export type CreateCurrentUserTotpRegistrationChallengeResponse =
+  CreateCurrentUserTotpRegistrationChallengeResponses[keyof CreateCurrentUserTotpRegistrationChallengeResponses];
 
 export type RevokeCurrentUserAuthenticationMethodData = {
   /**
