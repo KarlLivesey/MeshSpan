@@ -45,9 +45,10 @@ pub trait CreateSessionController: Send + 'static {
     ) -> Result<CreateSessionResult, CreateSessionError>;
 }
 
-impl<A> CreateSessionController for CreateSessionService<A>
+impl<A, P> CreateSessionController for CreateSessionService<A, P>
 where
     A: SessionAuthority + Send + 'static,
+    P: crate::PasskeySessionCeremony + Send + 'static,
 {
     fn create_session(
         &mut self,
@@ -242,19 +243,23 @@ fn service_error_response(
     schema_digest: HeaderValue,
 ) -> Response<Body> {
     let (status, code, message) = match error {
-        CreateSessionError::InvalidOperation | CreateSessionError::UnsupportedCeremony => (
+        CreateSessionError::InvalidOperation
+        | CreateSessionError::UnsupportedCeremony
+        | CreateSessionError::Passkey(crate::PasskeySessionError::Unsupported) => (
             StatusCode::BAD_REQUEST,
             ApiErrorCode::InvalidRequest,
             "authentication request is not supported",
         ),
         CreateSessionError::ApiKey(_)
         | CreateSessionError::Rejected
+        | CreateSessionError::Passkey(crate::PasskeySessionError::Rejected)
         | CreateSessionError::AdditionalFactorRequired => (
             StatusCode::UNAUTHORIZED,
             ApiErrorCode::Unauthenticated,
             "authentication was rejected",
         ),
-        CreateSessionError::Authority(SessionAuthorityError::Conflict) => (
+        CreateSessionError::Authority(SessionAuthorityError::Conflict)
+        | CreateSessionError::Passkey(crate::PasskeySessionError::Conflict) => (
             StatusCode::CONFLICT,
             ApiErrorCode::OperationConflict,
             "session operation conflicts with durable state",
@@ -267,6 +272,7 @@ fn service_error_response(
         CreateSessionError::Material(_)
         | CreateSessionError::InvalidPolicy
         | CreateSessionError::InvalidReceipt
+        | CreateSessionError::Passkey(crate::PasskeySessionError::Failed)
         | CreateSessionError::Authority(SessionAuthorityError::Failed) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             ApiErrorCode::InternalContract,

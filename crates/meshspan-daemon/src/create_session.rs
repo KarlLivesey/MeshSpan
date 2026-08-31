@@ -8,18 +8,20 @@ use meshspan_api_contract::{
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ApiKeyBundle, ApiKeyBundleError, AuditEventId, AuthenticationOperationClass,
-    AuthenticationService, OperationId, SessionCsrfBundle, SessionTokenBundle,
-    SessionTokenBundleError, UnixMicros,
+    ApiKeyBundle, ApiKeyBundleError, AuditEventId, AuthenticationMethodKind,
+    AuthenticationOperationClass, AuthenticationService, OperationId, SessionCsrfBundle,
+    SessionTokenBundle, SessionTokenBundleError, UnixMicros,
 };
 use meshspan_metadata::{
     ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthoritativeCommand,
-    CommandContext, IssueAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
+    CommandContext, IssueAuthenticationSession, PasskeySessionReplay, PasskeyVerificationMaterial,
+    SessionAuthenticationFactor, SessionClientLabel,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::create_mesh_setup::parse_uuid;
+use crate::{DisabledPasskeySessions, PasskeySessionCeremony, PasskeySessionError};
 
 /// Result of one committed browser-session exchange.
 pub struct CreateSessionResult {
@@ -46,6 +48,17 @@ pub trait SessionAuthority {
         now: UnixMicros,
     ) -> Result<Option<ApiKeyAuthentication>, SessionAuthorityError>;
 
+    /// Resolves current public passkey verification material by opaque credential identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when current authority cannot provide trustworthy evidence.
+    fn passkey_verification_material(
+        &self,
+        credential_id: &[u8],
+        now: UnixMicros,
+    ) -> Result<Option<PasskeyVerificationMaterial>, SessionAuthorityError>;
+
     /// Loads the current HTTPS session-establishment policy.
     ///
     /// # Errors
@@ -63,6 +76,16 @@ pub trait SessionAuthority {
         &self,
         operation_id: OperationId,
     ) -> Result<Option<ApiKeySessionReplay>, SessionAuthorityError>;
+
+    /// Resolves one already-committed passkey session before mutable counter verification.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when durable replay evidence cannot be read or validated.
+    fn resolve_passkey_session(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<PasskeySessionReplay>, SessionAuthorityError>;
 
     /// Commits or exactly resolves the session command through consensus.
     ///
@@ -98,18 +121,30 @@ pub enum SessionAuthorityError {
 }
 
 /// Creates HTTPS browser sessions without retaining plaintext credential material.
-pub struct CreateSessionService<A> {
-    authority: A,
+pub struct CreateSessionService<A, P = DisabledPasskeySessions> {
+    pub(crate) authority: A,
+    pub(crate) passkeys: P,
 }
 
-impl<A> CreateSessionService<A>
-where
-    A: SessionAuthority,
-{
+impl<A> CreateSessionService<A, DisabledPasskeySessions> {
     /// Creates a session service over the live root authority.
     #[must_use]
     pub const fn new(authority: A) -> Self {
-        Self { authority }
+        Self {
+            authority,
+            passkeys: DisabledPasskeySessions,
+        }
+    }
+}
+
+impl<A, P> CreateSessionService<A, P> {
+    /// Creates a session service with one explicit replaceable passkey ceremony adapter.
+    #[must_use]
+    pub const fn with_passkeys(authority: A, passkeys: P) -> Self {
+        Self {
+            authority,
+            passkeys,
+        }
     }
 
     /// Returns the authority so adjacent authentication lifecycle services can be composed.
@@ -117,8 +152,14 @@ where
     pub fn into_authority(self) -> A {
         self.authority
     }
+}
 
-    /// Authenticates and commits one exact API-key browser session.
+impl<A, P> CreateSessionService<A, P>
+where
+    A: SessionAuthority,
+    P: PasskeySessionCeremony,
+{
+    /// Authenticates and commits one exact browser session.
     ///
     /// # Errors
     ///
@@ -132,18 +173,29 @@ where
         if request.additional_factor.is_some() {
             return Err(CreateSessionError::UnsupportedCeremony);
         }
-        let secret = match &request.authentication {
-            SessionAuthentication::ApiKey { secret } => secret,
-            SessionAuthentication::Passkey { .. } => {
-                return Err(CreateSessionError::UnsupportedCeremony);
-            }
-        };
-        let api_key = ApiKeyBundle::parse(secret)?;
         let operation_id = OperationId::from_bytes(
             parse_uuid(request.operation_id.as_str())
                 .map_err(|_| CreateSessionError::InvalidOperation)?,
         )
         .map_err(|_| CreateSessionError::InvalidOperation)?;
+        match &request.authentication {
+            SessionAuthentication::ApiKey { secret } => {
+                self.create_api_key(request, secret, operation_id, now)
+            }
+            SessionAuthentication::Passkey { .. } => {
+                self.create_passkey(request, operation_id, now)
+            }
+        }
+    }
+
+    fn create_api_key(
+        &mut self,
+        request: &CreateSessionRequest,
+        secret: &str,
+        operation_id: OperationId,
+        now: UnixMicros,
+    ) -> Result<CreateSessionResult, CreateSessionError> {
+        let api_key = ApiKeyBundle::parse(secret)?;
         let authenticated = self
             .authority
             .authenticate_api_key(api_key.secret_digest(), now)?
@@ -153,16 +205,11 @@ where
         if let Some(replay) = self.authority.resolve_api_key_session(operation_id)? {
             return replay_result(request, &authenticated, bearer, csrf, &replay);
         }
-        let policy = self.authority.session_policy()?;
-        if policy.service != AuthenticationService::Https
-            || policy.operation_class != AuthenticationOperationClass::SessionEstablishment
-            || policy.minimum_factor_count != 1
-        {
-            return Err(CreateSessionError::AdditionalFactorRequired);
-        }
-        let expires_at = now
-            .checked_add(policy.maximum_session_duration)
-            .ok_or(CreateSessionError::InvalidPolicy)?;
+        let expires_at = session_expiry(
+            self.authority.session_policy()?,
+            AuthenticationMethodKind::ApiKey,
+            now,
+        )?;
         let factors = BoundedItems::new(
             vec![SessionAuthenticationFactor::ApiKey {
                 method_id: authenticated.method_id,
@@ -188,7 +235,7 @@ where
         let context = CommandContext {
             operation_id,
             actor_principal_id: authenticated.principal_id,
-            audit_event_id: audit_event_id(operation_id, authenticated.key_id.as_bytes())?,
+            audit_event_id: session_audit_event_id(operation_id, &authenticated.key_id.as_bytes())?,
             occurred_at: now,
             expected_revision: None,
         };
@@ -253,7 +300,23 @@ fn replay_result(
     })
 }
 
-fn client_label(request: &CreateSessionRequest) -> SessionClientLabel {
+pub(crate) fn session_expiry(
+    policy: AuthenticationPolicy,
+    method: AuthenticationMethodKind,
+    now: UnixMicros,
+) -> Result<UnixMicros, CreateSessionError> {
+    if policy.service != AuthenticationService::Https
+        || policy.operation_class != AuthenticationOperationClass::SessionEstablishment
+        || policy.minimum_factor_count != 1
+        || !policy.allowed_factor_classes.contains(method)
+    {
+        return Err(CreateSessionError::AdditionalFactorRequired);
+    }
+    now.checked_add(policy.maximum_session_duration)
+        .ok_or(CreateSessionError::InvalidPolicy)
+}
+
+pub(crate) fn client_label(request: &CreateSessionRequest) -> SessionClientLabel {
     match &request.client_label {
         NullableField::Missing => SessionClientLabel::Missing,
         NullableField::Null => SessionClientLabel::Null,
@@ -261,14 +324,14 @@ fn client_label(request: &CreateSessionRequest) -> SessionClientLabel {
     }
 }
 
-fn audit_event_id(
+pub(crate) fn session_audit_event_id(
     operation_id: OperationId,
-    key_id: [u8; 16],
+    credential_reference: &[u8],
 ) -> Result<AuditEventId, CreateSessionError> {
     let mut digest = Sha256::new();
     digest.update(b"meshspan.authentication.session-audit-id.v1");
     digest.update(operation_id.as_bytes());
-    digest.update(key_id);
+    digest.update(credential_reference);
     let mut bytes: [u8; 16] = digest.finalize()[..16]
         .try_into()
         .map_err(|_| CreateSessionError::InvalidPolicy)?;
@@ -292,6 +355,9 @@ pub enum CreateSessionError {
     /// This authentication ceremony is not implemented by the current slice.
     #[error("authentication ceremony is not currently supported")]
     UnsupportedCeremony,
+    /// Passkey ceremony failed without exposing assertion or credential detail.
+    #[error("passkey authentication failed")]
+    Passkey(#[from] PasskeySessionError),
     /// Current policy requires another independent factor.
     #[error("an additional authentication factor is required")]
     AdditionalFactorRequired,

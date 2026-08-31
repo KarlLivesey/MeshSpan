@@ -14,7 +14,8 @@ use meshspan_metadata::{
     ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthoritativeCommand,
     AuthoritativeRepository, BootstrapAppliance, BootstrapMesh, BrowserSessionAccessRequest,
     CommandContext, CreateAuthenticationMethod, LogPosition, NewAuthenticationCredential,
-    PartitionDatabase, RecordName, RepositoryError, SessionAccessDecision, SessionRevocationReplay,
+    PartitionDatabase, PasskeySessionReplay, PasskeyVerificationMaterial, RecordName,
+    RepositoryError, SessionAccessDecision, SessionRevocationReplay,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
@@ -199,7 +200,7 @@ async fn public_revocation_commits_then_replays_after_the_session_is_unusable()
     Ok(())
 }
 
-fn bootstrap(
+pub(super) fn bootstrap(
     authority: &mut RepositorySessionAuthority,
     material: &InitialBootstrapMaterial,
     operation_id: OperationId,
@@ -287,9 +288,9 @@ fn revocation_request(
         .body(Body::from(body))?)
 }
 
-struct RepositorySessionAuthority {
-    repository: AuthoritativeRepository,
-    next_index: u64,
+pub(super) struct RepositorySessionAuthority {
+    pub(super) repository: AuthoritativeRepository,
+    pub(super) next_index: u64,
 }
 
 impl SessionAuthority for RepositorySessionAuthority {
@@ -308,6 +309,16 @@ impl SessionAuthority for RepositorySessionAuthority {
             .map_err(|error| map_repository_error(&error))
     }
 
+    fn passkey_verification_material(
+        &self,
+        credential_id: &[u8],
+        now: UnixMicros,
+    ) -> Result<Option<PasskeyVerificationMaterial>, SessionAuthorityError> {
+        self.repository
+            .passkey_verification_material(credential_id, AuthenticationService::Https, now)
+            .map_err(|error| map_repository_error(&error))
+    }
+
     fn session_policy(&self) -> Result<AuthenticationPolicy, SessionAuthorityError> {
         self.repository
             .authentication_policy(
@@ -323,6 +334,15 @@ impl SessionAuthority for RepositorySessionAuthority {
     ) -> Result<Option<ApiKeySessionReplay>, SessionAuthorityError> {
         self.repository
             .resolve_api_key_session(operation_id)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn resolve_passkey_session(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<PasskeySessionReplay>, SessionAuthorityError> {
+        self.repository
+            .resolve_passkey_session(operation_id)
             .map_err(|error| map_repository_error(&error))
     }
 

@@ -23,6 +23,7 @@ use crate::create_mesh_setup::parse_uuid;
 use crate::passkey_challenge_state::{
     FrozenPasskeyChallengeState, PasskeyChallengeBinding, PasskeyChallengeProtector,
 };
+use crate::{PasskeySessionCeremony, PreparedPasskeyProof};
 
 /// Minimal local-journal boundary required by passkey session completion.
 pub trait PasskeySessionStore {
@@ -238,6 +239,31 @@ where
     }
 }
 
+impl<S> PasskeySessionCeremony for PasskeySessionService<S>
+where
+    S: PasskeySessionStore,
+{
+    type Prepared = PreparedPasskeySession;
+
+    fn prepare(
+        &mut self,
+        authentication: &SessionAuthentication,
+        operation_id: OperationId,
+        now: UnixMicros,
+    ) -> Result<Self::Prepared, PasskeySessionError> {
+        Self::prepare(self, authentication, operation_id, now)
+    }
+
+    fn complete(
+        &mut self,
+        prepared: &Self::Prepared,
+        result_digest: [u8; 32],
+        now: UnixMicros,
+    ) -> Result<(), PasskeySessionError> {
+        Self::complete(self, prepared, result_digest, now)
+    }
+}
+
 /// Reserved assertion plus its authenticated challenge state.
 pub struct PreparedPasskeySession {
     challenge_id: AuthenticationChallengeId,
@@ -325,6 +351,27 @@ impl PreparedPasskeySession {
     }
 }
 
+impl PreparedPasskeyProof for PreparedPasskeySession {
+    fn credential_id(&self) -> &[u8] {
+        Self::credential_id(self)
+    }
+
+    fn session_seed(&self) -> &[u8; 32] {
+        Self::session_seed(self)
+    }
+
+    fn recorded_result_digest(&self) -> Option<[u8; 32]> {
+        Self::recorded_result_digest(self)
+    }
+
+    fn verify(
+        &self,
+        material: &PasskeyVerificationMaterial,
+    ) -> Result<VerifiedPasskeyFactor, PasskeySessionError> {
+        Self::verify(self, material)
+    }
+}
+
 /// Verified passkey evidence safe to submit to authoritative session issuance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedPasskeyFactor {
@@ -347,6 +394,9 @@ pub struct VerifiedPasskeyFactor {
 /// Stable passkey session failure without assertion, credential or key detail.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum PasskeySessionError {
+    /// Passkey login was not composed into this daemon instance.
+    #[error("passkey authentication is not available")]
+    Unsupported,
     /// Assertion transport, challenge or cryptographic evidence was rejected.
     #[error("passkey authentication was rejected")]
     Rejected,
