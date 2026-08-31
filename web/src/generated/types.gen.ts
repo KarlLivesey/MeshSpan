@@ -1906,6 +1906,57 @@ export type ListDirectoryResponses = {
 export type ListDirectoryResponse2 =
   ListDirectoryResponses[keyof ListDirectoryResponses];
 
+export type ReadFileData = {
+  body?: never;
+  path: {
+    volume_id: string;
+  };
+  query: {
+    path: string;
+    offset?: number;
+    length?: number;
+  };
+  url: "/volumes/{volume_id}/file-content";
+};
+
+export type ReadFileErrors = {
+  /**
+   * Invalid path, range or volume identity
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Volume or regular file not found
+   */
+  404: ApiError;
+  /**
+   * Concurrent share mode rejected the read
+   */
+  409: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * File authority or content temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ReadFileError = ReadFileErrors[keyof ReadFileErrors];
+
+export type ReadFileResponses = {
+  /**
+   * Verified bounded logical-file bytes
+   */
+  200: Blob | File;
+};
+
+export type ReadFileResponse = ReadFileResponses[keyof ReadFileResponses];
+
 export type GetObjectData = {
   body?: never;
   path: {

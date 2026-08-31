@@ -10,6 +10,7 @@ use meshspan_api_contract::{
 use meshspan_filesystem::{DirectoryEntryKind, NamespaceObjectStat};
 
 use super::service::ObjectStatError;
+use crate::native_query::has_valid_percent_encoding;
 
 pub(super) fn parse_object_query(
     raw_query: Option<&str>,
@@ -59,7 +60,8 @@ pub(super) fn response(
                 stat.object_revision_id.as_bytes(),
             )
             .ok_or(ObjectStatError::Failed)?,
-            entry_generation: stat.entry_generation,
+            entry_generation: i64::try_from(stat.entry_generation)
+                .map_err(|_| ObjectStatError::Failed)?,
             kind: match stat.kind {
                 DirectoryEntryKind::Directory => ApiDirectoryEntryKind::Directory,
                 DirectoryEntryKind::File => ApiDirectoryEntryKind::File,
@@ -70,34 +72,11 @@ pub(super) fn response(
                     FileVersionId::from_uuid_bytes(value.as_bytes()).ok_or(ObjectStatError::Failed)
                 })
                 .transpose()?,
-            logical_length: stat.logical_length,
+            logical_length: stat
+                .logical_length
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| ObjectStatError::Failed)?,
         },
     })
-}
-
-fn has_valid_percent_encoding(bytes: &[u8]) -> bool {
-    let mut index = 0_usize;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            if index + 2 >= bytes.len()
-                || hex_nibble(bytes[index + 1]).is_none()
-                || hex_nibble(bytes[index + 2]).is_none()
-            {
-                return false;
-            }
-            index += 3;
-        } else {
-            index += 1;
-        }
-    }
-    true
-}
-
-const fn hex_nibble(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
 }

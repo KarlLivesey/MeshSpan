@@ -6,6 +6,8 @@ mod api_key_management;
 mod api_key_validation;
 mod directory_listing;
 mod directory_listing_validation;
+mod file_read;
+mod file_read_validation;
 mod model;
 mod object_stat;
 mod object_stat_validation;
@@ -39,6 +41,8 @@ pub use directory_listing_validation::{
     encode_list_directory_response, validate_list_directory_query,
     validate_list_directory_query_value, validate_list_directory_response_value,
 };
+pub use file_read::{MAX_FILE_READ_BYTES, MAX_SAFE_FILE_OFFSET, ReadFileQuery};
+pub use file_read_validation::{validate_read_file_query, validate_read_file_query_value};
 pub use model::{
     ApiError, ApiErrorCode, ApiErrorIssue, AssuranceLevel, CreateMeshSetupRequest,
     CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,

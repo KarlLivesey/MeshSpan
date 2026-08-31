@@ -40,10 +40,14 @@ mod current_session_api_tests;
 mod directory_listing_api;
 #[cfg(test)]
 mod directory_listing_api_tests;
+mod file_read_api;
+#[cfg(test)]
+mod file_read_api_tests;
 mod multi_factor_session;
 mod native_api_authentication;
 #[cfg(test)]
 mod native_api_authentication_tests;
+mod native_query;
 mod object_stat_api;
 #[cfg(test)]
 mod object_stat_api_tests;
@@ -158,6 +162,10 @@ pub use current_session_api::{
 pub use directory_listing_api::{
     DirectoryLister, DirectoryListingApiError, DirectoryListingController, DirectoryListingError,
     DirectoryListingService, FileApiAuthenticator, FileApiFailure, directory_listing_api_router,
+};
+pub use file_read_api::{
+    FileRangeReader, FileReadApiError, FileReadController, FileReadError, FileReadResult,
+    FileReadService, file_read_api_router,
 };
 pub use native_api_authentication::{
     FileApiAuthenticationError, NativeApiAuthenticator, NativeApiKeyAuthenticator,

@@ -108,6 +108,8 @@ pub enum FileApiFailure {
     AccessDenied,
     /// Continuation belongs to an obsolete immutable view.
     StaleCursor,
+    /// A live connector share or mutation conflicts with this operation.
+    Conflict,
     /// Required committed authority is temporarily unavailable.
     Unavailable,
     /// Persisted evidence or an internal invariant failed closed.
@@ -204,7 +206,7 @@ fn map_filesystem_failure(value: FileApiFailure) -> DirectoryListingError {
         FileApiFailure::AccessDenied => DirectoryListingError::AccessDenied,
         FileApiFailure::StaleCursor => DirectoryListingError::StaleCursor,
         FileApiFailure::Unavailable => DirectoryListingError::Unavailable,
-        FileApiFailure::Failed => DirectoryListingError::Failed,
+        FileApiFailure::Conflict | FileApiFailure::Failed => DirectoryListingError::Failed,
     }
 }
 

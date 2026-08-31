@@ -18,10 +18,11 @@ use meshspan_api_contract::{
     NullableField, ObjectId, ObjectMetadataResponse, ObjectRevisionId, OperationId,
     PasskeyAttestation, PasskeyChallengeId, PasskeyCredentialDescriptor,
     PasskeyCredentialParameter, PasskeyCredentialType, PasskeyResidentKey, PasskeyUserVerification,
-    RecoveryCode, RevokeAuthenticationMethodResponse, RevokeCurrentSessionResponse, SessionId,
-    SetupState, SetupStatusResponse, TotpRegistrationAlgorithm, TotpRegistrationChallengeId,
-    VolumeId, decode_create_api_key_request, decode_create_mesh_setup_request,
-    decode_create_passkey_challenge_request, decode_create_passkey_registration_challenge_request,
+    ReadFileQuery, RecoveryCode, RevokeAuthenticationMethodResponse, RevokeCurrentSessionResponse,
+    SessionId, SetupState, SetupStatusResponse, TotpRegistrationAlgorithm,
+    TotpRegistrationChallengeId, VolumeId, decode_create_api_key_request,
+    decode_create_mesh_setup_request, decode_create_passkey_challenge_request,
+    decode_create_passkey_registration_challenge_request,
     decode_create_passkey_registration_request, decode_create_recovery_codes_request,
     decode_create_session_request, decode_create_totp_registration_challenge_request,
     decode_create_totp_registration_request, decode_revoke_authentication_method_request,
@@ -39,8 +40,8 @@ use meshspan_api_contract::{
     validate_create_passkey_registration_request_value, validate_create_session_request_value,
     validate_create_session_response_value, validate_get_object_query,
     validate_get_object_query_value, validate_list_directory_query,
-    validate_list_directory_query_value, validate_setup_status_response_value,
-    validate_step_up_current_session_request_value,
+    validate_list_directory_query_value, validate_read_file_query, validate_read_file_query_value,
+    validate_setup_status_response_value, validate_step_up_current_session_request_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -812,6 +813,51 @@ fn object_metadata_contract_is_path_bound_and_internally_consistent() {
     let operation = &document.value()["paths"]["/volumes/{volume_id}/objects"]["get"];
     assert_eq!(operation["operationId"], "getObject");
     assert_eq!(operation["x-meshspan-access"], "authenticated");
+}
+
+#[test]
+fn file_read_contract_is_bounded_binary_and_safe_for_generated_clients() {
+    let query: ReadFileQuery = serde_json::from_value(json!({
+        "path": "reports/accounts.csv",
+        "offset": 1024,
+        "length": 65536
+    }))
+    .expect("file read query fixture must decode");
+    validate_read_file_query(&query).expect("bounded canonical file range must validate");
+    assert!(
+        validate_read_file_query_value(&json!({
+            "path": "reports/accounts.csv",
+            "offset": 0,
+            "length": 8_388_609
+        }))
+        .is_err()
+    );
+    assert!(
+        validate_read_file_query_value(&json!({
+            "path": "reports/accounts.csv",
+            "unexpected": true
+        }))
+        .is_err()
+    );
+    let traversal: ReadFileQuery = serde_json::from_value(json!({
+        "path": "reports/../private",
+        "length": 1
+    }))
+    .expect("structural decoding is separate from path semantics");
+    assert!(validate_read_file_query(&traversal).is_err());
+
+    let document = generate_openapi().expect("file read contract must generate");
+    let operation = &document.value()["paths"]["/volumes/{volume_id}/file-content"]["get"];
+    assert_eq!(operation["operationId"], "readFile");
+    assert_eq!(operation["x-meshspan-access"], "authenticated");
+    assert_eq!(
+        operation["responses"]["200"]["content"]["application/octet-stream"]["schema"]["format"],
+        "binary"
+    );
+    assert_eq!(
+        operation["responses"]["200"]["headers"]["MeshSpan-File-Version"]["required"],
+        true
+    );
 }
 
 #[test]

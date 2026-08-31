@@ -203,6 +203,12 @@ impl BoundedBytes {
         &self.0
     }
 
+    /// Consumes the checked wrapper without copying its allocation.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+
     /// Returns the validated byte count.
     #[must_use]
     pub const fn len(&self) -> usize {

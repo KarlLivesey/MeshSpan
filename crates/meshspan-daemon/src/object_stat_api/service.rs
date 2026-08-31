@@ -129,7 +129,7 @@ fn map_filesystem_failure(value: FileApiFailure) -> ObjectStatError {
         FileApiFailure::NotFound => ObjectStatError::NotFound,
         FileApiFailure::AccessDenied => ObjectStatError::AccessDenied,
         FileApiFailure::Unavailable => ObjectStatError::Unavailable,
-        FileApiFailure::Failed => ObjectStatError::Failed,
+        FileApiFailure::Conflict | FileApiFailure::Failed => ObjectStatError::Failed,
     }
 }
 

@@ -2,8 +2,10 @@
 
 //! Public authenticated directory-listing models.
 
-use schemars::JsonSchema;
+use schemars::generate::SchemaGenerator;
+use schemars::{JsonSchema, Schema};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 
 macro_rules! public_uuid {
     ($name:ident, $description:literal) => {
@@ -193,15 +195,23 @@ pub struct ObjectMetadataResponse {
     /// Exact immutable logical-object revision.
     pub object_revision_id: ObjectRevisionId,
     /// Monotonic name-reuse generation within the parent.
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
-    pub entry_generation: u64,
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_i64))]
+    pub entry_generation: i64,
     /// Directory or regular-file kind.
     pub kind: DirectoryEntryKind,
     /// Current immutable file version, or null for a directory.
     pub file_version_id: Option<FileVersionId>,
     /// Logical file bytes, or null for a directory.
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
-    pub logical_length: Option<u64>,
+    #[schemars(schema_with = "nullable_safe_integer_schema")]
+    pub logical_length: Option<i64>,
+}
+
+fn nullable_safe_integer_schema(_generator: &mut SchemaGenerator) -> Schema {
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), json!(["integer", "null"]));
+    schema.insert("minimum".to_owned(), Value::from(0));
+    schema.insert("maximum".to_owned(), Value::from(9_007_199_254_740_991_i64));
+    Schema::from(schema)
 }
 
 /// One immutable, bounded directory page.
