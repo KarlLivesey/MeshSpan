@@ -1096,6 +1096,7 @@ dependencies = [
  "meshspan-domain",
  "meshspan-metadata",
  "meshspan-passkey",
+ "p256",
  "serde_json",
  "sha2",
  "tempfile",

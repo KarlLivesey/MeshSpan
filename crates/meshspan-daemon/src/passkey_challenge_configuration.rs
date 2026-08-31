@@ -3,6 +3,7 @@
 //! Validated passkey relying-party configuration.
 
 use meshspan_domain::DurationMicros;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub(crate) const MINIMUM_LIFETIME_MICROS: u64 = 30_000_000;
@@ -68,6 +69,23 @@ impl PasskeyChallengeConfiguration {
     #[must_use]
     pub const fn lifetime(&self) -> DurationMicros {
         self.lifetime
+    }
+
+    pub(crate) fn digest(&self) -> Result<[u8; 32], PasskeyChallengeConfigurationError> {
+        let mut digest = Sha256::new();
+        digest.update(b"meshspan.authentication.passkey-challenge-request.v1\0");
+        digest_text(&mut digest, &self.relying_party_id)?;
+        digest.update(self.lifetime.get().to_be_bytes());
+        digest.update(
+            u16::try_from(self.allowed_origins.len())
+                .map_err(|_| PasskeyChallengeConfigurationError)?
+                .to_be_bytes(),
+        );
+        for origin in &self.allowed_origins {
+            digest_text(&mut digest, origin)?;
+        }
+        digest.update(b"required");
+        Ok(digest.finalize().into())
     }
 }
 
@@ -137,4 +155,14 @@ fn contains_duplicate(values: &[String]) -> bool {
         .iter()
         .enumerate()
         .any(|(index, value)| values[index + 1..].contains(value))
+}
+
+fn digest_text(digest: &mut Sha256, value: &str) -> Result<(), PasskeyChallengeConfigurationError> {
+    digest.update(
+        u16::try_from(value.len())
+            .map_err(|_| PasskeyChallengeConfigurationError)?
+            .to_be_bytes(),
+    );
+    digest.update(value.as_bytes());
+    Ok(())
 }

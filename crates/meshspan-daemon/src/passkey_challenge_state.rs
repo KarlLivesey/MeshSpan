@@ -95,6 +95,10 @@ impl FrozenPasskeyChallengeState {
     pub(crate) fn allowed_origins(&self) -> &[String] {
         &self.allowed_origins
     }
+
+    pub(crate) fn session_seed(&self) -> &[u8; SESSION_SEED_BYTES] {
+        &self.session_seed
+    }
 }
 
 pub(crate) struct PasskeyChallengeProtector {

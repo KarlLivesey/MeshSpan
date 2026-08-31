@@ -29,6 +29,9 @@ mod passkey_challenge_configuration;
 mod passkey_challenge_state;
 #[cfg(test)]
 mod passkey_challenge_tests;
+mod passkey_session;
+#[cfg(test)]
+mod passkey_session_tests;
 mod revoke_session;
 mod revoke_session_api;
 mod setup_api;
@@ -70,6 +73,10 @@ pub use passkey_challenge_configuration::{
     PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
 };
 pub use passkey_challenge_state::{PasskeyCeremonyKey, PasskeyChallengeStateError};
+pub use passkey_session::{
+    PasskeySessionError, PasskeySessionService, PasskeySessionStore, PasskeySessionStoreError,
+    PreparedPasskeySession, VerifiedPasskeyFactor,
+};
 pub use revoke_session::{
     RevokeCurrentSessionError, RevokeCurrentSessionService, SessionRevocationAuthority,
     SessionRevocationAuthorityError, SessionRevocationCommit,

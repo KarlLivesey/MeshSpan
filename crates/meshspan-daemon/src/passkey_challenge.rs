@@ -14,7 +14,6 @@ use meshspan_metadata::{
     AuthenticationCeremonyRecord, LocalDatabase, NewAuthenticationCeremony,
 };
 use meshspan_passkey::{PASSKEY_CHALLENGE_BYTES, PasskeyChallenge};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::PasskeyCeremonyKey;
@@ -123,7 +122,10 @@ where
         now: UnixMicros,
     ) -> Result<CreatePasskeyChallengeResponse, PasskeyChallengeError> {
         let operation_id = parse_operation(&request.operation_id)?;
-        let request_digest = configuration_digest(&self.configuration)?;
+        let request_digest = self
+            .configuration
+            .digest()
+            .map_err(|_| PasskeyChallengeError::Failed)?;
         if let Some(existing) = self.store.ceremony_by_creation(operation_id)? {
             return self.replay_response(request, request_digest, &existing);
         }
@@ -307,35 +309,6 @@ fn duration_between(
         return Err(PasskeyChallengeError::Failed);
     }
     Ok(DurationMicros::new(lifetime))
-}
-
-fn configuration_digest(
-    configuration: &PasskeyChallengeConfiguration,
-) -> Result<[u8; 32], PasskeyChallengeError> {
-    let mut digest = Sha256::new();
-    digest.update(b"meshspan.authentication.passkey-challenge-request.v1\0");
-    digest_text(&mut digest, configuration.relying_party_id())?;
-    digest.update(configuration.lifetime().get().to_be_bytes());
-    digest.update(
-        u16::try_from(configuration.allowed_origins().len())
-            .map_err(|_| PasskeyChallengeError::Failed)?
-            .to_be_bytes(),
-    );
-    for origin in configuration.allowed_origins() {
-        digest_text(&mut digest, origin)?;
-    }
-    digest.update(b"required");
-    Ok(digest.finalize().into())
-}
-
-fn digest_text(digest: &mut Sha256, value: &str) -> Result<(), PasskeyChallengeError> {
-    digest.update(
-        u16::try_from(value.len())
-            .map_err(|_| PasskeyChallengeError::Failed)?
-            .to_be_bytes(),
-    );
-    digest.update(value.as_bytes());
-    Ok(())
 }
 
 const fn map_ceremony_error(error: AuthenticationCeremonyError) -> PasskeyCeremonyStoreError {
