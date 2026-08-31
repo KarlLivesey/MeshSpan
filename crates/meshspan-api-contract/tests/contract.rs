@@ -23,8 +23,9 @@ use meshspan_api_contract::{
     decode_create_passkey_registration_request, decode_create_recovery_codes_request,
     decode_create_session_request, decode_create_totp_registration_challenge_request,
     decode_create_totp_registration_request, decode_revoke_authentication_method_request,
-    decode_revoke_current_session_request, encode_api_error, encode_create_api_key_response,
-    encode_create_mesh_setup_response, encode_create_passkey_challenge_response,
+    decode_revoke_current_session_request, decode_step_up_current_session_request,
+    encode_api_error, encode_create_api_key_response, encode_create_mesh_setup_response,
+    encode_create_passkey_challenge_response,
     encode_create_passkey_registration_challenge_response,
     encode_create_passkey_registration_response, encode_create_recovery_codes_response,
     encode_create_session_response, encode_create_totp_registration_challenge_response,
@@ -34,6 +35,7 @@ use meshspan_api_contract::{
     validate_create_passkey_challenge_response_value,
     validate_create_passkey_registration_request_value, validate_create_session_request_value,
     validate_create_session_response_value, validate_setup_status_response_value,
+    validate_step_up_current_session_request_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -136,6 +138,46 @@ fn public_error_passes_the_same_outgoing_contract_gate() {
 fn decoder_rejects_malformed_and_oversized_bodies_before_domain_work() {
     assert!(decode_create_session_request(b"{").is_err());
     assert!(decode_create_session_request(&vec![b' '; 2_049]).is_err());
+}
+
+#[test]
+fn step_up_contract_accepts_only_one_fresh_additional_factor() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    for additional_factor in [
+        json!({ "method": "totp", "code": "123456" }),
+        json!({
+            "method": "recovery_code",
+            "code": format!("meshspan-recovery-v1.{}.{}", "1".repeat(32), "2".repeat(64))
+        }),
+    ] {
+        let bytes = serde_json::to_vec(&json!({
+            "operation_id": operation,
+            "additional_factor": additional_factor
+        }))
+        .expect("step-up fixture must encode");
+        assert!(decode_step_up_current_session_request(&bytes).is_ok());
+    }
+    for rejected in [
+        json!({ "operation_id": operation }),
+        json!({
+            "operation_id": operation,
+            "additional_factor": { "method": "totp", "code": "123456" },
+            "authentication": { "method": "api_key", "secret": "must-not-be-accepted" }
+        }),
+        json!({
+            "operation_id": operation,
+            "additional_factor": { "method": "api_key", "secret": "must-not-be-accepted" }
+        }),
+    ] {
+        assert!(validate_step_up_current_session_request_value(&rejected).is_err());
+    }
+    assert!(decode_step_up_current_session_request(&vec![b' '; 513]).is_err());
+
+    let document = generate_openapi().expect("step-up contract must generate");
+    assert_eq!(
+        document.value()["paths"]["/sessions/current/step-ups"]["post"]["x-meshspan-access"],
+        "authenticated-csrf"
+    );
 }
 
 #[test]

@@ -829,6 +829,34 @@ export const zSetupStatusResponse = z
   .strict();
 
 /**
+ * StepUpCurrentSessionRequest
+ *
+ * Input for atomically rotating the current browser session after a fresh factor.
+ */
+export const zStepUpCurrentSessionRequest = z
+  .strictObject({
+    additional_factor: z.union([
+      z
+        .strictObject({
+          method: z.literal("totp"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          method: z.literal("recovery_code"),
+        })
+        .strict(),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateApiKeyResponse
  *
  * One exactly replayable API-key issuance result.
@@ -1103,6 +1131,36 @@ export const zCreateTotpRegistrationRequestWritable = z
   .strict();
 
 /**
+ * StepUpCurrentSessionRequest
+ *
+ * Input for atomically rotating the current browser session after a fresh factor.
+ */
+export const zStepUpCurrentSessionRequestWritable = z
+  .strictObject({
+    additional_factor: z.union([
+      z
+        .strictObject({
+          code: z.string().min(6).max(8),
+          method: z.literal("totp"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          code: z.string().min(8).max(128),
+          method: z.literal("recovery_code"),
+        })
+        .strict(),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * Process readiness
  */
 export const zGetHealthResponse = zHealthResponse;
@@ -1133,6 +1191,16 @@ export const zRevokeCurrentSessionBody = zRevokeCurrentSessionRequest;
  * Session authoritatively revoked
  */
 export const zRevokeCurrentSessionResponse2 = zRevokeCurrentSessionResponse;
+
+/**
+ * Current-session step-up
+ */
+export const zStepUpCurrentSessionBody = zStepUpCurrentSessionRequestWritable;
+
+/**
+ * Committed replacement session; the source session is revoked
+ */
+export const zStepUpCurrentSessionResponse = zCreateSessionResponse;
 
 /**
  * Passkey challenge creation

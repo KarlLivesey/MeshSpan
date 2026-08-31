@@ -109,5 +109,12 @@ export type {
   RevokeCurrentUserAuthenticationMethodResponse,
   RevokeCurrentUserAuthenticationMethodResponses,
   SetupStatusResponse,
+  StepUpCurrentSessionData,
+  StepUpCurrentSessionError,
+  StepUpCurrentSessionErrors,
+  StepUpCurrentSessionRequest,
+  StepUpCurrentSessionRequestWritable,
+  StepUpCurrentSessionResponse,
+  StepUpCurrentSessionResponses,
 } from "./types.gen";
 export * from "./fetch.gen";

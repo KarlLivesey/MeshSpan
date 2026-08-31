@@ -685,6 +685,28 @@ export type SetupStatusResponse = {
 };
 
 /**
+ * StepUpCurrentSessionRequest
+ *
+ * Input for atomically rotating the current browser session after a fresh factor.
+ */
+export type StepUpCurrentSessionRequest = {
+  /**
+   * Fresh TOTP or single-use recovery proof; the current session supplies the primary proof.
+   */
+  additional_factor:
+    | {
+        method: "totp";
+      }
+    | {
+        method: "recovery_code";
+      };
+  /**
+   * Client-generated idempotency key for the exact rotation.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateApiKeyResponse
  *
  * One exactly replayable API-key issuance result.
@@ -943,6 +965,36 @@ export type CreateTotpRegistrationRequestWritable = {
   operation_id: string;
 };
 
+/**
+ * StepUpCurrentSessionRequest
+ *
+ * Input for atomically rotating the current browser session after a fresh factor.
+ */
+export type StepUpCurrentSessionRequestWritable = {
+  /**
+   * Fresh TOTP or single-use recovery proof; the current session supplies the primary proof.
+   */
+  additional_factor:
+    | {
+        /**
+         * Six-to-eight digit TOTP value.
+         */
+        code: string;
+        method: "totp";
+      }
+    | {
+        /**
+         * Opaque recovery code consumed atomically on success.
+         */
+        code: string;
+        method: "recovery_code";
+      };
+  /**
+   * Client-generated idempotency key for the exact rotation.
+   */
+  operation_id: string;
+};
+
 export type GetHealthData = {
   body?: never;
   path?: never;
@@ -1120,6 +1172,60 @@ export type RevokeCurrentSessionResponses = {
 
 export type RevokeCurrentSessionResponse2 =
   RevokeCurrentSessionResponses[keyof RevokeCurrentSessionResponses];
+
+export type StepUpCurrentSessionData = {
+  /**
+   * Current-session step-up
+   */
+  body: StepUpCurrentSessionRequestWritable;
+  path?: never;
+  query?: never;
+  url: "/sessions/current/step-ups";
+};
+
+export type StepUpCurrentSessionErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or rotation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type StepUpCurrentSessionError =
+  StepUpCurrentSessionErrors[keyof StepUpCurrentSessionErrors];
+
+export type StepUpCurrentSessionResponses = {
+  /**
+   * Committed replacement session; the source session is revoked
+   */
+  201: CreateSessionResponse;
+};
+
+export type StepUpCurrentSessionResponse =
+  StepUpCurrentSessionResponses[keyof StepUpCurrentSessionResponses];
 
 export type CreatePasskeyChallengeData = {
   /**

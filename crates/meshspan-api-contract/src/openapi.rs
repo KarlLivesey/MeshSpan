@@ -15,7 +15,8 @@ use crate::{
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
     CreateTotpRegistrationResponse, CurrentSessionResponse, HealthResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse, schema,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -98,7 +99,8 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "RevokeCurrentSessionResponse": response_component::<RevokeCurrentSessionResponse>(),
                 "RevokeAuthenticationMethodRequest": request_component::<RevokeAuthenticationMethodRequest>(),
                 "RevokeAuthenticationMethodResponse": response_component::<RevokeAuthenticationMethodResponse>(),
-                "SetupStatusResponse": response_component::<SetupStatusResponse>()
+                "SetupStatusResponse": response_component::<SetupStatusResponse>(),
+                "StepUpCurrentSessionRequest": request_component::<StepUpCurrentSessionRequest>()
             }
         }
     });
@@ -147,10 +149,42 @@ fn paths() -> Value {
         ),
         ("/sessions/current".to_owned(), current_session_path()),
         (
+            "/sessions/current/step-ups".to_owned(),
+            step_up_current_session_path(),
+        ),
+        (
             "/sessions/current/revocations".to_owned(),
             revoke_current_session_path(),
         ),
     ]))
+}
+
+fn step_up_current_session_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "stepUpCurrentSession",
+            "summary": "Atomically rotate the current browser session after a fresh factor",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-session step-up",
+                "#/components/schemas/StepUpCurrentSessionRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Committed replacement session; the source session is revoked",
+                    "#/components/schemas/CreateSessionResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or rotation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn revoke_authentication_method_path() -> Value {
