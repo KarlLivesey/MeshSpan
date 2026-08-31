@@ -11,6 +11,7 @@ members = [
     "crates/meshspan-domain",
     "crates/meshspan-filesystem",
     "crates/meshspan-metadata",
+    "crates/meshspan-protobuf",
     "crates/meshspan-protocol",
     "crates/meshspan-storage",
     "crates/meshspan-transport",
