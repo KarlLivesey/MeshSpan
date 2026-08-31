@@ -19,6 +19,8 @@ export type ApiError = {
     | "forbidden"
     | "invalid_request"
     | "operation_conflict"
+    | "not_found"
+    | "state_conflict"
     | "busy"
     | "internal_contract";
   /**
@@ -602,6 +604,71 @@ export type HealthResponse = {
    * Current readiness state.
    */
   status: "starting" | "ready" | "degraded";
+};
+
+/**
+ * ListDirectoryResponse
+ *
+ * One immutable, bounded directory page.
+ */
+export type ListDirectoryResponse = {
+  /**
+   * Stable selected-directory identity.
+   */
+  directory_object_id: string;
+  /**
+   * Exact immutable selected-directory revision.
+   */
+  directory_object_revision_id: string;
+  /**
+   * Deterministically ordered complete child metadata.
+   */
+  entries: Array<{
+    /**
+     * Monotonic name-reuse generation within the parent.
+     */
+    entry_generation: number;
+    /**
+     * Current immutable file version, or null for a directory.
+     */
+    file_version_id: string | null;
+    /**
+     * Directory or regular-file kind.
+     */
+    kind: "directory" | "file";
+    /**
+     * Logical file bytes, or null for a directory.
+     */
+    logical_length: number | null;
+    /**
+     * Case-preserved child name.
+     */
+    name: string;
+    /**
+     * Stable logical child identity.
+     */
+    object_id: string;
+    /**
+     * Exact immutable child revision.
+     */
+    object_revision_id: string;
+  }>;
+  /**
+   * Immutable namespace view shared by every entry.
+   */
+  namespace_commit_id: string;
+  /**
+   * Ready-to-follow relative URL, or null when this is the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Selected relative path, or null for the root.
+   */
+  path: string | null;
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
 };
 
 /**
@@ -1733,3 +1800,55 @@ export type RevokeCurrentUserAuthenticationMethodResponses = {
 
 export type RevokeCurrentUserAuthenticationMethodResponse =
   RevokeCurrentUserAuthenticationMethodResponses[keyof RevokeCurrentUserAuthenticationMethodResponses];
+
+export type ListDirectoryData = {
+  body?: never;
+  path: {
+    volume_id: string;
+  };
+  query?: {
+    path?: string;
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/volumes/{volume_id}/directory-entries";
+};
+
+export type ListDirectoryErrors = {
+  /**
+   * Invalid query or volume identity
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Volume or directory not found
+   */
+  404: ApiError;
+  /**
+   * Continuation no longer names the current immutable view
+   */
+  409: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListDirectoryError = ListDirectoryErrors[keyof ListDirectoryErrors];
+
+export type ListDirectoryResponses = {
+  /**
+   * Complete metadata for one immutable directory page
+   */
+  200: ListDirectoryResponse;
+};
+
+export type ListDirectoryResponse2 =
+  ListDirectoryResponses[keyof ListDirectoryResponses];

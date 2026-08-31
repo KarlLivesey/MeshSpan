@@ -13,11 +13,13 @@ use meshspan_api_contract::{
     CreateApiKeyResponse, CreateMeshSetupResponse, CreatePasskeyChallengeResponse,
     CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationResponse,
     CreateRecoveryCodesResponse, CreateSessionResponse, CreateTotpRegistrationChallengeResponse,
-    CreateTotpRegistrationResponse, NullableField, OperationId, PasskeyAttestation,
-    PasskeyChallengeId, PasskeyCredentialDescriptor, PasskeyCredentialParameter,
-    PasskeyCredentialType, PasskeyResidentKey, PasskeyUserVerification, RecoveryCode,
-    RevokeAuthenticationMethodResponse, RevokeCurrentSessionResponse, SessionId, SetupState,
-    SetupStatusResponse, TotpRegistrationAlgorithm, TotpRegistrationChallengeId,
+    CreateTotpRegistrationResponse, DirectoryEntryKind, DirectoryEntryResponse, DirectoryPath,
+    FileVersionId, ListDirectoryQuery, ListDirectoryResponse, NamespaceCommitId, NullableField,
+    ObjectId, ObjectRevisionId, OperationId, PasskeyAttestation, PasskeyChallengeId,
+    PasskeyCredentialDescriptor, PasskeyCredentialParameter, PasskeyCredentialType,
+    PasskeyResidentKey, PasskeyUserVerification, RecoveryCode, RevokeAuthenticationMethodResponse,
+    RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
+    TotpRegistrationAlgorithm, TotpRegistrationChallengeId, VolumeId,
     decode_create_api_key_request, decode_create_mesh_setup_request,
     decode_create_passkey_challenge_request, decode_create_passkey_registration_challenge_request,
     decode_create_passkey_registration_request, decode_create_recovery_codes_request,
@@ -29,12 +31,14 @@ use meshspan_api_contract::{
     encode_create_passkey_registration_challenge_response,
     encode_create_passkey_registration_response, encode_create_recovery_codes_response,
     encode_create_session_response, encode_create_totp_registration_challenge_response,
-    encode_create_totp_registration_response, encode_revoke_authentication_method_response,
-    encode_revoke_current_session_response, encode_setup_status_response, generate_openapi,
-    validate_create_mesh_setup_request_value, validate_create_passkey_challenge_request_value,
+    encode_create_totp_registration_response, encode_list_directory_response,
+    encode_revoke_authentication_method_response, encode_revoke_current_session_response,
+    encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
+    validate_create_passkey_challenge_request_value,
     validate_create_passkey_challenge_response_value,
     validate_create_passkey_registration_request_value, validate_create_session_request_value,
-    validate_create_session_response_value, validate_setup_status_response_value,
+    validate_create_session_response_value, validate_list_directory_query,
+    validate_list_directory_query_value, validate_setup_status_response_value,
     validate_step_up_current_session_request_value,
 };
 use serde::Deserialize;
@@ -670,6 +674,88 @@ fn openapi_document_is_31_licensed_bounded_and_deterministic() {
     assert_eq!(
         challenge["responses"]["201"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/CreatePasskeyChallengeResponse"
+    );
+}
+
+#[test]
+fn directory_listing_is_bounded_complete_and_ready_to_continue() {
+    let query: ListDirectoryQuery = serde_json::from_value(json!({
+        "path": "reports/2026",
+        "cursor": "v1.opaque-continuation",
+        "limit": 80
+    }))
+    .expect("directory query fixture must decode");
+    validate_list_directory_query(&query).expect("canonical relative path must validate");
+    assert!(
+        validate_list_directory_query_value(&json!({
+            "path": "reports",
+            "limit": 80,
+            "unexpected": true
+        }))
+        .is_err()
+    );
+    let traversal: ListDirectoryQuery =
+        serde_json::from_value(json!({ "path": "reports/../private" }))
+            .expect("structural query decoding is separate from path semantics");
+    assert!(validate_list_directory_query(&traversal).is_err());
+
+    let response = ListDirectoryResponse {
+        volume_id: VolumeId::from_uuid_bytes(versioned(1)).expect("volume id must be valid"),
+        path: Some(
+            serde_json::from_value::<DirectoryPath>(json!("reports/2026"))
+                .expect("path fixture must decode"),
+        ),
+        namespace_commit_id: NamespaceCommitId::from_uuid_bytes(versioned(2))
+            .expect("commit id must be valid"),
+        directory_object_id: ObjectId::from_uuid_bytes(versioned(3))
+            .expect("directory id must be valid"),
+        directory_object_revision_id: ObjectRevisionId::from_uuid_bytes(versioned(4))
+            .expect("directory revision must be valid"),
+        entries: vec![DirectoryEntryResponse {
+            name: "accounts.csv".to_owned(),
+            object_id: ObjectId::from_uuid_bytes(versioned(5)).expect("object id must be valid"),
+            object_revision_id: ObjectRevisionId::from_uuid_bytes(versioned(6))
+                .expect("object revision must be valid"),
+            entry_generation: 9,
+            kind: DirectoryEntryKind::File,
+            file_version_id: Some(
+                FileVersionId::from_uuid_bytes(versioned(7)).expect("version id must be valid"),
+            ),
+            logical_length: Some(1_024),
+        }],
+        next_page_url: Some(
+            "/api/latest/volumes/01010101-0101-4101-8101-010101010101/directory-entries?path=reports%2F2026&limit=80&cursor=v1.next"
+                .to_owned(),
+        ),
+    };
+    let encoded = encode_list_directory_response(&response)
+        .expect("complete file metadata and continuation must validate");
+    let value: Value = serde_json::from_slice(&encoded).expect("response must be JSON");
+    assert_eq!(value["entries"][0]["logical_length"], 1_024);
+    assert!(value["next_page_url"].as_str().is_some());
+
+    let invalid_directory = ListDirectoryResponse {
+        entries: vec![DirectoryEntryResponse {
+            name: "invalid-directory".to_owned(),
+            object_id: ObjectId::from_uuid_bytes(versioned(8)).expect("object id must be valid"),
+            object_revision_id: ObjectRevisionId::from_uuid_bytes(versioned(9))
+                .expect("object revision must be valid"),
+            entry_generation: 1,
+            kind: DirectoryEntryKind::Directory,
+            file_version_id: None,
+            logical_length: Some(0),
+        }],
+        ..response
+    };
+    assert!(encode_list_directory_response(&invalid_directory).is_err());
+
+    let document = generate_openapi().expect("directory contract must generate");
+    let operation = &document.value()["paths"]["/volumes/{volume_id}/directory-entries"]["get"];
+    assert_eq!(operation["operationId"], "listDirectory");
+    assert_eq!(operation["x-meshspan-access"], "authenticated");
+    assert_eq!(
+        operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ListDirectoryResponse"
     );
 }
 

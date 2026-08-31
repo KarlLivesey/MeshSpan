@@ -105,9 +105,22 @@ where
         required_assurance: AssuranceLevel,
         now: UnixMicros,
     ) -> Result<SessionAccessCapability, BrowserAuthenticationError> {
+        self.authenticate_with_evidence(headers, protection, required_assurance, now)
+            .map(|(capability, _)| capability)
+    }
+
+    pub(crate) fn authenticate_with_evidence(
+        &self,
+        headers: &HeaderMap,
+        protection: BrowserRequestProtection,
+        required_assurance: AssuranceLevel,
+        now: UnixMicros,
+    ) -> Result<(SessionAccessCapability, BrowserSessionEvidence), BrowserAuthenticationError> {
         let evidence = parse_browser_session(headers, protection)
             .map_err(|_| BrowserAuthenticationError::Rejected)?;
-        self.authenticate_evidence(evidence, protection, required_assurance, now)
+        let capability =
+            self.authenticate_evidence(evidence, protection, required_assurance, now)?;
+        Ok((capability, evidence))
     }
 
     pub(crate) fn authenticate_evidence(

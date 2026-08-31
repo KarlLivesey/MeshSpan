@@ -13,7 +13,7 @@ use crate::{
     CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
     CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CurrentSessionResponse, HealthResponse,
+    CreateTotpRegistrationResponse, CurrentSessionResponse, HealthResponse, ListDirectoryResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
     StepUpCurrentSessionRequest, schema,
@@ -95,6 +95,7 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "CreateTotpRegistrationResponse": response_component::<CreateTotpRegistrationResponse>(),
                 "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
                 "HealthResponse": response_component::<HealthResponse>(),
+                "ListDirectoryResponse": response_component::<ListDirectoryResponse>(),
                 "RevokeCurrentSessionRequest": request_component::<RevokeCurrentSessionRequest>(),
                 "RevokeCurrentSessionResponse": response_component::<RevokeCurrentSessionResponse>(),
                 "RevokeAuthenticationMethodRequest": request_component::<RevokeAuthenticationMethodRequest>(),
@@ -111,6 +112,10 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
 fn paths() -> Value {
     Value::Object(Map::from_iter([
         ("/health".to_owned(), health_path()),
+        (
+            "/volumes/{volume_id}/directory-entries".to_owned(),
+            list_directory_path(),
+        ),
         ("/openapi.json".to_owned(), openapi_path()),
         ("/setup/status".to_owned(), setup_status_path()),
         ("/setup/meshes".to_owned(), create_mesh_path()),
@@ -157,6 +162,73 @@ fn paths() -> Value {
             revoke_current_session_path(),
         ),
     ]))
+}
+
+fn list_directory_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listDirectory",
+            "summary": "List one bounded immutable directory page",
+            "x-meshspan-access": "authenticated",
+            "parameters": [
+                {
+                    "name": "volume_id",
+                    "in": "path",
+                    "required": true,
+                    "schema": uuid_parameter_schema()
+                },
+                {
+                    "name": "path",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                    }
+                },
+                {
+                    "name": "cursor",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024,
+                        "pattern": "^[A-Za-z0-9._~-]+$"
+                    }
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": false,
+                    "schema": { "type": "integer", "minimum": 1, "maximum": 256 }
+                }
+            ],
+            "responses": {
+                "200": json_response(
+                    "Complete metadata for one immutable directory page",
+                    "#/components/schemas/ListDirectoryResponse"
+                ),
+                "400": json_response("Invalid query or volume identity", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "404": json_response("Volume or directory not found", "#/components/schemas/ApiError"),
+                "409": json_response("Continuation no longer names the current immutable view", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn uuid_parameter_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 36,
+        "maxLength": 36,
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    })
 }
 
 fn step_up_current_session_path() -> Value {

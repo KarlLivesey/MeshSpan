@@ -92,6 +92,10 @@ pub struct NamespaceListEntry {
     pub entry_generation: u64,
     /// Directory or regular-file kind.
     pub kind: DirectoryEntryKind,
+    /// Current immutable file version, absent for directories.
+    pub file_version_id: Option<FileVersionId>,
+    /// Logical file bytes, absent for directories.
+    pub logical_length: Option<u64>,
 }
 
 /// One immutable directory page with continuation only when another entry exists.
@@ -211,7 +215,10 @@ pub(crate) fn list(
     if has_more {
         entries.pop();
     }
-    let results: Vec<_> = entries.iter().map(list_entry).collect();
+    let results = entries
+        .iter()
+        .map(|entry| list_entry(connection, request.volume_id, entry))
+        .collect::<Result<Vec<_>, _>>()?;
     let next_cursor = if has_more {
         let last = entries.last().ok_or(NamespaceQueryError::Corrupt)?;
         Some(DirectoryListCursor {
@@ -395,14 +402,31 @@ const fn hash_nibble(hash: &[u8; 32], depth: usize) -> u8 {
     }
 }
 
-fn list_entry(entry: &DirectoryEntry) -> NamespaceListEntry {
-    NamespaceListEntry {
+fn list_entry(
+    connection: &Connection,
+    volume_id: VolumeId,
+    entry: &DirectoryEntry,
+) -> Result<NamespaceListEntry, NamespaceQueryError> {
+    let revision = load_revision(connection, entry.object_revision_id())?;
+    if revision.volume_id != volume_id
+        || revision.object_id != entry.object_id()
+        || revision.kind != entry.kind()
+    {
+        return Err(NamespaceQueryError::Corrupt);
+    }
+    let logical_length = revision
+        .file_version_id
+        .map(|version_id| load_file_length(connection, volume_id, entry.object_id(), version_id))
+        .transpose()?;
+    Ok(NamespaceListEntry {
         name: entry.name().clone(),
         object_id: entry.object_id(),
         object_revision_id: entry.object_revision_id(),
         entry_generation: entry.generation(),
         kind: entry.kind(),
-    }
+        file_version_id: revision.file_version_id,
+        logical_length,
+    })
 }
 
 fn build_stat(
