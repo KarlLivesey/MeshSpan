@@ -104,7 +104,9 @@ pub use access_query::{
     AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
     PermissionGrantRecord, ScopedGrantCursor, SubjectGrantCursor,
 };
-pub use authentication_method::{ApiKeyAuthentication, PasskeyVerificationMaterial};
+pub use authentication_method::{
+    ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
+};
 pub use authentication_policy::AuthenticationPolicy;
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
@@ -555,6 +557,18 @@ impl AuthoritativeRepository {
             token_digest,
             csrf_digest,
         )
+    }
+
+    /// Resolves an exact durable authentication-method revocation retry.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the operation, method lifecycle event or persisted result differs.
+    pub fn resolve_authentication_method_revocation(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<AuthenticationMethodRevocationReplay>, RepositoryError> {
+        authentication_method::resolve_revocation_replay(&self.database, operation_id)
     }
 
     /// Evaluates one exact connector-neutral namespace operation against committed authority.

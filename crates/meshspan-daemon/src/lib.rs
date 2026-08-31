@@ -14,6 +14,14 @@ mod api_key_issuance_tests;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
+mod authentication_method_revocation;
+mod authentication_method_revocation_api;
+#[cfg(test)]
+mod authentication_method_revocation_api_tests;
+mod authentication_method_revocation_contract;
+mod authentication_method_revocation_model;
+#[cfg(test)]
+mod authentication_method_revocation_tests;
 mod browser_authentication;
 mod browser_session;
 mod claim_file;
@@ -71,6 +79,15 @@ pub use api_key_issuance_contract::{
     ApiKeyIssuanceError,
 };
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
+pub use authentication_method_revocation::AuthenticationMethodRevocationService;
+pub use authentication_method_revocation_api::{
+    AuthenticationMethodRevocationApiError, AuthenticationMethodRevocationController,
+    authentication_method_revocation_api_router,
+};
+pub use authentication_method_revocation_contract::{
+    AuthenticationMethodRevocationAuthority, AuthenticationMethodRevocationAuthorityError,
+    AuthenticationMethodRevocationCommit, AuthenticationMethodRevocationError,
+};
 pub use browser_authentication::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
     BrowserSessionAuthorityError, GatewaySessionIdentity,

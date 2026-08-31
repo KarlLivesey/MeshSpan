@@ -532,6 +532,50 @@ export const zHealthResponse = z
   .strict();
 
 /**
+ * RevokeAuthenticationMethodRequest
+ *
+ * One idempotent request to revoke an owned authentication method.
+ */
+export const zRevokeAuthenticationMethodRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    reason: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[^\x00-\x20\x7f](?:[^\x00-\x1f\x7f]{0,1022}[^\x00-\x20\x7f])?$/),
+  })
+  .strict();
+
+/**
+ * RevokeAuthenticationMethodResponse
+ *
+ * Durable result of revoking one owned authentication method.
+ */
+export const zRevokeAuthenticationMethodResponse = z
+  .strictObject({
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revoked_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+  })
+  .strict();
+
+/**
  * RevokeCurrentSessionRequest
  *
  * Idempotent request to revoke the caller's current browser session.
@@ -873,3 +917,26 @@ export const zCreateCurrentUserPasskeyRegistrationChallengeBody =
  */
 export const zCreateCurrentUserPasskeyRegistrationChallengeResponse =
   zCreatePasskeyRegistrationChallengeResponse;
+
+/**
+ * Authentication-method revocation
+ */
+export const zRevokeCurrentUserAuthenticationMethodBody =
+  zRevokeAuthenticationMethodRequest;
+
+export const zRevokeCurrentUserAuthenticationMethodPath = z
+  .object({
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Authentication method authoritatively revoked
+ */
+export const zRevokeCurrentUserAuthenticationMethodResponse =
+  zRevokeAuthenticationMethodResponse;

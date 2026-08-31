@@ -125,3 +125,45 @@ pub struct CreateApiKeyResponse {
     #[schemars(with = "Option<ApiKeyExpiry>")]
     pub expires_at_epoch_micros: Option<i64>,
 }
+
+/// Bounded audit reason for revoking one authentication method.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct AuthenticationMethodRevocationReason(
+    #[schemars(
+        length(min = 1, max = 1_024),
+        pattern(r"^[^\x00-\x20\x7f](?:[^\x00-\x1f\x7f]{0,1022}[^\x00-\x20\x7f])?$")
+    )]
+    String,
+);
+
+impl AuthenticationMethodRevocationReason {
+    /// Returns the untrusted reason candidate for authoritative validation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One idempotent request to revoke an owned authentication method.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeAuthenticationMethodRequest {
+    /// Client-generated identity binding exact retries.
+    pub operation_id: OperationId,
+    /// Human-readable reason retained in the immutable audit history.
+    pub reason: AuthenticationMethodRevocationReason,
+}
+
+/// Durable result of revoking one owned authentication method.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeAuthenticationMethodResponse {
+    /// Exact idempotency identity whose committed result was resolved.
+    pub operation_id: OperationId,
+    /// Authentication method which is now authoritatively unusable.
+    pub method_id: AuthenticationMethodId,
+    /// Authoritative revocation instant as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_i64))]
+    pub revoked_at_epoch_micros: i64,
+}

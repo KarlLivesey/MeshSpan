@@ -14,17 +14,19 @@ use meshspan_api_contract::{
     CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationResponse,
     CreateSessionResponse, NullableField, OperationId, PasskeyAttestation, PasskeyChallengeId,
     PasskeyCredentialDescriptor, PasskeyCredentialParameter, PasskeyCredentialType,
-    PasskeyResidentKey, PasskeyUserVerification, RevokeCurrentSessionResponse, SessionId,
-    SetupState, SetupStatusResponse, decode_create_api_key_request,
-    decode_create_mesh_setup_request, decode_create_passkey_challenge_request,
-    decode_create_passkey_registration_challenge_request,
+    PasskeyResidentKey, PasskeyUserVerification, RevokeAuthenticationMethodResponse,
+    RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
+    decode_create_api_key_request, decode_create_mesh_setup_request,
+    decode_create_passkey_challenge_request, decode_create_passkey_registration_challenge_request,
     decode_create_passkey_registration_request, decode_create_session_request,
-    decode_revoke_current_session_request, encode_api_error, encode_create_api_key_response,
-    encode_create_mesh_setup_response, encode_create_passkey_challenge_response,
+    decode_revoke_authentication_method_request, decode_revoke_current_session_request,
+    encode_api_error, encode_create_api_key_response, encode_create_mesh_setup_response,
+    encode_create_passkey_challenge_response,
     encode_create_passkey_registration_challenge_response,
     encode_create_passkey_registration_response, encode_create_session_response,
-    encode_revoke_current_session_response, encode_setup_status_response, generate_openapi,
-    validate_create_mesh_setup_request_value, validate_create_passkey_challenge_request_value,
+    encode_revoke_authentication_method_response, encode_revoke_current_session_response,
+    encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
+    validate_create_passkey_challenge_request_value,
     validate_create_passkey_challenge_response_value,
     validate_create_passkey_registration_request_value, validate_create_session_request_value,
     validate_create_session_response_value, validate_setup_status_response_value,
@@ -301,6 +303,50 @@ fn api_key_issuance_preserves_expiry_intent_and_validates_secret_output() {
     let path = &document.value()["paths"]["/users/current/authentication-methods/api-keys"]["post"];
     assert_eq!(path["operationId"], "createCurrentUserApiKey");
     assert_eq!(path["x-meshspan-access"], "authenticated-csrf");
+}
+
+#[test]
+fn authentication_method_revocation_is_bounded_owned_and_generated_once() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    let method = AuthenticationMethodId::from_uuid_bytes(versioned(14))
+        .expect("method fixture must be valid");
+    let request = decode_revoke_authentication_method_request(
+        &serde_json::to_vec(&json!({
+            "operation_id": operation,
+            "reason": "Rotating the automation credential"
+        }))
+        .expect("request fixture must encode"),
+    )
+    .expect("exact revocation request must decode");
+    assert_eq!(
+        request.reason.as_str(),
+        "Rotating the automation credential"
+    );
+    for invalid in [" leading", "trailing ", "contains\ncontrol"] {
+        assert!(
+            decode_revoke_authentication_method_request(
+                &serde_json::to_vec(&json!({
+                    "operation_id": operation,
+                    "reason": invalid
+                }))
+                .expect("rejection fixture must encode")
+            )
+            .is_err()
+        );
+    }
+    let response = RevokeAuthenticationMethodResponse {
+        operation_id: request.operation_id,
+        method_id: method,
+        revoked_at_epoch_micros: 1_800_000_000_000_000,
+    };
+    assert!(encode_revoke_authentication_method_response(&response).is_ok());
+
+    let document = generate_openapi().expect("contract must generate");
+    let path = &document.value()["paths"]["/users/current/authentication-methods/{method_id}/revocations"]
+        ["post"];
+    assert_eq!(path["operationId"], "revokeCurrentUserAuthenticationMethod");
+    assert_eq!(path["x-meshspan-access"], "authenticated-csrf");
+    assert_eq!(path["parameters"][0]["name"], "method_id");
 }
 
 #[test]

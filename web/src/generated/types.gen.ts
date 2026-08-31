@@ -462,6 +462,42 @@ export type HealthResponse = {
 };
 
 /**
+ * RevokeAuthenticationMethodRequest
+ *
+ * One idempotent request to revoke an owned authentication method.
+ */
+export type RevokeAuthenticationMethodRequest = {
+  /**
+   * Client-generated identity binding exact retries.
+   */
+  operation_id: string;
+  /**
+   * Human-readable reason retained in the immutable audit history.
+   */
+  reason: string;
+};
+
+/**
+ * RevokeAuthenticationMethodResponse
+ *
+ * Durable result of revoking one owned authentication method.
+ */
+export type RevokeAuthenticationMethodResponse = {
+  /**
+   * Authentication method which is now authoritatively unusable.
+   */
+  method_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Authoritative revocation instant as epoch microseconds.
+   */
+  revoked_at_epoch_micros: number;
+};
+
+/**
  * RevokeCurrentSessionRequest
  *
  * Idempotent request to revoke the caller's current browser session.
@@ -1154,3 +1190,59 @@ export type CreateCurrentUserPasskeyRegistrationChallengeResponses = {
 
 export type CreateCurrentUserPasskeyRegistrationChallengeResponse =
   CreateCurrentUserPasskeyRegistrationChallengeResponses[keyof CreateCurrentUserPasskeyRegistrationChallengeResponses];
+
+export type RevokeCurrentUserAuthenticationMethodData = {
+  /**
+   * Authentication-method revocation
+   */
+  body: RevokeAuthenticationMethodRequest;
+  path: {
+    method_id: string;
+  };
+  query?: never;
+  url: "/users/current/authentication-methods/{method_id}/revocations";
+};
+
+export type RevokeCurrentUserAuthenticationMethodErrors = {
+  /**
+   * Invalid request or method identity
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or revocation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type RevokeCurrentUserAuthenticationMethodError =
+  RevokeCurrentUserAuthenticationMethodErrors[keyof RevokeCurrentUserAuthenticationMethodErrors];
+
+export type RevokeCurrentUserAuthenticationMethodResponses = {
+  /**
+   * Authentication method authoritatively revoked
+   */
+  200: RevokeAuthenticationMethodResponse;
+};
+
+export type RevokeCurrentUserAuthenticationMethodResponse =
+  RevokeCurrentUserAuthenticationMethodResponses[keyof RevokeCurrentUserAuthenticationMethodResponses];
