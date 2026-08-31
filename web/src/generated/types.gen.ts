@@ -423,6 +423,58 @@ export type CreateApiKeyResponse = {
 };
 
 /**
+ * CreateDirectoryRequest
+ *
+ * Creates one empty logical directory at an exact path.
+ */
+export type CreateDirectoryRequest = {
+  /**
+   * Client-generated end-to-end idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Root-relative path of the new empty directory.
+   */
+  path: string;
+};
+
+/**
+ * CreateDirectoryResponse
+ *
+ * Durable result of one atomic empty-directory creation.
+ */
+export type CreateDirectoryResponse = {
+  /**
+   * Resulting local branch-head sequence.
+   */
+  head_sequence: number;
+  /**
+   * Namespace commit made current by the operation.
+   */
+  namespace_commit_id: string;
+  /**
+   * Stable logical directory identity.
+   */
+  object_id: string;
+  /**
+   * Newly published immutable directory revision.
+   */
+  object_revision_id: string;
+  /**
+   * Exact operation which created or previously created the directory.
+   */
+  operation_id: string;
+  /**
+   * Exact created path.
+   */
+  path: string;
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
+};
+
+/**
  * CreateMeshSetupRequest
  *
  * One exact request to create the first mesh on an unclaimed daemon.
@@ -895,6 +947,66 @@ export type CurrentSessionResponse = {
 };
 
 /**
+ * DeleteObjectRequest
+ *
+ * Logically deletes one exact current file or empty directory.
+ */
+export type DeleteObjectRequest = {
+  /**
+   * Client-generated end-to-end idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Exact current root-relative path to remove.
+   */
+  path: string;
+};
+
+/**
+ * DeleteObjectResponse
+ *
+ * Durable result of one atomic logical namespace removal.
+ */
+export type DeleteObjectResponse = {
+  /**
+   * Resulting local branch-head sequence.
+   */
+  head_sequence: number;
+  /**
+   * Namespace commit made current by the operation.
+   */
+  namespace_commit_id: string;
+  /**
+   * Stable removed logical-object identity.
+   */
+  object_id: string;
+  /**
+   * Whether the removed object was a file or directory.
+   */
+  object_kind: "directory" | "file";
+  /**
+   * Exact immutable object revision removed from the namespace.
+   */
+  object_revision_id: string;
+  /**
+   * Exact operation which removed or previously removed the object.
+   */
+  operation_id: string;
+  /**
+   * Exact removed path.
+   */
+  path: string;
+  /**
+   * The complete local/cell branch mutation is durably committed.
+   */
+  scope: "branch_deleted";
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
+};
+
+/**
  * GetObjectResponse
  *
  * Complete immutable metadata for one logical object.
@@ -1063,6 +1175,66 @@ export type ListUploadRangesResponse = {
    * Selected upload.
    */
   upload_id: string;
+};
+
+/**
+ * RenameObjectRequest
+ *
+ * Atomically renames or moves one object within a logical volume.
+ */
+export type RenameObjectRequest = {
+  /**
+   * Client-generated end-to-end idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Exact current root-relative path.
+   */
+  source_path: string;
+  /**
+   * Exact unoccupied destination, or the same canonical name with changed display case.
+   */
+  target_path: string;
+};
+
+/**
+ * RenameObjectResponse
+ *
+ * Durable result of one atomic same-volume rename or move.
+ */
+export type RenameObjectResponse = {
+  /**
+   * Resulting local branch-head sequence.
+   */
+  head_sequence: number;
+  /**
+   * Namespace commit made current by the operation.
+   */
+  namespace_commit_id: string;
+  /**
+   * Stable moved logical-object identity.
+   */
+  object_id: string;
+  /**
+   * Immutable object revision retained by the move.
+   */
+  object_revision_id: string;
+  /**
+   * Exact operation which moved or previously moved the object.
+   */
+  operation_id: string;
+  /**
+   * Exact source path named by the operation.
+   */
+  source_path: string;
+  /**
+   * Exact resulting path.
+   */
+  target_path: string;
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
 };
 
 /**
@@ -2619,6 +2791,137 @@ export type RevokeCurrentUserAuthenticationMethodResponses = {
 export type RevokeCurrentUserAuthenticationMethodResponse =
   RevokeCurrentUserAuthenticationMethodResponses[keyof RevokeCurrentUserAuthenticationMethodResponses];
 
+export type DeleteObjectData = {
+  /**
+   * Exact idempotent logical-delete intent
+   */
+  body: DeleteObjectRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+  };
+  query?: never;
+  url: "/volumes/{volume_id}/deletions";
+};
+
+export type DeleteObjectErrors = {
+  /**
+   * Invalid namespace mutation
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Volume, object or parent not found
+   */
+  404: ApiError;
+  /**
+   * Namespace, sharing or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Mutation body exceeds its byte limit
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Namespace authority or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type DeleteObjectError = DeleteObjectErrors[keyof DeleteObjectErrors];
+
+export type DeleteObjectResponses = {
+  /**
+   * Durable branch-deleted receipt; physical reclamation is separate
+   */
+  200: DeleteObjectResponse;
+};
+
+export type DeleteObjectResponse2 =
+  DeleteObjectResponses[keyof DeleteObjectResponses];
+
+export type CreateDirectoryData = {
+  /**
+   * Exact idempotent directory-creation intent
+   */
+  body: CreateDirectoryRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+  };
+  query?: never;
+  url: "/volumes/{volume_id}/directories";
+};
+
+export type CreateDirectoryErrors = {
+  /**
+   * Invalid namespace mutation
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Volume, object or parent not found
+   */
+  404: ApiError;
+  /**
+   * Namespace, sharing or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Mutation body exceeds its byte limit
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Namespace authority or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateDirectoryError =
+  CreateDirectoryErrors[keyof CreateDirectoryErrors];
+
+export type CreateDirectoryResponses = {
+  /**
+   * Durable local-branch directory-creation receipt
+   */
+  201: CreateDirectoryResponse;
+};
+
+export type CreateDirectoryResponse2 =
+  CreateDirectoryResponses[keyof CreateDirectoryResponses];
+
 export type ListDirectoryData = {
   body?: never;
   path: {
@@ -2766,6 +3069,71 @@ export type GetObjectResponses = {
 };
 
 export type GetObjectResponse2 = GetObjectResponses[keyof GetObjectResponses];
+
+export type RenameObjectData = {
+  /**
+   * Exact idempotent same-volume rename intent
+   */
+  body: RenameObjectRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+  };
+  query?: never;
+  url: "/volumes/{volume_id}/renames";
+};
+
+export type RenameObjectErrors = {
+  /**
+   * Invalid namespace mutation
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Volume, object or parent not found
+   */
+  404: ApiError;
+  /**
+   * Namespace, sharing or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Mutation body exceeds its byte limit
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Namespace authority or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type RenameObjectError = RenameObjectErrors[keyof RenameObjectErrors];
+
+export type RenameObjectResponses = {
+  /**
+   * Durable local-branch rename receipt
+   */
+  200: RenameObjectResponse;
+};
+
+export type RenameObjectResponse2 =
+  RenameObjectResponses[keyof RenameObjectResponses];
 
 export type BeginUploadData = {
   /**

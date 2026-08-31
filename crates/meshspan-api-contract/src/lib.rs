@@ -11,6 +11,8 @@ mod file_read_validation;
 mod file_upload;
 mod file_upload_validation;
 mod model;
+mod namespace_mutation;
+mod namespace_mutation_validation;
 mod object_stat;
 mod object_stat_validation;
 mod openapi;
@@ -25,6 +27,8 @@ mod validation;
 
 #[cfg(test)]
 mod file_upload_tests;
+#[cfg(test)]
+mod namespace_mutation_tests;
 
 pub use api_key_management::{
     ApiKeyExpiry, ApiKeyId, ApiKeyScope, AuthenticationMethodRevocationReason, CreateApiKeyRequest,
@@ -69,6 +73,15 @@ pub use model::{
     PrincipalId, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
     SessionAdditionalFactor, SessionAuthentication, SessionId, SetupClaim, SetupName, SetupState,
     SetupStatusResponse, StepUpCurrentSessionRequest,
+};
+pub use namespace_mutation::{
+    CreateDirectoryRequest, CreateDirectoryResponse, DeleteObjectRequest, DeleteObjectResponse,
+    DeleteObjectScope, RenameObjectRequest, RenameObjectResponse,
+};
+pub use namespace_mutation_validation::{
+    MAX_NAMESPACE_MUTATION_BYTES, decode_create_directory_request, decode_delete_object_request,
+    decode_rename_object_request, encode_create_directory_response, encode_delete_object_response,
+    encode_rename_object_response,
 };
 pub use object_stat::{GetObjectQuery, GetObjectResponse};
 pub use object_stat_validation::{

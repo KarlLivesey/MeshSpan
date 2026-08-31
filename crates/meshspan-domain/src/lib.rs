@@ -22,6 +22,7 @@ mod seams;
 mod secret_text;
 mod session_token;
 mod topology;
+mod uuid;
 
 pub use access::{
     AccessActivation, AccessActivationError, AccessActivationPolicy, AccessActivationRequest,
@@ -87,3 +88,4 @@ pub use topology::{
     FailureScenario, FailureTerm, FaultGroupMember, ProtectionError, ProtectionLayout,
     ProtectionProof, Topology, prove_protection,
 };
+pub use uuid::uuid_v8;

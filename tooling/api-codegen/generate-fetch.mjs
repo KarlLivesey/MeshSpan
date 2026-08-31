@@ -14,6 +14,10 @@ import {
   renderUploadClientMethods,
   renderUploadRequestTypes,
 } from "./render-upload-client.mjs";
+import {
+  renderNamespaceMutationClientInterface,
+  renderNamespaceMutationClientMethods,
+} from "./render-namespace-mutation-client.mjs";
 import { renderFetchRuntime } from "./render-fetch-runtime.mjs";
 
 const OPENAPI_PATH = new URL(
@@ -42,11 +46,15 @@ import type {
   CommitUploadResponse,
   CreateApiKeyRequest,
   CreateApiKeyResponse,
+  CreateDirectoryRequest,
+  CreateDirectoryResponse,
   CreateMeshSetupRequestWritable,
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
   CurrentSessionResponse,
+  DeleteObjectRequest,
+  DeleteObjectResponse,
   GetObjectResponse,
   HealthResponse,
   ListDirectoryResponse,
@@ -55,6 +63,8 @@ import type {
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
   RevokeCurrentSessionResponse,
+  RenameObjectRequest,
+  RenameObjectResponse,
   SetupStatusResponse,
   UploadStatusResponse,
   WriteUploadRangeResponse,
@@ -72,10 +82,16 @@ import {
   zCommitUploadResponse2,
   zCreateCurrentUserApiKeyBody,
   zCreateCurrentUserApiKeyResponse,
+  zCreateDirectoryBody,
+  zCreateDirectoryPath,
+  zCreateDirectoryResponse2,
   zCreateMeshSetupBody,
   zCreateMeshSetupResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
+  zDeleteObjectBody,
+  zDeleteObjectPath,
+  zDeleteObjectResponse2,
   zGetCurrentSessionResponse,
   zGetHealthResponse,
   zGetObjectPath,
@@ -98,6 +114,9 @@ import {
   zRevokeCurrentUserAuthenticationMethodResponse,
   zRevokeCurrentSessionBody,
   zRevokeCurrentSessionResponse2,
+  zRenameObjectBody,
+  zRenameObjectPath,
+  zRenameObjectResponse2,
   zWriteUploadRangeHeaders,
   zWriteUploadRangePath,
   zWriteUploadRangeResponse2,
@@ -161,6 +180,7 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
   createCurrentUserApiKey(
     request: CreateApiKeyRequest,
@@ -222,6 +242,7 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
     async createCurrentUserApiKey(
       request,

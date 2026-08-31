@@ -448,9 +448,7 @@ fn derived_identifier<T>(
     digest.update(purpose);
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&digest.finalize()[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    constructor(bytes).map_err(|_| NativeUploadError::Failed)
+    constructor(meshspan_domain::uuid_v8(bytes)).map_err(|_| NativeUploadError::Failed)
 }
 
 trait TransposeOption<T> {

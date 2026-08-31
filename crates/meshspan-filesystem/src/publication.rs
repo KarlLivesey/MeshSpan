@@ -539,6 +539,8 @@ pub struct DirectoryPublicationReceipt {
     pub operation_id: OperationId,
     /// Digest of every mutation input and expected base.
     pub request_digest: [u8; 32],
+    /// Stable logical directory identity created by the operation.
+    pub directory_object_id: ObjectId,
     /// Newly created immutable directory revision.
     pub directory_object_revision_id: ObjectRevisionId,
     /// Namespace commit made current.

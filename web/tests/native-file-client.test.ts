@@ -14,6 +14,10 @@ const CONTRACT_HEADERS = {
   "MeshSpan-API-Schema": `sha256:${"a".repeat(64)}`,
   "MeshSpan-API-Version": "latest",
 };
+type RecordedRequest = Readonly<{
+  input: RequestInfo | URL;
+  init?: RequestInit;
+}>;
 
 describe("generated native file API client", () => {
   it("authenticates headlessly and validates bounded binary responses", async () => {
@@ -122,6 +126,65 @@ describe("generated native resumable upload client", () => {
     expect(new Uint8Array(requests[1]?.init?.body as ArrayBuffer)).toEqual(
       Uint8Array.from([1, 2, 3]),
     );
+  });
+});
+
+describe("generated native namespace mutation client", () => {
+  it("creates, renames, and logically deletes through the specialised API", async () => {
+    const requests: RecordedRequest[] = [];
+    const responses = namespaceMutationResponses();
+    const client = createMeshSpanFetchClient({
+      apiKey: API_KEY,
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input, init) => {
+        requests.push({ input, ...(init === undefined ? {} : { init }) });
+        return Promise.resolve(responses.shift() ?? jsonResponse({}));
+      },
+    });
+
+    await client.createDirectory(
+      VOLUME_ID,
+      { operation_id: OPERATION_ID, path: "reports" },
+      CSRF_TOKEN,
+    );
+    await client.renameObject(VOLUME_ID, {
+      operation_id: OPERATION_ID,
+      source_path: "reports",
+      target_path: "archive",
+    });
+    await client.deleteObject(VOLUME_ID, {
+      operation_id: OPERATION_ID,
+      path: "archive",
+    });
+
+    expect(requests).toHaveLength(3);
+    expectNamespaceMutationRequests(requests);
+  });
+
+  it("rejects unsafe and no-op mutation paths before Fetch", async () => {
+    let calls = 0;
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async () => {
+        calls += 1;
+        return Promise.resolve(jsonResponse({}));
+      },
+    });
+
+    await expect(
+      client.createDirectory(VOLUME_ID, {
+        operation_id: OPERATION_ID,
+        path: "reports/../private",
+      }),
+    ).rejects.toThrow("invalid MeshSpan namespace path");
+    await expect(
+      client.renameObject(VOLUME_ID, {
+        operation_id: OPERATION_ID,
+        source_path: "same",
+        target_path: "same",
+      }),
+    ).rejects.toThrow("rename source and target must differ");
+    expect(calls).toBe(0);
   });
 });
 
@@ -301,6 +364,50 @@ describe("generated native file client rejection", () => {
     expect(calls).toBe(0);
   });
 });
+
+function namespaceMutationResponses(): Response[] {
+  const identity = {
+    head_sequence: 2,
+    namespace_commit_id: "04040404-0404-4404-8404-040404040404",
+    object_id: "02020202-0202-4202-8202-020202020202",
+    object_revision_id: "03030303-0303-4303-8303-030303030303",
+    operation_id: OPERATION_ID,
+    volume_id: VOLUME_ID,
+  };
+  return [
+    jsonResponse({ ...identity, head_sequence: 1, path: "reports" }),
+    jsonResponse({
+      ...identity,
+      source_path: "reports",
+      target_path: "archive",
+    }),
+    jsonResponse({
+      ...identity,
+      head_sequence: 3,
+      object_kind: "directory",
+      path: "archive",
+      scope: "branch_deleted",
+    }),
+  ];
+}
+
+function expectNamespaceMutationRequests(requests: RecordedRequest[]): void {
+  expect(requests.map(({ input }) => requestUrl(input))).toEqual([
+    `https://node.example/api/latest/volumes/${VOLUME_ID}/directories`,
+    `https://node.example/api/latest/volumes/${VOLUME_ID}/renames`,
+    `https://node.example/api/latest/volumes/${VOLUME_ID}/deletions`,
+  ]);
+  expect(requests.every(({ init }) => init?.method === "POST")).toBe(true);
+  expect(
+    new Headers(requests[0]?.init?.headers).get("MeshSpan-CSRF-Token"),
+  ).toBe(CSRF_TOKEN);
+  expect(
+    new Headers(requests[1]?.init?.headers).has("MeshSpan-CSRF-Token"),
+  ).toBe(false);
+  expect(new Headers(requests[1]?.init?.headers).get("Authorization")).toBe(
+    `Bearer ${API_KEY}`,
+  );
+}
 
 function uploadStatus(
   overrides: Readonly<Record<string, unknown>> = {},

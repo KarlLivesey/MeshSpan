@@ -760,10 +760,7 @@ fn derive(id: OperationId, purpose: &[u8], ordinal: u64) -> [u8; 16] {
     digest.update(&ordinal.to_be_bytes());
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&digest.finalize().as_bytes()[..16]);
-    if bytes == [0; 16] {
-        bytes[15] = 1;
-    }
-    bytes
+    meshspan_domain::uuid_v8(bytes)
 }
 
 fn update_path(digest: &mut blake3::Hasher, path: &NamespacePath) {

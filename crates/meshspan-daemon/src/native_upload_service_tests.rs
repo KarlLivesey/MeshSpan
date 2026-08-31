@@ -4,9 +4,11 @@ use axum::body::{Body, to_bytes};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use meshspan_api_contract::{
-    BeginUploadRequest, BeginUploadResponse, CommitUploadRequest,
-    NamespacePath as ApiNamespacePath, OperationId as ApiOperationId,
-    UploadDisposition as ApiUploadDisposition, UploadState as ApiUploadState,
+    ApiError, ApiErrorCode, BeginUploadRequest, BeginUploadResponse, CommitUploadRequest,
+    CreateDirectoryRequest, CreateDirectoryResponse, DeleteObjectRequest, DeleteObjectResponse,
+    DeleteObjectScope, DirectoryEntryKind as ApiDirectoryEntryKind, MAX_NAMESPACE_MUTATION_BYTES,
+    NamespacePath as ApiNamespacePath, OperationId as ApiOperationId, RenameObjectRequest,
+    RenameObjectResponse, UploadDisposition as ApiUploadDisposition, UploadState as ApiUploadState,
 };
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
@@ -19,16 +21,18 @@ use meshspan_filesystem::{
     ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
     DurableContentPublisher, DurableContentReader, FilePublication, FilesystemAccessAuthority,
     FilesystemAccessContext, FilesystemAdapterPolicy, FilesystemAuthorityGrant,
-    FilesystemAuthorityRequest, FilesystemCommitService, ManifestPublication, NamespaceLimits,
-    NamespacePath, NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
+    FilesystemAuthorityRequest, FilesystemCommitService, HandleError, ManifestPublication,
+    NamespaceLimits, NamespacePath, NamespacePublicationPath, RootFilePublication,
+    VersionPublicationStore,
 };
 use tempfile::tempdir;
 use tower::ServiceExt;
 
 use crate::{
     FileApiAuthenticationError, FileApiFailure, NativeFileApiAuthenticator,
-    NativeFileRequestProtection, NativeUploadController, NativeUploadService,
-    NativeUploadServicePolicy, UploadRangeWriteRequest, native_upload_api_router,
+    NativeFileRequestProtection, NativeNamespaceMutationController, NativeNamespaceMutationService,
+    NativeUploadController, NativeUploadService, NativeUploadServicePolicy,
+    UploadRangeWriteRequest, native_namespace_mutation_api_router, native_upload_api_router,
 };
 
 const AUTHENTICATION_PROOF: &str = "MeshSpan native-service-proof";
@@ -83,6 +87,67 @@ fn specialised_native_service_publishes_a_real_authorised_upload()
     assert_eq!(committed.upload.state, ApiUploadState::Committed);
     assert_eq!(committed.object.object.logical_length, Some(8));
     assert_eq!(committed.object.path.as_str(), "final.bin");
+    Ok(())
+}
+
+#[test]
+fn specialised_native_service_mutates_a_real_namespace_with_exact_replay()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_namespace(directory.path())?;
+    let mut service = native_namespace_service(directory.path())?;
+    let context = service.authenticate(
+        &authenticated_headers(),
+        NativeFileRequestProtection::Mutation,
+        UnixMicros::new(10),
+    )?;
+    let volume_id = uuid_text(versioned(12));
+    let create_request = CreateDirectoryRequest {
+        operation_id: api_operation(versioned(90))?,
+        path: api_path("incoming")?,
+    };
+    let created = service
+        .create_directory(context, &volume_id, create_request.clone())
+        .map_err(|error| format!("create failed: {error:?}"))?;
+    assert_eq!(
+        service
+            .create_directory(context, &volume_id, create_request)
+            .map_err(|error| format!("create replay failed: {error:?}"))?,
+        created
+    );
+
+    let rename_request = RenameObjectRequest {
+        operation_id: api_operation(versioned(91))?,
+        source_path: api_path("incoming")?,
+        target_path: api_path("ready")?,
+    };
+    let renamed = service
+        .rename_object(context, &volume_id, rename_request.clone())
+        .map_err(|error| format!("rename failed: {error:?}"))?;
+    assert_eq!(renamed.object_id, created.object_id);
+    assert_eq!(
+        service
+            .rename_object(context, &volume_id, rename_request)
+            .map_err(|error| format!("rename replay failed: {error:?}"))?,
+        renamed
+    );
+
+    let delete_request = DeleteObjectRequest {
+        operation_id: api_operation(versioned(92))?,
+        path: api_path("ready")?,
+    };
+    let deleted = service
+        .delete_object(context, &volume_id, delete_request.clone())
+        .map_err(|error| format!("delete failed: {error:?}"))?;
+    assert_eq!(deleted.object_id, created.object_id);
+    assert_eq!(deleted.object_kind, ApiDirectoryEntryKind::Directory);
+    assert_eq!(deleted.scope, DeleteObjectScope::BranchDeleted);
+    assert_eq!(
+        service
+            .delete_object(context, &volume_id, delete_request)
+            .map_err(|error| format!("delete replay failed: {error:?}"))?,
+        deleted
+    );
     Ok(())
 }
 
@@ -163,6 +228,88 @@ async fn native_http_client_publishes_through_the_real_filesystem_service()
     Ok(())
 }
 
+#[tokio::test]
+async fn native_http_client_mutates_the_real_authorised_namespace()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_namespace(directory.path())?;
+    let router = native_namespace_mutation_api_router(native_namespace_service(directory.path())?)?;
+    let volume_id = uuid_text(versioned(12));
+
+    let unauthenticated = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/latest/volumes/{volume_id}/directories"))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(vec![b'x'; MAX_NAMESPACE_MUTATION_BYTES + 1]))?,
+        )
+        .await?;
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let create = router
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &format!("/api/latest/volumes/{volume_id}/directories"),
+            &serde_json::json!({
+                "operation_id": uuid_text(versioned(100)),
+                "path": "working"
+            }),
+        )?)
+        .await?;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let created: CreateDirectoryResponse = serde_json::from_slice(&response_body(create).await?)?;
+
+    let conflict = router
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &format!("/api/latest/volumes/{volume_id}/directories"),
+            &serde_json::json!({
+                "operation_id": uuid_text(versioned(100)),
+                "path": "different"
+            }),
+        )?)
+        .await?;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let conflict: ApiError = serde_json::from_slice(&response_body(conflict).await?)?;
+    assert_eq!(conflict.code, ApiErrorCode::OperationConflict);
+
+    let rename = router
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &format!("/api/latest/volumes/{volume_id}/renames"),
+            &serde_json::json!({
+                "operation_id": uuid_text(versioned(101)),
+                "source_path": "working",
+                "target_path": "complete"
+            }),
+        )?)
+        .await?;
+    assert_eq!(rename.status(), StatusCode::OK);
+    let renamed: RenameObjectResponse = serde_json::from_slice(&response_body(rename).await?)?;
+    assert_eq!(renamed.object_id, created.object_id);
+
+    let delete = router
+        .oneshot(json_request(
+            "POST",
+            &format!("/api/latest/volumes/{volume_id}/deletions"),
+            &serde_json::json!({
+                "operation_id": uuid_text(versioned(102)),
+                "path": "complete"
+            }),
+        )?)
+        .await?;
+    assert_eq!(delete.status(), StatusCode::OK);
+    let deleted: DeleteObjectResponse = serde_json::from_slice(&response_body(delete).await?)?;
+    assert_eq!(deleted.object_id, created.object_id);
+    assert_eq!(deleted.scope, DeleteObjectScope::BranchDeleted);
+    Ok(())
+}
+
 struct TestAuthenticator;
 
 impl NativeFileApiAuthenticator for TestAuthenticator {
@@ -227,6 +374,11 @@ type TestService = NativeUploadService<
     TestFilesystem,
     fn(&AuthorisedFilesystemError<TestAuthorityError>) -> FileApiFailure,
 >;
+type TestNamespaceService = NativeNamespaceMutationService<
+    TestAuthenticator,
+    TestFilesystem,
+    fn(&AuthorisedFilesystemError<TestAuthorityError>) -> FileApiFailure,
+>;
 
 fn native_upload_service(
     state: &std::path::Path,
@@ -247,6 +399,22 @@ fn native_upload_service(
         filesystem,
         classify_filesystem_error,
         policy,
+    ))
+}
+
+fn native_namespace_service(
+    state: &std::path::Path,
+) -> Result<TestNamespaceService, Box<dyn std::error::Error>> {
+    let filesystem = FilesystemCommitService::open(state, UnixMicros::new(1), TestPublisher)?;
+    let filesystem = BoundFilesystemAdapter::new(
+        AuthorisedFilesystemService::new(filesystem, TestAuthority),
+        BranchId::from_bytes(versioned(11))?,
+        FilesystemAdapterPolicy::new(true, 1, 1)?,
+    );
+    Ok(NativeNamespaceMutationService::new(
+        TestAuthenticator,
+        filesystem,
+        classify_filesystem_error,
     ))
 }
 
@@ -283,10 +451,31 @@ fn classify_filesystem_error(
 ) -> FileApiFailure {
     match error {
         AuthorisedFilesystemError::InvalidInput => FileApiFailure::InvalidInput,
-        AuthorisedFilesystemError::TargetUnavailable => FileApiFailure::NotFound,
+        AuthorisedFilesystemError::TargetUnavailable
+        | AuthorisedFilesystemError::Handle(HandleError::NotFound) => FileApiFailure::NotFound,
         AuthorisedFilesystemError::Authority(_) => FileApiFailure::AccessDenied,
+        AuthorisedFilesystemError::Handle(HandleError::InvalidInput) => {
+            FileApiFailure::InvalidInput
+        }
+        AuthorisedFilesystemError::Handle(HandleError::OperationConflict) => {
+            FileApiFailure::Conflict
+        }
+        AuthorisedFilesystemError::Handle(
+            HandleError::AlreadyExists
+            | HandleError::CreationRequired
+            | HandleError::SharingViolation
+            | HandleError::DeletePending
+            | HandleError::StaleHandle
+            | HandleError::GatewayMismatch
+            | HandleError::LockConflict
+            | HandleError::FlushInProgress
+            | HandleError::DirectoryNotEmpty
+            | HandleError::StaleLock,
+        ) => FileApiFailure::StaleCursor,
         AuthorisedFilesystemError::InvalidGrant
-        | AuthorisedFilesystemError::Handle(_)
+        | AuthorisedFilesystemError::Handle(
+            HandleError::Corrupt | HandleError::Namespace(_) | HandleError::Sqlite(_),
+        )
         | AuthorisedFilesystemError::HandleIo(_)
         | AuthorisedFilesystemError::Upload(_)
         | AuthorisedFilesystemError::Commit(_)
@@ -385,6 +574,10 @@ fn seed_namespace(state: &std::path::Path) -> Result<(), Box<dyn std::error::Err
 
 fn api_operation(bytes: [u8; 16]) -> Result<ApiOperationId, Box<dyn std::error::Error>> {
     ApiOperationId::parse(&uuid_text(bytes)).ok_or_else(|| "operation".into())
+}
+
+fn api_path(value: &str) -> Result<ApiNamespacePath, Box<dyn std::error::Error>> {
+    ApiNamespacePath::from_decoded(value.to_owned()).ok_or_else(|| "path".into())
 }
 
 fn uuid_text(bytes: [u8; 16]) -> String {

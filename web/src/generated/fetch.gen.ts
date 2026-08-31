@@ -11,11 +11,15 @@ import type {
   CommitUploadResponse,
   CreateApiKeyRequest,
   CreateApiKeyResponse,
+  CreateDirectoryRequest,
+  CreateDirectoryResponse,
   CreateMeshSetupRequestWritable,
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
   CurrentSessionResponse,
+  DeleteObjectRequest,
+  DeleteObjectResponse,
   GetObjectResponse,
   HealthResponse,
   ListDirectoryResponse,
@@ -24,6 +28,8 @@ import type {
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
   RevokeCurrentSessionResponse,
+  RenameObjectRequest,
+  RenameObjectResponse,
   SetupStatusResponse,
   UploadStatusResponse,
   WriteUploadRangeResponse,
@@ -41,10 +47,16 @@ import {
   zCommitUploadResponse2,
   zCreateCurrentUserApiKeyBody,
   zCreateCurrentUserApiKeyResponse,
+  zCreateDirectoryBody,
+  zCreateDirectoryPath,
+  zCreateDirectoryResponse2,
   zCreateMeshSetupBody,
   zCreateMeshSetupResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
+  zDeleteObjectBody,
+  zDeleteObjectPath,
+  zDeleteObjectResponse2,
   zGetCurrentSessionResponse,
   zGetHealthResponse,
   zGetObjectPath,
@@ -67,6 +79,9 @@ import {
   zRevokeCurrentUserAuthenticationMethodResponse,
   zRevokeCurrentSessionBody,
   zRevokeCurrentSessionResponse2,
+  zRenameObjectBody,
+  zRenameObjectPath,
+  zRenameObjectResponse2,
   zWriteUploadRangeHeaders,
   zWriteUploadRangePath,
   zWriteUploadRangeResponse2,
@@ -144,6 +159,21 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  createDirectory(
+    volumeId: string,
+    request: CreateDirectoryRequest,
+    csrfToken?: string,
+  ): Promise<CreateDirectoryResponse>;
+  deleteObject(
+    volumeId: string,
+    request: DeleteObjectRequest,
+    csrfToken?: string,
+  ): Promise<DeleteObjectResponse>;
+  renameObject(
+    volumeId: string,
+    request: RenameObjectRequest,
+    csrfToken?: string,
+  ): Promise<RenameObjectResponse>;
   abortUpload(
     uploadId: string,
     request: AbortUploadRequest,
@@ -231,6 +261,79 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async createDirectory(
+      volumeId,
+      request,
+      csrfToken,
+    ): Promise<CreateDirectoryResponse> {
+      const path = zCreateDirectoryPath.parse({ volume_id: volumeId });
+      const body = zCreateDirectoryBody.parse(request);
+      validateNamespacePath(body.path);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/volumes/{volume_id}/directories",
+          "volume_id",
+          path.volume_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateDirectoryResponse2,
+      );
+    },
+    async deleteObject(
+      volumeId,
+      request,
+      csrfToken,
+    ): Promise<DeleteObjectResponse> {
+      const path = zDeleteObjectPath.parse({ volume_id: volumeId });
+      const body = zDeleteObjectBody.parse(request);
+      validateNamespacePath(body.path);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/volumes/{volume_id}/deletions",
+          "volume_id",
+          path.volume_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zDeleteObjectResponse2,
+      );
+    },
+    async renameObject(
+      volumeId,
+      request,
+      csrfToken,
+    ): Promise<RenameObjectResponse> {
+      const path = zRenameObjectPath.parse({ volume_id: volumeId });
+      const body = zRenameObjectBody.parse(request);
+      validateNamespacePath(body.source_path);
+      validateNamespacePath(body.target_path);
+      if (body.source_path === body.target_path) {
+        throw new TypeError("rename source and target must differ");
+      }
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/volumes/{volume_id}/renames",
+          "volume_id",
+          path.volume_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zRenameObjectResponse2,
+      );
+    },
     async abortUpload(
       uploadId,
       request,

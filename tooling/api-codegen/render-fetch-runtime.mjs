@@ -2,9 +2,11 @@
 
 /** Renders the bounded, authenticated transport shared by native API methods. */
 export function renderFetchRuntime() {
-  return [renderJsonRuntime(), renderFileReadRuntime(), renderContractRuntime()].join(
-    "\n\n",
-  );
+  return [
+    renderJsonRuntime(),
+    renderFileReadRuntime(),
+    renderContractRuntime(),
+  ].join("\n\n");
 }
 
 function renderJsonRuntime() {

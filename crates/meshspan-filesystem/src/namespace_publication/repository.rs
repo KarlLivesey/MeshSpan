@@ -134,9 +134,13 @@ pub(super) fn load_directory_operation_raw(
 ) -> Result<Option<DirectoryPublicationReceipt>, PublicationError> {
     let stored: Option<StoredDirectoryReceipt> = connection
         .query_row(
-            "SELECT request_digest, namespace_commit_id, directory_object_revision_id,
-                    head_sequence, result_digest
-             FROM directory_publication_operations WHERE operation_id = ?1",
+            "SELECT operation.request_digest, operation.namespace_commit_id,
+                    operation.directory_object_revision_id, revision.object_id,
+                    operation.head_sequence, operation.result_digest
+             FROM directory_publication_operations AS operation
+             JOIN object_revisions AS revision
+               ON revision.object_revision_id = operation.directory_object_revision_id
+             WHERE operation.operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
                 Ok((
@@ -145,13 +149,23 @@ pub(super) fn load_directory_operation_raw(
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
                 ))
             },
         )
         .optional()?;
-    stored
+    let receipt = stored
         .map(|values| decode_directory_receipt(operation_id, disposition, &values))
-        .transpose()
+        .transpose()?;
+    if let Some(receipt) = receipt {
+        let revision = load_object_revision(connection, receipt.directory_object_revision_id)?;
+        if revision.kind != 1 || revision.object_id != receipt.directory_object_id {
+            return Err(PublicationError::Corrupt);
+        }
+        Ok(Some(receipt))
+    } else {
+        Ok(None)
+    }
 }
 
 pub(super) struct StoredCommit {
@@ -1125,6 +1139,7 @@ pub(super) fn persist_directory_operation(
         disposition: PublicationDisposition::Applied,
         operation_id: publication.operation_id,
         request_digest,
+        directory_object_id: publication.directory_object_id,
         directory_object_revision_id: publication.directory_object_revision_id,
         namespace_commit_id: publication.namespace_commit_id,
         head_sequence,
@@ -1133,7 +1148,7 @@ pub(super) fn persist_directory_operation(
 }
 
 type StoredReceipt = (Vec<u8>, Vec<u8>, Vec<u8>, i64, Vec<u8>);
-type StoredDirectoryReceipt = (Vec<u8>, Vec<u8>, Vec<u8>, i64, Vec<u8>);
+type StoredDirectoryReceipt = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, i64, Vec<u8>);
 
 fn decode_file_receipt(
     operation_id: OperationId,
@@ -1175,8 +1190,9 @@ fn decode_directory_receipt(
     let request_digest = copy_array(&stored.0)?;
     let namespace_commit_id = decode_identifier(&stored.1, NamespaceCommitId::from_bytes)?;
     let revision_id = decode_identifier(&stored.2, ObjectRevisionId::from_bytes)?;
-    let head_sequence = from_i64(stored.3)?;
-    let digest = copy_array(&stored.4)?;
+    let object_id = decode_identifier(&stored.3, ObjectId::from_bytes)?;
+    let head_sequence = from_i64(stored.4)?;
+    let digest = copy_array(&stored.5)?;
     if digest
         != directory_result_digest(
             operation_id,
@@ -1192,6 +1208,7 @@ fn decode_directory_receipt(
         disposition,
         operation_id,
         request_digest,
+        directory_object_id: object_id,
         directory_object_revision_id: revision_id,
         namespace_commit_id,
         head_sequence,
