@@ -322,5 +322,5 @@ fn derive_generation(operation_id: OperationId) -> u64 {
     digest.update(&operation_id.as_bytes());
     let mut bytes = [0_u8; 8];
     bytes.copy_from_slice(&digest.finalize().as_bytes()[..8]);
-    (u64::from_be_bytes(bytes) & i64::MAX as u64).max(1)
+    super::entry_generation_from_hash(bytes)
 }

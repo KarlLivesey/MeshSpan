@@ -23,6 +23,12 @@ use crate::{
     NamespacePath, NamespacePublicationPath, UploadDisposition,
 };
 
+const MAX_SAFE_ENTRY_GENERATION: u64 = 9_007_199_254_740_991;
+
+pub(super) const fn entry_generation_from_hash(bytes: [u8; 8]) -> u64 {
+    (u64::from_be_bytes(bytes) % MAX_SAFE_ENTRY_GENERATION) + 1
+}
+
 pub(crate) fn upload_authority_target(
     connection: &Connection,
     branch_id: BranchId,
@@ -454,7 +460,7 @@ fn derive_generation(operation_id: OperationId) -> u64 {
     let bytes = derive(operation_id, b"generation", 0);
     let mut generation = [0_u8; 8];
     generation.copy_from_slice(&bytes[..8]);
-    (u64::from_be_bytes(generation) & i64::MAX as u64).max(1)
+    entry_generation_from_hash(generation)
 }
 
 fn derive(operation_id: OperationId, purpose: &[u8], ordinal: u64) -> [u8; 16] {
@@ -505,6 +511,16 @@ mod tests {
         FilesystemAuthorityGrant, HandleAccess, HandleShare, ManifestPublication, NamespaceLimits,
         NamespacePath, NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
     };
+
+    #[test]
+    fn derived_entry_generations_are_positive_json_safe_integers() {
+        assert_eq!(entry_generation_from_hash([0; 8]), 1);
+        assert_eq!(
+            entry_generation_from_hash([u8::MAX; 8]),
+            (u64::MAX % MAX_SAFE_ENTRY_GENERATION) + 1
+        );
+        assert!(entry_generation_from_hash([u8::MAX; 8]) <= MAX_SAFE_ENTRY_GENERATION);
+    }
 
     #[test]
     fn nested_directory_plan_restarts_exactly_and_detects_corruption()

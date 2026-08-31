@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use axum::http::HeaderMap;
+use axum::body::{Body, to_bytes};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use meshspan_api_contract::{
-    BeginUploadRequest, CommitUploadRequest, NamespacePath as ApiNamespacePath,
-    OperationId as ApiOperationId, UploadDisposition as ApiUploadDisposition,
-    UploadState as ApiUploadState,
+    BeginUploadRequest, BeginUploadResponse, CommitUploadRequest,
+    NamespacePath as ApiNamespacePath, OperationId as ApiOperationId,
+    UploadDisposition as ApiUploadDisposition, UploadState as ApiUploadState,
 };
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
@@ -21,38 +23,24 @@ use meshspan_filesystem::{
     NamespacePath, NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
 };
 use tempfile::tempdir;
+use tower::ServiceExt;
 
 use crate::{
     FileApiAuthenticationError, FileApiFailure, NativeFileApiAuthenticator,
     NativeFileRequestProtection, NativeUploadController, NativeUploadService,
-    NativeUploadServicePolicy, UploadRangeWriteRequest,
+    NativeUploadServicePolicy, UploadRangeWriteRequest, native_upload_api_router,
 };
+
+const AUTHENTICATION_PROOF: &str = "MeshSpan native-service-proof";
 
 #[test]
 fn specialised_native_service_publishes_a_real_authorised_upload()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     seed_namespace(directory.path())?;
-    let filesystem =
-        FilesystemCommitService::open(directory.path(), UnixMicros::new(1), TestPublisher)?;
-    let filesystem = BoundFilesystemAdapter::new(
-        AuthorisedFilesystemService::new(filesystem, TestAuthority),
-        BranchId::from_bytes(versioned(11))?,
-        FilesystemAdapterPolicy::new(true, 1, 1)?,
-    );
-    let upload_policy = NativeUploadServicePolicy::new(
-        meshspan_domain::DurationMicros::new(3_600_000_000),
-        meshspan_domain::DurationMicros::new(60_000_000),
-    )
-    .ok_or("upload policy")?;
-    let mut service = NativeUploadService::new(
-        TestAuthenticator,
-        filesystem,
-        classify_filesystem_error,
-        upload_policy,
-    );
+    let mut service = native_upload_service(directory.path())?;
     let context = service.authenticate(
-        &HeaderMap::new(),
+        &authenticated_headers(),
         NativeFileRequestProtection::Mutation,
         UnixMicros::new(10),
     )?;
@@ -98,15 +86,95 @@ fn specialised_native_service_publishes_a_real_authorised_upload()
     Ok(())
 }
 
+#[tokio::test]
+async fn native_http_client_publishes_through_the_real_filesystem_service()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_namespace(directory.path())?;
+    let router = native_upload_api_router(native_upload_service(directory.path())?)?;
+    let volume_id = uuid_text(versioned(12));
+    let begin = router
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &format!("/api/latest/volumes/{volume_id}/uploads"),
+            &serde_json::json!({
+                "disposition": { "mode": "create_new" },
+                "maximum_bytes": 1_024,
+                "operation_id": uuid_text(versioned(80)),
+                "path": "from-client.bin"
+            }),
+        )?)
+        .await?;
+    assert_eq!(begin.status(), StatusCode::CREATED);
+    let begin: BeginUploadResponse = serde_json::from_slice(&response_body(begin).await?)?;
+    let upload_id = begin.upload_id.as_str();
+    let content = b"external native client";
+    let write = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/latest/uploads/{upload_id}/ranges/0"))
+                .header(AUTHORIZATION, AUTHENTICATION_PROOF)
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .header("MeshSpan-Operation-Id", uuid_text(versioned(81)))
+                .header("MeshSpan-Stage-Fence", begin.stage_fence)
+                .header(
+                    "MeshSpan-Content-BLAKE3",
+                    blake3::hash(content).to_hex().to_string(),
+                )
+                .body(Body::from(content.as_slice()))?,
+        )
+        .await?;
+    assert_eq!(write.status(), StatusCode::OK);
+    let written: meshspan_api_contract::WriteUploadRangeResponse =
+        serde_json::from_slice(&response_body(write).await?)?;
+    let commit = router
+        .oneshot(json_request(
+            "POST",
+            &format!("/api/latest/uploads/{upload_id}/commits"),
+            &serde_json::json!({
+                "expected_blake3": blake3::hash(content).to_hex().to_string(),
+                "expected_sequence": written.checkpoint_sequence,
+                "final_length": content.len(),
+                "operation_id": uuid_text(versioned(82)),
+                "sparse": false,
+                "stage_fence": written.stage_fence
+            }),
+        )?)
+        .await?;
+    let commit_status = commit.status();
+    let commit_body = response_body(commit).await?;
+    assert_eq!(
+        commit_status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&commit_body)
+    );
+    let committed: meshspan_api_contract::CommitUploadResponse =
+        serde_json::from_slice(&commit_body)?;
+    assert_eq!(committed.upload.state, ApiUploadState::Committed);
+    assert_eq!(
+        committed.object.object.logical_length,
+        Some(i64::try_from(content.len())?)
+    );
+    assert_eq!(committed.object.path.as_str(), "from-client.bin");
+    Ok(())
+}
+
 struct TestAuthenticator;
 
 impl NativeFileApiAuthenticator for TestAuthenticator {
     fn authenticate_file_request(
         &self,
-        _headers: &HeaderMap,
+        headers: &HeaderMap,
         _protection: NativeFileRequestProtection,
         now: UnixMicros,
     ) -> Result<FilesystemAccessContext, FileApiAuthenticationError> {
+        if headers.get(AUTHORIZATION) != Some(&HeaderValue::from_static(AUTHENTICATION_PROOF)) {
+            return Err(FileApiAuthenticationError::Rejected);
+        }
         Ok(FilesystemAccessContext {
             authentication_service: AuthenticationService::HeadlessApi,
             credential_digest: [9; 32],
@@ -143,10 +211,71 @@ impl FilesystemAccessAuthority for TestAuthority {
             namespace_revision: Revision::new(1),
             object_revision: Revision::new(1),
             gateway_revision: Revision::new(1),
-            expires_at: UnixMicros::new(1_000_000_000),
+            expires_at: request
+                .context
+                .now
+                .checked_add(meshspan_domain::DurationMicros::new(60_000_000))
+                .ok_or(TestAuthorityError)?,
             evidence_digest: [7; 32],
         })
     }
+}
+
+type TestFilesystem = BoundFilesystemAdapter<TestPublisher, TestAuthority>;
+type TestService = NativeUploadService<
+    TestAuthenticator,
+    TestFilesystem,
+    fn(&AuthorisedFilesystemError<TestAuthorityError>) -> FileApiFailure,
+>;
+
+fn native_upload_service(
+    state: &std::path::Path,
+) -> Result<TestService, Box<dyn std::error::Error>> {
+    let filesystem = FilesystemCommitService::open(state, UnixMicros::new(1), TestPublisher)?;
+    let filesystem = BoundFilesystemAdapter::new(
+        AuthorisedFilesystemService::new(filesystem, TestAuthority),
+        BranchId::from_bytes(versioned(11))?,
+        FilesystemAdapterPolicy::new(true, 1, 1)?,
+    );
+    let policy = NativeUploadServicePolicy::new(
+        meshspan_domain::DurationMicros::new(3_600_000_000),
+        meshspan_domain::DurationMicros::new(60_000_000),
+    )
+    .ok_or("upload policy")?;
+    Ok(NativeUploadService::new(
+        TestAuthenticator,
+        filesystem,
+        classify_filesystem_error,
+        policy,
+    ))
+}
+
+fn authenticated_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static(AUTHENTICATION_PROOF),
+    );
+    headers
+}
+
+fn json_request(
+    method: &str,
+    uri: &str,
+    value: &serde_json::Value,
+) -> Result<Request<Body>, axum::http::Error> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(AUTHORIZATION, AUTHENTICATION_PROOF)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(value.to_string()))
+}
+
+async fn response_body(
+    response: axum::response::Response,
+) -> Result<axum::body::Bytes, axum::Error> {
+    to_bytes(response.into_body(), 256 * 1_024).await
 }
 
 fn classify_filesystem_error(

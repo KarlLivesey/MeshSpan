@@ -749,7 +749,7 @@ fn derive_generation(id: OperationId) -> u64 {
     let bytes = derive(id, b"generation", 0);
     let mut value = [0_u8; 8];
     value.copy_from_slice(&bytes[..8]);
-    (u64::from_be_bytes(value) & i64::MAX as u64).max(1)
+    super::entry_generation_from_hash(value)
 }
 fn derive(id: OperationId, purpose: &[u8], ordinal: u64) -> [u8; 16] {
     let mut digest = blake3::Hasher::new();
