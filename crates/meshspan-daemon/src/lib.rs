@@ -29,6 +29,16 @@ mod passkey_challenge_configuration;
 mod passkey_challenge_state;
 #[cfg(test)]
 mod passkey_challenge_tests;
+mod passkey_registration;
+mod passkey_registration_api;
+#[cfg(test)]
+mod passkey_registration_api_tests;
+mod passkey_registration_configuration;
+mod passkey_registration_contract;
+mod passkey_registration_model;
+mod passkey_registration_state;
+#[cfg(test)]
+mod passkey_registration_tests;
 mod passkey_session;
 mod passkey_session_contract;
 mod passkey_session_creation;
@@ -79,6 +89,17 @@ pub use passkey_challenge_configuration::{
     PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
 };
 pub use passkey_challenge_state::{PasskeyCeremonyKey, PasskeyChallengeStateError};
+pub use passkey_registration::PasskeyRegistrationService;
+pub use passkey_registration_api::{
+    PasskeyRegistrationApiError, PasskeyRegistrationController, passkey_registration_api_router,
+};
+pub use passkey_registration_configuration::{
+    PasskeyRegistrationConfiguration, PasskeyRegistrationConfigurationError,
+};
+pub use passkey_registration_contract::{
+    PasskeyRegistrationAuthority, PasskeyRegistrationAuthorityError, PasskeyRegistrationCommit,
+    PasskeyRegistrationError, PasskeyRegistrationStore, PasskeyRegistrationStoreError,
+};
 pub use passkey_session::{
     PasskeySessionError, PasskeySessionService, PasskeySessionStore, PasskeySessionStoreError,
     PreparedPasskeySession, VerifiedPasskeyFactor,

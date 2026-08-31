@@ -36,6 +36,17 @@ fn registration_profile_returns_current_user_and_bounded_active_passkeys()
     assert_eq!(profile.display_name, "Administrator");
     assert_eq!(profile.identity_revision, Revision::new(1));
     assert_eq!(profile.exclude_credential_ids, vec![vec![10; 32]]);
+    let replay = repository
+        .resolve_passkey_registration(meshspan_domain::OperationId::from_bytes([50; 16])?)?
+        .ok_or("passkey registration replay was absent")?;
+    assert_eq!(
+        replay.method_id,
+        AuthenticationMethodId::from_bytes([52; 16])?
+    );
+    assert_eq!(replay.principal_id, administrator);
+    assert_eq!(replay.created_at, UnixMicros::new(20));
+    assert_ne!(replay.request_digest, [0; 32]);
+    assert_ne!(replay.result_digest, [0; 32]);
     assert_eq!(
         repository.passkey_registration_profile(PrincipalId::from_bytes([99; 16])?)?,
         None

@@ -50,6 +50,10 @@ impl PasskeyCeremonyKey {
         random.fill_bytes(&mut bytes[..])?;
         Self::from_bytes(*bytes)
     }
+
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
 pub(crate) struct FrozenPasskeyChallengeState {

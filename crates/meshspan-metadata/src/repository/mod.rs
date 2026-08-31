@@ -145,7 +145,7 @@ pub use kernel::{
 };
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
-pub use passkey_registration::PasskeyRegistrationProfile;
+pub use passkey_registration::{PasskeyRegistrationProfile, PasskeyRegistrationReplay};
 pub use query::{
     GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
     PrincipalRecord,
@@ -678,6 +678,19 @@ impl AuthoritativeRepository {
         principal_id: meshspan_domain::PrincipalId,
     ) -> Result<Option<PasskeyRegistrationProfile>, RepositoryError> {
         passkey_registration::profile(&self.database, principal_id)
+    }
+
+    /// Resolves one exact committed passkey-registration operation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an operation naming another command family and fails closed for malformed method
+    /// or receipt evidence.
+    pub fn resolve_passkey_registration(
+        &self,
+        operation_id: meshspan_domain::OperationId,
+    ) -> Result<Option<PasskeyRegistrationReplay>, RepositoryError> {
+        passkey_registration::resolve_replay(&self.database, operation_id)
     }
 
     /// Returns the current immutable authentication policy for one service and operation class.
