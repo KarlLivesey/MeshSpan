@@ -152,6 +152,7 @@ define_identifier!(
     "Stable identity of one immutable content manifest root."
 );
 define_identifier!(StageId, "Stable identity of one private write stage.");
+define_identifier!(UploadId, "Stable identity of one resumable file upload.");
 define_identifier!(HandleId, "Stable identity of one fenced filesystem handle.");
 define_identifier!(LockId, "Stable identity of one fenced byte-range lock.");
 define_identifier!(GrantId, "Stable identity of one permission grant.");

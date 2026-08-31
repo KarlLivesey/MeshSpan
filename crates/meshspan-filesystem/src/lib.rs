@@ -26,7 +26,13 @@ mod reachability;
 mod reconciliation;
 mod stage_store;
 mod staging;
+mod upload;
+mod upload_service;
+mod upload_store;
 mod version_retention;
+
+#[cfg(test)]
+mod upload_service_tests;
 
 pub use adapter::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
@@ -137,6 +143,11 @@ pub use stage_store::{
     StageRangeReadRequest, StageRegistration, StageStoreError,
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
+pub use upload::{
+    UploadAbortRequest, UploadBeginRequest, UploadDisposition, UploadSession, UploadState,
+    UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt, UploadWriteRequest,
+};
+pub use upload_service::UploadServiceError;
 pub use version_retention::{
     VersionReclaimMode, VersionRetentionCandidate, VersionRetentionCandidatePage,
     VersionRetentionCandidateReason, VersionRetentionCursor, VersionRetentionError,
