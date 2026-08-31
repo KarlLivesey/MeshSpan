@@ -40,7 +40,7 @@ if (!generation.passed) {
       ],
     },
     {
-      name: "Rust domain and capability tests",
+      name: "Rust domain and authentication primitives",
       steps: [
         [
           "cargo",
@@ -50,6 +50,10 @@ if (!generation.passed) {
             "meshspan-domain",
             "-p",
             "meshspan-contracts",
+            "-p",
+            "meshspan-passkey",
+            "-p",
+            "meshspan-otp",
             "--all-targets",
             "--all-features",
           ],
