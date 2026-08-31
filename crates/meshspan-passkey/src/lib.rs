@@ -11,6 +11,7 @@ mod challenge;
 mod client_data;
 mod error;
 mod registration;
+mod registration_transport;
 
 pub use assertion::{
     Assertion, AssertionExpectation, AssertionOutcome, CounterState, Es256PublicKey,
@@ -22,6 +23,7 @@ pub use error::{PasskeyError, PasskeyErrorKind};
 pub use registration::{
     Registration, RegistrationExpectation, RegistrationOutcome, verify_registration,
 };
+pub use registration_transport::OwnedRegistration;
 
 /// Maximum accepted client-data JSON bytes.
 pub const MAXIMUM_CLIENT_DATA_BYTES: usize = 4_096;
