@@ -6,8 +6,9 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
-    CreateSessionResponse, CurrentSessionResponse, HealthResponse, RevokeCurrentSessionRequest,
+    ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
+    CreatePasskeyChallengeResponse, CreateSessionRequest, CreateSessionResponse,
+    CurrentSessionResponse, HealthResponse, RevokeCurrentSessionRequest,
     RevokeCurrentSessionResponse, SetupStatusResponse, schema,
 };
 
@@ -69,6 +70,8 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "ApiError": response_component::<ApiError>(),
                 "CreateMeshSetupRequest": request_component::<CreateMeshSetupRequest>(),
                 "CreateMeshSetupResponse": response_component::<CreateMeshSetupResponse>(),
+                "CreatePasskeyChallengeRequest": request_component::<CreatePasskeyChallengeRequest>(),
+                "CreatePasskeyChallengeResponse": response_component::<CreatePasskeyChallengeResponse>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
                 "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
@@ -90,6 +93,10 @@ fn paths() -> Value {
         ("/setup/status".to_owned(), setup_status_path()),
         ("/setup/meshes".to_owned(), create_mesh_path()),
         ("/sessions".to_owned(), create_session_path()),
+        (
+            "/sessions/passkey/challenges".to_owned(),
+            create_passkey_challenge_path(),
+        ),
         ("/sessions/current".to_owned(), current_session_path()),
         (
             "/sessions/current/revocations".to_owned(),
@@ -196,6 +203,33 @@ fn create_session_path() -> Value {
                 "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
                 "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_passkey_challenge_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createPasskeyChallenge",
+            "summary": "Create one bounded passkey authentication challenge",
+            "x-meshspan-access": "anonymous",
+            "x-meshspan-idempotency": "operation-id-and-gateway-local-ceremony",
+            "requestBody": json_request(
+                "Passkey challenge creation",
+                "#/components/schemas/CreatePasskeyChallengeRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Browser-ready passkey request options",
+                    "#/components/schemas/CreatePasskeyChallengeResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or ceremony conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication gateway temporarily unavailable", "#/components/schemas/ApiError")
             }
         }
     })

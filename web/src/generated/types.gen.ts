@@ -101,6 +101,50 @@ export type CreateMeshSetupResponse = {
 };
 
 /**
+ * CreatePasskeyChallengeRequest
+ *
+ * Input for creating one short-lived passkey authentication challenge.
+ */
+export type CreatePasskeyChallengeRequest = {
+  /**
+   * Client-generated identity making challenge creation exactly replayable on this gateway.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreatePasskeyChallengeResponse
+ *
+ * Browser-ready options for one passkey authentication ceremony.
+ */
+export type CreatePasskeyChallengeResponse = {
+  /**
+   * Unpadded base64url random challenge supplied to `navigator.credentials.get`.
+   */
+  challenge: string;
+  /**
+   * Stable challenge identity supplied with the resulting assertion.
+   */
+  challenge_id: string;
+  /**
+   * Challenge-creation operation whose exact result this response represents.
+   */
+  operation_id: string;
+  /**
+   * Exact relying-party identifier against which authenticator data is verified.
+   */
+  relying_party_id: string;
+  /**
+   * Browser hint; server expiry remains authoritative.
+   */
+  timeout_milliseconds: number;
+  /**
+   * Require a PIN, biometric or equivalent authenticator-local verification.
+   */
+  user_verification: "required";
+};
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -543,6 +587,56 @@ export type RevokeCurrentSessionResponses = {
 
 export type RevokeCurrentSessionResponse2 =
   RevokeCurrentSessionResponses[keyof RevokeCurrentSessionResponses];
+
+export type CreatePasskeyChallengeData = {
+  /**
+   * Passkey challenge creation
+   */
+  body: CreatePasskeyChallengeRequest;
+  path?: never;
+  query?: never;
+  url: "/sessions/passkey/challenges";
+};
+
+export type CreatePasskeyChallengeErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Changed retry or ceremony conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication gateway temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreatePasskeyChallengeError =
+  CreatePasskeyChallengeErrors[keyof CreatePasskeyChallengeErrors];
+
+export type CreatePasskeyChallengeResponses = {
+  /**
+   * Browser-ready passkey request options
+   */
+  201: CreatePasskeyChallengeResponse;
+};
+
+export type CreatePasskeyChallengeResponse2 =
+  CreatePasskeyChallengeResponses[keyof CreatePasskeyChallengeResponses];
 
 export type CreateMeshSetupData = {
   /**

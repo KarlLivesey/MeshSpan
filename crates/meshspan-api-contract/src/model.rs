@@ -58,6 +58,35 @@ impl SessionId {
     }
 }
 
+/// A short-lived passkey authentication challenge identifier.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct PasskeyChallengeId(
+    #[schemars(
+        length(equal = 36),
+        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    String,
+);
+
+impl PasskeyChallengeId {
+    /// Constructs canonical UUID text from already validated versioned UUID bytes.
+    #[must_use]
+    pub fn from_uuid_bytes(value: [u8; 16]) -> Option<Self> {
+        let version = value[6] >> 4;
+        if !(1..=8).contains(&version) || value[8] >> 6 != 2 {
+            return None;
+        }
+        Some(Self(format_uuid(value)))
+    }
+
+    /// Returns the canonical UUID text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A globally qualified principal's local UUID within the current swarm.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -239,6 +268,46 @@ pub struct CreateSessionRequest {
     pub client_label: NullableField<SessionLabel>,
     /// Whether the caller requests the policy's longer-lived session profile.
     pub remember: bool,
+}
+
+/// Input for creating one short-lived passkey authentication challenge.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreatePasskeyChallengeRequest {
+    /// Client-generated identity making challenge creation exactly replayable on this gateway.
+    pub operation_id: OperationId,
+}
+
+/// Passkey authenticator-local user-verification requirement.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PasskeyUserVerification {
+    /// Require a PIN, biometric or equivalent authenticator-local verification.
+    Required,
+}
+
+/// Browser-ready options for one passkey authentication ceremony.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreatePasskeyChallengeResponse {
+    /// Challenge-creation operation whose exact result this response represents.
+    pub operation_id: OperationId,
+    /// Stable challenge identity supplied with the resulting assertion.
+    pub challenge_id: PasskeyChallengeId,
+    /// Unpadded base64url random challenge supplied to `navigator.credentials.get`.
+    #[schemars(length(equal = 43), pattern(r"^[A-Za-z0-9_-]{43}$"))]
+    pub challenge: String,
+    /// Exact relying-party identifier against which authenticator data is verified.
+    #[schemars(
+        length(min = 1, max = 253),
+        pattern(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
+    )]
+    pub relying_party_id: String,
+    /// Browser hint; server expiry remains authoritative.
+    #[schemars(range(min = 30_000, max = 600_000))]
+    pub timeout_milliseconds: u32,
+    /// Authenticator-local verification required by the challenge policy.
+    pub user_verification: PasskeyUserVerification,
 }
 
 /// Authentication assurance reached by a session.
