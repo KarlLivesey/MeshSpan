@@ -502,6 +502,8 @@ fn assert_namespace_queries(
     )?;
     assert_eq!(page.entries.len(), 1);
     assert_eq!(page.entries[0].object_id, stat.object_id);
+    assert_eq!(page.entries[0].file_version_id, stat.file_version_id);
+    assert_eq!(page.entries[0].logical_length, stat.logical_length);
     assert!(page.next_cursor.is_none());
     Ok(())
 }
