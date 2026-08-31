@@ -69,6 +69,7 @@ mod revoke_session_api;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
+mod totp_secret;
 
 pub use api_key_issuance::ApiKeyIssuanceService;
 pub use api_key_issuance_api::{
@@ -151,6 +152,7 @@ pub use setup_api::{
     CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,
     SetupStatusSource, setup_api_router, setup_api_router_with_creation,
 };
+pub use totp_secret::{TotpEnvelopeKey, TotpSecretBinding, TotpSecretCipher, TotpSecretError};
 
 use meshspan_domain::{EntropyError, RandomSource};
 
