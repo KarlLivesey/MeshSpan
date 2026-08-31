@@ -42,42 +42,42 @@ These direct dependencies are currently installed. They are build-time tools or
 libraries linked into project artefacts as indicated; transitive inventory and
 source/advisory policy automation arrive before a release artefact is built.
 
-| Rust dependency                    | Resolved version | Declared licence           |
-| ---------------------------------- | ---------------: | -------------------------- |
-| `aes`                              |            0.9.3 | `MIT OR Apache-2.0`        |
-| `aes-gcm`                          |           0.11.1 | `Apache-2.0 OR MIT`        |
-| `axum`                             |            0.8.9 | `MIT`                      |
-| `chacha20`                         |           0.10.2 | `MIT OR Apache-2.0`        |
-| `jsonschema`                       |           0.52.0 | `MIT`                      |
-| `hmac`                             |           0.13.0 | `MIT OR Apache-2.0`        |
-| `meshspan-otp` (workspace)         |            0.1.0 | `GPL-2.0-only`             |
-| `meshspan-protobuf` (workspace)    |            0.1.0 | `GPL-2.0-only`             |
-| `meshspan-passkey` (workspace)     |            0.1.0 | `GPL-2.0-only`             |
-| `meshspan-quinn-rustls` (workspace) |           0.1.0 | `GPL-2.0-only`             |
-| `meshspan-rustls-provider` (workspace) |        0.1.0 | `GPL-2.0-only`             |
-| `meshspan-test-certificates` (workspace) |       0.1.0 | `GPL-2.0-only`             |
-| `sync_wrapper` (workspace)         |            1.0.2 | `GPL-2.0-only`             |
-| `p256`                             |           0.14.0 | `Apache-2.0 OR MIT`        |
-| `rusqlite`                         |           0.40.2 | `MIT`                      |
-| `schemars`                         |            1.2.2 | `MIT`                      |
-| `serde`                            |          1.0.229 | `MIT OR Apache-2.0`        |
-| `serde_json`                       |          1.0.151 | `MIT OR Apache-2.0`        |
-| `sha1`                             |           0.11.0 | `MIT OR Apache-2.0`        |
-| `sha2`                             |           0.11.0 | `MIT OR Apache-2.0`        |
-| `subtle`                           |            2.6.1 | `BSD-3-Clause`             |
-| `thiserror`                        |           2.0.20 | `MIT OR Apache-2.0`        |
-| `unicode-normalization`            |           0.1.25 | `MIT OR Apache-2.0`        |
-| `tempfile` (test only)             |           3.27.0 | `MIT OR Apache-2.0`        |
-| `bytes`                            |           1.12.1 | `MIT`                      |
-| `chacha20poly1305`                 |           0.11.0 | `Apache-2.0 OR MIT`        |
-| `ed25519-dalek`                    |            3.0.0 | `BSD-3-Clause`             |
-| `form_urlencoded`                  |            1.2.2 | `MIT OR Apache-2.0`        |
-| `quinn`                            |          0.11.11 | `MIT OR Apache-2.0`        |
-| `rcgen`                            |           0.14.9 | `MIT OR Apache-2.0`        |
-| `rustls`                           |          0.23.43 | `Apache-2.0 OR ISC OR MIT` |
-| `tokio`                            |           1.53.1 | `MIT`                      |
-| `tower`                            |            0.5.3 | `MIT`                      |
-| `zeroize`                          |            1.9.0 | `Apache-2.0 OR MIT`        |
+| Rust dependency                          | Resolved version | Declared licence           |
+| ---------------------------------------- | ---------------: | -------------------------- |
+| `aes`                                    |            0.9.3 | `MIT OR Apache-2.0`        |
+| `aes-gcm`                                |           0.11.1 | `Apache-2.0 OR MIT`        |
+| `axum`                                   |            0.8.9 | `MIT`                      |
+| `chacha20`                               |           0.10.2 | `MIT OR Apache-2.0`        |
+| `jsonschema`                             |           0.52.0 | `MIT`                      |
+| `hmac`                                   |           0.13.0 | `MIT OR Apache-2.0`        |
+| `meshspan-otp` (workspace)               |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-protobuf` (workspace)          |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-passkey` (workspace)           |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-quinn-rustls` (workspace)      |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-rustls-provider` (workspace)   |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-test-certificates` (workspace) |            0.1.0 | `GPL-2.0-only`             |
+| `sync_wrapper` (workspace)               |            1.0.2 | `GPL-2.0-only`             |
+| `p256`                                   |           0.14.0 | `Apache-2.0 OR MIT`        |
+| `rusqlite`                               |           0.40.2 | `MIT`                      |
+| `schemars`                               |            1.2.2 | `MIT`                      |
+| `serde`                                  |          1.0.229 | `MIT OR Apache-2.0`        |
+| `serde_json`                             |          1.0.151 | `MIT OR Apache-2.0`        |
+| `sha1`                                   |           0.11.0 | `MIT OR Apache-2.0`        |
+| `sha2`                                   |           0.11.0 | `MIT OR Apache-2.0`        |
+| `subtle`                                 |            2.6.1 | `BSD-3-Clause`             |
+| `thiserror`                              |           2.0.20 | `MIT OR Apache-2.0`        |
+| `unicode-normalization`                  |           0.1.25 | `MIT OR Apache-2.0`        |
+| `tempfile` (test only)                   |           3.27.0 | `MIT OR Apache-2.0`        |
+| `bytes`                                  |           1.12.1 | `MIT`                      |
+| `chacha20poly1305`                       |           0.11.0 | `Apache-2.0 OR MIT`        |
+| `ed25519-dalek`                          |            3.0.0 | `BSD-3-Clause`             |
+| `form_urlencoded`                        |            1.2.2 | `MIT OR Apache-2.0`        |
+| `quinn`                                  |          0.11.11 | `MIT OR Apache-2.0`        |
+| `rcgen`                                  |           0.14.9 | `MIT OR Apache-2.0`        |
+| `rustls`                                 |          0.23.43 | `Apache-2.0 OR ISC OR MIT` |
+| `tokio`                                  |           1.53.1 | `MIT`                      |
+| `tower`                                  |            0.5.3 | `MIT`                      |
+| `zeroize`                                |            1.9.0 | `Apache-2.0 OR MIT`        |
 
 The workspace `sync_wrapper` package is a clean-room, narrow compatibility implementation for the
 static exclusivity proof consumed by current Axum and Tower. The upstream package is
@@ -141,16 +141,16 @@ MeshSpan-owned core.
 
 ### HTTPS, API and encoding
 
-| Direct dependency | Need                                                                                |
-| ----------------- | ----------------------------------------------------------------------------------- |
-| `axum`            | Embedded HTTPS API, administration panel assets and HTTP-01 route                   |
-| `form_urlencoded` | Maintained percent-decoding primitive beneath MeshSpan's strict bounded query parser |
-| `tower`           | Explicit service boundaries, timeouts, concurrency and observability layers         |
-| `tower-http`      | Narrow HTTP middleware such as tracing, limits and static asset handling            |
-| `serde`           | Typed configuration and public JSON models                                          |
-| `serde_json`      | Public JSON API and bounded diagnostic documents                                    |
+| Direct dependency   | Need                                                                                                             |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `axum`              | Embedded HTTPS API, administration panel assets and HTTP-01 route                                                |
+| `form_urlencoded`   | Maintained percent-decoding primitive beneath MeshSpan's strict bounded query parser                             |
+| `tower`             | Explicit service boundaries, timeouts, concurrency and observability layers                                      |
+| `tower-http`        | Narrow HTTP middleware such as tracing, limits and static asset handling                                         |
+| `serde`             | Typed configuration and public JSON models                                                                       |
+| `serde_json`        | Public JSON API and bounded diagnostic documents                                                                 |
 | `meshspan-protobuf` | Bounded private Protobuf runtime and pure-Rust schema generation; generated types do not cross domain boundaries |
-| `base64`          | Strict URL-safe token and wire encodings where the protocol requires them           |
+| `base64`            | Strict URL-safe token and wire encodings where the protocol requires them                                        |
 
 Rust boundary types and structural constraints generate OpenAPI 3.1 and drive
 runtime request/response validation through the admitted `schemars` and
@@ -197,8 +197,8 @@ the first implementation.
 | `hkdf`             | Domain-separated key derivation                                                |
 | `sha2`             | Standards that mandate SHA-2, including certificate and SMB constructions      |
 | `getrandom`        | Operating-system cryptographic randomness                                      |
-| `hmac`             | Maintained RFC HMAC construction used by interoperable TOTP verification        |
-| `sha1`             | TOTP's interoperable HMAC-SHA-1 profile only; never a content/security digest   |
+| `hmac`             | Maintained RFC HMAC construction used by interoperable TOTP verification       |
+| `sha1`             | TOTP's interoperable HMAC-SHA-1 profile only; never a content/security digest  |
 | `zeroize`          | Best-effort erasure for owned secret buffers                                   |
 | `secrecy`          | Types that prevent accidental secret formatting/logging                        |
 | `rcgen`            | Internal node certificates and certificate requests                            |
@@ -285,6 +285,13 @@ These do not ship in the daemon:
 Real SMB/HTTPS clients, multi-process daemons, power/fault injection and
 multi-machine acceptance remain black-box test infrastructure rather than Rust
 library dependencies.
+
+Production Rust and JavaScript dependency graphs accept only explicitly reviewed
+`GPL-2.0-only`-compatible licences. Executable build, lint and test tools are a
+separate graph: licences such as Apache-2.0, MPL-2.0 or LGPL-3.0-only may be
+accepted there only while their code is absent from every shipped binary and web
+bundle. Local checks fail if a tool-only licence enters the production graph or
+if either graph introduces an unreviewed licence.
 
 ## Web production dependencies
 
