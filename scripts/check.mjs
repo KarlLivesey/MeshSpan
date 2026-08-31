@@ -130,6 +130,12 @@ if (!generation.passed) {
           [
             "test",
             "-p",
+            "meshspan-quinn-rustls",
+            "-p",
+            "meshspan-rustls-provider",
+            "-p",
+            "meshspan-test-certificates",
+            "-p",
             "meshspan-transport",
             "--all-targets",
             "--all-features",

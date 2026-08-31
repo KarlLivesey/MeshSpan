@@ -19,6 +19,7 @@ members = [
     "crates/meshspan-rustls-provider",
     "crates/meshspan-storage",
     "crates/meshspan-sync-wrapper",
+    "crates/meshspan-test-certificates",
     "crates/meshspan-transport",
 ]
 resolver = "3"
@@ -49,7 +50,7 @@ meshspan-protobuf = { path = "crates/meshspan-protobuf" }
 p256 = { version = "0.14.0", default-features = false, features = ["ecdh", "ecdsa", "pkcs8", "std"] }
 quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio"] }
 quinn-proto = { version = "0.11.17", default-features = false }
-rcgen = { version = "0.14.9", default-features = false, features = ["ring"] }
+rcgen = { version = "0.14.9", default-features = false }
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
 rustix = { version = "1.1.4", features = ["fs"] }
 rustls = { version = "0.23.43", default-features = false, features = ["custom-provider", "std"] }

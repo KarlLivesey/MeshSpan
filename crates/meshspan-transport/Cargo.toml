@@ -24,7 +24,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-rcgen.workspace = true
+meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 
 [lints]
 workspace = true

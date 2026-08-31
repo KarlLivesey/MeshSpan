@@ -22,7 +22,7 @@ rustls = { version = "0.23.43", default-features = false, features = ["custom-pr
 sha2.workspace = true
 
 [dev-dependencies]
-rcgen = { version = "0.14.9", default-features = false }
+meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 
 [lints]
 workspace = true

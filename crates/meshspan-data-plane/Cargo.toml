@@ -22,7 +22,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 meshspan-storage = { path = "../meshspan-storage" }
-rcgen.workspace = true
+meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 rustls.workspace = true
 tempfile = "3.27.0"
 

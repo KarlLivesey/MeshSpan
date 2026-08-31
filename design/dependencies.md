@@ -55,6 +55,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `meshspan-passkey` (workspace)     |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-quinn-rustls` (workspace) |           0.1.0 | `GPL-2.0-only`             |
 | `meshspan-rustls-provider` (workspace) |        0.1.0 | `GPL-2.0-only`             |
+| `meshspan-test-certificates` (workspace) |       0.1.0 | `GPL-2.0-only`             |
 | `sync_wrapper` (workspace)         |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                             |           0.14.0 | `Apache-2.0 OR MIT`        |
 | `rusqlite`                         |           0.40.2 | `MIT`                      |
@@ -101,9 +102,13 @@ streams, saturation isolation, snapshots and federation framing through this ada
 The production Rustls/Quinn dependency graph no longer resolves `ring`, whose declared licence is
 `Apache-2.0 AND ISC`. No MeshSpan release artefact may ship while that conjunctive Apache-2.0
 dependency remains. Downgrading is forbidden, and AWS-LC is not a licence solution because its
-current sys crate also includes an Apache-2.0-only conjunct. The remaining `ring` resolution is
-test-only certificate generation through `rcgen`; it must be removed before the dependency gate is
-closed. Experimental providers which explicitly disclaim production readiness are not admissible.
+current sys crate also includes an Apache-2.0-only conjunct. Test certificate generation uses the
+workspace `meshspan-test-certificates` package: current RustCrypto P-256 owns key generation and
+signing while current `rcgen` performs DER construction with all of its crypto-provider features
+disabled. Supported Linux, macOS and Windows target graphs therefore contain no `ring`. Upstream
+`quinn-proto` still declares a target-specific Ring dependency for unsupported browser-WASM builds;
+MeshSpan does not publish a browser-WASM daemon. Experimental providers which explicitly disclaim
+production readiness are not admissible.
 
 | Web/runtime dependency  | Version | Declared licence |
 | ----------------------- | ------: | ---------------- |

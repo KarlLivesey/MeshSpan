@@ -12,10 +12,7 @@ use std::time::{Duration, Instant};
 use meshspan_consensus::ActiveQuorumPlan;
 use meshspan_domain::{PartitionId, Revision, UnixMicros};
 use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
-use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose,
-};
+use meshspan_test_certificates::CertificateAuthority;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -529,39 +526,23 @@ fn write_certificates(
     directory: &Path,
     authority_path: &Path,
 ) -> Result<Vec<(PathBuf, PathBuf)>, Box<dyn Error>> {
-    let mut authority_parameters = CertificateParams::new(Vec::<String>::new())?;
-    authority_parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    authority_parameters
-        .key_usages
-        .extend([KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign]);
-    let authority_key = KeyPair::generate()?;
-    let authority_certificate = authority_parameters.self_signed(&authority_key)?;
-    fs::write(authority_path, authority_certificate.der())?;
-    let issuer = Issuer::new(authority_parameters, authority_key);
+    let authority = CertificateAuthority::new()?;
+    fs::write(authority_path, authority.certificate_der())?;
     (1_u8..=3)
-        .map(|number| write_leaf(directory, number, &issuer))
+        .map(|number| write_leaf(directory, number, &authority))
         .collect()
 }
 
 fn write_leaf(
     directory: &Path,
     number: u8,
-    issuer: &Issuer<'_, KeyPair>,
+    authority: &CertificateAuthority,
 ) -> Result<(PathBuf, PathBuf), Box<dyn Error>> {
-    let mut parameters = CertificateParams::new(vec![CERTIFICATE_NAME.to_owned()])?;
-    parameters
-        .key_usages
-        .push(KeyUsagePurpose::DigitalSignature);
-    parameters.extended_key_usages.extend([
-        ExtendedKeyUsagePurpose::ServerAuth,
-        ExtendedKeyUsagePurpose::ClientAuth,
-    ]);
-    let key = KeyPair::generate()?;
-    let certificate: Certificate = parameters.signed_by(&key, issuer)?;
+    let certificate = authority.issue_node(CERTIFICATE_NAME)?;
     let certificate_path = directory.join(format!("node-{number}.der"));
     let private_key_path = directory.join(format!("node-{number}.key"));
-    fs::write(&certificate_path, certificate.der())?;
-    fs::write(&private_key_path, key.serialize_der())?;
+    fs::write(&certificate_path, certificate.certificate_der())?;
+    fs::write(&private_key_path, certificate.private_key())?;
     Ok((certificate_path, private_key_path))
 }
 

@@ -6,12 +6,7 @@ use std::error::Error;
 use std::io::{Cursor, Read, Write};
 use std::sync::Arc;
 
-use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _};
-use p256::pkcs8::EncodePrivateKey;
-use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
-    KeyUsagePurpose, PublicKeyData, SerialNumber, SigningKey,
-};
+use meshspan_test_certificates::CertificateAuthority;
 use rustls::client::ClientConnection;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::server::{ServerConnection, WebPkiClientVerifier};
@@ -116,38 +111,19 @@ struct Leaf {
 }
 
 fn certificates() -> Result<Certificates, Box<dyn Error>> {
-    let authority_key = TestKey::from_seed([1; 32])?;
-    let mut authority_parameters = CertificateParams::new(Vec::<String>::new())?;
-    authority_parameters.serial_number = Some(SerialNumber::from(1_u64));
-    authority_parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    authority_parameters
-        .key_usages
-        .extend([KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign]);
-    let authority_certificate = authority_parameters.self_signed(&authority_key)?;
-    let authority = authority_certificate.der().clone();
-    let issuer = Issuer::new(authority_parameters, authority_key);
+    let authority = CertificateAuthority::new()?;
+    let server = authority.issue_node(CERTIFICATE_NAME)?.into_parts();
+    let client = authority.issue_node(CERTIFICATE_NAME)?.into_parts();
     Ok(Certificates {
-        authority,
-        server: leaf(&issuer, [2; 32], 2)?,
-        client: leaf(&issuer, [3; 32], 3)?,
-    })
-}
-
-fn leaf(issuer: &Issuer<'_, TestKey>, seed: [u8; 32], serial: u64) -> Result<Leaf, Box<dyn Error>> {
-    let key = TestKey::from_seed(seed)?;
-    let mut parameters = CertificateParams::new(vec![CERTIFICATE_NAME.to_owned()])?;
-    parameters.serial_number = Some(SerialNumber::from(serial));
-    parameters
-        .key_usages
-        .push(KeyUsagePurpose::DigitalSignature);
-    parameters.extended_key_usages.extend([
-        ExtendedKeyUsagePurpose::ServerAuth,
-        ExtendedKeyUsagePurpose::ClientAuth,
-    ]);
-    let certificate: Certificate = parameters.signed_by(&key, issuer)?;
-    Ok(Leaf {
-        certificate: certificate.der().clone(),
-        private_key: key.private_key,
+        authority: CertificateDer::from(authority.certificate_der().to_vec()),
+        server: Leaf {
+            certificate: CertificateDer::from(server.0),
+            private_key: server.1,
+        },
+        client: Leaf {
+            certificate: CertificateDer::from(client.0),
+            private_key: client.1,
+        },
     })
 }
 
@@ -155,43 +131,4 @@ fn roots(authority: &CertificateDer<'static>) -> Result<RootCertStore, Box<dyn E
     let mut roots = RootCertStore::empty();
     roots.add(authority.clone())?;
     Ok(roots)
-}
-
-struct TestKey {
-    key: p256::ecdsa::SigningKey,
-    public_key: Vec<u8>,
-    private_key: Vec<u8>,
-}
-
-impl TestKey {
-    fn from_seed(seed: [u8; 32]) -> Result<Self, Box<dyn Error>> {
-        let key = p256::ecdsa::SigningKey::from_slice(&seed)?;
-        let public_key = key.verifying_key().to_sec1_point(false).as_bytes().to_vec();
-        let private_key = key.to_pkcs8_der()?.as_bytes().to_vec();
-        Ok(Self {
-            key,
-            public_key,
-            private_key,
-        })
-    }
-}
-
-impl PublicKeyData for TestKey {
-    fn der_bytes(&self) -> &[u8] {
-        &self.public_key
-    }
-
-    fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
-        &rcgen::PKCS_ECDSA_P256_SHA256
-    }
-}
-
-impl SigningKey for TestKey {
-    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
-        let signature: p256::ecdsa::DerSignature = self
-            .key
-            .try_sign(message)
-            .map_err(|_| rcgen::Error::RemoteKeyError)?;
-        Ok(signature.to_vec())
-    }
 }
