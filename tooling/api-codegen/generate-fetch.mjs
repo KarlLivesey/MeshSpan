@@ -19,6 +19,11 @@ import {
   renderNamespaceMutationClientMethods,
 } from "./render-namespace-mutation-client.mjs";
 import { renderFetchRuntime } from "./render-fetch-runtime.mjs";
+import {
+  renderIdentityAdministrationClientInterface,
+  renderIdentityAdministrationClientMethods,
+  renderIdentityAdministrationRuntime,
+} from "./render-identity-administration-client.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -48,16 +53,20 @@ import type {
   CreateApiKeyResponse,
   CreateDirectoryRequest,
   CreateDirectoryResponse,
+  CreateGroupRequest,
   CreateMeshSetupRequestWritable,
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
+  CreatePrincipalResponse,
+  CreateUserRequest,
   CurrentSessionResponse,
   DeleteObjectRequest,
   DeleteObjectResponse,
   GetObjectResponse,
   HealthResponse,
   ListDirectoryResponse,
+  ListPrincipalsResponse,
   ListUploadRangesResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
@@ -85,10 +94,14 @@ import {
   zCreateDirectoryBody,
   zCreateDirectoryPath,
   zCreateDirectoryResponse2,
+  zCreateGroupBody,
+  zCreateGroupResponse,
   zCreateMeshSetupBody,
   zCreateMeshSetupResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
+  zCreateUserBody,
+  zCreateUserResponse,
   zDeleteObjectBody,
   zDeleteObjectPath,
   zDeleteObjectResponse2,
@@ -104,9 +117,14 @@ import {
   zListDirectoryPath,
   zListDirectoryQuery,
   zListDirectoryResponse2,
+  zListGroupsQuery,
+  zListGroupsResponse,
+  zListPrincipalsResponse,
   zListUploadRangesPath,
   zListUploadRangesQuery,
   zListUploadRangesResponse2,
+  zListUsersQuery,
+  zListUsersResponse,
   zReadFilePath,
   zReadFileQuery,
   zRevokeCurrentUserAuthenticationMethodBody,
@@ -172,6 +190,11 @@ export type ReadFileResult = Readonly<{
   offset: number;
 }>;
 
+export type ListPrincipalsRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
 ${renderUploadRequestTypes()}
 
 export type CreateSessionResult = Readonly<{
@@ -180,6 +203,7 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  ${renderIdentityAdministrationClientInterface()}
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
   createCurrentUserApiKey(
@@ -242,6 +266,7 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    ${renderIdentityAdministrationClientMethods(routes)}
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
     async createCurrentUserApiKey(
@@ -448,6 +473,8 @@ export function createMeshSpanFetchClient(
 }
 
 ${renderFetchRuntime()}
+
+${renderIdentityAdministrationRuntime(routes)}
 
 `;
 

@@ -3,6 +3,8 @@
     "allowImportingTsExtensions": false,
     "exactOptionalPropertyTypes": true,
     "isolatedModules": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
     "lib": ["ES2024", "ESNext.Temporal", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleDetection": "force",
@@ -19,9 +21,9 @@
     "skipLibCheck": false,
     "strict": true,
     "target": "ES2024",
-    "types": ["node", "vitest/globals"],
+    "types": ["node", "vite/client", "vitest/globals"],
     "useUnknownInCatchVariables": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"]
 }

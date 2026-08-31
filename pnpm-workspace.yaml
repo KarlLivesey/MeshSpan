@@ -8,3 +8,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - "@types/node@26.4.0"
   - eslint-plugin-solid@0.16.1
+patchedDependencies:
+  "@solidjs/web@2.0.0-rc.3": patches/@solidjs__web@2.0.0-rc.3.patch
