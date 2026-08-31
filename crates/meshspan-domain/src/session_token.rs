@@ -66,6 +66,27 @@ impl SessionTokenBundle {
         )
     }
 
+    /// Derives exact-retry-stable replacement material from the presented current session.
+    ///
+    /// This supports atomic step-up rotation without persisting new plaintext token material or
+    /// relying on gateway-local entropy. The source token remains secret and is domain-separated
+    /// from both the replacement bearer and its CSRF token.
+    ///
+    /// # Errors
+    ///
+    /// Rejects cryptographically negligible invalid derived material.
+    pub fn derive_rotation(
+        source: &Self,
+        operation_id: OperationId,
+    ) -> Result<Self, SessionTokenBundleError> {
+        Self::derive_from_material(
+            b"meshspan.authentication.rotated-session-id.v1",
+            &source.secret,
+            operation_id,
+            b"meshspan.authentication.rotated-session-secret.v1",
+        )
+    }
+
     fn derive_from_material(
         identity_domain: &[u8],
         source: &[u8; 32],
@@ -166,6 +187,24 @@ impl SessionCsrfBundle {
         let secret = Zeroizing::new(derive(
             b"meshspan.authentication.passkey-csrf-secret.v1",
             seed,
+            operation_id,
+        ));
+        Self::from_parts(session.session_id.as_bytes(), secret)
+    }
+
+    /// Derives the independently presented CSRF token for one session rotation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects cryptographically negligible invalid derived material.
+    pub fn derive_rotation(
+        source: &SessionTokenBundle,
+        operation_id: OperationId,
+    ) -> Result<Self, SessionTokenBundleError> {
+        let session = SessionTokenBundle::derive_rotation(source, operation_id)?;
+        let secret = Zeroizing::new(derive(
+            b"meshspan.authentication.rotated-session-csrf-secret.v1",
+            &source.secret,
             operation_id,
         ));
         Self::from_parts(session.session_id.as_bytes(), secret)
@@ -273,6 +312,34 @@ mod tests {
             SessionTokenBundle::derive_from_passkey_seed(&[0; 32], operation_id),
             Err(SessionTokenBundleError::Invalid)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn rotation_is_stable_bound_to_source_and_domain_separated()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = SessionTokenBundle::derive_from_passkey_seed(
+            &[11; 32],
+            OperationId::from_bytes([12; 16])?,
+        )?;
+        let operation = OperationId::from_bytes([13; 16])?;
+        let rotated = SessionTokenBundle::derive_rotation(&source, operation)?;
+        let retry = SessionTokenBundle::derive_rotation(&source, operation)?;
+        let csrf = SessionCsrfBundle::derive_rotation(&source, operation)?;
+        assert_eq!(rotated.session_id(), retry.session_id());
+        assert_eq!(rotated.token_digest(), retry.token_digest());
+        assert_eq!(rotated.session_id(), csrf.session_id());
+        assert_ne!(rotated.token_digest(), csrf.token_digest());
+        assert_ne!(rotated.session_id(), source.session_id());
+        let parsed = SessionTokenBundle::parse(&rotated.expose_encoded())?;
+        assert_eq!(parsed.token_digest(), rotated.token_digest());
+
+        let other_source = SessionTokenBundle::derive_from_passkey_seed(
+            &[14; 32],
+            OperationId::from_bytes([12; 16])?,
+        )?;
+        let other = SessionTokenBundle::derive_rotation(&other_source, operation)?;
+        assert_ne!(other.token_digest(), rotated.token_digest());
         Ok(())
     }
 
