@@ -34,12 +34,14 @@ fn remove_safe_integer_wire_format(schema: &mut Schema) {
     let Some(object) = schema.as_object_mut() else {
         return;
     };
+    let integer_format = object.get("format").and_then(serde_json::Value::as_str);
+    let safe_maximum = object
+        .get("maximum")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|maximum| maximum <= 9_007_199_254_740_991_u64);
     let is_safe_integer = object.get("type").and_then(serde_json::Value::as_str) == Some("integer")
-        && object.get("format").and_then(serde_json::Value::as_str) == Some("int64")
-        && object
-            .get("maximum")
-            .and_then(serde_json::Value::as_i64)
-            .is_some_and(|maximum| maximum <= 9_007_199_254_740_991_i64);
+        && matches!(integer_format, Some("int64" | "uint64"))
+        && safe_maximum;
 
     if is_safe_integer {
         object.remove("format");

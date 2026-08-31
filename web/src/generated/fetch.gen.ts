@@ -2,7 +2,13 @@
 // Generated from the Rust-authored MeshSpan OpenAPI contract. Do not edit.
 
 import type {
+  AbortUploadRequest,
+  AbortUploadResponse,
   ApiError,
+  BeginUploadRequest,
+  BeginUploadResponse,
+  CommitUploadRequest,
+  CommitUploadResponse,
   CreateApiKeyRequest,
   CreateApiKeyResponse,
   CreateMeshSetupRequestWritable,
@@ -13,14 +19,26 @@ import type {
   GetObjectResponse,
   HealthResponse,
   ListDirectoryResponse,
+  ListUploadRangesResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
   RevokeCurrentSessionResponse,
   SetupStatusResponse,
+  UploadStatusResponse,
+  WriteUploadRangeResponse,
 } from "./types.gen";
 import {
+  zAbortUploadBody,
+  zAbortUploadPath,
+  zAbortUploadResponse2,
   zApiError,
+  zBeginUploadBody,
+  zBeginUploadPath,
+  zBeginUploadResponse2,
+  zCommitUploadBody,
+  zCommitUploadPath,
+  zCommitUploadResponse2,
   zCreateCurrentUserApiKeyBody,
   zCreateCurrentUserApiKeyResponse,
   zCreateMeshSetupBody,
@@ -34,9 +52,14 @@ import {
   zGetObjectResponse2,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
+  zGetUploadPath,
+  zGetUploadResponse,
   zListDirectoryPath,
   zListDirectoryQuery,
   zListDirectoryResponse2,
+  zListUploadRangesPath,
+  zListUploadRangesQuery,
+  zListUploadRangesResponse2,
   zReadFilePath,
   zReadFileQuery,
   zRevokeCurrentUserAuthenticationMethodBody,
@@ -44,6 +67,9 @@ import {
   zRevokeCurrentUserAuthenticationMethodResponse,
   zRevokeCurrentSessionBody,
   zRevokeCurrentSessionResponse2,
+  zWriteUploadRangeHeaders,
+  zWriteUploadRangePath,
+  zWriteUploadRangeResponse2,
 } from "./zod.gen";
 import {
   appendQuery,
@@ -59,6 +85,7 @@ import {
 
 const MAX_JSON_RESPONSE_BYTES = 65_536;
 const MAX_FILE_READ_BYTES = 8_388_608;
+const MAX_UPLOAD_RANGE_BYTES = 8_388_608;
 const SCHEMA_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CSRF_TOKEN_PATTERN = /^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/u;
 const API_KEY_PATTERN = /^meshspan-key-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/u;
@@ -96,12 +123,46 @@ export type ReadFileResult = Readonly<{
   offset: number;
 }>;
 
+export type ListUploadRangesRequest = Readonly<{
+  uploadId: string;
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type WriteUploadRangeRequest = Readonly<{
+  uploadId: string;
+  offset: number;
+  operationId: string;
+  stageFence: number;
+  contentBlake3: string;
+  bytes: Uint8Array;
+}>;
+
 export type CreateSessionResult = Readonly<{
   csrfToken: string;
   session: CreateSessionResponse;
 }>;
 
 export interface MeshSpanFetchClient {
+  abortUpload(
+    uploadId: string,
+    request: AbortUploadRequest,
+  ): Promise<AbortUploadResponse>;
+  beginUpload(
+    volumeId: string,
+    request: BeginUploadRequest,
+  ): Promise<BeginUploadResponse>;
+  commitUpload(
+    uploadId: string,
+    request: CommitUploadRequest,
+  ): Promise<CommitUploadResponse>;
+  getUpload(uploadId: string): Promise<UploadStatusResponse>;
+  listUploadRanges(
+    request: ListUploadRangesRequest,
+  ): Promise<ListUploadRangesResponse>;
+  writeUploadRange(
+    request: WriteUploadRangeRequest,
+  ): Promise<WriteUploadRangeResponse>;
   createCurrentUserApiKey(
     request: CreateApiKeyRequest,
     csrfToken: string,
@@ -166,6 +227,134 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async abortUpload(uploadId, request): Promise<AbortUploadResponse> {
+      const path = zAbortUploadPath.parse({ upload_id: uploadId });
+      const body = zAbortUploadBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/uploads/{upload_id}/aborts",
+          "upload_id",
+          path.upload_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        zAbortUploadResponse2,
+      );
+    },
+    async beginUpload(volumeId, request): Promise<BeginUploadResponse> {
+      const path = zBeginUploadPath.parse({ volume_id: volumeId });
+      const body = zBeginUploadBody.parse(request);
+      validateNamespacePath(body.path);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/volumes/{volume_id}/uploads",
+          "volume_id",
+          path.volume_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        zBeginUploadResponse2,
+      );
+    },
+    async commitUpload(uploadId, request): Promise<CommitUploadResponse> {
+      const path = zCommitUploadPath.parse({ upload_id: uploadId });
+      const body = zCommitUploadBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/uploads/{upload_id}/commits",
+          "upload_id",
+          path.upload_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        zCommitUploadResponse2,
+      );
+    },
+    async getUpload(uploadId): Promise<UploadStatusResponse> {
+      const path = zGetUploadPath.parse({ upload_id: uploadId });
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/uploads/{upload_id}",
+          "upload_id",
+          path.upload_id,
+        ),
+        { method: "GET" },
+        zGetUploadResponse,
+      );
+    },
+    async listUploadRanges(request): Promise<ListUploadRangesResponse> {
+      const path = zListUploadRangesPath.parse({ upload_id: request.uploadId });
+      const query = zListUploadRangesQuery.parse({
+        cursor: request.cursor,
+        limit: request.limit,
+      });
+      return requestJson(
+        context,
+        appendQuery(
+          substitutePathParameter(
+            "/uploads/{upload_id}/ranges",
+            "upload_id",
+            path.upload_id,
+          ),
+          query,
+        ),
+        { method: "GET" },
+        zListUploadRangesResponse2,
+      );
+    },
+    async writeUploadRange(request): Promise<WriteUploadRangeResponse> {
+      const path = zWriteUploadRangePath.parse({
+        offset: request.offset,
+        upload_id: request.uploadId,
+      });
+      const headers = zWriteUploadRangeHeaders.parse({
+        "MeshSpan-Content-BLAKE3": request.contentBlake3,
+        "MeshSpan-Operation-Id": request.operationId,
+        "MeshSpan-Stage-Fence": request.stageFence,
+      });
+      if (request.bytes.byteLength === 0) {
+        throw new RangeError("upload range must not be empty");
+      }
+      if (request.bytes.byteLength > MAX_UPLOAD_RANGE_BYTES) {
+        throw new RangeError("upload range exceeds the native byte limit");
+      }
+      const body = new Uint8Array(request.bytes).buffer;
+      return requestJson(
+        context,
+        substitutePathParameter(
+          substitutePathParameter(
+            "/uploads/{upload_id}/ranges/{offset}",
+            "upload_id",
+            path.upload_id,
+          ),
+          "offset",
+          String(path.offset),
+        ),
+        {
+          body,
+          headers: {
+            ...headers,
+            "Content-Type": "application/octet-stream",
+            "MeshSpan-Stage-Fence": String(headers["MeshSpan-Stage-Fence"]),
+          },
+          method: "PUT",
+        },
+        zWriteUploadRangeResponse2,
+      );
+    },
     async createCurrentUserApiKey(
       request,
       csrfToken,

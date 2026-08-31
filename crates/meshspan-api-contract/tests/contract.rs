@@ -861,6 +861,53 @@ fn file_read_contract_is_bounded_binary_and_safe_for_generated_clients() {
 }
 
 #[test]
+fn native_upload_contract_is_resumable_bounded_and_explicitly_committed() {
+    let document = generate_openapi().expect("native upload contract must generate");
+    let paths = &document.value()["paths"];
+    assert_eq!(
+        paths["/volumes/{volume_id}/uploads"]["post"]["operationId"],
+        "beginUpload"
+    );
+    assert_eq!(
+        paths["/uploads/{upload_id}"]["get"]["operationId"],
+        "getUpload"
+    );
+    assert_eq!(
+        paths["/uploads/{upload_id}/ranges"]["get"]["operationId"],
+        "listUploadRanges"
+    );
+    let write = &paths["/uploads/{upload_id}/ranges/{offset}"]["put"];
+    assert_eq!(write["operationId"], "writeUploadRange");
+    assert_eq!(
+        write["requestBody"]["content"]["application/octet-stream"]["schema"]["maxLength"],
+        8_388_608
+    );
+    let headers = write["parameters"]
+        .as_array()
+        .expect("upload write parameters must be an array");
+    for name in [
+        "MeshSpan-Operation-Id",
+        "MeshSpan-Stage-Fence",
+        "MeshSpan-Content-BLAKE3",
+    ] {
+        assert!(
+            headers
+                .iter()
+                .any(|parameter| parameter["name"] == name && parameter["required"] == true),
+            "missing required {name}"
+        );
+    }
+    assert_eq!(
+        paths["/uploads/{upload_id}/commits"]["post"]["operationId"],
+        "commitUpload"
+    );
+    assert_eq!(
+        paths["/uploads/{upload_id}/aborts"]["post"]["operationId"],
+        "abortUpload"
+    );
+}
+
+#[test]
 fn every_documented_operation_declares_access_and_an_operation_id() {
     let document = generate_openapi().expect("the Rust contract must generate");
     let paths = document.value()["paths"]

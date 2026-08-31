@@ -9,6 +9,12 @@ import {
   regexLiteral,
   writeAtomically,
 } from "./fetch-contract.mjs";
+import {
+  renderUploadClientInterface,
+  renderUploadClientMethods,
+  renderUploadRequestTypes,
+} from "./render-upload-client.mjs";
+import { renderFetchRuntime } from "./render-fetch-runtime.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -27,7 +33,13 @@ const source = `// SPDX-License-Identifier: GPL-2.0-only
 // Generated from the Rust-authored MeshSpan OpenAPI contract. Do not edit.
 
 import type {
+  AbortUploadRequest,
+  AbortUploadResponse,
   ApiError,
+  BeginUploadRequest,
+  BeginUploadResponse,
+  CommitUploadRequest,
+  CommitUploadResponse,
   CreateApiKeyRequest,
   CreateApiKeyResponse,
   CreateMeshSetupRequestWritable,
@@ -38,14 +50,26 @@ import type {
   GetObjectResponse,
   HealthResponse,
   ListDirectoryResponse,
+  ListUploadRangesResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
   RevokeCurrentSessionResponse,
   SetupStatusResponse,
+  UploadStatusResponse,
+  WriteUploadRangeResponse,
 } from "./types.gen";
 import {
+  zAbortUploadBody,
+  zAbortUploadPath,
+  zAbortUploadResponse2,
   zApiError,
+  zBeginUploadBody,
+  zBeginUploadPath,
+  zBeginUploadResponse2,
+  zCommitUploadBody,
+  zCommitUploadPath,
+  zCommitUploadResponse2,
   zCreateCurrentUserApiKeyBody,
   zCreateCurrentUserApiKeyResponse,
   zCreateMeshSetupBody,
@@ -59,9 +83,14 @@ import {
   zGetObjectResponse2,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
+  zGetUploadPath,
+  zGetUploadResponse,
   zListDirectoryPath,
   zListDirectoryQuery,
   zListDirectoryResponse2,
+  zListUploadRangesPath,
+  zListUploadRangesQuery,
+  zListUploadRangesResponse2,
   zReadFilePath,
   zReadFileQuery,
   zRevokeCurrentUserAuthenticationMethodBody,
@@ -69,6 +98,9 @@ import {
   zRevokeCurrentUserAuthenticationMethodResponse,
   zRevokeCurrentSessionBody,
   zRevokeCurrentSessionResponse2,
+  zWriteUploadRangeHeaders,
+  zWriteUploadRangePath,
+  zWriteUploadRangeResponse2,
 } from "./zod.gen";
 import {
   appendQuery,
@@ -84,6 +116,7 @@ import {
 
 const MAX_JSON_RESPONSE_BYTES = 65_536;
 const MAX_FILE_READ_BYTES = 8_388_608;
+const MAX_UPLOAD_RANGE_BYTES = 8_388_608;
 const SCHEMA_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CSRF_TOKEN_PATTERN = ${regexLiteral(routes.createSession.csrfPattern)};
 const API_KEY_PATTERN = /^meshspan-key-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$/u;
@@ -120,12 +153,15 @@ export type ReadFileResult = Readonly<{
   offset: number;
 }>;
 
+${renderUploadRequestTypes()}
+
 export type CreateSessionResult = Readonly<{
   csrfToken: string;
   session: CreateSessionResponse;
 }>;
 
 export interface MeshSpanFetchClient {
+  ${renderUploadClientInterface()}
   createCurrentUserApiKey(
     request: CreateApiKeyRequest,
     csrfToken: string,
@@ -186,6 +222,7 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    ${renderUploadClientMethods(routes)}
     async createCurrentUserApiKey(
       request,
       csrfToken,
@@ -389,139 +426,7 @@ export function createMeshSpanFetchClient(
   };
 }
 
-async function requestJson<T>(
-  context: RequestContext,
-  route: string,
-  request: RequestInit,
-  parser: JsonParser<T>,
-): Promise<T> {
-  return (await requestJsonResponse(context, route, request, parser)).body;
-}
-
-type JsonResponse<T> = Readonly<{
-  body: T;
-  headers: Headers;
-}>;
-
-async function requestJsonResponse<T>(
-  context: RequestContext,
-  route: string,
-  request: RequestInit,
-  parser: JsonParser<T>,
-): Promise<JsonResponse<T>> {
-  const headers = authenticatedHeaders(context.authorization, request.headers);
-  headers.set("Accept", "application/json");
-  const response = await context.fetch(resolveRoute(context.apiRoot, route), {
-    ...request,
-    credentials: context.authorization === undefined ? "same-origin" : "omit",
-    headers,
-  });
-  validateContractHeaders(response);
-  const value = await readBoundedJson(response);
-
-  if (!response.ok) {
-    const parsedError = zApiError.safeParse(value);
-    throw new MeshSpanApiError(
-      response.status,
-      parsedError.success ? parsedError.data : undefined,
-    );
-  }
-
-  return { body: parser.parse(value), headers: response.headers };
-}
-
-async function requestFileRange(
-  context: RequestContext,
-  route: string,
-  expectedOffset: number,
-  maximumBytes: number,
-): Promise<ReadFileResult> {
-  if (maximumBytes > MAX_FILE_READ_BYTES) {
-    throw new RangeError("file request exceeds the native range limit");
-  }
-  const response = await context.fetch(resolveRoute(context.apiRoot, route), {
-    credentials: context.authorization === undefined ? "same-origin" : "omit",
-    headers: authenticatedHeaders(context.authorization, {
-      Accept: "application/octet-stream",
-    }),
-    method: "GET",
-  });
-  validateContractHeaders(response);
-  if (!response.ok) {
-    const value = await readBoundedJson(response);
-    const parsedError = zApiError.safeParse(value);
-    throw new MeshSpanApiError(
-      response.status,
-      parsedError.success ? parsedError.data : undefined,
-    );
-  }
-  if (response.headers.get("content-type") !== "application/octet-stream") {
-    throw new TypeError("file response is not application/octet-stream");
-  }
-  const version = response.headers.get("MeshSpan-File-Version");
-  if (version === null || !FILE_VERSION_PATTERN.test(version)) {
-    throw new TypeError("file response has an invalid immutable version");
-  }
-  const offset = parseSafeDecimalHeader(
-    response.headers.get("MeshSpan-Read-Offset"),
-  );
-  if (offset !== expectedOffset) {
-    throw new TypeError("file response has an unexpected range offset");
-  }
-  rejectOversizedContentLength(
-    response.headers.get("content-length"),
-    maximumBytes,
-  );
-  const bytes = await readBoundedBytes(response.body, maximumBytes);
-  return { bytes, fileVersionId: version, offset };
-}
-
-function readCsrfToken(headers: Headers): string {
-  const token = headers.get("MeshSpan-CSRF-Token");
-  if (token === null || !CSRF_TOKEN_PATTERN.test(token)) {
-    throw new TypeError("response has an invalid MeshSpan CSRF token");
-  }
-  return token;
-}
-
-function normalizeApiRoot(value: string): URL {
-  const apiRoot = new URL(value);
-  if (apiRoot.username || apiRoot.password) {
-    throw new TypeError("the MeshSpan API URL must not contain credentials");
-  }
-  if (!apiRoot.pathname.endsWith("/")) {
-    apiRoot.pathname += "/";
-  }
-  return apiRoot;
-}
-
-function resolveRoute(apiRoot: URL, route: string): URL {
-  return new URL(route.replace(/^\\/+/, ""), apiRoot);
-}
-
-function validateContractHeaders(response: Response): void {
-  if (response.headers.get("MeshSpan-API-Version") !== "latest") {
-    throw new TypeError("response has an unexpected MeshSpan API version");
-  }
-  const digest = response.headers.get("MeshSpan-API-Schema");
-  if (digest === null || !SCHEMA_DIGEST_PATTERN.test(digest)) {
-    throw new TypeError("response has an invalid MeshSpan API schema digest");
-  }
-}
-
-async function readBoundedJson(response: Response): Promise<unknown> {
-  const contentType = response.headers.get("content-type");
-  if (!contentType?.startsWith("application/json")) {
-    throw new TypeError("response is not application/json");
-  }
-  rejectOversizedContentLength(
-    response.headers.get("content-length"),
-    MAX_JSON_RESPONSE_BYTES,
-  );
-  const bytes = await readBoundedBytes(response.body, MAX_JSON_RESPONSE_BYTES);
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  return JSON.parse(text) as unknown;
-}
+${renderFetchRuntime()}
 
 `;
 

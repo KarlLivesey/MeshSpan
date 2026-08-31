@@ -11,8 +11,8 @@ use serde::de::DeserializeOwned;
 use crate::validation::{CompiledValidator, compile, validate, validator_from};
 use crate::{
     AbortUploadRequest, AbortUploadResponse, BeginUploadRequest, BeginUploadResponse,
-    BoundaryError, CommitUploadRequest, CommitUploadResponse, UploadState, UploadStatusResponse,
-    WriteUploadRangeResponse, schema,
+    BoundaryError, CommitUploadRequest, CommitUploadResponse, ListUploadRangesQuery,
+    ListUploadRangesResponse, UploadState, UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Maximum accepted JSON bytes for beginning an upload.
@@ -28,6 +28,8 @@ static COMMIT_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::n
 static COMMIT_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static ABORT_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static STATUS_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static RANGE_QUERY: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static RANGE_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 
 /// Decodes and validates one hostile begin-upload body.
 ///
@@ -92,6 +94,37 @@ pub fn encode_upload_status_response(
     response: &UploadStatusResponse,
 ) -> Result<Vec<u8>, BoundaryError> {
     encode_status(response, status_response_validator())
+}
+
+/// Validates one decoded upload-range page query.
+///
+/// # Errors
+///
+/// Rejects schema-invalid cursor or page bounds.
+pub fn validate_list_upload_ranges_query(
+    query: &ListUploadRangesQuery,
+) -> Result<(), BoundaryError> {
+    let value = serde_json::to_value(query).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate(range_query_validator()?, &value)
+}
+
+/// Validates and encodes one exact upload-range page.
+///
+/// # Errors
+///
+/// Rejects excessive, empty, overlapping, adjacent or schema-invalid ranges.
+pub fn encode_list_upload_ranges_response(
+    response: &ListUploadRangesResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let valid_ranges = response.ranges.iter().all(|range| range.start < range.end)
+        && response
+            .ranges
+            .windows(2)
+            .all(|pair| pair[0].end < pair[1].start);
+    if !valid_ranges {
+        return Err(BoundaryError::EncodeMismatch);
+    }
+    encode_response(response, range_response_validator())
 }
 
 /// Validates and encodes a complete publication response.
@@ -195,4 +228,12 @@ fn abort_request_validator() -> Result<&'static CompiledValidator, BoundaryError
 
 fn status_response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     response_validator::<UploadStatusResponse>(&STATUS_RESPONSE)
+}
+
+fn range_query_validator() -> Result<&'static CompiledValidator, BoundaryError> {
+    request_validator::<ListUploadRangesQuery>(&RANGE_QUERY)
+}
+
+fn range_response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
+    response_validator::<ListUploadRangesResponse>(&RANGE_RESPONSE)
 }

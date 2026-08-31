@@ -4,6 +4,80 @@
 import * as z from "zod";
 
 /**
+ * AbortUploadRequest
+ *
+ * Permanently abandons one unpublished upload.
+ */
+export const zAbortUploadRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    stage_fence: z.int().gte(1).lte(9007199254740991),
+  })
+  .strict();
+
+/**
+ * UploadStatusResponse
+ *
+ * Common exact upload state returned after every lifecycle operation.
+ */
+export const zAbortUploadResponse = z
+  .strictObject({
+    checkpoint_sequence: z.int().gte(0).lte(9007199254740991),
+    committed_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .nullable(),
+    committed_version_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .nullable(),
+    expires_at_epoch_micros: z.int().gte(1).lte(9007199254740991),
+    logical_extent: z.int().gte(0).lte(9007199254740991),
+    maximum_bytes: z.int().gte(1).lte(9007199254740991),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    ranges_url: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^\/api\//),
+    stage_fence: z.int().gte(1).lte(9007199254740991),
+    state: z.union([
+      z.literal("active"),
+      z.literal("committing"),
+      z.literal("committed"),
+      z.literal("aborted"),
+    ]),
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * ApiError
  *
  * Public error envelope that never includes raw untrusted values.
@@ -48,6 +122,246 @@ export const zApiError = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * BeginUploadRequest
+ *
+ * Starts one durable private upload session.
+ */
+export const zBeginUploadRequest = z
+  .strictObject({
+    disposition: z.union([
+      z
+        .object({
+          mode: z.literal("create_new"),
+        })
+        .strict(),
+      z
+        .object({
+          mode: z.literal("replace_current"),
+        })
+        .strict(),
+      z
+        .object({
+          mode: z.literal("replace_if_version"),
+          version_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+        })
+        .strict(),
+    ]),
+    maximum_bytes: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+  })
+  .strict();
+
+/**
+ * UploadStatusResponse
+ *
+ * Common exact upload state returned after every lifecycle operation.
+ */
+export const zBeginUploadResponse = z
+  .strictObject({
+    checkpoint_sequence: z.int().gte(0).lte(9007199254740991),
+    committed_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .nullable(),
+    committed_version_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .nullable(),
+    expires_at_epoch_micros: z.int().gte(1).lte(9007199254740991),
+    logical_extent: z.int().gte(0).lte(9007199254740991),
+    maximum_bytes: z.int().gte(1).lte(9007199254740991),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    ranges_url: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^\/api\//),
+    stage_fence: z.int().gte(1).lte(9007199254740991),
+    state: z.union([
+      z.literal("active"),
+      z.literal("committing"),
+      z.literal("committed"),
+      z.literal("aborted"),
+    ]),
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CommitUploadRequest
+ *
+ * Explicit final publication request for one complete checkpoint.
+ */
+export const zCommitUploadRequest = z
+  .strictObject({
+    expected_blake3: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/)
+      .nullish(),
+    expected_sequence: z.int().gte(0).lte(9007199254740991),
+    final_length: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    sparse: z.boolean(),
+    stage_fence: z.int().gte(1).lte(9007199254740991),
+  })
+  .strict();
+
+/**
+ * CommitUploadResponse
+ *
+ * Complete successful upload publication.
+ */
+export const zCommitUploadResponse = z
+  .strictObject({
+    object: z
+      .strictObject({
+        namespace_commit_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        object: z
+          .strictObject({
+            entry_generation: z.int().gte(0).lte(9007199254740991),
+            file_version_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              )
+              .nullable(),
+            kind: z.union([z.literal("directory"), z.literal("file")]),
+            logical_length: z.int().gte(0).lte(9007199254740991).nullable(),
+            name: z
+              .string()
+              .min(1)
+              .max(255)
+              .regex(/^[^\x00-\x1f\x7f\x2f\\]+$/),
+            object_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            object_revision_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+          })
+          .strict(),
+        path: z
+          .string()
+          .min(1)
+          .max(4096)
+          .regex(/^[^\x00-\x1f\x7f]+$/),
+        volume_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      })
+      .strict(),
+    upload: z
+      .strictObject({
+        checkpoint_sequence: z.int().gte(0).lte(9007199254740991),
+        committed_object_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          )
+          .nullable(),
+        committed_version_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          )
+          .nullable(),
+        expires_at_epoch_micros: z.int().gte(1).lte(9007199254740991),
+        logical_extent: z.int().gte(0).lte(9007199254740991),
+        maximum_bytes: z.int().gte(1).lte(9007199254740991),
+        path: z
+          .string()
+          .min(1)
+          .max(4096)
+          .regex(/^[^\x00-\x1f\x7f]+$/),
+        ranges_url: z
+          .string()
+          .min(1)
+          .max(4096)
+          .regex(/^\/api\//),
+        stage_fence: z.int().gte(1).lte(9007199254740991),
+        state: z.union([
+          z.literal("active"),
+          z.literal("committing"),
+          z.literal("committed"),
+          z.literal("aborted"),
+        ]),
+        upload_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        volume_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      })
+      .strict(),
   })
   .strict();
 
@@ -872,6 +1186,39 @@ export const zListDirectoryResponse = z
   .strict();
 
 /**
+ * ListUploadRangesResponse
+ *
+ * Bounded exact coverage page pinned to one upload checkpoint.
+ */
+export const zListUploadRangesResponse = z
+  .strictObject({
+    checkpoint_sequence: z.int().gte(0).lte(9007199254740991),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^\/api\//)
+      .nullable(),
+    ranges: z
+      .array(
+        z
+          .strictObject({
+            end: z.int().gte(1).lte(9007199254740991),
+            start: z.int().gte(0).lte(9007199254740991),
+          })
+          .strict(),
+      )
+      .max(256),
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * RevokeAuthenticationMethodRequest
  *
  * One idempotent request to revoke an owned authentication method.
@@ -989,6 +1336,120 @@ export const zStepUpCurrentSessionRequest = z
         .strict(),
     ]),
     operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * UploadStatusResponse
+ *
+ * Common exact upload state returned after every lifecycle operation.
+ */
+export const zUploadStatusResponse = z
+  .strictObject({
+    checkpoint_sequence: z.int().gte(0).lte(9007199254740991),
+    committed_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .nullable(),
+    committed_version_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .nullable(),
+    expires_at_epoch_micros: z.int().gte(1).lte(9007199254740991),
+    logical_extent: z.int().gte(0).lte(9007199254740991),
+    maximum_bytes: z.int().gte(1).lte(9007199254740991),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    ranges_url: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^\/api\//),
+    stage_fence: z.int().gte(1).lte(9007199254740991),
+    state: z.union([
+      z.literal("active"),
+      z.literal("committing"),
+      z.literal("committed"),
+      z.literal("aborted"),
+    ]),
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * UploadStatusResponse
+ *
+ * Common exact upload state returned after every lifecycle operation.
+ */
+export const zWriteUploadRangeResponse = z
+  .strictObject({
+    checkpoint_sequence: z.int().gte(0).lte(9007199254740991),
+    committed_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .nullable(),
+    committed_version_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .nullable(),
+    expires_at_epoch_micros: z.int().gte(1).lte(9007199254740991),
+    logical_extent: z.int().gte(0).lte(9007199254740991),
+    maximum_bytes: z.int().gte(1).lte(9007199254740991),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    ranges_url: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^\/api\//),
+    stage_fence: z.int().gte(1).lte(9007199254740991),
+    state: z.union([
+      z.literal("active"),
+      z.literal("committing"),
+      z.literal("committed"),
+      z.literal("aborted"),
+    ]),
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    volume_id: z
       .string()
       .length(36)
       .regex(
@@ -1368,6 +1829,127 @@ export const zCreateMeshSetupResponse2 = zCreateMeshSetupResponse;
  */
 export const zGetSetupStatusResponse = zSetupStatusResponse;
 
+export const zGetUploadPath = z
+  .object({
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Exact current upload state
+ */
+export const zGetUploadResponse = zUploadStatusResponse;
+
+/**
+ * Exact fenced upload abandonment intent
+ */
+export const zAbortUploadBody = zAbortUploadRequest;
+
+export const zAbortUploadPath = z
+  .object({
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Terminal abandoned upload state
+ */
+export const zAbortUploadResponse2 = zAbortUploadResponse;
+
+/**
+ * Exact private checkpoint publication intent
+ */
+export const zCommitUploadBody = zCommitUploadRequest;
+
+export const zCommitUploadPath = z
+  .object({
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Committed immutable object version
+ */
+export const zCommitUploadResponse2 = zCommitUploadResponse;
+
+export const zListUploadRangesPath = z
+  .object({
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+export const zListUploadRangesQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One immutable checkpoint range page
+ */
+export const zListUploadRangesResponse2 = zListUploadRangesResponse;
+
+export const zWriteUploadRangeBody = z.string().min(1).max(8388608);
+
+export const zWriteUploadRangeHeaders = z
+  .object({
+    "MeshSpan-Operation-Id": z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    "MeshSpan-Stage-Fence": z.int().gte(1).lte(9007199254740991),
+    "MeshSpan-Content-BLAKE3": z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+export const zWriteUploadRangePath = z
+  .object({
+    upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    offset: z.int().gte(0).lte(9007199254740991),
+  })
+  .strict();
+
+/**
+ * Durable range acknowledgement and exact resulting checkpoint
+ */
+export const zWriteUploadRangeResponse2 = zWriteUploadRangeResponse;
+
 /**
  * Current-user API-key issuance
  */
@@ -1546,3 +2128,24 @@ export const zGetObjectQuery = z
  * Complete immutable metadata for the selected logical object
  */
 export const zGetObjectResponse2 = zGetObjectResponse;
+
+/**
+ * Bounded durable upload intent
+ */
+export const zBeginUploadBody = zBeginUploadRequest;
+
+export const zBeginUploadPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Ready durable upload session
+ */
+export const zBeginUploadResponse2 = zBeginUploadResponse;

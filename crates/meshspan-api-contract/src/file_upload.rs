@@ -119,6 +119,61 @@ pub struct UploadStatusResponse {
     pub ranges_url: String,
 }
 
+/// Opaque continuation for one immutable upload-checkpoint range view.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct UploadRangeCursor(
+    #[schemars(length(min = 1, max = 1024), pattern(r"^[A-Za-z0-9._~-]+$"))] String,
+);
+
+impl UploadRangeCursor {
+    /// Returns the opaque cursor text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One bounded page query over exact received ranges.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListUploadRangesQuery {
+    /// Continuation returned by the preceding page.
+    pub cursor: Option<UploadRangeCursor>,
+    /// Requested page bound; omission selects the server default.
+    #[schemars(range(min = 1, max = 256))]
+    pub limit: Option<u16>,
+}
+
+/// One exact non-empty initialised byte range, end-exclusive.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UploadRange {
+    /// First initialised byte.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub start: u64,
+    /// Exclusive end, strictly greater than start.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub end: u64,
+}
+
+/// Bounded exact coverage page pinned to one upload checkpoint.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListUploadRangesResponse {
+    /// Selected upload.
+    pub upload_id: UploadId,
+    /// Immutable stage sequence represented by every page in this traversal.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub checkpoint_sequence: u64,
+    /// Sorted, non-overlapping, non-adjacent exact received ranges.
+    #[schemars(length(max = 256))]
+    pub ranges: Vec<UploadRange>,
+    /// Complete next-page URL under current authority, or null at the end.
+    #[schemars(length(min = 1, max = 4096), pattern(r"^/api/"))]
+    pub next_page_url: Option<String>,
+}
+
 /// Starts and returns one ready durable upload.
 pub type BeginUploadResponse = UploadStatusResponse;
 

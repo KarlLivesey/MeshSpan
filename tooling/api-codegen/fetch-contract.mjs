@@ -22,6 +22,9 @@ export function parseContract(sourceText) {
 export function readRequiredRoutes(document) {
   const operations = collectOperations(document);
   return {
+    abortUpload: requireOperation(operations, "abortUpload"),
+    beginUpload: requireOperation(operations, "beginUpload"),
+    commitUpload: requireOperation(operations, "commitUpload"),
     createCurrentUserApiKey: requireOperation(
       operations,
       "createCurrentUserApiKey",
@@ -35,13 +38,16 @@ export function readRequiredRoutes(document) {
     getObject: requireOperation(operations, "getObject"),
     getOpenApi: requireOperation(operations, "getOpenApi"),
     getSetupStatus: requireOperation(operations, "getSetupStatus"),
+    getUpload: requireOperation(operations, "getUpload"),
     listDirectory: requireOperation(operations, "listDirectory"),
+    listUploadRanges: requireOperation(operations, "listUploadRanges"),
     readFile: requireOperation(operations, "readFile"),
     revokeCurrentSession: requireOperation(operations, "revokeCurrentSession"),
     revokeCurrentUserAuthenticationMethod: requireOperation(
       operations,
       "revokeCurrentUserAuthenticationMethod",
     ),
+    writeUploadRange: requireOperation(operations, "writeUploadRange"),
   };
 }
 
