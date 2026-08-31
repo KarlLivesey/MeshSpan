@@ -137,6 +137,9 @@ function normalizeApiRoot(value: string): URL {
 }
 
 function resolveRoute(apiRoot: URL, route: string): URL {
+  if (route.startsWith("/api/")) {
+    return new URL(route, apiRoot.origin);
+  }
   return new URL(route.replace(/^\\/+/, ""), apiRoot);
 }
 

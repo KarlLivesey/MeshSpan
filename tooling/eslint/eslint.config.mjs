@@ -16,7 +16,7 @@ import typescriptEslint from "typescript-eslint";
 const webRoot = fileURLToPath(new URL("../../web/", import.meta.url));
 const webFiles = ["web/**/*.ts", "web/**/*.tsx"];
 const generatedFiles = ["web/src/generated/**/*.ts"];
-const testFiles = ["web/tests/**/*.ts"];
+const testFiles = ["web/tests/**/*.ts", "web/tests/**/*.tsx"];
 const toolingFiles = ["scripts/**/*.mjs", "tooling/**/*.mjs"];
 
 function forWeb(config) {

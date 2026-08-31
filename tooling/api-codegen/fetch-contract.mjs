@@ -25,6 +25,7 @@ export function readRequiredRoutes(document) {
     abortUpload: requireOperation(operations, "abortUpload"),
     beginUpload: requireOperation(operations, "beginUpload"),
     commitUpload: requireOperation(operations, "commitUpload"),
+    createGroup: requireOperation(operations, "createGroup"),
     createDirectory: requireOperation(operations, "createDirectory"),
     createCurrentUserApiKey: requireOperation(
       operations,
@@ -34,6 +35,7 @@ export function readRequiredRoutes(document) {
     createSession: readSessionOperation(
       requireOperation(operations, "createSession"),
     ),
+    createUser: requireOperation(operations, "createUser"),
     deleteObject: requireOperation(operations, "deleteObject"),
     getHealth: requireOperation(operations, "getHealth"),
     getCurrentSession: requireOperation(operations, "getCurrentSession"),
@@ -42,7 +44,9 @@ export function readRequiredRoutes(document) {
     getSetupStatus: requireOperation(operations, "getSetupStatus"),
     getUpload: requireOperation(operations, "getUpload"),
     listDirectory: requireOperation(operations, "listDirectory"),
+    listGroups: requireOperation(operations, "listGroups"),
     listUploadRanges: requireOperation(operations, "listUploadRanges"),
+    listUsers: requireOperation(operations, "listUsers"),
     readFile: requireOperation(operations, "readFile"),
     renameObject: requireOperation(operations, "renameObject"),
     revokeCurrentSession: requireOperation(operations, "revokeCurrentSession"),

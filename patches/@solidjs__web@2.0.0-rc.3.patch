@@ -1,0 +1,12 @@
+diff --git a/types/server-functions/server.d.ts b/types/server-functions/server.d.ts
+index abb5a4d7ff4f8b72d7dbe14f15a97497cb8b58b0..a4a797e8b8abad17d3f058720ccd1d2e9f789e20 100644
+--- a/types/server-functions/server.d.ts
++++ b/types/server-functions/server.d.ts
+@@ -3,6 +3,7 @@ export { decodeFlashCookie, encodeFlashCookie } from "./flash.js";
+ import { ResponseEnvelope } from "../response.js";
+ import { JSONCodecOptions } from "../serializer-decode.js";
+ import { RequestEvent } from "../server.js";
++import type { ServerFunction, ServerFunctionMetadata } from "./shared.js";
+ export type { FlightDataConsumer, FlightDataContext, ServerFunction, ServerFunctionMetadata, SingleFlightPayload } from "./shared.js";
+ export type { FlashSubmission } from "./flash.js";
+ /**

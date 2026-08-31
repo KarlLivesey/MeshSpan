@@ -2,6 +2,7 @@
 
 const productionLicences = new Set([
   "GPL-2.0-only",
+  "0BSD",
   "MIT",
   "MIT-0",
   "BSD-1-Clause",
@@ -20,6 +21,7 @@ const productionLicences = new Set([
 const developmentToolLicences = new Set([
   "Apache-2.0",
   "BlueOak-1.0.0",
+  "CC-BY-4.0",
   "LGPL-3.0-only",
   "MPL-2.0",
   "Python-2.0",
