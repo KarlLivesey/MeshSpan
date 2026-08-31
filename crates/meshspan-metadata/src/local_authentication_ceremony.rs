@@ -379,6 +379,18 @@ impl LocalDatabase {
     ) -> Result<Option<AuthenticationCeremonyRecord>, AuthenticationCeremonyError> {
         load_by_challenge(self.connection(), challenge_id)
     }
+
+    /// Loads one challenge by its creation operation while verifying all persisted evidence.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed or substituted persisted evidence.
+    pub fn authentication_ceremony_by_creation(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<AuthenticationCeremonyRecord>, AuthenticationCeremonyError> {
+        load_by_creation(self.connection(), operation_id)
+    }
 }
 
 fn validate_new(ceremony: &NewAuthenticationCeremony) -> Result<(), AuthenticationCeremonyError> {

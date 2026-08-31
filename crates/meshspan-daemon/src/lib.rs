@@ -21,6 +21,11 @@ mod create_session_tests;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
+mod passkey_challenge;
+mod passkey_challenge_configuration;
+mod passkey_challenge_state;
+#[cfg(test)]
+mod passkey_challenge_tests;
 mod revoke_session;
 mod revoke_session_api;
 mod setup_api;
@@ -52,6 +57,13 @@ pub use current_session_api::{
     CurrentSessionApiError, CurrentSessionController, CurrentSessionError,
     current_session_api_router,
 };
+pub use passkey_challenge::{
+    PasskeyCeremonyStore, PasskeyCeremonyStoreError, PasskeyChallengeError, PasskeyChallengeService,
+};
+pub use passkey_challenge_configuration::{
+    PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
+};
+pub use passkey_challenge_state::{PasskeyCeremonyKey, PasskeyChallengeStateError};
 pub use revoke_session::{
     RevokeCurrentSessionError, RevokeCurrentSessionService, SessionRevocationAuthority,
     SessionRevocationAuthorityError, SessionRevocationCommit,

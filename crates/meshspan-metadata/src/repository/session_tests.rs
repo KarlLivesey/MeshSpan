@@ -332,7 +332,7 @@ fn create_passkey(
             credential: NewAuthenticationCredential::Passkey {
                 credential_id: vec![24; 32],
                 public_key_algorithm: -7,
-                public_key: vec![25; 77],
+                public_key: super::authentication_method_creation_tests::valid_es256_public_key(),
                 signature_counter: 0,
                 authenticator_guid: Some([26; 16]),
                 transports: 1,

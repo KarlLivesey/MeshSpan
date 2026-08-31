@@ -1089,17 +1089,20 @@ name = "meshspan-daemon"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chacha20poly1305",
  "getrandom 0.4.3",
  "meshspan-api-contract",
  "meshspan-contracts",
  "meshspan-domain",
  "meshspan-metadata",
+ "meshspan-passkey",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
  "tokio",
  "tower",
+ "zeroize",
 ]
 
 [[package]]

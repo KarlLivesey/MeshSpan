@@ -36,6 +36,13 @@ fn ceremony_is_restart_safe_single_attempt_and_exactly_replayable()
         database.create_authentication_ceremony(&ceremony)?,
         AuthenticationCeremonyDisposition::Replayed
     );
+    assert_eq!(
+        database
+            .authentication_ceremony_by_creation(creation_operation)?
+            .ok_or("ceremony missing by creation operation")?
+            .challenge_id,
+        challenge_id
+    );
     drop(database);
 
     let mut database = LocalDatabase::open(&file_path, node_id, UnixMicros::new(110))?;
