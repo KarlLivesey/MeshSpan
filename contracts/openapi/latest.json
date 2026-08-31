@@ -3416,6 +3416,175 @@
         "title": "ListUploadRangesResponse",
         "type": "object"
       },
+      "ListVolumesResponse": {
+        "additionalProperties": false,
+        "description": "One bounded current-user volume page.",
+        "properties": {
+          "next_page_url": {
+            "description": "Ready-to-follow relative URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/volumes",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "volumes": {
+            "description": "Stable ordered volumes visible under the caller's current permissions.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One logical volume visible through the caller's current committed authority.",
+              "properties": {
+                "created_at_epoch_micros": {
+                  "description": "Authoritative creation instant as epoch microseconds.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "effective_rights": {
+                  "description": "Complete ordered rights available at the volume root for this request.",
+                  "items": {
+                    "description": "Protocol-neutral namespace authority currently available to this caller.",
+                    "oneOf": [
+                      {
+                        "const": "traverse",
+                        "description": "Traverse ancestor directories.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "list",
+                        "description": "Enumerate directory entries.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "read_data",
+                        "description": "Read file bytes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "create_child",
+                        "description": "Create a child object.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "write_data",
+                        "description": "Replace or modify file bytes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "append_data",
+                        "description": "Append file bytes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "rename",
+                        "description": "Rename or move an object.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "delete",
+                        "description": "Delete an object or empty directory.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "read_attributes",
+                        "description": "Read object attributes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "write_attributes",
+                        "description": "Change object attributes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "read_permissions",
+                        "description": "Read owners and permission grants.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "change_permissions",
+                        "description": "Change permission grants.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "change_owner",
+                        "description": "Change the owner set.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "maxItems": 13,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "name": {
+                  "description": "Case-preserved user-facing name.",
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Last authoritative metadata revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "state": {
+                  "description": "Current authoritative lifecycle state.",
+                  "oneOf": [
+                    {
+                      "const": "registered",
+                      "description": "Recorded but not yet serving ordinary work.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "active",
+                      "description": "Serving authorised work.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "draining",
+                      "description": "Refusing new responsibility while existing work is moved away.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "retired",
+                      "description": "Permanently fenced from new work.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "volume_id": {
+                  "description": "Stable logical-volume identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "volume_id",
+                "name",
+                "state",
+                "effective_rights",
+                "created_at_epoch_micros",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          }
+        },
+        "required": [
+          "volumes",
+          "next_page_url"
+        ],
+        "title": "ListVolumesResponse",
+        "type": "object"
+      },
       "RemoveGroupMemberRequest": {
         "additionalProperties": false,
         "description": "Idempotent administrator request to remove one exact active direct membership.",
@@ -10251,6 +10420,168 @@
         "summary": "Revoke one authentication method owned by the current user",
         "x-meshspan-access": "authenticated-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/volumes": {
+      "get": {
+        "operationId": "listVolumes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListVolumesResponse"
+                }
+              }
+            },
+            "description": "One current-authority volume page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Namespace authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List one permission-filtered page of logical volumes",
+        "x-meshspan-access": "authenticated"
       }
     },
     "/volumes/{volume_id}/deletions": {

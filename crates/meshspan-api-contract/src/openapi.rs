@@ -19,11 +19,11 @@ use crate::{
     CreateTotpRegistrationResponse, CreateUserRequest, CurrentSessionResponse, DeleteObjectRequest,
     DeleteObjectResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
     ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
-    ListUploadRangesResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
-    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
-    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
-    SetupStatusResponse, StepUpCurrentSessionRequest, UploadStatusResponse,
-    WriteUploadRangeResponse, schema,
+    ListUploadRangesResponse, ListVolumesResponse, RemoveGroupMemberRequest,
+    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -137,6 +137,7 @@ fn components() -> Value {
         schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
         schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
+        schema_response::<ListVolumesResponse>("ListVolumesResponse"),
         schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
         schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
         schema_request::<RemoveGroupMemberRequest>("RemoveGroupMemberRequest"),
@@ -167,6 +168,7 @@ fn schema_response<T: schemars::JsonSchema>(name: &str) -> (String, Value) {
 fn paths() -> Value {
     Value::Object(Map::from_iter(administration_paths().into_iter().chain([
         ("/health".to_owned(), health_path()),
+        ("/volumes".to_owned(), list_volumes_path()),
         (
             "/volumes/{volume_id}/directory-entries".to_owned(),
             list_directory_path(),
@@ -274,6 +276,24 @@ fn list_authentication_methods_path() -> Value {
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
                 "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn list_volumes_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listVolumes",
+            "summary": "List one permission-filtered page of logical volumes",
+            "x-meshspan-access": "authenticated",
+            "parameters": [cursor_parameter(), limit_parameter()],
+            "responses": {
+                "200": json_response("One current-authority volume page", "#/components/schemas/ListVolumesResponse"),
+                "400": json_response("Invalid query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Namespace authority temporarily unavailable", "#/components/schemas/ApiError")
             }
         }
     })
