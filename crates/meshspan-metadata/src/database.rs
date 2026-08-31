@@ -248,8 +248,8 @@ mod tests {
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
         local_federation_storage_scrub_migration_digest, local_migration_digest,
-        local_setup_operation_migration_digest, migrate_local, migrate_local_through,
-        migrate_partition, migrate_partition_through,
+        local_setup_operation_migration_digest, local_totp_registration_ceremony_migration_digest,
+        migrate_local, migrate_local_through, migrate_partition, migrate_partition_through,
         partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
@@ -595,7 +595,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 9);
+        assert_eq!(database.schema_version(), 10);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -676,7 +676,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(database.check_integrity()?.schema_version, 9);
+        assert_eq!(database.check_integrity()?.schema_version, 10);
         Ok(())
     }
 
@@ -981,6 +981,14 @@ mod tests {
                 0x18, 0x3e, 0x9a, 0x32, 0x42, 0xd5, 0xd1, 0xef, 0xe4, 0xe1, 0x37, 0x4f, 0xa5, 0xef,
                 0x1f, 0x67, 0x0e, 0x01, 0xca, 0x80, 0xd7, 0x69, 0x9e, 0x8b, 0xb7, 0x8e, 0xb5, 0xfd,
                 0x42, 0x64, 0xf2, 0xf9,
+            ]
+        );
+        assert_eq!(
+            local_totp_registration_ceremony_migration_digest(),
+            [
+                0x58, 0xf9, 0xa8, 0x28, 0x1a, 0xd5, 0xeb, 0x99, 0x47, 0x1a, 0x7f, 0xad, 0x97, 0x57,
+                0x44, 0x7e, 0x1f, 0x08, 0x8b, 0xc8, 0x66, 0x8d, 0x4a, 0xdd, 0xd8, 0x63, 0xd2, 0x3a,
+                0xf4, 0x2d, 0x46, 0xa4,
             ]
         );
     }

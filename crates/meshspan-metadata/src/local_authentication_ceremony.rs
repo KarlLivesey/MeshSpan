@@ -24,6 +24,8 @@ pub enum AuthenticationCeremonyKind {
     AdditionalFactor,
     /// Registration of a new passkey after current authority is established.
     PasskeyRegistration,
+    /// Registration of a new TOTP seed after current authority is established.
+    TotpRegistration,
 }
 
 /// Authenticated ciphertext owned by the selected authentication adapter.
@@ -522,6 +524,7 @@ const fn kind_code(kind: AuthenticationCeremonyKind) -> i64 {
         AuthenticationCeremonyKind::PasskeyAuthentication => 1,
         AuthenticationCeremonyKind::AdditionalFactor => 2,
         AuthenticationCeremonyKind::PasskeyRegistration => 3,
+        AuthenticationCeremonyKind::TotpRegistration => 4,
     }
 }
 
@@ -530,6 +533,7 @@ const fn parse_kind(value: i64) -> Result<AuthenticationCeremonyKind, Authentica
         1 => Ok(AuthenticationCeremonyKind::PasskeyAuthentication),
         2 => Ok(AuthenticationCeremonyKind::AdditionalFactor),
         3 => Ok(AuthenticationCeremonyKind::PasskeyRegistration),
+        4 => Ok(AuthenticationCeremonyKind::TotpRegistration),
         _ => Err(AuthenticationCeremonyError::Invalid),
     }
 }
