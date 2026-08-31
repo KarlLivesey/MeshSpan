@@ -49,8 +49,8 @@ impl<'a> MetadataAccessAdministration<'a> {
     ///
     /// # Errors
     ///
-    /// Rejects unauthenticated, stale, unauthorised, substituted-cursor or corrupt requests before
-    /// disclosing owner records.
+    /// Rejects unauthenticated, unauthorised, substituted-cursor or corrupt requests before
+    /// disclosing owner records. Existing sessions are re-evaluated against current authority.
     pub fn object_owners(
         &self,
         context: FilesystemAccessContext,
@@ -105,8 +105,8 @@ impl<'a> MetadataAccessAdministration<'a> {
     ///
     /// # Errors
     ///
-    /// Rejects missing/stale sessions, inactive gateways, cross-user disclosure by ordinary users,
-    /// cursor substitution and corrupt state.
+    /// Rejects missing sessions, inactive gateways, cross-user disclosure by ordinary users,
+    /// cursor substitution and corrupt state. Existing sessions use current committed roles.
     pub fn permission_grants_for_subject(
         &self,
         context: FilesystemAccessContext,
@@ -132,8 +132,8 @@ impl<'a> MetadataAccessAdministration<'a> {
     ///
     /// # Errors
     ///
-    /// Rejects missing/stale sessions, inactive gateways, cross-user disclosure by ordinary users,
-    /// cursor substitution and corrupt state.
+    /// Rejects missing sessions, inactive gateways, cross-user disclosure by ordinary users,
+    /// cursor substitution and corrupt state. Existing sessions use current committed roles.
     pub fn access_activations(
         &self,
         context: FilesystemAccessContext,

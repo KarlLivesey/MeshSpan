@@ -10,6 +10,8 @@ mod file_read;
 mod file_read_validation;
 mod file_upload;
 mod file_upload_validation;
+mod identity_administration;
+mod identity_administration_validation;
 mod model;
 mod namespace_mutation;
 mod namespace_mutation_validation;
@@ -27,6 +29,8 @@ mod validation;
 
 #[cfg(test)]
 mod file_upload_tests;
+#[cfg(test)]
+mod identity_administration_tests;
 #[cfg(test)]
 mod namespace_mutation_tests;
 
@@ -64,6 +68,16 @@ pub use file_upload_validation::{
     encode_abort_upload_response, encode_begin_upload_response, encode_commit_upload_response,
     encode_list_upload_ranges_response, encode_upload_status_response,
     encode_write_upload_range_response, validate_list_upload_ranges_query,
+};
+pub use identity_administration::{
+    CreateGroupRequest, CreatePrincipalResponse, CreateUserRequest, ListPrincipalsQuery,
+    ListPrincipalsResponse, PrincipalCursor, PrincipalKind, PrincipalName, PrincipalState,
+    PrincipalSummary,
+};
+pub use identity_administration_validation::{
+    MAX_CREATE_PRINCIPAL_BYTES, decode_create_group_request, decode_create_user_request,
+    encode_create_principal_response, encode_list_principals_response,
+    validate_list_principals_query, validate_list_principals_query_value,
 };
 pub use model::{
     ApiError, ApiErrorCode, ApiErrorIssue, AssuranceLevel, CreateMeshSetupRequest,

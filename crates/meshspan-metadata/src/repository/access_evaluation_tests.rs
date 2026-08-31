@@ -366,10 +366,10 @@ fn sessions_are_fenced_by_identity_assurance_gateway_and_object()
         }),
     )?;
     access.object_id = fixture.file;
-    assert_eq!(
+    assert!(matches!(
         fixture.repository.evaluate_access(access)?,
-        AccessDecision::Denied(AccessDenial::StaleIdentity)
-    );
+        AccessDecision::Granted(_)
+    ));
     Ok(())
 }
 

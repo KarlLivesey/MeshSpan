@@ -47,8 +47,6 @@ pub struct AccessRequest {
 pub enum AccessDenial {
     /// No current committed authentication matches the supplied service and digest.
     AuthenticationUnavailable,
-    /// The authentication predates the current identity/ACL projection.
-    StaleIdentity,
     /// The session does not prove the operation's required assurance.
     InsufficientAssurance,
     /// The named gateway incarnation is not currently active.
@@ -168,9 +166,6 @@ pub(super) fn evaluate(
             AccessDenial::AuthenticationUnavailable,
         ));
     };
-    if authentication.identity_revision != revisions.identity {
-        return Ok(AccessDecision::Denied(AccessDenial::StaleIdentity));
-    }
     if !super::session::meets_assurance(
         database.connection(),
         authentication.factor_state,

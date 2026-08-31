@@ -2,7 +2,7 @@
 
 //! Typed point reads and index-aligned bounded pagination.
 
-use meshspan_domain::{GroupId, ObjectId, OwnerSetId, PrincipalId, Revision, VolumeId};
+use meshspan_domain::{GroupId, ObjectId, OwnerSetId, PrincipalId, Revision, UnixMicros, VolumeId};
 use rusqlite::{OptionalExtension, params};
 
 use super::RepositoryError;
@@ -57,8 +57,48 @@ pub struct PrincipalRecord {
     pub canonical_name: String,
     /// Whether the principal is active, suspended or retired.
     pub state: u8,
+    /// Original authoritative creation instant.
+    pub created_at: UnixMicros,
     /// Last authoritative record revision.
     pub revision: Revision,
+}
+
+/// Stable principal seek cursor bound to one principal family.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrincipalCursor {
+    kind: PrincipalKind,
+    canonical_name: String,
+    principal_id: PrincipalId,
+}
+
+impl PrincipalCursor {
+    /// Reconstructs a cursor after a public boundary has validated its fields.
+    #[must_use]
+    pub fn new(kind: PrincipalKind, canonical_name: String, principal_id: PrincipalId) -> Self {
+        Self {
+            kind,
+            canonical_name,
+            principal_id,
+        }
+    }
+
+    /// Returns the principal family to which this continuation is bound.
+    #[must_use]
+    pub const fn kind(&self) -> PrincipalKind {
+        self.kind
+    }
+
+    /// Returns the exact canonical seek name.
+    #[must_use]
+    pub fn canonical_name(&self) -> &str {
+        &self.canonical_name
+    }
+
+    /// Returns the exact seek identity.
+    #[must_use]
+    pub const fn principal_id(&self) -> PrincipalId {
+        self.principal_id
+    }
 }
 
 /// Stable namespace seek cursor, opaque to higher-level public APIs.
@@ -113,7 +153,7 @@ pub(super) fn principal(
     database
         .connection()
         .query_row(
-            "SELECT principal_kind, display_name, canonical_name, state, revision
+            "SELECT principal_kind, display_name, canonical_name, state, created_at, revision
              FROM principals WHERE principal_id = ?1",
             [identifier.as_slice()],
             |row| {
@@ -123,6 +163,7 @@ pub(super) fn principal(
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             },
         )
@@ -134,10 +175,65 @@ pub(super) fn principal(
                 display_name: row.1,
                 canonical_name: row.2,
                 state: u8::try_from(row.3).map_err(|_| RepositoryError::CorruptState)?,
-                revision: Revision::new(parse_u64(row.4)?),
+                created_at: UnixMicros::new(row.4),
+                revision: Revision::new(parse_u64(row.5)?),
             })
         })
         .transpose()
+}
+
+pub(super) fn principals(
+    database: &PartitionDatabase,
+    kind: PrincipalKind,
+    after: Option<&PrincipalCursor>,
+    limit: PageLimit,
+) -> Result<Page<PrincipalRecord, PrincipalCursor>, RepositoryError> {
+    if after.is_some_and(|cursor| cursor.kind != kind) {
+        return Err(RepositoryError::StaleRevision);
+    }
+    let kind_code = principal_kind_code(kind);
+    let after_name = after.map_or("", |cursor| cursor.canonical_name.as_str());
+    let after_id = after.map_or([0; 16], |cursor| cursor.principal_id.as_bytes());
+    let row_limit = sql_limit(limit)?;
+    let mut statement = database.connection().prepare(
+        "SELECT principal_id, display_name, canonical_name, state, created_at, revision
+         FROM principals INDEXED BY principals_by_kind_and_name
+         WHERE principal_kind = ?1
+           AND (canonical_name, principal_id) > (?2, ?3)
+         ORDER BY canonical_name, principal_id LIMIT ?4",
+    )?;
+    let rows = statement.query_map(
+        params![kind_code, after_name, after_id.as_slice(), row_limit],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        },
+    )?;
+    let mut items = Vec::with_capacity(limit.get().saturating_add(1));
+    for row in rows {
+        let row = row?;
+        items.push(PrincipalRecord {
+            principal_id: parse_principal(&row.0)?,
+            kind,
+            display_name: row.1,
+            canonical_name: row.2,
+            state: u8::try_from(row.3).map_err(|_| RepositoryError::CorruptState)?,
+            created_at: UnixMicros::new(row.4),
+            revision: Revision::new(parse_u64(row.5)?),
+        });
+    }
+    let next = (items.len() > limit.get()).then(|| {
+        let last = &items[limit.get() - 1];
+        PrincipalCursor::new(kind, last.canonical_name.clone(), last.principal_id)
+    });
+    items.truncate(limit.get());
+    Ok(Page { items, next })
 }
 
 pub(super) fn namespace_children(
@@ -251,6 +347,14 @@ fn parse_principal_kind(value: i64) -> Result<PrincipalKind, RepositoryError> {
         2 => Ok(PrincipalKind::Group),
         3 => Ok(PrincipalKind::Service),
         _ => Err(RepositoryError::CorruptState),
+    }
+}
+
+const fn principal_kind_code(kind: PrincipalKind) -> i64 {
+    match kind {
+        PrincipalKind::User => 1,
+        PrincipalKind::Group => 2,
+        PrincipalKind::Service => 3,
     }
 }
 

@@ -83,6 +83,7 @@ pub(in crate::repository) fn change_principal_state(
         transaction,
         context,
         command.principal_id,
+        stored.kind,
         stored.state,
         resulting_state,
         revision,
@@ -259,6 +260,7 @@ fn update_principal(
     transaction: &Transaction<'_>,
     context: CommandContext,
     principal_id: PrincipalId,
+    principal_kind: u8,
     prior_state: u8,
     resulting_state: u8,
     revision: Revision,
@@ -277,11 +279,22 @@ fn update_principal(
             context.occurred_at.get(),
         ],
     )?;
-    if updated == 1 {
-        Ok(())
-    } else {
-        Err(RepositoryError::InvalidCommand)
+    if updated != 1 {
+        return Err(RepositoryError::InvalidCommand);
     }
+    if principal_kind == PRINCIPAL_USER && resulting_state != ACTIVE_STATE {
+        transaction.execute(
+            "UPDATE authentication_sessions
+             SET revoked_at = ?1, revision = ?2
+             WHERE user_principal_id = ?3 AND revoked_at IS NULL",
+            params![
+                context.occurred_at.get(),
+                to_i64(revision.get())?,
+                principal.as_slice(),
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn insert_event(

@@ -26,7 +26,7 @@ pub(super) fn load_authentication(
     current_identity_revision: Revision,
 ) -> Result<Option<AuthenticatedPrincipal>, RepositoryError> {
     match request.authentication_service {
-        AuthenticationService::Https => load_session(database, request),
+        AuthenticationService::Https => load_session(database, request, current_identity_revision),
         AuthenticationService::HeadlessApi => {
             load_direct_api_key(database, request, current_identity_revision)
         }
@@ -37,6 +37,7 @@ pub(super) fn load_authentication(
 fn load_session(
     database: &PartitionDatabase,
     request: AccessRequest,
+    current_identity_revision: Revision,
 ) -> Result<Option<AuthenticatedPrincipal>, RepositoryError> {
     let row = database
         .connection()
@@ -77,11 +78,12 @@ fn load_session(
     if factors.service != request.authentication_service {
         return Ok(None);
     }
+    parse_revision(value.3)?;
     Ok(Some(AuthenticatedPrincipal {
         authentication: AccessAuthentication::Session(session_id),
         principal_id: parse_principal(&value.1)?,
         factor_state: factors,
-        identity_revision: parse_revision(value.3)?,
+        identity_revision: current_identity_revision,
         expires_at: UnixMicros::new(value.4),
     }))
 }

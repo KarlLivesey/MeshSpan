@@ -155,8 +155,8 @@ pub use passkey_registration::{
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
 };
 pub use query::{
-    GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
-    PrincipalRecord,
+    GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalCursor,
+    PrincipalKind, PrincipalRecord,
 };
 pub use reachability::{
     RetainedNamespaceRoot, RetainedNamespaceRootCursor, RetainedNamespaceRootPage,
@@ -946,6 +946,33 @@ impl AuthoritativeRepository {
         principal_id: meshspan_domain::PrincipalId,
     ) -> Result<Option<PrincipalRecord>, RepositoryError> {
         query::principal(&self.database, principal_id)
+    }
+
+    /// Reports whether one active principal currently carries direct system-management authority.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed role projections or database failure.
+    pub fn principal_is_system_manager(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<bool, RepositoryError> {
+        session_access::is_system_manager(&self.database, principal_id, now)
+    }
+
+    /// Returns one stable, bounded page of principals in a selected family.
+    ///
+    /// # Errors
+    ///
+    /// Rejects cursor-family substitution, malformed stored values and database failures.
+    pub fn principals(
+        &self,
+        kind: PrincipalKind,
+        after: Option<&PrincipalCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<PrincipalRecord, PrincipalCursor>, RepositoryError> {
+        query::principals(&self.database, kind, after, limit)
     }
 
     /// Returns one stable, bounded page of active namespace children.

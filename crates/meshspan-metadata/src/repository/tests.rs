@@ -21,8 +21,9 @@ use tempfile::tempdir;
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
     ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, PageLimit, PreservedVote,
-    PrincipalKind, RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
-    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
+    PrincipalCursor, PrincipalKind, RepositoryConformanceReport, RepositoryConformanceVector,
+    RepositoryError, restore_partition_backup, restore_partition_snapshot,
+    run_repository_conformance,
 };
 use crate::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
@@ -629,7 +630,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 17);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        49
+        50
     );
     Ok(())
 }
@@ -2380,6 +2381,77 @@ fn sqlite_passes_the_reusable_metadata_kernel_conformance_vector()
             failures: Vec::new(),
         }
     );
+    Ok(())
+}
+
+#[test]
+fn principal_administration_pages_are_ordered_bounded_and_kind_bound()
+-> Result<(), Box<dyn std::error::Error>> {
+    let ids = fixture_ids()?;
+    let database =
+        PartitionDatabase::open(Path::new(":memory:"), ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    apply(
+        &mut repository,
+        1,
+        context(176, ids.administrator, 177, 100, Some(0))?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([178; 16])?,
+            mesh_name: RecordName::new("Principal paging")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Zulu administrator")?,
+            administrator_role_id: RoleId::from_bytes([179; 16])?,
+            host_id: HostId::from_bytes([180; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: NodeId::from_bytes([181; 16])?,
+            node_name: RecordName::new("Node")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
+    for (index, operation, audit, principal_id, name) in [
+        (2, 182, 183, ids.user, "Bravo user"),
+        (3, 184, 185, ids.second_user, "Alpha user"),
+    ] {
+        apply(
+            &mut repository,
+            index,
+            context(
+                operation,
+                ids.administrator,
+                audit,
+                100 + i64::try_from(index)?,
+                Some(index - 1),
+            )?,
+            &AuthoritativeCommand::CreateUser(CreateUser {
+                principal_id,
+                name: RecordName::new(name)?,
+            }),
+        )?;
+    }
+    let first = repository.principals(PrincipalKind::User, None, PageLimit::new(2)?)?;
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|record| record.display_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Alpha user", "Bravo user"]
+    );
+    let cursor = first.next.ok_or("expected another user page")?;
+    let second = repository.principals(PrincipalKind::User, Some(&cursor), PageLimit::new(2)?)?;
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].display_name, "Zulu administrator");
+    assert!(second.next.is_none());
+
+    let substituted = PrincipalCursor::new(
+        PrincipalKind::Group,
+        cursor.canonical_name().to_owned(),
+        cursor.principal_id(),
+    );
+    assert!(matches!(
+        repository.principals(PrincipalKind::User, Some(&substituted), PageLimit::new(2)?,),
+        Err(RepositoryError::StaleRevision)
+    ));
     Ok(())
 }
 
