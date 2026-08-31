@@ -83,6 +83,194 @@ pub struct PasskeySessionReplay {
     pub credential_id: Vec<u8>,
 }
 
+/// Exact durable facts for one session operation independently of its factor combination.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticationSessionReplay {
+    /// Digest of the original authoritative result receipt.
+    pub result_digest: [u8; 32],
+    /// Stable session identity bound to the operation.
+    pub session_id: SessionId,
+    /// User which authenticated the original operation.
+    pub principal_id: PrincipalId,
+    /// Stored bearer verifier.
+    pub token_digest: [u8; 32],
+    /// Stored CSRF verifier.
+    pub csrf_digest: [u8; 32],
+    /// Exact missing, null or value label intent.
+    pub client_label: SessionClientLabel,
+    /// Exact cookie-persistence intent.
+    pub persistent_cookie: bool,
+    /// Connector family bound to the session.
+    pub service: AuthenticationService,
+    /// Assurance derived from the committed factor combination.
+    pub assurance: AssuranceLevel,
+    /// Original exclusive expiry returned to the caller.
+    pub expires_at: UnixMicros,
+    /// Explicit revocation instant, when the original session has since been fenced.
+    pub revoked_at: Option<UnixMicros>,
+    /// Ordered exact factor evidence retained by the committed session.
+    pub factors: Vec<AuthenticationSessionReplayFactor>,
+}
+
+/// One exact factor retained by a committed session operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticationSessionReplayFactor {
+    /// Common authentication-method identity.
+    pub method_id: AuthenticationMethodId,
+    /// Exact credential family.
+    pub kind: AuthenticationMethodKind,
+    /// Credential generation consumed by the operation.
+    pub credential_generation: u64,
+    /// Method revision consumed by the operation.
+    pub method_revision: Revision,
+    /// Family-specific public replay evidence.
+    pub credential: AuthenticationSessionReplayCredential,
+}
+
+/// Family-specific non-secret evidence needed to validate an exact session retry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AuthenticationSessionReplayCredential {
+    /// Opaque passkey credential identity.
+    Passkey(Vec<u8>),
+    /// Exact TOTP step atomically consumed by the session.
+    Totp {
+        /// Monotonic RFC 6238 counter accepted by authority.
+        accepted_step: u64,
+    },
+    /// Exact single-use recovery-code identity.
+    RecoveryCode(meshspan_domain::RecoveryCodeId),
+    /// Exact public API-key identity.
+    ApiKey(ApiKeyId),
+}
+
+/// Resolves one already-committed session with every ordered factor.
+pub(super) fn resolve_session_replay(
+    database: &crate::PartitionDatabase,
+    operation_id: OperationId,
+) -> Result<Option<AuthenticationSessionReplay>, RepositoryError> {
+    let Some(receipt) = super::receipt::resolve_operation(database, operation_id)? else {
+        return Ok(None);
+    };
+    if receipt.entity.kind != EntityKind::AuthenticationSession {
+        return Err(RepositoryError::OperationConflict);
+    }
+    let session_id = receipt.entity.id;
+    let common = database.connection().query_row(
+        "SELECT user_principal_id, token_digest, csrf_digest, client_label_state,
+                client_label, persistent_cookie, service, assurance, issued_at,
+                expires_at, revoked_at
+         FROM authentication_sessions WHERE session_id = ?1",
+        [session_id.as_slice()],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+            ))
+        },
+    )?;
+    let mut statement = database.connection().prepare(
+        "SELECT factor_sequence, method_id, method_kind, credential_generation,
+                method_revision, credential_reference, authenticated_at
+         FROM authentication_session_factors
+         WHERE session_id = ?1 ORDER BY factor_sequence LIMIT ?2",
+    )?;
+    let rows = statement.query_map(
+        params![
+            session_id.as_slice(),
+            i64::try_from(MAXIMUM_FACTORS + 1).map_err(|_| RepositoryError::CapacityExceeded)?
+        ],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        },
+    )?;
+    let mut factors = Vec::new();
+    for row in rows {
+        let (sequence, method, kind, generation, revision, reference, authenticated_at) = row?;
+        if sequence
+            != i64::try_from(factors.len() + 1).map_err(|_| RepositoryError::CapacityExceeded)?
+            || authenticated_at != common.8
+            || factors.len() >= MAXIMUM_FACTORS
+        {
+            return Err(RepositoryError::CorruptState);
+        }
+        factors.push(parse_replay_factor(
+            method, kind, generation, revision, reference,
+        )?);
+    }
+    if factors.is_empty() || common.9 <= common.8 {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(Some(AuthenticationSessionReplay {
+        result_digest: receipt.result_digest,
+        session_id: SessionId::from_bytes(session_id).map_err(|_| RepositoryError::CorruptState)?,
+        principal_id: PrincipalId::from_bytes(fixed_bytes(common.0)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        token_digest: fixed_bytes(common.1)?,
+        csrf_digest: fixed_bytes(common.2)?,
+        client_label: parse_client_label(common.3, common.4)?,
+        persistent_cookie: parse_boolean(common.5)?,
+        service: parse_service(common.6)?,
+        assurance: parse_assurance(common.7)?,
+        expires_at: UnixMicros::new(common.9),
+        revoked_at: common.10.map(UnixMicros::new),
+        factors,
+    }))
+}
+
+fn parse_replay_factor(
+    method: Vec<u8>,
+    kind: i64,
+    generation: i64,
+    revision: i64,
+    reference: Vec<u8>,
+) -> Result<AuthenticationSessionReplayFactor, RepositoryError> {
+    let kind = parse_method_kind(kind)?;
+    let credential = match kind {
+        AuthenticationMethodKind::Passkey if !reference.is_empty() && reference.len() <= 1_024 => {
+            AuthenticationSessionReplayCredential::Passkey(reference)
+        }
+        AuthenticationMethodKind::Totp => AuthenticationSessionReplayCredential::Totp {
+            accepted_step: u64::from_be_bytes(fixed_bytes(reference)?),
+        },
+        AuthenticationMethodKind::RecoveryCode => {
+            AuthenticationSessionReplayCredential::RecoveryCode(
+                meshspan_domain::RecoveryCodeId::from_bytes(fixed_bytes(reference)?)
+                    .map_err(|_| RepositoryError::CorruptState)?,
+            )
+        }
+        AuthenticationMethodKind::ApiKey => AuthenticationSessionReplayCredential::ApiKey(
+            ApiKeyId::from_bytes(fixed_bytes(reference)?)
+                .map_err(|_| RepositoryError::CorruptState)?,
+        ),
+        AuthenticationMethodKind::Passkey => return Err(RepositoryError::CorruptState),
+    };
+    Ok(AuthenticationSessionReplayFactor {
+        method_id: AuthenticationMethodId::from_bytes(fixed_bytes(method)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        kind,
+        credential_generation: parse_positive(generation)?,
+        method_revision: Revision::new(parse_positive(revision)?),
+        credential,
+    })
+}
+
 /// Exact durable result of a self-service session revocation retry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SessionRevocationReplay {
@@ -997,7 +1185,9 @@ const fn factor_kind(factor: &SessionAuthenticationFactor) -> AuthenticationMeth
 fn credential_reference(factor: &SessionAuthenticationFactor) -> Vec<u8> {
     match factor {
         SessionAuthenticationFactor::Passkey { credential_id, .. } => credential_id.clone(),
-        SessionAuthenticationFactor::Totp { method_id, .. } => method_id.as_bytes().to_vec(),
+        SessionAuthenticationFactor::Totp { accepted_step, .. } => {
+            accepted_step.to_be_bytes().to_vec()
+        }
         SessionAuthenticationFactor::RecoveryCode { code_id, .. } => code_id.as_bytes().to_vec(),
         SessionAuthenticationFactor::ApiKey { key_id, .. } => key_id.as_bytes().to_vec(),
     }
@@ -1149,8 +1339,7 @@ fn validate_factor_shape(
             .method_expires_at
             .is_some_and(|expiry| expiry <= factor.method_created_at)
         || current_generation < expected_generation
-        || factor.credential_reference.is_empty()
-        || factor.credential_reference.len() > 1_024
+        || !valid_credential_reference(kind, &factor.credential_reference)
     {
         return Err(RepositoryError::CorruptState);
     }
@@ -1206,7 +1395,6 @@ fn validate_current_credential(
                 SELECT 1 FROM authentication_session_factors AS factor
                 JOIN totp_credentials AS credential USING(method_id)
                 WHERE factor.session_id = ?1 AND factor.factor_sequence = ?2
-                  AND factor.credential_reference = factor.method_id
              )",
             params![session_id, factor.sequence],
             |row| row.get(0),
@@ -1260,6 +1448,16 @@ fn validate_current_credential(
     }
 }
 
+fn valid_credential_reference(kind: AuthenticationMethodKind, reference: &[u8]) -> bool {
+    match kind {
+        AuthenticationMethodKind::Passkey => !reference.is_empty() && reference.len() <= 1_024,
+        AuthenticationMethodKind::Totp => reference.len() == 8,
+        AuthenticationMethodKind::RecoveryCode | AuthenticationMethodKind::ApiKey => {
+            reference.len() == 16
+        }
+    }
+}
+
 /// Applies current service/operation policy to exact session evidence.
 pub(super) fn meets_assurance(
     connection: &Connection,
@@ -1287,6 +1485,15 @@ fn parse_service(value: i64) -> Result<AuthenticationService, RepositoryError> {
         1 => Ok(AuthenticationService::Https),
         2 => Ok(AuthenticationService::HeadlessApi),
         4 => Ok(AuthenticationService::Smb),
+        _ => Err(RepositoryError::CorruptState),
+    }
+}
+
+fn parse_assurance(value: i64) -> Result<AssuranceLevel, RepositoryError> {
+    match value {
+        1 => Ok(AssuranceLevel::SingleFactor),
+        2 => Ok(AssuranceLevel::MultiFactor),
+        3 => Ok(AssuranceLevel::RecentStepUp),
         _ => Err(RepositoryError::CorruptState),
     }
 }

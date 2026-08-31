@@ -16,6 +16,7 @@ const ACTIVE: i64 = 1;
 const REVOKED: i64 = 3;
 const MAXIMUM_REASON_CHARACTERS: usize = 1_024;
 const MAXIMUM_SERVICE_SCOPE: u8 = 7;
+const MAXIMUM_TOTP_METHODS_PER_USER: usize = 64;
 
 /// Validated active API-key authority without its secret or verifier digest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +75,171 @@ pub struct PasskeyVerificationMaterial {
     pub backup_eligible: bool,
     /// Last committed backup-state observation.
     pub backup_state: bool,
+}
+
+/// Current encrypted verification material for one active TOTP method.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TotpVerificationMaterial {
+    /// User account to which the method is authoritatively bound.
+    pub principal_id: PrincipalId,
+    /// Common authentication-method identity.
+    pub method_id: AuthenticationMethodId,
+    /// Credential generation used to fence older ceremonies and sessions.
+    pub credential_generation: u64,
+    /// Authoritative method revision included in the verification decision.
+    pub revision: Revision,
+    /// Authenticated-encryption envelope; never plaintext seed material.
+    pub secret_ciphertext: Vec<u8>,
+    /// Persisted algorithm code: SHA-1 1, SHA-256 2 or SHA-512 3.
+    pub algorithm: u8,
+    /// Decimal code width.
+    pub digits: u8,
+    /// Timestep in seconds.
+    pub period_seconds: u16,
+    /// Number of adjacent time steps accepted by policy.
+    pub accepted_step_window: u8,
+}
+
+/// Resolves every bounded active TOTP method for one already-authenticated user.
+pub(super) fn totp_verification_materials(
+    connection: &rusqlite::Connection,
+    principal_id: PrincipalId,
+    service: AuthenticationService,
+    now: UnixMicros,
+) -> Result<Vec<TotpVerificationMaterial>, RepositoryError> {
+    let mut statement = connection.prepare(
+        "SELECT method.method_id, method.user_principal_id, method.method_kind,
+                method.service_scope, method.state, method.created_at, method.expires_at,
+                method.credential_generation, method.revision, credential.secret_ciphertext,
+                credential.algorithm, credential.digits, credential.period_seconds,
+                credential.accepted_step_window, credential.revision, principal.state
+         FROM authentication_methods AS method INDEXED BY authentication_methods_by_user
+         JOIN totp_credentials AS credential USING(method_id)
+         JOIN principals AS principal ON principal.principal_id = method.user_principal_id
+         WHERE method.user_principal_id = ?1 AND method.method_kind = ?2
+         ORDER BY method.user_principal_id, method.state, method.method_kind, method.method_id
+         LIMIT ?3",
+    )?;
+    let rows = statement.query_map(
+        params![
+            principal_id.as_bytes().as_slice(),
+            AuthenticationMethodKind::Totp as u8,
+            i64::try_from(MAXIMUM_TOTP_METHODS_PER_USER + 1)
+                .map_err(|_| RepositoryError::CapacityExceeded)?,
+        ],
+        |row| {
+            Ok(StoredTotp {
+                method_id: row.get(0)?,
+                principal_id: row.get(1)?,
+                method_kind: row.get(2)?,
+                service_scope: row.get(3)?,
+                method_state: row.get(4)?,
+                created_at: row.get(5)?,
+                expires_at: row.get(6)?,
+                credential_generation: row.get(7)?,
+                method_revision: row.get(8)?,
+                secret_ciphertext: row.get(9)?,
+                algorithm: row.get(10)?,
+                digits: row.get(11)?,
+                period_seconds: row.get(12)?,
+                accepted_step_window: row.get(13)?,
+                credential_revision: row.get(14)?,
+                principal_state: row.get(15)?,
+            })
+        },
+    )?;
+    let mut materials = Vec::new();
+    for row in rows {
+        if let Some(material) = validate_totp_material(row?, principal_id, service, now)? {
+            materials.push(material);
+        }
+        if materials.len() > MAXIMUM_TOTP_METHODS_PER_USER {
+            return Err(RepositoryError::CapacityExceeded);
+        }
+    }
+    Ok(materials)
+}
+
+struct StoredTotp {
+    method_id: Vec<u8>,
+    principal_id: Vec<u8>,
+    method_kind: i64,
+    service_scope: i64,
+    method_state: i64,
+    created_at: i64,
+    expires_at: Option<i64>,
+    credential_generation: i64,
+    method_revision: i64,
+    secret_ciphertext: Vec<u8>,
+    algorithm: i64,
+    digits: i64,
+    period_seconds: i64,
+    accepted_step_window: i64,
+    credential_revision: i64,
+    principal_state: i64,
+}
+
+fn validate_totp_material(
+    stored: StoredTotp,
+    expected_principal: PrincipalId,
+    service: AuthenticationService,
+    now: UnixMicros,
+) -> Result<Option<TotpVerificationMaterial>, RepositoryError> {
+    let principal_id = PrincipalId::from_bytes(fixed(stored.principal_id)?)
+        .map_err(|_| RepositoryError::CorruptState)?;
+    let service_scope = u8::try_from(stored.service_scope)
+        .ok()
+        .filter(|scope| (1..=MAXIMUM_SERVICE_SCOPE).contains(scope))
+        .ok_or(RepositoryError::CorruptState)?;
+    let credential_generation = positive_u64(stored.credential_generation)?;
+    let method_revision = positive_u64(stored.method_revision)?;
+    positive_u64(stored.credential_revision)?;
+    let algorithm = u8::try_from(stored.algorithm)
+        .ok()
+        .filter(|value| (1..=3).contains(value))
+        .ok_or(RepositoryError::CorruptState)?;
+    let digits = u8::try_from(stored.digits)
+        .ok()
+        .filter(|value| (6..=8).contains(value))
+        .ok_or(RepositoryError::CorruptState)?;
+    let period_seconds = u16::try_from(stored.period_seconds)
+        .ok()
+        .filter(|value| (15..=300).contains(value))
+        .ok_or(RepositoryError::CorruptState)?;
+    let accepted_step_window = u8::try_from(stored.accepted_step_window)
+        .ok()
+        .filter(|value| *value <= 10)
+        .ok_or(RepositoryError::CorruptState)?;
+    if principal_id != expected_principal
+        || stored.method_kind != AuthenticationMethodKind::Totp as i64
+        || !(1..=3).contains(&stored.method_state)
+        || !(1..=3).contains(&stored.principal_state)
+        || !(32..=4_096).contains(&stored.secret_ciphertext.len())
+        || stored
+            .expires_at
+            .is_some_and(|end| end <= stored.created_at)
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    if stored.method_state != ACTIVE
+        || stored.principal_state != ACTIVE
+        || service_scope & service.scope_bit() == 0
+        || stored.expires_at.is_some_and(|end| now.get() >= end)
+    {
+        return Ok(None);
+    }
+    Ok(Some(TotpVerificationMaterial {
+        principal_id,
+        method_id: AuthenticationMethodId::from_bytes(fixed(stored.method_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        credential_generation,
+        revision: Revision::new(method_revision),
+        secret_ciphertext: stored.secret_ciphertext,
+        algorithm,
+        digits,
+        period_seconds,
+        accepted_step_window,
+    }))
 }
 
 /// Resolves one passkey credential through its unique identity and current authority bounds.

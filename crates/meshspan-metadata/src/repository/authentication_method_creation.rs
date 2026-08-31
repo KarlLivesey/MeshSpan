@@ -323,7 +323,7 @@ fn validate(
             ..
         } => {
             if !(32..=4_096).contains(&secret_ciphertext.len())
-                || !(6..=10).contains(digits)
+                || !(6..=8).contains(digits)
                 || !(15..=300).contains(period_seconds)
                 || *accepted_step_window > 10
                 || command.service_scope & SMB_SERVICE != 0

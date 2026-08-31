@@ -11,9 +11,9 @@ use tempfile::tempdir;
 use super::authentication_method_tests::{bootstrap, context, position};
 use super::{AuthoritativeRepository, RepositoryError};
 use crate::{
-    AuthoritativeCommand, ConfigureAuthenticationPolicy, CreateAuthenticationMethod,
-    IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode, PartitionDatabase,
-    SessionAuthenticationFactor,
+    AuthenticationSessionReplayCredential, AuthoritativeCommand, ConfigureAuthenticationPolicy,
+    CreateAuthenticationMethod, IssueAuthenticationSession, NewAuthenticationCredential,
+    NewRecoveryCode, PartitionDatabase, SessionAuthenticationFactor,
 };
 
 #[test]
@@ -213,6 +213,20 @@ fn session_consumes_exact_typed_factors_and_rolls_back_a_replay()
         context(41, administrator, 42, 120, Some(Revision::new(3)))?,
         &session,
     )?;
+
+    let retained = repository
+        .resolve_authentication_session(meshspan_domain::OperationId::from_bytes([41; 16])?)?
+        .ok_or("multi-factor replay missing")?;
+    assert_eq!(retained.assurance, AssuranceLevel::MultiFactor);
+    assert_eq!(retained.factors.len(), 2);
+    assert!(matches!(
+        retained.factors[0].credential,
+        AuthenticationSessionReplayCredential::Passkey(_)
+    ));
+    assert_eq!(
+        retained.factors[1].credential,
+        AuthenticationSessionReplayCredential::RecoveryCode(recovery_code)
+    );
 
     let database = &repository.database;
     assert_session_delivery(database)?;

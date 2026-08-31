@@ -2,7 +2,8 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuthenticationMethodId, PartitionId, PrincipalId, RecoveryCodeId, Revision, UnixMicros,
+    AuthenticationMethodId, AuthenticationService, PartitionId, PrincipalId, RecoveryCodeId,
+    Revision, UnixMicros,
 };
 use tempfile::tempdir;
 
@@ -61,6 +62,27 @@ fn passkey_totp_and_recovery_methods_commit_exact_typed_rows()
         assert_eq!(receipt.entity.kind, EntityKind::AuthenticationMethod);
         assert_eq!(receipt.entity.id, method_id.as_bytes());
     }
+    let materials = repository.totp_verification_materials(
+        administrator,
+        AuthenticationService::Https,
+        UnixMicros::new(100),
+    )?;
+    assert_eq!(materials.len(), 1);
+    assert_eq!(
+        materials[0].method_id,
+        AuthenticationMethodId::from_bytes([55; 16])?
+    );
+    assert_eq!(materials[0].secret_ciphertext, vec![13; 64]);
+    assert_eq!(materials[0].algorithm, 2);
+    assert!(
+        repository
+            .totp_verification_materials(
+                administrator,
+                AuthenticationService::Https,
+                UnixMicros::new(200),
+            )?
+            .is_empty()
+    );
     let database = repository.into_database();
     let passkey_algorithm: i64 = database.connection().query_row(
         "SELECT public_key_algorithm FROM webauthn_credentials",

@@ -106,6 +106,7 @@ pub use access_query::{
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
+    TotpVerificationMaterial,
 };
 pub use authentication_policy::AuthenticationPolicy;
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
@@ -161,7 +162,10 @@ pub use reachability::{
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use retention::VersionRetentionPolicy;
-pub use session::{ApiKeySessionReplay, PasskeySessionReplay, SessionRevocationReplay};
+pub use session::{
+    ApiKeySessionReplay, AuthenticationSessionReplay, AuthenticationSessionReplayCredential,
+    AuthenticationSessionReplayFactor, PasskeySessionReplay, SessionRevocationReplay,
+};
 pub use session_access::{
     BrowserSessionAccessRequest, BrowserSessionProtection, SessionAccessCapability,
     SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
@@ -539,6 +543,18 @@ impl AuthoritativeRepository {
         session::resolve_passkey_replay(&self.database, operation_id)
     }
 
+    /// Resolves one exact committed session with its complete ordered factor evidence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects operations for another entity and fails closed for malformed retained evidence.
+    pub fn resolve_authentication_session(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<AuthenticationSessionReplay>, RepositoryError> {
+        session::resolve_session_replay(&self.database, operation_id)
+    }
+
     /// Resolves an exact durable self-service session revocation retry.
     ///
     /// # Errors
@@ -677,6 +693,28 @@ impl AuthoritativeRepository {
         authentication_method::passkey_verification_material(
             self.database.connection(),
             credential_id,
+            service,
+            now,
+        )
+    }
+
+    /// Resolves every bounded active TOTP verifier for one already-authenticated user.
+    ///
+    /// The returned seeds remain encrypted. Absence and ordinary inactive, expired or
+    /// service-policy rejection produce an empty list.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when matching persisted evidence is malformed or exceeds its hard bound.
+    pub fn totp_verification_materials(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        service: AuthenticationService,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Vec<TotpVerificationMaterial>, RepositoryError> {
+        authentication_method::totp_verification_materials(
+            self.database.connection(),
+            principal_id,
             service,
             now,
         )
