@@ -44,12 +44,16 @@ source/advisory policy automation arrive before a release artefact is built.
 
 | Rust dependency                    | Resolved version | Declared licence           |
 | ---------------------------------- | ---------------: | -------------------------- |
+| `aes`                              |            0.9.3 | `MIT OR Apache-2.0`        |
+| `aes-gcm`                          |           0.11.1 | `Apache-2.0 OR MIT`        |
 | `axum`                             |            0.8.9 | `MIT`                      |
+| `chacha20`                         |           0.10.2 | `MIT OR Apache-2.0`        |
 | `jsonschema`                       |           0.52.0 | `MIT`                      |
 | `hmac`                             |           0.13.0 | `MIT OR Apache-2.0`        |
 | `meshspan-otp` (workspace)         |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-protobuf` (workspace)    |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-passkey` (workspace)     |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-rustls-provider` (workspace) |        0.1.0 | `GPL-2.0-only`             |
 | `sync_wrapper` (workspace)         |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                             |           0.14.0 | `Apache-2.0 OR MIT`        |
 | `rusqlite`                         |           0.40.2 | `MIT`                      |
@@ -78,12 +82,22 @@ Apache-2.0-only, so it cannot ship in a `GPL-2.0-only` combined artefact. Cargo 
 transitive package name to MeshSpan's allocation-free implementation; its unsafe surface is limited
 to the documented pinned projection and `Sync` proof and is exercised by the normal local gate.
 
-The current Rustls/Quinn graph still resolves `ring`, whose declared licence is
+The workspace `meshspan-rustls-provider` package is the narrow, independently extractable
+`GPL-2.0-only` Rustls provider boundary. It uses the current stable RustCrypto AES, AES-GCM,
+ChaCha20, ChaCha20-Poly1305, P-256, HMAC and SHA-2 releases under their MIT options. Its initial
+profile is TLS 1.3 only, with P-256 ECDHE and ECDSA identities plus AES-128-GCM and
+ChaCha20-Poly1305 traffic protection. RFC 9001 AES and ChaCha packet/header vectors, tamper
+rejection and a real mutually authenticated Rustls handshake are executable tests. Broader
+algorithm support is not implied and requires equivalent standards and interoperability proof.
+
+The current application Rustls/Quinn graph still resolves `ring`, whose declared licence is
 `Apache-2.0 AND ISC`. No MeshSpan release artefact may ship while that conjunctive Apache-2.0
 dependency remains. Downgrading is forbidden, and AWS-LC is not a licence solution because its
 current sys crate also includes an Apache-2.0-only conjunct. The replacement must be a maintained,
 portable Rustls/QUIC cryptography provider with complete hostile, standards and interoperability
 proof; experimental providers which explicitly disclaim production readiness are not admissible.
+The provider primitive is now present without `ring`; the remaining blocker is the current-stable
+Quinn adapter/endpoint boundary and removal of `ring`-backed certificate generation from tests.
 
 | Web/runtime dependency  | Version | Declared licence |
 | ----------------------- | ------: | ---------------- |

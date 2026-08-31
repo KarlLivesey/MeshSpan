@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-rustls-provider"
+description = "Narrow RustCrypto-backed Rustls provider for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+aes.workspace = true
+aes-gcm.workspace = true
+chacha20.workspace = true
+chacha20poly1305.workspace = true
+getrandom.workspace = true
+hmac.workspace = true
+p256.workspace = true
+rustls = { version = "0.23.43", default-features = false, features = ["custom-provider", "std"] }
+sha2.workspace = true
+
+[dev-dependencies]
+rcgen = { version = "0.14.9", default-features = false }
+
+[lints]
+workspace = true
