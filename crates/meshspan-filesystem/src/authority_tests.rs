@@ -4,8 +4,9 @@ use std::{cell::Cell, rc::Rc};
 
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
-    AssuranceLevel, BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId,
-    NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
+    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId, HandleId,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
+    UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
@@ -324,7 +325,8 @@ struct TestAuthorityError;
 
 fn context(now: UnixMicros) -> Result<FilesystemAccessContext, Box<dyn std::error::Error>> {
     Ok(FilesystemAccessContext {
-        token_digest: [9; 32],
+        authentication_service: AuthenticationService::Https,
+        credential_digest: [9; 32],
         required_assurance: AssuranceLevel::SingleFactor,
         gateway_node_id: NodeId::from_bytes([19; 16])?,
         gateway_incarnation: 1,

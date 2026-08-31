@@ -654,5 +654,7 @@ pub(crate) fn valid_adapter_context(
     context: FilesystemAccessContext,
     observed_at: UnixMicros,
 ) -> bool {
-    context.now == observed_at && context.gateway_incarnation > 0 && context.token_digest != [0; 32]
+    context.now == observed_at
+        && context.gateway_incarnation > 0
+        && context.credential_digest != [0; 32]
 }

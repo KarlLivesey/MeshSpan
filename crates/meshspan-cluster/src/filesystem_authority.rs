@@ -31,7 +31,8 @@ impl FilesystemAccessAuthority for MetadataFilesystemAuthority<'_> {
         request: FilesystemAuthorityRequest,
     ) -> Result<FilesystemAuthorityGrant, Self::Error> {
         let decision = self.repository.evaluate_access(AccessRequest {
-            token_digest: request.context.token_digest,
+            authentication_service: request.context.authentication_service,
+            credential_digest: request.context.credential_digest,
             required_assurance: request.context.required_assurance,
             gateway_node_id: request.context.gateway_node_id,
             gateway_incarnation: request.context.gateway_incarnation,
@@ -148,7 +149,8 @@ mod tests {
 
         let request = FilesystemAuthorityRequest {
             context: FilesystemAccessContext {
-                token_digest,
+                authentication_service: AuthenticationService::Https,
+                credential_digest: token_digest,
                 required_assurance: AssuranceLevel::SingleFactor,
                 gateway_node_id,
                 gateway_incarnation: 1,
@@ -176,7 +178,7 @@ mod tests {
         assert!(matches!(
             MetadataFilesystemAuthority::new(&repository).authorise(request),
             Err(MetadataFilesystemAuthorityError::Denied(
-                AccessDenial::SessionUnavailable
+                AccessDenial::AuthenticationUnavailable
             ))
         ));
         Ok(())

@@ -3,6 +3,12 @@
 Status: draft for review. This document defines the public contract to be built;
 it does not describe an implemented API.
 
+This is MeshSpan's native specialised HTTPS administration and file/data API.
+It is intentionally usable by generated clients, CLIs, automation, bespoke
+applications and the shipped web panels without requiring those callers to
+adopt the web application. It does not claim compatibility with S3, WebDAV,
+NFS or another storage protocol; those are separate replaceable connectors.
+
 ## 1. One source of structural truth
 
 Rust endpoint, request and response boundary types are authoritative. A

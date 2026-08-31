@@ -99,7 +99,9 @@ use thiserror::Error;
 
 use crate::{MetadataStoreError, PartitionDatabase};
 
-pub use access_evaluation::{AccessCapability, AccessDecision, AccessDenial, AccessRequest};
+pub use access_evaluation::{
+    AccessAuthentication, AccessCapability, AccessDecision, AccessDenial, AccessRequest,
+};
 pub use access_query::{
     AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
     PermissionGrantRecord, ScopedGrantCursor, SubjectGrantCursor,
@@ -693,6 +695,32 @@ impl AuthoritativeRepository {
             presented_key_digest,
             service,
             required_scopes,
+            now,
+        )
+    }
+
+    /// Authenticates a direct API key against current credential and operation-policy bounds.
+    ///
+    /// Absence and ordinary scope, service, time or policy rejection return `None` without
+    /// disclosing which authority did not match.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when matching persisted evidence is structurally invalid.
+    pub fn authenticate_api_key_for_operation(
+        &self,
+        presented_key_digest: [u8; 32],
+        service: AuthenticationService,
+        required_scopes: u64,
+        required_assurance: meshspan_domain::AssuranceLevel,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Option<ApiKeyAuthentication>, RepositoryError> {
+        authentication_method::authenticate_api_key_for_operation(
+            self.database.connection(),
+            presented_key_digest,
+            service,
+            required_scopes,
+            required_assurance,
             now,
         )
     }

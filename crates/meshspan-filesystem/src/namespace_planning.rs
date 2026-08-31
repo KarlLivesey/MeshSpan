@@ -465,7 +465,8 @@ fn to_i64(value: u64) -> Result<i64, HandleError> {
 #[cfg(test)]
 mod tests {
     use meshspan_domain::{
-        AssuranceLevel, ContentManifestId, FileVersionId, NodeId, Revision, Rights, VolumeId,
+        AssuranceLevel, AuthenticationService, ContentManifestId, FileVersionId, NodeId, Revision,
+        Rights, VolumeId,
     };
     use rusqlite::params;
     use tempfile::tempdir;
@@ -854,7 +855,8 @@ mod tests {
 
     fn access_context() -> Result<FilesystemAccessContext, Box<dyn std::error::Error>> {
         Ok(FilesystemAccessContext {
-            token_digest: [40; 32],
+            authentication_service: AuthenticationService::Https,
+            credential_digest: [40; 32],
             required_assurance: AssuranceLevel::SingleFactor,
             gateway_node_id: NodeId::from_bytes([19; 16])?,
             gateway_incarnation: 1,

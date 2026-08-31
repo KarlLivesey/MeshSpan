@@ -9,8 +9,8 @@ pub(super) mod subjects;
 use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{
-    AssuranceLevel, GrantId, NodeId, ObjectId, PrincipalId, Revision, Rights, SessionId,
-    UnixMicros, VolumeId,
+    ApiKeyId, AssuranceLevel, AuthenticationService, GrantId, NodeId, ObjectId, PrincipalId,
+    Revision, Rights, SessionId, UnixMicros, VolumeId,
 };
 use sha2::{Digest, Sha256};
 
@@ -22,8 +22,10 @@ pub(super) const DEFINED_RIGHTS: usize = 13;
 /// Authenticated, gateway-bound request for one exact namespace object.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccessRequest {
-    /// Digest of the presented bearer token; raw token bytes remain outside metadata.
-    pub token_digest: [u8; 32],
+    /// Connector family against which the credential must be validated.
+    pub authentication_service: AuthenticationService,
+    /// Digest of the presented session or API-key secret; raw bytes remain outside metadata.
+    pub credential_digest: [u8; 32],
     /// Minimum assurance required by this operation class.
     pub required_assurance: AssuranceLevel,
     /// Gateway executing the authorised operation.
@@ -43,9 +45,9 @@ pub struct AccessRequest {
 /// Stable internal denial classes; connectors map them to non-disclosing protocol errors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccessDenial {
-    /// No current committed session matches the supplied digest.
-    SessionUnavailable,
-    /// The session predates the current identity/ACL projection.
+    /// No current committed authentication matches the supplied service and digest.
+    AuthenticationUnavailable,
+    /// The authentication predates the current identity/ACL projection.
     StaleIdentity,
     /// The session does not prove the operation's required assurance.
     InsufficientAssurance,
@@ -57,11 +59,22 @@ pub enum AccessDenial {
     MissingRights,
 }
 
+/// Public identity of the exact committed authentication used by an access decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccessAuthentication {
+    /// Replicated interactive session.
+    Session(SessionId),
+    /// Direct scoped API key, revalidated at operation time.
+    ApiKey(ApiKeyId),
+}
+
 /// One bounded capability input, tied to every mutable authority used by the decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccessCapability {
-    /// Committed session that authenticated the user.
-    pub session_id: SessionId,
+    /// Exact authentication authority used for this decision.
+    pub authentication: AccessAuthentication,
+    /// Connector family against which that authority was validated.
+    pub authentication_service: AuthenticationService,
     /// User receiving authority.
     pub principal_id: PrincipalId,
     /// Gateway to which this decision is fenced.
@@ -100,8 +113,8 @@ pub enum AccessDecision {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Session {
-    id: SessionId,
+pub(super) struct AuthenticatedPrincipal {
+    authentication: AccessAuthentication,
     principal_id: PrincipalId,
     factor_state: super::session::SessionFactorState,
     identity_revision: Revision,
@@ -147,17 +160,20 @@ pub(super) fn evaluate(
     if request.requested_rights == Rights::default() || request.gateway_incarnation == 0 {
         return Ok(AccessDecision::Denied(AccessDenial::MissingRights));
     }
-    let Some(session) = authority::load_session(database, request.token_digest, request.now)?
-    else {
-        return Ok(AccessDecision::Denied(AccessDenial::SessionUnavailable));
-    };
     let revisions = authority::load_authority_revisions(database, request)?;
-    if session.identity_revision != revisions.identity {
+    let Some(authentication) =
+        authority::load_authentication(database, request, revisions.identity)?
+    else {
+        return Ok(AccessDecision::Denied(
+            AccessDenial::AuthenticationUnavailable,
+        ));
+    };
+    if authentication.identity_revision != revisions.identity {
         return Ok(AccessDecision::Denied(AccessDenial::StaleIdentity));
     }
     if !super::session::meets_assurance(
         database.connection(),
-        session.factor_state,
+        authentication.factor_state,
         request.required_assurance,
         request.now,
     )? {
@@ -169,10 +185,15 @@ pub(super) fn evaluate(
     let Some((target, ancestors)) = authority::load_target_and_ancestors(database, request)? else {
         return Ok(AccessDecision::Denied(AccessDenial::ObjectUnavailable));
     };
-    let group_activations = subjects::load_group_activations(database, session, request.now)?;
-    let effective_subjects =
-        subjects::load_effective_subjects(database, session, request.now, &group_activations)?;
-    let grant_activations = grants::load_grant_activations(database, session, request.now)?;
+    let group_activations =
+        subjects::load_group_activations(database, authentication, request.now)?;
+    let effective_subjects = subjects::load_effective_subjects(
+        database,
+        authentication,
+        request.now,
+        &group_activations,
+    )?;
+    let grant_activations = grants::load_grant_activations(database, authentication, request.now)?;
     let mut rights = [RightLifetime::default(); DEFINED_RIGHTS];
     grants::apply_ownership(
         database,
@@ -184,7 +205,7 @@ pub(super) fn evaluate(
         database,
         GrantEvaluation {
             request,
-            principal_id: session.principal_id,
+            principal_id: authentication.principal_id,
             target_is_root: target.is_root,
             inherits_volume_grants: target.inherits_volume_grants,
             ancestors: &ancestors,
@@ -193,18 +214,18 @@ pub(super) fn evaluate(
         },
         &mut rights,
     )?;
-    build_decision(request, session, target, revisions, &rights)
+    build_decision(request, authentication, target, revisions, &rights)
 }
 
 fn build_decision(
     request: AccessRequest,
-    session: Session,
+    authentication: AuthenticatedPrincipal,
     target: Target,
     revisions: AuthorityRevisions,
     rights: &[RightLifetime; DEFINED_RIGHTS],
 ) -> Result<AccessDecision, RepositoryError> {
     let mut effective_bits = 0_u32;
-    let mut expires_at = session.expires_at;
+    let mut expires_at = authentication.expires_at;
     for (index, lifetime) in rights.iter().enumerate() {
         let bit = 1_u32 << index;
         if lifetime.present {
@@ -225,8 +246,9 @@ fn build_decision(
     let effective_rights =
         Rights::from_bits(effective_bits).map_err(|_| RepositoryError::CorruptState)?;
     let mut capability = AccessCapability {
-        session_id: session.id,
-        principal_id: session.principal_id,
+        authentication: authentication.authentication,
+        authentication_service: request.authentication_service,
+        principal_id: authentication.principal_id,
         gateway_node_id: request.gateway_node_id,
         gateway_incarnation: request.gateway_incarnation,
         volume_id: request.volume_id,
@@ -272,8 +294,18 @@ fn extends_expiry(current: Option<UnixMicros>, candidate: Option<UnixMicros>) ->
 
 fn capability_digest(capability: AccessCapability) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"meshspan.access-capability.v1");
-    digest.update(capability.session_id.as_bytes());
+    digest.update(b"meshspan.access-capability.v2");
+    match capability.authentication {
+        AccessAuthentication::Session(session_id) => {
+            digest.update([1]);
+            digest.update(session_id.as_bytes());
+        }
+        AccessAuthentication::ApiKey(key_id) => {
+            digest.update([2]);
+            digest.update(key_id.as_bytes());
+        }
+    }
+    digest.update([capability.authentication_service.scope_bit()]);
     digest.update(capability.principal_id.as_bytes());
     digest.update(capability.gateway_node_id.as_bytes());
     digest.update(capability.gateway_incarnation.to_be_bytes());

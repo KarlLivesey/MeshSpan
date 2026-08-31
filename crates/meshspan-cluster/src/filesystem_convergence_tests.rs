@@ -3,8 +3,9 @@
 use std::{cell::RefCell, collections::BTreeMap, io::Write, path::Path, rc::Rc};
 
 use meshspan_domain::{
-    AssuranceLevel, BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId,
-    NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
+    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId, HandleId,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
+    UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateFileRequest, AuthorisedFilesystemService,
@@ -270,7 +271,8 @@ fn merge_application(
 
 fn access_context(gateway_node_id: NodeId, now: UnixMicros) -> FilesystemAccessContext {
     FilesystemAccessContext {
-        token_digest: [90; 32],
+        authentication_service: AuthenticationService::Https,
+        credential_digest: [90; 32],
         required_assurance: AssuranceLevel::SingleFactor,
         gateway_node_id,
         gateway_incarnation: 1,

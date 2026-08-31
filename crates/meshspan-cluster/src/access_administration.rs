@@ -165,7 +165,8 @@ impl<'a> MetadataAccessAdministration<'a> {
         object_id: ObjectId,
     ) -> Result<AccessCapability, AccessAdministrationError> {
         match self.repository.evaluate_access(AccessRequest {
-            token_digest: context.token_digest,
+            authentication_service: context.authentication_service,
+            credential_digest: context.credential_digest,
             required_assurance: context.required_assurance,
             gateway_node_id: context.gateway_node_id,
             gateway_incarnation: context.gateway_incarnation,
@@ -186,7 +187,7 @@ impl<'a> MetadataAccessAdministration<'a> {
         match self
             .repository
             .evaluate_session_access(SessionAccessRequest {
-                token_digest: context.token_digest,
+                token_digest: context.credential_digest,
                 required_assurance: context.required_assurance,
                 gateway_node_id: context.gateway_node_id,
                 gateway_incarnation: context.gateway_incarnation,

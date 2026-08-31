@@ -9,7 +9,7 @@ use rusqlite::params;
 
 use super::authority::{parse_grant, parse_object, parse_principal, to_i64};
 use super::subjects::earliest;
-use super::{GrantEvaluation, RightLifetime, Session};
+use super::{AuthenticatedPrincipal, GrantEvaluation, RightLifetime};
 use crate::PartitionDatabase;
 use crate::repository::RepositoryError;
 
@@ -18,10 +18,10 @@ const MAXIMUM_OWNERS: usize = 1_024;
 
 pub(super) fn load_grant_activations(
     database: &PartitionDatabase,
-    session: Session,
+    authentication: AuthenticatedPrincipal,
     now: UnixMicros,
 ) -> Result<BTreeMap<GrantId, UnixMicros>, RepositoryError> {
-    let principal = session.principal_id.as_bytes();
+    let principal = authentication.principal_id.as_bytes();
     let mut statement = database.connection().prepare(
         "SELECT a.grant_id, MAX(a.expires_at)
          FROM access_activations a
@@ -37,7 +37,7 @@ pub(super) fn load_grant_activations(
         params![
             principal.as_slice(),
             now.get(),
-            to_i64(session.identity_revision.get())?,
+            to_i64(authentication.identity_revision.get())?,
             to_i64(
                 u64::try_from(MAXIMUM_GRANTS + 1).map_err(|_| RepositoryError::CapacityExceeded)?
             )?

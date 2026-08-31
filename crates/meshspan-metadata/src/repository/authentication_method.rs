@@ -3,8 +3,8 @@
 //! Atomic authoritative lifecycle for protocol-neutral authentication methods.
 
 use meshspan_domain::{
-    ApiKeyId, AuthenticationMethodId, AuthenticationMethodKind, AuthenticationService, OperationId,
-    PrincipalId, RecoveryCodeId, Revision, UnixMicros,
+    ApiKeyId, AssuranceLevel, AuthenticationMethodId, AuthenticationMethodKind,
+    AuthenticationService, OperationId, PrincipalId, RecoveryCodeId, Revision, UnixMicros,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 
@@ -33,6 +33,8 @@ pub struct ApiKeyAuthentication {
     pub credential_generation: u64,
     /// Authoritative method revision included in the decision.
     pub revision: Revision,
+    /// Exclusive expiry of the key or containing method, whichever occurs first.
+    pub expires_at: Option<UnixMicros>,
 }
 
 /// Exact durable facts needed to reproduce one authentication-method revocation result.
@@ -553,6 +555,41 @@ pub(super) fn authenticate_api_key(
         .map(Option::flatten)
 }
 
+/// Authenticates a direct API-key presentation and applies the current operation policy.
+pub(super) fn authenticate_api_key_for_operation(
+    connection: &rusqlite::Connection,
+    presented_key_digest: [u8; 32],
+    service: AuthenticationService,
+    required_scopes: u64,
+    required_assurance: AssuranceLevel,
+    now: UnixMicros,
+) -> Result<Option<ApiKeyAuthentication>, RepositoryError> {
+    let Some(authentication) = authenticate_api_key(
+        connection,
+        presented_key_digest,
+        service,
+        required_scopes,
+        now,
+    )?
+    else {
+        return Ok(None);
+    };
+    let permitted = super::authentication_policy::permits_operation(
+        connection,
+        service,
+        required_assurance,
+        super::authentication_policy::SessionPolicyEvidence {
+            assurance: AssuranceLevel::SingleFactor,
+            factor_classes: AuthenticationMethodKind::ApiKey.class_bit(),
+            factor_count: 1,
+            issued_at: now,
+            latest_authenticated_at: now,
+        },
+        now,
+    )?;
+    Ok(permitted.then_some(authentication))
+}
+
 struct StoredApiKey {
     method_id: Vec<u8>,
     key_id: Vec<u8>,
@@ -624,6 +661,11 @@ fn validate_authentication(
         scopes,
         credential_generation: generation,
         revision: Revision::new(method_revision),
+        expires_at: [stored.valid_until, stored.method_expires_at]
+            .into_iter()
+            .flatten()
+            .min()
+            .map(UnixMicros::new),
     }))
 }
 

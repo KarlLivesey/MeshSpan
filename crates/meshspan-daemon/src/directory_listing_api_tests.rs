@@ -15,7 +15,8 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use meshspan_api_contract::ListDirectoryResponse;
 use meshspan_domain::{
-    AssuranceLevel, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, UnixMicros,
+    AssuranceLevel, AuthenticationService, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
+    UnixMicros,
 };
 use meshspan_filesystem::{
     AdapterListRequest, DirectoryEntryKind, DirectoryListCursor, FilesystemAccessContext,
@@ -24,7 +25,7 @@ use meshspan_filesystem::{
 use tower::ServiceExt;
 
 use crate::{
-    BrowserAuthenticationError, DirectoryLister, DirectoryListingFailure, DirectoryListingService,
+    DirectoryLister, DirectoryListingFailure, DirectoryListingService, FileApiAuthenticationError,
     FileApiAuthenticator, directory_listing_api_router,
 };
 
@@ -156,15 +157,16 @@ impl FileApiAuthenticator for HeaderAuthenticator {
         &self,
         headers: &HeaderMap,
         now: UnixMicros,
-    ) -> Result<FilesystemAccessContext, BrowserAuthenticationError> {
+    ) -> Result<FilesystemAccessContext, FileApiAuthenticationError> {
         if headers.get(AUTHORIZATION) != Some(&HeaderValue::from_static("MeshSpan proof")) {
-            return Err(BrowserAuthenticationError::Rejected);
+            return Err(FileApiAuthenticationError::Rejected);
         }
         Ok(FilesystemAccessContext {
-            token_digest: [9; 32],
+            authentication_service: AuthenticationService::Https,
+            credential_digest: [9; 32],
             required_assurance: AssuranceLevel::SingleFactor,
             gateway_node_id: NodeId::from_bytes(versioned(9))
-                .map_err(|_| BrowserAuthenticationError::InvalidGateway)?,
+                .map_err(|_| FileApiAuthenticationError::InvalidGateway)?,
             gateway_incarnation: 1,
             now,
         })

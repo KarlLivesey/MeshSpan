@@ -3,7 +3,8 @@
 //! Connector-neutral operation-time authority for the logical filesystem service.
 
 use meshspan_domain::{
-    AssuranceLevel, BranchId, NodeId, ObjectId, PrincipalId, Revision, Rights, UnixMicros, VolumeId,
+    AssuranceLevel, AuthenticationService, BranchId, NodeId, ObjectId, PrincipalId, Revision,
+    Rights, UnixMicros, VolumeId,
 };
 use thiserror::Error;
 
@@ -27,8 +28,10 @@ use crate::{
 /// Authenticated connector context supplied independently of a filesystem operation payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FilesystemAccessContext {
-    /// Digest of the presented session secret; raw credentials never enter filesystem state.
-    pub token_digest: [u8; 32],
+    /// Connector family against which the credential must be validated.
+    pub authentication_service: AuthenticationService,
+    /// Digest of the presented session or API-key secret; raw credentials never enter state.
+    pub credential_digest: [u8; 32],
     /// Minimum authentication assurance required by the connector operation.
     pub required_assurance: AssuranceLevel,
     /// Gateway executing the operation.
@@ -1038,7 +1041,7 @@ fn require_same_time<E>(
     context: FilesystemAccessContext,
     operation_time: UnixMicros,
 ) -> Result<(), AuthorisedFilesystemError<E>> {
-    if context.now == operation_time && context.token_digest != [0; 32] {
+    if context.now == operation_time && context.credential_digest != [0; 32] {
         Ok(())
     } else {
         Err(AuthorisedFilesystemError::InvalidInput)

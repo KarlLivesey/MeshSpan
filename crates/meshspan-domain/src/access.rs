@@ -196,9 +196,9 @@ pub enum AssuranceLevel {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum AuthenticationService {
-    /// Browser and direct HTTPS file/application access.
+    /// Browser HTTPS sessions established through the interactive authentication flow.
     Https = 1,
-    /// Headless public administration and data API access.
+    /// `MeshSpan`'s native HTTPS administration and data API for arbitrary external clients.
     HeadlessApi = 2,
     /// Embedded SMB 3.1.1 session establishment.
     Smb = 4,
