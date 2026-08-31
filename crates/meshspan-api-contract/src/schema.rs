@@ -39,11 +39,26 @@ fn remove_safe_integer_wire_format(schema: &mut Schema) {
         .get("maximum")
         .and_then(serde_json::Value::as_u64)
         .is_some_and(|maximum| maximum <= 9_007_199_254_740_991_u64);
-    let is_safe_integer = object.get("type").and_then(serde_json::Value::as_str) == Some("integer")
+    let is_safe_integer = object
+        .get("type")
+        .is_some_and(is_integer_or_nullable_integer)
         && matches!(integer_format, Some("int64" | "uint64"))
         && safe_maximum;
 
     if is_safe_integer {
         object.remove("format");
     }
+}
+
+fn is_integer_or_nullable_integer(value: &serde_json::Value) -> bool {
+    if value.as_str() == Some("integer") {
+        return true;
+    }
+    let Some(types) = value.as_array() else {
+        return false;
+    };
+    types.len() == 2
+        && types
+            .iter()
+            .all(|kind| matches!(kind.as_str(), Some("integer" | "null")))
 }

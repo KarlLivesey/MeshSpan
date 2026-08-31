@@ -44,6 +44,8 @@ const source = `// SPDX-License-Identifier: GPL-2.0-only
 import type {
   AbortUploadRequest,
   AbortUploadResponse,
+  AddGroupMemberRequest,
+  AddGroupMemberResponse,
   ApiError,
   BeginUploadRequest,
   BeginUploadResponse,
@@ -66,6 +68,7 @@ import type {
   GetObjectResponse,
   HealthResponse,
   ListDirectoryResponse,
+  ListGroupMembershipsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
   RevokeAuthenticationMethodRequest,
@@ -74,6 +77,8 @@ import type {
   RevokeCurrentSessionResponse,
   RenameObjectRequest,
   RenameObjectResponse,
+  RemoveGroupMemberRequest,
+  RemoveGroupMemberResponse,
   SetupStatusResponse,
   UploadStatusResponse,
   WriteUploadRangeResponse,
@@ -83,6 +88,9 @@ import {
   zAbortUploadPath,
   zAbortUploadResponse2,
   zApiError,
+  zAddGroupMemberBody,
+  zAddGroupMemberPath,
+  zAddGroupMemberResponse2,
   zBeginUploadBody,
   zBeginUploadPath,
   zBeginUploadResponse2,
@@ -119,6 +127,9 @@ import {
   zListDirectoryResponse2,
   zListGroupsQuery,
   zListGroupsResponse,
+  zListGroupMembersPath,
+  zListGroupMembersQuery,
+  zListGroupMembersResponse,
   zListPrincipalsResponse,
   zListUploadRangesPath,
   zListUploadRangesQuery,
@@ -135,6 +146,9 @@ import {
   zRenameObjectBody,
   zRenameObjectPath,
   zRenameObjectResponse2,
+  zRemoveGroupMemberBody,
+  zRemoveGroupMemberPath,
+  zRemoveGroupMemberResponse2,
   zWriteUploadRangeHeaders,
   zWriteUploadRangePath,
   zWriteUploadRangeResponse2,
@@ -191,6 +205,12 @@ export type ReadFileResult = Readonly<{
 }>;
 
 export type ListPrincipalsRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type ListGroupMembersRequest = Readonly<{
+  groupId: string;
   cursor?: string;
   limit?: number;
 }>;

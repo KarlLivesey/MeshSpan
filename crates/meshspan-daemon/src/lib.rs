@@ -178,10 +178,10 @@ pub use file_read_api::{
     FileReadService, file_read_api_router,
 };
 pub use identity_administration::{
-    IdentityAdministrationApiError, IdentityAdministrationAuthority,
-    IdentityAdministrationAuthorityError, IdentityAdministrationCommit,
-    IdentityAdministrationController, IdentityAdministrationError, IdentityAdministrationService,
-    IdentityAdministrator, identity_administration_api_router,
+    GroupMembershipAdministrationCommit, IdentityAdministrationApiError,
+    IdentityAdministrationAuthority, IdentityAdministrationAuthorityError,
+    IdentityAdministrationCommit, IdentityAdministrationController, IdentityAdministrationError,
+    IdentityAdministrationService, IdentityAdministrator, identity_administration_api_router,
 };
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,

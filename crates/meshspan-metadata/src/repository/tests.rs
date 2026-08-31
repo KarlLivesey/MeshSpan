@@ -20,10 +20,10 @@ use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
-    ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, PageLimit, PreservedVote,
-    PrincipalCursor, PrincipalKind, RepositoryConformanceReport, RepositoryConformanceVector,
-    RepositoryError, restore_partition_backup, restore_partition_snapshot,
-    run_repository_conformance,
+    ApplyDisposition, AuthoritativeRepository, EntityKind, GroupMembershipEventKind, LogPosition,
+    PageLimit, PreservedVote, PrincipalCursor, PrincipalKind, RepositoryConformanceReport,
+    RepositoryConformanceVector, RepositoryError, restore_partition_backup,
+    restore_partition_snapshot, run_repository_conformance,
 };
 use crate::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
@@ -2475,6 +2475,26 @@ fn verify_vertical_queries(
     let members = repository.direct_group_members(ids.inner_group, None, PageLimit::new(1)?)?;
     assert_eq!(members.items, vec![ids.user]);
     assert!(members.next.is_none());
+    let memberships =
+        repository.direct_group_memberships(ids.inner_group, None, PageLimit::new(1)?)?;
+    assert_eq!(memberships.items.len(), 1);
+    assert_eq!(memberships.items[0].member.principal_id, ids.user);
+    assert_eq!(memberships.items[0].member.display_name, "Alex");
+    assert_eq!(memberships.items[0].created_by, ids.administrator);
+    assert!(!memberships.items[0].activation_required);
+    assert!(memberships.next.is_none());
+    let exact = repository
+        .direct_group_membership(ids.inner_group, ids.user)?
+        .ok_or("direct membership was not returned")?;
+    assert_eq!(exact, memberships.items[0]);
+    let event = repository
+        .group_membership_event(ids.inner_group, exact.revision)?
+        .ok_or("membership event was not returned")?;
+    assert_eq!(event.group_id, ids.inner_group);
+    assert_eq!(event.member_principal_id, ids.user);
+    assert_eq!(event.kind, GroupMembershipEventKind::Added);
+    assert_eq!(event.actor_principal_id, ids.administrator);
+    assert_eq!(event.occurred_at, exact.created_at);
     assert!(
         repository
             .check_invariants(PageLimit::new(100)?)?

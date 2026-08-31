@@ -115,6 +115,76 @@ pub struct GroupMemberCursor {
     member_principal_id: PrincipalId,
 }
 
+impl GroupMemberCursor {
+    /// Reconstructs a cursor after a public boundary has validated its fields.
+    #[must_use]
+    pub const fn new(group_id: GroupId, member_principal_id: PrincipalId) -> Self {
+        Self {
+            group_id,
+            member_principal_id,
+        }
+    }
+
+    /// Returns the group to which this continuation is bound.
+    #[must_use]
+    pub const fn group_id(self) -> GroupId {
+        self.group_id
+    }
+
+    /// Returns the exact last member identity.
+    #[must_use]
+    pub const fn member_principal_id(self) -> PrincipalId {
+        self.member_principal_id
+    }
+}
+
+/// One current direct-group-membership edge and its member projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroupMembershipRecord {
+    /// Structurally containing group.
+    pub group_id: GroupId,
+    /// Direct user or nested-group member.
+    pub member: PrincipalRecord,
+    /// Inclusive validity start, or no lower bound.
+    pub valid_from: Option<UnixMicros>,
+    /// Exclusive validity end, or no upper bound.
+    pub valid_until: Option<UnixMicros>,
+    /// Whether a current user activation is required before this edge contributes rights.
+    pub activation_required: bool,
+    /// Principal that created the current edge.
+    pub created_by: PrincipalId,
+    /// Original creation instant of the current edge.
+    pub created_at: UnixMicros,
+    /// Last authoritative edge revision.
+    pub revision: Revision,
+}
+
+/// Closed mutation families retained in immutable direct-membership history.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GroupMembershipEventKind {
+    /// A direct edge was created or recreated.
+    Added,
+    /// An active direct edge was removed.
+    Removed,
+}
+
+/// Immutable evidence for one direct-membership mutation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroupMembershipEventRecord {
+    /// Structurally containing group.
+    pub group_id: GroupId,
+    /// Direct user or nested-group member affected by the mutation.
+    pub member_principal_id: PrincipalId,
+    /// Mutation family committed at this revision.
+    pub kind: GroupMembershipEventKind,
+    /// Principal that authorised the mutation.
+    pub actor_principal_id: PrincipalId,
+    /// Original authoritative mutation instant.
+    pub occurred_at: UnixMicros,
+    /// Exact authoritative mutation revision.
+    pub revision: Revision,
+}
+
 /// One active namespace child returned by an indexed page.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceRecord {
@@ -331,6 +401,221 @@ pub(super) fn direct_group_members(
     });
     items.truncate(limit.get());
     Ok(Page { items, next })
+}
+
+pub(super) fn direct_group_memberships(
+    database: &PartitionDatabase,
+    group_id: GroupId,
+    after: Option<GroupMemberCursor>,
+    limit: PageLimit,
+) -> Result<Page<GroupMembershipRecord, GroupMemberCursor>, RepositoryError> {
+    let group = group_id.as_bytes();
+    let lower = membership_lower_bound(group_id, after)?;
+    let mut statement = database.connection().prepare(
+        "SELECT gm.member_principal_id, gm.valid_from, gm.valid_until,
+                gm.activation_required, gm.created_by, gm.created_at, gm.revision,
+                p.principal_kind, p.display_name, p.canonical_name, p.state,
+                p.created_at, p.revision
+         FROM group_memberships gm
+         JOIN principals p ON p.principal_id = gm.member_principal_id
+         WHERE gm.containing_group_id = ?1 AND gm.state = 1
+           AND gm.member_principal_id > ?2
+         ORDER BY gm.member_principal_id LIMIT ?3",
+    )?;
+    let rows = statement.query_map(
+        params![group.as_slice(), lower.as_slice(), sql_limit(limit)?],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, i64>(11)?,
+                row.get::<_, i64>(12)?,
+            ))
+        },
+    )?;
+    let mut items = Vec::with_capacity(limit.get().saturating_add(1));
+    for row in rows {
+        items.push(parse_group_membership(group_id, row?)?);
+    }
+    let next = (items.len() > limit.get())
+        .then(|| GroupMemberCursor::new(group_id, items[limit.get() - 1].member.principal_id));
+    items.truncate(limit.get());
+    Ok(Page { items, next })
+}
+
+pub(super) fn direct_group_membership(
+    database: &PartitionDatabase,
+    group_id: GroupId,
+    member_principal_id: PrincipalId,
+) -> Result<Option<GroupMembershipRecord>, RepositoryError> {
+    let group = group_id.as_bytes();
+    let member = member_principal_id.as_bytes();
+    database
+        .connection()
+        .query_row(
+            "SELECT gm.member_principal_id, gm.valid_from, gm.valid_until,
+                    gm.activation_required, gm.created_by, gm.created_at, gm.revision,
+                    p.principal_kind, p.display_name, p.canonical_name, p.state,
+                    p.created_at, p.revision
+             FROM group_memberships gm
+             JOIN principals p ON p.principal_id = gm.member_principal_id
+             WHERE gm.containing_group_id = ?1 AND gm.member_principal_id = ?2
+               AND gm.state = 1",
+            params![group.as_slice(), member.as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                ))
+            },
+        )
+        .optional()?
+        .map(|row| parse_group_membership(group_id, row))
+        .transpose()
+}
+
+pub(super) fn group_membership_event(
+    database: &PartitionDatabase,
+    group_id: GroupId,
+    revision: Revision,
+) -> Result<Option<GroupMembershipEventRecord>, RepositoryError> {
+    if revision == Revision::ZERO {
+        return Err(RepositoryError::CorruptState);
+    }
+    let group = group_id.as_bytes();
+    let mut statement = database.connection().prepare(
+        "SELECT member_principal_id, event_kind, reason, actor_principal_id, occurred_at
+         FROM group_membership_events INDEXED BY group_membership_events_by_revision
+         WHERE revision = ?1 AND containing_group_id = ?2
+         ORDER BY member_principal_id LIMIT 2",
+    )?;
+    let stored_revision =
+        i64::try_from(revision.get()).map_err(|_| RepositoryError::CorruptState)?;
+    let rows = statement.query_map(params![stored_revision, group.as_slice()], |row| {
+        Ok((
+            row.get::<_, Vec<u8>>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Vec<u8>>(3)?,
+            row.get::<_, i64>(4)?,
+        ))
+    })?;
+    let mut events = rows.collect::<Result<Vec<_>, _>>()?;
+    if events.len() > 1 {
+        return Err(RepositoryError::CorruptState);
+    }
+    events
+        .pop()
+        .map(|row| parse_group_membership_event(group_id, revision, &row))
+        .transpose()
+}
+
+type GroupMembershipRow = (
+    Vec<u8>,
+    Option<i64>,
+    Option<i64>,
+    i64,
+    Vec<u8>,
+    i64,
+    i64,
+    i64,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+);
+
+type GroupMembershipEventRow = (Vec<u8>, i64, Option<String>, Vec<u8>, i64);
+
+fn membership_lower_bound(
+    group_id: GroupId,
+    after: Option<GroupMemberCursor>,
+) -> Result<[u8; 16], RepositoryError> {
+    match after {
+        Some(cursor) if cursor.group_id == group_id => Ok(cursor.member_principal_id.as_bytes()),
+        Some(_) => Err(RepositoryError::StaleRevision),
+        None => Ok([0; 16]),
+    }
+}
+
+fn parse_group_membership(
+    group_id: GroupId,
+    row: GroupMembershipRow,
+) -> Result<GroupMembershipRecord, RepositoryError> {
+    let member_id = parse_principal(&row.0)?;
+    let valid_from = row.1.map(UnixMicros::new);
+    let valid_until = row.2.map(UnixMicros::new);
+    if valid_until
+        .zip(valid_from)
+        .is_some_and(|(until, from)| until <= from)
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(GroupMembershipRecord {
+        group_id,
+        member: PrincipalRecord {
+            principal_id: member_id,
+            kind: parse_principal_kind(row.7)?,
+            display_name: row.8,
+            canonical_name: row.9,
+            state: u8::try_from(row.10).map_err(|_| RepositoryError::CorruptState)?,
+            created_at: UnixMicros::new(row.11),
+            revision: Revision::new(parse_u64(row.12)?),
+        },
+        valid_from,
+        valid_until,
+        activation_required: match row.3 {
+            0 => false,
+            1 => true,
+            _ => return Err(RepositoryError::CorruptState),
+        },
+        created_by: parse_principal(&row.4)?,
+        created_at: UnixMicros::new(row.5),
+        revision: Revision::new(parse_u64(row.6)?),
+    })
+}
+
+fn parse_group_membership_event(
+    group_id: GroupId,
+    revision: Revision,
+    row: &GroupMembershipEventRow,
+) -> Result<GroupMembershipEventRecord, RepositoryError> {
+    let kind = match (row.1, row.2.as_deref()) {
+        (1, None) => GroupMembershipEventKind::Added,
+        (2, Some(reason)) if !reason.is_empty() && reason.len() <= 512 => {
+            GroupMembershipEventKind::Removed
+        }
+        _ => return Err(RepositoryError::CorruptState),
+    };
+    Ok(GroupMembershipEventRecord {
+        group_id,
+        member_principal_id: parse_principal(&row.0)?,
+        kind,
+        actor_principal_id: parse_principal(&row.3)?,
+        occurred_at: UnixMicros::new(row.4),
+        revision,
+    })
 }
 
 pub(super) fn sql_limit(limit: PageLimit) -> Result<i64, RepositoryError> {

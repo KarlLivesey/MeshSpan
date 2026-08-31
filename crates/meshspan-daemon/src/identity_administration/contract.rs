@@ -2,10 +2,10 @@
 
 //! Replaceable replicated-authority boundary for identity administration.
 
-use meshspan_domain::{OperationId, PrincipalId, UnixMicros};
+use meshspan_domain::{GroupId, OperationId, PrincipalId, UnixMicros};
 use meshspan_metadata::{
-    AuthoritativeCommand, CommandContext, Page, PageLimit, PrincipalCursor, PrincipalKind,
-    PrincipalRecord,
+    AuthoritativeCommand, CommandContext, GroupMemberCursor, GroupMembershipEventKind,
+    GroupMembershipRecord, Page, PageLimit, PrincipalCursor, PrincipalKind, PrincipalRecord,
 };
 use thiserror::Error;
 
@@ -23,6 +23,27 @@ pub struct IdentityAdministrationCommit {
     /// Authoritative revision created by the original operation.
     pub committed_revision: u64,
     /// Original authoritative creation instant used by exact retries.
+    pub occurred_at: UnixMicros,
+}
+
+/// Exact durable evidence returned after one direct-membership mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GroupMembershipAdministrationCommit {
+    /// Original semantic request digest.
+    pub request_digest: [u8; 32],
+    /// Durable result digest.
+    pub result_digest: [u8; 32],
+    /// Containing group identified by the durable receipt.
+    pub group_id: GroupId,
+    /// Direct member identified by immutable mutation history.
+    pub member_principal_id: PrincipalId,
+    /// Original mutation family identified by immutable history.
+    pub mutation_kind: GroupMembershipEventKind,
+    /// Principal that authorised the original mutation.
+    pub actor_principal_id: PrincipalId,
+    /// Authoritative revision created by the original operation.
+    pub committed_revision: u64,
+    /// Original authoritative mutation instant used by exact retries.
     pub occurred_at: UnixMicros,
 }
 
@@ -83,6 +104,50 @@ pub trait IdentityAdministrationAuthority: BrowserSessionAuthority + NativeApiKe
         command: &AuthoritativeCommand,
         kind: PrincipalKind,
     ) -> Result<IdentityAdministrationCommit, IdentityAdministrationAuthorityError>;
+
+    /// Returns one bounded page of current direct-membership records.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale cursors and unavailable or corrupt committed state.
+    fn group_memberships(
+        &self,
+        group_id: GroupId,
+        after: Option<GroupMemberCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<GroupMembershipRecord, GroupMemberCursor>, IdentityAdministrationAuthorityError>;
+
+    /// Reads one exact current direct-membership edge.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for unavailable or corrupt committed state.
+    fn group_membership(
+        &self,
+        group_id: GroupId,
+        member_principal_id: PrincipalId,
+    ) -> Result<Option<GroupMembershipRecord>, IdentityAdministrationAuthorityError>;
+
+    /// Resolves an already committed direct-membership mutation, if present.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another command family or malformed durable evidence.
+    fn resolve_group_membership_mutation(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<GroupMembershipAdministrationCommit>, IdentityAdministrationAuthorityError>;
+
+    /// Commits or exactly resolves one direct-membership mutation through consensus.
+    ///
+    /// # Errors
+    ///
+    /// Rejects changed operation reuse and never reports success without durable evidence.
+    fn commit_or_resolve_group_membership_mutation(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<GroupMembershipAdministrationCommit, IdentityAdministrationAuthorityError>;
 }
 
 /// Closed replicated-authority failures safe for service classification.

@@ -3,19 +3,26 @@
 //! Strict public/domain identity conversion, deterministic identities and cursor codec.
 
 use meshspan_api_contract::{
-    CreatePrincipalResponse, ListPrincipalsQuery, ListPrincipalsResponse,
-    OperationId as ApiOperationId, PrincipalCursor as ApiPrincipalCursor,
-    PrincipalId as ApiPrincipalId, PrincipalKind as ApiPrincipalKind,
-    PrincipalState as ApiPrincipalState, PrincipalSummary,
+    AddGroupMemberRequest, AddGroupMemberResponse, CreatePrincipalResponse,
+    GroupMembershipCursor as ApiGroupMembershipCursor, GroupMembershipSummary,
+    ListGroupMembershipsQuery, ListGroupMembershipsResponse, ListPrincipalsQuery,
+    ListPrincipalsResponse, NullableField, OperationId as ApiOperationId,
+    PrincipalCursor as ApiPrincipalCursor, PrincipalId as ApiPrincipalId,
+    PrincipalKind as ApiPrincipalKind, PrincipalState as ApiPrincipalState, PrincipalSummary,
+    RemoveGroupMemberRequest, RemoveGroupMemberResponse,
 };
-use meshspan_domain::{AuditEventId, GroupId, OperationId, PrincipalId, uuid_v8};
+use meshspan_domain::{AuditEventId, GroupId, OperationId, PrincipalId, UnixMicros, uuid_v8};
 use meshspan_metadata::{
-    AuthoritativeCommand, CommandContext, CreateGroup, CreateUser, Page, PrincipalCursor,
-    PrincipalKind, PrincipalRecord, RecordName,
+    AddGroupMember, AuthoritativeCommand, CommandContext, CreateGroup, CreateUser,
+    GroupMemberCursor, GroupMembershipRecord, Page, PrincipalCursor, PrincipalKind,
+    PrincipalRecord, RecordName, RemoveGroupMember,
 };
 use sha2::{Digest, Sha256};
 
-use super::{IdentityAdministrationCommit, IdentityAdministrationError, IdentityAdministrator};
+use super::{
+    GroupMembershipAdministrationCommit, IdentityAdministrationCommit, IdentityAdministrationError,
+    IdentityAdministrator,
+};
 use crate::create_mesh_setup::parse_uuid;
 
 const USER_ID_DOMAIN: &[u8] = b"meshspan.identity.user-id.v1\0";
@@ -63,6 +70,75 @@ pub(super) fn group_command(
             activation_policy_id: None,
         }),
     ))
+}
+
+pub(super) fn domain_principal(
+    value: &ApiPrincipalId,
+) -> Result<PrincipalId, IdentityAdministrationError> {
+    PrincipalId::from_bytes(
+        parse_uuid(value.as_str()).map_err(|_| IdentityAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| IdentityAdministrationError::InvalidInput)
+}
+
+pub(super) fn domain_group(value: &ApiPrincipalId) -> Result<GroupId, IdentityAdministrationError> {
+    GroupId::from_bytes(domain_principal(value)?.as_bytes())
+        .map_err(|_| IdentityAdministrationError::InvalidInput)
+}
+
+pub(super) fn add_membership_command(
+    group_id: &ApiPrincipalId,
+    request: &AddGroupMemberRequest,
+) -> Result<(OperationId, GroupId, PrincipalId, AuthoritativeCommand), IdentityAdministrationError>
+{
+    let operation_id = domain_operation(&request.operation_id)?;
+    let group_id = domain_group(group_id)?;
+    let member_principal_id = domain_principal(&request.member_principal_id)?;
+    if group_id.principal_id() == member_principal_id {
+        return Err(IdentityAdministrationError::InvalidInput);
+    }
+    Ok((
+        operation_id,
+        group_id,
+        member_principal_id,
+        AuthoritativeCommand::AddGroupMember(AddGroupMember {
+            containing_group_id: group_id,
+            member_principal_id,
+            valid_from: public_instant(&request.valid_from_epoch_micros),
+            valid_until: public_instant(&request.valid_until_epoch_micros),
+            activation_required: request.activation_required,
+        }),
+    ))
+}
+
+pub(super) fn remove_membership_command(
+    group_id: &ApiPrincipalId,
+    member_principal_id: &ApiPrincipalId,
+    request: &RemoveGroupMemberRequest,
+) -> Result<(OperationId, GroupId, PrincipalId, AuthoritativeCommand), IdentityAdministrationError>
+{
+    let operation_id = domain_operation(&request.operation_id)?;
+    let group_id = domain_group(group_id)?;
+    let member_principal_id = domain_principal(member_principal_id)?;
+    Ok((
+        operation_id,
+        group_id,
+        member_principal_id,
+        AuthoritativeCommand::RemoveGroupMember(RemoveGroupMember {
+            containing_group_id: group_id,
+            member_principal_id,
+            reason: request.reason.as_str().to_owned(),
+        }),
+    ))
+}
+
+const fn public_instant(
+    value: &NullableField<meshspan_api_contract::GroupMembershipInstant>,
+) -> Option<UnixMicros> {
+    match value {
+        NullableField::Value(value) => Some(UnixMicros::new(value.epoch_micros())),
+        NullableField::Missing | NullableField::Null => None,
+    }
 }
 
 pub(super) fn command_context(
@@ -129,6 +205,105 @@ pub(super) fn list_response(
     })
 }
 
+pub(super) fn membership_list_response(
+    api_group_id: &ApiPrincipalId,
+    query: &ListGroupMembershipsQuery,
+    limit: u16,
+    page: Page<GroupMembershipRecord, GroupMemberCursor>,
+) -> Result<ListGroupMembershipsResponse, IdentityAdministrationError> {
+    let memberships = page
+        .items
+        .into_iter()
+        .map(public_membership)
+        .collect::<Result<Vec<_>, _>>()?;
+    let next_page_url = page
+        .next
+        .map(|cursor| membership_next_page_url(api_group_id, query, limit, cursor))
+        .transpose()?;
+    Ok(ListGroupMembershipsResponse {
+        group_id: api_group_id.clone(),
+        memberships,
+        next_page_url,
+    })
+}
+
+pub(super) fn add_membership_response(
+    request_operation: &ApiOperationId,
+    request: &AddGroupMemberRequest,
+    commit: GroupMembershipAdministrationCommit,
+    member: PrincipalRecord,
+) -> Result<AddGroupMemberResponse, IdentityAdministrationError> {
+    if commit.result_digest == [0; 32]
+        || commit.member_principal_id != member.principal_id
+        || commit.mutation_kind != meshspan_metadata::GroupMembershipEventKind::Added
+        || commit.committed_revision == 0
+        || commit.committed_revision > 9_007_199_254_740_991
+        || !(0..=9_007_199_254_740_991).contains(&commit.occurred_at.get())
+    {
+        return Err(IdentityAdministrationError::Failed);
+    }
+    Ok(AddGroupMemberResponse {
+        operation_id: request_operation.clone(),
+        membership: GroupMembershipSummary {
+            group_id: ApiPrincipalId::from_uuid_bytes(commit.group_id.as_bytes())
+                .ok_or(IdentityAdministrationError::Failed)?,
+            member: public_principal(member)?,
+            valid_from_epoch_micros: public_instant(&request.valid_from_epoch_micros)
+                .map(UnixMicros::get),
+            valid_until_epoch_micros: public_instant(&request.valid_until_epoch_micros)
+                .map(UnixMicros::get),
+            activation_required: request.activation_required,
+            created_by: ApiPrincipalId::from_uuid_bytes(commit.actor_principal_id.as_bytes())
+                .ok_or(IdentityAdministrationError::Failed)?,
+            created_at_epoch_micros: commit.occurred_at.get(),
+            revision: commit.committed_revision,
+        },
+    })
+}
+
+pub(super) fn remove_membership_response(
+    request_operation: &ApiOperationId,
+    commit: GroupMembershipAdministrationCommit,
+    member_principal_id: &ApiPrincipalId,
+) -> Result<RemoveGroupMemberResponse, IdentityAdministrationError> {
+    let requested_member = domain_principal(member_principal_id)?;
+    if commit.result_digest == [0; 32]
+        || commit.member_principal_id != requested_member
+        || commit.mutation_kind != meshspan_metadata::GroupMembershipEventKind::Removed
+        || commit.committed_revision == 0
+        || commit.committed_revision > 9_007_199_254_740_991
+        || !(0..=9_007_199_254_740_991).contains(&commit.occurred_at.get())
+    {
+        return Err(IdentityAdministrationError::Failed);
+    }
+    Ok(RemoveGroupMemberResponse {
+        operation_id: request_operation.clone(),
+        group_id: ApiPrincipalId::from_uuid_bytes(commit.group_id.as_bytes())
+            .ok_or(IdentityAdministrationError::Failed)?,
+        member_principal_id: member_principal_id.clone(),
+        removed_at_epoch_micros: commit.occurred_at.get(),
+        revision: commit.committed_revision,
+    })
+}
+
+pub(super) fn decode_membership_cursor(
+    cursor: &ApiGroupMembershipCursor,
+    expected_group: GroupId,
+) -> Result<GroupMemberCursor, IdentityAdministrationError> {
+    let fields = cursor.as_str().split('.').collect::<Vec<_>>();
+    if fields.len() != 4 || fields[0] != "v1" || fields[1] != "gm" {
+        return Err(IdentityAdministrationError::InvalidInput);
+    }
+    let group_id = GroupId::from_bytes(decode_array(fields[2])?)
+        .map_err(|_| IdentityAdministrationError::InvalidInput)?;
+    let member_principal_id = PrincipalId::from_bytes(decode_array(fields[3])?)
+        .map_err(|_| IdentityAdministrationError::InvalidInput)?;
+    if group_id != expected_group {
+        return Err(IdentityAdministrationError::InvalidInput);
+    }
+    Ok(GroupMemberCursor::new(group_id, member_principal_id))
+}
+
 pub(super) fn decode_cursor(
     cursor: &ApiPrincipalCursor,
     expected_kind: PrincipalKind,
@@ -161,7 +336,7 @@ pub(super) const fn domain_kind(kind: ApiPrincipalKind) -> PrincipalKind {
     }
 }
 
-fn public_principal(
+pub(super) fn public_principal(
     record: PrincipalRecord,
 ) -> Result<PrincipalSummary, IdentityAdministrationError> {
     let kind = match record.kind {
@@ -191,6 +366,58 @@ fn public_principal(
         created_at_epoch_micros: record.created_at.get(),
         revision,
     })
+}
+
+fn public_membership(
+    record: GroupMembershipRecord,
+) -> Result<GroupMembershipSummary, IdentityAdministrationError> {
+    let revision = record.revision.get();
+    if revision == 0
+        || revision > 9_007_199_254_740_991
+        || !(0..=9_007_199_254_740_991).contains(&record.created_at.get())
+    {
+        return Err(IdentityAdministrationError::Failed);
+    }
+    Ok(GroupMembershipSummary {
+        group_id: ApiPrincipalId::from_uuid_bytes(record.group_id.as_bytes())
+            .ok_or(IdentityAdministrationError::Failed)?,
+        member: public_principal(record.member)?,
+        valid_from_epoch_micros: record.valid_from.map(UnixMicros::get),
+        valid_until_epoch_micros: record.valid_until.map(UnixMicros::get),
+        activation_required: record.activation_required,
+        created_by: ApiPrincipalId::from_uuid_bytes(record.created_by.as_bytes())
+            .ok_or(IdentityAdministrationError::Failed)?,
+        created_at_epoch_micros: record.created_at.get(),
+        revision,
+    })
+}
+
+fn membership_next_page_url(
+    group_id: &ApiPrincipalId,
+    query: &ListGroupMembershipsQuery,
+    limit: u16,
+    cursor: GroupMemberCursor,
+) -> Result<String, IdentityAdministrationError> {
+    let cursor = encode_membership_cursor(cursor)?;
+    let url = format!(
+        "/api/latest/admin/groups/{}/members?limit={limit}&cursor={}",
+        group_id.as_str(),
+        cursor.as_str()
+    );
+    let _ = query;
+    (url.len() <= 16_384)
+        .then_some(url)
+        .ok_or(IdentityAdministrationError::Failed)
+}
+
+fn encode_membership_cursor(
+    cursor: GroupMemberCursor,
+) -> Result<ApiGroupMembershipCursor, IdentityAdministrationError> {
+    let mut encoded = "v1.gm.".to_owned();
+    append_hex(&mut encoded, &cursor.group_id().as_bytes());
+    encoded.push('.');
+    append_hex(&mut encoded, &cursor.member_principal_id().as_bytes());
+    ApiGroupMembershipCursor::from_encoded(encoded).ok_or(IdentityAdministrationError::Failed)
 }
 
 fn next_page_url(

@@ -4,6 +4,8 @@
 import type {
   AbortUploadRequest,
   AbortUploadResponse,
+  AddGroupMemberRequest,
+  AddGroupMemberResponse,
   ApiError,
   BeginUploadRequest,
   BeginUploadResponse,
@@ -26,6 +28,7 @@ import type {
   GetObjectResponse,
   HealthResponse,
   ListDirectoryResponse,
+  ListGroupMembershipsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
   RevokeAuthenticationMethodRequest,
@@ -34,6 +37,8 @@ import type {
   RevokeCurrentSessionResponse,
   RenameObjectRequest,
   RenameObjectResponse,
+  RemoveGroupMemberRequest,
+  RemoveGroupMemberResponse,
   SetupStatusResponse,
   UploadStatusResponse,
   WriteUploadRangeResponse,
@@ -43,6 +48,9 @@ import {
   zAbortUploadPath,
   zAbortUploadResponse2,
   zApiError,
+  zAddGroupMemberBody,
+  zAddGroupMemberPath,
+  zAddGroupMemberResponse2,
   zBeginUploadBody,
   zBeginUploadPath,
   zBeginUploadResponse2,
@@ -79,6 +87,9 @@ import {
   zListDirectoryResponse2,
   zListGroupsQuery,
   zListGroupsResponse,
+  zListGroupMembersPath,
+  zListGroupMembersQuery,
+  zListGroupMembersResponse,
   zListPrincipalsResponse,
   zListUploadRangesPath,
   zListUploadRangesQuery,
@@ -95,6 +106,9 @@ import {
   zRenameObjectBody,
   zRenameObjectPath,
   zRenameObjectResponse2,
+  zRemoveGroupMemberBody,
+  zRemoveGroupMemberPath,
+  zRemoveGroupMemberResponse2,
   zWriteUploadRangeHeaders,
   zWriteUploadRangePath,
   zWriteUploadRangeResponse2,
@@ -156,6 +170,12 @@ export type ListPrincipalsRequest = Readonly<{
   limit?: number;
 }>;
 
+export type ListGroupMembersRequest = Readonly<{
+  groupId: string;
+  cursor?: string;
+  limit?: number;
+}>;
+
 export type ListUploadRangesRequest = Readonly<{
   uploadId: string;
   cursor?: string;
@@ -177,6 +197,11 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  addGroupMember(
+    groupId: string,
+    request: AddGroupMemberRequest,
+    csrfToken?: string,
+  ): Promise<AddGroupMemberResponse>;
   createGroup(
     request: CreateGroupRequest,
     csrfToken?: string,
@@ -186,8 +211,20 @@ export interface MeshSpanFetchClient {
     csrfToken?: string,
   ): Promise<CreatePrincipalResponse>;
   listGroups(request?: ListPrincipalsRequest): Promise<ListPrincipalsResponse>;
+  listGroupMembers(
+    request: ListGroupMembersRequest,
+  ): Promise<ListGroupMembershipsResponse>;
+  listNextGroupMembers(
+    nextPageUrl: string,
+  ): Promise<ListGroupMembershipsResponse>;
   listUsers(request?: ListPrincipalsRequest): Promise<ListPrincipalsResponse>;
   listNextPrincipals(nextPageUrl: string): Promise<ListPrincipalsResponse>;
+  removeGroupMember(
+    groupId: string,
+    memberPrincipalId: string,
+    request: RemoveGroupMemberRequest,
+    csrfToken?: string,
+  ): Promise<RemoveGroupMemberResponse>;
   createDirectory(
     volumeId: string,
     request: CreateDirectoryRequest,
@@ -290,6 +327,89 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async addGroupMember(
+      groupId,
+      request,
+      csrfToken,
+    ): Promise<AddGroupMemberResponse> {
+      const path = zAddGroupMemberPath.parse({ group_id: groupId });
+      const body = zAddGroupMemberBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/admin/groups/{group_id}/members",
+          "group_id",
+          path.group_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zAddGroupMemberResponse2,
+      );
+    },
+    async listGroupMembers(request): Promise<ListGroupMembershipsResponse> {
+      const path = zListGroupMembersPath.parse({ group_id: request.groupId });
+      const query = zListGroupMembersQuery.parse({
+        cursor: request.cursor,
+        limit: request.limit,
+      });
+      return requestJson(
+        context,
+        appendQuery(
+          substitutePathParameter(
+            "/admin/groups/{group_id}/members",
+            "group_id",
+            path.group_id,
+          ),
+          query,
+        ),
+        { method: "GET" },
+        zListGroupMembersResponse,
+      );
+    },
+    async listNextGroupMembers(
+      nextPageUrl,
+    ): Promise<ListGroupMembershipsResponse> {
+      return requestJson(
+        context,
+        validateGroupMembershipPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListGroupMembersResponse,
+      );
+    },
+    async removeGroupMember(
+      groupId,
+      memberPrincipalId,
+      request,
+      csrfToken,
+    ): Promise<RemoveGroupMemberResponse> {
+      const path = zRemoveGroupMemberPath.parse({
+        group_id: groupId,
+        member_principal_id: memberPrincipalId,
+      });
+      const body = zRemoveGroupMemberBody.parse(request);
+      const groupRoute = substitutePathParameter(
+        "/admin/groups/{group_id}/members/{member_principal_id}/removals",
+        "group_id",
+        path.group_id,
+      );
+      return requestJson(
+        context,
+        substitutePathParameter(
+          groupRoute,
+          "member_principal_id",
+          path.member_principal_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zRemoveGroupMemberResponse2,
+      );
+    },
     async createGroup(request, csrfToken): Promise<CreatePrincipalResponse> {
       const body = zCreateGroupBody.parse(request);
       return requestJson(
@@ -957,4 +1077,44 @@ function validatePrincipalPageQuery(route: URL): void {
   } else {
     zListUsersQuery.parse(query);
   }
+}
+
+function validateGroupMembershipPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("group-membership page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  const prefix = "/api/latest/admin/groups/";
+  const suffix = "/members";
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    !route.pathname.startsWith(prefix) ||
+    !route.pathname.endsWith(suffix)
+  ) {
+    throw new TypeError(
+      "group-membership page URL is outside the administration API",
+    );
+  }
+  const groupId = route.pathname.slice(prefix.length, -suffix.length);
+  zListGroupMembersPath.parse({ group_id: groupId });
+  validateGroupMembershipPageQuery(route);
+  return route.pathname + route.search;
+}
+
+function validateGroupMembershipPageQuery(route: URL): void {
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("group-membership page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListGroupMembersQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
 }
