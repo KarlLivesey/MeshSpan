@@ -6,7 +6,7 @@ use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
     AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId, HandleId,
     NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
-    UnixMicros, VolumeId,
+    StageId, UnixMicros, UploadId, VolumeId,
 };
 use tempfile::tempdir;
 
@@ -18,7 +18,7 @@ use crate::{
     HandleShare, ManifestPublication, NamespaceLimits, NamespaceListRequest, NamespacePath,
     NamespacePublicationPath, NamespaceQueryError, NamespaceStatRequest, OpenHandleRequest,
     PublicationDisposition, PublishedContentReference, RootFilePublication, StageWrite,
-    StageWriteOutcome, VersionPublicationStore,
+    StageWriteOutcome, UploadDisposition, UploadState, VersionPublicationStore,
 };
 
 #[test]
@@ -264,6 +264,103 @@ fn directory_pages_are_immutable_bounded_and_reauthorised_before_each_page()
     Ok(())
 }
 
+#[test]
+fn resumable_upload_reauthorises_the_stable_parent_before_every_range()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let allowed = Rc::new(Cell::new(true));
+    let authority = TestAuthority::new(Rc::clone(&allowed), PrincipalId::from_bytes([18; 16])?);
+    let service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), TestPublisher)?;
+    let mut service = AuthorisedFilesystemService::new(service, authority);
+    let begin = AdapterUploadBeginRequest {
+        operation_id: OperationId::from_bytes([70; 16])?,
+        upload_id: UploadId::from_bytes([71; 16])?,
+        stage_id: StageId::from_bytes([72; 16])?,
+        volume_id: VolumeId::from_bytes([12; 16])?,
+        path: NamespacePath::from_components(["upload.bin"], NamespaceLimits::PORTABLE)?,
+        disposition: UploadDisposition::CreateNew,
+        maximum_bytes: 1_024,
+        expires_at: UnixMicros::new(100),
+        observed_at: UnixMicros::new(30),
+    };
+    let receipt = service.adapter_begin_upload(
+        BranchId::from_bytes([11; 16])?,
+        context(begin.observed_at)?,
+        &begin,
+    )?;
+    assert_eq!(
+        receipt.session.authority_object_id,
+        ObjectId::from_bytes([2; 16])?
+    );
+    assert_eq!(
+        service
+            .authority
+            .last_request
+            .get()
+            .map(|value| value.requested_rights),
+        Some(Rights::CREATE_CHILD)
+    );
+
+    let write = AdapterUploadWriteRequest {
+        upload_id: begin.upload_id,
+        operation_id: OperationId::from_bytes([73; 16])?,
+        stage_fence: 1,
+        offset: 0,
+        bytes: BoundedBytes::copy_from(b"safe", 4)?,
+        digest: blake3::hash(b"safe").into(),
+        observed_at: UnixMicros::new(31),
+    };
+    allowed.set(false);
+    assert!(matches!(
+        service.adapter_write_upload(context(write.observed_at)?, &write),
+        Err(AuthorisedFilesystemError::Authority(TestAuthorityError))
+    ));
+    allowed.set(true);
+    assert_eq!(
+        service
+            .adapter_write_upload(context(write.observed_at)?, &write)?
+            .checkpoint
+            .logical_extent,
+        4
+    );
+    let commit = AdapterUploadCommitRequest {
+        operation_id: OperationId::from_bytes([74; 16])?,
+        upload_id: begin.upload_id,
+        stage_fence: 1,
+        expected_sequence: 1,
+        final_length: 4,
+        sparse: false,
+        expected_content_digest: Some(blake3::hash(b"safe").into()),
+        content_deadline: UnixMicros::new(80),
+        observed_at: UnixMicros::new(32),
+    };
+    let policy = FilesystemAdapterPolicy::new(true, 1, 1)?;
+    let committed = service.adapter_commit_upload(
+        BranchId::from_bytes([11; 16])?,
+        context(commit.observed_at)?,
+        commit,
+        policy,
+    )?;
+    assert_eq!(committed.session.state, UploadState::Committed);
+    assert_eq!(
+        committed.publication.disposition,
+        PublicationDisposition::Applied
+    );
+    let replayed = service.adapter_commit_upload(
+        BranchId::from_bytes([11; 16])?,
+        context(commit.observed_at)?,
+        commit,
+        policy,
+    )?;
+    assert_eq!(
+        replayed.publication.disposition,
+        PublicationDisposition::Replayed
+    );
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RecordedRequest {
     volume_id: VolumeId,
@@ -496,6 +593,8 @@ fn publish_additional_file(
 
 struct UnusedPublisher;
 
+struct TestPublisher;
+
 struct SeedPublisher {
     content: PublishedContentReference,
     bytes: Vec<u8>,
@@ -576,5 +675,43 @@ impl DurableContentPublisher for UnusedPublisher {
         _completed: crate::CompletedStage,
     ) -> Result<ManifestPublication, ContentPublicationError> {
         Err(ContentPublicationError::Unavailable)
+    }
+}
+
+impl DurableContentPublisher for TestPublisher {
+    type Sink = Vec<u8>;
+
+    fn resolve(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Option<ManifestPublication>, ContentPublicationError> {
+        Ok(None)
+    }
+
+    fn begin(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Self::Sink, ContentPublicationError> {
+        Ok(Vec::new())
+    }
+
+    fn finish(
+        &mut self,
+        request: ContentPublicationRequest,
+        sink: Self::Sink,
+        completed: crate::CompletedStage,
+    ) -> Result<ManifestPublication, ContentPublicationError> {
+        if sink.len() as u64 != completed.logical_length
+            || blake3::hash(&sink).as_bytes() != &completed.content_digest
+        {
+            return Err(ContentPublicationError::Corrupt);
+        }
+        Ok(ManifestPublication {
+            manifest_id: request.manifest_id,
+            format_version: request.format_version,
+            logical_length: completed.logical_length,
+            content_digest: completed.content_digest,
+            root_digest: blake3::hash(&sink).into(),
+        })
     }
 }

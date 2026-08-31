@@ -19,7 +19,10 @@ use meshspan_filesystem::{
 use thiserror::Error;
 
 use crate::create_mesh_setup::parse_uuid;
-use crate::{FileApiAuthenticationError, FileApiAuthenticator, FileApiFailure};
+use crate::{
+    FileApiAuthenticationError, FileApiFailure, NativeFileApiAuthenticator,
+    NativeFileRequestProtection,
+};
 
 const READ_LEASE_MICROS: u64 = 30 * 1_000_000;
 
@@ -143,7 +146,7 @@ pub trait FileReadController: Send + 'static {
 
 impl<A, F, M, R> FileReadController for FileReadService<A, F, M, R>
 where
-    A: FileApiAuthenticator,
+    A: NativeFileApiAuthenticator,
     F: FileRangeReader,
     M: Fn(&F::Error) -> FileApiFailure + Send + 'static,
     R: RandomSource + Send + 'static,
@@ -156,7 +159,11 @@ where
         now: UnixMicros,
     ) -> Result<FileReadResult, FileReadError> {
         validate_read_file_query(&query).map_err(|_| FileReadError::InvalidInput)?;
-        let context = self.authenticator.authenticate_file_read(headers, now)?;
+        let context = self.authenticator.authenticate_file_request(
+            headers,
+            NativeFileRequestProtection::Read,
+            now,
+        )?;
         let target = read_target(volume_id, &query)?;
         let identities = FileReadIdentities::allocate(&mut self.random)?;
         let deadline = now

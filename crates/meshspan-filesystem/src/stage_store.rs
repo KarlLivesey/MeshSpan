@@ -19,7 +19,7 @@ use crate::{Checkpoint, StageWrite, StageWriteOutcome};
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 type BaseLoader<'a> = dyn FnMut(&mut dyn Write) -> Result<(), StageStoreError> + 'a;
-const MIGRATIONS: [Migration; 3] = [
+const MIGRATIONS: [Migration; 5] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/stage/001_initial.sql"),
@@ -32,8 +32,16 @@ const MIGRATIONS: [Migration; 3] = [
         version: 3,
         sql: include_str!("../schema/stage/003_truncation_operations.sql"),
     },
+    Migration {
+        version: 4,
+        sql: include_str!("../schema/stage/004_abort_operations.sql"),
+    },
+    Migration {
+        version: 5,
+        sql: include_str!("../schema/stage/005_range_index.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 5;
 const STAGE_DIRECTORY: &str = "stages";
 const DATABASE_FILE: &str = "filesystem-stages.sqlite3";
 const COPY_BUFFER_BYTES: usize = 64 * 1_024;
@@ -107,6 +115,30 @@ pub struct StageRangeReadRequest {
     pub observed_at: UnixMicros,
 }
 
+/// One bounded immutable page over exact initialised range coverage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StageRangePage {
+    /// Exact checkpoint represented by every range in this traversal.
+    pub checkpoint_sequence: u64,
+    /// Sorted, merged, non-adjacent coverage.
+    pub ranges: Vec<Range<u64>>,
+    /// Start of the last returned range, used only with the pinned checkpoint.
+    pub next_after_start: Option<u64>,
+}
+
+/// One bounded range-index query pinned after its first page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageRangePageRequest {
+    /// Selected private stage.
+    pub stage_id: StageId,
+    /// First page omits this; continuations require the returned exact sequence.
+    pub expected_sequence: Option<u64>,
+    /// Exclusive range-start continuation from the preceding page.
+    pub after_start: Option<u64>,
+    /// Positive page bound no larger than 256.
+    pub limit: u16,
+}
+
 /// Exact idempotent private-stage lease transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StageLeaseRequest {
@@ -139,6 +171,38 @@ pub struct StageLeaseReceipt {
     pub stage_fence: u64,
     /// New exclusive lease deadline.
     pub lease_expires_at: UnixMicros,
+    /// Digest binding the complete durable result.
+    pub result_digest: [u8; 32],
+}
+
+/// Exact idempotent abandonment of one private write stage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageAbortRequest {
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Private stage being abandoned.
+    pub stage_id: StageId,
+    /// Exact current writer generation.
+    pub stage_fence: u64,
+    /// Authoritative abandonment instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Durable proof that a private stage can no longer accept writes or publish content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageAbortReceipt {
+    /// Whether the abort was newly applied or exactly replayed.
+    pub outcome: StageWriteOutcome,
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Abandoned stage.
+    pub stage_id: StageId,
+    /// Digest binding the exact abort request.
+    pub request_digest: [u8; 32],
+    /// Fence retired by the abort.
+    pub stage_fence: u64,
+    /// Authoritative abandonment instant.
+    pub aborted_at: UnixMicros,
     /// Digest binding the complete durable result.
     pub result_digest: [u8; 32],
 }
@@ -356,6 +420,29 @@ impl DurableStageStore {
         })
     }
 
+    /// Returns one bounded exact range page without scanning the write journal.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds, absent stages, stale continuation checkpoints and corrupt indexes.
+    pub fn range_page(
+        &self,
+        request: StageRangePageRequest,
+    ) -> Result<StageRangePage, StageStoreError> {
+        let page = crate::stage_range_index::page(
+            &self.connection,
+            request.stage_id,
+            request.expected_sequence,
+            request.after_start,
+            request.limit,
+        )?;
+        Ok(StageRangePage {
+            checkpoint_sequence: page.sequence,
+            ranges: page.ranges,
+            next_after_start: page.next_after_start,
+        })
+    }
+
     /// Extends a private-stage lease or advances its fence during explicit handle takeover.
     ///
     /// # Errors
@@ -437,6 +524,73 @@ impl DurableStageStore {
             request_digest,
             stage_fence: resulting_fence,
             lease_expires_at: request.lease_expires_at,
+            result_digest,
+        })
+    }
+
+    /// Permanently fences one unpublished stage without making any staged bytes visible.
+    ///
+    /// Exact retries return the original receipt. The immutable part files remain unreachable and
+    /// are reclaimed separately, so a crash cannot turn a partially removed stage back into a
+    /// writable one.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, stale, expired or conflicting requests and persistence failure.
+    pub fn abort(
+        &mut self,
+        request: StageAbortRequest,
+    ) -> Result<StageAbortReceipt, StageStoreError> {
+        validate_abort_request(request)?;
+        let request_digest = abort_request_digest(request);
+        if let Some(receipt) = load_abort_receipt(&self.connection, request.operation_id)? {
+            return matching_abort_replay(receipt, request, request_digest);
+        }
+        reject_stage_operation_collision(&self.connection, request.operation_id)?;
+        let stage = load_stage(&self.connection, request.stage_id)?;
+        if stage.state != 1
+            || stage.fence != request.stage_fence
+            || stage.expires_at <= request.observed_at
+        {
+            return Err(StageStoreError::Stale);
+        }
+        let result_digest = abort_result_digest(request, request_digest);
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let updated = transaction.execute(
+            "UPDATE stages SET state = 3
+             WHERE stage_id = ?1 AND state = 1 AND stage_fence = ?2 AND expires_at > ?3",
+            params![
+                request.stage_id.as_bytes().as_slice(),
+                to_i64(request.stage_fence)?,
+                request.observed_at.get(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err(StageStoreError::Stale);
+        }
+        transaction.execute(
+            "INSERT INTO stage_abort_operations(
+                operation_id, stage_id, request_digest, stage_fence, aborted_at, receipt_digest
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                request.operation_id.as_bytes().as_slice(),
+                request.stage_id.as_bytes().as_slice(),
+                request_digest.as_slice(),
+                to_i64(request.stage_fence)?,
+                request.observed_at.get(),
+                result_digest.as_slice(),
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(StageAbortReceipt {
+            outcome: StageWriteOutcome::Applied,
+            operation_id: request.operation_id,
+            stage_id: request.stage_id,
+            request_digest,
+            stage_fence: request.stage_fence,
+            aborted_at: request.observed_at,
             result_digest,
         })
     }
@@ -683,6 +837,7 @@ impl DurableStageStore {
         if updated != 1 {
             return Err(StageStoreError::Unavailable);
         }
+        crate::stage_range_index::merge(&transaction, stage_id, write.offset..extent)?;
         transaction.commit()?;
         Ok(StageWriteOutcome::Applied)
     }
@@ -807,6 +962,14 @@ fn validate_lease_request(request: StageLeaseRequest) -> Result<(), StageStoreEr
     }
 }
 
+fn validate_abort_request(request: StageAbortRequest) -> Result<(), StageStoreError> {
+    if request.stage_fence == 0 {
+        Err(StageStoreError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_range_read(request: StageRangeReadRequest) -> Result<(), StageStoreError> {
     let maximum =
         u64::try_from(MAXIMUM_STAGE_READ_BYTES).map_err(|_| StageStoreError::InvalidInput)?;
@@ -827,7 +990,8 @@ fn reject_stage_operation_collision(
     let collision: i64 = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM stage_writes WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM stage_lease_operations WHERE operation_id = ?1)
-             OR EXISTS(SELECT 1 FROM stage_truncation_operations WHERE operation_id = ?1)",
+             OR EXISTS(SELECT 1 FROM stage_truncation_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM stage_abort_operations WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;
@@ -836,6 +1000,95 @@ fn reject_stage_operation_collision(
     } else {
         Err(StageStoreError::OperationConflict)
     }
+}
+
+fn load_abort_receipt(
+    connection: &Connection,
+    operation_id: OperationId,
+) -> Result<Option<StageAbortReceipt>, StageStoreError> {
+    type Stored = (Vec<u8>, Vec<u8>, i64, i64, Vec<u8>);
+    let stored: Option<Stored> = connection
+        .query_row(
+            "SELECT stage_id, request_digest, stage_fence, aborted_at, receipt_digest
+             FROM stage_abort_operations WHERE operation_id = ?1",
+            [operation_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    stored
+        .as_ref()
+        .map(|stored| decode_abort_receipt(operation_id, stored))
+        .transpose()
+}
+
+fn decode_abort_receipt(
+    operation_id: OperationId,
+    stored: &(Vec<u8>, Vec<u8>, i64, i64, Vec<u8>),
+) -> Result<StageAbortReceipt, StageStoreError> {
+    let stage_id = stage_identifier(&stored.0)?;
+    let request_digest = copy_digest(&stored.1)?;
+    let stage_fence = from_i64(stored.2)?;
+    let aborted_at = UnixMicros::new(stored.3);
+    let result_digest = copy_digest(&stored.4)?;
+    let request = StageAbortRequest {
+        operation_id,
+        stage_id,
+        stage_fence,
+        observed_at: aborted_at,
+    };
+    if result_digest != abort_result_digest(request, request_digest) {
+        return Err(StageStoreError::Corrupt);
+    }
+    Ok(StageAbortReceipt {
+        outcome: StageWriteOutcome::Replayed,
+        operation_id,
+        stage_id,
+        request_digest,
+        stage_fence,
+        aborted_at,
+        result_digest,
+    })
+}
+
+fn matching_abort_replay(
+    receipt: StageAbortReceipt,
+    request: StageAbortRequest,
+    request_digest: [u8; 32],
+) -> Result<StageAbortReceipt, StageStoreError> {
+    if receipt.stage_id == request.stage_id && receipt.request_digest == request_digest {
+        Ok(receipt)
+    } else {
+        Err(StageStoreError::OperationConflict)
+    }
+}
+
+fn abort_request_digest(request: StageAbortRequest) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.stage-abort-request.v1\0");
+    digest.update(&request.operation_id.as_bytes());
+    digest.update(&request.stage_id.as_bytes());
+    digest.update(&request.stage_fence.to_be_bytes());
+    digest.update(&request.observed_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+fn abort_result_digest(request: StageAbortRequest, request_digest: [u8; 32]) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.stage-abort-result.v1\0");
+    digest.update(&request.operation_id.as_bytes());
+    digest.update(&request.stage_id.as_bytes());
+    digest.update(&request_digest);
+    digest.update(&request.stage_fence.to_be_bytes());
+    digest.update(&request.observed_at.get().to_be_bytes());
+    digest.finalize().into()
 }
 
 fn truncation_request_digest(
@@ -1419,8 +1672,9 @@ mod tests {
 
     use super::{
         CompletedStage, DATABASE_FILE, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, MIGRATIONS,
-        SCHEMA_VERSION, STAGE_DIRECTORY, StageCompletionRequest, StageLeaseRequest,
-        StageRangeReadRequest, StageRegistration, StageStoreError, configure, install_part,
+        SCHEMA_VERSION, STAGE_DIRECTORY, StageAbortRequest, StageCompletionRequest,
+        StageLeaseRequest, StageRangePageRequest, StageRangeReadRequest, StageRegistration,
+        StageStoreError, configure, install_part,
     };
     use crate::{StageWrite, StageWriteOutcome};
 
@@ -1463,6 +1717,116 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(truncation_table, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn range_index_migration_backfills_legacy_write_coverage()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([91; 16])?;
+        let connection = Connection::open(directory.path().join(DATABASE_FILE))?;
+        configure(&connection)?;
+        for migration in &MIGRATIONS[..4] {
+            connection.execute_batch(migration.sql)?;
+            let digest: [u8; 32] = blake3::hash(migration.sql.as_bytes()).into();
+            connection.execute(
+                "INSERT INTO schema_migrations(version, migration_digest, applied_at)
+                 VALUES (?1, ?2, 1)",
+                params![migration.version, digest.as_slice()],
+            )?;
+            connection.pragma_update(None, "user_version", migration.version)?;
+        }
+        connection.execute(
+            "INSERT INTO stages(
+                stage_id, stage_fence, maximum_bytes, state, mutation_sequence,
+                logical_extent, created_at, expires_at
+             ) VALUES (?1, 1, 100, 1, 4, 6, 1, 100)",
+            [stage_id.as_bytes().as_slice()],
+        )?;
+        for (sequence, offset) in [(1_i64, 0_i64), (2, 2), (3, 1), (4, 5)] {
+            let operation = OperationId::from_bytes([u8::try_from(sequence)?; 16])?;
+            connection.execute(
+                "INSERT INTO stage_writes(
+                    operation_id, stage_id, mutation_sequence, stage_fence, byte_offset,
+                    byte_length, content_digest, part_name, applied_at
+                 ) VALUES (?1, ?2, ?3, 1, ?4, 1, ?5, ?6, 2)",
+                params![
+                    operation.as_bytes().as_slice(),
+                    stage_id.as_bytes().as_slice(),
+                    sequence,
+                    offset,
+                    [0_u8; 32].as_slice(),
+                    format!("{operation}.part")
+                ],
+            )?;
+        }
+        drop(connection);
+
+        let store = DurableStageStore::open(directory.path(), UnixMicros::new(2))?;
+        let page = store.range_page(StageRangePageRequest {
+            stage_id,
+            expected_sequence: Some(4),
+            after_start: None,
+            limit: 8,
+        })?;
+        assert_eq!(page.ranges, vec![0..3, 5..6]);
+        assert_eq!(page.next_after_start, None);
+        Ok(())
+    }
+
+    #[test]
+    fn abort_is_durable_idempotent_and_permanently_fences_private_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([101; 16])?;
+        let operation_id = OperationId::from_bytes([102; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 7, 100))?;
+        store.write(stage_id, &write(103, 7, 0, b"private")?, UnixMicros::new(2))?;
+        let request = StageAbortRequest {
+            operation_id,
+            stage_id,
+            stage_fence: 7,
+            observed_at: UnixMicros::new(3),
+        };
+        let applied = store.abort(request)?;
+        assert_eq!(applied.outcome, StageWriteOutcome::Applied);
+        assert_eq!(store.abort(request)?.outcome, StageWriteOutcome::Replayed);
+        assert!(matches!(
+            store.write(stage_id, &write(104, 7, 7, b"hidden")?, UnixMicros::new(4)),
+            Err(StageStoreError::Stale)
+        ));
+        assert!(matches!(
+            store.stream_complete(
+                StageCompletionRequest {
+                    operation_id: OperationId::from_bytes([105; 16])?,
+                    stage_id,
+                    stage_fence: 7,
+                    expected_sequence: 1,
+                    final_length: 7,
+                    sparse: false,
+                    observed_at: UnixMicros::new(4),
+                },
+                &mut Vec::new(),
+            ),
+            Err(StageStoreError::Stale)
+        ));
+        drop(store);
+
+        let mut reopened = DurableStageStore::open(directory.path(), UnixMicros::new(5))?;
+        assert_eq!(
+            reopened.abort(request)?.outcome,
+            StageWriteOutcome::Replayed
+        );
+        let conflict = StageAbortRequest {
+            stage_id: StageId::from_bytes([106; 16])?,
+            ..request
+        };
+        assert!(matches!(
+            reopened.abort(conflict),
+            Err(StageStoreError::OperationConflict)
+        ));
         Ok(())
     }
 

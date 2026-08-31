@@ -12,17 +12,23 @@ use crate::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
     AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
-    AdapterUnlinkRequest, AdapterUnlockRequest, AdapterWriteFileRequest, DirectoryPublication,
-    DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy, FilesystemCommitError,
-    FilesystemCommitService, FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest,
-    FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest, FilesystemHandleFlushRequest,
-    FilesystemHandleOpenRequest, FilesystemHandleReadReceipt, FilesystemHandleReadRequest,
-    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleAccess, HandleError,
-    HandleIoError, HandleLeaseReceipt, HandleLeaseRequest, HandleReadError, LockRangeReceipt,
-    LockRangeRequest, NamespaceListRequest, NamespacePublicationReceipt, NamespaceQueryError,
-    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceStatRequest,
-    NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest,
-    RangeLockKind, StageWrite, UnlockRangeReceipt, UnlockRangeRequest,
+    AdapterUnlinkRequest, AdapterUnlockRequest, AdapterUploadAbortRequest,
+    AdapterUploadBeginRequest, AdapterUploadCommitRequest, AdapterUploadRangePageRequest,
+    AdapterUploadStatusRequest, AdapterUploadWriteRequest, AdapterWriteFileRequest,
+    DirectoryPublication, DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy,
+    FilesystemCommitError, FilesystemCommitService, FilesystemHandleCloseReceipt,
+    FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest,
+    FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleReadReceipt,
+    FilesystemHandleReadRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
+    HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt, HandleLeaseRequest,
+    HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
+    NamespacePublicationReceipt, NamespaceQueryError, NamespaceRenamePublication,
+    NamespaceRenameReceipt, NamespaceStatRequest, NamespaceUnlinkPublication,
+    NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, StageWrite,
+    UnlockRangeReceipt, UnlockRangeRequest, UploadAbortRequest, UploadBeginRequest,
+    UploadCommitReceipt, UploadCommitRequest, UploadRangePageReceipt, UploadRangePageRequest,
+    UploadSession, UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt,
+    UploadWriteRequest,
 };
 
 /// Authenticated connector context supplied independently of a filesystem operation payload.
@@ -885,6 +891,176 @@ where
         )
     }
 
+    pub(crate) fn adapter_begin_upload(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: &AdapterUploadBeginRequest,
+    ) -> Result<UploadStatusReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let existing = self.filesystem.upload_session(request.upload_id).ok();
+        let (target, created_at, expires_at) = if let Some(session) = existing.as_ref() {
+            validate_upload_begin_replay(session, request)?;
+            (
+                session.authority_object_id,
+                session.created_at,
+                session.expires_at,
+            )
+        } else {
+            (
+                self.filesystem
+                    .upload_authority_target(
+                        branch_id,
+                        request.volume_id,
+                        &request.path,
+                        request.disposition,
+                    )
+                    .map_err(AuthorisedFilesystemError::Handle)?,
+                request.observed_at,
+                request.expires_at,
+            )
+        };
+        let rights = match request.disposition {
+            crate::UploadDisposition::CreateNew => Rights::CREATE_CHILD,
+            crate::UploadDisposition::ReplaceIfVersion(_)
+            | crate::UploadDisposition::ReplaceCurrent => Rights::WRITE_DATA,
+        };
+        let grant = self.authorise(context, request.volume_id, target, rights)?;
+        let prepared = UploadBeginRequest {
+            operation_id: request.operation_id,
+            upload_id: request.upload_id,
+            stage_id: request.stage_id,
+            volume_id: request.volume_id,
+            authority_object_id: target,
+            path: request.path.clone(),
+            principal_id: grant.principal_id,
+            authorization_revision: grant.identity_revision,
+            disposition: request.disposition,
+            maximum_bytes: request.maximum_bytes,
+            created_at,
+            expires_at,
+        };
+        self.filesystem
+            .begin_upload(&prepared)
+            .map_err(AuthorisedFilesystemError::Upload)?;
+        self.filesystem
+            .upload_status(UploadStatusRequest {
+                upload_id: request.upload_id,
+                principal_id: grant.principal_id,
+                authorization_revision: grant.identity_revision,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::Upload)
+    }
+
+    pub(crate) fn adapter_upload_status(
+        &self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadStatusRequest,
+    ) -> Result<UploadStatusReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let (session, grant) = self.authorise_upload(context, request.upload_id)?;
+        self.filesystem
+            .upload_status(UploadStatusRequest {
+                upload_id: request.upload_id,
+                principal_id: session.principal_id,
+                authorization_revision: grant.identity_revision,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::Upload)
+    }
+
+    pub(crate) fn adapter_write_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterUploadWriteRequest,
+    ) -> Result<UploadWriteReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let (session, grant) = self.authorise_upload(context, request.upload_id)?;
+        self.filesystem
+            .write_upload(&UploadWriteRequest {
+                upload_id: request.upload_id,
+                principal_id: session.principal_id,
+                authorization_revision: grant.identity_revision,
+                operation_id: request.operation_id,
+                stage_fence: request.stage_fence,
+                offset: request.offset,
+                bytes: request.bytes.clone(),
+                digest: request.digest,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::Upload)
+    }
+
+    pub(crate) fn adapter_upload_range_page(
+        &self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadRangePageRequest,
+    ) -> Result<UploadRangePageReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let (session, grant) = self.authorise_upload(context, request.upload_id)?;
+        self.filesystem
+            .upload_range_page(UploadRangePageRequest {
+                upload_id: request.upload_id,
+                principal_id: session.principal_id,
+                authorization_revision: grant.identity_revision,
+                expected_sequence: request.expected_sequence,
+                after_start: request.after_start,
+                limit: request.limit,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::Upload)
+    }
+
+    pub(crate) fn adapter_abort_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadAbortRequest,
+    ) -> Result<UploadSession, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let (session, grant) = self.authorise_upload(context, request.upload_id)?;
+        self.filesystem
+            .abort_upload(UploadAbortRequest {
+                operation_id: request.operation_id,
+                upload_id: request.upload_id,
+                principal_id: session.principal_id,
+                authorization_revision: grant.identity_revision,
+                stage_fence: request.stage_fence,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::Upload)
+    }
+
+    pub(crate) fn adapter_commit_upload(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: AdapterUploadCommitRequest,
+        policy: FilesystemAdapterPolicy,
+    ) -> Result<UploadCommitReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let (session, grant) = self.authorise_upload(context, request.upload_id)?;
+        let publication = self
+            .filesystem
+            .prepare_upload_publication(branch_id, &session, request, policy, grant)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        self.filesystem
+            .commit_upload(&UploadCommitRequest {
+                operation_id: request.operation_id,
+                upload_id: request.upload_id,
+                principal_id: session.principal_id,
+                authorization_revision: grant.identity_revision,
+                stage_fence: request.stage_fence,
+                expected_sequence: request.expected_sequence,
+                final_length: request.final_length,
+                sparse: request.sparse,
+                expected_content_digest: request.expected_content_digest,
+                publication,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::Commit)
+    }
+
     /// Returns the owned parts for orderly shutdown and composition tests.
     #[must_use]
     pub fn into_parts(self) -> (FilesystemCommitService<P>, A) {
@@ -910,6 +1086,33 @@ where
         let grant = self.authorise(context, target.volume_id, target.object_id, rights)?;
         validate_principal_and_gateway(grant, target.principal_id, target.gateway_node_id)?;
         Ok(grant)
+    }
+
+    fn authorise_upload(
+        &self,
+        context: FilesystemAccessContext,
+        upload_id: meshspan_domain::UploadId,
+    ) -> Result<(UploadSession, FilesystemAuthorityGrant), AuthorisedFilesystemError<A::Error>>
+    {
+        let session = self
+            .filesystem
+            .upload_session(upload_id)
+            .map_err(AuthorisedFilesystemError::Upload)?;
+        let rights = match session.disposition {
+            crate::UploadDisposition::CreateNew => Rights::CREATE_CHILD,
+            crate::UploadDisposition::ReplaceIfVersion(_)
+            | crate::UploadDisposition::ReplaceCurrent => Rights::WRITE_DATA,
+        };
+        let grant = self.authorise(
+            context,
+            session.volume_id,
+            session.authority_object_id,
+            rights,
+        )?;
+        if grant.principal_id != session.principal_id {
+            return Err(AuthorisedFilesystemError::InvalidGrant);
+        }
+        Ok((session, grant))
     }
 
     fn authorise(
@@ -945,6 +1148,24 @@ fn require_adapter_context<E>(
         Ok(())
     } else {
         Err(AuthorisedFilesystemError::InvalidInput)
+    }
+}
+
+fn validate_upload_begin_replay<E>(
+    session: &UploadSession,
+    request: &AdapterUploadBeginRequest,
+) -> Result<(), AuthorisedFilesystemError<E>> {
+    if session.begin_operation_id != request.operation_id
+        || session.upload_id != request.upload_id
+        || session.stage_id != request.stage_id
+        || session.volume_id != request.volume_id
+        || session.path != request.path
+        || session.disposition != request.disposition
+        || session.maximum_bytes != request.maximum_bytes
+    {
+        Err(AuthorisedFilesystemError::InvalidInput)
+    } else {
+        Ok(())
     }
 }
 
@@ -1102,6 +1323,9 @@ pub enum AuthorisedFilesystemError<E> {
     /// Cross-database handle/stage orchestration rejected the operation.
     #[error("authorised filesystem handle IO failed")]
     HandleIo(#[source] HandleIoError),
+    /// Durable resumable-upload orchestration rejected the operation.
+    #[error("authorised filesystem upload operation failed")]
+    Upload(#[source] crate::UploadServiceError),
     /// Content or namespace publication rejected the operation.
     #[error("authorised filesystem commit failed")]
     Commit(#[source] FilesystemCommitError),

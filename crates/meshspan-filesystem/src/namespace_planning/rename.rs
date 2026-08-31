@@ -573,7 +573,7 @@ fn derive_generation(operation_id: OperationId) -> u64 {
     let bytes = derive(operation_id, b"generation", 0);
     let mut generation = [0_u8; 8];
     generation.copy_from_slice(&bytes[..8]);
-    (u64::from_be_bytes(generation) & i64::MAX as u64).max(1)
+    super::entry_generation_from_hash(generation)
 }
 
 fn derive_commit(operation_id: OperationId) -> Result<NamespaceCommitId, HandleError> {

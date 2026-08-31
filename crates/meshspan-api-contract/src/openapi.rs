@@ -6,17 +6,19 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ApiError, CreateApiKeyRequest, CreateApiKeyResponse, CreateMeshSetupRequest,
-    CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
-    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse,
-    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
-    CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
+    AbortUploadRequest, AbortUploadResponse, ApiError, BeginUploadRequest, BeginUploadResponse,
+    CommitUploadRequest, CommitUploadResponse, CreateApiKeyRequest, CreateApiKeyResponse,
+    CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
+    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
+    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
+    CreatePasskeyRegistrationResponse, CreateRecoveryCodesRequest, CreateRecoveryCodesResponse,
+    CreateSessionRequest, CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
     CreateTotpRegistrationResponse, CurrentSessionResponse, GetObjectResponse, HealthResponse,
-    ListDirectoryResponse, RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
-    StepUpCurrentSessionRequest, schema,
+    ListDirectoryResponse, ListUploadRangesResponse, RevokeAuthenticationMethodRequest,
+    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
+    SetupStatusResponse, StepUpCurrentSessionRequest, UploadStatusResponse,
+    WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -72,42 +74,73 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
         },
         "servers": [{ "url": "/api/latest" }],
         "paths": paths(),
-        "components": {
-            "schemas": {
-                "ApiError": response_component::<ApiError>(),
-                "CreateApiKeyRequest": request_component::<CreateApiKeyRequest>(),
-                "CreateApiKeyResponse": response_component::<CreateApiKeyResponse>(),
-                "CreateMeshSetupRequest": request_component::<CreateMeshSetupRequest>(),
-                "CreateMeshSetupResponse": response_component::<CreateMeshSetupResponse>(),
-                "CreatePasskeyChallengeRequest": request_component::<CreatePasskeyChallengeRequest>(),
-                "CreatePasskeyChallengeResponse": response_component::<CreatePasskeyChallengeResponse>(),
-                "CreatePasskeyRegistrationChallengeRequest": request_component::<CreatePasskeyRegistrationChallengeRequest>(),
-                "CreatePasskeyRegistrationChallengeResponse": response_component::<CreatePasskeyRegistrationChallengeResponse>(),
-                "CreatePasskeyRegistrationRequest": request_component::<CreatePasskeyRegistrationRequest>(),
-                "CreatePasskeyRegistrationResponse": response_component::<CreatePasskeyRegistrationResponse>(),
-                "CreateRecoveryCodesRequest": request_component::<CreateRecoveryCodesRequest>(),
-                "CreateRecoveryCodesResponse": response_component::<CreateRecoveryCodesResponse>(),
-                "CreateSessionRequest": request_component::<CreateSessionRequest>(),
-                "CreateSessionResponse": response_component::<CreateSessionResponse>(),
-                "CreateTotpRegistrationChallengeRequest": request_component::<CreateTotpRegistrationChallengeRequest>(),
-                "CreateTotpRegistrationChallengeResponse": response_component::<CreateTotpRegistrationChallengeResponse>(),
-                "CreateTotpRegistrationRequest": request_component::<CreateTotpRegistrationRequest>(),
-                "CreateTotpRegistrationResponse": response_component::<CreateTotpRegistrationResponse>(),
-                "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
-                "GetObjectResponse": response_component::<GetObjectResponse>(),
-                "HealthResponse": response_component::<HealthResponse>(),
-                "ListDirectoryResponse": response_component::<ListDirectoryResponse>(),
-                "RevokeCurrentSessionRequest": request_component::<RevokeCurrentSessionRequest>(),
-                "RevokeCurrentSessionResponse": response_component::<RevokeCurrentSessionResponse>(),
-                "RevokeAuthenticationMethodRequest": request_component::<RevokeAuthenticationMethodRequest>(),
-                "RevokeAuthenticationMethodResponse": response_component::<RevokeAuthenticationMethodResponse>(),
-                "SetupStatusResponse": response_component::<SetupStatusResponse>(),
-                "StepUpCurrentSessionRequest": request_component::<StepUpCurrentSessionRequest>()
-            }
-        }
+        "components": components()
     });
     let digest = format!("sha256:{}", hex_digest(&serde_json::to_vec(&document)?));
     Ok(OpenApiDocument { document, digest })
+}
+
+fn components() -> Value {
+    let schemas = Map::from_iter([
+        schema_response::<ApiError>("ApiError"),
+        schema_request::<AbortUploadRequest>("AbortUploadRequest"),
+        schema_response::<AbortUploadResponse>("AbortUploadResponse"),
+        schema_request::<BeginUploadRequest>("BeginUploadRequest"),
+        schema_response::<BeginUploadResponse>("BeginUploadResponse"),
+        schema_request::<CommitUploadRequest>("CommitUploadRequest"),
+        schema_response::<CommitUploadResponse>("CommitUploadResponse"),
+        schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
+        schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
+        schema_request::<CreateMeshSetupRequest>("CreateMeshSetupRequest"),
+        schema_response::<CreateMeshSetupResponse>("CreateMeshSetupResponse"),
+        schema_request::<CreatePasskeyChallengeRequest>("CreatePasskeyChallengeRequest"),
+        schema_response::<CreatePasskeyChallengeResponse>("CreatePasskeyChallengeResponse"),
+        schema_request::<CreatePasskeyRegistrationChallengeRequest>(
+            "CreatePasskeyRegistrationChallengeRequest",
+        ),
+        schema_response::<CreatePasskeyRegistrationChallengeResponse>(
+            "CreatePasskeyRegistrationChallengeResponse",
+        ),
+        schema_request::<CreatePasskeyRegistrationRequest>("CreatePasskeyRegistrationRequest"),
+        schema_response::<CreatePasskeyRegistrationResponse>("CreatePasskeyRegistrationResponse"),
+        schema_request::<CreateRecoveryCodesRequest>("CreateRecoveryCodesRequest"),
+        schema_response::<CreateRecoveryCodesResponse>("CreateRecoveryCodesResponse"),
+        schema_request::<CreateSessionRequest>("CreateSessionRequest"),
+        schema_response::<CreateSessionResponse>("CreateSessionResponse"),
+        schema_request::<CreateTotpRegistrationChallengeRequest>(
+            "CreateTotpRegistrationChallengeRequest",
+        ),
+        schema_response::<CreateTotpRegistrationChallengeResponse>(
+            "CreateTotpRegistrationChallengeResponse",
+        ),
+        schema_request::<CreateTotpRegistrationRequest>("CreateTotpRegistrationRequest"),
+        schema_response::<CreateTotpRegistrationResponse>("CreateTotpRegistrationResponse"),
+        schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
+        schema_response::<GetObjectResponse>("GetObjectResponse"),
+        schema_response::<HealthResponse>("HealthResponse"),
+        schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
+        schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
+        schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
+        schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
+        schema_request::<RevokeAuthenticationMethodRequest>("RevokeAuthenticationMethodRequest"),
+        schema_response::<RevokeAuthenticationMethodResponse>("RevokeAuthenticationMethodResponse"),
+        schema_response::<SetupStatusResponse>("SetupStatusResponse"),
+        schema_request::<StepUpCurrentSessionRequest>("StepUpCurrentSessionRequest"),
+        schema_response::<UploadStatusResponse>("UploadStatusResponse"),
+        schema_response::<WriteUploadRangeResponse>("WriteUploadRangeResponse"),
+    ]);
+    Value::Object(Map::from_iter([(
+        "schemas".to_owned(),
+        Value::Object(schemas),
+    )]))
+}
+
+fn schema_request<T: schemars::JsonSchema>(name: &str) -> (String, Value) {
+    (name.to_owned(), request_component::<T>())
+}
+
+fn schema_response<T: schemars::JsonSchema>(name: &str) -> (String, Value) {
+    (name.to_owned(), response_component::<T>())
 }
 
 fn paths() -> Value {
@@ -121,6 +154,27 @@ fn paths() -> Value {
         (
             "/volumes/{volume_id}/file-content".to_owned(),
             read_file_path(),
+        ),
+        (
+            "/volumes/{volume_id}/uploads".to_owned(),
+            begin_upload_path(),
+        ),
+        ("/uploads/{upload_id}".to_owned(), upload_status_path()),
+        (
+            "/uploads/{upload_id}/ranges".to_owned(),
+            upload_ranges_path(),
+        ),
+        (
+            "/uploads/{upload_id}/ranges/{offset}".to_owned(),
+            write_upload_range_path(),
+        ),
+        (
+            "/uploads/{upload_id}/commits".to_owned(),
+            commit_upload_path(),
+        ),
+        (
+            "/uploads/{upload_id}/aborts".to_owned(),
+            abort_upload_path(),
         ),
         ("/openapi.json".to_owned(), openapi_path()),
         ("/setup/status".to_owned(), setup_status_path()),
@@ -168,6 +222,276 @@ fn paths() -> Value {
             revoke_current_session_path(),
         ),
     ]))
+}
+
+fn begin_upload_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "beginUpload",
+            "summary": "Begin one durable private resumable file upload",
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [volume_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request(
+                "Bounded durable upload intent",
+                "#/components/schemas/BeginUploadRequest"
+            ),
+            "responses": upload_json_responses(
+                "201",
+                "Ready durable upload session",
+                "#/components/schemas/BeginUploadResponse"
+            )
+        }
+    })
+}
+
+fn upload_status_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getUpload",
+            "summary": "Read exact durable resumable upload state",
+            "x-meshspan-access": "authenticated",
+            "parameters": [upload_parameter()],
+            "responses": upload_json_responses(
+                "200",
+                "Exact current upload state",
+                "#/components/schemas/UploadStatusResponse"
+            )
+        }
+    })
+}
+
+fn upload_ranges_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listUploadRanges",
+            "summary": "List one bounded exact received-range page",
+            "x-meshspan-access": "authenticated",
+            "parameters": [
+                upload_parameter(),
+                {
+                    "name": "cursor",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024,
+                        "pattern": "^[A-Za-z0-9._~-]+$"
+                    }
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": false,
+                    "schema": { "type": "integer", "minimum": 1, "maximum": 256 }
+                }
+            ],
+            "responses": upload_json_responses(
+                "200",
+                "One immutable checkpoint range page",
+                "#/components/schemas/ListUploadRangesResponse"
+            )
+        }
+    })
+}
+
+fn write_upload_range_path() -> Value {
+    json!({
+        "put": {
+            "operationId": "writeUploadRange",
+            "summary": "Write one independently idempotent bounded raw upload range",
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [
+                upload_parameter(),
+                {
+                    "name": "offset",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9_007_199_254_740_991_u64
+                    }
+                },
+                upload_header("MeshSpan-Operation-Id", &uuid_parameter_schema()),
+                upload_header("MeshSpan-Stage-Fence", &safe_positive_integer_schema()),
+                upload_header("MeshSpan-Content-BLAKE3", &json!({
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                })),
+                optional_csrf_parameter()
+            ],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/octet-stream": {
+                        "schema": {
+                            "type": "string",
+                            "format": "binary",
+                            "minLength": 1,
+                            "maxLength": 8_388_608
+                        }
+                    }
+                }
+            },
+            "responses": upload_json_responses(
+                "200",
+                "Durable range acknowledgement and exact resulting checkpoint",
+                "#/components/schemas/WriteUploadRangeResponse"
+            )
+        }
+    })
+}
+
+fn commit_upload_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "commitUpload",
+            "summary": "Atomically publish one complete exact upload checkpoint",
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [upload_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request(
+                "Exact private checkpoint publication intent",
+                "#/components/schemas/CommitUploadRequest"
+            ),
+            "responses": upload_json_responses(
+                "200",
+                "Committed immutable object version",
+                "#/components/schemas/CommitUploadResponse"
+            )
+        }
+    })
+}
+
+fn abort_upload_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "abortUpload",
+            "summary": "Permanently abandon one unpublished upload",
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [upload_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request(
+                "Exact fenced upload abandonment intent",
+                "#/components/schemas/AbortUploadRequest"
+            ),
+            "responses": upload_json_responses(
+                "200",
+                "Terminal abandoned upload state",
+                "#/components/schemas/AbortUploadResponse"
+            )
+        }
+    })
+}
+
+fn upload_json_responses(success: &str, description: &str, schema_reference: &str) -> Value {
+    let mut responses = Map::from_iter([
+        (
+            "400".to_owned(),
+            json_response("Invalid upload input", "#/components/schemas/ApiError"),
+        ),
+        (
+            "401".to_owned(),
+            json_response("Authentication rejected", "#/components/schemas/ApiError"),
+        ),
+        (
+            "403".to_owned(),
+            json_response(
+                "Current principal is not authorised",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "404".to_owned(),
+            json_response(
+                "Upload or destination volume not found",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "409".to_owned(),
+            json_response(
+                "Fence, checkpoint, namespace or idempotency conflict",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "413".to_owned(),
+            json_response(
+                "Range or JSON body exceeds its operation bound",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "500".to_owned(),
+            json_response(
+                "Outgoing contract or integrity failure",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "503".to_owned(),
+            json_response(
+                "Upload authority, content or metadata temporarily unavailable",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+    ]);
+    responses.insert(
+        success.to_owned(),
+        json_response(description, schema_reference),
+    );
+    Value::Object(responses)
+}
+
+fn volume_parameter() -> Value {
+    json!({
+        "name": "volume_id",
+        "in": "path",
+        "required": true,
+        "schema": uuid_parameter_schema()
+    })
+}
+
+fn upload_parameter() -> Value {
+    json!({
+        "name": "upload_id",
+        "in": "path",
+        "required": true,
+        "schema": uuid_parameter_schema()
+    })
+}
+
+fn upload_header(name: &str, schema: &Value) -> Value {
+    json!({
+        "name": name,
+        "in": "header",
+        "required": true,
+        "schema": schema
+    })
+}
+
+fn optional_csrf_parameter() -> Value {
+    json!({
+        "name": "MeshSpan-CSRF-Token",
+        "in": "header",
+        "required": false,
+        "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+        "schema": {
+            "type": "string",
+            "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$"
+        },
+        "x-meshspan-sensitive": true
+    })
+}
+
+fn safe_positive_integer_schema() -> Value {
+    json!({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9_007_199_254_740_991_u64
+    })
 }
 
 fn read_file_path() -> Value {

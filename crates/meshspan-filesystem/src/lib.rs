@@ -24,9 +24,16 @@ mod namespace_query;
 mod publication;
 mod reachability;
 mod reconciliation;
+mod stage_range_index;
 mod stage_store;
 mod staging;
+mod upload;
+mod upload_service;
+mod upload_store;
 mod version_retention;
+
+#[cfg(test)]
+mod upload_service_tests;
 
 pub use adapter::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
@@ -34,6 +41,7 @@ pub use adapter::{
     AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
     AdapterUnlinkRequest, AdapterUnlockRequest, AdapterWriteFileRequest, BoundFilesystemAdapter,
     FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemFileAdapter,
+    FilesystemUploadAdapter,
 };
 pub use authority::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, FilesystemAccessAuthority,
@@ -132,11 +140,20 @@ pub use reconciliation::{
     plan_reconciliation,
 };
 pub use stage_store::{
-    CompletedStage, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, StageCompletionRequest,
-    StageLeaseReceipt, StageLeaseRequest, StageRangeReadRequest, StageRegistration,
+    CompletedStage, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, StageAbortReceipt,
+    StageAbortRequest, StageCompletionRequest, StageLeaseReceipt, StageLeaseRequest,
+    StageRangePage, StageRangePageRequest, StageRangeReadRequest, StageRegistration,
     StageStoreError,
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
+pub use upload::{
+    AdapterUploadAbortRequest, AdapterUploadBeginRequest, AdapterUploadCommitRequest,
+    AdapterUploadRangePageRequest, AdapterUploadStatusRequest, AdapterUploadWriteRequest,
+    UploadAbortRequest, UploadBeginRequest, UploadCommitReceipt, UploadCommitRequest,
+    UploadDisposition, UploadRangePageReceipt, UploadRangePageRequest, UploadSession, UploadState,
+    UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt, UploadWriteRequest,
+};
+pub use upload_service::UploadServiceError;
 pub use version_retention::{
     VersionReclaimMode, VersionRetentionCandidate, VersionRetentionCandidatePage,
     VersionRetentionCandidateReason, VersionRetentionCursor, VersionRetentionError,

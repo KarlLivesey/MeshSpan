@@ -6,6 +6,78 @@ export type ClientOptions = {
 };
 
 /**
+ * AbortUploadRequest
+ *
+ * Permanently abandons one unpublished upload.
+ */
+export type AbortUploadRequest = {
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Exact current positive writer fence.
+   */
+  stage_fence: number;
+};
+
+/**
+ * UploadStatusResponse
+ *
+ * Common exact upload state returned after every lifecycle operation.
+ */
+export type AbortUploadResponse = {
+  /**
+   * Exact current private-stage mutation sequence.
+   */
+  checkpoint_sequence: number;
+  /**
+   * Stable object published by a committed upload; otherwise null.
+   */
+  committed_object_id: string | null;
+  /**
+   * Immutable version published by a committed upload; otherwise null.
+   */
+  committed_version_id: string | null;
+  /**
+   * Exclusive server-authoritative expiry as Unix epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Highest byte written, exclusive; this does not imply gap-free coverage.
+   */
+  logical_extent: number;
+  /**
+   * Hard maximum logical file bytes.
+   */
+  maximum_bytes: number;
+  /**
+   * Canonical destination path.
+   */
+  path: string;
+  /**
+   * Absolute-path reference for bounded exact received-range pages.
+   */
+  ranges_url: string;
+  /**
+   * Positive current writer fence.
+   */
+  stage_fence: number;
+  /**
+   * Current durable lifecycle state.
+   */
+  state: "active" | "committing" | "committed" | "aborted";
+  /**
+   * Opaque upload identity.
+   */
+  upload_id: string;
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
+};
+
+/**
  * ApiError
  *
  * Public error envelope that never includes raw untrusted values.
@@ -48,6 +120,242 @@ export type ApiError = {
    * Server request identifier for support correlation.
    */
   request_id: string;
+};
+
+/**
+ * BeginUploadRequest
+ *
+ * Starts one durable private upload session.
+ */
+export type BeginUploadRequest = {
+  /**
+   * Final namespace precondition.
+   */
+  disposition:
+    | {
+        mode: "create_new";
+      }
+    | {
+        mode: "replace_current";
+      }
+    | {
+        mode: "replace_if_version";
+        /**
+         * Required current immutable version.
+         */
+        version_id: string;
+      };
+  /**
+   * Hard maximum logical file bytes reserved for this upload.
+   */
+  maximum_bytes: number;
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Canonical root-relative destination path.
+   */
+  path: string;
+};
+
+/**
+ * UploadStatusResponse
+ *
+ * Common exact upload state returned after every lifecycle operation.
+ */
+export type BeginUploadResponse = {
+  /**
+   * Exact current private-stage mutation sequence.
+   */
+  checkpoint_sequence: number;
+  /**
+   * Stable object published by a committed upload; otherwise null.
+   */
+  committed_object_id: string | null;
+  /**
+   * Immutable version published by a committed upload; otherwise null.
+   */
+  committed_version_id: string | null;
+  /**
+   * Exclusive server-authoritative expiry as Unix epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Highest byte written, exclusive; this does not imply gap-free coverage.
+   */
+  logical_extent: number;
+  /**
+   * Hard maximum logical file bytes.
+   */
+  maximum_bytes: number;
+  /**
+   * Canonical destination path.
+   */
+  path: string;
+  /**
+   * Absolute-path reference for bounded exact received-range pages.
+   */
+  ranges_url: string;
+  /**
+   * Positive current writer fence.
+   */
+  stage_fence: number;
+  /**
+   * Current durable lifecycle state.
+   */
+  state: "active" | "committing" | "committed" | "aborted";
+  /**
+   * Opaque upload identity.
+   */
+  upload_id: string;
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
+};
+
+/**
+ * CommitUploadRequest
+ *
+ * Explicit final publication request for one complete checkpoint.
+ */
+export type CommitUploadRequest = {
+  /**
+   * Optional independently checked BLAKE3 digest of the complete logical file.
+   */
+  expected_blake3?: string | null;
+  /**
+   * Exact checkpoint sequence; later writes make this request stale.
+   */
+  expected_sequence: number;
+  /**
+   * Exact final logical file length.
+   */
+  final_length: number;
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Whether uncovered ranges are intentional logical zeroes.
+   */
+  sparse: boolean;
+  /**
+   * Exact current positive writer fence.
+   */
+  stage_fence: number;
+};
+
+/**
+ * CommitUploadResponse
+ *
+ * Complete successful upload publication.
+ */
+export type CommitUploadResponse = {
+  /**
+   * Immutable metadata for the newly published exact version.
+   */
+  object: {
+    /**
+     * Immutable namespace view under which the path resolved.
+     */
+    namespace_commit_id: string;
+    /**
+     * Complete object metadata, including the immutable file version when applicable.
+     */
+    object: {
+      /**
+       * Monotonic name-reuse generation within the parent.
+       */
+      entry_generation: number;
+      /**
+       * Current immutable file version, or null for a directory.
+       */
+      file_version_id: string | null;
+      /**
+       * Directory or regular-file kind.
+       */
+      kind: "directory" | "file";
+      /**
+       * Logical file bytes, or null for a directory.
+       */
+      logical_length: number | null;
+      /**
+       * Case-preserved logical-object name.
+       */
+      name: string;
+      /**
+       * Stable logical-object identity.
+       */
+      object_id: string;
+      /**
+       * Exact immutable logical-object revision.
+       */
+      object_revision_id: string;
+    };
+    /**
+     * Exact root-relative path which resolved the object.
+     */
+    path: string;
+    /**
+     * Selected logical volume.
+     */
+    volume_id: string;
+  };
+  /**
+   * Terminal upload state.
+   */
+  upload: {
+    /**
+     * Exact current private-stage mutation sequence.
+     */
+    checkpoint_sequence: number;
+    /**
+     * Stable object published by a committed upload; otherwise null.
+     */
+    committed_object_id: string | null;
+    /**
+     * Immutable version published by a committed upload; otherwise null.
+     */
+    committed_version_id: string | null;
+    /**
+     * Exclusive server-authoritative expiry as Unix epoch microseconds.
+     */
+    expires_at_epoch_micros: number;
+    /**
+     * Highest byte written, exclusive; this does not imply gap-free coverage.
+     */
+    logical_extent: number;
+    /**
+     * Hard maximum logical file bytes.
+     */
+    maximum_bytes: number;
+    /**
+     * Canonical destination path.
+     */
+    path: string;
+    /**
+     * Absolute-path reference for bounded exact received-range pages.
+     */
+    ranges_url: string;
+    /**
+     * Positive current writer fence.
+     */
+    stage_fence: number;
+    /**
+     * Current durable lifecycle state.
+     */
+    state: "active" | "committing" | "committed" | "aborted";
+    /**
+     * Opaque upload identity.
+     */
+    upload_id: string;
+    /**
+     * Selected logical volume.
+     */
+    volume_id: string;
+  };
 };
 
 /**
@@ -725,6 +1033,39 @@ export type ListDirectoryResponse = {
 };
 
 /**
+ * ListUploadRangesResponse
+ *
+ * Bounded exact coverage page pinned to one upload checkpoint.
+ */
+export type ListUploadRangesResponse = {
+  /**
+   * Immutable stage sequence represented by every page in this traversal.
+   */
+  checkpoint_sequence: number;
+  /**
+   * Complete next-page URL under current authority, or null at the end.
+   */
+  next_page_url: string | null;
+  /**
+   * Sorted, non-overlapping, non-adjacent exact received ranges.
+   */
+  ranges: Array<{
+    /**
+     * Exclusive end, strictly greater than start.
+     */
+    end: number;
+    /**
+     * First initialised byte.
+     */
+    start: number;
+  }>;
+  /**
+   * Selected upload.
+   */
+  upload_id: string;
+};
+
+/**
  * RevokeAuthenticationMethodRequest
  *
  * One idempotent request to revoke an owned authentication method.
@@ -824,6 +1165,118 @@ export type StepUpCurrentSessionRequest = {
    * Client-generated idempotency key for the exact rotation.
    */
   operation_id: string;
+};
+
+/**
+ * UploadStatusResponse
+ *
+ * Common exact upload state returned after every lifecycle operation.
+ */
+export type UploadStatusResponse = {
+  /**
+   * Exact current private-stage mutation sequence.
+   */
+  checkpoint_sequence: number;
+  /**
+   * Stable object published by a committed upload; otherwise null.
+   */
+  committed_object_id: string | null;
+  /**
+   * Immutable version published by a committed upload; otherwise null.
+   */
+  committed_version_id: string | null;
+  /**
+   * Exclusive server-authoritative expiry as Unix epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Highest byte written, exclusive; this does not imply gap-free coverage.
+   */
+  logical_extent: number;
+  /**
+   * Hard maximum logical file bytes.
+   */
+  maximum_bytes: number;
+  /**
+   * Canonical destination path.
+   */
+  path: string;
+  /**
+   * Absolute-path reference for bounded exact received-range pages.
+   */
+  ranges_url: string;
+  /**
+   * Positive current writer fence.
+   */
+  stage_fence: number;
+  /**
+   * Current durable lifecycle state.
+   */
+  state: "active" | "committing" | "committed" | "aborted";
+  /**
+   * Opaque upload identity.
+   */
+  upload_id: string;
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
+};
+
+/**
+ * UploadStatusResponse
+ *
+ * Common exact upload state returned after every lifecycle operation.
+ */
+export type WriteUploadRangeResponse = {
+  /**
+   * Exact current private-stage mutation sequence.
+   */
+  checkpoint_sequence: number;
+  /**
+   * Stable object published by a committed upload; otherwise null.
+   */
+  committed_object_id: string | null;
+  /**
+   * Immutable version published by a committed upload; otherwise null.
+   */
+  committed_version_id: string | null;
+  /**
+   * Exclusive server-authoritative expiry as Unix epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Highest byte written, exclusive; this does not imply gap-free coverage.
+   */
+  logical_extent: number;
+  /**
+   * Hard maximum logical file bytes.
+   */
+  maximum_bytes: number;
+  /**
+   * Canonical destination path.
+   */
+  path: string;
+  /**
+   * Absolute-path reference for bounded exact received-range pages.
+   */
+  ranges_url: string;
+  /**
+   * Positive current writer fence.
+   */
+  stage_fence: number;
+  /**
+   * Current durable lifecycle state.
+   */
+  state: "active" | "committing" | "committed" | "aborted";
+  /**
+   * Opaque upload identity.
+   */
+  upload_id: string;
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
 };
 
 /**
@@ -1474,6 +1927,318 @@ export type GetSetupStatusResponses = {
 export type GetSetupStatusResponse =
   GetSetupStatusResponses[keyof GetSetupStatusResponses];
 
+export type GetUploadData = {
+  body?: never;
+  path: {
+    upload_id: string;
+  };
+  query?: never;
+  url: "/uploads/{upload_id}";
+};
+
+export type GetUploadErrors = {
+  /**
+   * Invalid upload input
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Upload or destination volume not found
+   */
+  404: ApiError;
+  /**
+   * Fence, checkpoint, namespace or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Range or JSON body exceeds its operation bound
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Upload authority, content or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetUploadError = GetUploadErrors[keyof GetUploadErrors];
+
+export type GetUploadResponses = {
+  /**
+   * Exact current upload state
+   */
+  200: UploadStatusResponse;
+};
+
+export type GetUploadResponse = GetUploadResponses[keyof GetUploadResponses];
+
+export type AbortUploadData = {
+  /**
+   * Exact fenced upload abandonment intent
+   */
+  body: AbortUploadRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    upload_id: string;
+  };
+  query?: never;
+  url: "/uploads/{upload_id}/aborts";
+};
+
+export type AbortUploadErrors = {
+  /**
+   * Invalid upload input
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Upload or destination volume not found
+   */
+  404: ApiError;
+  /**
+   * Fence, checkpoint, namespace or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Range or JSON body exceeds its operation bound
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Upload authority, content or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type AbortUploadError = AbortUploadErrors[keyof AbortUploadErrors];
+
+export type AbortUploadResponses = {
+  /**
+   * Terminal abandoned upload state
+   */
+  200: AbortUploadResponse;
+};
+
+export type AbortUploadResponse2 =
+  AbortUploadResponses[keyof AbortUploadResponses];
+
+export type CommitUploadData = {
+  /**
+   * Exact private checkpoint publication intent
+   */
+  body: CommitUploadRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    upload_id: string;
+  };
+  query?: never;
+  url: "/uploads/{upload_id}/commits";
+};
+
+export type CommitUploadErrors = {
+  /**
+   * Invalid upload input
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Upload or destination volume not found
+   */
+  404: ApiError;
+  /**
+   * Fence, checkpoint, namespace or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Range or JSON body exceeds its operation bound
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Upload authority, content or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CommitUploadError = CommitUploadErrors[keyof CommitUploadErrors];
+
+export type CommitUploadResponses = {
+  /**
+   * Committed immutable object version
+   */
+  200: CommitUploadResponse;
+};
+
+export type CommitUploadResponse2 =
+  CommitUploadResponses[keyof CommitUploadResponses];
+
+export type ListUploadRangesData = {
+  body?: never;
+  path: {
+    upload_id: string;
+  };
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/uploads/{upload_id}/ranges";
+};
+
+export type ListUploadRangesErrors = {
+  /**
+   * Invalid upload input
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Upload or destination volume not found
+   */
+  404: ApiError;
+  /**
+   * Fence, checkpoint, namespace or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Range or JSON body exceeds its operation bound
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Upload authority, content or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListUploadRangesError =
+  ListUploadRangesErrors[keyof ListUploadRangesErrors];
+
+export type ListUploadRangesResponses = {
+  /**
+   * One immutable checkpoint range page
+   */
+  200: ListUploadRangesResponse;
+};
+
+export type ListUploadRangesResponse2 =
+  ListUploadRangesResponses[keyof ListUploadRangesResponses];
+
+export type WriteUploadRangeData = {
+  body: Blob | File;
+  headers: {
+    "MeshSpan-Operation-Id": string;
+    "MeshSpan-Stage-Fence": number;
+    "MeshSpan-Content-BLAKE3": string;
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    upload_id: string;
+    offset: number;
+  };
+  query?: never;
+  url: "/uploads/{upload_id}/ranges/{offset}";
+};
+
+export type WriteUploadRangeErrors = {
+  /**
+   * Invalid upload input
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Upload or destination volume not found
+   */
+  404: ApiError;
+  /**
+   * Fence, checkpoint, namespace or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Range or JSON body exceeds its operation bound
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Upload authority, content or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type WriteUploadRangeError =
+  WriteUploadRangeErrors[keyof WriteUploadRangeErrors];
+
+export type WriteUploadRangeResponses = {
+  /**
+   * Durable range acknowledgement and exact resulting checkpoint
+   */
+  200: WriteUploadRangeResponse;
+};
+
+export type WriteUploadRangeResponse2 =
+  WriteUploadRangeResponses[keyof WriteUploadRangeResponses];
+
 export type CreateCurrentUserApiKeyData = {
   /**
    * Current-user API-key issuance
@@ -2001,3 +2766,68 @@ export type GetObjectResponses = {
 };
 
 export type GetObjectResponse2 = GetObjectResponses[keyof GetObjectResponses];
+
+export type BeginUploadData = {
+  /**
+   * Bounded durable upload intent
+   */
+  body: BeginUploadRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+  };
+  query?: never;
+  url: "/volumes/{volume_id}/uploads";
+};
+
+export type BeginUploadErrors = {
+  /**
+   * Invalid upload input
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Current principal is not authorised
+   */
+  403: ApiError;
+  /**
+   * Upload or destination volume not found
+   */
+  404: ApiError;
+  /**
+   * Fence, checkpoint, namespace or idempotency conflict
+   */
+  409: ApiError;
+  /**
+   * Range or JSON body exceeds its operation bound
+   */
+  413: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Upload authority, content or metadata temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type BeginUploadError = BeginUploadErrors[keyof BeginUploadErrors];
+
+export type BeginUploadResponses = {
+  /**
+   * Ready durable upload session
+   */
+  201: BeginUploadResponse;
+};
+
+export type BeginUploadResponse2 =
+  BeginUploadResponses[keyof BeginUploadResponses];

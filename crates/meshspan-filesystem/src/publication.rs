@@ -37,7 +37,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 37] = [
+const MIGRATIONS: [Migration; 38] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -186,8 +186,12 @@ const MIGRATIONS: [Migration; 37] = [
         version: 37,
         sql: include_str!("../schema/branch/037_federated_mutation_admissions.sql"),
     },
+    Migration {
+        version: 38,
+        sql: include_str!("../schema/branch/038_upload_publication_plans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 37;
+const SCHEMA_VERSION: u32 = 38;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -1545,6 +1549,40 @@ impl VersionPublicationStore {
         path: &crate::NamespacePath,
     ) -> Result<Option<ObjectId>, crate::HandleError> {
         crate::handles::resolve_path_object(&self.connection, branch_id, volume_id, path)
+    }
+
+    pub(crate) fn upload_authority_target(
+        &self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        path: &crate::NamespacePath,
+        disposition: crate::UploadDisposition,
+    ) -> Result<ObjectId, crate::HandleError> {
+        crate::namespace_planning::upload_authority_target(
+            &self.connection,
+            branch_id,
+            volume_id,
+            path,
+            disposition,
+        )
+    }
+
+    pub(crate) fn prepare_upload_publication(
+        &mut self,
+        branch_id: BranchId,
+        session: &crate::UploadSession,
+        request: crate::AdapterUploadCommitRequest,
+        policy: crate::FilesystemAdapterPolicy,
+        grant: crate::FilesystemAuthorityGrant,
+    ) -> Result<crate::RootFileCommitRequest, crate::HandleError> {
+        crate::namespace_planning::upload_commit::prepare(
+            &mut self.connection,
+            branch_id,
+            session,
+            request,
+            policy,
+            grant,
+        )
     }
 
     /// Validates a prospective open without reserving a handle or changing durable state.

@@ -23,33 +23,47 @@ use crate::{
 
 const DEFAULT_PAGE_LIMIT: u16 = 100;
 
+/// Credential proof required by one native file-API operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFileRequestProtection {
+    /// Safe metadata or content read.
+    Read,
+    /// State-changing request; browser sessions also require bound CSRF proof.
+    Mutation,
+}
+
 /// Authentication evidence accepted by the native specialised file API.
-pub trait FileApiAuthenticator: Send + 'static {
-    /// Authenticates one safe read and returns only connector-neutral filesystem evidence.
+pub trait NativeFileApiAuthenticator: Send + 'static {
+    /// Authenticates one request and returns only connector-neutral filesystem evidence.
     ///
     /// # Errors
     ///
     /// Rejects malformed, expired, revoked or unavailable current authority.
-    fn authenticate_file_read(
+    fn authenticate_file_request(
         &self,
         headers: &HeaderMap,
+        protection: NativeFileRequestProtection,
         now: UnixMicros,
     ) -> Result<FilesystemAccessContext, FileApiAuthenticationError>;
 }
 
-impl<A> FileApiAuthenticator for BrowserSessionAuthenticator<A>
+impl<A> NativeFileApiAuthenticator for BrowserSessionAuthenticator<A>
 where
     A: BrowserSessionAuthority + Send + 'static,
 {
-    fn authenticate_file_read(
+    fn authenticate_file_request(
         &self,
         headers: &HeaderMap,
+        protection: NativeFileRequestProtection,
         now: UnixMicros,
     ) -> Result<FilesystemAccessContext, FileApiAuthenticationError> {
         let (capability, evidence) = self
             .authenticate_with_evidence(
                 headers,
-                BrowserRequestProtection::Read,
+                match protection {
+                    NativeFileRequestProtection::Read => BrowserRequestProtection::Read,
+                    NativeFileRequestProtection::Mutation => BrowserRequestProtection::Mutation,
+                },
                 AssuranceLevel::SingleFactor,
                 now,
             )
@@ -153,7 +167,7 @@ pub trait DirectoryListingController: Send + 'static {
 
 impl<A, F, M> DirectoryListingController for DirectoryListingService<A, F, M>
 where
-    A: FileApiAuthenticator,
+    A: NativeFileApiAuthenticator,
     F: DirectoryLister,
     M: Fn(&F::Error) -> FileApiFailure + Send + 'static,
 {
@@ -165,7 +179,11 @@ where
         now: UnixMicros,
     ) -> Result<ListDirectoryResponse, DirectoryListingError> {
         validate_list_directory_query(query).map_err(|_| DirectoryListingError::InvalidInput)?;
-        let context = self.authenticator.authenticate_file_read(headers, now)?;
+        let context = self.authenticator.authenticate_file_request(
+            headers,
+            NativeFileRequestProtection::Read,
+            now,
+        )?;
         let api_volume =
             ApiVolumeId::parse(volume_id).ok_or(DirectoryListingError::InvalidInput)?;
         let volume = VolumeId::from_bytes(

@@ -48,7 +48,7 @@ macro_rules! public_uuid {
     };
 }
 
-fn parse_public_uuid(value: &str) -> Option<String> {
+pub(crate) fn parse_public_uuid(value: &str) -> Option<String> {
     if value.len() != 36 {
         return None;
     }

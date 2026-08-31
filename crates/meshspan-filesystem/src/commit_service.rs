@@ -171,6 +171,7 @@ impl RootFileCommitRequest {
 /// Filesystem save service over independent stage, content and branch durability domains.
 pub struct FilesystemCommitService<P> {
     stages: DurableStageStore,
+    uploads: crate::upload_store::UploadSessionStore,
     publications: VersionPublicationStore,
     content: P,
 }
@@ -188,6 +189,8 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
     ) -> Result<Self, FilesystemCommitError> {
         Ok(Self {
             stages: DurableStageStore::open(state_directory, opened_at)?,
+            uploads: crate::upload_store::UploadSessionStore::open(state_directory, opened_at)
+                .map_err(crate::UploadServiceError::from)?,
             publications: VersionPublicationStore::open(state_directory, opened_at)?,
             content,
         })
@@ -197,6 +200,121 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
     #[must_use]
     pub fn stages_mut(&mut self) -> &mut DurableStageStore {
         &mut self.stages
+    }
+
+    /// Creates or exactly resumes one private upload and acknowledges it only after its durable
+    /// stage exists.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or conflicting identities, unsafe bounds and persistence failure.
+    pub fn begin_upload(
+        &mut self,
+        request: &crate::UploadBeginRequest,
+    ) -> Result<crate::UploadSession, crate::UploadServiceError> {
+        crate::upload_service::begin(&mut self.uploads, &mut self.stages, request)
+    }
+
+    pub(crate) fn upload_session(
+        &self,
+        upload_id: meshspan_domain::UploadId,
+    ) -> Result<crate::UploadSession, crate::UploadServiceError> {
+        self.uploads.load(upload_id).map_err(Into::into)
+    }
+
+    pub(crate) fn upload_authority_target(
+        &self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        path: &crate::NamespacePath,
+        disposition: crate::UploadDisposition,
+    ) -> Result<ObjectId, crate::HandleError> {
+        self.publications
+            .upload_authority_target(branch_id, volume_id, path, disposition)
+    }
+
+    pub(crate) fn prepare_upload_publication(
+        &mut self,
+        branch_id: BranchId,
+        session: &crate::UploadSession,
+        request: crate::AdapterUploadCommitRequest,
+        policy: crate::FilesystemAdapterPolicy,
+        grant: crate::FilesystemAuthorityGrant,
+    ) -> Result<RootFileCommitRequest, crate::HandleError> {
+        self.publications
+            .prepare_upload_publication(branch_id, session, request, policy, grant)
+    }
+
+    /// Writes one independently idempotent bounded range to a private upload.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale authority, hostile bytes, range excess, conflicting retries and persistence
+    /// failure.
+    pub fn write_upload(
+        &mut self,
+        request: &crate::UploadWriteRequest,
+    ) -> Result<crate::UploadWriteReceipt, crate::UploadServiceError> {
+        crate::upload_service::write(&self.uploads, &mut self.stages, request)
+    }
+
+    /// Returns the exact durable coverage required to resume one upload.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale authority, absent/corrupt state and persistence failure.
+    pub fn upload_status(
+        &self,
+        request: crate::UploadStatusRequest,
+    ) -> Result<crate::UploadStatusReceipt, crate::UploadServiceError> {
+        crate::upload_service::status(&self.uploads, &self.stages, request)
+    }
+
+    /// Returns one authorised bounded page over exact initialised upload ranges.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale authority, stale checkpoint cursors, invalid page bounds and corruption.
+    pub fn upload_range_page(
+        &self,
+        request: crate::UploadRangePageRequest,
+    ) -> Result<crate::UploadRangePageReceipt, crate::UploadServiceError> {
+        crate::upload_service::range_page(&self.uploads, &self.stages, request)
+    }
+
+    /// Permanently abandons one unpublished upload without exposing its private bytes.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale authority, conflicting retries and persistence failure.
+    pub fn abort_upload(
+        &mut self,
+        request: crate::UploadAbortRequest,
+    ) -> Result<crate::UploadSession, crate::UploadServiceError> {
+        crate::upload_service::abort(&mut self.uploads, &mut self.stages, request)
+    }
+
+    /// Publishes one complete private upload as immutable content and one atomic namespace change.
+    ///
+    /// Incomplete checkpoints are rejected before the upload is frozen. Once the durable commit
+    /// transition begins, exact retries can only finish the same content and namespace mutation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete or stale checkpoints, substituted publication plans, conflicting
+    /// retries, content failure and atomic namespace-publication failure.
+    pub fn commit_upload(
+        &mut self,
+        request: &crate::UploadCommitRequest,
+    ) -> Result<crate::UploadCommitReceipt, FilesystemCommitError> {
+        let transition =
+            crate::upload_service::begin_commit(&mut self.uploads, &mut self.stages, request)?;
+        let publication = self.commit_root_file(&request.publication)?;
+        let session = crate::upload_service::finish_commit(&mut self.uploads, transition)?;
+        Ok(crate::UploadCommitReceipt {
+            session,
+            publication,
+        })
     }
 
     /// Opens a logical file and establishes its bounded private stage before a writable handle
@@ -894,6 +1012,9 @@ pub enum FilesystemCommitError {
     /// Private stage completion failed.
     #[error("filesystem commit stage failed")]
     Stage(#[from] StageStoreError),
+    /// Durable resumable-upload state failed to open or verify.
+    #[error("filesystem upload state failed")]
+    Upload(#[from] crate::UploadServiceError),
     /// Durable content publication failed.
     #[error("filesystem commit content publication failed")]
     Content(#[from] ContentPublicationError),

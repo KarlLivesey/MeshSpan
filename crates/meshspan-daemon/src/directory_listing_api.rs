@@ -9,5 +9,5 @@ mod service;
 pub use http::{DirectoryListingApiError, directory_listing_api_router};
 pub use service::{
     DirectoryLister, DirectoryListingController, DirectoryListingError, DirectoryListingService,
-    FileApiAuthenticator, FileApiFailure,
+    FileApiFailure, NativeFileApiAuthenticator, NativeFileRequestProtection,
 };

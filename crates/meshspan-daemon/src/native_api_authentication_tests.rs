@@ -10,20 +10,20 @@ use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_domain::{
     ApiKeyBundle, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId, EntropyError,
     HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId, RandomSource, Revision, RoleId,
-    UnixMicros,
+    SessionCsrfBundle, SessionTokenBundle, UnixMicros,
 };
 use meshspan_metadata::{
     ApiKeyAuthentication, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
     BrowserSessionAccessRequest, CommandContext, CreateAuthenticationMethod, LogPosition,
-    NewAuthenticationCredential, PartitionDatabase, RecordName, SessionAccessDecision,
-    SessionAccessDenial,
+    NewAuthenticationCredential, PartitionDatabase, RecordName, SessionAccessCapability,
+    SessionAccessDecision, SessionAccessDenial,
 };
 
 use crate::{
     BrowserSessionAuthenticator, BrowserSessionAuthority, BrowserSessionAuthorityError,
-    FileApiAuthenticationError, FileApiAuthenticator, GatewaySessionIdentity,
-    NativeApiAuthenticator, NativeApiKeyAuthenticator, NativeApiKeyAuthority,
-    NativeApiKeyAuthorityError,
+    FileApiAuthenticationError, GatewaySessionIdentity, NativeApiAuthenticator,
+    NativeApiKeyAuthenticator, NativeApiKeyAuthority, NativeApiKeyAuthorityError,
+    NativeFileApiAuthenticator, NativeFileRequestProtection,
 };
 
 #[test]
@@ -39,8 +39,11 @@ fn exact_bearer_key_produces_only_headless_digest_context() -> Result<(), Box<dy
         },
         gateway()?,
     );
-    let context =
-        authenticator.authenticate_file_read(&bearer_headers(&encoded)?, UnixMicros::new(200))?;
+    let context = authenticator.authenticate_file_request(
+        &bearer_headers(&encoded)?,
+        NativeFileRequestProtection::Read,
+        UnixMicros::new(200),
+    )?;
     assert_eq!(
         context.authentication_service,
         meshspan_domain::AuthenticationService::HeadlessApi
@@ -99,8 +102,11 @@ fn real_replicated_repository_accepts_the_issued_native_api_key()
         }),
     )?;
 
-    let context = NativeApiKeyAuthenticator::new(repository, gateway)
-        .authenticate_file_read(&bearer_headers(&encoded)?, UnixMicros::new(200))?;
+    let context = NativeApiKeyAuthenticator::new(repository, gateway).authenticate_file_request(
+        &bearer_headers(&encoded)?,
+        NativeFileRequestProtection::Read,
+        UnixMicros::new(200),
+    )?;
     assert_eq!(context.credential_digest, key.secret_digest());
     assert_eq!(context.gateway_node_id, gateway.node_id);
     Ok(())
@@ -131,7 +137,11 @@ fn malformed_ambiguous_and_mismatched_presentations_fail_before_acceptance()
             headers.insert(AUTHORIZATION, value.parse()?);
         }
         assert_eq!(
-            authenticator.authenticate_file_read(&headers, UnixMicros::new(200)),
+            authenticator.authenticate_file_request(
+                &headers,
+                NativeFileRequestProtection::Read,
+                UnixMicros::new(200),
+            ),
             Err(FileApiAuthenticationError::Rejected)
         );
     }
@@ -139,7 +149,11 @@ fn malformed_ambiguous_and_mismatched_presentations_fail_before_acceptance()
     let mut duplicated = bearer_headers(&encoded)?;
     duplicated.append(AUTHORIZATION, format!("Bearer {encoded}").parse()?);
     assert_eq!(
-        authenticator.authenticate_file_read(&duplicated, UnixMicros::new(200)),
+        authenticator.authenticate_file_request(
+            &duplicated,
+            NativeFileRequestProtection::Read,
+            UnixMicros::new(200),
+        ),
         Err(FileApiAuthenticationError::Rejected)
     );
 
@@ -152,8 +166,11 @@ fn malformed_ambiguous_and_mismatched_presentations_fail_before_acceptance()
     };
     let changed_identity = String::from_utf8(changed_identity)?;
     assert_eq!(
-        authenticator
-            .authenticate_file_read(&bearer_headers(&changed_identity)?, UnixMicros::new(200),),
+        authenticator.authenticate_file_request(
+            &bearer_headers(&changed_identity)?,
+            NativeFileRequestProtection::Read,
+            UnixMicros::new(200),
+        ),
         Err(FileApiAuthenticationError::Rejected)
     );
     assert_eq!(calls.load(Ordering::Relaxed), 1);
@@ -179,9 +196,44 @@ fn cookie_and_bearer_cannot_create_ambiguous_native_api_authority()
     let mut headers = bearer_headers(&encoded)?;
     headers.insert(COOKIE, "unrelated=value".parse()?);
     assert_eq!(
-        authenticator.authenticate_file_read(&headers, UnixMicros::new(200)),
+        authenticator.authenticate_file_request(
+            &headers,
+            NativeFileRequestProtection::Read,
+            UnixMicros::new(200),
+        ),
         Err(FileApiAuthenticationError::Rejected)
     );
+    Ok(())
+}
+
+#[test]
+fn browser_upload_mutations_require_csrf_while_upload_reads_do_not()
+-> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway()?;
+    let authority = BrowserProtectionAuthority { gateway };
+    let authenticator = BrowserSessionAuthenticator::new(authority, gateway);
+    let (mut headers, csrf) = browser_headers()?;
+
+    authenticator.authenticate_file_request(
+        &headers,
+        NativeFileRequestProtection::Read,
+        UnixMicros::new(200),
+    )?;
+    assert_eq!(
+        authenticator.authenticate_file_request(
+            &headers,
+            NativeFileRequestProtection::Mutation,
+            UnixMicros::new(200),
+        ),
+        Err(FileApiAuthenticationError::Rejected)
+    );
+
+    headers.insert("MeshSpan-CSRF-Token", csrf.parse()?);
+    authenticator.authenticate_file_request(
+        &headers,
+        NativeFileRequestProtection::Mutation,
+        UnixMicros::new(200),
+    )?;
     Ok(())
 }
 
@@ -264,6 +316,45 @@ impl BrowserSessionAuthority for RejectingBrowserAuthority {
             SessionAccessDenial::Unavailable,
         ))
     }
+}
+
+#[derive(Clone, Copy)]
+struct BrowserProtectionAuthority {
+    gateway: GatewaySessionIdentity,
+}
+
+impl BrowserSessionAuthority for BrowserProtectionAuthority {
+    fn evaluate_browser_session(
+        &self,
+        request: BrowserSessionAccessRequest,
+    ) -> Result<SessionAccessDecision, BrowserSessionAuthorityError> {
+        Ok(SessionAccessDecision::Granted(SessionAccessCapability {
+            session_id: request.expected_session_id,
+            principal_id: PrincipalId::from_bytes(versioned(70))
+                .map_err(|_| BrowserSessionAuthorityError::Failed)?,
+            gateway_node_id: self.gateway.node_id,
+            gateway_incarnation: self.gateway.incarnation,
+            identity_revision: Revision::new(1),
+            gateway_revision: Revision::new(1),
+            expires_at: UnixMicros::new(300),
+            persistent_cookie: false,
+            system_management_expires_at: None,
+            capability_digest: [71; 32],
+        }))
+    }
+}
+
+fn browser_headers() -> Result<(HeaderMap, String), Box<dyn std::error::Error>> {
+    let api_key = ApiKeyBundle::generate(&mut SequentialRandom(80))?;
+    let operation_id = OperationId::from_bytes(versioned(81))?;
+    let bearer = SessionTokenBundle::derive(&api_key, operation_id)?.expose_encoded();
+    let csrf = SessionCsrfBundle::derive(&api_key, operation_id)?.expose_encoded();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        COOKIE,
+        format!("meshspan_session={}", bearer.as_str()).parse()?,
+    );
+    Ok((headers, csrf.to_string()))
 }
 
 struct SequentialRandom(u8);
