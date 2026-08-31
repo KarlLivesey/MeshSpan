@@ -55,8 +55,6 @@ pub struct BrowserSessionAccessRequest {
 pub enum SessionAccessDenial {
     /// The credential or gateway incarnation is not currently usable.
     Unavailable,
-    /// The session predates the current identity and role projection.
-    StaleIdentity,
     /// The session does not meet the operation's assurance requirement.
     InsufficientAssurance,
 }
@@ -121,6 +119,32 @@ pub(super) fn evaluate(
         ));
     };
     evaluate_stored_session(database, request, &stored)
+}
+
+pub(super) fn is_system_manager(
+    database: &PartitionDatabase,
+    principal_id: PrincipalId,
+    now: UnixMicros,
+) -> Result<bool, RepositoryError> {
+    let principal = principal_id.as_bytes();
+    let permitted: i64 = database.connection().query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM role_grants rg JOIN roles r USING(role_id)
+             JOIN principals p ON p.principal_id = rg.principal_id
+             WHERE rg.principal_id = ?1 AND p.state = 1
+               AND (r.system_rights & ?2) = ?2
+               AND (rg.valid_from IS NULL OR rg.valid_from <= ?3)
+               AND (rg.valid_until IS NULL OR rg.valid_until > ?3)
+               AND rg.activation_policy_id IS NULL
+         )",
+        params![principal.as_slice(), SYSTEM_MANAGE_RIGHT, now.get()],
+        |row| row.get(0),
+    )?;
+    match permitted {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(RepositoryError::CorruptState),
+    }
 }
 
 fn load_stored_session(
@@ -189,13 +213,8 @@ fn evaluate_stored_session(
     if assurance != factors.assurance {
         return Err(RepositoryError::CorruptState);
     }
-    let session_revision = revision(stored.3)?;
+    revision(stored.3)?;
     let identity_revision = revision(stored.5)?;
-    if session_revision != identity_revision {
-        return Ok(SessionAccessDecision::Denied(
-            SessionAccessDenial::StaleIdentity,
-        ));
-    }
     if !super::session::meets_assurance(
         database.connection(),
         factors,

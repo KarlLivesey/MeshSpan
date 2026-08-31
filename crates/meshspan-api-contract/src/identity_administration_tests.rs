@@ -54,6 +54,7 @@ fn principal_pages_and_receipts_validate_bounded_public_output()
         kind: PrincipalKind::User,
         display_name: "Alex".to_owned(),
         state: PrincipalState::Active,
+        created_at_epoch_micros: 1,
         revision: 2,
     };
     let response = CreatePrincipalResponse {

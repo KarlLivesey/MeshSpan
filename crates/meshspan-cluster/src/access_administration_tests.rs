@@ -52,7 +52,7 @@ fn administration_pages_recheck_object_self_and_system_authority_before_disclosu
             reason: "No longer required".to_owned(),
         }),
     )?;
-    assert_revocation_is_immediate(&fixture)?;
+    assert_revocation_rechecks_current_rights(&fixture)?;
     Ok(())
 }
 
@@ -376,26 +376,34 @@ fn assert_authentication_precedes_projection_validation(
     Ok(())
 }
 
-fn assert_revocation_is_immediate(fixture: &Fixture) -> Result<(), Box<dyn std::error::Error>> {
+fn assert_revocation_rechecks_current_rights(
+    fixture: &Fixture,
+) -> Result<(), Box<dyn std::error::Error>> {
     let ids = fixture.ids;
     let administration = MetadataAccessAdministration::new(&fixture.repository);
-    let stale = context(ids.user_token, ids.gateway, AssuranceLevel::SingleFactor);
     assert!(matches!(
-        administration.object_owners(stale, ids.volume, ids.root, None, PageLimit::new(10)?,),
-        Err(AccessAdministrationError::ObjectDenied(
-            AccessDenial::StaleIdentity
-        ))
-    ));
-    assert!(matches!(
-        administration.permission_grants_for_subject(
-            context([0; 32], ids.gateway, AssuranceLevel::SingleFactor),
-            ids.user,
+        administration.object_owners(
+            context(ids.user_token, ids.gateway, AssuranceLevel::SingleFactor),
+            ids.volume,
+            ids.root,
             None,
             PageLimit::new(10)?,
         ),
-        Err(AccessAdministrationError::SessionDenied(
-            SessionAccessDenial::Unavailable
+        Err(AccessAdministrationError::ObjectDenied(
+            AccessDenial::MissingRights
         ))
+    ));
+    let current = administration.permission_grants_for_subject(
+        context(ids.user_token, ids.gateway, AssuranceLevel::SingleFactor),
+        ids.user,
+        None,
+        PageLimit::new(10)?,
+    )?;
+    assert!(current.items.is_empty());
+    assert!(matches!(
+        current.authority,
+        AccessAdministrationAuthority::Session(capability)
+            if capability.identity_revision.get() == 11
     ));
     Ok(())
 }

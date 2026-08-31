@@ -43,6 +43,9 @@ mod directory_listing_api_tests;
 mod file_read_api;
 #[cfg(test)]
 mod file_read_api_tests;
+mod identity_administration;
+#[cfg(test)]
+mod identity_administration_tests;
 mod multi_factor_session;
 mod namespace_mutation_api;
 mod native_api_authentication;
@@ -173,6 +176,12 @@ pub use directory_listing_api::{
 pub use file_read_api::{
     FileRangeReader, FileReadApiError, FileReadController, FileReadError, FileReadResult,
     FileReadService, file_read_api_router,
+};
+pub use identity_administration::{
+    IdentityAdministrationApiError, IdentityAdministrationAuthority,
+    IdentityAdministrationAuthorityError, IdentityAdministrationCommit,
+    IdentityAdministrationController, IdentityAdministrationError, IdentityAdministrationService,
+    IdentityAdministrator, identity_administration_api_router,
 };
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,

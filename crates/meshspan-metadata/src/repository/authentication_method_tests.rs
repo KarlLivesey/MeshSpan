@@ -83,7 +83,7 @@ fn api_key_creation_is_atomic_restart_safe_and_exactly_replayable()
     assert_eq!(repository.current_revision()?, Revision::new(2));
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        49
+        50
     );
     Ok(())
 }
@@ -167,7 +167,7 @@ fn api_key_revocation_is_audited_restart_safe_and_exactly_replayable()
             administrator.as_bytes().to_vec(),
         )
     );
-    assert_eq!(database.check_integrity()?.schema_version, 49);
+    assert_eq!(database.check_integrity()?.schema_version, 50);
     Ok(())
 }
 

@@ -820,6 +820,7 @@ export const zCreatePrincipalResponse = z
       ),
     principal: z
       .strictObject({
+        created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
         display_name: z.string(),
         kind: z.union([z.literal("user"), z.literal("group")]),
         principal_id: z
@@ -1415,6 +1416,7 @@ export const zListPrincipalsResponse = z
       .array(
         z
           .strictObject({
+            created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
             display_name: z.string(),
             kind: z.union([z.literal("user"), z.literal("group")]),
             principal_id: z

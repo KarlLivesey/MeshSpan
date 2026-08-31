@@ -2,7 +2,7 @@
 
 //! Typed point reads and index-aligned bounded pagination.
 
-use meshspan_domain::{GroupId, ObjectId, OwnerSetId, PrincipalId, Revision, VolumeId};
+use meshspan_domain::{GroupId, ObjectId, OwnerSetId, PrincipalId, Revision, UnixMicros, VolumeId};
 use rusqlite::{OptionalExtension, params};
 
 use super::RepositoryError;
@@ -57,6 +57,8 @@ pub struct PrincipalRecord {
     pub canonical_name: String,
     /// Whether the principal is active, suspended or retired.
     pub state: u8,
+    /// Original authoritative creation instant.
+    pub created_at: UnixMicros,
     /// Last authoritative record revision.
     pub revision: Revision,
 }
@@ -151,7 +153,7 @@ pub(super) fn principal(
     database
         .connection()
         .query_row(
-            "SELECT principal_kind, display_name, canonical_name, state, revision
+            "SELECT principal_kind, display_name, canonical_name, state, created_at, revision
              FROM principals WHERE principal_id = ?1",
             [identifier.as_slice()],
             |row| {
@@ -161,6 +163,7 @@ pub(super) fn principal(
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             },
         )
@@ -172,7 +175,8 @@ pub(super) fn principal(
                 display_name: row.1,
                 canonical_name: row.2,
                 state: u8::try_from(row.3).map_err(|_| RepositoryError::CorruptState)?,
-                revision: Revision::new(parse_u64(row.4)?),
+                created_at: UnixMicros::new(row.4),
+                revision: Revision::new(parse_u64(row.5)?),
             })
         })
         .transpose()
@@ -192,7 +196,7 @@ pub(super) fn principals(
     let after_id = after.map_or([0; 16], |cursor| cursor.principal_id.as_bytes());
     let row_limit = sql_limit(limit)?;
     let mut statement = database.connection().prepare(
-        "SELECT principal_id, display_name, canonical_name, state, revision
+        "SELECT principal_id, display_name, canonical_name, state, created_at, revision
          FROM principals INDEXED BY principals_by_kind_and_name
          WHERE principal_kind = ?1
            AND (canonical_name, principal_id) > (?2, ?3)
@@ -207,6 +211,7 @@ pub(super) fn principals(
                 row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         },
     )?;
@@ -219,7 +224,8 @@ pub(super) fn principals(
             display_name: row.1,
             canonical_name: row.2,
             state: u8::try_from(row.3).map_err(|_| RepositoryError::CorruptState)?,
-            revision: Revision::new(parse_u64(row.4)?),
+            created_at: UnixMicros::new(row.4),
+            revision: Revision::new(parse_u64(row.5)?),
         });
     }
     let next = (items.len() > limit.get()).then(|| {

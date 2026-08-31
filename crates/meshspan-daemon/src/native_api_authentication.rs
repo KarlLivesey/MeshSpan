@@ -82,6 +82,28 @@ impl<A> NativeApiKeyAuthenticator<A> {
     }
 }
 
+impl<A> NativeApiKeyAuthenticator<A>
+where
+    A: NativeApiKeyAuthority,
+{
+    pub(crate) fn authenticate_principal(
+        &self,
+        headers: &HeaderMap,
+        now: UnixMicros,
+    ) -> Result<meshspan_domain::PrincipalId, FileApiAuthenticationError> {
+        let key = parse_bearer(headers)?;
+        self.authority
+            .authenticate_native_api_key(
+                key.key_id(),
+                key.secret_digest(),
+                AssuranceLevel::SingleFactor,
+                now,
+            )?
+            .map(|authentication| authentication.principal_id)
+            .ok_or(FileApiAuthenticationError::Rejected)
+    }
+}
+
 impl<A> NativeFileApiAuthenticator for NativeApiKeyAuthenticator<A>
 where
     A: NativeApiKeyAuthority + Send + 'static,

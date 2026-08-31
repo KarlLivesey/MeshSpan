@@ -948,6 +948,19 @@ impl AuthoritativeRepository {
         query::principal(&self.database, principal_id)
     }
 
+    /// Reports whether one active principal currently carries direct system-management authority.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed role projections or database failure.
+    pub fn principal_is_system_manager(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<bool, RepositoryError> {
+        session_access::is_system_manager(&self.database, principal_id, now)
+    }
+
     /// Returns one stable, bounded page of principals in a selected family.
     ///
     /// # Errors

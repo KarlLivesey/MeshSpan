@@ -74,7 +74,7 @@ fn membership_removal_is_immediate_audited_and_reversible() -> Result<(), Box<dy
         fixture
             .repository
             .evaluate_access(request(&fixture, [61; 32], Rights::READ_DATA, 211))?,
-        AccessDecision::Denied(AccessDenial::StaleIdentity)
+        AccessDecision::Denied(AccessDenial::MissingRights)
     );
     assert!(
         fixture
@@ -149,7 +149,7 @@ fn grant_revocation_invalidates_sessions_and_retains_evidence()
         fixture
             .repository
             .evaluate_access(request(&fixture, [67; 32], Rights::READ_DATA, 211))?,
-        AccessDecision::Denied(AccessDenial::StaleIdentity)
+        AccessDecision::Denied(AccessDenial::MissingRights)
     );
     issue_session(
         &mut fixture,
@@ -313,7 +313,7 @@ fn activation_revocation_supports_self_service_and_administrator_recovery()
         fixture
             .repository
             .evaluate_access(request(&fixture, [72; 32], Rights::READ_DATA, 231))?,
-        AccessDecision::Denied(AccessDenial::StaleIdentity)
+        AccessDecision::Denied(AccessDenial::MissingRights)
     );
     issue_session(
         &mut fixture,

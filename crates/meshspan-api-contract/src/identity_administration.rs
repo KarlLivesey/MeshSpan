@@ -98,6 +98,9 @@ pub struct PrincipalSummary {
     pub display_name: String,
     /// Current lifecycle state.
     pub state: PrincipalState,
+    /// Original authoritative creation instant as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_i64))]
+    pub created_at_epoch_micros: i64,
     /// Last authoritative metadata revision.
     #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
     pub revision: u64,

@@ -741,6 +741,10 @@ export type CreatePrincipalResponse = {
    */
   principal: {
     /**
+     * Original authoritative creation instant as epoch microseconds.
+     */
+    created_at_epoch_micros: number;
+    /**
      * Case-preserved NFC display name.
      */
     display_name: string;
@@ -1231,6 +1235,10 @@ export type ListPrincipalsResponse = {
    * Stable ordered identities.
    */
   principals: Array<{
+    /**
+     * Original authoritative creation instant as epoch microseconds.
+     */
+    created_at_epoch_micros: number;
     /**
      * Case-preserved NFC display name.
      */

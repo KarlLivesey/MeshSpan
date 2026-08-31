@@ -1581,6 +1581,12 @@
             "additionalProperties": false,
             "description": "Newly created or exactly replayed principal.",
             "properties": {
+              "created_at_epoch_micros": {
+                "description": "Original authoritative creation instant as epoch microseconds.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
               "display_name": {
                 "description": "Case-preserved NFC display name.",
                 "type": "string"
@@ -1639,6 +1645,7 @@
               "kind",
               "display_name",
               "state",
+              "created_at_epoch_micros",
               "revision"
             ],
             "type": "object"
@@ -2659,6 +2666,12 @@
               "additionalProperties": false,
               "description": "Complete administration summary of one local user or group.",
               "properties": {
+                "created_at_epoch_micros": {
+                  "description": "Original authoritative creation instant as epoch microseconds.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "display_name": {
                   "description": "Case-preserved NFC display name.",
                   "type": "string"
@@ -2717,6 +2730,7 @@
                 "kind",
                 "display_name",
                 "state",
+                "created_at_epoch_micros",
                 "revision"
               ],
               "type": "object"
