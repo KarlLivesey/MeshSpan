@@ -132,9 +132,10 @@ pub use name::{RecordName, RecordNameError};
 pub use repository::{
     AccessActivationCursor, AccessActivationRecord, AccessAuthentication, AccessCapability,
     AccessDecision, AccessDenial, AccessRequest, ApiKeyAuthentication, ApiKeySessionReplay,
-    ApplyDisposition, AuthenticationMethodCreationReplay, AuthenticationMethodRevocationReplay,
-    AuthenticationPolicy, AuthenticationRegistrationProfile, AuthenticationService,
-    AuthenticationSessionReplay, AuthenticationSessionReplayCredential,
+    ApplyDisposition, AuthenticationMethodCreationReplay, AuthenticationMethodCursor,
+    AuthenticationMethodRecord, AuthenticationMethodRecordDetails,
+    AuthenticationMethodRevocationReplay, AuthenticationPolicy, AuthenticationRegistrationProfile,
+    AuthenticationService, AuthenticationSessionReplay, AuthenticationSessionReplayCredential,
     AuthenticationSessionReplayFactor, AuthoritativeMembership, AuthoritativeMetadataKernel,
     AuthoritativeRepository, BrowserSessionAccessRequest, BrowserSessionProtection, CommandReceipt,
     ConsensusStoreError, ConvergedVolumeHead, EntityKind, EntityReference,

@@ -14,6 +14,11 @@ mod api_key_issuance_tests;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
+mod authentication_method_listing;
+#[cfg(test)]
+mod authentication_method_listing_api_tests;
+#[cfg(test)]
+mod authentication_method_listing_service_tests;
 mod authentication_method_revocation;
 mod authentication_method_revocation_api;
 #[cfg(test)]
@@ -135,6 +140,12 @@ pub use api_key_issuance_contract::{
     ApiKeyIssuanceError,
 };
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
+pub use authentication_method_listing::{
+    AuthenticationMethodListingApiError, AuthenticationMethodListingAuthority,
+    AuthenticationMethodListingAuthorityError, AuthenticationMethodListingController,
+    AuthenticationMethodListingError, AuthenticationMethodListingService,
+    authentication_method_listing_api_router,
+};
 pub use authentication_method_revocation::AuthenticationMethodRevocationService;
 pub use authentication_method_revocation_api::{
     AuthenticationMethodRevocationApiError, AuthenticationMethodRevocationController,
