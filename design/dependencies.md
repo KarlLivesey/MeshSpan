@@ -40,9 +40,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | ---------------------------------- | ---------------: | -------------------------- |
 | `axum`                             |            0.8.9 | `MIT`                      |
 | `jsonschema`                       |           0.52.0 | `MIT`                      |
-| `prost`                            |           0.14.4 | `Apache-2.0`               |
-| `prost-build` (build only)         |           0.14.4 | `Apache-2.0`               |
-| `protoc-bin-vendored` (build only) |            3.2.0 | `MIT`                      |
+| `meshspan-protobuf` (workspace)    |            0.1.0 | `GPL-2.0-only`             |
 | `rusqlite`                         |           0.40.2 | `MIT`                      |
 | `schemars`                         |            1.2.2 | `MIT`                      |
 | `serde`                            |          1.0.229 | `MIT OR Apache-2.0`        |
@@ -98,7 +96,7 @@ MeshSpan-owned core.
 | `tower-http`      | Narrow HTTP middleware such as tracing, limits and static asset handling            |
 | `serde`           | Typed configuration and public JSON models                                          |
 | `serde_json`      | Public JSON API and bounded diagnostic documents                                    |
-| `prost`           | Versioned private Protobuf messages; generated types do not cross domain boundaries |
+| `meshspan-protobuf` | Bounded private Protobuf runtime and pure-Rust schema generation; generated types do not cross domain boundaries |
 | `base64`          | Strict URL-safe token and wire encodings where the protocol requires them           |
 
 Rust boundary types and structural constraints generate OpenAPI 3.1 and drive
@@ -107,10 +105,12 @@ runtime request/response validation through the admitted `schemars` and
 constraint appears in runtime validation, OpenAPI and hostile fixtures without
 a second hand-written model.
 
-Private Protobuf generation uses `prost-build` with the exact platform-specific
-`protoc` selected by `protoc-bin-vendored`. Both are build-only dependencies;
-the generated Rust is compiled in `OUT_DIR`, while canonical encoded fixtures
-are committed and checked for drift and compatibility.
+Private Protobuf encoding and generation use the independently extractable
+`GPL-2.0-only` `meshspan-protobuf` workspace crate. It uses only the Rust
+standard library, compiles the supported `proto3` schema directly in Rust and
+does not invoke or ship an external `protoc`. Generated Rust is compiled in
+`OUT_DIR`; canonical encoded fixtures remain committed and checked for drift
+and compatibility.
 
 ### Persistence and local filesystem
 

@@ -153,6 +153,36 @@ impl<'a> Decoder<'a> {
         Ok((value >> 1).cast_signed() ^ -(value & 1).cast_signed())
     }
 
+    /// Reads a bounded unsigned 32-bit varint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-varint error when the encoded value exceeds u32.
+    pub fn uint32(&mut self) -> Result<u32, DecodeError> {
+        let start = self.position;
+        u32::try_from(self.varint()?)
+            .map_err(|_| DecodeError::new(DecodeErrorKind::InvalidVarint, start))
+    }
+
+    /// Reads a Protocol Buffers enum/int32 value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-varint error for malformed input.
+    pub fn int32(&mut self) -> Result<i32, DecodeError> {
+        let bytes = self.varint()?.to_le_bytes();
+        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    /// Reads a Protocol Buffers Boolean, where any non-zero varint is true.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-varint error for malformed input.
+    pub fn boolean(&mut self) -> Result<bool, DecodeError> {
+        Ok(self.varint()? != 0)
+    }
+
     /// Reads a little-endian fixed-width 64-bit integer.
     ///
     /// # Errors

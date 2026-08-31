@@ -90,3 +90,15 @@ impl fmt::Display for EncodeError {
 }
 
 impl std::error::Error for EncodeError {}
+
+/// An integer that is not declared by a generated enumeration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownEnumValue(pub i32);
+
+impl fmt::Display for UnknownEnumValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown Protocol Buffers enum value {}", self.0)
+    }
+}
+
+impl std::error::Error for UnknownEnumValue {}

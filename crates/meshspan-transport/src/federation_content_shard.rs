@@ -177,7 +177,7 @@ pub fn signed_federation_content_shard_fetch(
         .signing_key()
         .sign(&federation_content_shard_fetch_signing_payload(
             &header, &request,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let expectation = FederationContentShardExpectation {
@@ -219,7 +219,7 @@ pub fn signed_federation_content_shard_header(
         .signing_key()
         .sign(&federation_content_shard_header_signing_payload(
             &header, &response,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {
@@ -336,12 +336,10 @@ fn verify_fetch_signature(
     request: &FetchFederatedContentShard,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&request.signature)?;
+    let payload = federation_content_shard_fetch_signing_payload(header, request)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_content_shard_fetch_signing_payload(header, request),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
@@ -395,11 +393,9 @@ fn verify_header_signature(
     response: &FederatedContentShardHeader,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&response.signature)?;
+    let payload = federation_content_shard_header_signing_payload(header, response)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_content_shard_header_signing_payload(header, response),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }

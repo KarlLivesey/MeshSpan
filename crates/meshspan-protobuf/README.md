@@ -15,10 +15,11 @@ consumer, not its owner at runtime.
 - Decode limits are explicit and checked before allocation.
 - Length arithmetic and output reservation are fallible.
 - Unknown fields are skipped according to the Protocol Buffers wire format.
-- Malformed, truncated and non-canonical boundary values fail closed.
+- Malformed, truncated and out-of-range boundary values fail closed; emitted
+  messages use one deterministic canonical encoding.
 - Generated records use ordinary Rust values rather than exposing a generator's
   internal representation.
-- The optional `codegen` feature will compile supported `.proto` schemas without
+- The optional `codegen` feature compiles supported `.proto` schemas without
   invoking an external executable.
 
 The first integration target is the MeshSpan private `proto3` schema surface:

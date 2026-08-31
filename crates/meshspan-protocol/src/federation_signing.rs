@@ -2,7 +2,7 @@
 
 //! Canonical domain-separated bytes for signed federation negotiation messages.
 
-use prost::Message;
+use meshspan_protobuf::{EncodeError, EncodedLength, Message};
 
 use crate::v1::{
     FederatedBranchPage, FederatedContentLayoutPage, FederatedContentShardHeader,
@@ -43,321 +43,356 @@ const STORAGE_INVENTORY_PAGE_DIGEST_DOMAIN: &[u8] =
     b"meshspan.federation.storage-inventory-page-digest.v1\0";
 
 /// Returns the exact bytes signed by a federation hello identity.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_hello_signing_payload(
     header: &FederationHeader,
     hello: &FederationHello,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = hello.clone();
     unsigned.signature.clear();
     signing_payload(HELLO_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by a federation welcome identity.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_welcome_signing_payload(
     header: &FederationHeader,
     welcome: &FederationWelcome,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = welcome.clone();
     unsigned.signature.clear();
     signing_payload(WELCOME_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by a federation authority page identity.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_authority_page_signing_payload(
     header: &FederationHeader,
     page: &FederationAuthorityPage,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = page.clone();
     unsigned.signature.clear();
     signing_payload(AUTHORITY_PAGE_DOMAIN, header, &unsigned)
 }
 
 /// Returns canonical domain-separated page content for the embedded digest.
-#[must_use]
-pub fn federation_authority_page_digest_payload(page: &FederationAuthorityPage) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
+pub fn federation_authority_page_digest_payload(
+    page: &FederationAuthorityPage,
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = page.clone();
     unsigned.page_digest.clear();
     unsigned.signature.clear();
-    let encoded = unsigned.encode_to_vec();
-    let mut payload = Vec::with_capacity(
-        AUTHORITY_PAGE_DIGEST_DOMAIN
-            .len()
-            .saturating_add(8)
-            .saturating_add(encoded.len()),
-    );
-    payload.extend_from_slice(AUTHORITY_PAGE_DIGEST_DOMAIN);
-    append_part(&mut payload, &encoded);
-    payload
+    single_message_payload(AUTHORITY_PAGE_DIGEST_DOMAIN, &unsigned)
 }
 
 /// Returns the exact bytes signed by an authority fetch identity.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_authority_fetch_signing_payload(
     header: &FederationHeader,
     request: &FetchFederationAuthority,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = request.clone();
     unsigned.signature.clear();
     signing_payload(AUTHORITY_FETCH_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by a federated branch-page fetch identity.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_branch_fetch_signing_payload(
     header: &FederationHeader,
     request: &FetchFederatedBranchPage,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = request.clone();
     unsigned.signature.clear();
     signing_payload(BRANCH_FETCH_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by a federated branch-page identity.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_branch_page_signing_payload(
     header: &FederationHeader,
     page: &FederatedBranchPage,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = page.clone();
     unsigned.signature.clear();
     signing_payload(BRANCH_PAGE_DOMAIN, header, &unsigned)
 }
 
 /// Returns canonical domain-separated branch-page content for the embedded digest.
-#[must_use]
-pub fn federation_branch_page_digest_payload(page: &FederatedBranchPage) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
+pub fn federation_branch_page_digest_payload(
+    page: &FederatedBranchPage,
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = page.clone();
     unsigned.page_digest.clear();
     unsigned.signature.clear();
-    let encoded = unsigned.encode_to_vec();
-    let mut payload = Vec::with_capacity(
-        BRANCH_PAGE_DIGEST_DOMAIN
-            .len()
-            .saturating_add(8)
-            .saturating_add(encoded.len()),
-    );
-    payload.extend_from_slice(BRANCH_PAGE_DIGEST_DOMAIN);
-    append_part(&mut payload, &encoded);
-    payload
+    single_message_payload(BRANCH_PAGE_DIGEST_DOMAIN, &unsigned)
 }
 
 /// Returns the exact bytes signed by one immutable-history object requester.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_history_object_fetch_signing_payload(
     header: &FederationHeader,
     request: &FetchFederatedHistoryObject,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = request.clone();
     unsigned.signature.clear();
     signing_payload(HISTORY_OBJECT_FETCH_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by one immutable-history object response header.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_history_object_header_signing_payload(
     header: &FederationHeader,
     response: &FederatedHistoryObjectHeader,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = response.clone();
     unsigned.signature.clear();
     signing_payload(HISTORY_OBJECT_HEADER_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by one federated content-layout requester.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_content_layout_fetch_signing_payload(
     header: &FederationHeader,
     request: &FetchFederatedContentLayout,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = request.clone();
     unsigned.signature.clear();
     signing_payload(CONTENT_LAYOUT_FETCH_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by one federated content-layout page issuer.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_content_layout_page_signing_payload(
     header: &FederationHeader,
     page: &FederatedContentLayoutPage,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = page.clone();
     unsigned.signature.clear();
     signing_payload(CONTENT_LAYOUT_PAGE_DOMAIN, header, &unsigned)
 }
 
 /// Returns canonical domain-separated layout-page content for the embedded digest.
-#[must_use]
-pub fn federation_content_layout_page_digest_payload(page: &FederatedContentLayoutPage) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
+pub fn federation_content_layout_page_digest_payload(
+    page: &FederatedContentLayoutPage,
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = page.clone();
     unsigned.page_digest.clear();
     unsigned.signature.clear();
-    let encoded = unsigned.encode_to_vec();
-    let mut payload = Vec::with_capacity(
-        CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN
-            .len()
-            .saturating_add(8)
-            .saturating_add(encoded.len()),
-    );
-    payload.extend_from_slice(CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN);
-    append_part(&mut payload, &encoded);
-    payload
+    single_message_payload(CONTENT_LAYOUT_PAGE_DIGEST_DOMAIN, &unsigned)
 }
 
 /// Returns the exact bytes signed by one federated encrypted-shard requester.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_content_shard_fetch_signing_payload(
     header: &FederationHeader,
     request: &FetchFederatedContentShard,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = request.clone();
     unsigned.signature.clear();
     signing_payload(CONTENT_SHARD_FETCH_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by one federated encrypted-shard response.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_content_shard_header_signing_payload(
     header: &FederationHeader,
     response: &FederatedContentShardHeader,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = response.clone();
     unsigned.signature.clear();
     signing_payload(CONTENT_SHARD_HEADER_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by a remote-storage capability requester.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_storage_capability_request_signing_payload(
     header: &FederationHeader,
     request: &RequestFederatedStorageCapability,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = request.clone();
     unsigned.signature.clear();
     signing_payload(STORAGE_CAPABILITY_REQUEST_DOMAIN, header, &unsigned)
 }
 
 /// Returns canonical domain-separated request content for idempotency across fresh envelopes.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_storage_capability_request_digest_payload(
     request: &RequestFederatedStorageCapability,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = request.clone();
     unsigned.signature.clear();
-    let encoded = unsigned.encode_to_vec();
-    let mut payload = Vec::with_capacity(
-        STORAGE_CAPABILITY_REQUEST_DIGEST_DOMAIN
-            .len()
-            .saturating_add(8)
-            .saturating_add(encoded.len()),
-    );
-    payload.extend_from_slice(STORAGE_CAPABILITY_REQUEST_DIGEST_DOMAIN);
-    append_part(&mut payload, &encoded);
-    payload
+    single_message_payload(STORAGE_CAPABILITY_REQUEST_DIGEST_DOMAIN, &unsigned)
 }
 
 /// Returns the exact bytes signed by a remote-storage capability issuer.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_storage_capability_signing_payload(
     header: &FederationHeader,
     capability: &FederatedStorageCapability,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = capability.clone();
     unsigned.signature.clear();
     signing_payload(STORAGE_CAPABILITY_DOMAIN, header, &unsigned)
 }
 
 /// Returns canonical domain-separated capability content for lifecycle receipt correlation.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_storage_capability_digest_payload(
     capability: &FederatedStorageCapability,
-) -> Vec<u8> {
-    let encoded = capability.encode_to_vec();
-    let mut payload = Vec::with_capacity(
-        STORAGE_CAPABILITY_DIGEST_DOMAIN
-            .len()
-            .saturating_add(8)
-            .saturating_add(encoded.len()),
-    );
-    payload.extend_from_slice(STORAGE_CAPABILITY_DIGEST_DOMAIN);
-    append_part(&mut payload, &encoded);
-    payload
+) -> Result<Vec<u8>, EncodeError> {
+    single_message_payload(STORAGE_CAPABILITY_DIGEST_DOMAIN, capability)
 }
 
 /// Returns the exact bytes signed by a remote-storage lifecycle result.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_storage_receipt_signing_payload(
     header: &FederationHeader,
     receipt: &FederatedStorageReceipt,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = receipt.clone();
     unsigned.signature.clear();
     signing_payload(STORAGE_RECEIPT_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by a remote-storage inventory fetch identity.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_storage_inventory_fetch_signing_payload(
     header: &FederationHeader,
     request: &FetchFederatedStorageInventory,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = request.clone();
     unsigned.signature.clear();
     signing_payload(STORAGE_INVENTORY_FETCH_DOMAIN, header, &unsigned)
 }
 
 /// Returns the exact bytes signed by one remote-storage inventory page.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_storage_inventory_page_signing_payload(
     header: &FederationHeader,
     page: &FederatedStorageInventoryPage,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = page.clone();
     unsigned.signature.clear();
     signing_payload(STORAGE_INVENTORY_PAGE_DOMAIN, header, &unsigned)
 }
 
 /// Returns canonical domain-separated inventory content for the embedded page digest.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if canonical message length or allocation fails.
 pub fn federation_storage_inventory_page_digest_payload(
     page: &FederatedStorageInventoryPage,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut unsigned = page.clone();
     unsigned.page_digest.clear();
     unsigned.signature.clear();
-    let encoded = unsigned.encode_to_vec();
-    let mut payload = Vec::with_capacity(
-        STORAGE_INVENTORY_PAGE_DIGEST_DOMAIN
-            .len()
-            .saturating_add(8)
-            .saturating_add(encoded.len()),
-    );
-    payload.extend_from_slice(STORAGE_INVENTORY_PAGE_DIGEST_DOMAIN);
-    append_part(&mut payload, &encoded);
-    payload
+    single_message_payload(STORAGE_INVENTORY_PAGE_DIGEST_DOMAIN, &unsigned)
 }
 
-fn signing_payload(domain: &[u8], header: &FederationHeader, message: &impl Message) -> Vec<u8> {
-    let header = header.encode_to_vec();
-    let message = message.encode_to_vec();
-    let mut payload = Vec::with_capacity(
-        domain
-            .len()
-            .saturating_add(16)
-            .saturating_add(header.len())
-            .saturating_add(message.len()),
-    );
+fn signing_payload(
+    domain: &[u8],
+    header: &FederationHeader,
+    message: &impl Message,
+) -> Result<Vec<u8>, EncodeError> {
+    let header = header.encode_to_vec()?;
+    let message = message.encode_to_vec()?;
+    assemble_payload(domain, &[&header, &message])
+}
+
+fn single_message_payload(domain: &[u8], message: &impl Message) -> Result<Vec<u8>, EncodeError> {
+    let message = message.encode_to_vec()?;
+    assemble_payload(domain, &[&message])
+}
+
+fn assemble_payload(domain: &[u8], parts: &[&[u8]]) -> Result<Vec<u8>, EncodeError> {
+    let mut length = EncodedLength::new();
+    length.add(domain.len())?;
+    for part in parts {
+        length.add(8)?;
+        length.add(part.len())?;
+    }
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(length.get())
+        .map_err(|_| EncodeError::AllocationFailed)?;
     payload.extend_from_slice(domain);
-    append_part(&mut payload, &header);
-    append_part(&mut payload, &message);
-    payload
-}
-
-fn append_part(payload: &mut Vec<u8>, part: &[u8]) {
-    payload.extend_from_slice(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_be_bytes());
-    payload.extend_from_slice(part);
+    for part in parts {
+        let part_length = u64::try_from(part.len()).map_err(|_| EncodeError::LengthOverflow)?;
+        payload.extend_from_slice(&part_length.to_be_bytes());
+        payload.extend_from_slice(part);
+    }
+    Ok(payload)
 }
 
 #[cfg(test)]

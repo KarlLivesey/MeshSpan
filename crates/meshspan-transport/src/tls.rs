@@ -174,6 +174,9 @@ pub enum TransportError {
     /// Configuration, key material, trust roots or resource limits are invalid.
     #[error("private transport configuration is invalid")]
     InvalidConfiguration,
+    /// Canonical private-wire payload encoding failed before signing or sending.
+    #[error("private transport payload encoding failed")]
+    Encoding(#[from] meshspan_protocol::ProtocolEncodeError),
     /// UDP endpoint creation or binding failed.
     #[error("private transport socket failed")]
     Io(#[source] io::Error),

@@ -270,7 +270,7 @@ impl AuthenticatedFederationHello {
         };
         welcome.signature = local_identity
             .signing_key()
-            .sign(&federation_welcome_signing_payload(&header, &welcome))
+            .sign(&federation_welcome_signing_payload(&header, &welcome)?)
             .to_bytes()
             .to_vec();
         let session = AcceptedFederationSession {
@@ -380,12 +380,10 @@ fn verify_welcome_signature(
     welcome: &FederationWelcome,
 ) -> Result<(), TransportError> {
     let signature = exact(&welcome.signature)?;
+    let payload = federation_welcome_signing_payload(header, welcome)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_welcome_signing_payload(header, welcome),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 

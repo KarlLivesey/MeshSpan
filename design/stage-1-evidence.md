@@ -18,10 +18,12 @@ service; those remain later roadmap stages.
   deterministic conformance entry points for storage, access connectors,
   administration clients, persistence, consensus, coding, placement,
   authentication, ACME challenge publication and observability.
-- `meshspan-protocol` generates the closed private message catalogue with Prost
-  and a vendored `protoc`. Length framing rejects excess before decode; generated
-  values must not be treated as trusted input until wrapped by family-specific
-  semantic validation. Bulk data frames have an independent limit. Cross-swarm
+- `meshspan-protocol` generates the closed private message catalogue with the
+  independently extractable, standard-library-only and `GPL-2.0-only`
+  `meshspan-protobuf` runtime/compiler. No external schema compiler is invoked.
+  Length framing rejects excess before decode; generated values must not be
+  treated as trusted input until wrapped by family-specific semantic validation.
+  Bulk data frames have an independent limit. Cross-swarm
   traffic uses a distinct hostile-by-default envelope with both swarm IDs,
   relationship/epoch/replay binding, bounded authority/branch/inventory pages,
   exact storage capabilities and signed receipt shapes.

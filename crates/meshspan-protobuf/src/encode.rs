@@ -52,6 +52,11 @@ impl<'a> Encoder<'a> {
         self.varint(value);
     }
 
+    /// Writes an enum/int32 field with the Protocol Buffers signed expansion.
+    pub fn int32_field(&mut self, field_number: u32, value: i32) {
+        self.varint_field(field_number, int32_to_varint(value));
+    }
+
     /// Writes a zig-zag encoded signed 64-bit field.
     pub fn sint64_field(&mut self, field_number: u32, value: i64) {
         self.varint_field(field_number, zig_zag_encode(value));
@@ -105,6 +110,41 @@ impl<'a> Encoder<'a> {
         self.varint(u64::try_from(packed_length.get()).map_err(|_| EncodeError::LengthOverflow)?);
         for value in values {
             self.varint(*value);
+        }
+        Ok(())
+    }
+
+    /// Writes a packed uint32 field without a temporary conversion allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packed length arithmetic overflows.
+    pub fn packed_uint32(&mut self, field_number: u32, values: &[u32]) -> Result<(), EncodeError> {
+        self.packed_converted(field_number, values.iter().copied().map(u64::from))
+    }
+
+    /// Writes a packed enum/int32 field without a temporary allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packed length arithmetic overflows.
+    pub fn packed_int32(&mut self, field_number: u32, values: &[i32]) -> Result<(), EncodeError> {
+        self.packed_converted(field_number, values.iter().copied().map(int32_to_varint))
+    }
+
+    fn packed_converted(
+        &mut self,
+        field_number: u32,
+        values: impl Iterator<Item = u64> + Clone,
+    ) -> Result<(), EncodeError> {
+        self.key(field_number, WireType::LengthDelimited);
+        let mut packed_length = EncodedLength::new();
+        for value in values.clone() {
+            packed_length.add(varint_len(value))?;
+        }
+        self.varint(u64::try_from(packed_length.get()).map_err(|_| EncodeError::LengthOverflow)?);
+        for value in values {
+            self.varint(value);
         }
         Ok(())
     }
@@ -174,6 +214,24 @@ pub fn packed_varint_field_len(field_number: u32, values: &[u64]) -> Result<usiz
     bytes_field_len(field_number, packed.get())
 }
 
+/// Returns a packed uint32 field's encoded length.
+///
+/// # Errors
+///
+/// Returns an error when length arithmetic overflows.
+pub fn packed_uint32_field_len(field_number: u32, values: &[u32]) -> Result<usize, EncodeError> {
+    packed_converted_field_len(field_number, values.iter().copied().map(u64::from))
+}
+
+/// Returns a packed enum/int32 field's encoded length.
+///
+/// # Errors
+///
+/// Returns an error when length arithmetic overflows.
+pub fn packed_int32_field_len(field_number: u32, values: &[i32]) -> Result<usize, EncodeError> {
+    packed_converted_field_len(field_number, values.iter().copied().map(int32_to_varint))
+}
+
 /// Returns one unsigned varint's byte length.
 #[must_use]
 pub const fn varint_len(value: u64) -> usize {
@@ -186,6 +244,23 @@ pub const fn varint_len(value: u64) -> usize {
 #[must_use]
 pub const fn zig_zag_encode(value: i64) -> u64 {
     ((value << 1) ^ (value >> 63)).cast_unsigned()
+}
+
+/// Converts an enum/int32 value to its wire varint representation.
+#[must_use]
+pub fn int32_to_varint(value: i32) -> u64 {
+    i64::from(value).cast_unsigned()
+}
+
+fn packed_converted_field_len(
+    field_number: u32,
+    values: impl Iterator<Item = u64>,
+) -> Result<usize, EncodeError> {
+    let mut packed = EncodedLength::new();
+    for value in values {
+        packed.add(varint_len(value))?;
+    }
+    bytes_field_len(field_number, packed.get())
 }
 
 fn varint_len_usize(value: usize) -> usize {

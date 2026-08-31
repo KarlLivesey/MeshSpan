@@ -191,12 +191,12 @@ pub fn signed_federation_content_layout_fetch(
     validate_deadline(binding, context, now)?;
     let header = federation_header(binding, context);
     request.signature.clear();
-    let transit_binding = content_layout_transit_binding(&header, &request);
+    let transit_binding = content_layout_transit_binding(&header, &request)?;
     request.signature = identity
         .signing_key()
         .sign(&federation_content_layout_fetch_signing_payload(
             &header, &request,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let expectation = FederationContentLayoutPageExpectation {
@@ -237,12 +237,12 @@ pub fn signed_federation_content_layout_page(
     let header = federation_header(binding, context);
     page.page_digest.clear();
     page.signature.clear();
-    page.page_digest = content_layout_page_digest(&page).to_vec();
+    page.page_digest = content_layout_page_digest(&page)?.to_vec();
     page.signature = identity
         .signing_key()
         .sign(&federation_content_layout_page_signing_payload(
             &header, &page,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {
@@ -282,7 +282,7 @@ impl FederationPeerRegistry {
         verify_request_header(binding, header)?;
         replay.check(binding.relationship_id, header, now)?;
         verify_fetch_signature(binding.verifying_key, header, request)?;
-        let transit_binding = content_layout_transit_binding(header, request);
+        let transit_binding = content_layout_transit_binding(header, request)?;
         replay.record(binding.relationship_id, header)?;
         Ok(AuthenticatedFederationContentLayoutFetch {
             binding,
@@ -361,12 +361,10 @@ fn verify_fetch_signature(
     request: &FetchFederatedContentLayout,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&request.signature)?;
+    let payload = federation_content_layout_fetch_signing_payload(header, request)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_content_layout_fetch_signing_payload(header, request),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
@@ -405,7 +403,7 @@ fn verify_page_shape(
 }
 
 fn verify_page_digest(page: &FederatedContentLayoutPage) -> Result<(), TransportError> {
-    if exact::<32>(&page.page_digest)? == content_layout_page_digest(page) {
+    if exact::<32>(&page.page_digest)? == content_layout_page_digest(page)? {
         Ok(())
     } else {
         Err(TransportError::UntrustedFederationPeer)
@@ -418,25 +416,27 @@ fn verify_page_signature(
     page: &FederatedContentLayoutPage,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&page.signature)?;
+    let payload = federation_content_layout_page_signing_payload(header, page)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_content_layout_page_signing_payload(header, page),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
-fn content_layout_page_digest(page: &FederatedContentLayoutPage) -> [u8; 32] {
-    Sha256::digest(federation_content_layout_page_digest_payload(page)).into()
+fn content_layout_page_digest(
+    page: &FederatedContentLayoutPage,
+) -> Result<[u8; 32], TransportError> {
+    Ok(Sha256::digest(federation_content_layout_page_digest_payload(page)?).into())
 }
 
 fn content_layout_transit_binding(
     header: &FederationHeader,
     request: &FetchFederatedContentLayout,
-) -> [u8; 32] {
-    Sha256::digest(federation_content_layout_fetch_signing_payload(
-        header, request,
-    ))
-    .into()
+) -> Result<[u8; 32], TransportError> {
+    Ok(
+        Sha256::digest(federation_content_layout_fetch_signing_payload(
+            header, request,
+        )?)
+        .into(),
+    )
 }

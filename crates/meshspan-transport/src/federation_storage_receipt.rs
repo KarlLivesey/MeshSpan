@@ -73,7 +73,7 @@ pub fn signed_federation_storage_receipt(
         .signing_key()
         .sign(&federation_storage_receipt_signing_payload(
             &header, &receipt,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {
@@ -163,11 +163,9 @@ fn verify_receipt_signature(
     receipt: &FederatedStorageReceipt,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&receipt.signature)?;
+    let payload = federation_storage_receipt_signing_payload(header, receipt)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_storage_receipt_signing_payload(header, receipt),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }

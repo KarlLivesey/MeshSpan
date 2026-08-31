@@ -163,7 +163,7 @@ pub fn signed_federation_storage_inventory_fetch(
         .signing_key()
         .sign(&federation_storage_inventory_fetch_signing_payload(
             &header, &request,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let expectation = FederationStorageInventoryPageExpectation {
@@ -199,12 +199,12 @@ pub fn signed_federation_storage_inventory_page(
     let header = federation_header(binding, context);
     page.page_digest.clear();
     page.signature.clear();
-    page.page_digest = inventory_page_digest(&page).to_vec();
+    page.page_digest = inventory_page_digest(&page)?.to_vec();
     page.signature = identity
         .signing_key()
         .sign(&federation_storage_inventory_page_signing_payload(
             &header, &page,
-        ))
+        )?)
         .to_bytes()
         .to_vec();
     let envelope = FederationEnvelope {
@@ -294,12 +294,10 @@ fn verify_inventory_fetch_signature(
     request: &FetchFederatedStorageInventory,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&request.signature)?;
+    let payload = federation_storage_inventory_fetch_signing_payload(header, request)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_storage_inventory_fetch_signing_payload(header, request),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
@@ -332,7 +330,7 @@ fn verify_inventory_page_shape(
 fn verify_inventory_page_digest(
     page: &FederatedStorageInventoryPage,
 ) -> Result<(), TransportError> {
-    if exact::<32>(&page.page_digest)? == inventory_page_digest(page) {
+    if exact::<32>(&page.page_digest)? == inventory_page_digest(page)? {
         Ok(())
     } else {
         Err(TransportError::UntrustedFederationPeer)
@@ -345,15 +343,13 @@ fn verify_inventory_page_signature(
     page: &FederatedStorageInventoryPage,
 ) -> Result<(), TransportError> {
     let signature = exact::<64>(&page.signature)?;
+    let payload = federation_storage_inventory_page_signing_payload(header, page)?;
     VerifyingKey::from_bytes(&verifying_key)
         .map_err(|_| TransportError::UntrustedFederationPeer)?
-        .verify_strict(
-            &federation_storage_inventory_page_signing_payload(header, page),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| TransportError::UntrustedFederationPeer)
 }
 
-fn inventory_page_digest(page: &FederatedStorageInventoryPage) -> [u8; 32] {
-    Sha256::digest(federation_storage_inventory_page_digest_payload(page)).into()
+fn inventory_page_digest(page: &FederatedStorageInventoryPage) -> Result<[u8; 32], TransportError> {
+    Ok(Sha256::digest(federation_storage_inventory_page_digest_payload(page)?).into())
 }

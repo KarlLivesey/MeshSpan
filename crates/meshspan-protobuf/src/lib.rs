@@ -8,9 +8,12 @@ mod error;
 mod limits;
 mod wire;
 
+#[cfg(feature = "codegen")]
+pub mod codegen;
+
 pub use decode::{DecodeState, Decoder};
 pub use encode::{EncodedLength, Encoder};
-pub use error::{DecodeError, DecodeErrorKind, EncodeError};
+pub use error::{DecodeError, DecodeErrorKind, EncodeError, UnknownEnumValue};
 pub use limits::DecodeLimits;
 pub use wire::WireType;
 

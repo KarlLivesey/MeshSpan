@@ -29,9 +29,16 @@ pub use framing::{
     decode_data_control_frame, decode_data_frame, decode_federation_frame, encode_control_frame,
     encode_data_control_frame, encode_data_frame, encode_federation_frame,
 };
+pub use meshspan_protobuf::EncodeError as ProtocolEncodeError;
 
 /// Generated version-one private wire messages.
-#[allow(missing_docs, clippy::doc_markdown, clippy::must_use_candidate)]
+#[allow(
+    missing_docs,
+    clippy::cognitive_complexity,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines
+)]
 pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/meshspan.private.v1.rs"));
 }
