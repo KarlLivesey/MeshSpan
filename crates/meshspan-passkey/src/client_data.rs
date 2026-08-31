@@ -29,13 +29,14 @@ pub(crate) fn verify(
     input: &[u8],
     expected_challenge: &[u8],
     expected_origins: &[&str],
+    ceremony_type: &str,
 ) -> Result<VerifiedClientData, PasskeyError> {
     if input.is_empty() || input.len() > MAXIMUM_CLIENT_DATA_BYTES || expected_origins.is_empty() {
         return Err(PasskeyError::new(PasskeyErrorKind::LimitExceeded));
     }
     let value = serde_json::from_slice::<CollectedClientData>(input)
         .map_err(|_| PasskeyError::new(PasskeyErrorKind::Malformed))?;
-    if value.r#type != "webauthn.get"
+    if value.r#type != ceremony_type
         || value.cross_origin
         || value.top_origin.is_some()
         || !expected_origins.contains(&value.origin.as_str())

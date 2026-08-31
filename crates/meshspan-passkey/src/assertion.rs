@@ -125,6 +125,7 @@ pub fn verify_assertion(
         assertion.client_data_json,
         expected.challenge,
         expected.allowed_origins,
+        "webauthn.get",
     )?;
     let relying_party_hash: [u8; 32] = Sha256::digest(expected.relying_party_id.as_bytes()).into();
     let authenticator = authenticator_data::verify(
