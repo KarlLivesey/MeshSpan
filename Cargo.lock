@@ -1128,6 +1128,7 @@ dependencies = [
 name = "meshspan-domain"
 version = "0.1.0"
 dependencies = [
+ "hmac",
  "sha2",
  "thiserror",
  "zeroize",

@@ -49,6 +49,70 @@ export type ApiError = {
 };
 
 /**
+ * CreateApiKeyRequest
+ *
+ * One idempotent request to issue a current-user API key.
+ */
+export type CreateApiKeyRequest = {
+  /**
+   * Omitted applies the server default, null means no automatic expiry, and a value is exact.
+   */
+  expires_at_epoch_micros?: number | null;
+  /**
+   * Human-readable independently revocable method label.
+   */
+  label: string;
+  /**
+   * Client-generated identity binding exact retries.
+   */
+  operation_id: string;
+  /**
+   * One connector through which an issued API key may authenticate.
+   */
+  scopes: Array<"https_session" | "headless_api" | "smb_session">;
+};
+
+/**
+ * CreateApiKeyResponse
+ *
+ * One exactly replayable API-key issuance result.
+ */
+export type CreateApiKeyResponse = {
+  /**
+   * Authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Exclusive expiry, or null when the key does not expire automatically.
+   */
+  expires_at_epoch_micros: number | null;
+  /**
+   * Public key identity embedded in the returned secret.
+   */
+  key_id: string;
+  /**
+   * Independently revocable common authentication-method identity.
+   */
+  method_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * One connector through which an issued API key may authenticate.
+   */
+  scopes: Array<"https_session" | "headless_api" | "smb_session">;
+  /**
+   * Secret-bearing key returned only from this issuance operation.
+   */
+  readonly secret: string;
+  /**
+   * Inclusive first accepted instant as epoch microseconds.
+   */
+  valid_from_epoch_micros: number;
+};
+
+/**
  * CreateMeshSetupRequest
  *
  * One exact request to create the first mesh on an unclaimed daemon.
@@ -439,6 +503,42 @@ export type SetupStatusResponse = {
    * Current coarse setup state; this response never includes claim material.
    */
   state: "claim_required" | "configuring" | "configured";
+};
+
+/**
+ * CreateApiKeyResponse
+ *
+ * One exactly replayable API-key issuance result.
+ */
+export type CreateApiKeyResponseWritable = {
+  /**
+   * Authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Exclusive expiry, or null when the key does not expire automatically.
+   */
+  expires_at_epoch_micros: number | null;
+  /**
+   * Public key identity embedded in the returned secret.
+   */
+  key_id: string;
+  /**
+   * Independently revocable common authentication-method identity.
+   */
+  method_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * One connector through which an issued API key may authenticate.
+   */
+  scopes: Array<"https_session" | "headless_api" | "smb_session">;
+  /**
+   * Inclusive first accepted instant as epoch microseconds.
+   */
+  valid_from_epoch_micros: number;
 };
 
 /**
@@ -892,6 +992,60 @@ export type GetSetupStatusResponses = {
 
 export type GetSetupStatusResponse =
   GetSetupStatusResponses[keyof GetSetupStatusResponses];
+
+export type CreateCurrentUserApiKeyData = {
+  /**
+   * Current-user API-key issuance
+   */
+  body: CreateApiKeyRequest;
+  path?: never;
+  query?: never;
+  url: "/users/current/authentication-methods/api-keys";
+};
+
+export type CreateCurrentUserApiKeyErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or issuance conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateCurrentUserApiKeyError =
+  CreateCurrentUserApiKeyErrors[keyof CreateCurrentUserApiKeyErrors];
+
+export type CreateCurrentUserApiKeyResponses = {
+  /**
+   * Committed API key with its exactly replayable one-time secret
+   */
+  201: CreateApiKeyResponse;
+};
+
+export type CreateCurrentUserApiKeyResponse =
+  CreateCurrentUserApiKeyResponses[keyof CreateCurrentUserApiKeyResponses];
 
 export type CreateCurrentUserPasskeyData = {
   /**

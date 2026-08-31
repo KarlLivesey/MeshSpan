@@ -3,6 +3,8 @@
 
 import type {
   ApiError,
+  CreateApiKeyRequest,
+  CreateApiKeyResponse,
   CreateMeshSetupRequestWritable,
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
@@ -15,6 +17,8 @@ import type {
 } from "./types.gen";
 import {
   zApiError,
+  zCreateCurrentUserApiKeyBody,
+  zCreateCurrentUserApiKeyResponse,
   zCreateMeshSetupBody,
   zCreateMeshSetupResponse2,
   zCreateSessionBody,
@@ -42,6 +46,10 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  createCurrentUserApiKey(
+    request: CreateApiKeyRequest,
+    csrfToken: string,
+  ): Promise<CreateApiKeyResponse>;
   createMeshSetup(
     request: CreateMeshSetupRequestWritable,
   ): Promise<CreateMeshSetupResponse>;
@@ -88,6 +96,28 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async createCurrentUserApiKey(
+      request,
+      csrfToken,
+    ): Promise<CreateApiKeyResponse> {
+      const body = zCreateCurrentUserApiKeyBody.parse(request);
+      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
+        throw new TypeError("request has an invalid MeshSpan CSRF token");
+      }
+      return requestJson(
+        context,
+        "/users/current/authentication-methods/api-keys",
+        {
+          body: JSON.stringify(body),
+          headers: {
+            "Content-Type": "application/json",
+            "MeshSpan-CSRF-Token": csrfToken,
+          },
+          method: "POST",
+        },
+        zCreateCurrentUserApiKeyResponse,
+      );
+    },
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(

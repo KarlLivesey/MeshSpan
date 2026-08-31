@@ -29,7 +29,10 @@ pub use access::{
     AuthenticationService, GroupGraph, GroupGraphError, MembershipChange, OwnerSet, OwnerSetError,
     Rights, RightsError,
 };
-pub use api_key::{ApiKeyBundle, ApiKeyBundleError, ENCODED_API_KEY_LENGTH};
+pub use api_key::{
+    ApiKeyBundle, ApiKeyBundleError, ApiKeyIssuanceKey, ApiKeyIssuanceKeyError,
+    ENCODED_API_KEY_LENGTH,
+};
 pub use bootstrap_material::{InitialBootstrapMaterial, InitialBootstrapMaterialError};
 pub use claim::{ClaimBundle, ClaimBundleError, ENCODED_CLAIM_BUNDLE_LENGTH};
 pub use federation::{

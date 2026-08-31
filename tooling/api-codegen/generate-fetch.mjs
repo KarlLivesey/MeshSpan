@@ -20,6 +20,8 @@ const source = `// SPDX-License-Identifier: GPL-2.0-only
 
 import type {
   ApiError,
+  CreateApiKeyRequest,
+  CreateApiKeyResponse,
   CreateMeshSetupRequestWritable,
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
@@ -32,6 +34,8 @@ import type {
 } from "./types.gen";
 import {
   zApiError,
+  zCreateCurrentUserApiKeyBody,
+  zCreateCurrentUserApiKeyResponse,
   zCreateMeshSetupBody,
   zCreateMeshSetupResponse2,
   zCreateSessionBody,
@@ -59,6 +63,10 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  createCurrentUserApiKey(
+    request: CreateApiKeyRequest,
+    csrfToken: string,
+  ): Promise<CreateApiKeyResponse>;
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
   getCurrentSession(): Promise<CurrentSessionResponse>;
@@ -101,6 +109,28 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async createCurrentUserApiKey(
+      request,
+      csrfToken,
+    ): Promise<CreateApiKeyResponse> {
+      const body = zCreateCurrentUserApiKeyBody.parse(request);
+      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
+        throw new TypeError("request has an invalid MeshSpan CSRF token");
+      }
+      return requestJson(
+        context,
+        ${JSON.stringify(routes.createCurrentUserApiKey.route)},
+        {
+          body: JSON.stringify(body),
+          headers: {
+            "Content-Type": "application/json",
+            "MeshSpan-CSRF-Token": csrfToken,
+          },
+          method: ${JSON.stringify(routes.createCurrentUserApiKey.method)},
+        },
+        zCreateCurrentUserApiKeyResponse,
+      );
+    },
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -376,6 +406,10 @@ function readRequiredRoutes(document) {
     }
   }
   return {
+    createCurrentUserApiKey: requireOperation(
+      operations,
+      "createCurrentUserApiKey",
+    ),
     createMeshSetup: requireOperation(operations, "createMeshSetup"),
     createSession: readSessionOperation(
       requireOperation(operations, "createSession"),

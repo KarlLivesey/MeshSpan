@@ -6,11 +6,11 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
-    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
-    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
-    CreatePasskeyRegistrationResponse, CreateSessionRequest, CreateSessionResponse,
-    CurrentSessionResponse, HealthResponse, RevokeCurrentSessionRequest,
+    ApiError, CreateApiKeyRequest, CreateApiKeyResponse, CreateMeshSetupRequest,
+    CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
+    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
+    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreateSessionRequest,
+    CreateSessionResponse, CurrentSessionResponse, HealthResponse, RevokeCurrentSessionRequest,
     RevokeCurrentSessionResponse, SetupStatusResponse, schema,
 };
 
@@ -70,6 +70,8 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
         "components": {
             "schemas": {
                 "ApiError": response_component::<ApiError>(),
+                "CreateApiKeyRequest": request_component::<CreateApiKeyRequest>(),
+                "CreateApiKeyResponse": response_component::<CreateApiKeyResponse>(),
                 "CreateMeshSetupRequest": request_component::<CreateMeshSetupRequest>(),
                 "CreateMeshSetupResponse": response_component::<CreateMeshSetupResponse>(),
                 "CreatePasskeyChallengeRequest": request_component::<CreatePasskeyChallengeRequest>(),
@@ -111,12 +113,44 @@ fn paths() -> Value {
             "/users/current/authentication-methods/passkeys".to_owned(),
             create_passkey_registration_path(),
         ),
+        (
+            "/users/current/authentication-methods/api-keys".to_owned(),
+            create_api_key_path(),
+        ),
         ("/sessions/current".to_owned(), current_session_path()),
         (
             "/sessions/current/revocations".to_owned(),
             revoke_current_session_path(),
         ),
     ]))
+}
+
+fn create_api_key_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserApiKey",
+            "summary": "Issue one scoped current-user API key",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-user API-key issuance",
+                "#/components/schemas/CreateApiKeyRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Committed API key with its exactly replayable one-time secret",
+                    "#/components/schemas/CreateApiKeyResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or issuance conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn health_path() -> Value {
