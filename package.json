@@ -9,6 +9,7 @@
   },
   "scripts": {
     "check": "node scripts/check.mjs",
+    "check:licences": "cargo deny check licenses && node scripts/check-javascript-licences.mjs",
     "check:stage3-adversarial": "node scripts/check-stage3-adversarial.mjs",
     "check:generated": "node scripts/verify-generated.mjs",
     "generate:api": "node scripts/generate-api.mjs",

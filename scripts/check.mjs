@@ -44,6 +44,10 @@ if (!generation.passed) {
       steps: [["cargo", ["deny", "check", "licenses"]]],
     },
     {
+      name: "JavaScript dependency licences",
+      steps: [[process.execPath, ["scripts/check-javascript-licences.mjs"]]],
+    },
+    {
       name: "Rust domain and authentication primitives",
       steps: [
         [
@@ -230,7 +234,16 @@ if (!generation.passed) {
     },
     {
       name: "scheduler tests",
-      steps: [[process.execPath, ["--test", "scripts/scheduler.test.mjs"]]],
+      steps: [
+        [
+          process.execPath,
+          [
+            "--test",
+            "scripts/javascript-licence-policy.test.mjs",
+            "scripts/scheduler.test.mjs",
+          ],
+        ],
+      ],
     },
     {
       name: "web tests",
