@@ -16,6 +16,7 @@ members = [
     "crates/meshspan-protobuf",
     "crates/meshspan-protocol",
     "crates/meshspan-storage",
+    "crates/meshspan-sync-wrapper",
     "crates/meshspan-transport",
 ]
 resolver = "3"
@@ -57,6 +58,9 @@ tower = { version = "0.5.3", default-features = false, features = ["util"] }
 unicode-normalization = "0.1.25"
 unicode-casefold = "0.2.0"
 zeroize = "1.9.0"
+
+[patch.crates-io]
+sync_wrapper = { path = "crates/meshspan-sync-wrapper" }
 
 [workspace.lints.rust]
 missing_docs = "deny"

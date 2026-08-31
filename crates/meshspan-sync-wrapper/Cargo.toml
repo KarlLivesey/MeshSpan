@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "sync_wrapper"
+description = "MeshSpan-owned static synchronisation proof used by the embedded HTTP stack"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version = "1.0.2"
+
+[lints]
+workspace = true
