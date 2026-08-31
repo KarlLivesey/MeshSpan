@@ -54,6 +54,8 @@ if (!generation.passed) {
             "meshspan-passkey",
             "-p",
             "meshspan-otp",
+            "-p",
+            "sync_wrapper",
             "--all-targets",
             "--all-features",
           ],

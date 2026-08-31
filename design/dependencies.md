@@ -50,6 +50,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `meshspan-otp` (workspace)         |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-protobuf` (workspace)    |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-passkey` (workspace)     |            0.1.0 | `GPL-2.0-only`             |
+| `sync_wrapper` (workspace)         |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                             |           0.14.0 | `Apache-2.0 OR MIT`        |
 | `rusqlite`                         |           0.40.2 | `MIT`                      |
 | `schemars`                         |            1.2.2 | `MIT`                      |
@@ -70,6 +71,19 @@ source/advisory policy automation arrive before a release artefact is built.
 | `tokio`                            |           1.53.1 | `MIT`                      |
 | `tower`                            |            0.5.3 | `MIT`                      |
 | `zeroize`                          |            1.9.0 | `Apache-2.0 OR MIT`        |
+
+The workspace `sync_wrapper` package is a clean-room, narrow compatibility implementation for the
+static exclusivity proof consumed by current Axum and Tower. The upstream package is
+Apache-2.0-only, so it cannot ship in a `GPL-2.0-only` combined artefact. Cargo patches the exact
+transitive package name to MeshSpan's allocation-free implementation; its unsafe surface is limited
+to the documented pinned projection and `Sync` proof and is exercised by the normal local gate.
+
+The current Rustls/Quinn graph still resolves `ring`, whose declared licence is
+`Apache-2.0 AND ISC`. No MeshSpan release artefact may ship while that conjunctive Apache-2.0
+dependency remains. Downgrading is forbidden, and AWS-LC is not a licence solution because its
+current sys crate also includes an Apache-2.0-only conjunct. The replacement must be a maintained,
+portable Rustls/QUIC cryptography provider with complete hostile, standards and interoperability
+proof; experimental providers which explicitly disclaim production readiness are not admissible.
 
 | Web/runtime dependency  | Version | Declared licence |
 | ----------------------- | ------: | ---------------- |
