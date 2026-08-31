@@ -13,20 +13,22 @@ use crate::{
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
     AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
     AdapterUnlinkRequest, AdapterUnlockRequest, AdapterUploadAbortRequest,
-    AdapterUploadBeginRequest, AdapterUploadRangePageRequest, AdapterUploadStatusRequest,
-    AdapterUploadWriteRequest, AdapterWriteFileRequest, DirectoryPublication,
-    DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy, FilesystemCommitError,
-    FilesystemCommitService, FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest,
-    FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest, FilesystemHandleFlushRequest,
-    FilesystemHandleOpenRequest, FilesystemHandleReadReceipt, FilesystemHandleReadRequest,
-    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleAccess, HandleError,
-    HandleIoError, HandleLeaseReceipt, HandleLeaseRequest, HandleReadError, LockRangeReceipt,
-    LockRangeRequest, NamespaceListRequest, NamespacePublicationReceipt, NamespaceQueryError,
-    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceStatRequest,
-    NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest,
-    RangeLockKind, StageWrite, UnlockRangeReceipt, UnlockRangeRequest, UploadAbortRequest,
-    UploadBeginRequest, UploadRangePageReceipt, UploadRangePageRequest, UploadSession,
-    UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt, UploadWriteRequest,
+    AdapterUploadBeginRequest, AdapterUploadCommitRequest, AdapterUploadRangePageRequest,
+    AdapterUploadStatusRequest, AdapterUploadWriteRequest, AdapterWriteFileRequest,
+    DirectoryPublication, DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy,
+    FilesystemCommitError, FilesystemCommitService, FilesystemHandleCloseReceipt,
+    FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest,
+    FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleReadReceipt,
+    FilesystemHandleReadRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
+    HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt, HandleLeaseRequest,
+    HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
+    NamespacePublicationReceipt, NamespaceQueryError, NamespaceRenamePublication,
+    NamespaceRenameReceipt, NamespaceStatRequest, NamespaceUnlinkPublication,
+    NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, StageWrite,
+    UnlockRangeReceipt, UnlockRangeRequest, UploadAbortRequest, UploadBeginRequest,
+    UploadCommitReceipt, UploadCommitRequest, UploadRangePageReceipt, UploadRangePageRequest,
+    UploadSession, UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt,
+    UploadWriteRequest,
 };
 
 /// Authenticated connector context supplied independently of a filesystem operation payload.
@@ -1027,6 +1029,36 @@ where
                 observed_at: request.observed_at,
             })
             .map_err(AuthorisedFilesystemError::Upload)
+    }
+
+    pub(crate) fn adapter_commit_upload(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: AdapterUploadCommitRequest,
+        policy: FilesystemAdapterPolicy,
+    ) -> Result<UploadCommitReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let (session, grant) = self.authorise_upload(context, request.upload_id)?;
+        let publication = self
+            .filesystem
+            .prepare_upload_publication(branch_id, &session, request, policy, grant)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        self.filesystem
+            .commit_upload(&UploadCommitRequest {
+                operation_id: request.operation_id,
+                upload_id: request.upload_id,
+                principal_id: session.principal_id,
+                authorization_revision: grant.identity_revision,
+                stage_fence: request.stage_fence,
+                expected_sequence: request.expected_sequence,
+                final_length: request.final_length,
+                sparse: request.sparse,
+                expected_content_digest: request.expected_content_digest,
+                publication,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::Commit)
     }
 
     /// Returns the owned parts for orderly shutdown and composition tests.

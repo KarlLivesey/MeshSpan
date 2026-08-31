@@ -6,14 +6,15 @@ use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{BranchId, HandleId, LockId, OperationId, UnixMicros, VolumeId};
 
 use crate::{
-    AdapterUploadAbortRequest, AdapterUploadBeginRequest, AdapterUploadRangePageRequest,
-    AdapterUploadStatusRequest, AdapterUploadWriteRequest, AuthorisedFilesystemError,
-    AuthorisedFilesystemService, CreateDisposition, DurableContentPublisher, DurableContentReader,
-    FilesystemAccessAuthority, FilesystemAccessContext, FilesystemHandleCloseReceipt,
-    FilesystemHandleFlushRequest, FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt,
-    HandleAccess, HandleLeaseReceipt, HandleShare, LockRangeReceipt, NamespaceListPage,
-    NamespaceObjectStat, NamespacePath, NamespacePublicationReceipt, OpenHandleReceipt,
-    RangeLockKind, UnlockRangeReceipt, UploadRangePageReceipt, UploadSession, UploadStatusReceipt,
+    AdapterUploadAbortRequest, AdapterUploadBeginRequest, AdapterUploadCommitRequest,
+    AdapterUploadRangePageRequest, AdapterUploadStatusRequest, AdapterUploadWriteRequest,
+    AuthorisedFilesystemError, AuthorisedFilesystemService, CreateDisposition,
+    DurableContentPublisher, DurableContentReader, FilesystemAccessAuthority,
+    FilesystemAccessContext, FilesystemHandleCloseReceipt, FilesystemHandleFlushRequest,
+    FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt, HandleAccess, HandleLeaseReceipt,
+    HandleShare, LockRangeReceipt, NamespaceListPage, NamespaceObjectStat, NamespacePath,
+    NamespacePublicationReceipt, OpenHandleReceipt, RangeLockKind, UnlockRangeReceipt,
+    UploadCommitReceipt, UploadRangePageReceipt, UploadSession, UploadStatusReceipt,
     UploadWriteReceipt,
 };
 
@@ -530,6 +531,17 @@ pub trait FilesystemUploadAdapter {
         context: FilesystemAccessContext,
         request: AdapterUploadAbortRequest,
     ) -> Result<UploadSession, Self::Error>;
+
+    /// Atomically publishes one complete exact upload checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale authority or namespace state, incomplete content and durability failure.
+    fn commit_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadCommitRequest,
+    ) -> Result<UploadCommitReceipt, Self::Error>;
 }
 
 /// Daemon composition binding semantic connector operations to one local branch and policy.
@@ -734,6 +746,15 @@ where
         request: AdapterUploadAbortRequest,
     ) -> Result<UploadSession, Self::Error> {
         self.filesystem.adapter_abort_upload(context, request)
+    }
+
+    fn commit_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadCommitRequest,
+    ) -> Result<UploadCommitReceipt, Self::Error> {
+        self.filesystem
+            .adapter_commit_upload(self.branch_id, context, request, self.policy)
     }
 }
 

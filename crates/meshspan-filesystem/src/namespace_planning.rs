@@ -10,6 +10,8 @@ pub(crate) mod rename;
 mod resolution;
 #[path = "namespace_planning/unlink.rs"]
 pub(crate) mod unlink;
+#[path = "namespace_planning/upload_commit.rs"]
+pub(crate) mod upload_commit;
 
 use meshspan_domain::{
     BranchId, NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, UnixMicros,

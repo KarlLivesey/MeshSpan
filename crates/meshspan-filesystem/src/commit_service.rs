@@ -233,6 +233,18 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .upload_authority_target(branch_id, volume_id, path, disposition)
     }
 
+    pub(crate) fn prepare_upload_publication(
+        &mut self,
+        branch_id: BranchId,
+        session: &crate::UploadSession,
+        request: crate::AdapterUploadCommitRequest,
+        policy: crate::FilesystemAdapterPolicy,
+        grant: crate::FilesystemAuthorityGrant,
+    ) -> Result<RootFileCommitRequest, crate::HandleError> {
+        self.publications
+            .prepare_upload_publication(branch_id, session, request, policy, grant)
+    }
+
     /// Writes one independently idempotent bounded range to a private upload.
     ///
     /// # Errors

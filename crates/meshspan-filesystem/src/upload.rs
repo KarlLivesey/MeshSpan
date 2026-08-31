@@ -93,6 +93,29 @@ pub struct AdapterUploadAbortRequest {
     pub observed_at: UnixMicros,
 }
 
+/// Connector-supplied exact publication barrier for one upload checkpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterUploadCommitRequest {
+    /// Stable publication operation identity.
+    pub operation_id: OperationId,
+    /// Selected upload.
+    pub upload_id: UploadId,
+    /// Exact writer fence.
+    pub stage_fence: u64,
+    /// Exact selected checkpoint sequence.
+    pub expected_sequence: u64,
+    /// Exact logical file length.
+    pub final_length: u64,
+    /// Whether uncovered ranges are intentional logical zeroes.
+    pub sparse: bool,
+    /// Optional independently verified complete-content digest.
+    pub expected_content_digest: Option<[u8; 32]>,
+    /// Exclusive deadline for new content-provider work.
+    pub content_deadline: UnixMicros,
+    /// Authoritative publication instant.
+    pub observed_at: UnixMicros,
+}
+
 /// Namespace precondition applied when an upload is eventually published.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UploadDisposition {

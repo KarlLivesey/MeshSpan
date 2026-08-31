@@ -18,7 +18,7 @@ use crate::{
     HandleShare, ManifestPublication, NamespaceLimits, NamespaceListRequest, NamespacePath,
     NamespacePublicationPath, NamespaceQueryError, NamespaceStatRequest, OpenHandleRequest,
     PublicationDisposition, PublishedContentReference, RootFilePublication, StageWrite,
-    StageWriteOutcome, UploadDisposition, VersionPublicationStore,
+    StageWriteOutcome, UploadDisposition, UploadState, VersionPublicationStore,
 };
 
 #[test]
@@ -272,7 +272,7 @@ fn resumable_upload_reauthorises_the_stable_parent_before_every_range()
     let allowed = Rc::new(Cell::new(true));
     let authority = TestAuthority::new(Rc::clone(&allowed), PrincipalId::from_bytes([18; 16])?);
     let service =
-        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), TestPublisher)?;
     let mut service = AuthorisedFilesystemService::new(service, authority);
     let begin = AdapterUploadBeginRequest {
         operation_id: OperationId::from_bytes([70; 16])?,
@@ -324,6 +324,39 @@ fn resumable_upload_reauthorises_the_stable_parent_before_every_range()
             .checkpoint
             .logical_extent,
         4
+    );
+    let commit = AdapterUploadCommitRequest {
+        operation_id: OperationId::from_bytes([74; 16])?,
+        upload_id: begin.upload_id,
+        stage_fence: 1,
+        expected_sequence: 1,
+        final_length: 4,
+        sparse: false,
+        expected_content_digest: Some(blake3::hash(b"safe").into()),
+        content_deadline: UnixMicros::new(80),
+        observed_at: UnixMicros::new(32),
+    };
+    let policy = FilesystemAdapterPolicy::new(true, 1, 1)?;
+    let committed = service.adapter_commit_upload(
+        BranchId::from_bytes([11; 16])?,
+        context(commit.observed_at)?,
+        commit,
+        policy,
+    )?;
+    assert_eq!(committed.session.state, UploadState::Committed);
+    assert_eq!(
+        committed.publication.disposition,
+        PublicationDisposition::Applied
+    );
+    let replayed = service.adapter_commit_upload(
+        BranchId::from_bytes([11; 16])?,
+        context(commit.observed_at)?,
+        commit,
+        policy,
+    )?;
+    assert_eq!(
+        replayed.publication.disposition,
+        PublicationDisposition::Replayed
     );
     Ok(())
 }
@@ -560,6 +593,8 @@ fn publish_additional_file(
 
 struct UnusedPublisher;
 
+struct TestPublisher;
+
 struct SeedPublisher {
     content: PublishedContentReference,
     bytes: Vec<u8>,
@@ -640,5 +675,43 @@ impl DurableContentPublisher for UnusedPublisher {
         _completed: crate::CompletedStage,
     ) -> Result<ManifestPublication, ContentPublicationError> {
         Err(ContentPublicationError::Unavailable)
+    }
+}
+
+impl DurableContentPublisher for TestPublisher {
+    type Sink = Vec<u8>;
+
+    fn resolve(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Option<ManifestPublication>, ContentPublicationError> {
+        Ok(None)
+    }
+
+    fn begin(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Self::Sink, ContentPublicationError> {
+        Ok(Vec::new())
+    }
+
+    fn finish(
+        &mut self,
+        request: ContentPublicationRequest,
+        sink: Self::Sink,
+        completed: crate::CompletedStage,
+    ) -> Result<ManifestPublication, ContentPublicationError> {
+        if sink.len() as u64 != completed.logical_length
+            || blake3::hash(&sink).as_bytes() != &completed.content_digest
+        {
+            return Err(ContentPublicationError::Corrupt);
+        }
+        Ok(ManifestPublication {
+            manifest_id: request.manifest_id,
+            format_version: request.format_version,
+            logical_length: completed.logical_length,
+            content_digest: completed.content_digest,
+            root_digest: blake3::hash(&sink).into(),
+        })
     }
 }
