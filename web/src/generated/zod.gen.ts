@@ -444,6 +444,73 @@ export const zCreateApiKeyResponse = z
   .strict();
 
 /**
+ * CreateDirectoryRequest
+ *
+ * Creates one empty logical directory at an exact path.
+ */
+export const zCreateDirectoryRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+  })
+  .strict();
+
+/**
+ * CreateDirectoryResponse
+ *
+ * Durable result of one atomic empty-directory creation.
+ */
+export const zCreateDirectoryResponse = z
+  .strictObject({
+    head_sequence: z.int().gte(1).lte(9007199254740991),
+    namespace_commit_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    object_revision_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateMeshSetupRequest
  *
  * One exact request to create the first mesh on an unclaimed daemon.
@@ -1024,6 +1091,75 @@ export const zCurrentSessionResponse = z
   .strict();
 
 /**
+ * DeleteObjectRequest
+ *
+ * Logically deletes one exact current file or empty directory.
+ */
+export const zDeleteObjectRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+  })
+  .strict();
+
+/**
+ * DeleteObjectResponse
+ *
+ * Durable result of one atomic logical namespace removal.
+ */
+export const zDeleteObjectResponse = z
+  .strictObject({
+    head_sequence: z.int().gte(1).lte(9007199254740991),
+    namespace_commit_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    object_kind: z.union([z.literal("directory"), z.literal("file")]),
+    object_revision_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    scope: z.literal("branch_deleted"),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * GetObjectResponse
  *
  * Complete immutable metadata for one logical object.
@@ -1210,6 +1346,83 @@ export const zListUploadRangesResponse = z
       )
       .max(256),
     upload_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * RenameObjectRequest
+ *
+ * Atomically renames or moves one object within a logical volume.
+ */
+export const zRenameObjectRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    source_path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    target_path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+  })
+  .strict();
+
+/**
+ * RenameObjectResponse
+ *
+ * Durable result of one atomic same-volume rename or move.
+ */
+export const zRenameObjectResponse = z
+  .strictObject({
+    head_sequence: z.int().gte(1).lte(9007199254740991),
+    namespace_commit_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    object_revision_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    source_path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    target_path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    volume_id: z
       .string()
       .length(36)
       .regex(
@@ -2063,6 +2276,66 @@ export const zRevokeCurrentUserAuthenticationMethodPath = z
 export const zRevokeCurrentUserAuthenticationMethodResponse =
   zRevokeAuthenticationMethodResponse;
 
+/**
+ * Exact idempotent logical-delete intent
+ */
+export const zDeleteObjectBody = zDeleteObjectRequest;
+
+export const zDeleteObjectHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zDeleteObjectPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Durable branch-deleted receipt; physical reclamation is separate
+ */
+export const zDeleteObjectResponse2 = zDeleteObjectResponse;
+
+/**
+ * Exact idempotent directory-creation intent
+ */
+export const zCreateDirectoryBody = zCreateDirectoryRequest;
+
+export const zCreateDirectoryHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zCreateDirectoryPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Durable local-branch directory-creation receipt
+ */
+export const zCreateDirectoryResponse2 = zCreateDirectoryResponse;
+
 export const zListDirectoryPath = z
   .object({
     volume_id: z
@@ -2150,6 +2423,36 @@ export const zGetObjectQuery = z
  * Complete immutable metadata for the selected logical object
  */
 export const zGetObjectResponse2 = zGetObjectResponse;
+
+/**
+ * Exact idempotent same-volume rename intent
+ */
+export const zRenameObjectBody = zRenameObjectRequest;
+
+export const zRenameObjectHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zRenameObjectPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Durable local-branch rename receipt
+ */
+export const zRenameObjectResponse2 = zRenameObjectResponse;
 
 /**
  * Bounded durable upload intent

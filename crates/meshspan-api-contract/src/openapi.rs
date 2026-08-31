@@ -8,17 +8,19 @@ use sha2::{Digest, Sha256};
 use crate::{
     AbortUploadRequest, AbortUploadResponse, ApiError, BeginUploadRequest, BeginUploadResponse,
     CommitUploadRequest, CommitUploadResponse, CreateApiKeyRequest, CreateApiKeyResponse,
-    CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
-    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
-    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
-    CreatePasskeyRegistrationResponse, CreateRecoveryCodesRequest, CreateRecoveryCodesResponse,
-    CreateSessionRequest, CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
+    CreateDirectoryRequest, CreateDirectoryResponse, CreateMeshSetupRequest,
+    CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
+    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
+    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse,
+    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
+    CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CurrentSessionResponse, GetObjectResponse, HealthResponse,
-    ListDirectoryResponse, ListUploadRangesResponse, RevokeAuthenticationMethodRequest,
-    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
-    SetupStatusResponse, StepUpCurrentSessionRequest, UploadStatusResponse,
-    WriteUploadRangeResponse, schema,
+    CreateTotpRegistrationResponse, CurrentSessionResponse, DeleteObjectRequest,
+    DeleteObjectResponse, GetObjectResponse, HealthResponse, ListDirectoryResponse,
+    ListUploadRangesResponse, RenameObjectRequest, RenameObjectResponse,
+    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -91,6 +93,8 @@ fn components() -> Value {
         schema_response::<CommitUploadResponse>("CommitUploadResponse"),
         schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
         schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
+        schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
+        schema_response::<CreateDirectoryResponse>("CreateDirectoryResponse"),
         schema_request::<CreateMeshSetupRequest>("CreateMeshSetupRequest"),
         schema_response::<CreateMeshSetupResponse>("CreateMeshSetupResponse"),
         schema_request::<CreatePasskeyChallengeRequest>("CreatePasskeyChallengeRequest"),
@@ -116,12 +120,16 @@ fn components() -> Value {
         schema_request::<CreateTotpRegistrationRequest>("CreateTotpRegistrationRequest"),
         schema_response::<CreateTotpRegistrationResponse>("CreateTotpRegistrationResponse"),
         schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
+        schema_request::<DeleteObjectRequest>("DeleteObjectRequest"),
+        schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
         schema_response::<GetObjectResponse>("GetObjectResponse"),
         schema_response::<HealthResponse>("HealthResponse"),
         schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
         schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
         schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
+        schema_request::<RenameObjectRequest>("RenameObjectRequest"),
+        schema_response::<RenameObjectResponse>("RenameObjectResponse"),
         schema_request::<RevokeAuthenticationMethodRequest>("RevokeAuthenticationMethodRequest"),
         schema_response::<RevokeAuthenticationMethodResponse>("RevokeAuthenticationMethodResponse"),
         schema_response::<SetupStatusResponse>("SetupStatusResponse"),
@@ -149,6 +157,18 @@ fn paths() -> Value {
         (
             "/volumes/{volume_id}/directory-entries".to_owned(),
             list_directory_path(),
+        ),
+        (
+            "/volumes/{volume_id}/directories".to_owned(),
+            create_directory_path(),
+        ),
+        (
+            "/volumes/{volume_id}/renames".to_owned(),
+            rename_object_path(),
+        ),
+        (
+            "/volumes/{volume_id}/deletions".to_owned(),
+            delete_object_path(),
         ),
         ("/volumes/{volume_id}/objects".to_owned(), get_object_path()),
         (
@@ -242,6 +262,129 @@ fn begin_upload_path() -> Value {
             )
         }
     })
+}
+
+fn create_directory_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createDirectory",
+            "summary": "Atomically create one empty logical directory",
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [volume_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request(
+                "Exact idempotent directory-creation intent",
+                "#/components/schemas/CreateDirectoryRequest"
+            ),
+            "responses": namespace_mutation_responses(
+                "201",
+                "Durable local-branch directory-creation receipt",
+                "#/components/schemas/CreateDirectoryResponse"
+            )
+        }
+    })
+}
+
+fn rename_object_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "renameObject",
+            "summary": "Atomically rename or move one logical object within a volume",
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [volume_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request(
+                "Exact idempotent same-volume rename intent",
+                "#/components/schemas/RenameObjectRequest"
+            ),
+            "responses": namespace_mutation_responses(
+                "200",
+                "Durable local-branch rename receipt",
+                "#/components/schemas/RenameObjectResponse"
+            )
+        }
+    })
+}
+
+fn delete_object_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "deleteObject",
+            "summary": "Atomically remove one file or empty directory from the logical namespace",
+            "x-meshspan-access": "authenticated-csrf",
+            "parameters": [volume_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request(
+                "Exact idempotent logical-delete intent",
+                "#/components/schemas/DeleteObjectRequest"
+            ),
+            "responses": namespace_mutation_responses(
+                "200",
+                "Durable branch-deleted receipt; physical reclamation is separate",
+                "#/components/schemas/DeleteObjectResponse"
+            )
+        }
+    })
+}
+
+fn namespace_mutation_responses(success: &str, description: &str, schema_reference: &str) -> Value {
+    let mut responses = Map::from_iter([
+        (
+            "400".to_owned(),
+            json_response(
+                "Invalid namespace mutation",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "401".to_owned(),
+            json_response("Authentication rejected", "#/components/schemas/ApiError"),
+        ),
+        (
+            "403".to_owned(),
+            json_response(
+                "Current principal is not authorised",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "404".to_owned(),
+            json_response(
+                "Volume, object or parent not found",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "409".to_owned(),
+            json_response(
+                "Namespace, sharing or idempotency conflict",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "413".to_owned(),
+            json_response(
+                "Mutation body exceeds its byte limit",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "500".to_owned(),
+            json_response(
+                "Outgoing contract or integrity failure",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+        (
+            "503".to_owned(),
+            json_response(
+                "Namespace authority or metadata temporarily unavailable",
+                "#/components/schemas/ApiError",
+            ),
+        ),
+    ]);
+    responses.insert(
+        success.to_owned(),
+        json_response(description, schema_reference),
+    );
+    Value::Object(responses)
 }
 
 fn upload_status_path() -> Value {
