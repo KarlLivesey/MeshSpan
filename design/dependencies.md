@@ -41,11 +41,14 @@ source/advisory policy automation arrive before a release artefact is built.
 | `axum`                             |            0.8.9 | `MIT`                      |
 | `jsonschema`                       |           0.52.0 | `MIT`                      |
 | `meshspan-protobuf` (workspace)    |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-passkey` (workspace)     |            0.1.0 | `GPL-2.0-only`             |
+| `p256`                             |           0.14.0 | `Apache-2.0 OR MIT`        |
 | `rusqlite`                         |           0.40.2 | `MIT`                      |
 | `schemars`                         |            1.2.2 | `MIT`                      |
 | `serde`                            |          1.0.229 | `MIT OR Apache-2.0`        |
 | `serde_json`                       |          1.0.151 | `MIT OR Apache-2.0`        |
-| `sha2`                             |           0.10.9 | `MIT OR Apache-2.0`        |
+| `sha2`                             |           0.11.0 | `MIT OR Apache-2.0`        |
+| `subtle`                           |            2.6.1 | `BSD-3-Clause`             |
 | `thiserror`                        |           2.0.20 | `MIT OR Apache-2.0`        |
 | `unicode-normalization`            |           0.1.25 | `MIT OR Apache-2.0`        |
 | `tempfile` (test only)             |           3.27.0 | `MIT OR Apache-2.0`        |
@@ -140,9 +143,14 @@ the first implementation.
 | `secrecy`          | Types that prevent accidental secret formatting/logging                        |
 | `rcgen`            | Internal node certificates and certificate requests                            |
 
-`webauthn-rs` and `totp-rs` are evaluation candidates for the WebAuthn and TOTP
-authentication-method adapters. They are not admitted until their parsing,
-storage, platform, maintenance and dependency trees pass the security review.
+The independently extractable `GPL-2.0-only` `meshspan-passkey` crate owns the
+bounded WebAuthn relying-party parser and validation state machine. It initially
+uses current `p256` under its MIT option for the mandatory ES256 path and
+`subtle` for constant-time binding comparisons. It has no MeshSpan application
+dependency and invokes no external service or executable. Additional algorithms
+are admitted only with exact standards vectors and a compatible maintained
+cryptographic primitive. `totp-rs` remains an evaluation candidate for the TOTP
+adapter and is not admitted until its complete tree passes the same review.
 
 No ACME library is selected yet. The current candidates each miss at least one
 mandatory constraint, most importantly first-class HTTP-01 plus DNS-01 control

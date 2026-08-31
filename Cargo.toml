@@ -11,6 +11,7 @@ members = [
     "crates/meshspan-domain",
     "crates/meshspan-filesystem",
     "crates/meshspan-metadata",
+    "crates/meshspan-passkey",
     "crates/meshspan-protobuf",
     "crates/meshspan-protocol",
     "crates/meshspan-storage",
@@ -36,6 +37,7 @@ chacha20poly1305 = "0.11.0"
 ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
 meshspan-protobuf = { path = "crates/meshspan-protobuf" }
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14.9", default-features = false, features = ["ring"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
@@ -44,7 +46,8 @@ rustls = { version = "0.23.43", default-features = false, features = ["ring", "s
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
+subtle = "2.6.1"
 thiserror = "2.0.16"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
