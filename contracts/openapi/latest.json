@@ -6390,6 +6390,22 @@
                   "const": "latest",
                   "type": "string"
                 }
+              },
+              "MeshSpan-CSRF-Token": {
+                "required": true,
+                "schema": {
+                  "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "x-meshspan-sensitive": true
+              },
+              "Set-Cookie": {
+                "required": true,
+                "schema": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "x-meshspan-sensitive": true
               }
             }
           },

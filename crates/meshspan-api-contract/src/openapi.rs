@@ -1090,9 +1090,8 @@ fn step_up_current_session_path() -> Value {
                 "#/components/schemas/StepUpCurrentSessionRequest"
             ),
             "responses": {
-                "201": json_response(
-                    "Committed replacement session; the source session is revoked",
-                    "#/components/schemas/CreateSessionResponse"
+                "201": session_response(
+                    "Committed replacement session; the source session is revoked"
                 ),
                 "400": json_response("Invalid request", "#/components/schemas/ApiError"),
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
@@ -1291,7 +1290,7 @@ fn create_session_path() -> Value {
                 }
             },
             "responses": {
-                "201": session_response(),
+                "201": session_response("Authenticated session created"),
                 "400": json_response("Malformed or structurally invalid request", "#/components/schemas/ApiError"),
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
                 "409": json_response("Operation identifier conflict", "#/components/schemas/ApiError"),
@@ -1510,7 +1509,7 @@ fn json_response(description: &str, schema_reference: &str) -> Value {
     })
 }
 
-fn session_response() -> Value {
+fn session_response(description: &str) -> Value {
     let mut headers = response_headers();
     if let Some(headers) = headers.as_object_mut() {
         headers.insert(
@@ -1534,7 +1533,7 @@ fn session_response() -> Value {
         );
     }
     json!({
-        "description": "Authenticated session created",
+        "description": description,
         "headers": headers,
         "content": {
             "application/json": {

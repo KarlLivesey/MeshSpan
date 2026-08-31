@@ -16,10 +16,22 @@ import type {
   CreateDirectoryRequest,
   CreateDirectoryResponse,
   CreateGroupRequest,
+  CreatePasskeyChallengeRequest,
+  CreatePasskeyChallengeResponse,
+  CreatePasskeyRegistrationChallengeRequest,
+  CreatePasskeyRegistrationChallengeResponse,
+  CreatePasskeyRegistrationRequestWritable,
+  CreatePasskeyRegistrationResponse,
+  CreateRecoveryCodesRequest,
+  CreateRecoveryCodesResponse,
   CreateMeshSetupRequestWritable,
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
+  CreateTotpRegistrationChallengeRequest,
+  CreateTotpRegistrationChallengeResponse,
+  CreateTotpRegistrationRequestWritable,
+  CreateTotpRegistrationResponse,
   CreatePrincipalResponse,
   CreateUserRequest,
   CurrentSessionResponse,
@@ -29,6 +41,7 @@ import type {
   HealthResponse,
   ListDirectoryResponse,
   ListGroupMembershipsResponse,
+  ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
   RevokeAuthenticationMethodRequest,
@@ -40,6 +53,7 @@ import type {
   RemoveGroupMemberRequest,
   RemoveGroupMemberResponse,
   SetupStatusResponse,
+  StepUpCurrentSessionRequestWritable,
   UploadStatusResponse,
   WriteUploadRangeResponse,
 } from "./types.gen";
@@ -59,6 +73,16 @@ import {
   zCommitUploadResponse2,
   zCreateCurrentUserApiKeyBody,
   zCreateCurrentUserApiKeyResponse,
+  zCreateCurrentUserPasskeyBody,
+  zCreateCurrentUserPasskeyRegistrationChallengeBody,
+  zCreateCurrentUserPasskeyRegistrationChallengeResponse,
+  zCreateCurrentUserPasskeyResponse,
+  zCreateCurrentUserRecoveryCodesBody,
+  zCreateCurrentUserRecoveryCodesResponse,
+  zCreateCurrentUserTotpBody,
+  zCreateCurrentUserTotpRegistrationChallengeBody,
+  zCreateCurrentUserTotpRegistrationChallengeResponse,
+  zCreateCurrentUserTotpResponse,
   zCreateDirectoryBody,
   zCreateDirectoryPath,
   zCreateDirectoryResponse2,
@@ -66,6 +90,8 @@ import {
   zCreateGroupResponse,
   zCreateMeshSetupBody,
   zCreateMeshSetupResponse2,
+  zCreatePasskeyChallengeBody,
+  zCreatePasskeyChallengeResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
   zCreateUserBody,
@@ -90,6 +116,8 @@ import {
   zListGroupMembersPath,
   zListGroupMembersQuery,
   zListGroupMembersResponse,
+  zListCurrentUserAuthenticationMethodsQuery,
+  zListCurrentUserAuthenticationMethodsResponse,
   zListPrincipalsResponse,
   zListUploadRangesPath,
   zListUploadRangesQuery,
@@ -109,6 +137,8 @@ import {
   zRemoveGroupMemberBody,
   zRemoveGroupMemberPath,
   zRemoveGroupMemberResponse2,
+  zStepUpCurrentSessionBody,
+  zStepUpCurrentSessionResponse,
   zWriteUploadRangeHeaders,
   zWriteUploadRangePath,
   zWriteUploadRangeResponse2,
@@ -176,6 +206,11 @@ export type ListGroupMembersRequest = Readonly<{
   limit?: number;
 }>;
 
+export type ListAuthenticationMethodsRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
 export type ListUploadRangesRequest = Readonly<{
   uploadId: string;
   cursor?: string;
@@ -197,6 +232,48 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  createPasskeyChallenge(
+    request: CreatePasskeyChallengeRequest,
+  ): Promise<CreatePasskeyChallengeResponse>;
+  createCurrentUserApiKey(
+    request: CreateApiKeyRequest,
+    csrfToken: string,
+  ): Promise<CreateApiKeyResponse>;
+  createCurrentUserPasskey(
+    request: CreatePasskeyRegistrationRequestWritable,
+    csrfToken: string,
+  ): Promise<CreatePasskeyRegistrationResponse>;
+  createCurrentUserPasskeyRegistrationChallenge(
+    request: CreatePasskeyRegistrationChallengeRequest,
+    csrfToken: string,
+  ): Promise<CreatePasskeyRegistrationChallengeResponse>;
+  createCurrentUserRecoveryCodes(
+    request: CreateRecoveryCodesRequest,
+    csrfToken: string,
+  ): Promise<CreateRecoveryCodesResponse>;
+  createCurrentUserTotp(
+    request: CreateTotpRegistrationRequestWritable,
+    csrfToken: string,
+  ): Promise<CreateTotpRegistrationResponse>;
+  createCurrentUserTotpRegistrationChallenge(
+    request: CreateTotpRegistrationChallengeRequest,
+    csrfToken: string,
+  ): Promise<CreateTotpRegistrationChallengeResponse>;
+  listCurrentUserAuthenticationMethods(
+    request?: ListAuthenticationMethodsRequest,
+  ): Promise<ListAuthenticationMethodsResponse>;
+  listNextCurrentUserAuthenticationMethods(
+    nextPageUrl: string,
+  ): Promise<ListAuthenticationMethodsResponse>;
+  revokeCurrentUserAuthenticationMethod(
+    methodId: string,
+    request: RevokeAuthenticationMethodRequest,
+    csrfToken: string,
+  ): Promise<RevokeAuthenticationMethodResponse>;
+  stepUpCurrentSession(
+    request: StepUpCurrentSessionRequestWritable,
+    csrfToken: string,
+  ): Promise<CreateSessionResult>;
   addGroupMember(
     groupId: string,
     request: AddGroupMemberRequest,
@@ -263,10 +340,6 @@ export interface MeshSpanFetchClient {
     request: WriteUploadRangeRequest,
     csrfToken?: string,
   ): Promise<WriteUploadRangeResponse>;
-  createCurrentUserApiKey(
-    request: CreateApiKeyRequest,
-    csrfToken: string,
-  ): Promise<CreateApiKeyResponse>;
   createMeshSetup(
     request: CreateMeshSetupRequestWritable,
   ): Promise<CreateMeshSetupResponse>;
@@ -284,11 +357,6 @@ export interface MeshSpanFetchClient {
     request: RevokeCurrentSessionRequest,
     csrfToken: string,
   ): Promise<RevokeCurrentSessionResponse>;
-  revokeCurrentUserAuthenticationMethod(
-    methodId: string,
-    request: RevokeAuthenticationMethodRequest,
-    csrfToken: string,
-  ): Promise<RevokeAuthenticationMethodResponse>;
 }
 
 export class MeshSpanApiError extends Error {
@@ -327,6 +395,184 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async createPasskeyChallenge(
+      request,
+    ): Promise<CreatePasskeyChallengeResponse> {
+      const body = zCreatePasskeyChallengeBody.parse(request);
+      return requestJson(
+        context,
+        "/sessions/passkey/challenges",
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        zCreatePasskeyChallengeResponse2,
+      );
+    },
+    async createCurrentUserPasskeyRegistrationChallenge(
+      request,
+      csrfToken,
+    ): Promise<CreatePasskeyRegistrationChallengeResponse> {
+      const body =
+        zCreateCurrentUserPasskeyRegistrationChallengeBody.parse(request);
+      return requestJson(
+        context,
+        "/users/current/authentication-methods/passkeys/registration-challenges",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateCurrentUserPasskeyRegistrationChallengeResponse,
+      );
+    },
+    async createCurrentUserTotpRegistrationChallenge(
+      request,
+      csrfToken,
+    ): Promise<CreateTotpRegistrationChallengeResponse> {
+      const body =
+        zCreateCurrentUserTotpRegistrationChallengeBody.parse(request);
+      return requestJson(
+        context,
+        "/users/current/authentication-methods/totp/registration-challenges",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateCurrentUserTotpRegistrationChallengeResponse,
+      );
+    },
+    async createCurrentUserApiKey(
+      request,
+      csrfToken,
+    ): Promise<CreateApiKeyResponse> {
+      const body = zCreateCurrentUserApiKeyBody.parse(request);
+      return requestJson(
+        context,
+        "/users/current/authentication-methods/api-keys",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateCurrentUserApiKeyResponse,
+      );
+    },
+    async createCurrentUserPasskey(
+      request,
+      csrfToken,
+    ): Promise<CreatePasskeyRegistrationResponse> {
+      const body = zCreateCurrentUserPasskeyBody.parse(request);
+      return requestJson(
+        context,
+        "/users/current/authentication-methods/passkeys",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateCurrentUserPasskeyResponse,
+      );
+    },
+    async createCurrentUserRecoveryCodes(
+      request,
+      csrfToken,
+    ): Promise<CreateRecoveryCodesResponse> {
+      const body = zCreateCurrentUserRecoveryCodesBody.parse(request);
+      return requestJson(
+        context,
+        "/users/current/authentication-methods/recovery-codes",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateCurrentUserRecoveryCodesResponse,
+      );
+    },
+    async createCurrentUserTotp(
+      request,
+      csrfToken,
+    ): Promise<CreateTotpRegistrationResponse> {
+      const body = zCreateCurrentUserTotpBody.parse(request);
+      return requestJson(
+        context,
+        "/users/current/authentication-methods/totp",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateCurrentUserTotpResponse,
+      );
+    },
+    async listCurrentUserAuthenticationMethods(
+      request = {},
+    ): Promise<ListAuthenticationMethodsResponse> {
+      const query = zListCurrentUserAuthenticationMethodsQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/users/current/authentication-methods", query),
+        { method: "GET" },
+        zListCurrentUserAuthenticationMethodsResponse,
+      );
+    },
+    async listNextCurrentUserAuthenticationMethods(
+      nextPageUrl,
+    ): Promise<ListAuthenticationMethodsResponse> {
+      return requestJson(
+        context,
+        validateAuthenticationMethodPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListCurrentUserAuthenticationMethodsResponse,
+      );
+    },
+    async revokeCurrentUserAuthenticationMethod(
+      methodId,
+      request,
+      csrfToken,
+    ): Promise<RevokeAuthenticationMethodResponse> {
+      const path = zRevokeCurrentUserAuthenticationMethodPath.parse({
+        method_id: methodId,
+      });
+      const body = zRevokeCurrentUserAuthenticationMethodBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/users/current/authentication-methods/{method_id}/revocations",
+          "method_id",
+          path.method_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zRevokeCurrentUserAuthenticationMethodResponse,
+      );
+    },
+    async stepUpCurrentSession(
+      request,
+      csrfToken,
+    ): Promise<CreateSessionResult> {
+      const body = zStepUpCurrentSessionBody.parse(request);
+      const response = await requestJsonResponse(
+        context,
+        "/sessions/current/step-ups",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zStepUpCurrentSessionResponse,
+      );
+      return {
+        csrfToken: readCsrfToken(response.headers),
+        session: response.body,
+      };
+    },
     async addGroupMember(
       groupId,
       request,
@@ -679,28 +925,6 @@ export function createMeshSpanFetchClient(
         zWriteUploadRangeResponse2,
       );
     },
-    async createCurrentUserApiKey(
-      request,
-      csrfToken,
-    ): Promise<CreateApiKeyResponse> {
-      const body = zCreateCurrentUserApiKeyBody.parse(request);
-      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
-        throw new TypeError("request has an invalid MeshSpan CSRF token");
-      }
-      return requestJson(
-        context,
-        "/users/current/authentication-methods/api-keys",
-        {
-          body: JSON.stringify(body),
-          headers: {
-            "Content-Type": "application/json",
-            "MeshSpan-CSRF-Token": csrfToken,
-          },
-          method: "POST",
-        },
-        zCreateCurrentUserApiKeyResponse,
-      );
-    },
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -847,36 +1071,6 @@ export function createMeshSpanFetchClient(
           method: "POST",
         },
         zRevokeCurrentSessionResponse2,
-      );
-    },
-    async revokeCurrentUserAuthenticationMethod(
-      methodId,
-      request,
-      csrfToken,
-    ): Promise<RevokeAuthenticationMethodResponse> {
-      const path = zRevokeCurrentUserAuthenticationMethodPath.parse({
-        method_id: methodId,
-      });
-      const body = zRevokeCurrentUserAuthenticationMethodBody.parse(request);
-      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
-        throw new TypeError("request has an invalid MeshSpan CSRF token");
-      }
-      return requestJson(
-        context,
-        substitutePathParameter(
-          "/users/current/authentication-methods/{method_id}/revocations",
-          "method_id",
-          path.method_id,
-        ),
-        {
-          body: JSON.stringify(body),
-          headers: {
-            "Content-Type": "application/json",
-            "MeshSpan-CSRF-Token": csrfToken,
-          },
-          method: "POST",
-        },
-        zRevokeCurrentUserAuthenticationMethodResponse,
       );
     },
   };
@@ -1114,6 +1308,46 @@ function validateGroupMembershipPageQuery(route: URL): void {
   }
   const rawLimit = route.searchParams.get("limit");
   zListGroupMembersQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+}
+
+function validateAuthenticationMethodPageUrl(
+  apiRoot: URL,
+  value: string,
+): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("authentication-method page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    route.pathname !== "/api/latest/users/current/authentication-methods"
+  ) {
+    throw new TypeError(
+      "authentication-method page URL is outside the current-user API",
+    );
+  }
+  validateAuthenticationMethodPageQuery(route);
+  return route.pathname + route.search;
+}
+
+function validateAuthenticationMethodPageQuery(route: URL): void {
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError(
+      "authentication-method page URL has invalid query fields",
+    );
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListCurrentUserAuthenticationMethodsQuery.parse({
     cursor: route.searchParams.get("cursor") ?? undefined,
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
   });

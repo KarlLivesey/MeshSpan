@@ -24,6 +24,11 @@ import {
   renderIdentityAdministrationClientMethods,
   renderIdentityAdministrationRuntime,
 } from "./render-identity-administration-client.mjs";
+import {
+  renderAuthenticationClientInterface,
+  renderAuthenticationClientMethods,
+  renderAuthenticationClientRuntime,
+} from "./render-authentication-client.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -56,10 +61,22 @@ import type {
   CreateDirectoryRequest,
   CreateDirectoryResponse,
   CreateGroupRequest,
+  CreatePasskeyChallengeRequest,
+  CreatePasskeyChallengeResponse,
+  CreatePasskeyRegistrationChallengeRequest,
+  CreatePasskeyRegistrationChallengeResponse,
+  CreatePasskeyRegistrationRequestWritable,
+  CreatePasskeyRegistrationResponse,
+  CreateRecoveryCodesRequest,
+  CreateRecoveryCodesResponse,
   CreateMeshSetupRequestWritable,
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
+  CreateTotpRegistrationChallengeRequest,
+  CreateTotpRegistrationChallengeResponse,
+  CreateTotpRegistrationRequestWritable,
+  CreateTotpRegistrationResponse,
   CreatePrincipalResponse,
   CreateUserRequest,
   CurrentSessionResponse,
@@ -69,6 +86,7 @@ import type {
   HealthResponse,
   ListDirectoryResponse,
   ListGroupMembershipsResponse,
+  ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
   RevokeAuthenticationMethodRequest,
@@ -80,6 +98,7 @@ import type {
   RemoveGroupMemberRequest,
   RemoveGroupMemberResponse,
   SetupStatusResponse,
+  StepUpCurrentSessionRequestWritable,
   UploadStatusResponse,
   WriteUploadRangeResponse,
 } from "./types.gen";
@@ -99,6 +118,16 @@ import {
   zCommitUploadResponse2,
   zCreateCurrentUserApiKeyBody,
   zCreateCurrentUserApiKeyResponse,
+  zCreateCurrentUserPasskeyBody,
+  zCreateCurrentUserPasskeyRegistrationChallengeBody,
+  zCreateCurrentUserPasskeyRegistrationChallengeResponse,
+  zCreateCurrentUserPasskeyResponse,
+  zCreateCurrentUserRecoveryCodesBody,
+  zCreateCurrentUserRecoveryCodesResponse,
+  zCreateCurrentUserTotpBody,
+  zCreateCurrentUserTotpRegistrationChallengeBody,
+  zCreateCurrentUserTotpRegistrationChallengeResponse,
+  zCreateCurrentUserTotpResponse,
   zCreateDirectoryBody,
   zCreateDirectoryPath,
   zCreateDirectoryResponse2,
@@ -106,6 +135,8 @@ import {
   zCreateGroupResponse,
   zCreateMeshSetupBody,
   zCreateMeshSetupResponse2,
+  zCreatePasskeyChallengeBody,
+  zCreatePasskeyChallengeResponse2,
   zCreateSessionBody,
   zCreateSessionResponse2,
   zCreateUserBody,
@@ -130,6 +161,8 @@ import {
   zListGroupMembersPath,
   zListGroupMembersQuery,
   zListGroupMembersResponse,
+  zListCurrentUserAuthenticationMethodsQuery,
+  zListCurrentUserAuthenticationMethodsResponse,
   zListPrincipalsResponse,
   zListUploadRangesPath,
   zListUploadRangesQuery,
@@ -149,6 +182,8 @@ import {
   zRemoveGroupMemberBody,
   zRemoveGroupMemberPath,
   zRemoveGroupMemberResponse2,
+  zStepUpCurrentSessionBody,
+  zStepUpCurrentSessionResponse,
   zWriteUploadRangeHeaders,
   zWriteUploadRangePath,
   zWriteUploadRangeResponse2,
@@ -215,6 +250,11 @@ export type ListGroupMembersRequest = Readonly<{
   limit?: number;
 }>;
 
+export type ListAuthenticationMethodsRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
 ${renderUploadRequestTypes()}
 
 export type CreateSessionResult = Readonly<{
@@ -223,13 +263,10 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  ${renderAuthenticationClientInterface()}
   ${renderIdentityAdministrationClientInterface()}
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
-  createCurrentUserApiKey(
-    request: CreateApiKeyRequest,
-    csrfToken: string,
-  ): Promise<CreateApiKeyResponse>;
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
   getCurrentSession(): Promise<CurrentSessionResponse>;
@@ -243,11 +280,6 @@ export interface MeshSpanFetchClient {
     request: RevokeCurrentSessionRequest,
     csrfToken: string,
   ): Promise<RevokeCurrentSessionResponse>;
-  revokeCurrentUserAuthenticationMethod(
-    methodId: string,
-    request: RevokeAuthenticationMethodRequest,
-    csrfToken: string,
-  ): Promise<RevokeAuthenticationMethodResponse>;
 }
 
 export class MeshSpanApiError extends Error {
@@ -286,31 +318,10 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    ${renderAuthenticationClientMethods(routes)}
     ${renderIdentityAdministrationClientMethods(routes)}
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
-    async createCurrentUserApiKey(
-      request,
-      csrfToken,
-    ): Promise<CreateApiKeyResponse> {
-      const body = zCreateCurrentUserApiKeyBody.parse(request);
-      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
-        throw new TypeError("request has an invalid MeshSpan CSRF token");
-      }
-      return requestJson(
-        context,
-        ${JSON.stringify(routes.createCurrentUserApiKey.route)},
-        {
-          body: JSON.stringify(body),
-          headers: {
-            "Content-Type": "application/json",
-            "MeshSpan-CSRF-Token": csrfToken,
-          },
-          method: ${JSON.stringify(routes.createCurrentUserApiKey.method)},
-        },
-        zCreateCurrentUserApiKeyResponse,
-      );
-    },
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -459,42 +470,14 @@ export function createMeshSpanFetchClient(
         zRevokeCurrentSessionResponse2,
       );
     },
-    async revokeCurrentUserAuthenticationMethod(
-      methodId,
-      request,
-      csrfToken,
-    ): Promise<RevokeAuthenticationMethodResponse> {
-      const path = zRevokeCurrentUserAuthenticationMethodPath.parse({
-        method_id: methodId,
-      });
-      const body = zRevokeCurrentUserAuthenticationMethodBody.parse(request);
-      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
-        throw new TypeError("request has an invalid MeshSpan CSRF token");
-      }
-      return requestJson(
-        context,
-        substitutePathParameter(
-          ${JSON.stringify(routes.revokeCurrentUserAuthenticationMethod.route)},
-          "method_id",
-          path.method_id,
-        ),
-        {
-          body: JSON.stringify(body),
-          headers: {
-            "Content-Type": "application/json",
-            "MeshSpan-CSRF-Token": csrfToken,
-          },
-          method: ${JSON.stringify(routes.revokeCurrentUserAuthenticationMethod.method)},
-        },
-        zRevokeCurrentUserAuthenticationMethodResponse,
-      );
-    },
   };
 }
 
 ${renderFetchRuntime()}
 
 ${renderIdentityAdministrationRuntime(routes)}
+
+${renderAuthenticationClientRuntime(routes)}
 
 `;
 
