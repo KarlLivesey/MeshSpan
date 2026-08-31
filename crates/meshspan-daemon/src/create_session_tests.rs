@@ -25,8 +25,8 @@ use crate::{
     BrowserSessionAuthority, BrowserSessionAuthorityError, CreateSessionError,
     CreateSessionService, GatewaySessionIdentity, RevokeCurrentSessionService, SessionAuthority,
     SessionAuthorityError, SessionCommit, SessionRevocationAuthority,
-    SessionRevocationAuthorityError, SessionRevocationCommit, revoke_current_session_api_router,
-    session_api_router,
+    SessionRevocationAuthorityError, SessionRevocationCommit, StepUpSessionAuthority,
+    revoke_current_session_api_router, session_api_router,
 };
 
 const OPERATION_TEXT: &str = "00000000-0000-4000-8000-000000000011";
@@ -436,6 +436,25 @@ impl BrowserSessionAuthority for RepositorySessionAuthority {
     }
 }
 
+impl StepUpSessionAuthority for RepositorySessionAuthority {
+    fn resolve_step_up_session(
+        &self,
+        operation_id: OperationId,
+        source_session_id: meshspan_domain::SessionId,
+        source_token_digest: [u8; 32],
+        source_csrf_digest: [u8; 32],
+    ) -> Result<Option<meshspan_metadata::AuthenticationSessionReplay>, SessionAuthorityError> {
+        self.repository
+            .resolve_step_up_session(
+                operation_id,
+                source_session_id,
+                source_token_digest,
+                source_csrf_digest,
+            )
+            .map_err(|error| map_repository_error(&error))
+    }
+}
+
 impl SessionRevocationAuthority for RepositorySessionAuthority {
     fn resolve_revocation(
         &self,
@@ -505,7 +524,7 @@ fn map_revocation_repository_error(error: &RepositoryError) -> SessionRevocation
     }
 }
 
-struct SequentialRandom(u8);
+pub(super) struct SequentialRandom(pub(super) u8);
 
 impl RandomSource for SequentialRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {

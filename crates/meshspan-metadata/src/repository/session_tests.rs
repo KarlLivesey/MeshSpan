@@ -13,7 +13,8 @@ use super::{AuthoritativeRepository, RepositoryError};
 use crate::{
     AuthenticationSessionReplayCredential, AuthoritativeCommand, ConfigureAuthenticationPolicy,
     CreateAuthenticationMethod, IssueAuthenticationSession, NewAuthenticationCredential,
-    NewRecoveryCode, PartitionDatabase, SessionAuthenticationFactor, StepUpAuthenticationSession,
+    NewRecoveryCode, PartitionDatabase, RevokeAuthenticationSession, SessionAuthenticationFactor,
+    StepUpAuthenticationSession,
 };
 
 #[test]
@@ -273,10 +274,27 @@ fn step_up_atomically_replaces_the_source_and_consumes_one_fresh_factor()
     )?
     .ok_or("replacement factors are not current")?;
     assert_eq!(active.latest_authenticated_at, UnixMicros::new(130));
+    repository.apply_committed(
+        position(6),
+        context(85, administrator, 86, 131, Some(Revision::new(5)))?,
+        &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
+            session_id: replacement.session_id,
+            principal_id: administrator,
+        }),
+    )?;
+    assert!(matches!(
+        repository.resolve_step_up_session(
+            meshspan_domain::OperationId::from_bytes([83; 16])?,
+            SessionId::from_bytes([70; 16])?,
+            [71; 32],
+            [72; 32],
+        ),
+        Err(RepositoryError::OperationConflict)
+    ));
     assert!(matches!(
         repository.apply_committed(
-            position(6),
-            context(85, administrator, 86, 131, Some(Revision::new(5)))?,
+            position(7),
+            context(87, administrator, 88, 132, Some(Revision::new(6)))?,
             &step_up,
         ),
         Err(RepositoryError::InvalidCommand)

@@ -267,6 +267,9 @@ pub(super) fn resolve_step_up_replay(
     if replay.source_session_id != Some(expected_source) {
         return Err(RepositoryError::OperationConflict);
     }
+    if replay.revoked_at.is_some() {
+        return Err(RepositoryError::OperationConflict);
+    }
     let stored: Option<(Vec<u8>, Vec<u8>)> = database
         .connection()
         .query_row(

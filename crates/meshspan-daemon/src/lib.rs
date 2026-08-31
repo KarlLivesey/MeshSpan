@@ -81,6 +81,9 @@ mod revoke_session_api;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
+mod step_up_session;
+#[cfg(test)]
+mod step_up_session_tests;
 mod totp_registration;
 mod totp_registration_api;
 #[cfg(test)]
@@ -187,6 +190,9 @@ pub use revoke_session_api::{
 pub use setup_api::{
     CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,
     SetupStatusSource, setup_api_router, setup_api_router_with_creation,
+};
+pub use step_up_session::{
+    StepUpCurrentSessionError, StepUpCurrentSessionService, StepUpSessionAuthority,
 };
 pub use totp_registration::TotpRegistrationService;
 pub use totp_registration_api::{
