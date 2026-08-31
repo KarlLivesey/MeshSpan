@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-passkey"
+description = "Bounded WebAuthn relying-party verification for hostile services"
+authors = ["MeshSpan contributors"]
+edition = "2024"
+license = "GPL-2.0-only"
+repository = "https://github.com/KarlLivesey/MeshSpan"
+rust-version = "1.98"
+version = "0.1.0"
+
+[dependencies]
+p256.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+
+[dev-dependencies]
+p256 = { workspace = true, features = ["ecdsa"] }
+
+[lints]
+workspace = true
