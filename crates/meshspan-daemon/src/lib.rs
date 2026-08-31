@@ -70,6 +70,9 @@ mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 mod totp_registration;
+mod totp_registration_api;
+#[cfg(test)]
+mod totp_registration_api_tests;
 mod totp_registration_configuration;
 mod totp_registration_contract;
 mod totp_registration_model;
@@ -161,6 +164,9 @@ pub use setup_api::{
     SetupStatusSource, setup_api_router, setup_api_router_with_creation,
 };
 pub use totp_registration::TotpRegistrationService;
+pub use totp_registration_api::{
+    TotpRegistrationApiError, TotpRegistrationController, totp_registration_api_router,
+};
 pub use totp_registration_configuration::{
     TotpRegistrationConfiguration, TotpRegistrationConfigurationError,
 };
