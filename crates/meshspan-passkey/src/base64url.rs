@@ -37,6 +37,29 @@ pub(crate) fn decode(value: &str, maximum_bytes: usize) -> Result<Vec<u8>, Passk
     Ok(output)
 }
 
+pub(crate) fn encode(value: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut output = String::with_capacity(value.len().saturating_mul(4).div_ceil(3));
+    for chunk in value.chunks(3) {
+        let first = chunk[0];
+        output.push(char::from(ALPHABET[usize::from(first >> 2)]));
+        let second = chunk.get(1).copied();
+        output.push(char::from(
+            ALPHABET[usize::from(((first & 0x03) << 4) | second.unwrap_or(0) >> 4)],
+        ));
+        if let Some(second) = second {
+            let third = chunk.get(2).copied();
+            output.push(char::from(
+                ALPHABET[usize::from(((second & 0x0f) << 2) | third.unwrap_or(0) >> 6)],
+            ));
+            if let Some(third) = third {
+                output.push(char::from(ALPHABET[usize::from(third & 0x3f)]));
+            }
+        }
+    }
+    output
+}
+
 fn maximum_decoded_length(encoded_length: usize) -> Result<usize, PasskeyError> {
     encoded_length
         .checked_mul(3)
@@ -57,7 +80,7 @@ fn symbol(byte: u8) -> Result<u8, PasskeyError> {
 
 #[cfg(test)]
 mod tests {
-    use super::decode;
+    use super::{decode, encode};
     use crate::PasskeyErrorKind;
 
     #[test]
@@ -74,5 +97,13 @@ mod tests {
             let error = decode(value, 8).err().map(crate::PasskeyError::kind);
             assert_eq!(error, Some(PasskeyErrorKind::Malformed), "{value}");
         }
+    }
+
+    #[test]
+    fn encoder_uses_canonical_unpadded_base64url() {
+        assert_eq!(encode(&[0]), "AA");
+        assert_eq!(encode(&[1, 2]), "AQI");
+        assert_eq!(encode(&[1, 2, 3]), "AQID");
+        assert_eq!(encode(&[0xfb, 0xff]), "-_8");
     }
 }
