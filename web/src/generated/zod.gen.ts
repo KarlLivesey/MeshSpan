@@ -485,6 +485,109 @@ export const zCreateSessionResponse = z
   .strict();
 
 /**
+ * CreateTotpRegistrationChallengeRequest
+ *
+ * One idempotent request to create TOTP registration material.
+ */
+export const zCreateTotpRegistrationChallengeRequest = z
+  .strictObject({
+    label: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationChallengeResponse
+ *
+ * One exactly replayable TOTP seed presentation.
+ */
+export const zCreateTotpRegistrationChallengeResponse = z
+  .strictObject({
+    algorithm: z.literal("SHA1"),
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    digits: z.int().gte(6).lte(6),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    period_seconds: z.int().gte(30).lte(30),
+    provisioning_uri: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^otpauth:\/\/totp\/[^\x00-\x20\x7f]+$/)
+      .readonly(),
+    secret: z
+      .string()
+      .length(32)
+      .regex(/^[A-Z2-7]{32}$/)
+      .readonly(),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationRequest
+ *
+ * One idempotent request confirming a newly presented TOTP seed.
+ */
+export const zCreateTotpRegistrationRequest = z
+  .strictObject({
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationResponse
+ *
+ * Durable result of confirming one independently revocable TOTP method.
+ */
+export const zCreateTotpRegistrationResponse = z
+  .strictObject({
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CurrentSessionResponse
  *
  * Current caller identity and coarse panel-navigation authority.
@@ -828,6 +931,58 @@ export const zCreateSessionRequestWritable = z
   .strict();
 
 /**
+ * CreateTotpRegistrationChallengeResponse
+ *
+ * One exactly replayable TOTP seed presentation.
+ */
+export const zCreateTotpRegistrationChallengeResponseWritable = z
+  .strictObject({
+    algorithm: z.literal("SHA1"),
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    digits: z.int().gte(6).lte(6),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    period_seconds: z.int().gte(30).lte(30),
+  })
+  .strict();
+
+/**
+ * CreateTotpRegistrationRequest
+ *
+ * One idempotent request confirming a newly presented TOTP seed.
+ */
+export const zCreateTotpRegistrationRequestWritable = z
+  .strictObject({
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    code: z
+      .string()
+      .length(6)
+      .regex(/^\d{6}$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * Process readiness
  */
 export const zGetHealthResponse = zHealthResponse;
@@ -917,6 +1072,29 @@ export const zCreateCurrentUserPasskeyRegistrationChallengeBody =
  */
 export const zCreateCurrentUserPasskeyRegistrationChallengeResponse =
   zCreatePasskeyRegistrationChallengeResponse;
+
+/**
+ * Current-user TOTP registration confirmation
+ */
+export const zCreateCurrentUserTotpBody =
+  zCreateTotpRegistrationRequestWritable;
+
+/**
+ * Committed TOTP authentication method
+ */
+export const zCreateCurrentUserTotpResponse = zCreateTotpRegistrationResponse;
+
+/**
+ * Current-user TOTP registration material
+ */
+export const zCreateCurrentUserTotpRegistrationChallengeBody =
+  zCreateTotpRegistrationChallengeRequest;
+
+/**
+ * Exactly replayable TOTP registration material
+ */
+export const zCreateCurrentUserTotpRegistrationChallengeResponse =
+  zCreateTotpRegistrationChallengeResponse;
 
 /**
  * Authentication-method revocation

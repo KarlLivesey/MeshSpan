@@ -12,18 +12,22 @@ use meshspan_api_contract::{
     ApiError, ApiErrorCode, ApiKeyId, ApiKeyScope, AuthenticationMethodId, BoundaryError,
     CreateApiKeyResponse, CreateMeshSetupResponse, CreatePasskeyChallengeResponse,
     CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationResponse,
-    CreateSessionResponse, NullableField, OperationId, PasskeyAttestation, PasskeyChallengeId,
+    CreateSessionResponse, CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationResponse,
+    NullableField, OperationId, PasskeyAttestation, PasskeyChallengeId,
     PasskeyCredentialDescriptor, PasskeyCredentialParameter, PasskeyCredentialType,
     PasskeyResidentKey, PasskeyUserVerification, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
-    decode_create_api_key_request, decode_create_mesh_setup_request,
-    decode_create_passkey_challenge_request, decode_create_passkey_registration_challenge_request,
+    TotpRegistrationAlgorithm, TotpRegistrationChallengeId, decode_create_api_key_request,
+    decode_create_mesh_setup_request, decode_create_passkey_challenge_request,
+    decode_create_passkey_registration_challenge_request,
     decode_create_passkey_registration_request, decode_create_session_request,
+    decode_create_totp_registration_challenge_request, decode_create_totp_registration_request,
     decode_revoke_authentication_method_request, decode_revoke_current_session_request,
     encode_api_error, encode_create_api_key_response, encode_create_mesh_setup_response,
     encode_create_passkey_challenge_response,
     encode_create_passkey_registration_challenge_response,
     encode_create_passkey_registration_response, encode_create_session_response,
+    encode_create_totp_registration_challenge_response, encode_create_totp_registration_response,
     encode_revoke_authentication_method_response, encode_revoke_current_session_response,
     encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
     validate_create_passkey_challenge_request_value,
@@ -247,6 +251,96 @@ fn passkey_registration_contract_is_authenticated_bounded_and_validated_both_way
     let completion_path =
         &document.value()["paths"]["/users/current/authentication-methods/passkeys"]["post"];
     assert_eq!(completion_path["operationId"], "createCurrentUserPasskey");
+    assert_eq!(completion_path["x-meshspan-access"], "authenticated-csrf");
+}
+
+#[test]
+fn totp_registration_contract_is_secret_safe_exact_and_validated_both_ways() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    let challenge_request = json!({
+        "operation_id": operation,
+        "label": "Primary authenticator"
+    });
+    let decoded = decode_create_totp_registration_challenge_request(
+        &serde_json::to_vec(&challenge_request).expect("challenge request must encode"),
+    )
+    .expect("exact challenge request must decode");
+    assert_eq!(decoded.label.as_str(), "Primary authenticator");
+
+    let mut unknown = challenge_request;
+    unknown["issuer"] = json!("client must not choose security parameters");
+    assert!(
+        decode_create_totp_registration_challenge_request(
+            &serde_json::to_vec(&unknown).expect("rejection fixture must encode")
+        )
+        .is_err()
+    );
+    assert!(decode_create_totp_registration_challenge_request(&vec![b' '; 513]).is_err());
+
+    let challenge_id = TotpRegistrationChallengeId::from_uuid_bytes(versioned(15))
+        .expect("challenge fixture must be valid");
+    let challenge_response = CreateTotpRegistrationChallengeResponse {
+        operation_id: serde_json::from_value(json!(operation))
+            .expect("operation fixture must be valid"),
+        challenge_id: challenge_id.clone(),
+        secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP".to_owned(),
+        provisioning_uri: concat!(
+            "otpauth://totp/MeshSpan%3Aadministrator?",
+            "secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&",
+            "issuer=MeshSpan&algorithm=SHA1&digits=6&period=30"
+        )
+        .to_owned(),
+        algorithm: TotpRegistrationAlgorithm::Sha1,
+        digits: 6,
+        period_seconds: 30,
+        expires_at_epoch_micros: 1_800_000_000_000_000,
+    };
+    let encoded = encode_create_totp_registration_challenge_response(&challenge_response)
+        .expect("valid secret-bearing challenge response must encode");
+    let encoded_value = serde_json::from_slice::<Value>(&encoded).expect("response must be JSON");
+    assert_eq!(encoded_value["secret"], challenge_response.secret);
+
+    let completion = json!({
+        "operation_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c63",
+        "challenge_id": challenge_id.as_str(),
+        "code": "012345"
+    });
+    let confirmation = decode_create_totp_registration_request(
+        &serde_json::to_vec(&completion).expect("confirmation fixture must encode"),
+    )
+    .expect("exact confirmation must decode");
+    assert_eq!(confirmation.code, "012345");
+    for malformed in ["12345", "1234567", "12a456"] {
+        let mut invalid = completion.clone();
+        invalid["code"] = json!(malformed);
+        assert!(
+            decode_create_totp_registration_request(
+                &serde_json::to_vec(&invalid).expect("rejection fixture must encode")
+            )
+            .is_err()
+        );
+    }
+
+    let response = CreateTotpRegistrationResponse {
+        operation_id: confirmation.operation_id,
+        method_id: AuthenticationMethodId::from_uuid_bytes(versioned(16))
+            .expect("method fixture must be valid"),
+        created_at_epoch_micros: 1_800_000_000_000_000,
+    };
+    encode_create_totp_registration_response(&response)
+        .expect("committed registration response must encode");
+
+    let document = generate_openapi().expect("contract must generate");
+    let challenge_path = &document.value()["paths"]["/users/current/authentication-methods/totp/registration-challenges"]
+        ["post"];
+    assert_eq!(
+        challenge_path["operationId"],
+        "createCurrentUserTotpRegistrationChallenge"
+    );
+    assert_eq!(challenge_path["x-meshspan-access"], "authenticated-csrf");
+    let completion_path =
+        &document.value()["paths"]["/users/current/authentication-methods/totp"]["post"];
+    assert_eq!(completion_path["operationId"], "createCurrentUserTotp");
     assert_eq!(completion_path["x-meshspan-access"], "authenticated-csrf");
 }
 

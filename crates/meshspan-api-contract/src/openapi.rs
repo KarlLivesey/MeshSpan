@@ -10,7 +10,9 @@ use crate::{
     CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
     CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
     CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreateSessionRequest,
-    CreateSessionResponse, CurrentSessionResponse, HealthResponse,
+    CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
+    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
+    CreateTotpRegistrationResponse, CurrentSessionResponse, HealthResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse, schema,
 };
@@ -83,6 +85,10 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "CreatePasskeyRegistrationResponse": response_component::<CreatePasskeyRegistrationResponse>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
+                "CreateTotpRegistrationChallengeRequest": request_component::<CreateTotpRegistrationChallengeRequest>(),
+                "CreateTotpRegistrationChallengeResponse": response_component::<CreateTotpRegistrationChallengeResponse>(),
+                "CreateTotpRegistrationRequest": request_component::<CreateTotpRegistrationRequest>(),
+                "CreateTotpRegistrationResponse": response_component::<CreateTotpRegistrationResponse>(),
                 "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
                 "HealthResponse": response_component::<HealthResponse>(),
                 "RevokeCurrentSessionRequest": request_component::<RevokeCurrentSessionRequest>(),
@@ -115,6 +121,14 @@ fn paths() -> Value {
         (
             "/users/current/authentication-methods/passkeys".to_owned(),
             create_passkey_registration_path(),
+        ),
+        (
+            "/users/current/authentication-methods/totp/registration-challenges".to_owned(),
+            create_totp_registration_challenge_path(),
+        ),
+        (
+            "/users/current/authentication-methods/totp".to_owned(),
+            create_totp_registration_path(),
         ),
         (
             "/users/current/authentication-methods/api-keys".to_owned(),
@@ -376,6 +390,62 @@ fn create_passkey_registration_path() -> Value {
                 "400": json_response("Invalid request", "#/components/schemas/ApiError"),
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
                 "409": json_response("Changed retry, duplicate credential or ceremony conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_totp_registration_challenge_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserTotpRegistrationChallenge",
+            "summary": "Create registration material for a current-user TOTP method",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-gateway-local-ceremony",
+            "requestBody": json_request(
+                "Current-user TOTP registration material",
+                "#/components/schemas/CreateTotpRegistrationChallengeRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Exactly replayable TOTP registration material",
+                    "#/components/schemas/CreateTotpRegistrationChallengeResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or ceremony conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_totp_registration_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserTotp",
+            "summary": "Confirm and register a current-user TOTP method",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-user TOTP registration confirmation",
+                "#/components/schemas/CreateTotpRegistrationRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Committed TOTP authentication method",
+                    "#/components/schemas/CreateTotpRegistrationResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or ceremony conflict", "#/components/schemas/ApiError"),
                 "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),

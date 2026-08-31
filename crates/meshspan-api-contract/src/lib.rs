@@ -9,6 +9,8 @@ mod openapi;
 mod passkey_registration;
 mod passkey_validation;
 mod schema;
+mod totp_registration;
+mod totp_validation;
 mod validation;
 
 pub use api_key_management::{
@@ -51,6 +53,16 @@ pub use passkey_validation::{
     validate_create_passkey_registration_challenge_response_value,
     validate_create_passkey_registration_request_value,
     validate_create_passkey_registration_response_value,
+};
+pub use totp_registration::{
+    CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
+    CreateTotpRegistrationRequest, CreateTotpRegistrationResponse, TotpRegistrationAlgorithm,
+    TotpRegistrationChallengeId,
+};
+pub use totp_validation::{
+    MAX_CREATE_TOTP_REGISTRATION_BYTES, MAX_CREATE_TOTP_REGISTRATION_CHALLENGE_BYTES,
+    decode_create_totp_registration_challenge_request, decode_create_totp_registration_request,
+    encode_create_totp_registration_challenge_response, encode_create_totp_registration_response,
 };
 pub use validation::{
     BoundaryError, MAX_CREATE_MESH_SETUP_BYTES, MAX_CREATE_SESSION_BYTES,
