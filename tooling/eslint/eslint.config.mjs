@@ -177,6 +177,10 @@ export default typescriptEslint.config(
       "max-lines-per-function": "off",
       "max-statements": "off",
       "no-control-regex": "off",
+      // Preserve Rust-authored JSON Schema patterns byte-for-byte. Rewriting
+      // their character classes changes the cross-language trust boundary.
+      "regexp/prefer-w": "off",
+      "regexp/use-ignore-case": "off",
       "sonarjs/cognitive-complexity": "off",
     },
   },

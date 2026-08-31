@@ -118,6 +118,55 @@ export const zCreateMeshSetupResponse = z
   .strict();
 
 /**
+ * CreatePasskeyChallengeRequest
+ *
+ * Input for creating one short-lived passkey authentication challenge.
+ */
+export const zCreatePasskeyChallengeRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreatePasskeyChallengeResponse
+ *
+ * Browser-ready options for one passkey authentication ceremony.
+ */
+export const zCreatePasskeyChallengeResponse = z
+  .strictObject({
+    challenge: z
+      .string()
+      .length(43)
+      .regex(/^[A-Za-z0-9_-]{43}$/),
+    challenge_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    relying_party_id: z
+      .string()
+      .min(1)
+      .max(253)
+      .regex(/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/),
+    timeout_milliseconds: z.int().gte(30000).lte(600000),
+    user_verification: z.literal("required"),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -435,6 +484,16 @@ export const zRevokeCurrentSessionBody = zRevokeCurrentSessionRequest;
  * Session authoritatively revoked
  */
 export const zRevokeCurrentSessionResponse2 = zRevokeCurrentSessionResponse;
+
+/**
+ * Passkey challenge creation
+ */
+export const zCreatePasskeyChallengeBody = zCreatePasskeyChallengeRequest;
+
+/**
+ * Browser-ready passkey request options
+ */
+export const zCreatePasskeyChallengeResponse2 = zCreatePasskeyChallengeResponse;
 
 /**
  * First-mesh setup

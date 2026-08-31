@@ -137,7 +137,10 @@ fn typed_creation_rejects_incompatible_or_ambiguous_evidence_atomically()
     Ok(())
 }
 
-fn passkey(method_id: AuthenticationMethodId, owner: PrincipalId) -> AuthoritativeCommand {
+pub(super) fn passkey(
+    method_id: AuthenticationMethodId,
+    owner: PrincipalId,
+) -> AuthoritativeCommand {
     method(
         method_id,
         owner,
@@ -145,7 +148,7 @@ fn passkey(method_id: AuthenticationMethodId, owner: PrincipalId) -> Authoritati
         NewAuthenticationCredential::Passkey {
             credential_id: vec![10; 32],
             public_key_algorithm: -7,
-            public_key: vec![11; 77],
+            public_key: valid_es256_public_key(),
             signature_counter: 0,
             authenticator_guid: Some([12; 16]),
             transports: 1,
@@ -153,6 +156,16 @@ fn passkey(method_id: AuthenticationMethodId, owner: PrincipalId) -> Authoritati
             backup_state: false,
         },
     )
+}
+
+pub(super) fn valid_es256_public_key() -> Vec<u8> {
+    vec![
+        0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4,
+        0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45, 0xd8,
+        0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a,
+        0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40,
+        0x68, 0x37, 0xbf, 0x51, 0xf5,
+    ]
 }
 
 fn totp(method_id: AuthenticationMethodId, owner: PrincipalId) -> AuthoritativeCommand {

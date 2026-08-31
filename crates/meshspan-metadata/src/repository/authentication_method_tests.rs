@@ -293,6 +293,93 @@ fn api_key_authentication_fails_closed_for_matching_corrupt_evidence()
     Ok(())
 }
 
+#[test]
+fn passkey_material_is_current_service_scoped_and_never_claimed_authenticated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("passkey-verifier.sqlite3");
+    let partition_id = PartitionId::from_bytes([1; 16])?;
+    let administrator = PrincipalId::from_bytes([2; 16])?;
+    let database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap(&mut repository, administrator)?;
+    let method_id = AuthenticationMethodId::from_bytes([52; 16])?;
+    repository.apply_committed(
+        position(2),
+        context(50, administrator, 51, 20, Some(Revision::new(1)))?,
+        &super::authentication_method_creation_tests::passkey(method_id, administrator),
+    )?;
+
+    let material = repository
+        .passkey_verification_material(
+            &[10; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(21),
+        )?
+        .ok_or("current passkey material was withheld")?;
+    assert_eq!(material.principal_id, administrator);
+    assert_eq!(material.method_id, method_id);
+    assert_eq!(material.credential_generation, 1);
+    assert_eq!(material.revision, Revision::new(2));
+    assert_eq!(material.credential_id, vec![10; 32]);
+    assert_eq!(material.public_key_algorithm, -7);
+    assert_eq!(material.public_key.len(), 65);
+    assert_eq!(material.signature_counter, 0);
+    assert!(material.backup_eligible);
+    assert!(!material.backup_state);
+
+    assert_eq!(
+        repository.passkey_verification_material(
+            &[10; 32],
+            AuthenticationService::Smb,
+            UnixMicros::new(21),
+        )?,
+        None
+    );
+    assert_eq!(
+        repository.passkey_verification_material(
+            &[11; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(21),
+        )?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn passkey_material_fails_closed_for_matching_corrupt_key_shape()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("corrupt-passkey.sqlite3");
+    let partition_id = PartitionId::from_bytes([1; 16])?;
+    let administrator = PrincipalId::from_bytes([2; 16])?;
+    let database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap(&mut repository, administrator)?;
+    let method_id = AuthenticationMethodId::from_bytes([52; 16])?;
+    repository.apply_committed(
+        position(2),
+        context(50, administrator, 51, 20, Some(Revision::new(1)))?,
+        &super::authentication_method_creation_tests::passkey(method_id, administrator),
+    )?;
+    let database = repository.into_database();
+    database.connection().execute(
+        "UPDATE webauthn_credentials SET public_key = zeroblob(64) WHERE method_id = ?1",
+        [method_id.as_bytes().as_slice()],
+    )?;
+    let repository = AuthoritativeRepository::new(database);
+    assert!(matches!(
+        repository.passkey_verification_material(
+            &[10; 32],
+            AuthenticationService::Https,
+            UnixMicros::new(21),
+        ),
+        Err(RepositoryError::CorruptState)
+    ));
+    Ok(())
+}
+
 fn api_key_command(
     method_id: AuthenticationMethodId,
     administrator: PrincipalId,

@@ -34,6 +34,157 @@ pub struct ApiKeyAuthentication {
     pub revision: Revision,
 }
 
+/// Current public verification material for one opaque passkey credential identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PasskeyVerificationMaterial {
+    /// User account to which the credential is authoritatively bound.
+    pub principal_id: PrincipalId,
+    /// Common authentication-method identity.
+    pub method_id: AuthenticationMethodId,
+    /// Credential generation used to fence older ceremonies and sessions.
+    pub credential_generation: u64,
+    /// Authoritative method revision included in the verification decision.
+    pub revision: Revision,
+    /// Exact opaque credential identity selected by the browser.
+    pub credential_id: Vec<u8>,
+    /// COSE algorithm identifier. The initial supported value is ES256 (`-7`).
+    pub public_key_algorithm: i32,
+    /// Canonical algorithm-specific public-key bytes.
+    pub public_key: Vec<u8>,
+    /// Last authoritatively committed signature counter.
+    pub signature_counter: u64,
+    /// Whether the credential is eligible for backup/synchronisation.
+    pub backup_eligible: bool,
+    /// Last committed backup-state observation.
+    pub backup_state: bool,
+}
+
+/// Resolves one passkey credential through its unique identity and current authority bounds.
+pub(super) fn passkey_verification_material(
+    transaction: &rusqlite::Connection,
+    credential_id: &[u8],
+    service: AuthenticationService,
+    now: UnixMicros,
+) -> Result<Option<PasskeyVerificationMaterial>, RepositoryError> {
+    if credential_id.is_empty() || credential_id.len() > 1_024 {
+        return Ok(None);
+    }
+    let stored = transaction
+        .query_row(
+            "SELECT method.method_id, method.user_principal_id, method.method_kind,
+                    method.service_scope, method.state, method.created_at, method.expires_at,
+                    method.credential_generation, method.revision, credential.credential_id,
+                    credential.public_key_algorithm, credential.public_key,
+                    credential.signature_counter, credential.backup_eligible,
+                    credential.backup_state, credential.revision, principal.state
+             FROM webauthn_credentials AS credential
+             JOIN authentication_methods AS method USING(method_id)
+             JOIN principals AS principal ON principal.principal_id = method.user_principal_id
+             WHERE credential.credential_id = ?1 LIMIT 2",
+            [credential_id],
+            |row| {
+                Ok(StoredPasskey {
+                    method_id: row.get(0)?,
+                    principal_id: row.get(1)?,
+                    method_kind: row.get(2)?,
+                    service_scope: row.get(3)?,
+                    method_state: row.get(4)?,
+                    created_at: row.get(5)?,
+                    expires_at: row.get(6)?,
+                    credential_generation: row.get(7)?,
+                    method_revision: row.get(8)?,
+                    credential_id: row.get(9)?,
+                    algorithm: row.get(10)?,
+                    public_key: row.get(11)?,
+                    signature_counter: row.get(12)?,
+                    backup_eligible: row.get(13)?,
+                    backup_state: row.get(14)?,
+                    credential_revision: row.get(15)?,
+                    principal_state: row.get(16)?,
+                })
+            },
+        )
+        .optional()?;
+    stored
+        .map(|stored| validate_passkey_material(stored, service, now))
+        .transpose()
+        .map(Option::flatten)
+}
+
+struct StoredPasskey {
+    method_id: Vec<u8>,
+    principal_id: Vec<u8>,
+    method_kind: i64,
+    service_scope: i64,
+    method_state: i64,
+    created_at: i64,
+    expires_at: Option<i64>,
+    credential_generation: i64,
+    method_revision: i64,
+    credential_id: Vec<u8>,
+    algorithm: i64,
+    public_key: Vec<u8>,
+    signature_counter: i64,
+    backup_eligible: i64,
+    backup_state: i64,
+    credential_revision: i64,
+    principal_state: i64,
+}
+
+fn validate_passkey_material(
+    stored: StoredPasskey,
+    service: AuthenticationService,
+    now: UnixMicros,
+) -> Result<Option<PasskeyVerificationMaterial>, RepositoryError> {
+    let service_scope = u8::try_from(stored.service_scope)
+        .ok()
+        .filter(|scope| (1..=MAXIMUM_SERVICE_SCOPE).contains(scope))
+        .ok_or(RepositoryError::CorruptState)?;
+    let generation = positive_u64(stored.credential_generation)?;
+    let method_revision = positive_u64(stored.method_revision)?;
+    positive_u64(stored.credential_revision)?;
+    let signature_counter =
+        u64::try_from(stored.signature_counter).map_err(|_| RepositoryError::CorruptState)?;
+    let backup_eligible = boolean(stored.backup_eligible)?;
+    let backup_state = boolean(stored.backup_state)?;
+    if stored.method_kind != AuthenticationMethodKind::Passkey as i64
+        || !(1..=3).contains(&stored.method_state)
+        || !(1..=3).contains(&stored.principal_state)
+        || stored.algorithm != -7
+        || stored.public_key.len() != 65
+        || stored.credential_id.is_empty()
+        || stored.credential_id.len() > 1_024
+        || (backup_state && !backup_eligible)
+        || stored
+            .expires_at
+            .is_some_and(|end| end <= stored.created_at)
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    if stored.method_state != ACTIVE
+        || stored.principal_state != ACTIVE
+        || service_scope & service.scope_bit() == 0
+        || stored.expires_at.is_some_and(|end| now.get() >= end)
+    {
+        return Ok(None);
+    }
+    Ok(Some(PasskeyVerificationMaterial {
+        principal_id: PrincipalId::from_bytes(fixed(stored.principal_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        method_id: AuthenticationMethodId::from_bytes(fixed(stored.method_id)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        credential_generation: generation,
+        revision: Revision::new(method_revision),
+        credential_id: stored.credential_id,
+        public_key_algorithm: i32::try_from(stored.algorithm)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        public_key: stored.public_key,
+        signature_counter,
+        backup_eligible,
+        backup_state,
+    }))
+}
+
 /// Resolves one verifier digest through its unique index and evaluates all current bounds.
 pub(super) fn authenticate_api_key(
     transaction: &rusqlite::Connection,
@@ -164,6 +315,14 @@ fn positive_u64(value: i64) -> Result<u64, RepositoryError> {
         .ok()
         .filter(|value| *value > 0)
         .ok_or(RepositoryError::CorruptState)
+}
+
+fn boolean(value: i64) -> Result<bool, RepositoryError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(RepositoryError::CorruptState),
+    }
 }
 
 fn fixed<const N: usize>(value: Vec<u8>) -> Result<[u8; N], RepositoryError> {

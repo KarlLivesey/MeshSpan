@@ -9,15 +9,18 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
-    CreateSessionResponse, CurrentSessionResponse, RevokeCurrentSessionRequest,
-    RevokeCurrentSessionResponse, SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
+    ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
+    CreatePasskeyChallengeResponse, CreateSessionRequest, CreateSessionResponse,
+    CurrentSessionResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
+    SetupStatusResponse, model::MAX_ERROR_ISSUES, schema,
 };
 
 /// Maximum accepted body size for one session-creation request.
 pub const MAX_CREATE_SESSION_BYTES: usize = 2_048;
 /// Maximum accepted body size for one first-mesh setup request.
 pub const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
+/// Maximum accepted body size for creating a passkey challenge.
+pub const MAX_CREATE_PASSKEY_CHALLENGE_BYTES: usize = 256;
 /// Maximum accepted body size for one current-session revocation request.
 pub const MAX_REVOKE_CURRENT_SESSION_BYTES: usize = 256;
 
@@ -25,6 +28,10 @@ static API_ERROR_VALIDATOR: OnceLock<Result<CompiledValidator, String>> = OnceLo
 static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
 static CREATE_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static CREATE_PASSKEY_CHALLENGE_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static CREATE_PASSKEY_CHALLENGE_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
 static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
@@ -111,6 +118,57 @@ pub fn encode_create_mesh_setup_response(
 /// Returns every discovered issue up to the public issue limit.
 pub fn validate_create_mesh_setup_response_value(value: &Value) -> Result<(), BoundaryError> {
     validate(create_mesh_setup_response_validator()?, value)
+}
+
+/// Validates and decodes one bounded passkey challenge-creation request.
+///
+/// # Errors
+///
+/// Returns before ceremony work for oversized, malformed or schema-invalid input.
+pub fn decode_create_passkey_challenge_request(
+    bytes: &[u8],
+) -> Result<CreatePasskeyChallengeRequest, BoundaryError> {
+    if bytes.len() > MAX_CREATE_PASSKEY_CHALLENGE_BYTES {
+        return Err(BoundaryError::BodyTooLarge {
+            limit: MAX_CREATE_PASSKEY_CHALLENGE_BYTES,
+        });
+    }
+    let value = serde_json::from_slice(bytes).map_err(|_| BoundaryError::MalformedJson)?;
+    validate_create_passkey_challenge_request_value(&value)?;
+    serde_json::from_value(value).map_err(|_| BoundaryError::DecodeMismatch)
+}
+
+/// Validates raw passkey challenge input against the Rust-authored schema.
+///
+/// # Errors
+///
+/// Returns all discovered issues up to the public issue limit.
+pub fn validate_create_passkey_challenge_request_value(value: &Value) -> Result<(), BoundaryError> {
+    validate(create_passkey_challenge_request_validator()?, value)
+}
+
+/// Validates and encodes one browser-ready passkey challenge response.
+///
+/// # Errors
+///
+/// Returns an outgoing-contract error instead of emitting malformed options.
+pub fn encode_create_passkey_challenge_response(
+    response: &CreatePasskeyChallengeResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate_create_passkey_challenge_response_value(&value)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
+/// Validates raw passkey challenge output against the Rust-authored schema.
+///
+/// # Errors
+///
+/// Returns all discovered issues up to the public issue limit.
+pub fn validate_create_passkey_challenge_response_value(
+    value: &Value,
+) -> Result<(), BoundaryError> {
+    validate(create_passkey_challenge_response_validator()?, value)
 }
 
 /// One safe, bounded description of a structural contract violation.
@@ -310,6 +368,22 @@ fn create_mesh_setup_response_validator() -> Result<&'static CompiledValidator, 
     )
 }
 
+fn create_passkey_challenge_request_validator() -> Result<&'static CompiledValidator, BoundaryError>
+{
+    validator_from(
+        CREATE_PASSKEY_CHALLENGE_REQUEST_VALIDATOR
+            .get_or_init(|| compile(&schema::request_schema::<CreatePasskeyChallengeRequest>())),
+    )
+}
+
+fn create_passkey_challenge_response_validator() -> Result<&'static CompiledValidator, BoundaryError>
+{
+    validator_from(
+        CREATE_PASSKEY_CHALLENGE_RESPONSE_VALIDATOR
+            .get_or_init(|| compile(&schema::response_schema::<CreatePasskeyChallengeResponse>())),
+    )
+}
+
 fn response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
     validator_from(
         CREATE_SESSION_RESPONSE_VALIDATOR
@@ -406,8 +480,39 @@ fn collect_issues(error: &ValidationError<'_, '_>, issues: &mut Vec<ValidationIs
 }
 
 fn constraint(error: &ValidationError<'_, '_>) -> String {
-    error
-        .kind
-        .keyword_path()
-        .map_or_else(|| "schema".to_owned(), |path| path.keyword.to_owned())
+    error.kind.keyword_path().map_or_else(
+        || "schema".to_owned(),
+        |path| public_constraint(path.keyword),
+    )
+}
+
+fn public_constraint(keyword: &str) -> String {
+    let mut output = String::with_capacity(keyword.len().min(64));
+    for character in keyword.chars() {
+        if output.len() >= 64 {
+            break;
+        }
+        if character.is_ascii_uppercase() {
+            if !output.is_empty() && !output.ends_with('_') {
+                output.push('_');
+            }
+            output.push(character.to_ascii_lowercase());
+        } else if character.is_ascii_lowercase() || character.is_ascii_digit() {
+            output.push(character);
+        } else if !output.is_empty() && !output.ends_with('_') {
+            output.push('_');
+        }
+    }
+    while output.ends_with('_') {
+        output.pop();
+    }
+    if output
+        .as_bytes()
+        .first()
+        .is_none_or(|character| !character.is_ascii_lowercase())
+    {
+        "schema".to_owned()
+    } else {
+        output
+    }
 }

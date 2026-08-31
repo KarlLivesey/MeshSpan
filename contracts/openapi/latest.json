@@ -204,6 +204,85 @@
         "title": "CreateMeshSetupResponse",
         "type": "object"
       },
+      "CreatePasskeyChallengeRequest": {
+        "additionalProperties": false,
+        "description": "Input for creating one short-lived passkey authentication challenge.",
+        "properties": {
+          "operation_id": {
+            "description": "Client-generated identity making challenge creation exactly replayable on this gateway.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "title": "CreatePasskeyChallengeRequest",
+        "type": "object"
+      },
+      "CreatePasskeyChallengeResponse": {
+        "additionalProperties": false,
+        "description": "Browser-ready options for one passkey authentication ceremony.",
+        "properties": {
+          "challenge": {
+            "description": "Unpadded base64url random challenge supplied to `navigator.credentials.get`.",
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "challenge_id": {
+            "description": "Stable challenge identity supplied with the resulting assertion.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Challenge-creation operation whose exact result this response represents.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "relying_party_id": {
+            "description": "Exact relying-party identifier against which authenticator data is verified.",
+            "maxLength": 253,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$",
+            "type": "string"
+          },
+          "timeout_milliseconds": {
+            "description": "Browser hint; server expiry remains authoritative.",
+            "format": "uint32",
+            "maximum": 600000,
+            "minimum": 30000,
+            "type": "integer"
+          },
+          "user_verification": {
+            "description": "Authenticator-local verification required by the challenge policy.",
+            "oneOf": [
+              {
+                "const": "required",
+                "description": "Require a PIN, biometric or equivalent authenticator-local verification.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "challenge_id",
+          "challenge",
+          "relying_party_id",
+          "timeout_milliseconds",
+          "user_verification"
+        ],
+        "title": "CreatePasskeyChallengeResponse",
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "additionalProperties": false,
         "description": "Input for exchanging accepted authentication proofs for a session.",
@@ -1275,6 +1354,209 @@
         "summary": "Revoke the current authenticated browser session",
         "x-meshspan-access": "authenticated-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/sessions/passkey/challenges": {
+      "post": {
+        "operationId": "createPasskeyChallenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePasskeyChallengeRequest"
+              }
+            }
+          },
+          "description": "Passkey challenge creation",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePasskeyChallengeResponse"
+                }
+              }
+            },
+            "description": "Browser-ready passkey request options",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or ceremony conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bounded admission rejected the request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication gateway temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create one bounded passkey authentication challenge",
+        "x-meshspan-access": "anonymous",
+        "x-meshspan-idempotency": "operation-id-and-gateway-local-ceremony"
       }
     },
     "/setup/meshes": {

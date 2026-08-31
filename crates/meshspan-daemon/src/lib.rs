@@ -21,6 +21,23 @@ mod create_session_tests;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
+mod passkey_challenge;
+mod passkey_challenge_api;
+#[cfg(test)]
+mod passkey_challenge_api_tests;
+mod passkey_challenge_configuration;
+mod passkey_challenge_state;
+#[cfg(test)]
+mod passkey_challenge_tests;
+mod passkey_session;
+mod passkey_session_contract;
+mod passkey_session_creation;
+#[cfg(test)]
+mod passkey_session_creation_tests;
+#[cfg(test)]
+mod passkey_session_tests;
+#[cfg(test)]
+mod passkey_test_support;
 mod revoke_session;
 mod revoke_session_api;
 mod setup_api;
@@ -51,6 +68,23 @@ pub use create_session::{
 pub use current_session_api::{
     CurrentSessionApiError, CurrentSessionController, CurrentSessionError,
     current_session_api_router,
+};
+pub use passkey_challenge::{
+    PasskeyCeremonyStore, PasskeyCeremonyStoreError, PasskeyChallengeError, PasskeyChallengeService,
+};
+pub use passkey_challenge_api::{
+    CreatePasskeyChallengeController, PasskeyChallengeApiError, passkey_challenge_api_router,
+};
+pub use passkey_challenge_configuration::{
+    PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
+};
+pub use passkey_challenge_state::{PasskeyCeremonyKey, PasskeyChallengeStateError};
+pub use passkey_session::{
+    PasskeySessionError, PasskeySessionService, PasskeySessionStore, PasskeySessionStoreError,
+    PreparedPasskeySession, VerifiedPasskeyFactor,
+};
+pub use passkey_session_contract::{
+    DisabledPasskeyProof, DisabledPasskeySessions, PasskeySessionCeremony, PreparedPasskeyProof,
 };
 pub use revoke_session::{
     RevokeCurrentSessionError, RevokeCurrentSessionService, SessionRevocationAuthority,

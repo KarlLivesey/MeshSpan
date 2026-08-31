@@ -9,14 +9,17 @@
 )]
 
 use meshspan_api_contract::{
-    ApiError, ApiErrorCode, CreateMeshSetupResponse, CreateSessionResponse, NullableField,
-    OperationId, RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
-    decode_create_mesh_setup_request, decode_create_session_request,
-    decode_revoke_current_session_request, encode_api_error, encode_create_mesh_setup_response,
+    ApiError, ApiErrorCode, BoundaryError, CreateMeshSetupResponse, CreatePasskeyChallengeResponse,
+    CreateSessionResponse, NullableField, OperationId, PasskeyChallengeId, PasskeyUserVerification,
+    RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
+    decode_create_mesh_setup_request, decode_create_passkey_challenge_request,
+    decode_create_session_request, decode_revoke_current_session_request, encode_api_error,
+    encode_create_mesh_setup_response, encode_create_passkey_challenge_response,
     encode_create_session_response, encode_revoke_current_session_response,
     encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
-    validate_create_session_request_value, validate_create_session_response_value,
-    validate_setup_status_response_value,
+    validate_create_passkey_challenge_request_value,
+    validate_create_passkey_challenge_response_value, validate_create_session_request_value,
+    validate_create_session_response_value, validate_setup_status_response_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -119,6 +122,52 @@ fn public_error_passes_the_same_outgoing_contract_gate() {
 fn decoder_rejects_malformed_and_oversized_bodies_before_domain_work() {
     assert!(decode_create_session_request(b"{").is_err());
     assert!(decode_create_session_request(&vec![b' '; 2_049]).is_err());
+}
+
+#[test]
+fn passkey_challenge_contract_is_exact_bounded_and_validated_both_ways() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    let request_bytes = serde_json::to_vec(&json!({ "operation_id": operation }))
+        .expect("request fixture must encode");
+    let request = decode_create_passkey_challenge_request(&request_bytes)
+        .expect("exact challenge request must decode");
+    assert_eq!(request.operation_id.as_str(), operation);
+    let unknown = json!({
+        "operation_id": operation,
+        "user_name": "must-not-enable-account-enumeration"
+    });
+    let Err(BoundaryError::Invalid { issues }) =
+        validate_create_passkey_challenge_request_value(&unknown)
+    else {
+        panic!("unknown field must be a structural request failure");
+    };
+    assert_eq!(issues[0].constraint, "additional_property");
+    assert!(
+        decode_create_passkey_challenge_request(
+            &serde_json::to_vec(&unknown).expect("rejection fixture must encode")
+        )
+        .is_err()
+    );
+    assert!(decode_create_passkey_challenge_request(&vec![b' '; 257]).is_err());
+
+    let response = CreatePasskeyChallengeResponse {
+        operation_id: serde_json::from_value(json!(operation))
+            .expect("operation fixture must be valid"),
+        challenge_id: PasskeyChallengeId::from_uuid_bytes(versioned(3))
+            .expect("challenge fixture must be valid"),
+        challenge: "A".repeat(43),
+        relying_party_id: "storage.example.test".to_owned(),
+        timeout_milliseconds: 120_000,
+        user_verification: PasskeyUserVerification::Required,
+    };
+    let encoded = encode_create_passkey_challenge_response(&response)
+        .expect("valid challenge response must encode");
+    let value = serde_json::from_slice::<Value>(&encoded).expect("response must be JSON");
+    assert_eq!(value["challenge"], "A".repeat(43));
+
+    let mut malformed = value;
+    malformed["challenge"] = json!("contains padding=");
+    assert!(validate_create_passkey_challenge_response_value(&malformed).is_err());
 }
 
 #[test]
@@ -242,6 +291,13 @@ fn openapi_document_is_31_licensed_bounded_and_deterministic() {
     assert_eq!(
         session_headers["MeshSpan-CSRF-Token"]["schema"]["pattern"],
         r"^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$"
+    );
+    let challenge = &first.value()["paths"]["/sessions/passkey/challenges"]["post"];
+    assert_eq!(challenge["operationId"], "createPasskeyChallenge");
+    assert_eq!(challenge["x-meshspan-access"], "anonymous");
+    assert_eq!(
+        challenge["responses"]["201"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/CreatePasskeyChallengeResponse"
     );
 }
 
