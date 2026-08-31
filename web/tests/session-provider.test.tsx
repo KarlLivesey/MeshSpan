@@ -18,6 +18,10 @@ const RESPONSE_HEADERS = {
   "MeshSpan-API-Version": "latest",
 };
 const mountedRoots = new Set<() => void>();
+const credentialsDescriptor = Object.getOwnPropertyDescriptor(
+  navigator,
+  "credentials",
+);
 
 afterEach(() => {
   for (const dispose of mountedRoots) {
@@ -25,6 +29,7 @@ afterEach(() => {
   }
   mountedRoots.clear();
   document.body.replaceChildren();
+  restoreCredentials();
   vi.restoreAllMocks();
 });
 
@@ -61,6 +66,52 @@ describe("browser session provider", () => {
       "GET https://node.example/api/latest/sessions/current",
     ]);
   });
+
+  it("signs in with bounded evidence from a browser passkey", async () => {
+    denyBrowserStorage();
+    installAssertionCredential();
+    let currentSessionReads = 0;
+    let sessionRequest: unknown;
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input, init) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/sessions/current")) {
+          currentSessionReads += 1;
+          return currentSessionReads === 1
+            ? jsonResponse({}, 401)
+            : jsonResponse(currentSession());
+        }
+        if (url.endsWith("/sessions/passkey/challenges")) {
+          return jsonResponse(passkeyChallenge(), 201);
+        }
+        sessionRequest = JSON.parse(readStringBody(init?.body)) as unknown;
+        return jsonResponse(createdSession(), 201, {
+          "MeshSpan-CSRF-Token": CSRF_TOKEN,
+        });
+      },
+    });
+
+    mountSessionProbe(client);
+    await waitForPhase("anonymous");
+    clickButton("Sign in passkey fixture");
+    await waitForPhase("authenticated");
+
+    expect(sessionRequest).toEqual(
+      expect.objectContaining({
+        authentication: {
+          authenticator_data: "Cgs",
+          challenge_id: OPERATION_ID,
+          client_data_json: "DA0",
+          credential_id: "AQI",
+          method: "passkey",
+          signature: "Dg8",
+          user_handle: null,
+        },
+        remember: false,
+      }),
+    );
+  });
 });
 
 function SessionProbe(): JSX.Element {
@@ -73,6 +124,12 @@ function SessionProbe(): JSX.Element {
         type="button"
       >
         Sign in fixture
+      </button>
+      <button
+        onClick={() => void session.signInWithPasskey(false)}
+        type="button"
+      >
+        Sign in passkey fixture
       </button>
     </div>
   );
@@ -103,6 +160,46 @@ function denyBrowserStorage(): void {
   vi.spyOn(window, "sessionStorage", "get").mockImplementation(denial);
 }
 
+function installAssertionCredential(): void {
+  const credential = {
+    id: "credential",
+    rawId: Uint8Array.from([1, 2]).buffer,
+    response: {
+      authenticatorData: Uint8Array.from([10, 11]).buffer,
+      clientDataJSON: Uint8Array.from([12, 13]).buffer,
+      signature: Uint8Array.from([14, 15]).buffer,
+      userHandle: null,
+    },
+    type: "public-key",
+  } as unknown as Credential;
+  Object.defineProperty(navigator, "credentials", {
+    configurable: true,
+    value: {
+      create: async () => Promise.resolve(credential),
+      get: async () => Promise.resolve(credential),
+    },
+  });
+}
+
+function restoreCredentials(): void {
+  if (credentialsDescriptor === undefined) {
+    Reflect.deleteProperty(navigator, "credentials");
+    return;
+  }
+  Object.defineProperty(navigator, "credentials", credentialsDescriptor);
+}
+
+function passkeyChallenge() {
+  return {
+    challenge: "A".repeat(43),
+    challenge_id: OPERATION_ID,
+    operation_id: OPERATION_ID,
+    relying_party_id: "node.example",
+    timeout_milliseconds: 30_000,
+    user_verification: "required" as const,
+  };
+}
+
 function currentSession() {
   return {
     administration_available: true,
@@ -129,6 +226,13 @@ function requestUrl(input: RequestInfo | URL): string {
     return input.url;
   }
   return input;
+}
+
+function readStringBody(body: BodyInit | null | undefined): string {
+  if (typeof body !== "string") {
+    throw new TypeError("expected a string request body");
+  }
+  return body;
 }
 
 function jsonResponse(

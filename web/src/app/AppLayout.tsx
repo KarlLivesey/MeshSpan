@@ -31,6 +31,9 @@ export function AppLayout(props: Readonly<ParentProps>): JSX.Element {
         </a>
         <nav aria-label="Primary navigation">
           <a href="/">Files</a>
+          <Show when={authenticated()}>
+            <a href="/security">Security</a>
+          </Show>
           <Show when={canAdminister()}>
             <a href="/admin/identities">Administration</a>
           </Show>

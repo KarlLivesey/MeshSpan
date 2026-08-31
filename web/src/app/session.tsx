@@ -7,13 +7,27 @@ import {
   useContext,
   type Accessor,
   type ParentProps,
+  type Setter,
 } from "solid-js";
 import type { JSX } from "@solidjs/web";
-import type { CurrentSessionResponse } from "../generated/types.gen";
+
 import {
   MeshSpanApiError,
+  type CreateSessionResult,
   type MeshSpanFetchClient,
 } from "../generated/fetch.gen";
+import type {
+  CreateSessionRequestWritable,
+  CurrentSessionResponse,
+} from "../generated/types.gen";
+import {
+  browserCredentials,
+  requestPasskeyAssertion,
+} from "../features/authentication/webauthn";
+
+export type SessionAdditionalFactor = NonNullable<
+  CreateSessionRequestWritable["additional_factor"]
+>;
 
 export type SessionState =
   | Readonly<{ phase: "checking" }>
@@ -25,8 +39,25 @@ type SessionContextValue = Readonly<{
   client: MeshSpanFetchClient;
   csrfToken: Accessor<string | undefined>;
   refresh: () => Promise<void>;
-  signInWithApiKey: (secret: string, remember: boolean) => Promise<void>;
+  signInWithApiKey: (
+    secret: string,
+    remember: boolean,
+    additionalFactor?: SessionAdditionalFactor,
+  ) => Promise<void>;
+  signInWithPasskey: (
+    remember: boolean,
+    additionalFactor?: SessionAdditionalFactor,
+  ) => Promise<void>;
   signOut: () => Promise<void>;
+  state: Accessor<SessionState>;
+}>;
+
+type SessionStore = Readonly<{
+  accept: (result: CreateSessionResult, persistent: boolean) => void;
+  clear: () => void;
+  csrfToken: Accessor<string | undefined>;
+  refresh: () => Promise<void>;
+  setState: Setter<SessionState>;
   state: Accessor<SessionState>;
 }>;
 
@@ -37,20 +68,43 @@ type BrowserStorageName = "localStorage" | "sessionStorage";
 export function SessionProvider(
   props: ParentProps<Readonly<{ client: MeshSpanFetchClient }>>,
 ): JSX.Element {
+  const client = untrack(() => props.client);
+  const store = createSessionStore(client);
+  const actions = createSessionActions(client, store);
+  untrack(() => void store.refresh());
+  const context: SessionContextValue = {
+    get client() {
+      return props.client;
+    },
+    csrfToken: store.csrfToken,
+    refresh: store.refresh,
+    signInWithApiKey: actions.signInWithApiKey,
+    signInWithPasskey: actions.signInWithPasskey,
+    signOut: actions.signOut,
+    state: store.state,
+  };
+  return <SessionContext value={context}>{props.children}</SessionContext>;
+}
+
+function createSessionStore(client: MeshSpanFetchClient): SessionStore {
   const [state, setState] = createSignal<SessionState>({ phase: "checking" });
   const [csrfToken, setCsrfToken] = createSignal<string | undefined>(
     readStoredCsrfToken(),
   );
-
+  const clear = (): void => {
+    clearStoredCsrfToken();
+    setCsrfToken(undefined);
+    setState({ phase: "anonymous" });
+  };
   const refresh = async (): Promise<void> => {
     try {
-      const session = await props.client.getCurrentSession();
-      setState({ phase: "authenticated", session });
+      setState({
+        phase: "authenticated",
+        session: await client.getCurrentSession(),
+      });
     } catch (error) {
       if (error instanceof MeshSpanApiError && error.statusCode === 401) {
-        clearStoredCsrfToken();
-        setCsrfToken(undefined);
-        setState({ phase: "anonymous" });
+        clear();
         return;
       }
       setState({
@@ -59,50 +113,81 @@ export function SessionProvider(
       });
     }
   };
+  const accept = (result: CreateSessionResult, persistent: boolean): void => {
+    setCsrfToken(result.csrfToken);
+    storeCsrfToken(result.csrfToken, persistent);
+  };
+  return { accept, clear, csrfToken, refresh, setState, state };
+}
 
+function createSessionActions(
+  client: MeshSpanFetchClient,
+  store: SessionStore,
+) {
+  const complete = async (
+    result: Promise<CreateSessionResult>,
+    persistent: boolean,
+  ): Promise<void> => {
+    store.accept(await result, persistent);
+    await store.refresh();
+  };
   const signInWithApiKey = async (
     secret: string,
     remember: boolean,
+    additionalFactor?: SessionAdditionalFactor,
   ): Promise<void> => {
-    const result = await props.client.createSession({
-      authentication: { method: "api_key", secret },
-      operation_id: crypto.randomUUID(),
+    await complete(
+      client.createSession({
+        ...factorField(additionalFactor),
+        authentication: { method: "api_key", secret },
+        operation_id: crypto.randomUUID(),
+        remember,
+      }),
       remember,
-    });
-    setCsrfToken(result.csrfToken);
-    storeCsrfToken(result.csrfToken, remember);
-    await refresh();
+    );
   };
-
+  const signInWithPasskey = async (
+    remember: boolean,
+    additionalFactor?: SessionAdditionalFactor,
+  ): Promise<void> => {
+    const challenge = await client.createPasskeyChallenge({
+      operation_id: crypto.randomUUID(),
+    });
+    const authentication = await requestPasskeyAssertion(
+      challenge,
+      browserCredentials(),
+    );
+    await complete(
+      client.createSession({
+        ...factorField(additionalFactor),
+        authentication,
+        operation_id: crypto.randomUUID(),
+        remember,
+      }),
+      remember,
+    );
+  };
   const signOut = async (): Promise<void> => {
-    const token = csrfToken();
+    const token = store.csrfToken();
     if (token === undefined) {
-      setState({ phase: "anonymous" });
+      store.setState({ phase: "anonymous" });
       return;
     }
-    await props.client.revokeCurrentSession(
+    await client.revokeCurrentSession(
       { operation_id: crypto.randomUUID() },
       token,
     );
-    clearStoredCsrfToken();
-    setCsrfToken(undefined);
-    setState({ phase: "anonymous" });
+    store.clear();
   };
+  return { signInWithApiKey, signInWithPasskey, signOut };
+}
 
-  untrack(() => void refresh());
-
-  const context: SessionContextValue = {
-    get client() {
-      return props.client;
-    },
-    csrfToken,
-    refresh,
-    signInWithApiKey,
-    signOut,
-    state,
-  };
-
-  return <SessionContext value={context}>{props.children}</SessionContext>;
+function factorField(additionalFactor?: SessionAdditionalFactor): Readonly<{
+  additional_factor?: SessionAdditionalFactor;
+}> {
+  return additionalFactor === undefined
+    ? {}
+    : { additional_factor: additionalFactor };
 }
 
 function readStoredCsrfToken(): string | undefined {
