@@ -94,7 +94,7 @@ mod verify;
 mod version_cleanup;
 mod volume_head;
 
-use meshspan_domain::{OperationId, Revision, ScopeId, ScopeRoute};
+use meshspan_domain::{GroupId, OperationId, Revision, ScopeId, ScopeRoute};
 use thiserror::Error;
 
 use crate::{MetadataStoreError, PartitionDatabase};
@@ -155,8 +155,9 @@ pub use passkey_registration::{
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
 };
 pub use query::{
-    GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalCursor,
-    PrincipalKind, PrincipalRecord,
+    GroupMemberCursor, GroupMembershipEventKind, GroupMembershipEventRecord, GroupMembershipRecord,
+    NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalCursor, PrincipalKind,
+    PrincipalRecord,
 };
 pub use reachability::{
     RetainedNamespaceRoot, RetainedNamespaceRootCursor, RetainedNamespaceRootPage,
@@ -1237,6 +1238,47 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<meshspan_domain::PrincipalId, GroupMemberCursor>, RepositoryError> {
         query::direct_group_members(&self.database, group_id, after, limit)
+    }
+
+    /// Returns one stable, bounded page of active direct-membership records.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale cursors, corrupt rows, malformed identifiers and database failures.
+    pub fn direct_group_memberships(
+        &self,
+        group_id: meshspan_domain::GroupId,
+        after: Option<GroupMemberCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<GroupMembershipRecord, GroupMemberCursor>, RepositoryError> {
+        query::direct_group_memberships(&self.database, group_id, after, limit)
+    }
+
+    /// Returns one exact active direct-membership record.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt rows, malformed identifiers and database failures.
+    pub fn direct_group_membership(
+        &self,
+        group_id: meshspan_domain::GroupId,
+        member_principal_id: meshspan_domain::PrincipalId,
+    ) -> Result<Option<GroupMembershipRecord>, RepositoryError> {
+        query::direct_group_membership(&self.database, group_id, member_principal_id)
+    }
+
+    /// Resolves immutable evidence for one direct-membership mutation revision.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the revision is invalid, absent history is malformed or more than one
+    /// event claims the same authoritative group revision.
+    pub fn group_membership_event(
+        &self,
+        group_id: GroupId,
+        revision: Revision,
+    ) -> Result<Option<GroupMembershipEventRecord>, RepositoryError> {
+        query::group_membership_event(&self.database, group_id, revision)
     }
 
     /// Returns the authoritative active-voter and admitted-learner projection, if bootstrapped.

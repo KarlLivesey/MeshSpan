@@ -9,8 +9,10 @@ mod service;
 
 use axum::http::HeaderMap;
 use meshspan_api_contract::{
-    CreateGroupRequest, CreatePrincipalResponse, CreateUserRequest, ListPrincipalsQuery,
-    ListPrincipalsResponse, PrincipalKind,
+    AddGroupMemberRequest, AddGroupMemberResponse, CreateGroupRequest, CreatePrincipalResponse,
+    CreateUserRequest, ListGroupMembershipsQuery, ListGroupMembershipsResponse,
+    ListPrincipalsQuery, ListPrincipalsResponse, PrincipalId as ApiPrincipalId, PrincipalKind,
+    RemoveGroupMemberRequest, RemoveGroupMemberResponse,
 };
 use meshspan_domain::{PrincipalId, UnixMicros};
 use thiserror::Error;
@@ -19,8 +21,8 @@ use crate::BrowserRequestProtection;
 
 pub use api::{IdentityAdministrationApiError, identity_administration_api_router};
 pub use contract::{
-    IdentityAdministrationAuthority, IdentityAdministrationAuthorityError,
-    IdentityAdministrationCommit,
+    GroupMembershipAdministrationCommit, IdentityAdministrationAuthority,
+    IdentityAdministrationAuthorityError, IdentityAdministrationCommit,
 };
 pub use service::IdentityAdministrationService;
 
@@ -80,6 +82,43 @@ pub trait IdentityAdministrationController: Send + 'static {
         administrator: IdentityAdministrator,
         request: CreateGroupRequest,
     ) -> Result<CreatePrincipalResponse, IdentityAdministrationError>;
+
+    /// Returns one bounded current direct-membership page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid groups, substituted cursors and unavailable or corrupt authority.
+    fn list_group_memberships(
+        &self,
+        administrator: IdentityAdministrator,
+        group_id: &ApiPrincipalId,
+        query: ListGroupMembershipsQuery,
+    ) -> Result<ListGroupMembershipsResponse, IdentityAdministrationError>;
+
+    /// Adds or exactly replays one direct user or nested-group membership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid identities, cycles, duplicates and unavailable or corrupt authority.
+    fn add_group_member(
+        &mut self,
+        administrator: IdentityAdministrator,
+        group_id: &ApiPrincipalId,
+        request: AddGroupMemberRequest,
+    ) -> Result<AddGroupMemberResponse, IdentityAdministrationError>;
+
+    /// Removes or exactly replays one active direct membership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid identities, absent edges, changed retries and unavailable authority.
+    fn remove_group_member(
+        &mut self,
+        administrator: IdentityAdministrator,
+        group_id: &ApiPrincipalId,
+        member_principal_id: &ApiPrincipalId,
+        request: RemoveGroupMemberRequest,
+    ) -> Result<RemoveGroupMemberResponse, IdentityAdministrationError>;
 }
 
 /// Closed non-secret identity-administration failure categories.
@@ -97,6 +136,9 @@ pub enum IdentityAdministrationError {
     /// Name uniqueness or exact operation replay conflicts with committed state.
     #[error("identity-administration operation conflicts with committed state")]
     Conflict,
+    /// A requested group, member or active direct edge does not exist.
+    #[error("identity-administration resource was not found")]
+    NotFound,
     /// Required committed authority is temporarily unavailable.
     #[error("identity-administration authority is unavailable")]
     Unavailable,

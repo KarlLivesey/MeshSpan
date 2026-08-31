@@ -6,14 +6,19 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
-use axum::extract::{Request, State};
+use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::routing::get;
 use meshspan_api_contract::{
-    ApiErrorCode, BoundaryError, CreateGroupRequest, CreatePrincipalResponse, CreateUserRequest,
-    ListPrincipalsQuery, ListPrincipalsResponse, MAX_CREATE_PRINCIPAL_BYTES, PrincipalCursor,
-    PrincipalKind, decode_create_group_request, decode_create_user_request,
-    encode_create_principal_response, encode_list_principals_response, generate_openapi,
+    AddGroupMemberRequest, AddGroupMemberResponse, ApiErrorCode, BoundaryError, CreateGroupRequest,
+    CreatePrincipalResponse, CreateUserRequest, GroupMembershipCursor, ListGroupMembershipsQuery,
+    ListGroupMembershipsResponse, ListPrincipalsQuery, ListPrincipalsResponse,
+    MAX_CREATE_PRINCIPAL_BYTES, MAX_GROUP_MEMBERSHIP_MUTATION_BYTES, PrincipalCursor, PrincipalId,
+    PrincipalKind, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+    decode_add_group_member_request, decode_create_group_request, decode_create_user_request,
+    decode_remove_group_member_request, encode_add_group_member_response,
+    encode_create_principal_response, encode_list_group_memberships_response,
+    encode_list_principals_response, encode_remove_group_member_response, generate_openapi,
 };
 use thiserror::Error;
 
@@ -63,6 +68,14 @@ where
         .route(
             "/api/latest/admin/groups",
             get(list_groups::<C>).post(create_group::<C>),
+        )
+        .route(
+            "/api/latest/admin/groups/{group_id}/members",
+            get(list_group_members::<C>).post(add_group_member::<C>),
+        )
+        .route(
+            "/api/latest/admin/groups/{group_id}/members/{member_principal_id}/removals",
+            axum::routing::post(remove_group_member::<C>),
         )
         .with_state(state))
 }
@@ -145,7 +158,14 @@ where
     C: IdentityAdministrationController,
 {
     let request_id = request_identifier();
-    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    let (administrator, body) = match authenticated_body(
+        &state,
+        request,
+        MAX_CREATE_PRINCIPAL_BYTES,
+        "identity-creation body exceeds its bound",
+        request_id.clone(),
+    )
+    .await
     {
         Ok(value) => value,
         Err(response) => return *response,
@@ -172,7 +192,14 @@ where
     C: IdentityAdministrationController,
 {
     let request_id = request_identifier();
-    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    let (administrator, body) = match authenticated_body(
+        &state,
+        request,
+        MAX_CREATE_PRINCIPAL_BYTES,
+        "identity-creation body exceeds its bound",
+        request_id.clone(),
+    )
+    .await
     {
         Ok(value) => value,
         Err(response) => return *response,
@@ -189,6 +216,177 @@ where
         IdentityAdministrationController::create_group,
     )
     .await
+}
+
+async fn list_group_members<C>(
+    Path(group_id): Path<String>,
+    State(state): State<IdentityAdministrationApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: IdentityAdministrationController,
+{
+    let request_id = request_identifier();
+    let administrator = match authenticate(
+        &state,
+        request.headers(),
+        BrowserRequestProtection::Read,
+        request_id.clone(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let (Some(group_id), Ok(query)) = (
+        PrincipalId::parse(&group_id),
+        parse_membership_query(request.uri().query()),
+    ) else {
+        return public_error(
+            &state,
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidRequest,
+            "group-membership path or query is invalid",
+            request_id,
+            vec![issue("", "query")],
+        );
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| IdentityAdministrationError::Unavailable)?
+            .list_group_memberships(administrator, &group_id, query)
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => encoded_membership_page(&state, &response, request_id),
+        Ok(Err(error)) => service_error(&state, error, request_id, None),
+        Err(_) => service_error(
+            &state,
+            IdentityAdministrationError::Unavailable,
+            request_id,
+            None,
+        ),
+    }
+}
+
+async fn add_group_member<C>(
+    Path(group_id): Path<String>,
+    State(state): State<IdentityAdministrationApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: IdentityAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(
+        &state,
+        request,
+        MAX_GROUP_MEMBERSHIP_MUTATION_BYTES,
+        "group-membership body exceeds its bound",
+        request_id.clone(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Some(group_id) = PrincipalId::parse(&group_id) else {
+        return invalid_membership_path(&state, request_id);
+    };
+    let decoded = match decode_add_group_member_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    execute_membership_addition(state, administrator, group_id, decoded, request_id).await
+}
+
+async fn remove_group_member<C>(
+    Path((group_id, member_principal_id)): Path<(String, String)>,
+    State(state): State<IdentityAdministrationApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: IdentityAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(
+        &state,
+        request,
+        MAX_GROUP_MEMBERSHIP_MUTATION_BYTES,
+        "group-membership body exceeds its bound",
+        request_id.clone(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let (Some(group_id), Some(member_principal_id)) = (
+        PrincipalId::parse(&group_id),
+        PrincipalId::parse(&member_principal_id),
+    ) else {
+        return invalid_membership_path(&state, request_id);
+    };
+    let decoded = match decode_remove_group_member_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    execute_membership_removal(
+        state,
+        administrator,
+        group_id,
+        member_principal_id,
+        decoded,
+        request_id,
+    )
+    .await
+}
+
+async fn execute_membership_addition<C>(
+    state: IdentityAdministrationApiState<C>,
+    administrator: IdentityAdministrator,
+    group_id: PrincipalId,
+    request: AddGroupMemberRequest,
+    request_id: String,
+) -> Response<Body>
+where
+    C: IdentityAdministrationController,
+{
+    let operation_id = request.operation_id.clone();
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| IdentityAdministrationError::Unavailable)?
+            .add_group_member(administrator, &group_id, request)
+    })
+    .await;
+    membership_addition_response(&state, execution, request_id, operation_id)
+}
+
+async fn execute_membership_removal<C>(
+    state: IdentityAdministrationApiState<C>,
+    administrator: IdentityAdministrator,
+    group_id: PrincipalId,
+    member_principal_id: PrincipalId,
+    request: RemoveGroupMemberRequest,
+    request_id: String,
+) -> Response<Body>
+where
+    C: IdentityAdministrationController,
+{
+    let operation_id = request.operation_id.clone();
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| IdentityAdministrationError::Unavailable)?
+            .remove_group_member(administrator, &group_id, &member_principal_id, request)
+    })
+    .await;
+    membership_removal_response(&state, execution, request_id, operation_id)
 }
 
 async fn execute_creation<C, Q>(
@@ -233,6 +431,8 @@ where
 async fn authenticated_body<C>(
     state: &IdentityAdministrationApiState<C>,
     request: Request,
+    maximum_bytes: usize,
+    oversized_message: &'static str,
     request_id: String,
 ) -> Result<(IdentityAdministrator, Bytes), Box<Response<Body>>>
 where
@@ -255,7 +455,7 @@ where
         request_id.clone(),
     )
     .await?;
-    to_bytes(request.into_body(), MAX_CREATE_PRINCIPAL_BYTES)
+    to_bytes(request.into_body(), maximum_bytes)
         .await
         .map(|body| (administrator, body))
         .map_err(|_| {
@@ -263,7 +463,7 @@ where
                 state,
                 StatusCode::PAYLOAD_TOO_LARGE,
                 ApiErrorCode::InvalidRequest,
-                "identity-creation body exceeds its bound",
+                oversized_message,
                 request_id,
                 vec![issue("", "max_bytes")],
             ))
@@ -328,6 +528,39 @@ fn parse_query(raw_query: Option<&str>) -> Result<ListPrincipalsQuery, ()> {
     Ok(query)
 }
 
+fn parse_membership_query(raw_query: Option<&str>) -> Result<ListGroupMembershipsQuery, ()> {
+    let Some(raw_query) = raw_query.filter(|value| !value.is_empty()) else {
+        return Ok(ListGroupMembershipsQuery::default());
+    };
+    if raw_query.len() > 4_096 || !has_valid_percent_encoding(raw_query.as_bytes()) {
+        return Err(());
+    }
+    let mut query = ListGroupMembershipsQuery::default();
+    let mut cursor_seen = false;
+    let mut limit_seen = false;
+    for (name, value) in form_urlencoded::parse(raw_query.as_bytes()) {
+        match name.as_ref() {
+            "cursor" if !cursor_seen => {
+                cursor_seen = true;
+                query.cursor =
+                    Some(GroupMembershipCursor::from_encoded(value.into_owned()).ok_or(())?);
+            }
+            "limit" if !limit_seen => {
+                limit_seen = true;
+                query.limit = Some(
+                    value
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .ok_or(())?,
+                );
+            }
+            _ => return Err(()),
+        }
+    }
+    Ok(query)
+}
+
 fn encoded_page<C>(
     state: &IdentityAdministrationApiState<C>,
     response: &ListPrincipalsResponse,
@@ -337,6 +570,79 @@ fn encoded_page<C>(
         Ok(body) => json_response(StatusCode::OK, body, state.schema_digest.clone()),
         Err(_) => failed_closed(state, request_id, None),
     }
+}
+
+fn encoded_membership_page<C>(
+    state: &IdentityAdministrationApiState<C>,
+    response: &ListGroupMembershipsResponse,
+    request_id: String,
+) -> Response<Body> {
+    match encode_list_group_memberships_response(response) {
+        Ok(body) => json_response(StatusCode::OK, body, state.schema_digest.clone()),
+        Err(_) => failed_closed(state, request_id, None),
+    }
+}
+
+fn membership_addition_response<C>(
+    state: &IdentityAdministrationApiState<C>,
+    execution: Result<
+        Result<AddGroupMemberResponse, IdentityAdministrationError>,
+        tokio::task::JoinError,
+    >,
+    request_id: String,
+    operation_id: meshspan_api_contract::OperationId,
+) -> Response<Body> {
+    match execution {
+        Ok(Ok(response)) => match encode_add_group_member_response(&response) {
+            Ok(body) => json_response(StatusCode::CREATED, body, state.schema_digest.clone()),
+            Err(_) => failed_closed(state, request_id, Some(operation_id)),
+        },
+        Ok(Err(error)) => service_error(state, error, request_id, Some(operation_id)),
+        Err(_) => service_error(
+            state,
+            IdentityAdministrationError::Unavailable,
+            request_id,
+            Some(operation_id),
+        ),
+    }
+}
+
+fn membership_removal_response<C>(
+    state: &IdentityAdministrationApiState<C>,
+    execution: Result<
+        Result<RemoveGroupMemberResponse, IdentityAdministrationError>,
+        tokio::task::JoinError,
+    >,
+    request_id: String,
+    operation_id: meshspan_api_contract::OperationId,
+) -> Response<Body> {
+    match execution {
+        Ok(Ok(response)) => match encode_remove_group_member_response(&response) {
+            Ok(body) => json_response(StatusCode::OK, body, state.schema_digest.clone()),
+            Err(_) => failed_closed(state, request_id, Some(operation_id)),
+        },
+        Ok(Err(error)) => service_error(state, error, request_id, Some(operation_id)),
+        Err(_) => service_error(
+            state,
+            IdentityAdministrationError::Unavailable,
+            request_id,
+            Some(operation_id),
+        ),
+    }
+}
+
+fn invalid_membership_path<C>(
+    state: &IdentityAdministrationApiState<C>,
+    request_id: String,
+) -> Response<Body> {
+    public_error(
+        state,
+        StatusCode::BAD_REQUEST,
+        ApiErrorCode::InvalidRequest,
+        "group-membership path is invalid",
+        request_id,
+        vec![issue("", "path")],
+    )
 }
 
 fn boundary_error<C>(
@@ -353,7 +659,7 @@ fn boundary_error<C>(
         state,
         status,
         ApiErrorCode::InvalidRequest,
-        "identity-creation request is invalid",
+        "identity-administration request is invalid",
         request_id,
         boundary_issues(error),
     )
@@ -385,6 +691,11 @@ fn service_error<C>(
             StatusCode::CONFLICT,
             ApiErrorCode::OperationConflict,
             "identity operation conflicts with committed state",
+        ),
+        IdentityAdministrationError::NotFound => (
+            StatusCode::NOT_FOUND,
+            ApiErrorCode::NotFound,
+            "identity-administration resource was not found",
         ),
         IdentityAdministrationError::Unavailable => (
             StatusCode::SERVICE_UNAVAILABLE,

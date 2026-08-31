@@ -105,6 +105,12 @@ pub struct PrincipalId(
 );
 
 impl PrincipalId {
+    /// Parses exact canonical versioned UUID text.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        crate::directory_listing::parse_public_uuid(value).map(Self)
+    }
+
     /// Constructs canonical UUID text from already validated versioned UUID bytes.
     #[must_use]
     pub fn from_uuid_bytes(value: [u8; 16]) -> Option<Self> {

@@ -5,19 +5,27 @@
 use axum::http::HeaderMap;
 use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_api_contract::{
-    CreateGroupRequest, CreatePrincipalResponse, CreateUserRequest, ListPrincipalsQuery,
-    ListPrincipalsResponse, PrincipalKind as ApiPrincipalKind, validate_list_principals_query,
+    AddGroupMemberRequest, AddGroupMemberResponse, CreateGroupRequest, CreatePrincipalResponse,
+    CreateUserRequest, ListGroupMembershipsQuery, ListGroupMembershipsResponse,
+    ListPrincipalsQuery, ListPrincipalsResponse, PrincipalId as ApiPrincipalId,
+    PrincipalKind as ApiPrincipalKind, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+    validate_list_group_memberships_query, validate_list_principals_query,
 };
-use meshspan_domain::{AssuranceLevel, UnixMicros};
-use meshspan_metadata::{AuthoritativeCommand, PageLimit, PrincipalKind};
+use meshspan_domain::{AssuranceLevel, GroupId, OperationId, PrincipalId, UnixMicros};
+use meshspan_metadata::{
+    AuthoritativeCommand, GroupMembershipEventKind, PageLimit, PrincipalKind, PrincipalRecord,
+};
 
 use super::model::{
-    command_context, creation_response, decode_cursor, domain_kind, group_command, list_response,
+    add_membership_command, add_membership_response, command_context, creation_response,
+    decode_cursor, decode_membership_cursor, domain_group, domain_kind, group_command,
+    list_response, membership_list_response, remove_membership_command, remove_membership_response,
     user_command,
 };
 use super::{
-    IdentityAdministrationAuthority, IdentityAdministrationAuthorityError,
-    IdentityAdministrationController, IdentityAdministrationError, IdentityAdministrator,
+    GroupMembershipAdministrationCommit, IdentityAdministrationAuthority,
+    IdentityAdministrationAuthorityError, IdentityAdministrationController,
+    IdentityAdministrationError, IdentityAdministrator,
 };
 use crate::{
     BrowserAuthenticationError, BrowserRequestProtection, BrowserSessionAuthenticator,
@@ -144,6 +152,89 @@ where
             &request.operation_id,
         )
     }
+
+    fn list_group_memberships(
+        &self,
+        _administrator: IdentityAdministrator,
+        api_group_id: &ApiPrincipalId,
+        query: ListGroupMembershipsQuery,
+    ) -> Result<ListGroupMembershipsResponse, IdentityAdministrationError> {
+        validate_list_group_memberships_query(&query)
+            .map_err(|_| IdentityAdministrationError::InvalidInput)?;
+        let group_id = domain_group(api_group_id)?;
+        self.ensure_group(group_id)?;
+        let cursor = query
+            .cursor
+            .as_ref()
+            .map(|value| decode_membership_cursor(value, group_id))
+            .transpose()?;
+        let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        let page = self
+            .authority
+            .group_memberships(
+                group_id,
+                cursor,
+                PageLimit::new(usize::from(limit))
+                    .map_err(|_| IdentityAdministrationError::InvalidInput)?,
+            )
+            .map_err(map_authority_error)?;
+        membership_list_response(api_group_id, &query, limit, page)
+    }
+
+    fn add_group_member(
+        &mut self,
+        administrator: IdentityAdministrator,
+        api_group_id: &ApiPrincipalId,
+        request: AddGroupMemberRequest,
+    ) -> Result<AddGroupMemberResponse, IdentityAdministrationError> {
+        let (operation_id, group_id, member_principal_id, command) =
+            add_membership_command(api_group_id, &request)?;
+        self.ensure_group(group_id)?;
+        let member = self.require_principal(member_principal_id)?;
+        let commit = self.membership_commit(
+            administrator,
+            operation_id,
+            group_id,
+            member_principal_id,
+            GroupMembershipEventKind::Added,
+            &command,
+        )?;
+        add_membership_response(&request.operation_id, &request, commit, member)
+    }
+
+    fn remove_group_member(
+        &mut self,
+        administrator: IdentityAdministrator,
+        api_group_id: &ApiPrincipalId,
+        api_member_principal_id: &ApiPrincipalId,
+        request: RemoveGroupMemberRequest,
+    ) -> Result<RemoveGroupMemberResponse, IdentityAdministrationError> {
+        let (operation_id, group_id, member_principal_id, command) =
+            remove_membership_command(api_group_id, api_member_principal_id, &request)?;
+        self.ensure_group(group_id)?;
+        let existing = self
+            .authority
+            .resolve_group_membership_mutation(operation_id)
+            .map_err(map_authority_error)?;
+        if existing.is_none()
+            && self
+                .authority
+                .group_membership(group_id, member_principal_id)
+                .map_err(map_authority_error)?
+                .is_none()
+        {
+            return Err(IdentityAdministrationError::NotFound);
+        }
+        let commit = self.membership_commit(
+            administrator,
+            operation_id,
+            group_id,
+            member_principal_id,
+            GroupMembershipEventKind::Removed,
+            &command,
+        )?;
+        remove_membership_response(&request.operation_id, commit, api_member_principal_id)
+    }
 }
 
 impl<A> IdentityAdministrationService<A>
@@ -185,6 +276,58 @@ where
             return Err(IdentityAdministrationError::Failed);
         }
         creation_response(api_operation_id, commit, record)
+    }
+
+    fn ensure_group(&self, group_id: GroupId) -> Result<(), IdentityAdministrationError> {
+        let principal = self.require_principal(group_id.principal_id())?;
+        if principal.kind != PrincipalKind::Group {
+            return Err(IdentityAdministrationError::NotFound);
+        }
+        Ok(())
+    }
+
+    fn require_principal(
+        &self,
+        principal_id: PrincipalId,
+    ) -> Result<PrincipalRecord, IdentityAdministrationError> {
+        self.authority
+            .principal(principal_id)
+            .map_err(map_authority_error)?
+            .ok_or(IdentityAdministrationError::NotFound)
+    }
+
+    fn membership_commit(
+        &mut self,
+        administrator: IdentityAdministrator,
+        operation_id: OperationId,
+        group_id: GroupId,
+        member_principal_id: PrincipalId,
+        mutation_kind: GroupMembershipEventKind,
+        command: &AuthoritativeCommand,
+    ) -> Result<GroupMembershipAdministrationCommit, IdentityAdministrationError> {
+        let existing = self
+            .authority
+            .resolve_group_membership_mutation(operation_id)
+            .map_err(map_authority_error)?;
+        let occurred_at = existing.map_or(administrator.now, |commit| commit.occurred_at);
+        let context = command_context(operation_id, administrator, occurred_at)?;
+        let expected_digest = command.request_digest(context);
+        let commit = match existing {
+            Some(commit) => commit,
+            None => self
+                .authority
+                .commit_or_resolve_group_membership_mutation(context, command)
+                .map_err(map_authority_error)?,
+        };
+        if commit.request_digest != expected_digest
+            || commit.group_id != group_id
+            || commit.member_principal_id != member_principal_id
+            || commit.mutation_kind != mutation_kind
+            || commit.actor_principal_id != administrator.principal_id
+        {
+            return Err(IdentityAdministrationError::Conflict);
+        }
+        Ok(commit)
     }
 }
 
