@@ -8,6 +8,8 @@ mod model;
 mod openapi;
 mod passkey_registration;
 mod passkey_validation;
+mod recovery_code_management;
+mod recovery_code_validation;
 mod schema;
 mod totp_registration;
 mod totp_validation;
@@ -53,6 +55,14 @@ pub use passkey_validation::{
     validate_create_passkey_registration_challenge_response_value,
     validate_create_passkey_registration_request_value,
     validate_create_passkey_registration_response_value,
+};
+pub use recovery_code_management::{
+    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, RECOVERY_CODES_PER_SET, RecoveryCode,
+};
+pub use recovery_code_validation::{
+    MAX_CREATE_RECOVERY_CODES_BYTES, decode_create_recovery_codes_request,
+    encode_create_recovery_codes_response, validate_create_recovery_codes_request_value,
+    validate_create_recovery_codes_response_value,
 };
 pub use totp_registration::{
     CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,

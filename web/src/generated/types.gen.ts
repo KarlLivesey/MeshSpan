@@ -349,6 +349,57 @@ export type CreatePasskeyRegistrationResponse = {
 };
 
 /**
+ * CreateRecoveryCodesRequest
+ *
+ * One idempotent request to replace the current user's recovery-code set.
+ */
+export type CreateRecoveryCodesRequest = {
+  /**
+   * Human-readable independently revocable method label.
+   */
+  label: string;
+  /**
+   * Client-generated identity binding exact retries.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreateRecoveryCodesResponse
+ *
+ * One exactly replayable recovery-code set returned only by its issuance operation.
+ */
+export type CreateRecoveryCodesResponse = {
+  /**
+   * Ten independent, single-use secret-bearing recovery codes.
+   */
+  codes: [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  /**
+   * Authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Independently revocable common authentication-method identity.
+   */
+  method_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -737,6 +788,30 @@ export type CreatePasskeyRegistrationRequestWritable = {
   transports: Array<
     "usb" | "nfc" | "ble" | "smart-card" | "hybrid" | "internal"
   >;
+};
+
+/**
+ * CreateRecoveryCodesResponse
+ *
+ * One exactly replayable recovery-code set returned only by its issuance operation.
+ */
+export type CreateRecoveryCodesResponseWritable = {
+  /**
+   * Ten independent, single-use secret-bearing recovery codes.
+   */
+  codes: [];
+  /**
+   * Authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Independently revocable common authentication-method identity.
+   */
+  method_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
 };
 
 /**
@@ -1334,6 +1409,60 @@ export type CreateCurrentUserPasskeyRegistrationChallengeResponses = {
 
 export type CreateCurrentUserPasskeyRegistrationChallengeResponse =
   CreateCurrentUserPasskeyRegistrationChallengeResponses[keyof CreateCurrentUserPasskeyRegistrationChallengeResponses];
+
+export type CreateCurrentUserRecoveryCodesData = {
+  /**
+   * Current-user recovery-code issuance
+   */
+  body: CreateRecoveryCodesRequest;
+  path?: never;
+  query?: never;
+  url: "/users/current/authentication-methods/recovery-codes";
+};
+
+export type CreateCurrentUserRecoveryCodesErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or issuance conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateCurrentUserRecoveryCodesError =
+  CreateCurrentUserRecoveryCodesErrors[keyof CreateCurrentUserRecoveryCodesErrors];
+
+export type CreateCurrentUserRecoveryCodesResponses = {
+  /**
+   * Committed recovery-code set with exactly replayable one-time secrets
+   */
+  201: CreateRecoveryCodesResponse;
+};
+
+export type CreateCurrentUserRecoveryCodesResponse =
+  CreateCurrentUserRecoveryCodesResponses[keyof CreateCurrentUserRecoveryCodesResponses];
 
 export type CreateCurrentUserTotpData = {
   /**

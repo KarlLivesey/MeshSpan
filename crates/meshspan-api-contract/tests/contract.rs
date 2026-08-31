@@ -12,25 +12,25 @@ use meshspan_api_contract::{
     ApiError, ApiErrorCode, ApiKeyId, ApiKeyScope, AuthenticationMethodId, BoundaryError,
     CreateApiKeyResponse, CreateMeshSetupResponse, CreatePasskeyChallengeResponse,
     CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationResponse,
-    CreateSessionResponse, CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationResponse,
-    NullableField, OperationId, PasskeyAttestation, PasskeyChallengeId,
-    PasskeyCredentialDescriptor, PasskeyCredentialParameter, PasskeyCredentialType,
-    PasskeyResidentKey, PasskeyUserVerification, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
-    TotpRegistrationAlgorithm, TotpRegistrationChallengeId, decode_create_api_key_request,
-    decode_create_mesh_setup_request, decode_create_passkey_challenge_request,
-    decode_create_passkey_registration_challenge_request,
-    decode_create_passkey_registration_request, decode_create_session_request,
-    decode_create_totp_registration_challenge_request, decode_create_totp_registration_request,
-    decode_revoke_authentication_method_request, decode_revoke_current_session_request,
-    encode_api_error, encode_create_api_key_response, encode_create_mesh_setup_response,
-    encode_create_passkey_challenge_response,
+    CreateRecoveryCodesResponse, CreateSessionResponse, CreateTotpRegistrationChallengeResponse,
+    CreateTotpRegistrationResponse, NullableField, OperationId, PasskeyAttestation,
+    PasskeyChallengeId, PasskeyCredentialDescriptor, PasskeyCredentialParameter,
+    PasskeyCredentialType, PasskeyResidentKey, PasskeyUserVerification, RecoveryCode,
+    RevokeAuthenticationMethodResponse, RevokeCurrentSessionResponse, SessionId, SetupState,
+    SetupStatusResponse, TotpRegistrationAlgorithm, TotpRegistrationChallengeId,
+    decode_create_api_key_request, decode_create_mesh_setup_request,
+    decode_create_passkey_challenge_request, decode_create_passkey_registration_challenge_request,
+    decode_create_passkey_registration_request, decode_create_recovery_codes_request,
+    decode_create_session_request, decode_create_totp_registration_challenge_request,
+    decode_create_totp_registration_request, decode_revoke_authentication_method_request,
+    decode_revoke_current_session_request, encode_api_error, encode_create_api_key_response,
+    encode_create_mesh_setup_response, encode_create_passkey_challenge_response,
     encode_create_passkey_registration_challenge_response,
-    encode_create_passkey_registration_response, encode_create_session_response,
-    encode_create_totp_registration_challenge_response, encode_create_totp_registration_response,
-    encode_revoke_authentication_method_response, encode_revoke_current_session_response,
-    encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
-    validate_create_passkey_challenge_request_value,
+    encode_create_passkey_registration_response, encode_create_recovery_codes_response,
+    encode_create_session_response, encode_create_totp_registration_challenge_response,
+    encode_create_totp_registration_response, encode_revoke_authentication_method_response,
+    encode_revoke_current_session_response, encode_setup_status_response, generate_openapi,
+    validate_create_mesh_setup_request_value, validate_create_passkey_challenge_request_value,
     validate_create_passkey_challenge_response_value,
     validate_create_passkey_registration_request_value, validate_create_session_request_value,
     validate_create_session_response_value, validate_setup_status_response_value,
@@ -396,6 +396,63 @@ fn api_key_issuance_preserves_expiry_intent_and_validates_secret_output() {
     let document = generate_openapi().expect("contract must generate");
     let path = &document.value()["paths"]["/users/current/authentication-methods/api-keys"]["post"];
     assert_eq!(path["operationId"], "createCurrentUserApiKey");
+    assert_eq!(path["x-meshspan-access"], "authenticated-csrf");
+}
+
+#[test]
+fn recovery_code_issuance_is_fixed_bounded_secret_safe_and_validated_both_ways() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    let request = serde_json::to_vec(&json!({
+        "operation_id": operation,
+        "label": "Emergency recovery"
+    }))
+    .expect("recovery-code request must encode");
+    let decoded = decode_create_recovery_codes_request(&request)
+        .expect("valid recovery-code request must decode");
+    assert_eq!(decoded.label.as_str(), "Emergency recovery");
+    assert!(
+        decode_create_recovery_codes_request(
+            &serde_json::to_vec(&json!({
+                "operation_id": operation,
+                "label": "Emergency recovery",
+                "count": 1
+            }))
+            .expect("unknown-field fixture must encode")
+        )
+        .is_err()
+    );
+    assert!(decode_create_recovery_codes_request(&vec![b' '; 1_025]).is_err());
+
+    let codes = (1..=10)
+        .map(|sequence| {
+            RecoveryCode::from_canonical(format!(
+                "meshspan-recovery-v1.{sequence:032x}.{}",
+                "a".repeat(64)
+            ))
+        })
+        .collect();
+    let response = CreateRecoveryCodesResponse {
+        operation_id: serde_json::from_value(json!(operation))
+            .expect("operation fixture must be valid"),
+        method_id: AuthenticationMethodId::from_uuid_bytes(versioned(19))
+            .expect("method fixture must be valid"),
+        codes,
+        created_at_epoch_micros: 100,
+    };
+    let encoded = encode_create_recovery_codes_response(&response)
+        .expect("valid recovery-code response must encode");
+    let value = serde_json::from_slice::<Value>(&encoded).expect("response must be JSON");
+    assert_eq!(value["codes"].as_array().map(Vec::len), Some(10));
+
+    let invalid = CreateRecoveryCodesResponse {
+        codes: vec![RecoveryCode::from_canonical("not-a-code".to_owned())],
+        ..response
+    };
+    assert!(encode_create_recovery_codes_response(&invalid).is_err());
+    let document = generate_openapi().expect("OpenAPI generation must work");
+    let path =
+        &document.value()["paths"]["/users/current/authentication-methods/recovery-codes"]["post"];
+    assert_eq!(path["operationId"], "createCurrentUserRecoveryCodes");
     assert_eq!(path["x-meshspan-access"], "authenticated-csrf");
 }
 

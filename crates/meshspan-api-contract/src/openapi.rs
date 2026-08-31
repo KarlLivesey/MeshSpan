@@ -9,7 +9,8 @@ use crate::{
     ApiError, CreateApiKeyRequest, CreateApiKeyResponse, CreateMeshSetupRequest,
     CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
     CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreateSessionRequest,
+    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse,
+    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
     CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
     CreateTotpRegistrationResponse, CurrentSessionResponse, HealthResponse,
@@ -83,6 +84,8 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "CreatePasskeyRegistrationChallengeResponse": response_component::<CreatePasskeyRegistrationChallengeResponse>(),
                 "CreatePasskeyRegistrationRequest": request_component::<CreatePasskeyRegistrationRequest>(),
                 "CreatePasskeyRegistrationResponse": response_component::<CreatePasskeyRegistrationResponse>(),
+                "CreateRecoveryCodesRequest": request_component::<CreateRecoveryCodesRequest>(),
+                "CreateRecoveryCodesResponse": response_component::<CreateRecoveryCodesResponse>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
                 "CreateTotpRegistrationChallengeRequest": request_component::<CreateTotpRegistrationChallengeRequest>(),
@@ -133,6 +136,10 @@ fn paths() -> Value {
         (
             "/users/current/authentication-methods/api-keys".to_owned(),
             create_api_key_path(),
+        ),
+        (
+            "/users/current/authentication-methods/recovery-codes".to_owned(),
+            create_recovery_codes_path(),
         ),
         (
             "/users/current/authentication-methods/{method_id}/revocations".to_owned(),
@@ -200,6 +207,34 @@ fn create_api_key_path() -> Value {
                 "201": json_response(
                     "Committed API key with its exactly replayable one-time secret",
                     "#/components/schemas/CreateApiKeyResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or issuance conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_recovery_codes_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserRecoveryCodes",
+            "summary": "Replace the current user's single-use recovery-code set",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-user recovery-code issuance",
+                "#/components/schemas/CreateRecoveryCodesRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Committed recovery-code set with exactly replayable one-time secrets",
+                    "#/components/schemas/CreateRecoveryCodesResponse"
                 ),
                 "400": json_response("Invalid request", "#/components/schemas/ApiError"),
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),

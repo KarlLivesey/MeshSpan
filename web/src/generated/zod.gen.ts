@@ -402,6 +402,102 @@ export const zCreatePasskeyRegistrationResponse = z
   .strict();
 
 /**
+ * CreateRecoveryCodesRequest
+ *
+ * One idempotent request to replace the current user's recovery-code set.
+ */
+export const zCreateRecoveryCodesRequest = z
+  .strictObject({
+    label: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateRecoveryCodesResponse
+ *
+ * One exactly replayable recovery-code set returned only by its issuance operation.
+ */
+export const zCreateRecoveryCodesResponse = z
+  .strictObject({
+    codes: z.tuple([
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+      z
+        .string()
+        .length(118)
+        .regex(/^meshspan-recovery-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+        .readonly(),
+    ]),
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -868,6 +964,30 @@ export const zCreatePasskeyRegistrationRequestWritable = z
   .strict();
 
 /**
+ * CreateRecoveryCodesResponse
+ *
+ * One exactly replayable recovery-code set returned only by its issuance operation.
+ */
+export const zCreateRecoveryCodesResponseWritable = z
+  .strictObject({
+    codes: z.tuple([]),
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    method_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -1072,6 +1192,17 @@ export const zCreateCurrentUserPasskeyRegistrationChallengeBody =
  */
 export const zCreateCurrentUserPasskeyRegistrationChallengeResponse =
   zCreatePasskeyRegistrationChallengeResponse;
+
+/**
+ * Current-user recovery-code issuance
+ */
+export const zCreateCurrentUserRecoveryCodesBody = zCreateRecoveryCodesRequest;
+
+/**
+ * Committed recovery-code set with exactly replayable one-time secrets
+ */
+export const zCreateCurrentUserRecoveryCodesResponse =
+  zCreateRecoveryCodesResponse;
 
 /**
  * Current-user TOTP registration confirmation
