@@ -19,7 +19,7 @@ use crate::{Checkpoint, StageWrite, StageWriteOutcome};
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 type BaseLoader<'a> = dyn FnMut(&mut dyn Write) -> Result<(), StageStoreError> + 'a;
-const MIGRATIONS: [Migration; 4] = [
+const MIGRATIONS: [Migration; 5] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/stage/001_initial.sql"),
@@ -36,8 +36,12 @@ const MIGRATIONS: [Migration; 4] = [
         version: 4,
         sql: include_str!("../schema/stage/004_abort_operations.sql"),
     },
+    Migration {
+        version: 5,
+        sql: include_str!("../schema/stage/005_range_index.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 const STAGE_DIRECTORY: &str = "stages";
 const DATABASE_FILE: &str = "filesystem-stages.sqlite3";
 const COPY_BUFFER_BYTES: usize = 64 * 1_024;
@@ -109,6 +113,30 @@ pub struct StageRangeReadRequest {
     pub length: u64,
     /// Authoritative read instant used for lease expiry.
     pub observed_at: UnixMicros,
+}
+
+/// One bounded immutable page over exact initialised range coverage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StageRangePage {
+    /// Exact checkpoint represented by every range in this traversal.
+    pub checkpoint_sequence: u64,
+    /// Sorted, merged, non-adjacent coverage.
+    pub ranges: Vec<Range<u64>>,
+    /// Start of the last returned range, used only with the pinned checkpoint.
+    pub next_after_start: Option<u64>,
+}
+
+/// One bounded range-index query pinned after its first page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageRangePageRequest {
+    /// Selected private stage.
+    pub stage_id: StageId,
+    /// First page omits this; continuations require the returned exact sequence.
+    pub expected_sequence: Option<u64>,
+    /// Exclusive range-start continuation from the preceding page.
+    pub after_start: Option<u64>,
+    /// Positive page bound no larger than 256.
+    pub limit: u16,
 }
 
 /// Exact idempotent private-stage lease transition.
@@ -389,6 +417,29 @@ impl DurableStageStore {
             sequence: stage.sequence,
             logical_extent: stage.logical_extent,
             initialised_ranges: ranges,
+        })
+    }
+
+    /// Returns one bounded exact range page without scanning the write journal.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds, absent stages, stale continuation checkpoints and corrupt indexes.
+    pub fn range_page(
+        &self,
+        request: StageRangePageRequest,
+    ) -> Result<StageRangePage, StageStoreError> {
+        let page = crate::stage_range_index::page(
+            &self.connection,
+            request.stage_id,
+            request.expected_sequence,
+            request.after_start,
+            request.limit,
+        )?;
+        Ok(StageRangePage {
+            checkpoint_sequence: page.sequence,
+            ranges: page.ranges,
+            next_after_start: page.next_after_start,
         })
     }
 
@@ -786,6 +837,7 @@ impl DurableStageStore {
         if updated != 1 {
             return Err(StageStoreError::Unavailable);
         }
+        crate::stage_range_index::merge(&transaction, stage_id, write.offset..extent)?;
         transaction.commit()?;
         Ok(StageWriteOutcome::Applied)
     }
@@ -1621,8 +1673,8 @@ mod tests {
     use super::{
         CompletedStage, DATABASE_FILE, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, MIGRATIONS,
         SCHEMA_VERSION, STAGE_DIRECTORY, StageAbortRequest, StageCompletionRequest,
-        StageLeaseRequest, StageRangeReadRequest, StageRegistration, StageStoreError, configure,
-        install_part,
+        StageLeaseRequest, StageRangePageRequest, StageRangeReadRequest, StageRegistration,
+        StageStoreError, configure, install_part,
     };
     use crate::{StageWrite, StageWriteOutcome};
 
@@ -1665,6 +1717,61 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(truncation_table, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn range_index_migration_backfills_legacy_write_coverage()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([91; 16])?;
+        let connection = Connection::open(directory.path().join(DATABASE_FILE))?;
+        configure(&connection)?;
+        for migration in &MIGRATIONS[..4] {
+            connection.execute_batch(migration.sql)?;
+            let digest: [u8; 32] = blake3::hash(migration.sql.as_bytes()).into();
+            connection.execute(
+                "INSERT INTO schema_migrations(version, migration_digest, applied_at)
+                 VALUES (?1, ?2, 1)",
+                params![migration.version, digest.as_slice()],
+            )?;
+            connection.pragma_update(None, "user_version", migration.version)?;
+        }
+        connection.execute(
+            "INSERT INTO stages(
+                stage_id, stage_fence, maximum_bytes, state, mutation_sequence,
+                logical_extent, created_at, expires_at
+             ) VALUES (?1, 1, 100, 1, 4, 6, 1, 100)",
+            [stage_id.as_bytes().as_slice()],
+        )?;
+        for (sequence, offset) in [(1_i64, 0_i64), (2, 2), (3, 1), (4, 5)] {
+            let operation = OperationId::from_bytes([u8::try_from(sequence)?; 16])?;
+            connection.execute(
+                "INSERT INTO stage_writes(
+                    operation_id, stage_id, mutation_sequence, stage_fence, byte_offset,
+                    byte_length, content_digest, part_name, applied_at
+                 ) VALUES (?1, ?2, ?3, 1, ?4, 1, ?5, ?6, 2)",
+                params![
+                    operation.as_bytes().as_slice(),
+                    stage_id.as_bytes().as_slice(),
+                    sequence,
+                    offset,
+                    [0_u8; 32].as_slice(),
+                    format!("{operation}.part")
+                ],
+            )?;
+        }
+        drop(connection);
+
+        let store = DurableStageStore::open(directory.path(), UnixMicros::new(2))?;
+        let page = store.range_page(StageRangePageRequest {
+            stage_id,
+            expected_sequence: Some(4),
+            after_start: None,
+            limit: 8,
+        })?;
+        assert_eq!(page.ranges, vec![0..3, 5..6]);
+        assert_eq!(page.next_after_start, None);
         Ok(())
     }
 

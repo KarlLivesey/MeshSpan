@@ -8,8 +8,9 @@ use thiserror::Error;
 use crate::upload_store::{UploadCommitTransition, UploadSessionStore, UploadStoreError};
 use crate::{
     DurableStageStore, StageAbortRequest, StageRegistration, StageStoreError, UploadAbortRequest,
-    UploadBeginRequest, UploadCommitRequest, UploadDisposition, UploadSession, UploadState,
-    UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt, UploadWriteRequest,
+    UploadBeginRequest, UploadCommitRequest, UploadDisposition, UploadRangePageReceipt,
+    UploadRangePageRequest, UploadSession, UploadState, UploadStatusReceipt, UploadStatusRequest,
+    UploadWriteReceipt, UploadWriteRequest,
 };
 
 pub(crate) fn begin(
@@ -60,18 +61,42 @@ pub(crate) fn status(
     request: UploadStatusRequest,
 ) -> Result<UploadStatusReceipt, UploadServiceError> {
     let session = sessions.load(request.upload_id)?;
-    if session.principal_id != request.principal_id
-        || request.authorization_revision == Revision::ZERO
-    {
-        return Err(UploadServiceError::StaleAuthority);
-    }
-    if session.state == UploadState::Active && session.expires_at <= request.observed_at {
-        return Err(UploadServiceError::StaleAuthority);
-    }
+    validate_query_authority(
+        &session,
+        request.principal_id,
+        request.authorization_revision,
+        request.observed_at,
+    )?;
     let checkpoint = stages.checkpoint(session.stage_id)?;
     Ok(UploadStatusReceipt {
         session,
         checkpoint,
+    })
+}
+
+pub(crate) fn range_page(
+    sessions: &UploadSessionStore,
+    stages: &DurableStageStore,
+    request: UploadRangePageRequest,
+) -> Result<UploadRangePageReceipt, UploadServiceError> {
+    let session = sessions.load(request.upload_id)?;
+    validate_query_authority(
+        &session,
+        request.principal_id,
+        request.authorization_revision,
+        request.observed_at,
+    )?;
+    let page = stages.range_page(crate::StageRangePageRequest {
+        stage_id: session.stage_id,
+        expected_sequence: request.expected_sequence,
+        after_start: request.after_start,
+        limit: request.limit,
+    })?;
+    Ok(UploadRangePageReceipt {
+        upload_id: request.upload_id,
+        checkpoint_sequence: page.checkpoint_sequence,
+        ranges: page.ranges,
+        next_after_start: page.next_after_start,
     })
 }
 
@@ -201,6 +226,22 @@ fn validate_live_authority(
         || authorization_revision == Revision::ZERO
         || session.stage_fence != stage_fence
         || session.expires_at <= observed_at
+    {
+        Err(UploadServiceError::StaleAuthority)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_query_authority(
+    session: &UploadSession,
+    principal_id: meshspan_domain::PrincipalId,
+    authorization_revision: Revision,
+    observed_at: UnixMicros,
+) -> Result<(), UploadServiceError> {
+    if session.principal_id != principal_id
+        || authorization_revision == Revision::ZERO
+        || (session.state == UploadState::Active && session.expires_at <= observed_at)
     {
         Err(UploadServiceError::StaleAuthority)
     } else {

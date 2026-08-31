@@ -24,6 +24,7 @@ mod namespace_query;
 mod publication;
 mod reachability;
 mod reconciliation;
+mod stage_range_index;
 mod stage_store;
 mod staging;
 mod upload;
@@ -140,13 +141,14 @@ pub use reconciliation::{
 pub use stage_store::{
     CompletedStage, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, StageAbortReceipt,
     StageAbortRequest, StageCompletionRequest, StageLeaseReceipt, StageLeaseRequest,
-    StageRangeReadRequest, StageRegistration, StageStoreError,
+    StageRangePage, StageRangePageRequest, StageRangeReadRequest, StageRegistration,
+    StageStoreError,
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
 pub use upload::{
     UploadAbortRequest, UploadBeginRequest, UploadCommitReceipt, UploadCommitRequest,
-    UploadDisposition, UploadSession, UploadState, UploadStatusReceipt, UploadStatusRequest,
-    UploadWriteReceipt, UploadWriteRequest,
+    UploadDisposition, UploadRangePageReceipt, UploadRangePageRequest, UploadSession, UploadState,
+    UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt, UploadWriteRequest,
 };
 pub use upload_service::UploadServiceError;
 pub use version_retention::{

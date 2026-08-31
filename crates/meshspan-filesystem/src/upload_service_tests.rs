@@ -14,7 +14,8 @@ use crate::{
     FilesystemCommitError, FilesystemCommitService, ManifestPublication, NamespaceLimits,
     NamespacePath, NamespacePublicationPath, PublicationDisposition, RootFileCommitRequest,
     StageCompletionRequest, UploadAbortRequest, UploadBeginRequest, UploadCommitRequest,
-    UploadDisposition, UploadServiceError, UploadState, UploadStatusRequest, UploadWriteRequest,
+    UploadDisposition, UploadRangePageRequest, UploadServiceError, UploadState,
+    UploadStatusRequest, UploadWriteRequest,
 };
 
 #[test]
@@ -81,6 +82,43 @@ fn upload_identity_and_authority_substitution_fail_closed() -> Result<(), Box<dy
         service.write_upload(&substituted),
         Err(UploadServiceError::StaleAuthority)
     ));
+    Ok(())
+}
+
+#[test]
+fn upload_range_pages_are_bounded_merged_and_checkpoint_pinned()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let begin = begin_request()?;
+    let mut service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(1), UnusedPublisher)?;
+    service.begin_upload(&begin)?;
+    service.write_upload(&write_request(&begin, 42, 0, b"a")?)?;
+    service.write_upload(&write_request(&begin, 43, 2, b"b")?)?;
+    service.write_upload(&write_request(&begin, 44, 4, b"c")?)?;
+
+    let first = service.upload_range_page(range_page_request(&begin, None, None, 2))?;
+    assert_eq!(first.checkpoint_sequence, 3);
+    assert_eq!(first.ranges, vec![0..1, 2..3]);
+    assert_eq!(first.next_after_start, Some(2));
+    let second = service.upload_range_page(range_page_request(
+        &begin,
+        Some(first.checkpoint_sequence),
+        first.next_after_start,
+        2,
+    ))?;
+    assert_eq!(second.ranges, vec![4..5]);
+    assert_eq!(second.next_after_start, None);
+
+    service.write_upload(&write_request(&begin, 45, 1, b"x")?)?;
+    assert!(matches!(
+        service.upload_range_page(range_page_request(&begin, Some(3), Some(2), 2)),
+        Err(UploadServiceError::Stage(crate::StageStoreError::Stale))
+    ));
+    let merged = service.upload_range_page(range_page_request(&begin, None, None, 2))?;
+    assert_eq!(merged.checkpoint_sequence, 4);
+    assert_eq!(merged.ranges, vec![0..3, 4..5]);
+    assert_eq!(merged.next_after_start, None);
     Ok(())
 }
 
@@ -177,6 +215,23 @@ fn status_request(begin: &UploadBeginRequest, observed_at: UnixMicros) -> Upload
         principal_id: begin.principal_id,
         authorization_revision: Revision::new(7),
         observed_at,
+    }
+}
+
+fn range_page_request(
+    begin: &UploadBeginRequest,
+    expected_sequence: Option<u64>,
+    after_start: Option<u64>,
+    limit: u16,
+) -> UploadRangePageRequest {
+    UploadRangePageRequest {
+        upload_id: begin.upload_id,
+        principal_id: begin.principal_id,
+        authorization_revision: Revision::new(7),
+        expected_sequence,
+        after_start,
+        limit,
+        observed_at: UnixMicros::new(4),
     }
 }
 

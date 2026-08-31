@@ -7,6 +7,7 @@ use meshspan_domain::{
     FileVersionId, ObjectId, OperationId, PrincipalId, Revision, StageId, UnixMicros, UploadId,
     VolumeId,
 };
+use std::ops::Range;
 
 use crate::{
     Checkpoint, NamespacePath, NamespacePublicationReceipt, RootFileCommitRequest, StageWrite,
@@ -178,6 +179,38 @@ pub struct UploadStatusReceipt {
     pub session: UploadSession,
     /// Exact sorted range coverage and current mutation sequence.
     pub checkpoint: Checkpoint,
+}
+
+/// Authorised bounded query over one upload's exact range index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UploadRangePageRequest {
+    /// Upload being queried.
+    pub upload_id: UploadId,
+    /// Authenticated owning principal.
+    pub principal_id: PrincipalId,
+    /// Currently revalidated permission revision.
+    pub authorization_revision: Revision,
+    /// First page omits this; continuations pin the returned exact checkpoint.
+    pub expected_sequence: Option<u64>,
+    /// Exclusive start continuation returned by the preceding page.
+    pub after_start: Option<u64>,
+    /// Positive page bound no larger than 256.
+    pub limit: u16,
+    /// Authoritative query instant.
+    pub observed_at: UnixMicros,
+}
+
+/// One bounded page of exact merged range coverage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UploadRangePageReceipt {
+    /// Selected upload.
+    pub upload_id: UploadId,
+    /// Exact checkpoint represented by every page in this traversal.
+    pub checkpoint_sequence: u64,
+    /// Sorted, non-overlapping, non-adjacent coverage.
+    pub ranges: Vec<Range<u64>>,
+    /// Start of the last returned range, or none at the end.
+    pub next_after_start: Option<u64>,
 }
 
 /// Explicit atomic publication of one complete private upload checkpoint.

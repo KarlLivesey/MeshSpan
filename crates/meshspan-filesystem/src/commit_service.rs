@@ -240,6 +240,18 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         crate::upload_service::status(&self.uploads, &self.stages, request)
     }
 
+    /// Returns one authorised bounded page over exact initialised upload ranges.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale authority, stale checkpoint cursors, invalid page bounds and corruption.
+    pub fn upload_range_page(
+        &self,
+        request: crate::UploadRangePageRequest,
+    ) -> Result<crate::UploadRangePageReceipt, crate::UploadServiceError> {
+        crate::upload_service::range_page(&self.uploads, &self.stages, request)
+    }
+
     /// Permanently abandons one unpublished upload without exposing its private bytes.
     ///
     /// # Errors
