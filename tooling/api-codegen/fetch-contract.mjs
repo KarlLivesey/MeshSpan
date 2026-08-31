@@ -66,7 +66,9 @@ function collectPathOperations(operations, route, pathItem) {
       typeof operationId !== "string" ||
       !/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(operationId)
     ) {
-      throw new Error(`invalid operationId for ${method.toUpperCase()} ${route}`);
+      throw new Error(
+        `invalid operationId for ${method.toUpperCase()} ${route}`,
+      );
     }
     if (operations.has(operationId)) {
       throw new Error(`duplicate operationId: ${operationId}`);
