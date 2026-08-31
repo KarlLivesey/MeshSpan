@@ -175,7 +175,6 @@
           },
           "valid_from_epoch_micros": {
             "description": "Omitted applies policy defaults, null is unbounded, and a value is exact.",
-            "format": "int64",
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": [
@@ -185,7 +184,6 @@
           },
           "valid_until_epoch_micros": {
             "description": "Omitted applies policy defaults, null is unbounded, and a value is exact.",
-            "format": "int64",
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": [
@@ -315,7 +313,6 @@
               },
               "valid_from_epoch_micros": {
                 "description": "Inclusive validity start, or null when unbounded below.",
-                "format": "int64",
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": [
@@ -325,7 +322,6 @@
               },
               "valid_until_epoch_micros": {
                 "description": "Exclusive validity end, or null when unbounded above.",
-                "format": "int64",
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": [
@@ -2963,7 +2959,6 @@
                 },
                 "valid_from_epoch_micros": {
                   "description": "Inclusive validity start, or null when unbounded below.",
-                  "format": "int64",
                   "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": [
@@ -2973,7 +2968,6 @@
                 },
                 "valid_until_epoch_micros": {
                   "description": "Exclusive validity end, or null when unbounded above.",
-                  "format": "int64",
                   "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": [

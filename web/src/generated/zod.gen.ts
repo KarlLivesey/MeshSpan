@@ -97,16 +97,8 @@ export const zAddGroupMemberRequest = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
-    valid_from_epoch_micros: z.coerce
-      .bigint()
-      .gte(BigInt(0))
-      .lte(BigInt(9007199254740991))
-      .nullish(),
-    valid_until_epoch_micros: z.coerce
-      .bigint()
-      .gte(BigInt(0))
-      .lte(BigInt(9007199254740991))
-      .nullish(),
+    valid_from_epoch_micros: z.int().gte(0).lte(9007199254740991).nullish(),
+    valid_until_epoch_micros: z.int().gte(0).lte(9007199254740991).nullish(),
   })
   .strict();
 
@@ -153,15 +145,15 @@ export const zAddGroupMemberResponse = z
           })
           .strict(),
         revision: z.int().gte(1).lte(9007199254740991),
-        valid_from_epoch_micros: z.coerce
-          .bigint()
-          .gte(BigInt(0))
-          .lte(BigInt(9007199254740991))
+        valid_from_epoch_micros: z
+          .int()
+          .gte(0)
+          .lte(9007199254740991)
           .nullable(),
-        valid_until_epoch_micros: z.coerce
-          .bigint()
-          .gte(BigInt(0))
-          .lte(BigInt(9007199254740991))
+        valid_until_epoch_micros: z
+          .int()
+          .gte(0)
+          .lte(9007199254740991)
           .nullable(),
       })
       .strict(),
@@ -1546,15 +1538,15 @@ export const zListGroupMembershipsResponse = z
               })
               .strict(),
             revision: z.int().gte(1).lte(9007199254740991),
-            valid_from_epoch_micros: z.coerce
-              .bigint()
-              .gte(BigInt(0))
-              .lte(BigInt(9007199254740991))
+            valid_from_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
               .nullable(),
-            valid_until_epoch_micros: z.coerce
-              .bigint()
-              .gte(BigInt(0))
-              .lte(BigInt(9007199254740991))
+            valid_until_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
               .nullable(),
           })
           .strict(),

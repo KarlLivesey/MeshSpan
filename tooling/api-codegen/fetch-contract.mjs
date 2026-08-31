@@ -23,6 +23,7 @@ export function readRequiredRoutes(document) {
   const operations = collectOperations(document);
   return {
     abortUpload: requireOperation(operations, "abortUpload"),
+    addGroupMember: requireOperation(operations, "addGroupMember"),
     beginUpload: requireOperation(operations, "beginUpload"),
     commitUpload: requireOperation(operations, "commitUpload"),
     createGroup: requireOperation(operations, "createGroup"),
@@ -45,10 +46,12 @@ export function readRequiredRoutes(document) {
     getUpload: requireOperation(operations, "getUpload"),
     listDirectory: requireOperation(operations, "listDirectory"),
     listGroups: requireOperation(operations, "listGroups"),
+    listGroupMembers: requireOperation(operations, "listGroupMembers"),
     listUploadRanges: requireOperation(operations, "listUploadRanges"),
     listUsers: requireOperation(operations, "listUsers"),
     readFile: requireOperation(operations, "readFile"),
     renameObject: requireOperation(operations, "renameObject"),
+    removeGroupMember: requireOperation(operations, "removeGroupMember"),
     revokeCurrentSession: requireOperation(operations, "revokeCurrentSession"),
     revokeCurrentUserAuthenticationMethod: requireOperation(
       operations,
