@@ -8,11 +8,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use axum::http::HeaderMap;
 use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_domain::{
-    ApiKeyBundle, ApiKeyId, AssuranceLevel, AuthenticationMethodId, EntropyError, NodeId,
-    PrincipalId, RandomSource, Revision, UnixMicros,
+    ApiKeyBundle, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId, EntropyError,
+    HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId, RandomSource, Revision, RoleId,
+    UnixMicros,
 };
 use meshspan_metadata::{
-    ApiKeyAuthentication, BrowserSessionAccessRequest, SessionAccessDecision, SessionAccessDenial,
+    ApiKeyAuthentication, AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh,
+    BrowserSessionAccessRequest, CommandContext, CreateAuthenticationMethod, LogPosition,
+    NewAuthenticationCredential, PartitionDatabase, RecordName, SessionAccessDecision,
+    SessionAccessDenial,
 };
 
 use crate::{
@@ -44,6 +48,61 @@ fn exact_bearer_key_produces_only_headless_digest_context() -> Result<(), Box<dy
     assert_eq!(context.credential_digest, digest);
     assert_eq!(context.required_assurance, AssuranceLevel::SingleFactor);
     assert_eq!(calls.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
+#[test]
+fn real_replicated_repository_accepts_the_issued_native_api_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut random = SequentialRandom(30);
+    let key = ApiKeyBundle::generate(&mut random)?;
+    let encoded = key.expose_encoded().to_string();
+    let administrator = PrincipalId::from_bytes(versioned(40))?;
+    let gateway = gateway()?;
+    let database = PartitionDatabase::open(
+        std::path::Path::new(":memory:"),
+        PartitionId::from_bytes(versioned(41))?,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    repository.apply_committed(
+        LogPosition { index: 1, term: 1 },
+        command_context(1, administrator, Revision::ZERO)?,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes(versioned(42))?,
+            mesh_name: RecordName::new("Native API proof")?,
+            administrator_id: administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes(versioned(43))?,
+            host_id: HostId::from_bytes(versioned(44))?,
+            host_name: RecordName::new("Host")?,
+            node_id: gateway.node_id,
+            node_name: RecordName::new("Gateway")?,
+            partition_name: RecordName::new("Root authority")?,
+        }),
+    )?;
+    repository.apply_committed(
+        LogPosition { index: 2, term: 1 },
+        command_context(2, administrator, Revision::new(1))?,
+        &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id: AuthenticationMethodId::from_bytes(versioned(45))?,
+            principal_id: administrator,
+            label: "Native API".to_owned(),
+            service_scope: meshspan_domain::AuthenticationService::HeadlessApi.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::ApiKey {
+                key_id: key.key_id(),
+                key_digest: key.secret_digest(),
+                scopes: meshspan_domain::AuthenticationService::HeadlessApi.api_key_login_scope(),
+                valid_from: UnixMicros::new(20),
+            },
+        }),
+    )?;
+
+    let context = NativeApiKeyAuthenticator::new(repository, gateway)
+        .authenticate_file_read(&bearer_headers(&encoded)?, UnixMicros::new(200))?;
+    assert_eq!(context.credential_digest, key.secret_digest());
+    assert_eq!(context.gateway_node_id, gateway.node_id);
     Ok(())
 }
 
@@ -143,6 +202,20 @@ fn gateway() -> Result<GatewaySessionIdentity, Box<dyn std::error::Error>> {
     node[6] = 0x48;
     node[8] = 0x88;
     Ok(GatewaySessionIdentity::new(NodeId::from_bytes(node)?, 3)?)
+}
+
+fn command_context(
+    seed: u8,
+    actor_principal_id: PrincipalId,
+    expected_revision: Revision,
+) -> Result<CommandContext, Box<dyn std::error::Error>> {
+    Ok(CommandContext {
+        operation_id: OperationId::from_bytes(versioned(seed))?,
+        actor_principal_id,
+        audit_event_id: AuditEventId::from_bytes(versioned(seed.wrapping_add(10)))?,
+        occurred_at: UnixMicros::new(i64::from(seed) * 10),
+        expected_revision: Some(expected_revision),
+    })
 }
 
 struct KeyAuthority {
