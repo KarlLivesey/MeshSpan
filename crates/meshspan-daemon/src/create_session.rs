@@ -13,15 +13,19 @@ use meshspan_domain::{
     SessionTokenBundle, SessionTokenBundleError, UnixMicros,
 };
 use meshspan_metadata::{
-    ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthoritativeCommand,
-    CommandContext, IssueAuthenticationSession, PasskeySessionReplay, PasskeyVerificationMaterial,
-    SessionAuthenticationFactor, SessionClientLabel,
+    ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthenticationSessionReplay,
+    AuthoritativeCommand, CommandContext, IssueAuthenticationSession, PasskeySessionReplay,
+    PasskeyVerificationMaterial, SessionAuthenticationFactor, SessionClientLabel,
+    TotpVerificationMaterial,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::create_mesh_setup::parse_uuid;
-use crate::{DisabledPasskeySessions, PasskeySessionCeremony, PasskeySessionError};
+use crate::{
+    DisabledPasskeySessions, DisabledTotpFactors, PasskeySessionCeremony, PasskeySessionError,
+    TotpFactorVerifier, TotpSessionError,
+};
 
 /// Result of one committed browser-session exchange.
 pub struct CreateSessionResult {
@@ -59,6 +63,17 @@ pub trait SessionAuthority {
         now: UnixMicros,
     ) -> Result<Option<PasskeyVerificationMaterial>, SessionAuthorityError>;
 
+    /// Resolves every bounded active encrypted TOTP verifier for one authenticated user.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when current authority cannot provide trustworthy bounded evidence.
+    fn totp_verification_materials(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        now: UnixMicros,
+    ) -> Result<Vec<TotpVerificationMaterial>, SessionAuthorityError>;
+
     /// Loads the current HTTPS session-establishment policy.
     ///
     /// # Errors
@@ -86,6 +101,16 @@ pub trait SessionAuthority {
         &self,
         operation_id: OperationId,
     ) -> Result<Option<PasskeySessionReplay>, SessionAuthorityError>;
+
+    /// Resolves one already-committed session with every retained factor.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when durable replay evidence cannot be read or validated.
+    fn resolve_authentication_session(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<AuthenticationSessionReplay>, SessionAuthorityError>;
 
     /// Commits or exactly resolves the session command through consensus.
     ///
@@ -121,29 +146,44 @@ pub enum SessionAuthorityError {
 }
 
 /// Creates HTTPS browser sessions without retaining plaintext credential material.
-pub struct CreateSessionService<A, P = DisabledPasskeySessions> {
+pub struct CreateSessionService<A, P = DisabledPasskeySessions, T = DisabledTotpFactors> {
     pub(crate) authority: A,
     pub(crate) passkeys: P,
+    pub(crate) totp: T,
 }
 
-impl<A> CreateSessionService<A, DisabledPasskeySessions> {
+impl<A> CreateSessionService<A, DisabledPasskeySessions, DisabledTotpFactors> {
     /// Creates a session service over the live root authority.
     #[must_use]
     pub const fn new(authority: A) -> Self {
         Self {
             authority,
             passkeys: DisabledPasskeySessions,
+            totp: DisabledTotpFactors,
         }
     }
 }
 
-impl<A, P> CreateSessionService<A, P> {
+impl<A, P> CreateSessionService<A, P, DisabledTotpFactors> {
     /// Creates a session service with one explicit replaceable passkey ceremony adapter.
     #[must_use]
     pub const fn with_passkeys(authority: A, passkeys: P) -> Self {
         Self {
             authority,
             passkeys,
+            totp: DisabledTotpFactors,
+        }
+    }
+}
+
+impl<A, P, T> CreateSessionService<A, P, T> {
+    /// Creates a session service with explicit passkey and TOTP adapters.
+    #[must_use]
+    pub const fn with_factors(authority: A, passkeys: P, totp: T) -> Self {
+        Self {
+            authority,
+            passkeys,
+            totp,
         }
     }
 
@@ -154,10 +194,11 @@ impl<A, P> CreateSessionService<A, P> {
     }
 }
 
-impl<A, P> CreateSessionService<A, P>
+impl<A, P, T> CreateSessionService<A, P, T>
 where
     A: SessionAuthority,
     P: PasskeySessionCeremony,
+    T: TotpFactorVerifier,
 {
     /// Authenticates and commits one exact browser session.
     ///
@@ -170,21 +211,30 @@ where
         request: &CreateSessionRequest,
         now: UnixMicros,
     ) -> Result<CreateSessionResult, CreateSessionError> {
-        if request.additional_factor.is_some() {
-            return Err(CreateSessionError::UnsupportedCeremony);
-        }
         let operation_id = OperationId::from_bytes(
             parse_uuid(request.operation_id.as_str())
                 .map_err(|_| CreateSessionError::InvalidOperation)?,
         )
         .map_err(|_| CreateSessionError::InvalidOperation)?;
         match &request.authentication {
-            SessionAuthentication::ApiKey { secret } => {
-                self.create_api_key(request, secret, operation_id, now)
-            }
-            SessionAuthentication::Passkey { .. } => {
-                self.create_passkey(request, operation_id, now)
-            }
+            SessionAuthentication::ApiKey { secret } => match &request.additional_factor {
+                Some(meshspan_api_contract::SessionAdditionalFactor::Totp { code }) => {
+                    self.create_api_key_totp(request, secret, code, operation_id, now)
+                }
+                Some(meshspan_api_contract::SessionAdditionalFactor::RecoveryCode { .. }) => {
+                    Err(CreateSessionError::UnsupportedCeremony)
+                }
+                None => self.create_api_key(request, secret, operation_id, now),
+            },
+            SessionAuthentication::Passkey { .. } => match &request.additional_factor {
+                Some(meshspan_api_contract::SessionAdditionalFactor::Totp { code }) => {
+                    self.create_passkey_totp(request, code, operation_id, now)
+                }
+                Some(meshspan_api_contract::SessionAdditionalFactor::RecoveryCode { .. }) => {
+                    Err(CreateSessionError::UnsupportedCeremony)
+                }
+                None => self.create_passkey(request, operation_id, now),
+            },
         }
     }
 
@@ -305,10 +355,23 @@ pub(crate) fn session_expiry(
     method: AuthenticationMethodKind,
     now: UnixMicros,
 ) -> Result<UnixMicros, CreateSessionError> {
+    session_expiry_for_factors(policy, &[method], now)
+}
+
+pub(crate) fn session_expiry_for_factors(
+    policy: AuthenticationPolicy,
+    methods: &[AuthenticationMethodKind],
+    now: UnixMicros,
+) -> Result<UnixMicros, CreateSessionError> {
     if policy.service != AuthenticationService::Https
         || policy.operation_class != AuthenticationOperationClass::SessionEstablishment
-        || policy.minimum_factor_count != 1
-        || !policy.allowed_factor_classes.contains(method)
+        || methods.is_empty()
+        || methods.len() > 8
+        || usize::from(policy.minimum_factor_count) > methods.len()
+        || !methods.iter().any(|method| method.is_primary())
+        || methods
+            .iter()
+            .any(|method| !policy.allowed_factor_classes.contains(*method))
     {
         return Err(CreateSessionError::AdditionalFactorRequired);
     }
@@ -358,6 +421,9 @@ pub enum CreateSessionError {
     /// Passkey ceremony failed without exposing assertion or credential detail.
     #[error("passkey authentication failed")]
     Passkey(#[from] PasskeySessionError),
+    /// TOTP factor verification failed without exposing code or seed detail.
+    #[error("TOTP authentication failed")]
+    Totp(#[from] TotpSessionError),
     /// Current policy requires another independent factor.
     #[error("an additional authentication factor is required")]
     AdditionalFactorRequired,

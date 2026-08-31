@@ -198,7 +198,7 @@ fn invalid_session_factor(connection: &Connection) -> Result<i64, rusqlite::Erro
                      AND credential_id = factor.credential_reference
                ))
                OR (factor.method_kind = 2
-                   AND (factor.credential_reference <> factor.method_id OR NOT EXISTS(
+                   AND (length(factor.credential_reference) <> 8 OR NOT EXISTS(
                        SELECT 1 FROM totp_credentials WHERE method_id = factor.method_id
                    )))
                OR (factor.method_kind = 3 AND NOT EXISTS(

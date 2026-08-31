@@ -319,6 +319,16 @@ impl SessionAuthority for RepositorySessionAuthority {
             .map_err(|error| map_repository_error(&error))
     }
 
+    fn totp_verification_materials(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        now: UnixMicros,
+    ) -> Result<Vec<meshspan_metadata::TotpVerificationMaterial>, SessionAuthorityError> {
+        self.repository
+            .totp_verification_materials(principal_id, AuthenticationService::Https, now)
+            .map_err(|error| map_repository_error(&error))
+    }
+
     fn session_policy(&self) -> Result<AuthenticationPolicy, SessionAuthorityError> {
         self.repository
             .authentication_policy(
@@ -343,6 +353,15 @@ impl SessionAuthority for RepositorySessionAuthority {
     ) -> Result<Option<PasskeySessionReplay>, SessionAuthorityError> {
         self.repository
             .resolve_passkey_session(operation_id)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn resolve_authentication_session(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<meshspan_metadata::AuthenticationSessionReplay>, SessionAuthorityError> {
+        self.repository
+            .resolve_authentication_session(operation_id)
             .map_err(|error| map_repository_error(&error))
     }
 

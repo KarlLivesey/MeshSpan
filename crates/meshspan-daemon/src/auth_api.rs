@@ -45,10 +45,11 @@ pub trait CreateSessionController: Send + 'static {
     ) -> Result<CreateSessionResult, CreateSessionError>;
 }
 
-impl<A, P> CreateSessionController for CreateSessionService<A, P>
+impl<A, P, T> CreateSessionController for CreateSessionService<A, P, T>
 where
     A: SessionAuthority + Send + 'static,
     P: crate::PasskeySessionCeremony + Send + 'static,
+    T: crate::TotpFactorVerifier + Send + 'static,
 {
     fn create_session(
         &mut self,
@@ -245,7 +246,8 @@ fn service_error_response(
     let (status, code, message) = match error {
         CreateSessionError::InvalidOperation
         | CreateSessionError::UnsupportedCeremony
-        | CreateSessionError::Passkey(crate::PasskeySessionError::Unsupported) => (
+        | CreateSessionError::Passkey(crate::PasskeySessionError::Unsupported)
+        | CreateSessionError::Totp(crate::TotpSessionError::Unsupported) => (
             StatusCode::BAD_REQUEST,
             ApiErrorCode::InvalidRequest,
             "authentication request is not supported",
@@ -253,6 +255,7 @@ fn service_error_response(
         CreateSessionError::ApiKey(_)
         | CreateSessionError::Rejected
         | CreateSessionError::Passkey(crate::PasskeySessionError::Rejected)
+        | CreateSessionError::Totp(crate::TotpSessionError::Rejected)
         | CreateSessionError::AdditionalFactorRequired => (
             StatusCode::UNAUTHORIZED,
             ApiErrorCode::Unauthenticated,
@@ -273,6 +276,9 @@ fn service_error_response(
         | CreateSessionError::InvalidPolicy
         | CreateSessionError::InvalidReceipt
         | CreateSessionError::Passkey(crate::PasskeySessionError::Failed)
+        | CreateSessionError::Totp(
+            crate::TotpSessionError::InvalidEvidence | crate::TotpSessionError::InvalidTime,
+        )
         | CreateSessionError::Authority(SessionAuthorityError::Failed) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             ApiErrorCode::InternalContract,

@@ -82,6 +82,9 @@ mod totp_registration_tests;
 mod totp_secret;
 mod totp_session;
 mod totp_session_contract;
+mod totp_session_creation;
+#[cfg(test)]
+mod totp_session_creation_tests;
 
 pub use api_key_issuance::ApiKeyIssuanceService;
 pub use api_key_issuance_api::{
