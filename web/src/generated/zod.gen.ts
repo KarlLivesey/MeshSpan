@@ -511,6 +511,27 @@ export const zCreateDirectoryResponse = z
   .strict();
 
 /**
+ * CreateGroupRequest
+ *
+ * Idempotent administrator request to create one nested group.
+ */
+export const zCreateGroupRequest = z
+  .strictObject({
+    display_name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateMeshSetupRequest
  *
  * One exact request to create the first mesh on an unclaimed daemon.
@@ -781,6 +802,40 @@ export const zCreatePasskeyRegistrationResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * CreatePrincipalResponse
+ *
+ * Durable creation result shared by users and groups.
+ */
+export const zCreatePrincipalResponse = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    principal: z
+      .strictObject({
+        display_name: z.string(),
+        kind: z.union([z.literal("user"), z.literal("group")]),
+        principal_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        revision: z.int().gte(1).lte(9007199254740991),
+        state: z.union([
+          z.literal("active"),
+          z.literal("suspended"),
+          z.literal("retired"),
+        ]),
+      })
+      .strict(),
   })
   .strict();
 
@@ -1067,6 +1122,27 @@ export const zCreateTotpRegistrationResponse = z
   .strict();
 
 /**
+ * CreateUserRequest
+ *
+ * Idempotent administrator request to create one user.
+ */
+export const zCreateUserRequest = z
+  .strictObject({
+    display_name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CurrentSessionResponse
  *
  * Current caller identity and coarse panel-navigation authority.
@@ -1318,6 +1394,45 @@ export const zListDirectoryResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * ListPrincipalsResponse
+ *
+ * One bounded, permission-filtered administrator identity page.
+ */
+export const zListPrincipalsResponse = z
+  .strictObject({
+    kind: z.union([z.literal("user"), z.literal("group")]),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\//)
+      .nullable(),
+    principals: z
+      .array(
+        z
+          .strictObject({
+            display_name: z.string(),
+            kind: z.union([z.literal("user"), z.literal("group")]),
+            principal_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            revision: z.int().gte(1).lte(9007199254740991),
+            state: z.union([
+              z.literal("active"),
+              z.literal("suspended"),
+              z.literal("retired"),
+            ]),
+          })
+          .strict(),
+      )
+      .max(256),
   })
   .strict();
 
@@ -1974,6 +2089,60 @@ export const zStepUpCurrentSessionRequestWritable = z
       ),
   })
   .strict();
+
+export const zListGroupsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One current principal page
+ */
+export const zListGroupsResponse = zListPrincipalsResponse;
+
+/**
+ * Principal creation
+ */
+export const zCreateGroupBody = zCreateGroupRequest;
+
+/**
+ * Principal durably created or exactly replayed
+ */
+export const zCreateGroupResponse = zCreatePrincipalResponse;
+
+export const zListUsersQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One current principal page
+ */
+export const zListUsersResponse = zListPrincipalsResponse;
+
+/**
+ * Principal creation
+ */
+export const zCreateUserBody = zCreateUserRequest;
+
+/**
+ * Principal durably created or exactly replayed
+ */
+export const zCreateUserResponse = zCreatePrincipalResponse;
 
 /**
  * Process readiness

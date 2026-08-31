@@ -8,16 +8,16 @@ use sha2::{Digest, Sha256};
 use crate::{
     AbortUploadRequest, AbortUploadResponse, ApiError, BeginUploadRequest, BeginUploadResponse,
     CommitUploadRequest, CommitUploadResponse, CreateApiKeyRequest, CreateApiKeyResponse,
-    CreateDirectoryRequest, CreateDirectoryResponse, CreateMeshSetupRequest,
+    CreateDirectoryRequest, CreateDirectoryResponse, CreateGroupRequest, CreateMeshSetupRequest,
     CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
     CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse,
+    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreatePrincipalResponse,
     CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
     CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CurrentSessionResponse, DeleteObjectRequest,
+    CreateTotpRegistrationResponse, CreateUserRequest, CurrentSessionResponse, DeleteObjectRequest,
     DeleteObjectResponse, GetObjectResponse, HealthResponse, ListDirectoryResponse,
-    ListUploadRangesResponse, RenameObjectRequest, RenameObjectResponse,
+    ListPrincipalsResponse, ListUploadRangesResponse, RenameObjectRequest, RenameObjectResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
     StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
@@ -95,6 +95,7 @@ fn components() -> Value {
         schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
         schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
         schema_response::<CreateDirectoryResponse>("CreateDirectoryResponse"),
+        schema_request::<CreateGroupRequest>("CreateGroupRequest"),
         schema_request::<CreateMeshSetupRequest>("CreateMeshSetupRequest"),
         schema_response::<CreateMeshSetupResponse>("CreateMeshSetupResponse"),
         schema_request::<CreatePasskeyChallengeRequest>("CreatePasskeyChallengeRequest"),
@@ -107,6 +108,7 @@ fn components() -> Value {
         ),
         schema_request::<CreatePasskeyRegistrationRequest>("CreatePasskeyRegistrationRequest"),
         schema_response::<CreatePasskeyRegistrationResponse>("CreatePasskeyRegistrationResponse"),
+        schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
         schema_request::<CreateRecoveryCodesRequest>("CreateRecoveryCodesRequest"),
         schema_response::<CreateRecoveryCodesResponse>("CreateRecoveryCodesResponse"),
         schema_request::<CreateSessionRequest>("CreateSessionRequest"),
@@ -119,12 +121,14 @@ fn components() -> Value {
         ),
         schema_request::<CreateTotpRegistrationRequest>("CreateTotpRegistrationRequest"),
         schema_response::<CreateTotpRegistrationResponse>("CreateTotpRegistrationResponse"),
+        schema_request::<CreateUserRequest>("CreateUserRequest"),
         schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
         schema_request::<DeleteObjectRequest>("DeleteObjectRequest"),
         schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
         schema_response::<GetObjectResponse>("GetObjectResponse"),
         schema_response::<HealthResponse>("HealthResponse"),
         schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
+        schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
         schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
         schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
@@ -154,6 +158,14 @@ fn schema_response<T: schemars::JsonSchema>(name: &str) -> (String, Value) {
 fn paths() -> Value {
     Value::Object(Map::from_iter([
         ("/health".to_owned(), health_path()),
+        (
+            "/admin/users".to_owned(),
+            principal_administration_path(true),
+        ),
+        (
+            "/admin/groups".to_owned(),
+            principal_administration_path(false),
+        ),
         (
             "/volumes/{volume_id}/directory-entries".to_owned(),
             list_directory_path(),
@@ -242,6 +254,75 @@ fn paths() -> Value {
             revoke_current_session_path(),
         ),
     ]))
+}
+
+fn principal_administration_path(user: bool) -> Value {
+    let (list_operation, create_operation, request_schema, kind) = if user {
+        (
+            "listUsers",
+            "createUser",
+            "#/components/schemas/CreateUserRequest",
+            "user",
+        )
+    } else {
+        (
+            "listGroups",
+            "createGroup",
+            "#/components/schemas/CreateGroupRequest",
+            "group",
+        )
+    };
+    json!({
+        "get": {
+            "operationId": list_operation,
+            "summary": format!("List one bounded administrator {kind} page"),
+            "x-meshspan-access": "system-manager",
+            "parameters": [
+                {
+                    "name": "cursor",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024,
+                        "pattern": "^[A-Za-z0-9._~-]+$"
+                    }
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": false,
+                    "schema": { "type": "integer", "minimum": 1, "maximum": 256 }
+                }
+            ],
+            "responses": {
+                "200": json_response("One current principal page", "#/components/schemas/ListPrincipalsResponse"),
+                "400": json_response("Invalid query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Identity authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        },
+        "post": {
+            "operationId": create_operation,
+            "summary": format!("Create one local {kind} principal"),
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request("Principal creation", request_schema),
+            "responses": {
+                "201": json_response("Principal durably created or exactly replayed", "#/components/schemas/CreatePrincipalResponse"),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Name or operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Identity authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn begin_upload_path() -> Value {

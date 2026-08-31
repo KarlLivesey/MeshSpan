@@ -475,6 +475,22 @@ export type CreateDirectoryResponse = {
 };
 
 /**
+ * CreateGroupRequest
+ *
+ * Idempotent administrator request to create one nested group.
+ */
+export type CreateGroupRequest = {
+  /**
+   * Human-readable group name.
+   */
+  display_name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateMeshSetupRequest
  *
  * One exact request to create the first mesh on an unclaimed daemon.
@@ -711,6 +727,43 @@ export type CreatePasskeyRegistrationResponse = {
 };
 
 /**
+ * CreatePrincipalResponse
+ *
+ * Durable creation result shared by users and groups.
+ */
+export type CreatePrincipalResponse = {
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Newly created or exactly replayed principal.
+   */
+  principal: {
+    /**
+     * Case-preserved NFC display name.
+     */
+    display_name: string;
+    /**
+     * User or nested group.
+     */
+    kind: "user" | "group";
+    /**
+     * Stable local identity.
+     */
+    principal_id: string;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+    /**
+     * Current lifecycle state.
+     */
+    state: "active" | "suspended" | "retired";
+  };
+};
+
+/**
  * CreateRecoveryCodesRequest
  *
  * One idempotent request to replace the current user's recovery-code set.
@@ -918,6 +971,22 @@ export type CreateTotpRegistrationResponse = {
   method_id: string;
   /**
    * Exact confirmation operation whose result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreateUserRequest
+ *
+ * Idempotent administrator request to create one user.
+ */
+export type CreateUserRequest = {
+  /**
+   * Human-readable user name.
+   */
+  display_name: string;
+  /**
+   * Client-generated exact-retry identity.
    */
   operation_id: string;
 };
@@ -1142,6 +1211,47 @@ export type ListDirectoryResponse = {
    * Selected logical volume.
    */
   volume_id: string;
+};
+
+/**
+ * ListPrincipalsResponse
+ *
+ * One bounded, permission-filtered administrator identity page.
+ */
+export type ListPrincipalsResponse = {
+  /**
+   * Principal family selected by the endpoint.
+   */
+  kind: "user" | "group";
+  /**
+   * Ready-to-follow relative URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Stable ordered identities.
+   */
+  principals: Array<{
+    /**
+     * Case-preserved NFC display name.
+     */
+    display_name: string;
+    /**
+     * User or nested group.
+     */
+    kind: "user" | "group";
+    /**
+     * Stable local identity.
+     */
+    principal_id: string;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+    /**
+     * Current lifecycle state.
+     */
+    state: "active" | "suspended" | "retired";
+  }>;
 };
 
 /**
@@ -1739,6 +1849,199 @@ export type StepUpCurrentSessionRequestWritable = {
    */
   operation_id: string;
 };
+
+export type ListGroupsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/groups";
+};
+
+export type ListGroupsErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Identity authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListGroupsError = ListGroupsErrors[keyof ListGroupsErrors];
+
+export type ListGroupsResponses = {
+  /**
+   * One current principal page
+   */
+  200: ListPrincipalsResponse;
+};
+
+export type ListGroupsResponse = ListGroupsResponses[keyof ListGroupsResponses];
+
+export type CreateGroupData = {
+  /**
+   * Principal creation
+   */
+  body: CreateGroupRequest;
+  path?: never;
+  query?: never;
+  url: "/admin/groups";
+};
+
+export type CreateGroupErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Name or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Identity authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateGroupError = CreateGroupErrors[keyof CreateGroupErrors];
+
+export type CreateGroupResponses = {
+  /**
+   * Principal durably created or exactly replayed
+   */
+  201: CreatePrincipalResponse;
+};
+
+export type CreateGroupResponse =
+  CreateGroupResponses[keyof CreateGroupResponses];
+
+export type ListUsersData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/users";
+};
+
+export type ListUsersErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Identity authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListUsersError = ListUsersErrors[keyof ListUsersErrors];
+
+export type ListUsersResponses = {
+  /**
+   * One current principal page
+   */
+  200: ListPrincipalsResponse;
+};
+
+export type ListUsersResponse = ListUsersResponses[keyof ListUsersResponses];
+
+export type CreateUserData = {
+  /**
+   * Principal creation
+   */
+  body: CreateUserRequest;
+  path?: never;
+  query?: never;
+  url: "/admin/users";
+};
+
+export type CreateUserErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Name or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Identity authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateUserError = CreateUserErrors[keyof CreateUserErrors];
+
+export type CreateUserResponses = {
+  /**
+   * Principal durably created or exactly replayed
+   */
+  201: CreatePrincipalResponse;
+};
+
+export type CreateUserResponse = CreateUserResponses[keyof CreateUserResponses];
 
 export type GetHealthData = {
   body?: never;
