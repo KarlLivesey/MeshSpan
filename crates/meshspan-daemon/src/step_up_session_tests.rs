@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use axum::http::header::COOKIE;
-use axum::http::{HeaderMap, HeaderValue};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::body::{Body, to_bytes};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use meshspan_api_contract::{
     AssuranceLevel, CreateSessionRequest, StepUpCurrentSessionRequest,
     decode_create_session_request, decode_step_up_current_session_request,
@@ -16,12 +19,13 @@ use meshspan_metadata::{
     NewAuthenticationCredential, NewRecoveryCode, PartitionDatabase,
 };
 use tempfile::tempdir;
+use tower::ServiceExt;
 
 use crate::browser_session::CSRF_HEADER;
 use crate::create_session_tests::{RepositorySessionAuthority, SequentialRandom, bootstrap};
 use crate::{
     CreateSessionService, DisabledTotpFactors, GatewaySessionIdentity, SessionAuthorityError,
-    StepUpCurrentSessionError, StepUpCurrentSessionService,
+    StepUpCurrentSessionError, StepUpCurrentSessionService, step_up_current_session_api_router,
 };
 
 const SOURCE_OPERATION: &str = "00000000-0000-4000-8000-0000000000b1";
@@ -75,6 +79,81 @@ fn recovery_step_up_rotates_atomically_and_replays_exactly()
         step_up.step_up(&other_operation, &source_headers, UnixMicros::new(22)),
         Err(StepUpCurrentSessionError::Authentication(_))
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_step_up_round_trip_uses_real_sqlite_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
+    let bootstrap_operation = OperationId::from_bytes([8; 16])?;
+    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let directory = tempdir()?;
+    let database = PartitionDatabase::open(
+        &directory.path().join("root.sqlite3"),
+        material.partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut authority = RepositorySessionAuthority {
+        repository: meshspan_metadata::AuthoritativeRepository::new(database),
+        next_index: 1,
+    };
+    bootstrap(&mut authority, &material, bootstrap_operation)?;
+    let codes = create_recovery_method(&mut authority, &material)?;
+    let mut creation = CreateSessionService::new(authority);
+    let now = UnixMicros::new(i64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros(),
+    )?);
+    let source = creation.create(&source_request(&material, false)?, now)?;
+    let cookie = format!(
+        "meshspan_session={}",
+        source.bearer.expose_encoded().as_str()
+    );
+    let csrf = source.csrf.expose_encoded();
+    let router = step_up_current_session_api_router(StepUpCurrentSessionService::new(
+        creation.into_authority(),
+        GatewaySessionIdentity::new(material.node_id, 1)?,
+        DisabledTotpFactors,
+    ))?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": STEP_UP_OPERATION,
+        "additional_factor": {
+            "method": "recovery_code",
+            "code": codes[0].expose_encoded().as_str()
+        }
+    }))?;
+
+    let first = router
+        .clone()
+        .oneshot(http_step_up_request(&cookie, &csrf, body.clone())?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let first_cookie = first.headers()["set-cookie"].clone();
+    let first_csrf = first.headers()["meshspan-csrf-token"].clone();
+    let first_body = to_bytes(first.into_body(), 2_048).await?;
+    let replay = router
+        .clone()
+        .oneshot(http_step_up_request(&cookie, &csrf, body)?)
+        .await?;
+    assert_eq!(replay.status(), StatusCode::CREATED);
+    assert_eq!(replay.headers()["set-cookie"], first_cookie);
+    assert_eq!(replay.headers()["meshspan-csrf-token"], first_csrf);
+    assert_eq!(to_bytes(replay.into_body(), 2_048).await?, first_body);
+
+    let rejected = router
+        .oneshot(http_step_up_request(
+            &cookie,
+            &csrf,
+            serde_json::to_vec(&serde_json::json!({
+                "operation_id": "00000000-0000-4000-8000-0000000000b4",
+                "additional_factor": {
+                    "method": "recovery_code",
+                    "code": codes[1].expose_encoded().as_str()
+                }
+            }))?,
+        )?)
+        .await?;
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
     Ok(())
 }
 
@@ -177,4 +256,16 @@ fn session_headers(
         HeaderValue::from_str(&result.csrf.expose_encoded())?,
     );
     Ok(headers)
+}
+
+fn http_step_up_request(
+    cookie: &str,
+    csrf: &str,
+    body: Vec<u8>,
+) -> Result<Request<Body>, axum::http::Error> {
+    Request::post("/api/latest/sessions/current/step-ups")
+        .header("content-type", "application/json")
+        .header(COOKIE, cookie)
+        .header(CSRF_HEADER, csrf)
+        .body(Body::from(body))
 }

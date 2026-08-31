@@ -182,7 +182,7 @@ where
     })
     .await;
     match execution {
-        Ok(Ok(result)) => success_response(&result, now, state.schema_digest.clone())
+        Ok(Ok(result)) => session_success_response(&result, now, state.schema_digest.clone())
             .unwrap_or_else(|()| {
                 internal_error_response(
                     request_id,
@@ -203,7 +203,7 @@ where
     }
 }
 
-fn success_response(
+pub(crate) fn session_success_response(
     result: &CreateSessionResult,
     now: UnixMicros,
     schema_digest: HeaderValue,

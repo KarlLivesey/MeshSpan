@@ -82,6 +82,9 @@ mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 mod step_up_session;
+mod step_up_session_api;
+#[cfg(test)]
+mod step_up_session_api_tests;
 #[cfg(test)]
 mod step_up_session_tests;
 mod totp_registration;
@@ -193,6 +196,10 @@ pub use setup_api::{
 };
 pub use step_up_session::{
     StepUpCurrentSessionError, StepUpCurrentSessionService, StepUpSessionAuthority,
+};
+pub use step_up_session_api::{
+    StepUpCurrentSessionApiError, StepUpCurrentSessionController,
+    step_up_current_session_api_router,
 };
 pub use totp_registration::TotpRegistrationService;
 pub use totp_registration_api::{
