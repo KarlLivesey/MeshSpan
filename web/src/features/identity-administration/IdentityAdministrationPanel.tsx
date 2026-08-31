@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+import { createSignal, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
 import { CreatePrincipalForm } from "./CreatePrincipalForm";
+import { createGroupMembershipDirectory } from "./group-membership-model";
+import { GroupMembershipPanel } from "./GroupMembershipPanel";
 import { createPrincipalDirectory } from "./model";
 import { PrincipalList } from "./PrincipalList";
-import type { IdentityAdministrationClient, PrincipalKind } from "./model";
+import type {
+  IdentityAdministrationClient,
+  PrincipalKind,
+  PrincipalSummary,
+} from "./model";
 
 type IdentityAdministrationPanelProps = Readonly<{
   client: IdentityAdministrationClient;
@@ -17,6 +24,13 @@ export function IdentityAdministrationPanel(
 ): JSX.Element {
   const users = createPrincipalDirectory(() => props.client, "user");
   const groups = createPrincipalDirectory(() => props.client, "group");
+  const memberships = createGroupMembershipDirectory(
+    () => props.client,
+    () => props.csrfToken,
+  );
+  const [selectedGroupId, setSelectedGroupId] = createSignal<string>();
+  const selectedGroup = () =>
+    groups.items().find((group) => group.principal_id === selectedGroupId());
 
   void Promise.all([users.loadInitial(), groups.loadInitial()]);
 
@@ -35,6 +49,11 @@ export function IdentityAdministrationPanel(
     (kind === "user" ? users : groups).record(result.principal);
   };
 
+  const selectGroup = (group: PrincipalSummary): void => {
+    setSelectedGroupId(group.principal_id);
+    void memberships.load(group.principal_id);
+  };
+
   return (
     <div class="identity-administration">
       <header class="page-intro">
@@ -48,8 +67,22 @@ export function IdentityAdministrationPanel(
       <CreatePrincipalForm create={create} />
       <div class="principal-columns">
         <PrincipalList directory={users} kind="user" />
-        <PrincipalList directory={groups} kind="group" />
+        <PrincipalList
+          directory={groups}
+          kind="group"
+          onSelect={selectGroup}
+          selectedPrincipalId={selectedGroupId()}
+        />
       </div>
+      <Show when={selectedGroup()}>
+        {(group) => (
+          <GroupMembershipPanel
+            candidates={[...users.items(), ...groups.items()]}
+            directory={memberships}
+            group={group()}
+          />
+        )}
+      </Show>
     </div>
   );
 }

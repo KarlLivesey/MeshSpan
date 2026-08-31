@@ -4,11 +4,17 @@ import { For, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
 import { instantFromEpochMicroseconds } from "../../domain/instant";
-import type { PrincipalDirectory, PrincipalKind } from "./model";
+import type {
+  PrincipalDirectory,
+  PrincipalKind,
+  PrincipalSummary,
+} from "./model";
 
 type PrincipalListProps = Readonly<{
   directory: PrincipalDirectory;
   kind: PrincipalKind;
+  onSelect?: (principal: PrincipalSummary) => void;
+  selectedPrincipalId?: string | undefined;
 }>;
 
 export function PrincipalList(props: PrincipalListProps): JSX.Element {
@@ -36,57 +42,97 @@ export function PrincipalList(props: PrincipalListProps): JSX.Element {
           when={props.directory.items().length > 0}
           fallback={<p class="empty-state">{emptyMessage()}</p>}
         >
-          <div class="principal-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col">State</th>
-                  <th scope="col">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={props.directory.items()}>
-                  {(principal) => (
-                    <tr>
-                      <th data-label="Name" scope="row">
-                        {principal.display_name}
-                      </th>
-                      <td data-label="State">
-                        <span class={`state state-${principal.state}`}>
-                          {principal.state}
-                        </span>
-                      </td>
-                      <td data-label="Created" class="timestamp">
-                        {formatInstant(principal.created_at_epoch_micros)}
-                      </td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </div>
+          <PrincipalTable {...props} />
         </Show>
       </Show>
 
-      <div class="list-footer" aria-live="polite">
-        <Show when={props.directory.error()}>
-          {(message) => <p class="error">{message()}</p>}
-        </Show>
-        <Show when={props.directory.nextPageUrl() !== null}>
+      <PrincipalListFooter directory={props.directory} plural={plural()} />
+    </section>
+  );
+}
+
+function PrincipalTable(props: PrincipalListProps): JSX.Element {
+  return (
+    <div class="principal-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">State</th>
+            <th scope="col">Created</th>
+            <Show when={props.onSelect !== undefined}>
+              <th scope="col">Membership</th>
+            </Show>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={props.directory.items()}>
+            {(principal) => <PrincipalRow {...props} principal={principal} />}
+          </For>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+type PrincipalRowProps = PrincipalListProps &
+  Readonly<{ principal: PrincipalSummary }>;
+
+function PrincipalRow(props: PrincipalRowProps): JSX.Element {
+  const selected = () =>
+    props.selectedPrincipalId === props.principal.principal_id;
+  return (
+    <tr>
+      <th data-label="Name" scope="row">
+        {props.principal.display_name}
+      </th>
+      <td data-label="State">
+        <span class={`state state-${props.principal.state}`}>
+          {props.principal.state}
+        </span>
+      </td>
+      <td data-label="Created" class="timestamp">
+        {formatInstant(props.principal.created_at_epoch_micros)}
+      </td>
+      <Show when={props.onSelect !== undefined}>
+        <td data-label="Membership">
           <button
-            class="quiet-action"
-            disabled={props.directory.phase() !== "idle"}
-            onClick={() => void props.directory.loadNext()}
+            aria-pressed={selected() ? "true" : "false"}
+            class="quiet-action table-action"
+            onClick={() => {
+              props.onSelect?.(props.principal);
+            }}
             type="button"
           >
-            {props.directory.phase() === "loading_more"
-              ? `Loading more ${plural().toLowerCase()}…`
-              : `Load more ${plural().toLowerCase()}`}
+            {selected() ? "Managing" : "Manage members"}
           </button>
-        </Show>
-      </div>
-    </section>
+        </td>
+      </Show>
+    </tr>
+  );
+}
+
+function PrincipalListFooter(
+  props: Readonly<{ directory: PrincipalDirectory; plural: string }>,
+): JSX.Element {
+  return (
+    <div class="list-footer" aria-live="polite">
+      <Show when={props.directory.error()}>
+        {(message) => <p class="error">{message()}</p>}
+      </Show>
+      <Show when={props.directory.nextPageUrl() !== null}>
+        <button
+          class="quiet-action"
+          disabled={props.directory.phase() !== "idle"}
+          onClick={() => void props.directory.loadNext()}
+          type="button"
+        >
+          {props.directory.phase() === "loading_more"
+            ? `Loading more ${props.plural.toLowerCase()}…`
+            : `Load more ${props.plural.toLowerCase()}`}
+        </button>
+      </Show>
+    </div>
   );
 }
 

@@ -9,6 +9,7 @@ import { IdentityAdministrationPanel } from "../src/features/identity-administra
 import type { IdentityAdministrationClient } from "../src/features/identity-administration/model";
 import type {
   CreatePrincipalResponse,
+  ListGroupMembershipsResponse,
   ListPrincipalsResponse,
 } from "../src/generated/types.gen";
 
@@ -93,6 +94,45 @@ describe("identity administration panel", () => {
   });
 });
 
+describe("group membership administration panel", () => {
+  it("manages direct group membership without leaving the administration page", async () => {
+    const alex = principal("user", "Alex", "user-1");
+    const operators = principal("group", "Operators", "group-1");
+    const fixture = clientFixture({
+      groups: page("group", [operators]),
+      users: page("user", [alex]),
+    });
+
+    mountPanel(fixture.client);
+    await settle();
+    clickButton("Manage members");
+    await settle();
+
+    expect(fixture.listGroupMembers).toHaveBeenCalledWith({
+      groupId: operators.principal_id,
+    });
+    selectOption("Choose an identity", alex.principal_id);
+    clickButton("Add to group");
+    await settle();
+    expect(fixture.addGroupMember).toHaveBeenCalledWith(
+      operators.principal_id,
+      expect.objectContaining({ member_principal_id: alex.principal_id }),
+      CSRF_TOKEN,
+    );
+
+    clickButton("Remove membership");
+    enterRemovalReason("Moved to another team");
+    clickButton("Remove access");
+    await settle();
+    expect(fixture.removeGroupMember).toHaveBeenCalledWith(
+      operators.principal_id,
+      alex.principal_id,
+      expect.objectContaining({ reason: "Moved to another team" }),
+      CSRF_TOKEN,
+    );
+  });
+});
+
 type ClientFixtureOptions = Readonly<{
   createdUser?: Principal;
   failGroups?: boolean;
@@ -105,12 +145,21 @@ type ClientFixtureOptions = Readonly<{
 type Principal = ListPrincipalsResponse["principals"][number];
 
 type ClientFixture = Readonly<{
+  addGroupMember: ReturnType<
+    typeof vi.fn<IdentityAdministrationClient["addGroupMember"]>
+  >;
   client: IdentityAdministrationClient;
   createUser: ReturnType<
     typeof vi.fn<IdentityAdministrationClient["createUser"]>
   >;
   listNextPrincipals: ReturnType<
     typeof vi.fn<IdentityAdministrationClient["listNextPrincipals"]>
+  >;
+  listGroupMembers: ReturnType<
+    typeof vi.fn<IdentityAdministrationClient["listGroupMembers"]>
+  >;
+  removeGroupMember: ReturnType<
+    typeof vi.fn<IdentityAdministrationClient["removeGroupMember"]>
   >;
 }>;
 
@@ -149,17 +198,50 @@ function clientFixture(options: ClientFixtureOptions = {}): ClientFixture {
   const listUsers = vi.fn<IdentityAdministrationClient["listUsers"]>(
     async () => users,
   );
+  const listGroupMembers = vi.fn<
+    IdentityAdministrationClient["listGroupMembers"]
+  >(async ({ groupId }) => membershipPage(groupId));
+  const listNextGroupMembers = vi.fn<
+    IdentityAdministrationClient["listNextGroupMembers"]
+  >(async () => membershipPage(groups.principals[0]?.principal_id ?? userId()));
+  const addGroupMember = vi.fn<IdentityAdministrationClient["addGroupMember"]>(
+    async (groupId, request) => ({
+      membership: membership(
+        groupId,
+        [...users.principals, ...groups.principals].find(
+          (candidate) => candidate.principal_id === request.member_principal_id,
+        ) ?? principal("user", "Unknown", "unknown"),
+      ),
+      operation_id: request.operation_id,
+    }),
+  );
+  const removeGroupMember = vi.fn<
+    IdentityAdministrationClient["removeGroupMember"]
+  >(async (groupId, memberPrincipalId, request) => ({
+    group_id: groupId,
+    member_principal_id: memberPrincipalId,
+    operation_id: request.operation_id,
+    removed_at_epoch_micros: 80_000_000,
+    revision: 2,
+  }));
 
   return {
+    addGroupMember,
     client: {
+      addGroupMember,
       createGroup,
       createUser,
       listGroups,
+      listGroupMembers,
+      listNextGroupMembers,
       listNextPrincipals,
       listUsers,
+      removeGroupMember,
     },
     createUser,
+    listGroupMembers,
     listNextPrincipals,
+    removeGroupMember,
   };
 }
 
@@ -193,6 +275,30 @@ function principal(
   };
 }
 
+function membershipPage(groupId: string): ListGroupMembershipsResponse {
+  return { group_id: groupId, memberships: [], next_page_url: null };
+}
+
+function membership(
+  groupId: string,
+  member: Principal,
+): ListGroupMembershipsResponse["memberships"][number] {
+  return {
+    activation_required: false,
+    created_at_epoch_micros: 70_000_000,
+    created_by: userId(),
+    group_id: groupId,
+    member,
+    revision: 1,
+    valid_from_epoch_micros: null,
+    valid_until_epoch_micros: null,
+  };
+}
+
+function userId(): string {
+  return "00000000-0000-4000-8000-000000000001";
+}
+
 function mountPanel(client: IdentityAdministrationClient): void {
   const root = document.createElement("div");
   document.body.append(root);
@@ -224,6 +330,31 @@ function clickButton(label: string): void {
     throw new TypeError(`expected button: ${label}`);
   }
   button.click();
+  flush();
+}
+
+function selectOption(placeholder: string, value: string): void {
+  const select = [...document.querySelectorAll("select")].find((candidate) =>
+    candidate.textContent.includes(placeholder),
+  );
+  if (select === undefined) {
+    throw new TypeError(`expected select: ${placeholder}`);
+  }
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  flush();
+}
+
+function enterRemovalReason(value: string): void {
+  const input = document.querySelector<HTMLInputElement>(
+    ".membership-removal input",
+  );
+  if (input === null) {
+    throw new TypeError("expected the membership-removal reason input");
+  }
+  input.value = value;
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  flush();
 }
 
 async function settle(): Promise<void> {

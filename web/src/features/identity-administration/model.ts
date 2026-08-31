@@ -2,17 +2,27 @@
 
 import { createSignal, type Accessor } from "solid-js";
 import type {
+  AddGroupMemberRequest,
+  AddGroupMemberResponse,
   CreateGroupRequest,
   CreatePrincipalResponse,
   CreateUserRequest,
+  ListGroupMembershipsResponse,
   ListPrincipalsResponse,
+  RemoveGroupMemberRequest,
+  RemoveGroupMemberResponse,
 } from "../../generated/types.gen";
 
-type PrincipalSummary = ListPrincipalsResponse["principals"][number];
+export type PrincipalSummary = ListPrincipalsResponse["principals"][number];
 
 export type PrincipalKind = "group" | "user";
 
 export interface IdentityAdministrationClient {
+  addGroupMember(
+    groupId: string,
+    request: AddGroupMemberRequest,
+    csrfToken?: string,
+  ): Promise<AddGroupMemberResponse>;
   createGroup(
     request: CreateGroupRequest,
     csrfToken?: string,
@@ -22,8 +32,20 @@ export interface IdentityAdministrationClient {
     csrfToken?: string,
   ): Promise<CreatePrincipalResponse>;
   listGroups(): Promise<ListPrincipalsResponse>;
+  listGroupMembers(
+    request: Readonly<{ groupId: string }>,
+  ): Promise<ListGroupMembershipsResponse>;
+  listNextGroupMembers(
+    nextPageUrl: string,
+  ): Promise<ListGroupMembershipsResponse>;
   listNextPrincipals(nextPageUrl: string): Promise<ListPrincipalsResponse>;
   listUsers(): Promise<ListPrincipalsResponse>;
+  removeGroupMember(
+    groupId: string,
+    memberPrincipalId: string,
+    request: RemoveGroupMemberRequest,
+    csrfToken?: string,
+  ): Promise<RemoveGroupMemberResponse>;
 }
 
 export type PrincipalDirectory = Readonly<{

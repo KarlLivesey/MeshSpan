@@ -487,6 +487,79 @@ tbody th {
   gap: var(--space-md);
 }
 
+.table-action {
+  min-height: 2.75rem;
+  white-space: nowrap;
+}
+
+.table-action[aria-pressed="true"] {
+  color: var(--signal);
+  text-decoration-color: var(--signal);
+}
+
+.membership-administration {
+  display: grid;
+  gap: var(--space-xl);
+  margin-top: var(--space-3xl);
+  padding-top: var(--space-3xl);
+  border-top: 1px solid var(--line);
+}
+
+.membership-heading {
+  display: grid;
+  gap: var(--space-lg);
+}
+
+.membership-heading > div {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.membership-heading > p {
+  max-width: 52ch;
+  color: var(--ink-soft);
+  font-size: 1.1rem;
+}
+
+.membership-add {
+  display: grid;
+  gap: var(--space-md);
+  align-items: end;
+  max-width: 52rem;
+}
+
+.membership-service-error {
+  margin-block: calc(var(--space-md) * -1);
+}
+
+.danger-action {
+  color: var(--danger);
+}
+
+.membership-removal-row td {
+  padding: var(--space-lg);
+  background: var(--danger-surface);
+}
+
+.membership-removal {
+  display: grid;
+  gap: var(--space-md);
+  max-width: 52rem;
+}
+
+.membership-removal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  align-items: center;
+}
+
+.danger-button {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: var(--paper-raised);
+}
+
 .route-status {
   display: grid;
   gap: var(--space-lg);
@@ -519,6 +592,15 @@ tbody th {
 @container (min-width: 42rem) {
   .principal-create-fields {
     grid-template-columns: minmax(8rem, 0.55fr) minmax(16rem, 1.6fr) auto;
+  }
+
+  .membership-add {
+    grid-template-columns: minmax(18rem, 1fr) auto;
+  }
+
+  .membership-heading {
+    grid-template-columns: minmax(16rem, 0.8fr) minmax(20rem, 1.2fr);
+    align-items: end;
   }
 }
 
@@ -588,6 +670,15 @@ tbody th {
     font-weight: 750;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  .membership-removal-row,
+  .membership-removal-row td {
+    display: block;
+  }
+
+  .membership-removal-row td::before {
+    content: none;
   }
 }
 
