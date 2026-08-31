@@ -3,8 +3,8 @@
 //! Atomic authoritative lifecycle for protocol-neutral authentication methods.
 
 use meshspan_domain::{
-    ApiKeyId, AuthenticationMethodId, AuthenticationMethodKind, AuthenticationService, PrincipalId,
-    Revision, UnixMicros,
+    ApiKeyId, AuthenticationMethodId, AuthenticationMethodKind, AuthenticationService, OperationId,
+    PrincipalId, Revision, UnixMicros,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 
@@ -32,6 +32,23 @@ pub struct ApiKeyAuthentication {
     pub credential_generation: u64,
     /// Authoritative method revision included in the decision.
     pub revision: Revision,
+}
+
+/// Exact durable facts needed to reproduce one authentication-method revocation result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticationMethodRevocationReplay {
+    /// Original semantic request digest used to reject changed operation reuse.
+    pub request_digest: [u8; 32],
+    /// Digest of the durable command result.
+    pub result_digest: [u8; 32],
+    /// Authentication method which was revoked.
+    pub method_id: AuthenticationMethodId,
+    /// User who owned the method.
+    pub principal_id: PrincipalId,
+    /// Principal which committed the revocation.
+    pub actor_principal_id: PrincipalId,
+    /// Original authoritative revocation instant.
+    pub revoked_at: UnixMicros,
 }
 
 /// Current public verification material for one opaque passkey credential identity.
@@ -381,6 +398,79 @@ pub(super) fn revoke(
         kind: EntityKind::AuthenticationMethod,
         id: method_id,
     })
+}
+
+pub(super) fn resolve_revocation_replay(
+    database: &crate::PartitionDatabase,
+    operation_id: OperationId,
+) -> Result<Option<AuthenticationMethodRevocationReplay>, RepositoryError> {
+    let Some(receipt) = super::receipt::resolve_operation(database, operation_id)? else {
+        return Ok(None);
+    };
+    if receipt.entity.kind != EntityKind::AuthenticationMethod {
+        return Err(RepositoryError::OperationConflict);
+    }
+    let operation = operation_id.as_bytes();
+    let method = receipt.entity.id;
+    let stored = database
+        .connection()
+        .query_row(
+            "SELECT operation.actor_principal_id, operation.operation_kind,
+                    operation.started_at, method.user_principal_id, method.state,
+                    method.revision, event.changed_by, event.changed_at, event.revision
+             FROM operations AS operation
+             JOIN authentication_methods AS method ON method.method_id = ?2
+             JOIN authentication_method_events AS event
+               ON event.method_id = method.method_id AND event.event_sequence = 2
+             WHERE operation.operation_id = ?1",
+            params![operation.as_slice(), method.as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(RepositoryError::CorruptState)?;
+    let (
+        actor,
+        operation_kind,
+        started_at,
+        principal,
+        state,
+        method_revision,
+        changed_by,
+        changed_at,
+        event_revision,
+    ) = stored;
+    if operation_kind != 75
+        || state != REVOKED
+        || actor != changed_by
+        || started_at != changed_at
+        || method_revision != event_revision
+        || u64::try_from(method_revision).ok() != Some(receipt.committed_revision.get())
+    {
+        return Err(RepositoryError::OperationConflict);
+    }
+    Ok(Some(AuthenticationMethodRevocationReplay {
+        request_digest: receipt.request_digest,
+        result_digest: receipt.result_digest,
+        method_id: AuthenticationMethodId::from_bytes(method)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        principal_id: PrincipalId::from_bytes(fixed(principal)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        actor_principal_id: PrincipalId::from_bytes(fixed(actor)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        revoked_at: UnixMicros::new(changed_at),
+    }))
 }
 
 fn validate_text(value: &str, maximum_characters: usize) -> Result<(), RepositoryError> {

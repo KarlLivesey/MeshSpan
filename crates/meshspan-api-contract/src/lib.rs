@@ -2,6 +2,8 @@
 
 //! Authoritative public API models, schemas, and trust-boundary validation.
 
+mod api_key_management;
+mod api_key_validation;
 mod model;
 mod openapi;
 mod passkey_registration;
@@ -9,6 +11,18 @@ mod passkey_validation;
 mod schema;
 mod validation;
 
+pub use api_key_management::{
+    ApiKeyExpiry, ApiKeyId, ApiKeyScope, AuthenticationMethodRevocationReason, CreateApiKeyRequest,
+    CreateApiKeyResponse, RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+};
+pub use api_key_validation::{
+    MAX_CREATE_API_KEY_BYTES, MAX_REVOKE_AUTHENTICATION_METHOD_BYTES,
+    decode_create_api_key_request, decode_revoke_authentication_method_request,
+    encode_create_api_key_response, encode_revoke_authentication_method_response,
+    validate_create_api_key_request_value, validate_create_api_key_response_value,
+    validate_revoke_authentication_method_request_value,
+    validate_revoke_authentication_method_response_value,
+};
 pub use model::{
     ApiError, ApiErrorCode, ApiErrorIssue, AssuranceLevel, CreateMeshSetupRequest,
     CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,

@@ -2,7 +2,10 @@
 
 //! Current-user identity and bounded credential hints for passkey registration.
 
-use meshspan_domain::{AuthenticationMethodId, OperationId, PrincipalId, Revision, UnixMicros};
+use meshspan_domain::{
+    AuthenticationMethodId, AuthenticationMethodKind, OperationId, PrincipalId, Revision,
+    UnixMicros,
+};
 use rusqlite::{OptionalExtension, params};
 
 use super::query::PrincipalKind;
@@ -29,9 +32,9 @@ pub struct PasskeyRegistrationProfile {
     pub exclude_credential_ids: Vec<Vec<u8>>,
 }
 
-/// Exact durable facts needed to reproduce one passkey-registration result.
+/// Exact durable facts needed to reproduce one authentication-method creation result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PasskeyRegistrationReplay {
+pub struct AuthenticationMethodCreationReplay {
     /// Original semantic request digest used to reject changed operation reuse.
     pub request_digest: [u8; 32],
     /// Digest of the durable command result.
@@ -43,6 +46,9 @@ pub struct PasskeyRegistrationReplay {
     /// Authoritative creation instant returned to the client.
     pub created_at: UnixMicros,
 }
+
+/// Passkey-specific name retained at the passkey registration boundary.
+pub type PasskeyRegistrationReplay = AuthenticationMethodCreationReplay;
 
 pub(super) fn profile(
     database: &PartitionDatabase,
@@ -94,6 +100,14 @@ pub(super) fn resolve_replay(
     database: &PartitionDatabase,
     operation_id: OperationId,
 ) -> Result<Option<PasskeyRegistrationReplay>, RepositoryError> {
+    resolve_method_creation(database, operation_id, AuthenticationMethodKind::Passkey)
+}
+
+pub(super) fn resolve_method_creation(
+    database: &PartitionDatabase,
+    operation_id: OperationId,
+    expected_kind: AuthenticationMethodKind,
+) -> Result<Option<AuthenticationMethodCreationReplay>, RepositoryError> {
     let Some(receipt) = super::receipt::resolve_operation(database, operation_id)? else {
         return Ok(None);
     };
@@ -128,14 +142,14 @@ pub(super) fn resolve_replay(
         .ok_or(RepositoryError::CorruptState)?;
     let (actor, operation_kind, started_at, principal, method_kind, created_at, revision) = stored;
     if operation_kind != 74
-        || method_kind != PASSKEY
+        || method_kind != expected_kind as i64
         || actor != principal
         || started_at != created_at
         || u64::try_from(revision).ok() != Some(receipt.committed_revision.get())
     {
         return Err(RepositoryError::OperationConflict);
     }
-    Ok(Some(PasskeyRegistrationReplay {
+    Ok(Some(AuthenticationMethodCreationReplay {
         request_digest: receipt.request_digest,
         result_digest: receipt.result_digest,
         method_id: AuthenticationMethodId::from_bytes(method)

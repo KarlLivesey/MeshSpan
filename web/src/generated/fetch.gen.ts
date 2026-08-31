@@ -3,18 +3,24 @@
 
 import type {
   ApiError,
+  CreateApiKeyRequest,
+  CreateApiKeyResponse,
   CreateMeshSetupRequestWritable,
   CreateMeshSetupResponse,
   CreateSessionRequestWritable,
   CreateSessionResponse,
   CurrentSessionResponse,
   HealthResponse,
+  RevokeAuthenticationMethodRequest,
+  RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
   RevokeCurrentSessionResponse,
   SetupStatusResponse,
 } from "./types.gen";
 import {
   zApiError,
+  zCreateCurrentUserApiKeyBody,
+  zCreateCurrentUserApiKeyResponse,
   zCreateMeshSetupBody,
   zCreateMeshSetupResponse2,
   zCreateSessionBody,
@@ -23,6 +29,9 @@ import {
   zGetHealthResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
+  zRevokeCurrentUserAuthenticationMethodBody,
+  zRevokeCurrentUserAuthenticationMethodPath,
+  zRevokeCurrentUserAuthenticationMethodResponse,
   zRevokeCurrentSessionBody,
   zRevokeCurrentSessionResponse2,
 } from "./zod.gen";
@@ -42,6 +51,10 @@ export type CreateSessionResult = Readonly<{
 }>;
 
 export interface MeshSpanFetchClient {
+  createCurrentUserApiKey(
+    request: CreateApiKeyRequest,
+    csrfToken: string,
+  ): Promise<CreateApiKeyResponse>;
   createMeshSetup(
     request: CreateMeshSetupRequestWritable,
   ): Promise<CreateMeshSetupResponse>;
@@ -56,6 +69,11 @@ export interface MeshSpanFetchClient {
     request: RevokeCurrentSessionRequest,
     csrfToken: string,
   ): Promise<RevokeCurrentSessionResponse>;
+  revokeCurrentUserAuthenticationMethod(
+    methodId: string,
+    request: RevokeAuthenticationMethodRequest,
+    csrfToken: string,
+  ): Promise<RevokeAuthenticationMethodResponse>;
 }
 
 export class MeshSpanApiError extends Error {
@@ -88,6 +106,28 @@ export function createMeshSpanFetchClient(
   };
 
   return {
+    async createCurrentUserApiKey(
+      request,
+      csrfToken,
+    ): Promise<CreateApiKeyResponse> {
+      const body = zCreateCurrentUserApiKeyBody.parse(request);
+      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
+        throw new TypeError("request has an invalid MeshSpan CSRF token");
+      }
+      return requestJson(
+        context,
+        "/users/current/authentication-methods/api-keys",
+        {
+          body: JSON.stringify(body),
+          headers: {
+            "Content-Type": "application/json",
+            "MeshSpan-CSRF-Token": csrfToken,
+          },
+          method: "POST",
+        },
+        zCreateCurrentUserApiKeyResponse,
+      );
+    },
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -172,7 +212,49 @@ export function createMeshSpanFetchClient(
         zRevokeCurrentSessionResponse2,
       );
     },
+    async revokeCurrentUserAuthenticationMethod(
+      methodId,
+      request,
+      csrfToken,
+    ): Promise<RevokeAuthenticationMethodResponse> {
+      const path = zRevokeCurrentUserAuthenticationMethodPath.parse({
+        method_id: methodId,
+      });
+      const body = zRevokeCurrentUserAuthenticationMethodBody.parse(request);
+      if (!CSRF_TOKEN_PATTERN.test(csrfToken)) {
+        throw new TypeError("request has an invalid MeshSpan CSRF token");
+      }
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/users/current/authentication-methods/{method_id}/revocations",
+          "method_id",
+          path.method_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: {
+            "Content-Type": "application/json",
+            "MeshSpan-CSRF-Token": csrfToken,
+          },
+          method: "POST",
+        },
+        zRevokeCurrentUserAuthenticationMethodResponse,
+      );
+    },
   };
+}
+
+function substitutePathParameter(
+  route: string,
+  name: string,
+  value: string,
+): string {
+  const placeholder = `{${name}}`;
+  if (!route.includes(placeholder)) {
+    throw new TypeError("generated route is missing a required path parameter");
+  }
+  return route.replace(placeholder, encodeURIComponent(value));
 }
 
 async function requestJson<T>(

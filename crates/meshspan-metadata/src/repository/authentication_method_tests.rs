@@ -121,6 +121,18 @@ fn api_key_revocation_is_audited_restart_safe_and_exactly_replayable()
     let replayed_revoke = repository.apply_committed(position(4), revoke_context, &revoke)?;
     assert_eq!(replayed_revoke.disposition, ApplyDisposition::Replayed);
     assert_eq!(replayed_revoke.result_digest, revoked.result_digest);
+    let resolved = repository
+        .resolve_authentication_method_revocation(revoke_context.operation_id)?
+        .ok_or("authentication-method revocation replay missing")?;
+    assert_eq!(
+        resolved.request_digest,
+        revoke.request_digest(revoke_context)
+    );
+    assert_eq!(resolved.result_digest, revoked.result_digest);
+    assert_eq!(resolved.method_id, method_id);
+    assert_eq!(resolved.principal_id, administrator);
+    assert_eq!(resolved.actor_principal_id, administrator);
+    assert_eq!(resolved.revoked_at, UnixMicros::new(30));
     let database = repository.into_database();
     let stored: (i64, i64, Vec<u8>, i64, i64) = database.connection().query_row(
         "SELECT method.method_kind, method.state, key.key_digest,

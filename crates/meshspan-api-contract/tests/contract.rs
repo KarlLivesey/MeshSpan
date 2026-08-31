@@ -9,21 +9,24 @@
 )]
 
 use meshspan_api_contract::{
-    ApiError, ApiErrorCode, AuthenticationMethodId, BoundaryError, CreateMeshSetupResponse,
-    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationResponse, CreateSessionResponse, NullableField, OperationId,
-    PasskeyAttestation, PasskeyChallengeId, PasskeyCredentialDescriptor,
-    PasskeyCredentialParameter, PasskeyCredentialType, PasskeyResidentKey, PasskeyUserVerification,
+    ApiError, ApiErrorCode, ApiKeyId, ApiKeyScope, AuthenticationMethodId, BoundaryError,
+    CreateApiKeyResponse, CreateMeshSetupResponse, CreatePasskeyChallengeResponse,
+    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationResponse,
+    CreateSessionResponse, NullableField, OperationId, PasskeyAttestation, PasskeyChallengeId,
+    PasskeyCredentialDescriptor, PasskeyCredentialParameter, PasskeyCredentialType,
+    PasskeyResidentKey, PasskeyUserVerification, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
-    decode_create_mesh_setup_request, decode_create_passkey_challenge_request,
-    decode_create_passkey_registration_challenge_request,
+    decode_create_api_key_request, decode_create_mesh_setup_request,
+    decode_create_passkey_challenge_request, decode_create_passkey_registration_challenge_request,
     decode_create_passkey_registration_request, decode_create_session_request,
-    decode_revoke_current_session_request, encode_api_error, encode_create_mesh_setup_response,
+    decode_revoke_authentication_method_request, decode_revoke_current_session_request,
+    encode_api_error, encode_create_api_key_response, encode_create_mesh_setup_response,
     encode_create_passkey_challenge_response,
     encode_create_passkey_registration_challenge_response,
     encode_create_passkey_registration_response, encode_create_session_response,
-    encode_revoke_current_session_response, encode_setup_status_response, generate_openapi,
-    validate_create_mesh_setup_request_value, validate_create_passkey_challenge_request_value,
+    encode_revoke_authentication_method_response, encode_revoke_current_session_response,
+    encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
+    validate_create_passkey_challenge_request_value,
     validate_create_passkey_challenge_response_value,
     validate_create_passkey_registration_request_value, validate_create_session_request_value,
     validate_create_session_response_value, validate_setup_status_response_value,
@@ -245,6 +248,105 @@ fn passkey_registration_contract_is_authenticated_bounded_and_validated_both_way
         &document.value()["paths"]["/users/current/authentication-methods/passkeys"]["post"];
     assert_eq!(completion_path["operationId"], "createCurrentUserPasskey");
     assert_eq!(completion_path["x-meshspan-access"], "authenticated-csrf");
+}
+
+#[test]
+fn api_key_issuance_preserves_expiry_intent_and_validates_secret_output() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    let base = json!({
+        "operation_id": operation,
+        "label": "Laptop automation",
+        "scopes": ["https_session", "headless_api"]
+    });
+    let missing = decode_create_api_key_request(
+        &serde_json::to_vec(&base).expect("request fixture must encode"),
+    )
+    .expect("missing-expiry request must decode");
+    assert_eq!(missing.expires_at_epoch_micros, NullableField::Missing);
+    let mut null = base.clone();
+    null["expires_at_epoch_micros"] = Value::Null;
+    let null = decode_create_api_key_request(
+        &serde_json::to_vec(&null).expect("null fixture must encode"),
+    )
+    .expect("explicit-null request must decode");
+    assert_eq!(null.expires_at_epoch_micros, NullableField::Null);
+    let mut explicit = base;
+    explicit["expires_at_epoch_micros"] = json!(1_900_000_000_000_000_i64);
+    let explicit = decode_create_api_key_request(
+        &serde_json::to_vec(&explicit).expect("expiry fixture must encode"),
+    )
+    .expect("explicit-expiry request must decode");
+    assert!(matches!(
+        explicit.expires_at_epoch_micros,
+        NullableField::Value(_)
+    ));
+
+    let response = CreateApiKeyResponse {
+        operation_id: serde_json::from_value(json!(operation))
+            .expect("operation fixture must be valid"),
+        method_id: AuthenticationMethodId::from_uuid_bytes(versioned(12))
+            .expect("method fixture must be valid"),
+        key_id: ApiKeyId::from_uuid_bytes(versioned(13)).expect("key fixture must be valid"),
+        secret: concat!(
+            "meshspan-key-v1.",
+            "0d0d0d0d0d0d4d0d8d0d0d0d0d0d0d0d.",
+            "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"
+        )
+        .to_owned(),
+        scopes: vec![ApiKeyScope::HttpsSession, ApiKeyScope::HeadlessApi],
+        created_at_epoch_micros: 1_800_000_000_000_000,
+        valid_from_epoch_micros: 1_800_000_000_000_000,
+        expires_at_epoch_micros: Some(1_900_000_000_000_000),
+    };
+    encode_create_api_key_response(&response).expect("valid API-key response must encode");
+    let document = generate_openapi().expect("contract must generate");
+    let path = &document.value()["paths"]["/users/current/authentication-methods/api-keys"]["post"];
+    assert_eq!(path["operationId"], "createCurrentUserApiKey");
+    assert_eq!(path["x-meshspan-access"], "authenticated-csrf");
+}
+
+#[test]
+fn authentication_method_revocation_is_bounded_owned_and_generated_once() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    let method = AuthenticationMethodId::from_uuid_bytes(versioned(14))
+        .expect("method fixture must be valid");
+    let request = decode_revoke_authentication_method_request(
+        &serde_json::to_vec(&json!({
+            "operation_id": operation,
+            "reason": "Rotating the automation credential"
+        }))
+        .expect("request fixture must encode"),
+    )
+    .expect("exact revocation request must decode");
+    assert_eq!(
+        request.reason.as_str(),
+        "Rotating the automation credential"
+    );
+    for invalid in [" leading", "trailing ", "contains\ncontrol"] {
+        assert!(
+            decode_revoke_authentication_method_request(
+                &serde_json::to_vec(&json!({
+                    "operation_id": operation,
+                    "reason": invalid
+                }))
+                .expect("rejection fixture must encode")
+            )
+            .is_err()
+        );
+    }
+    let response = RevokeAuthenticationMethodResponse {
+        operation_id: request.operation_id,
+        method_id: method,
+        revoked_at_epoch_micros: 1_800_000_000_000_000,
+    };
+    assert!(encode_revoke_authentication_method_response(&response).is_ok());
+
+    let document = generate_openapi().expect("contract must generate");
+    let path = &document.value()["paths"]["/users/current/authentication-methods/{method_id}/revocations"]
+        ["post"];
+    assert_eq!(path["operationId"], "revokeCurrentUserAuthenticationMethod");
+    assert_eq!(path["x-meshspan-access"], "authenticated-csrf");
+    assert_eq!(path["parameters"][0]["name"], "method_id");
 }
 
 #[test]

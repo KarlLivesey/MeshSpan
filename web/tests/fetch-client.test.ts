@@ -14,6 +14,7 @@ const SETUP_OPERATION_ID = "00000000-0000-4000-8000-000000000001";
 const SETUP_CLAIM = `meshspan-claim-v1.${"1".repeat(32)}.${"2".repeat(64)}`;
 const SESSION_API_KEY = `meshspan-key-v1.${"3".repeat(32)}.${"4".repeat(64)}`;
 const SESSION_CSRF = `meshspan-csrf-v1.${"5".repeat(32)}.${"6".repeat(64)}`;
+const ISSUED_API_KEY = `meshspan-key-v1.${"7".repeat(32)}.${"8".repeat(64)}`;
 
 describe("generated native Fetch client requests", () => {
   it("uses the generated route and validates the response", async () => {
@@ -278,6 +279,75 @@ describe("generated current session", () => {
   });
 });
 
+describe("generated current-user API-key issuance", () => {
+  it("sends the exact authenticated request and validates the secret response", async () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input, init) => {
+        expect(readRequestUrl(input)).toBe(
+          "https://node.example/api/latest/users/current/authentication-methods/api-keys",
+        );
+        expect(init?.method).toBe("POST");
+        expect(new Headers(init?.headers).get("MeshSpan-CSRF-Token")).toBe(
+          SESSION_CSRF,
+        );
+        expect(JSON.parse(readStringBody(init?.body))).toEqual({
+          expires_at_epoch_micros: null,
+          label: "Automation",
+          operation_id: SETUP_OPERATION_ID,
+          scopes: ["headless_api", "smb_session"],
+        });
+        return Promise.resolve(jsonResponse(validApiKeyResponse(), 201));
+      },
+    });
+
+    await expect(
+      client.createCurrentUserApiKey(
+        {
+          expires_at_epoch_micros: null,
+          label: "Automation",
+          operation_id: SETUP_OPERATION_ID,
+          scopes: ["headless_api", "smb_session"],
+        },
+        SESSION_CSRF,
+      ),
+    ).resolves.toEqual(validApiKeyResponse());
+  });
+
+  it("rejects invalid input before Fetch", async () => {
+    let called = false;
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async () => {
+        called = true;
+        return Promise.resolve(jsonResponse(validApiKeyResponse(), 201));
+      },
+    });
+
+    await expect(
+      client.createCurrentUserApiKey(
+        {
+          label: "Automation",
+          operation_id: SETUP_OPERATION_ID,
+          scopes: [],
+        },
+        SESSION_CSRF,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      client.createCurrentUserApiKey(
+        {
+          label: "Automation",
+          operation_id: SETUP_OPERATION_ID,
+          scopes: ["headless_api"],
+        },
+        "invalid",
+      ),
+    ).rejects.toThrow("request has an invalid MeshSpan CSRF token");
+    expect(called).toBe(false);
+  });
+});
+
 describe("generated current-session revocation", () => {
   it("validates input and sends the session-bound CSRF token", async () => {
     const client = createMeshSpanFetchClient({
@@ -362,6 +432,19 @@ function validSessionResponse() {
     expires_at_epoch_micros: 60_000_000,
     operation_id: SETUP_OPERATION_ID,
     session_id: "00000000-0000-4000-8000-000000000007",
+  } as const;
+}
+
+function validApiKeyResponse() {
+  return {
+    created_at_epoch_micros: 70_000_000,
+    expires_at_epoch_micros: null,
+    key_id: "00000000-0000-4000-8000-000000000009",
+    method_id: "00000000-0000-4000-8000-00000000000a",
+    operation_id: SETUP_OPERATION_ID,
+    scopes: ["headless_api", "smb_session"],
+    secret: ISSUED_API_KEY,
+    valid_from_epoch_micros: 70_000_000,
   } as const;
 }
 

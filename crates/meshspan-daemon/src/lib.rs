@@ -3,9 +3,25 @@
 //! Daemon process composition, configuration and local secret presentation.
 
 mod api_http;
+mod api_key_issuance;
+mod api_key_issuance_api;
+#[cfg(test)]
+mod api_key_issuance_api_tests;
+mod api_key_issuance_contract;
+mod api_key_issuance_model;
+#[cfg(test)]
+mod api_key_issuance_tests;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
+mod authentication_method_revocation;
+mod authentication_method_revocation_api;
+#[cfg(test)]
+mod authentication_method_revocation_api_tests;
+mod authentication_method_revocation_contract;
+mod authentication_method_revocation_model;
+#[cfg(test)]
+mod authentication_method_revocation_tests;
 mod browser_authentication;
 mod browser_session;
 mod claim_file;
@@ -54,7 +70,24 @@ mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 
+pub use api_key_issuance::ApiKeyIssuanceService;
+pub use api_key_issuance_api::{
+    ApiKeyIssuanceApiError, ApiKeyIssuanceController, api_key_issuance_api_router,
+};
+pub use api_key_issuance_contract::{
+    ApiKeyIssuanceAuthority, ApiKeyIssuanceAuthorityError, ApiKeyIssuanceCommit,
+    ApiKeyIssuanceError,
+};
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
+pub use authentication_method_revocation::AuthenticationMethodRevocationService;
+pub use authentication_method_revocation_api::{
+    AuthenticationMethodRevocationApiError, AuthenticationMethodRevocationController,
+    authentication_method_revocation_api_router,
+};
+pub use authentication_method_revocation_contract::{
+    AuthenticationMethodRevocationAuthority, AuthenticationMethodRevocationAuthorityError,
+    AuthenticationMethodRevocationCommit, AuthenticationMethodRevocationError,
+};
 pub use browser_authentication::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
     BrowserSessionAuthorityError, GatewaySessionIdentity,
