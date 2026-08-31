@@ -148,7 +148,8 @@ pub use kernel::{
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
 pub use passkey_registration::{
-    AuthenticationMethodCreationReplay, PasskeyRegistrationProfile, PasskeyRegistrationReplay,
+    AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
+    PasskeyRegistrationProfile, PasskeyRegistrationReplay,
 };
 pub use query::{
     GroupMemberCursor, NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalKind,
@@ -694,6 +695,18 @@ impl AuthoritativeRepository {
         principal_id: meshspan_domain::PrincipalId,
     ) -> Result<Option<PasskeyRegistrationProfile>, RepositoryError> {
         passkey_registration::profile(&self.database, principal_id)
+    }
+
+    /// Returns the current active user identity for a non-passkey registration ceremony.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when replicated identity evidence is malformed.
+    pub fn authentication_registration_profile(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+    ) -> Result<Option<AuthenticationRegistrationProfile>, RepositoryError> {
+        passkey_registration::authentication_profile(&self.database, principal_id)
     }
 
     /// Resolves one exact committed passkey-registration operation.

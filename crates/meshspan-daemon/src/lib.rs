@@ -69,6 +69,13 @@ mod revoke_session_api;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
+mod totp_registration;
+mod totp_registration_configuration;
+mod totp_registration_contract;
+mod totp_registration_model;
+mod totp_registration_state;
+#[cfg(test)]
+mod totp_registration_tests;
 mod totp_secret;
 
 pub use api_key_issuance::ApiKeyIssuanceService;
@@ -131,6 +138,7 @@ pub use passkey_registration_configuration::{
     PasskeyRegistrationConfiguration, PasskeyRegistrationConfigurationError,
 };
 pub use passkey_registration_contract::{
+    AuthenticationRegistrationStore, AuthenticationRegistrationStoreError,
     PasskeyRegistrationAuthority, PasskeyRegistrationAuthorityError, PasskeyRegistrationCommit,
     PasskeyRegistrationError, PasskeyRegistrationStore, PasskeyRegistrationStoreError,
 };
@@ -152,6 +160,15 @@ pub use setup_api::{
     CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,
     SetupStatusSource, setup_api_router, setup_api_router_with_creation,
 };
+pub use totp_registration::TotpRegistrationService;
+pub use totp_registration_configuration::{
+    TotpRegistrationConfiguration, TotpRegistrationConfigurationError,
+};
+pub use totp_registration_contract::{
+    TotpRegistrationAuthority, TotpRegistrationAuthorityError, TotpRegistrationCommit,
+    TotpRegistrationError,
+};
+pub use totp_registration_state::{TotpCeremonyKey, TotpRegistrationStateError};
 pub use totp_secret::{TotpEnvelopeKey, TotpSecretBinding, TotpSecretCipher, TotpSecretError};
 
 use meshspan_domain::{EntropyError, RandomSource};
