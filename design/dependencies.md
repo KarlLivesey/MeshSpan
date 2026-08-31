@@ -15,6 +15,12 @@ and has a bounded interface owned by MeshSpan.
 Installed versions are locked by `Cargo.lock` and `pnpm-lock.yaml`. Automated
 updates must pass the same complete local gates as a human change.
 
+Version locking provides reproducibility, not permission to remain on an
+obsolete release line. MeshSpan must not resolve an incompatibility by pinning a
+version which no longer receives upstream security or bug fixes. It must move to
+a maintained release, adapt or replace the dependency boundary, or own the
+small required implementation and its maintenance burden.
+
 ## Toolchains
 
 | Tool       | Required line                                       | Purpose                                                                                                           |
