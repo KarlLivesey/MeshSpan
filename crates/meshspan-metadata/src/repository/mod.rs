@@ -152,7 +152,7 @@ pub use reachability::{
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
 pub use retention::VersionRetentionPolicy;
-pub use session::{ApiKeySessionReplay, SessionRevocationReplay};
+pub use session::{ApiKeySessionReplay, PasskeySessionReplay, SessionRevocationReplay};
 pub use session_access::{
     BrowserSessionAccessRequest, BrowserSessionProtection, SessionAccessCapability,
     SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
@@ -515,6 +515,19 @@ impl AuthoritativeRepository {
         operation_id: OperationId,
     ) -> Result<Option<ApiKeySessionReplay>, RepositoryError> {
         session::resolve_api_key_replay(&self.database, operation_id)
+    }
+
+    /// Resolves the durable delivery facts for one prior passkey session operation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if the operation targets another command family or retained session state is
+    /// malformed, revoked or no longer a single passkey ceremony.
+    pub fn resolve_passkey_session(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<PasskeySessionReplay>, RepositoryError> {
+        session::resolve_passkey_replay(&self.database, operation_id)
     }
 
     /// Resolves an exact durable self-service session revocation retry.

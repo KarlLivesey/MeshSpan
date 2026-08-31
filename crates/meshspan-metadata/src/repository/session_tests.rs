@@ -72,6 +72,48 @@ fn session_establishment_obeys_current_class_and_lifetime_policy()
 }
 
 #[test]
+fn single_passkey_session_replay_retains_exact_delivery_facts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let partition_id = meshspan_domain::PartitionId::from_bytes([1; 16])?;
+    let administrator = meshspan_domain::PrincipalId::from_bytes([2; 16])?;
+    let database = PartitionDatabase::open(
+        &directory.path().join("passkey-session-replay.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap(&mut repository, administrator)?;
+    let passkey_method = AuthenticationMethodId::from_bytes([20; 16])?;
+    create_passkey(&mut repository, administrator, passkey_method)?;
+    let command = single_passkey_session(administrator, passkey_method, 70, 500)?;
+    repository.apply_committed(
+        position(3),
+        context(71, administrator, 72, 120, Some(Revision::new(2)))?,
+        &command,
+    )?;
+
+    let replay = repository
+        .resolve_passkey_session(meshspan_domain::OperationId::from_bytes([71; 16])?)?
+        .ok_or("passkey session replay missing")?;
+    assert_ne!(replay.result_digest, [0; 32]);
+    assert_eq!(replay.session_id, SessionId::from_bytes([70; 16])?);
+    assert_eq!(replay.principal_id, administrator);
+    assert_eq!(replay.method_id, passkey_method);
+    assert_eq!(replay.credential_generation, 1);
+    assert_eq!(replay.credential_id, vec![24; 32]);
+    assert_eq!(
+        replay.client_label,
+        crate::SessionClientLabel::Value("Office browser".to_owned())
+    );
+    assert_eq!(replay.expires_at, UnixMicros::new(500));
+    assert!(replay.persistent_cookie);
+    assert_eq!(replay.service, AuthenticationService::Https);
+    assert!(replay.revoked_at.is_none());
+    Ok(())
+}
+
+#[test]
 fn current_privileged_policy_controls_step_up_age_without_a_caller_claim()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
