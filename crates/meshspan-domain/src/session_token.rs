@@ -38,18 +38,44 @@ impl SessionTokenBundle {
         api_key: &ApiKeyBundle,
         operation_id: OperationId,
     ) -> Result<Self, SessionTokenBundleError> {
-        let mut session_id = derive(
+        Self::derive_from_material(
             b"meshspan.authentication.session-id.v1",
             api_key.secret_bytes(),
             operation_id,
-        );
+            b"meshspan.authentication.session-secret.v1",
+        )
+    }
+
+    /// Derives exact-retry-stable session material from one protected passkey ceremony seed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an all-zero seed and cryptographically negligible invalid output.
+    pub fn derive_from_passkey_seed(
+        seed: &[u8; 32],
+        operation_id: OperationId,
+    ) -> Result<Self, SessionTokenBundleError> {
+        if seed == &[0; 32] {
+            return Err(SessionTokenBundleError::Invalid);
+        }
+        Self::derive_from_material(
+            b"meshspan.authentication.passkey-session-id.v1",
+            seed,
+            operation_id,
+            b"meshspan.authentication.passkey-session-secret.v1",
+        )
+    }
+
+    fn derive_from_material(
+        identity_domain: &[u8],
+        source: &[u8; 32],
+        operation_id: OperationId,
+        secret_domain: &[u8],
+    ) -> Result<Self, SessionTokenBundleError> {
+        let mut session_id = derive(identity_domain, source, operation_id);
         session_id[6] = (session_id[6] & 0x0f) | 0x40;
         session_id[8] = (session_id[8] & 0x3f) | 0x80;
-        let secret = Zeroizing::new(derive(
-            b"meshspan.authentication.session-secret.v1",
-            api_key.secret_bytes(),
-            operation_id,
-        ));
+        let secret = Zeroizing::new(derive(secret_domain, source, operation_id));
         Self::from_parts(
             session_id[..16]
                 .try_into()
@@ -122,6 +148,24 @@ impl SessionCsrfBundle {
         let secret = Zeroizing::new(derive(
             b"meshspan.authentication.csrf-secret.v1",
             api_key.secret_bytes(),
+            operation_id,
+        ));
+        Self::from_parts(session.session_id.as_bytes(), secret)
+    }
+
+    /// Derives exact-retry-stable CSRF material from one protected passkey ceremony seed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an all-zero seed and cryptographically negligible invalid output.
+    pub fn derive_from_passkey_seed(
+        seed: &[u8; 32],
+        operation_id: OperationId,
+    ) -> Result<Self, SessionTokenBundleError> {
+        let session = SessionTokenBundle::derive_from_passkey_seed(seed, operation_id)?;
+        let secret = Zeroizing::new(derive(
+            b"meshspan.authentication.passkey-csrf-secret.v1",
+            seed,
             operation_id,
         ));
         Self::from_parts(session.session_id.as_bytes(), secret)
@@ -210,6 +254,25 @@ mod tests {
         let parsed_csrf = SessionCsrfBundle::parse(&csrf_encoded)?;
         assert_eq!(parsed_csrf.session_id(), first.session_id());
         assert_eq!(parsed_csrf.token_digest(), csrf.token_digest());
+        Ok(())
+    }
+
+    #[test]
+    fn passkey_seed_derivation_is_stable_and_domain_separated()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let operation_id = OperationId::from_bytes([10; 16])?;
+        let seed = [11; 32];
+        let bearer = SessionTokenBundle::derive_from_passkey_seed(&seed, operation_id)?;
+        let retry = SessionTokenBundle::derive_from_passkey_seed(&seed, operation_id)?;
+        let csrf = SessionCsrfBundle::derive_from_passkey_seed(&seed, operation_id)?;
+        assert_eq!(bearer.session_id(), retry.session_id());
+        assert_eq!(bearer.token_digest(), retry.token_digest());
+        assert_eq!(bearer.session_id(), csrf.session_id());
+        assert_ne!(bearer.token_digest(), csrf.token_digest());
+        assert!(matches!(
+            SessionTokenBundle::derive_from_passkey_seed(&[0; 32], operation_id),
+            Err(SessionTokenBundleError::Invalid)
+        ));
         Ok(())
     }
 

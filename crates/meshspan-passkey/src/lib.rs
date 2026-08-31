@@ -3,6 +3,7 @@
 //! Bounded `WebAuthn` relying-party operations for hostile-input services.
 
 mod assertion;
+mod assertion_transport;
 mod authenticator_data;
 mod base64url;
 mod cbor;
@@ -15,6 +16,7 @@ pub use assertion::{
     Assertion, AssertionExpectation, AssertionOutcome, CounterState, Es256PublicKey,
     UserVerification, verify_assertion,
 };
+pub use assertion_transport::OwnedAssertion;
 pub use challenge::{PASSKEY_CHALLENGE_BYTES, PasskeyChallenge};
 pub use error::{PasskeyError, PasskeyErrorKind};
 pub use registration::{
