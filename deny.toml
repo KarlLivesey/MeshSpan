@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[graph]
+# MeshSpan ships native Linux/macOS daemons and Linux OCI images. Native browser-WASM and Windows
+# daemons are not supported targets; Quinn declares Ring only for its browser-WASM target.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = false
+
+[licenses]
+# Tests and build tooling are part of the reviewed source tree even when they are not linked into
+# a shipped binary.
+include-dev = true
+confidence-threshold = 0.95
+unused-allowed-license = "allow"
+allow = [
+    "GPL-2.0-only",
+    "MIT",
+    "MIT-0",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    # The LLVM exception expressly permits combination with GPLv2. Plain Apache-2.0 remains
+    # intentionally absent because it is not compatible with GPL-2.0-only.
+    "Apache-2.0 WITH LLVM-exception",
+]
+
+[licenses.private]
+ignore = false

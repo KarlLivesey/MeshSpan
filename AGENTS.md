@@ -175,6 +175,9 @@ abstractions solely to make the crate independently publishable.
   release, adapt the boundary, replace the dependency or own the required code.
 - Dependency and generated-code licences must be recorded and compatible with
   distributing the complete MeshSpan artefacts as `GPL-2.0-only`.
+- Every dependency change must pass `cargo deny check licenses`; the allow-only
+  policy includes development dependencies and intentionally excludes plain
+  `Apache-2.0`.
 
 ## TypeScript and ESLint contract
 

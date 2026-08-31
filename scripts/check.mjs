@@ -40,6 +40,10 @@ if (!generation.passed) {
       ],
     },
     {
+      name: "Rust dependency licences",
+      steps: [["cargo", ["deny", "check", "licenses"]]],
+    },
+    {
       name: "Rust domain and authentication primitives",
       steps: [
         [
