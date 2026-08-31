@@ -252,6 +252,29 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         crate::upload_service::abort(&mut self.uploads, &mut self.stages, request)
     }
 
+    /// Publishes one complete private upload as immutable content and one atomic namespace change.
+    ///
+    /// Incomplete checkpoints are rejected before the upload is frozen. Once the durable commit
+    /// transition begins, exact retries can only finish the same content and namespace mutation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete or stale checkpoints, substituted publication plans, conflicting
+    /// retries, content failure and atomic namespace-publication failure.
+    pub fn commit_upload(
+        &mut self,
+        request: &crate::UploadCommitRequest,
+    ) -> Result<crate::UploadCommitReceipt, FilesystemCommitError> {
+        let transition =
+            crate::upload_service::begin_commit(&mut self.uploads, &self.stages, request)?;
+        let publication = self.commit_root_file(&request.publication)?;
+        let session = crate::upload_service::finish_commit(&mut self.uploads, transition)?;
+        Ok(crate::UploadCommitReceipt {
+            session,
+            publication,
+        })
+    }
+
     /// Opens a logical file and establishes its bounded private stage before a writable handle
     /// can be returned.
     ///

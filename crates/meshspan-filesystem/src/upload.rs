@@ -4,10 +4,14 @@
 
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
-    FileVersionId, OperationId, PrincipalId, Revision, StageId, UnixMicros, UploadId, VolumeId,
+    FileVersionId, ObjectId, OperationId, PrincipalId, Revision, StageId, UnixMicros, UploadId,
+    VolumeId,
 };
 
-use crate::{Checkpoint, NamespacePath, StageWrite, StageWriteOutcome};
+use crate::{
+    Checkpoint, NamespacePath, NamespacePublicationReceipt, RootFileCommitRequest, StageWrite,
+    StageWriteOutcome,
+};
 
 /// Namespace precondition applied when an upload is eventually published.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +108,10 @@ pub struct UploadSession {
     pub created_at: UnixMicros,
     /// Exclusive session deadline.
     pub expires_at: UnixMicros,
+    /// Stable namespace object published by a completed upload.
+    pub committed_object_id: Option<ObjectId>,
+    /// Immutable file version published by a completed upload.
+    pub committed_version_id: Option<FileVersionId>,
 }
 
 /// One independently idempotent bounded range write to a private upload.
@@ -170,6 +178,40 @@ pub struct UploadStatusReceipt {
     pub session: UploadSession,
     /// Exact sorted range coverage and current mutation sequence.
     pub checkpoint: Checkpoint,
+}
+
+/// Explicit atomic publication of one complete private upload checkpoint.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UploadCommitRequest {
+    /// Stable publication operation identity.
+    pub operation_id: OperationId,
+    /// Upload whose private bytes are selected.
+    pub upload_id: UploadId,
+    /// Authenticated owning principal.
+    pub principal_id: PrincipalId,
+    /// Currently revalidated permission revision.
+    pub authorization_revision: Revision,
+    /// Exact current upload fence.
+    pub stage_fence: u64,
+    /// Exact checkpoint selected; later writes make the request stale.
+    pub expected_sequence: u64,
+    /// Exact resulting logical length.
+    pub final_length: u64,
+    /// Whether uncovered ranges are explicit logical zeroes.
+    pub sparse: bool,
+    /// Complete pre-authorised namespace and immutable-content plan.
+    pub publication: RootFileCommitRequest,
+    /// Authoritative commit instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Durable result of one atomic upload publication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UploadCommitReceipt {
+    /// Terminal upload state with published object/version identities.
+    pub session: UploadSession,
+    /// Exact namespace publication receipt, applied or replayed.
+    pub publication: NamespacePublicationReceipt,
 }
 
 /// Idempotent request to abandon one unpublished upload.

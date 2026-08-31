@@ -6,7 +6,8 @@ use std::fs;
 use std::path::Path;
 
 use meshspan_domain::{
-    FileVersionId, OperationId, PrincipalId, Revision, StageId, UnixMicros, UploadId, VolumeId,
+    FileVersionId, ObjectId, OperationId, PrincipalId, Revision, StageId, UnixMicros, UploadId,
+    VolumeId,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
@@ -17,8 +18,17 @@ use crate::{
 };
 
 const DATABASE_FILE: &str = "filesystem-uploads.sqlite3";
-const SCHEMA: &str = include_str!("../schema/upload/001_initial.sql");
-const SCHEMA_VERSION: u32 = 1;
+const MIGRATIONS: [Migration; 2] = [
+    Migration {
+        version: 1,
+        sql: include_str!("../schema/upload/001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("../schema/upload/002_commit_operations.sql"),
+    },
+];
+const SCHEMA_VERSION: u32 = 2;
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 
 const STATE_PREPARING: u8 = 1;
@@ -27,6 +37,24 @@ const STATE_ABORTING: u8 = 3;
 const STATE_ABORTED: u8 = 4;
 const STATE_COMMITTING: u8 = 5;
 const STATE_COMMITTED: u8 = 6;
+
+#[derive(Clone, Copy)]
+struct Migration {
+    version: u32,
+    sql: &'static str,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct UploadCommitTransition {
+    pub(crate) operation_id: OperationId,
+    pub(crate) upload_id: UploadId,
+    pub(crate) principal_id: PrincipalId,
+    pub(crate) stage_fence: u64,
+    pub(crate) request_digest: [u8; 32],
+    pub(crate) object_id: ObjectId,
+    pub(crate) version_id: FileVersionId,
+    pub(crate) observed_at: UnixMicros,
+}
 
 pub(crate) struct UploadSessionStore {
     connection: Connection,
@@ -134,6 +162,86 @@ impl UploadSessionStore {
         decode_session(&self.connection, &stored)
     }
 
+    pub(crate) fn begin_commit(
+        &mut self,
+        transition: UploadCommitTransition,
+    ) -> Result<UploadSession, UploadStoreError> {
+        let stored =
+            load_stored(&self.connection, transition.upload_id)?.ok_or(UploadStoreError::Stale)?;
+        if matches!(stored.state, STATE_COMMITTING | STATE_COMMITTED) {
+            validate_commit_replay(transition, &stored)?;
+            return decode_session_allow_transition(&self.connection, &stored);
+        }
+        if stored.state != STATE_ACTIVE
+            || identifier(&stored.principal, PrincipalId::from_bytes)? != transition.principal_id
+            || positive(stored.stage_fence)? != transition.stage_fence
+            || UnixMicros::new(stored.expires_at) <= transition.observed_at
+        {
+            return Err(UploadStoreError::Stale);
+        }
+        let operation_collision: i64 = self.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM upload_sessions
+                WHERE commit_operation_id = ?1 AND upload_id != ?2
+             )",
+            params![
+                transition.operation_id.as_bytes().as_slice(),
+                transition.upload_id.as_bytes().as_slice(),
+            ],
+            |row| row.get(0),
+        )?;
+        if operation_collision != 0 {
+            return Err(UploadStoreError::OperationConflict);
+        }
+        let updated = self.connection.execute(
+            "UPDATE upload_sessions
+             SET state = 5, commit_operation_id = ?1, commit_request_digest = ?2,
+                 committed_object_id = ?3, committed_version_id = ?4
+             WHERE upload_id = ?5 AND state = 2 AND stage_fence = ?6 AND expires_at > ?7",
+            params![
+                transition.operation_id.as_bytes().as_slice(),
+                transition.request_digest.as_slice(),
+                transition.object_id.as_bytes().as_slice(),
+                transition.version_id.as_bytes().as_slice(),
+                transition.upload_id.as_bytes().as_slice(),
+                to_i64(transition.stage_fence)?,
+                transition.observed_at.get(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err(UploadStoreError::Unavailable);
+        }
+        self.load_transition(transition.upload_id)
+    }
+
+    pub(crate) fn finish_commit(
+        &mut self,
+        transition: UploadCommitTransition,
+    ) -> Result<UploadSession, UploadStoreError> {
+        let stored =
+            load_stored(&self.connection, transition.upload_id)?.ok_or(UploadStoreError::Stale)?;
+        validate_commit_replay(transition, &stored)?;
+        match stored.state {
+            STATE_COMMITTED => decode_session(&self.connection, &stored),
+            STATE_COMMITTING => {
+                let updated = self.connection.execute(
+                    "UPDATE upload_sessions SET state = 6, committed_at = ?1
+                     WHERE upload_id = ?2 AND state = 5",
+                    params![
+                        transition.observed_at.get(),
+                        transition.upload_id.as_bytes().as_slice(),
+                    ],
+                )?;
+                if updated == 1 {
+                    self.load(transition.upload_id)
+                } else {
+                    Err(UploadStoreError::Unavailable)
+                }
+            }
+            _ => Err(UploadStoreError::Stale),
+        }
+    }
+
     pub(crate) fn begin_abort(
         &mut self,
         request: UploadAbortRequest,
@@ -222,6 +330,11 @@ struct StoredSession {
     abort_operation: Option<Vec<u8>>,
     abort_request_digest: Option<Vec<u8>>,
     aborted_at: Option<i64>,
+    commit_operation: Option<Vec<u8>>,
+    commit_request_digest: Option<Vec<u8>>,
+    committed_object: Option<Vec<u8>>,
+    committed_version: Option<Vec<u8>>,
+    committed_at: Option<i64>,
 }
 
 fn load_stored(
@@ -233,7 +346,9 @@ fn load_stored(
             "SELECT upload_id, begin_operation_id, request_digest, stage_id, stage_fence,
                     volume_id, principal_id, authorization_revision, disposition,
                     expected_version_id, maximum_bytes, state, created_at, expires_at, path_depth,
-                    result_digest, abort_operation_id, abort_request_digest, aborted_at
+                    result_digest, abort_operation_id, abort_request_digest, aborted_at,
+                    commit_operation_id, commit_request_digest, committed_object_id,
+                    committed_version_id, committed_at
              FROM upload_sessions WHERE upload_id = ?1",
             [upload_id.as_bytes().as_slice()],
             |row| {
@@ -257,6 +372,11 @@ fn load_stored(
                     abort_operation: row.get(16)?,
                     abort_request_digest: row.get(17)?,
                     aborted_at: row.get(18)?,
+                    commit_operation: row.get(19)?,
+                    commit_request_digest: row.get(20)?,
+                    committed_object: row.get(21)?,
+                    committed_version: row.get(22)?,
+                    committed_at: row.get(23)?,
                 })
             },
         )
@@ -278,6 +398,7 @@ fn decode_session_allow_transition(
     connection: &Connection,
     stored: &StoredSession,
 ) -> Result<UploadSession, UploadStoreError> {
+    validate_transition_shape(stored)?;
     let upload_id = identifier(&stored.upload, UploadId::from_bytes)?;
     let path = load_path(connection, upload_id, stored.path_depth)?;
     let disposition = decode_disposition(stored.disposition, stored.expected_version.as_deref())?;
@@ -295,7 +416,39 @@ fn decode_session_allow_transition(
         state: decode_state(stored.state)?,
         created_at: UnixMicros::new(stored.created_at),
         expires_at: UnixMicros::new(stored.expires_at),
+        committed_object_id: stored
+            .committed_object
+            .as_deref()
+            .map(|value| identifier(value, ObjectId::from_bytes))
+            .transpose()?,
+        committed_version_id: stored
+            .committed_version
+            .as_deref()
+            .map(|value| identifier(value, FileVersionId::from_bytes))
+            .transpose()?,
     })
+}
+
+fn validate_transition_shape(stored: &StoredSession) -> Result<(), UploadStoreError> {
+    let has_commit = stored.commit_operation.is_some()
+        && stored.commit_request_digest.is_some()
+        && stored.committed_object.is_some()
+        && stored.committed_version.is_some();
+    let no_commit = stored.commit_operation.is_none()
+        && stored.commit_request_digest.is_none()
+        && stored.committed_object.is_none()
+        && stored.committed_version.is_none()
+        && stored.committed_at.is_none();
+    let valid_commit = match stored.state {
+        STATE_COMMITTING => has_commit && stored.committed_at.is_none(),
+        STATE_COMMITTED => has_commit && stored.committed_at.is_some(),
+        _ => no_commit,
+    };
+    if valid_commit {
+        Ok(())
+    } else {
+        Err(UploadStoreError::Corrupt)
+    }
 }
 
 fn load_path(
@@ -414,6 +567,37 @@ fn validate_abort_replay(
     }
 }
 
+fn validate_commit_replay(
+    transition: UploadCommitTransition,
+    stored: &StoredSession,
+) -> Result<(), UploadStoreError> {
+    let operation = stored
+        .commit_operation
+        .as_deref()
+        .ok_or(UploadStoreError::Corrupt)?;
+    let request_digest = stored
+        .commit_request_digest
+        .as_deref()
+        .ok_or(UploadStoreError::Corrupt)?;
+    let object = stored
+        .committed_object
+        .as_deref()
+        .ok_or(UploadStoreError::Corrupt)?;
+    let version = stored
+        .committed_version
+        .as_deref()
+        .ok_or(UploadStoreError::Corrupt)?;
+    if identifier(operation, OperationId::from_bytes)? == transition.operation_id
+        && request_digest == transition.request_digest
+        && identifier(object, ObjectId::from_bytes)? == transition.object_id
+        && identifier(version, FileVersionId::from_bytes)? == transition.version_id
+    {
+        Ok(())
+    } else {
+        Err(UploadStoreError::OperationConflict)
+    }
+}
+
 fn decode_disposition(
     code: u8,
     version: Option<&[u8]>,
@@ -449,7 +633,6 @@ fn begin_digest(request: &UploadBeginRequest) -> [u8; 32] {
     digest.update(&request.volume_id.as_bytes());
     digest.update(&request.principal_id.as_bytes());
     digest.update(&request.authorization_revision.get().to_be_bytes());
-    digest.update(&request.authorization_revision.get().to_be_bytes());
     digest.update(&[request.disposition.code()]);
     digest.update(
         &request
@@ -484,6 +667,7 @@ fn abort_digest(request: UploadAbortRequest) -> [u8; 32] {
     digest.update(&request.operation_id.as_bytes());
     digest.update(&request.upload_id.as_bytes());
     digest.update(&request.principal_id.as_bytes());
+    digest.update(&request.authorization_revision.get().to_be_bytes());
     digest.update(&request.stage_fence.to_be_bytes());
     digest.update(&request.observed_at.get().to_be_bytes());
     digest.finalize().into()
@@ -515,26 +699,28 @@ fn migrate(connection: &mut Connection, applied_at: UnixMicros) -> Result<(), Up
     {
         return Err(UploadStoreError::Corrupt);
     }
-    let digest: [u8; 32] = blake3::hash(SCHEMA.as_bytes()).into();
-    if current == 0 {
+    for migration in MIGRATIONS {
+        let digest: [u8; 32] = blake3::hash(migration.sql.as_bytes()).into();
+        if migration.version <= current {
+            let stored: Vec<u8> = connection.query_row(
+                "SELECT migration_digest FROM schema_migrations WHERE version = ?1",
+                [migration.version],
+                |row| row.get(0),
+            )?;
+            if stored.as_slice() != digest {
+                return Err(UploadStoreError::Corrupt);
+            }
+            continue;
+        }
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(SCHEMA)?;
+        transaction.execute_batch(migration.sql)?;
         transaction.execute(
             "INSERT INTO schema_migrations(version, migration_digest, applied_at)
-             VALUES (1, ?1, ?2)",
-            params![digest.as_slice(), applied_at.get()],
+             VALUES (?1, ?2, ?3)",
+            params![migration.version, digest.as_slice(), applied_at.get()],
         )?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.pragma_update(None, "user_version", migration.version)?;
         transaction.commit()?;
-    } else {
-        let stored: Vec<u8> = connection.query_row(
-            "SELECT migration_digest FROM schema_migrations WHERE version = 1",
-            [],
-            |row| row.get(0),
-        )?;
-        if stored.as_slice() != digest {
-            return Err(UploadStoreError::Corrupt);
-        }
     }
     Ok(())
 }
@@ -590,4 +776,46 @@ pub(crate) enum UploadStoreError {
     Io(#[from] std::io::Error),
     #[error("upload session database operation failed")]
     Sqlite(#[from] rusqlite::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use meshspan_domain::UnixMicros;
+    use rusqlite::{Connection, params};
+    use tempfile::tempdir;
+
+    use super::{DATABASE_FILE, MIGRATIONS, SCHEMA_VERSION, UploadSessionStore, configure};
+
+    #[test]
+    fn version_one_upload_database_migrates_without_rewriting_history()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let connection = Connection::open(directory.path().join(DATABASE_FILE))?;
+        configure(&connection)?;
+        connection.execute_batch(MIGRATIONS[0].sql)?;
+        let digest: [u8; 32] = blake3::hash(MIGRATIONS[0].sql.as_bytes()).into();
+        connection.execute(
+            "INSERT INTO schema_migrations(version, migration_digest, applied_at)
+             VALUES (1, ?1, 1)",
+            params![digest.as_slice()],
+        )?;
+        connection.pragma_update(None, "user_version", 1)?;
+        drop(connection);
+
+        let store = UploadSessionStore::open(directory.path(), UnixMicros::new(2))?;
+        let version: u32 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        assert_eq!(version, SCHEMA_VERSION);
+        let column_exists: i64 = store.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM pragma_table_info('upload_sessions')
+                WHERE name = 'commit_request_digest'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(column_exists, 1);
+        Ok(())
+    }
 }

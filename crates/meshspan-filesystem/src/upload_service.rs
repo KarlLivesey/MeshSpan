@@ -5,11 +5,11 @@
 use meshspan_domain::{Revision, UnixMicros};
 use thiserror::Error;
 
-use crate::upload_store::{UploadSessionStore, UploadStoreError};
+use crate::upload_store::{UploadCommitTransition, UploadSessionStore, UploadStoreError};
 use crate::{
     DurableStageStore, StageAbortRequest, StageRegistration, StageStoreError, UploadAbortRequest,
-    UploadBeginRequest, UploadSession, UploadState, UploadStatusReceipt, UploadStatusRequest,
-    UploadWriteReceipt, UploadWriteRequest,
+    UploadBeginRequest, UploadCommitRequest, UploadDisposition, UploadSession, UploadState,
+    UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt, UploadWriteRequest,
 };
 
 pub(crate) fn begin(
@@ -96,6 +96,99 @@ pub(crate) fn abort(
     sessions.finish_abort(request).map_err(Into::into)
 }
 
+pub(crate) fn begin_commit(
+    sessions: &mut UploadSessionStore,
+    stages: &DurableStageStore,
+    request: &UploadCommitRequest,
+) -> Result<UploadCommitTransition, UploadServiceError> {
+    let session = sessions.load(request.upload_id)?;
+    validate_commit(&session, request)?;
+    let checkpoint = stages.checkpoint(session.stage_id)?;
+    if checkpoint.sequence != request.expected_sequence
+        || (!request.sparse
+            && !crate::staging::covers(&checkpoint.initialised_ranges, request.final_length))
+    {
+        return Err(UploadServiceError::Incomplete);
+    }
+    let transition = commit_transition(request);
+    sessions.begin_commit(transition)?;
+    Ok(transition)
+}
+
+pub(crate) fn finish_commit(
+    sessions: &mut UploadSessionStore,
+    transition: UploadCommitTransition,
+) -> Result<UploadSession, UploadServiceError> {
+    sessions.finish_commit(transition).map_err(Into::into)
+}
+
+fn validate_commit(
+    session: &UploadSession,
+    request: &UploadCommitRequest,
+) -> Result<(), UploadServiceError> {
+    let completion = request.publication.completion;
+    let disposition_matches = match session.disposition {
+        UploadDisposition::CreateNew => request.publication.expected_current_version_id.is_none(),
+        UploadDisposition::ReplaceIfVersion(version) => {
+            request.publication.expected_current_version_id == Some(version)
+        }
+        UploadDisposition::ReplaceCurrent => {
+            request.publication.expected_current_version_id.is_some()
+        }
+    };
+    let exact = session.state != UploadState::Aborted
+        && session.principal_id == request.principal_id
+        && request.authorization_revision != Revision::ZERO
+        && session.stage_fence == request.stage_fence
+        && session.expires_at > request.observed_at
+        && request.final_length <= session.maximum_bytes
+        && completion.operation_id == request.operation_id
+        && completion.stage_id == session.stage_id
+        && completion.stage_fence == request.stage_fence
+        && completion.expected_sequence == request.expected_sequence
+        && completion.final_length == request.final_length
+        && completion.sparse == request.sparse
+        && completion.observed_at == request.observed_at
+        && request.publication.volume_id == session.volume_id
+        && request.publication.path.path() == &session.path
+        && request.publication.created_by == request.principal_id
+        && request.publication.created_at == request.observed_at
+        && request.publication.content_authorization_revision == request.authorization_revision
+        && disposition_matches;
+    if exact {
+        Ok(())
+    } else {
+        Err(UploadServiceError::StaleAuthority)
+    }
+}
+
+fn commit_transition(request: &UploadCommitRequest) -> UploadCommitTransition {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.upload-commit.v1\0");
+    digest.update(&request.operation_id.as_bytes());
+    digest.update(&request.upload_id.as_bytes());
+    digest.update(&request.principal_id.as_bytes());
+    digest.update(&request.authorization_revision.get().to_be_bytes());
+    digest.update(&request.stage_fence.to_be_bytes());
+    digest.update(&request.expected_sequence.to_be_bytes());
+    digest.update(&request.final_length.to_be_bytes());
+    digest.update(&[u8::from(request.sparse)]);
+    digest.update(&crate::commit_service::commit_request_digest(
+        &request.publication,
+    ));
+    digest.update(&request.observed_at.get().to_be_bytes());
+    UploadCommitTransition {
+        operation_id: request.operation_id,
+        upload_id: request.upload_id,
+        principal_id: request.principal_id,
+        stage_fence: request.stage_fence,
+        request_digest: digest.finalize().into(),
+        object_id: request.publication.object_id,
+        version_id: request.publication.version_id,
+        observed_at: request.observed_at,
+    }
+}
+
 fn validate_live_authority(
     session: &UploadSession,
     principal_id: meshspan_domain::PrincipalId,
@@ -124,6 +217,9 @@ pub enum UploadServiceError {
     /// An idempotency or upload identity belongs to different canonical input.
     #[error("upload operation conflicts with durable state")]
     OperationConflict,
+    /// The selected exact checkpoint does not initialise the complete non-sparse file.
+    #[error("upload checkpoint is incomplete")]
+    Incomplete,
     /// Current identity, permission, fence, lifecycle or expiry does not permit the operation.
     #[error("upload authority is stale")]
     StaleAuthority,

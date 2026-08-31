@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use std::collections::BTreeMap;
+
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
+    BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
     OperationId, PrincipalId, Revision, StageId, UnixMicros, UploadId, VolumeId,
 };
 use tempfile::tempdir;
 
 use crate::{
     CompletedStage, ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
-    FilesystemCommitService, ManifestPublication, NamespaceLimits, NamespacePath,
-    UploadAbortRequest, UploadBeginRequest, UploadDisposition, UploadServiceError, UploadState,
-    UploadStatusRequest, UploadWriteRequest,
+    FilesystemCommitError, FilesystemCommitService, ManifestPublication, NamespaceLimits,
+    NamespacePath, NamespacePublicationPath, PublicationDisposition, RootFileCommitRequest,
+    StageCompletionRequest, UploadAbortRequest, UploadBeginRequest, UploadCommitRequest,
+    UploadDisposition, UploadServiceError, UploadState, UploadStatusRequest, UploadWriteRequest,
 };
 
 #[test]
@@ -80,13 +84,65 @@ fn upload_identity_and_authority_substitution_fail_closed() -> Result<(), Box<dy
     Ok(())
 }
 
+#[test]
+fn incomplete_commit_stays_writable_then_publishes_once_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let begin = begin_request()?;
+    let mut service = FilesystemCommitService::open(
+        directory.path(),
+        UnixMicros::new(1),
+        RecordingPublisher::default(),
+    )?;
+    service.begin_upload(&begin)?;
+    service.write_upload(&write_request(&begin, 50, 5, b"world")?)?;
+    let mut commit = commit_request(&begin, 1, UnixMicros::new(4))?;
+    assert!(matches!(
+        service.commit_upload(&commit),
+        Err(FilesystemCommitError::Upload(
+            UploadServiceError::Incomplete
+        ))
+    ));
+    assert_eq!(
+        service
+            .upload_status(status_request(&begin, UnixMicros::new(5)))?
+            .session
+            .state,
+        UploadState::Active
+    );
+
+    service.write_upload(&write_request(&begin, 51, 0, b"hello")?)?;
+    commit = commit_request(&begin, 2, UnixMicros::new(6))?;
+    let applied = service.commit_upload(&commit)?;
+    assert_eq!(
+        applied.publication.disposition,
+        PublicationDisposition::Applied
+    );
+    assert_eq!(applied.session.state, UploadState::Committed);
+    assert_eq!(
+        applied.session.committed_object_id,
+        Some(commit.publication.object_id)
+    );
+    assert_eq!(
+        applied.session.committed_version_id,
+        Some(commit.publication.version_id)
+    );
+    let replayed = service.commit_upload(&commit)?;
+    assert_eq!(
+        replayed.publication.disposition,
+        PublicationDisposition::Replayed
+    );
+    assert_eq!(replayed.session, applied.session);
+    Ok(())
+}
+
 fn begin_request() -> Result<UploadBeginRequest, Box<dyn std::error::Error>> {
     Ok(UploadBeginRequest {
         operation_id: OperationId::from_bytes([10; 16])?,
         upload_id: UploadId::from_bytes([11; 16])?,
         stage_id: StageId::from_bytes([12; 16])?,
         volume_id: VolumeId::from_bytes([13; 16])?,
-        path: NamespacePath::from_components(["reports", "result.bin"], NamespaceLimits::PORTABLE)?,
+        path: NamespacePath::from_components(["result.bin"], NamespaceLimits::PORTABLE)?,
         principal_id: PrincipalId::from_bytes([14; 16])?,
         authorization_revision: Revision::new(6),
         disposition: UploadDisposition::CreateNew,
@@ -124,7 +180,114 @@ fn status_request(begin: &UploadBeginRequest, observed_at: UnixMicros) -> Upload
     }
 }
 
+fn commit_request(
+    begin: &UploadBeginRequest,
+    sequence: u64,
+    observed_at: UnixMicros,
+) -> Result<UploadCommitRequest, Box<dyn std::error::Error>> {
+    let operation_id = OperationId::from_bytes([60; 16])?;
+    let publication = RootFileCommitRequest {
+        completion: StageCompletionRequest {
+            operation_id,
+            stage_id: begin.stage_id,
+            stage_fence: 1,
+            expected_sequence: sequence,
+            final_length: 10,
+            sparse: false,
+            observed_at,
+        },
+        branch_id: BranchId::from_bytes([61; 16])?,
+        volume_id: begin.volume_id,
+        object_id: ObjectId::from_bytes([62; 16])?,
+        expected_current_version_id: None,
+        version_id: FileVersionId::from_bytes([63; 16])?,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        manifest_id: ContentManifestId::from_bytes([64; 16])?,
+        manifest_format_version: 1,
+        content_authorization_revision: Revision::new(7),
+        content_deadline: UnixMicros::new(200),
+        root_object_id: ObjectId::from_bytes([65; 16])?,
+        expected_namespace_commit_id: None,
+        expected_file_object_revision_id: None,
+        file_object_revision_id: ObjectRevisionId::from_bytes([66; 16])?,
+        root_object_revision_id: ObjectRevisionId::from_bytes([67; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([68; 16])?,
+        path: NamespacePublicationPath::new(begin.path.clone(), Vec::new())?,
+        entry_generation: 1,
+        created_by: begin.principal_id,
+        created_at: observed_at,
+    };
+    Ok(UploadCommitRequest {
+        operation_id,
+        upload_id: begin.upload_id,
+        principal_id: begin.principal_id,
+        authorization_revision: Revision::new(7),
+        stage_fence: 1,
+        expected_sequence: sequence,
+        final_length: 10,
+        sparse: false,
+        publication,
+        observed_at,
+    })
+}
+
 struct UnusedPublisher;
+
+#[derive(Default)]
+struct RecordingPublisher {
+    durable: BTreeMap<OperationId, (ContentPublicationRequest, ManifestPublication)>,
+}
+
+impl DurableContentPublisher for RecordingPublisher {
+    type Sink = Vec<u8>;
+
+    fn resolve(
+        &mut self,
+        request: ContentPublicationRequest,
+    ) -> Result<Option<ManifestPublication>, ContentPublicationError> {
+        self.durable
+            .get(&request.operation_id)
+            .map(|(stored, manifest)| {
+                if stored.same_intent(request) {
+                    Ok(*manifest)
+                } else {
+                    Err(ContentPublicationError::Conflict)
+                }
+            })
+            .transpose()
+    }
+
+    fn begin(
+        &mut self,
+        _request: ContentPublicationRequest,
+    ) -> Result<Self::Sink, ContentPublicationError> {
+        Ok(Vec::new())
+    }
+
+    fn finish(
+        &mut self,
+        request: ContentPublicationRequest,
+        sink: Self::Sink,
+        completed: CompletedStage,
+    ) -> Result<ManifestPublication, ContentPublicationError> {
+        if u64::try_from(sink.len()) != Ok(completed.logical_length)
+            || blake3::hash(&sink).as_bytes() != &completed.content_digest
+        {
+            return Err(ContentPublicationError::Corrupt);
+        }
+        let manifest = ManifestPublication {
+            manifest_id: request.manifest_id,
+            format_version: request.format_version,
+            logical_length: completed.logical_length,
+            content_digest: completed.content_digest,
+            root_digest: blake3::hash(&sink).into(),
+        };
+        self.durable
+            .insert(request.operation_id, (request, manifest));
+        Ok(manifest)
+    }
+}
 
 impl DurableContentPublisher for UnusedPublisher {
     type Sink = Vec<u8>;

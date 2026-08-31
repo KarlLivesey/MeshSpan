@@ -144,8 +144,9 @@ pub use stage_store::{
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
 pub use upload::{
-    UploadAbortRequest, UploadBeginRequest, UploadDisposition, UploadSession, UploadState,
-    UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt, UploadWriteRequest,
+    UploadAbortRequest, UploadBeginRequest, UploadCommitReceipt, UploadCommitRequest,
+    UploadDisposition, UploadSession, UploadState, UploadStatusReceipt, UploadStatusRequest,
+    UploadWriteReceipt, UploadWriteRequest,
 };
 pub use upload_service::UploadServiceError;
 pub use version_retention::{
