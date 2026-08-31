@@ -23,7 +23,7 @@ pub use error::{PasskeyError, PasskeyErrorKind};
 pub use registration::{
     Registration, RegistrationExpectation, RegistrationOutcome, verify_registration,
 };
-pub use registration_transport::OwnedRegistration;
+pub use registration_transport::{OwnedRegistration, encode_credential_id, encode_user_handle};
 
 /// Maximum accepted client-data JSON bytes.
 pub const MAXIMUM_CLIENT_DATA_BYTES: usize = 4_096;

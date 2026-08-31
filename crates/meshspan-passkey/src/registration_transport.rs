@@ -5,8 +5,27 @@
 use crate::base64url;
 use crate::{
     MAXIMUM_ATTESTATION_OBJECT_BYTES, MAXIMUM_CLIENT_DATA_BYTES, MAXIMUM_CREDENTIAL_ID_BYTES,
-    PasskeyError, Registration,
+    PasskeyError, PasskeyErrorKind, Registration,
 };
+
+/// Encodes one already-validated 128-bit user handle for browser transport.
+#[must_use]
+pub fn encode_user_handle(user_handle: &[u8; 16]) -> String {
+    base64url::encode(user_handle)
+}
+
+/// Encodes one bounded opaque credential identity for browser transport.
+///
+/// # Errors
+///
+/// Rejects an empty identity or one exceeding the verifier's credential bound.
+pub fn encode_credential_id(credential_id: &[u8]) -> Result<String, PasskeyError> {
+    if credential_id.is_empty() || credential_id.len() > MAXIMUM_CREDENTIAL_ID_BYTES {
+        Err(PasskeyError::new(PasskeyErrorKind::LimitExceeded))
+    } else {
+        Ok(base64url::encode(credential_id))
+    }
+}
 
 /// Owned decoded registration fields, deliberately without `Debug` or `Display`.
 pub struct OwnedRegistration {
@@ -49,7 +68,7 @@ impl OwnedRegistration {
 
 #[cfg(test)]
 mod tests {
-    use super::OwnedRegistration;
+    use super::{OwnedRegistration, encode_credential_id, encode_user_handle};
     use crate::PasskeyErrorKind;
 
     #[test]
@@ -75,5 +94,21 @@ mod tests {
                 Some(PasskeyErrorKind::Malformed)
             );
         }
+    }
+
+    #[test]
+    fn bounded_public_identifiers_use_canonical_transport() -> Result<(), PasskeyErrorKind> {
+        assert_eq!(encode_user_handle(&[0x11; 16]), "EREREREREREREREREREREQ");
+        assert_eq!(
+            encode_credential_id(&[0xfb, 0xff]).map_err(crate::PasskeyError::kind)?,
+            "-_8"
+        );
+        assert_eq!(
+            encode_credential_id(&[])
+                .err()
+                .map(crate::PasskeyError::kind),
+            Some(PasskeyErrorKind::LimitExceeded)
+        );
+        Ok(())
     }
 }
