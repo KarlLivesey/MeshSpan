@@ -100,30 +100,36 @@ public_uuid!(
 /// A bounded relative logical directory path; omission selects the volume root.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
-pub struct DirectoryPath(
+pub struct NamespacePath(
     #[schemars(length(min = 1, max = 4096), pattern(r"^[^\x00-\x1f\x7f]+$"))] String,
 );
 
-impl DirectoryPath {
+impl NamespacePath {
     /// Constructs one decoded canonical relative path.
     #[must_use]
     pub fn from_decoded(value: String) -> Option<Self> {
-        let valid = (1..=4_096).contains(&value.len())
-            && !value.starts_with('/')
-            && !value.ends_with('/')
-            && value
-                .chars()
-                .all(|character| !character.is_control() && character != '\u{7f}')
-            && value
-                .split('/')
-                .all(|component| !component.is_empty() && component != "." && component != "..");
-        valid.then_some(Self(value))
+        let path = Self(value);
+        path.is_canonical().then_some(path)
     }
 
     /// Returns the untrusted relative path candidate.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub(crate) fn is_canonical(&self) -> bool {
+        (1..=4_096).contains(&self.0.len())
+            && !self.0.starts_with('/')
+            && !self.0.ends_with('/')
+            && self
+                .0
+                .chars()
+                .all(|character| !character.is_control() && character != '\u{7f}')
+            && self
+                .0
+                .split('/')
+                .all(|component| !component.is_empty() && component != "." && component != "..")
     }
 }
 
@@ -157,7 +163,7 @@ impl DirectoryCursor {
 #[serde(deny_unknown_fields)]
 pub struct ListDirectoryQuery {
     /// Relative directory path; omission selects the volume root.
-    pub path: Option<DirectoryPath>,
+    pub path: Option<NamespacePath>,
     /// Exact continuation returned by the preceding page.
     pub cursor: Option<DirectoryCursor>,
     /// Requested result bound; omission applies the server default.
@@ -175,16 +181,16 @@ pub enum DirectoryEntryKind {
     File,
 }
 
-/// Complete metadata needed to render one directory child without a follow-up stat request.
+/// Complete immutable metadata for one logical namespace object.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct DirectoryEntryResponse {
-    /// Case-preserved child name.
+pub struct ObjectMetadataResponse {
+    /// Case-preserved logical-object name.
     #[schemars(length(min = 1, max = 255), pattern(r"^[^\x00-\x1f\x7f\x2f\\]+$"))]
     pub name: String,
-    /// Stable logical child identity.
+    /// Stable logical-object identity.
     pub object_id: ObjectId,
-    /// Exact immutable child revision.
+    /// Exact immutable logical-object revision.
     pub object_revision_id: ObjectRevisionId,
     /// Monotonic name-reuse generation within the parent.
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
@@ -205,7 +211,7 @@ pub struct ListDirectoryResponse {
     /// Selected logical volume.
     pub volume_id: VolumeId,
     /// Selected relative path, or null for the root.
-    pub path: Option<DirectoryPath>,
+    pub path: Option<NamespacePath>,
     /// Immutable namespace view shared by every entry.
     pub namespace_commit_id: NamespaceCommitId,
     /// Stable selected-directory identity.
@@ -214,7 +220,7 @@ pub struct ListDirectoryResponse {
     pub directory_object_revision_id: ObjectRevisionId,
     /// Deterministically ordered complete child metadata.
     #[schemars(length(max = 256))]
-    pub entries: Vec<DirectoryEntryResponse>,
+    pub entries: Vec<ObjectMetadataResponse>,
     /// Ready-to-follow relative URL, or null when this is the terminal page.
     #[schemars(length(min = 1, max = 16384), pattern(r"^/api/latest/"))]
     pub next_page_url: Option<String>,

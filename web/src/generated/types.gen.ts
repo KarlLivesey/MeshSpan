@@ -587,6 +587,59 @@ export type CurrentSessionResponse = {
 };
 
 /**
+ * GetObjectResponse
+ *
+ * Complete immutable metadata for one logical object.
+ */
+export type GetObjectResponse = {
+  /**
+   * Immutable namespace view under which the path resolved.
+   */
+  namespace_commit_id: string;
+  /**
+   * Complete object metadata, including the immutable file version when applicable.
+   */
+  object: {
+    /**
+     * Monotonic name-reuse generation within the parent.
+     */
+    entry_generation: number;
+    /**
+     * Current immutable file version, or null for a directory.
+     */
+    file_version_id: string | null;
+    /**
+     * Directory or regular-file kind.
+     */
+    kind: "directory" | "file";
+    /**
+     * Logical file bytes, or null for a directory.
+     */
+    logical_length: number | null;
+    /**
+     * Case-preserved logical-object name.
+     */
+    name: string;
+    /**
+     * Stable logical-object identity.
+     */
+    object_id: string;
+    /**
+     * Exact immutable logical-object revision.
+     */
+    object_revision_id: string;
+  };
+  /**
+   * Exact root-relative path which resolved the object.
+   */
+  path: string;
+  /**
+   * Selected logical volume.
+   */
+  volume_id: string;
+};
+
+/**
  * HealthResponse
  *
  * Bounded anonymous health response.
@@ -641,15 +694,15 @@ export type ListDirectoryResponse = {
      */
     logical_length: number | null;
     /**
-     * Case-preserved child name.
+     * Case-preserved logical-object name.
      */
     name: string;
     /**
-     * Stable logical child identity.
+     * Stable logical-object identity.
      */
     object_id: string;
     /**
-     * Exact immutable child revision.
+     * Exact immutable logical-object revision.
      */
     object_revision_id: string;
   }>;
@@ -1852,3 +1905,48 @@ export type ListDirectoryResponses = {
 
 export type ListDirectoryResponse2 =
   ListDirectoryResponses[keyof ListDirectoryResponses];
+
+export type GetObjectData = {
+  body?: never;
+  path: {
+    volume_id: string;
+  };
+  query: {
+    path: string;
+  };
+  url: "/volumes/{volume_id}/objects";
+};
+
+export type GetObjectErrors = {
+  /**
+   * Invalid path or volume identity
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Volume or object not found
+   */
+  404: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetObjectError = GetObjectErrors[keyof GetObjectErrors];
+
+export type GetObjectResponses = {
+  /**
+   * Complete immutable metadata for the selected logical object
+   */
+  200: GetObjectResponse;
+};
+
+export type GetObjectResponse2 = GetObjectResponses[keyof GetObjectResponses];

@@ -20,14 +20,7 @@ static RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> = OnceLoc
 pub fn validate_list_directory_query(query: &ListDirectoryQuery) -> Result<(), BoundaryError> {
     let value = serde_json::to_value(query).map_err(|_| BoundaryError::EncodeMismatch)?;
     validate_list_directory_query_value(&value)?;
-    if query.path.as_ref().is_some_and(|path| {
-        path.as_str().starts_with('/')
-            || path.as_str().ends_with('/')
-            || path
-                .as_str()
-                .split('/')
-                .any(|component| component.is_empty() || component == "." || component == "..")
-    }) {
+    if query.path.as_ref().is_some_and(|path| !path.is_canonical()) {
         return Err(BoundaryError::DecodeMismatch);
     }
     Ok(())

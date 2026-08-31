@@ -4,10 +4,10 @@
 
 use meshspan_api_contract::{
     DirectoryCursor as ApiDirectoryCursor, DirectoryEntryKind as ApiDirectoryEntryKind,
-    DirectoryEntryResponse, DirectoryPath, FileVersionId as ApiFileVersionId, ListDirectoryQuery,
-    ListDirectoryResponse, NamespaceCommitId as ApiNamespaceCommitId, ObjectId as ApiObjectId,
-    ObjectRevisionId as ApiObjectRevisionId, VolumeId as ApiVolumeId,
-    validate_list_directory_query,
+    FileVersionId as ApiFileVersionId, ListDirectoryQuery, ListDirectoryResponse,
+    NamespaceCommitId as ApiNamespaceCommitId, NamespacePath as ApiNamespacePath,
+    ObjectId as ApiObjectId, ObjectMetadataResponse, ObjectRevisionId as ApiObjectRevisionId,
+    VolumeId as ApiVolumeId, validate_list_directory_query,
 };
 use meshspan_filesystem::{
     DirectoryEntryKind, DirectoryListCursor, NamespaceComponent, NamespaceLimits, NamespaceListPage,
@@ -33,7 +33,7 @@ pub(super) fn parse_directory_query(
             "path" if !path_seen => {
                 path_seen = true;
                 query.path = Some(
-                    DirectoryPath::from_decoded(value.into_owned())
+                    ApiNamespacePath::from_decoded(value.into_owned())
                         .ok_or(DirectoryListingError::InvalidInput)?,
                 );
             }
@@ -70,7 +70,7 @@ pub(super) fn response(
         .entries
         .into_iter()
         .map(|entry| {
-            Ok(DirectoryEntryResponse {
+            Ok(ObjectMetadataResponse {
                 name: entry.name.display().to_owned(),
                 object_id: api_object_id(entry.object_id.as_bytes())?,
                 object_revision_id: api_object_revision_id(entry.object_revision_id.as_bytes())?,
