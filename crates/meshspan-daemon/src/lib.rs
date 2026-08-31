@@ -80,6 +80,8 @@ mod totp_registration_state;
 #[cfg(test)]
 mod totp_registration_tests;
 mod totp_secret;
+mod totp_session;
+mod totp_session_contract;
 
 pub use api_key_issuance::ApiKeyIssuanceService;
 pub use api_key_issuance_api::{
@@ -176,6 +178,10 @@ pub use totp_registration_contract::{
 };
 pub use totp_registration_state::{TotpCeremonyKey, TotpRegistrationStateError};
 pub use totp_secret::{TotpEnvelopeKey, TotpSecretBinding, TotpSecretCipher, TotpSecretError};
+pub use totp_session::TotpSessionVerifier;
+pub use totp_session_contract::{
+    DisabledTotpFactors, TotpFactorVerifier, TotpSessionError, VerifiedTotpFactor,
+};
 
 use meshspan_domain::{EntropyError, RandomSource};
 

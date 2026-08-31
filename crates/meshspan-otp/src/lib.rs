@@ -92,6 +92,23 @@ impl TotpProfile {
         Ok(accepted)
     }
 
+    /// Verifies a code against one exact retained step without applying a freshness window.
+    ///
+    /// This is only for validating an idempotent replay whose step was already consumed
+    /// atomically by authority. It must not be used to admit a new authentication attempt.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed codes and secrets outside the bounded interoperability profile.
+    pub fn verify_step(self, secret: &[u8], code: &str, step: u64) -> Result<bool, TotpError> {
+        validate_secret(secret)?;
+        let presented = validate_code(code, self.digits)?;
+        let expected = self.code(secret, step)?;
+        Ok(bool::from(
+            expected.to_be_bytes().ct_eq(&presented.to_be_bytes()),
+        ))
+    }
+
     fn code(self, secret: &[u8], step: u64) -> Result<u32, TotpError> {
         let counter = step.to_be_bytes();
         let binary = match self.algorithm {
@@ -203,6 +220,8 @@ mod tests {
             .ok_or(TotpError::InvalidCode)?;
         assert_eq!(accepted.step(), 1);
         assert_eq!(profile.verify(SHA1_SECRET, "94287082", 90)?, None);
+        assert!(profile.verify_step(SHA1_SECRET, "94287082", 1)?);
+        assert!(!profile.verify_step(SHA1_SECRET, "94287082", 2)?);
         Ok(())
     }
 
