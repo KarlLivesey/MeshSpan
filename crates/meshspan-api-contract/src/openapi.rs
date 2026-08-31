@@ -7,7 +7,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
-    CreatePasskeyChallengeResponse, CreateSessionRequest, CreateSessionResponse,
+    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
+    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
+    CreatePasskeyRegistrationResponse, CreateSessionRequest, CreateSessionResponse,
     CurrentSessionResponse, HealthResponse, RevokeCurrentSessionRequest,
     RevokeCurrentSessionResponse, SetupStatusResponse, schema,
 };
@@ -72,6 +74,10 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "CreateMeshSetupResponse": response_component::<CreateMeshSetupResponse>(),
                 "CreatePasskeyChallengeRequest": request_component::<CreatePasskeyChallengeRequest>(),
                 "CreatePasskeyChallengeResponse": response_component::<CreatePasskeyChallengeResponse>(),
+                "CreatePasskeyRegistrationChallengeRequest": request_component::<CreatePasskeyRegistrationChallengeRequest>(),
+                "CreatePasskeyRegistrationChallengeResponse": response_component::<CreatePasskeyRegistrationChallengeResponse>(),
+                "CreatePasskeyRegistrationRequest": request_component::<CreatePasskeyRegistrationRequest>(),
+                "CreatePasskeyRegistrationResponse": response_component::<CreatePasskeyRegistrationResponse>(),
                 "CreateSessionRequest": request_component::<CreateSessionRequest>(),
                 "CreateSessionResponse": response_component::<CreateSessionResponse>(),
                 "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
@@ -96,6 +102,14 @@ fn paths() -> Value {
         (
             "/sessions/passkey/challenges".to_owned(),
             create_passkey_challenge_path(),
+        ),
+        (
+            "/users/current/authentication-methods/passkeys/registration-challenges".to_owned(),
+            create_passkey_registration_challenge_path(),
+        ),
+        (
+            "/users/current/authentication-methods/passkeys".to_owned(),
+            create_passkey_registration_path(),
         ),
         ("/sessions/current".to_owned(), current_session_path()),
         (
@@ -230,6 +244,62 @@ fn create_passkey_challenge_path() -> Value {
                 "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
                 "503": json_response("Authentication gateway temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_passkey_registration_challenge_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserPasskeyRegistrationChallenge",
+            "summary": "Create browser-ready options for registering a current-user passkey",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-gateway-local-ceremony",
+            "requestBody": json_request(
+                "Current-user passkey registration challenge",
+                "#/components/schemas/CreatePasskeyRegistrationChallengeRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Browser-ready passkey creation options",
+                    "#/components/schemas/CreatePasskeyRegistrationChallengeResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or ceremony conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_passkey_registration_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createCurrentUserPasskey",
+            "summary": "Verify and register a current-user passkey",
+            "x-meshspan-access": "authenticated-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Current-user passkey registration response",
+                "#/components/schemas/CreatePasskeyRegistrationRequest"
+            ),
+            "responses": {
+                "201": json_response(
+                    "Committed passkey authentication method",
+                    "#/components/schemas/CreatePasskeyRegistrationResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry, duplicate credential or ceremony conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "429": json_response("Bounded admission rejected the request", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authentication authority temporarily unavailable", "#/components/schemas/ApiError")
             }
         }
     })

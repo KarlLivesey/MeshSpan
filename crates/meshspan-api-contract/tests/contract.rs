@@ -9,16 +9,23 @@
 )]
 
 use meshspan_api_contract::{
-    ApiError, ApiErrorCode, BoundaryError, CreateMeshSetupResponse, CreatePasskeyChallengeResponse,
-    CreateSessionResponse, NullableField, OperationId, PasskeyChallengeId, PasskeyUserVerification,
+    ApiError, ApiErrorCode, AuthenticationMethodId, BoundaryError, CreateMeshSetupResponse,
+    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeResponse,
+    CreatePasskeyRegistrationResponse, CreateSessionResponse, NullableField, OperationId,
+    PasskeyAttestation, PasskeyChallengeId, PasskeyCredentialDescriptor,
+    PasskeyCredentialParameter, PasskeyCredentialType, PasskeyResidentKey, PasskeyUserVerification,
     RevokeCurrentSessionResponse, SessionId, SetupState, SetupStatusResponse,
     decode_create_mesh_setup_request, decode_create_passkey_challenge_request,
-    decode_create_session_request, decode_revoke_current_session_request, encode_api_error,
-    encode_create_mesh_setup_response, encode_create_passkey_challenge_response,
-    encode_create_session_response, encode_revoke_current_session_response,
-    encode_setup_status_response, generate_openapi, validate_create_mesh_setup_request_value,
-    validate_create_passkey_challenge_request_value,
-    validate_create_passkey_challenge_response_value, validate_create_session_request_value,
+    decode_create_passkey_registration_challenge_request,
+    decode_create_passkey_registration_request, decode_create_session_request,
+    decode_revoke_current_session_request, encode_api_error, encode_create_mesh_setup_response,
+    encode_create_passkey_challenge_response,
+    encode_create_passkey_registration_challenge_response,
+    encode_create_passkey_registration_response, encode_create_session_response,
+    encode_revoke_current_session_response, encode_setup_status_response, generate_openapi,
+    validate_create_mesh_setup_request_value, validate_create_passkey_challenge_request_value,
+    validate_create_passkey_challenge_response_value,
+    validate_create_passkey_registration_request_value, validate_create_session_request_value,
     validate_create_session_response_value, validate_setup_status_response_value,
 };
 use serde::Deserialize;
@@ -168,6 +175,76 @@ fn passkey_challenge_contract_is_exact_bounded_and_validated_both_ways() {
     let mut malformed = value;
     malformed["challenge"] = json!("contains padding=");
     assert!(validate_create_passkey_challenge_response_value(&malformed).is_err());
+}
+
+#[test]
+fn passkey_registration_contract_is_authenticated_bounded_and_validated_both_ways() {
+    let operation = "018f1d20-7b4c-7a1e-9d22-39a1558b4c61";
+    let challenge_request = serde_json::to_vec(&json!({ "operation_id": operation }))
+        .expect("challenge request must encode");
+    assert!(decode_create_passkey_registration_challenge_request(&challenge_request).is_ok());
+    let challenge_response = CreatePasskeyRegistrationChallengeResponse {
+        operation_id: serde_json::from_value(json!(operation))
+            .expect("operation fixture must be valid"),
+        challenge_id: PasskeyChallengeId::from_uuid_bytes(versioned(8))
+            .expect("challenge fixture must be valid"),
+        challenge: "A".repeat(43),
+        relying_party_id: "storage.example.test".to_owned(),
+        relying_party_name: "MeshSpan".to_owned(),
+        user_id: "A".repeat(22),
+        user_name: "administrator".to_owned(),
+        user_display_name: "Administrator".to_owned(),
+        timeout_milliseconds: 120_000,
+        user_verification: PasskeyUserVerification::Required,
+        resident_key: PasskeyResidentKey::Required,
+        attestation: PasskeyAttestation::None,
+        public_key_parameters: vec![PasskeyCredentialParameter {
+            credential_type: PasskeyCredentialType::PublicKey,
+            algorithm: -7,
+        }],
+        exclude_credentials: vec![PasskeyCredentialDescriptor {
+            credential_type: PasskeyCredentialType::PublicKey,
+            id: "Y3JlZGVudGlhbA".to_owned(),
+        }],
+    };
+    assert!(encode_create_passkey_registration_challenge_response(&challenge_response).is_ok());
+
+    let completion = json!({
+        "operation_id": operation,
+        "challenge_id": "018f1d20-7b4c-7a1e-9d22-39a1558b4c62",
+        "label": "Laptop passkey",
+        "credential_id": "Y3JlZGVudGlhbA",
+        "client_data_json": "e30",
+        "attestation_object": "oA",
+        "transports": ["internal", "hybrid"]
+    });
+    let decoded = decode_create_passkey_registration_request(
+        &serde_json::to_vec(&completion).expect("completion fixture must encode"),
+    )
+    .expect("completion fixture must decode");
+    assert_eq!(decoded.label.as_str(), "Laptop passkey");
+    assert!(decode_create_passkey_registration_request(&vec![b'A'; 30_001]).is_err());
+    let mut duplicate_shape = completion;
+    duplicate_shape["unknown"] = json!(true);
+    assert!(validate_create_passkey_registration_request_value(&duplicate_shape).is_err());
+
+    let response = CreatePasskeyRegistrationResponse {
+        operation_id: serde_json::from_value(json!(operation))
+            .expect("operation fixture must be valid"),
+        method_id: AuthenticationMethodId::from_uuid_bytes(versioned(9))
+            .expect("method fixture must be valid"),
+        created_at_epoch_micros: 1_800_000_000_000_000,
+    };
+    assert!(encode_create_passkey_registration_response(&response).is_ok());
+
+    let document = generate_openapi().expect("contract must generate");
+    let challenge_path = &document.value()["paths"]["/users/current/authentication-methods/passkeys/registration-challenges"]
+        ["post"];
+    assert_eq!(challenge_path["x-meshspan-access"], "authenticated-csrf");
+    let completion_path =
+        &document.value()["paths"]["/users/current/authentication-methods/passkeys"]["post"];
+    assert_eq!(completion_path["operationId"], "createCurrentUserPasskey");
+    assert_eq!(completion_path["x-meshspan-access"], "authenticated-csrf");
 }
 
 #[test]

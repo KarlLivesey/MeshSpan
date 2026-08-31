@@ -145,6 +145,146 @@ export type CreatePasskeyChallengeResponse = {
 };
 
 /**
+ * CreatePasskeyRegistrationChallengeRequest
+ *
+ * One idempotent request for browser-ready current-user registration options.
+ */
+export type CreatePasskeyRegistrationChallengeRequest = {
+  /**
+   * Client-generated identity making challenge creation exactly replayable on this gateway.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreatePasskeyRegistrationChallengeResponse
+ *
+ * Browser-ready options for registering a current user's passkey.
+ */
+export type CreatePasskeyRegistrationChallengeResponse = {
+  /**
+   * Request privacy-preserving none attestation.
+   */
+  attestation: "none";
+  /**
+   * Canonical unpadded base64url random challenge.
+   */
+  challenge: string;
+  /**
+   * Stable gateway-local challenge identity supplied with completion.
+   */
+  challenge_id: string;
+  /**
+   * Existing current-user credentials the authenticator should not duplicate.
+   */
+  exclude_credentials: Array<{
+    /**
+     * Canonical unpadded base64url credential identity.
+     */
+    id: string;
+    /**
+     * A public-key credential.
+     */
+    type: "public-key";
+  }>;
+  /**
+   * Challenge-creation operation whose exact result this response represents.
+   */
+  operation_id: string;
+  /**
+   * Exact supported public-key algorithms.
+   */
+  public_key_parameters: Array<{
+    /**
+     * COSE algorithm identifier; the initial profile supports ES256 only.
+     */
+    algorithm: number;
+    /**
+     * A public-key credential.
+     */
+    type: "public-key";
+  }>;
+  /**
+   * Exact relying-party identifier against which authenticator data is verified.
+   */
+  relying_party_id: string;
+  /**
+   * Human-readable relying-party name shown by authenticators.
+   */
+  relying_party_name: string;
+  /**
+   * Require a discoverable credential for account-name-free authentication.
+   */
+  resident_key: "required";
+  /**
+   * Browser hint; server expiry remains authoritative.
+   */
+  timeout_milliseconds: number;
+  /**
+   * Human-readable current-user display name.
+   */
+  user_display_name: string;
+  /**
+   * Stable opaque `WebAuthn` user handle encoded as canonical unpadded base64url.
+   */
+  user_id: string;
+  /**
+   * Stable current-user account name shown by authenticators.
+   */
+  user_name: string;
+  /**
+   * Require a PIN, biometric or equivalent authenticator-local verification.
+   */
+  user_verification: "required";
+};
+
+/**
+ * CreatePasskeyRegistrationRequest
+ *
+ * One exact registration response bound to a gateway-issued challenge.
+ */
+export type CreatePasskeyRegistrationRequest = {
+  /**
+   * Gateway-issued registration challenge consumed exactly once.
+   */
+  challenge_id: string;
+  /**
+   * User-visible method label.
+   */
+  label: string;
+  /**
+   * Client-generated identity for the authoritative method creation.
+   */
+  operation_id: string;
+  /**
+   * Authenticator transports reported for a newly registered credential.
+   */
+  transports: Array<
+    "usb" | "nfc" | "ble" | "smart-card" | "hybrid" | "internal"
+  >;
+};
+
+/**
+ * CreatePasskeyRegistrationResponse
+ *
+ * Durable result of registering one current-user passkey.
+ */
+export type CreatePasskeyRegistrationResponse = {
+  /**
+   * Authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Newly created independently revocable authentication method.
+   */
+  method_id: string;
+  /**
+   * Exact idempotency identity whose committed outcome was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateSessionRequest
  *
  * Input for exchanging accepted authentication proofs for a session.
@@ -331,6 +471,44 @@ export type CreateMeshSetupRequestWritable = {
    * Client-generated idempotency identity.
    */
   operation_id: string;
+};
+
+/**
+ * CreatePasskeyRegistrationRequest
+ *
+ * One exact registration response bound to a gateway-issued challenge.
+ */
+export type CreatePasskeyRegistrationRequestWritable = {
+  /**
+   * Canonical unpadded base64url CBOR attestation object.
+   */
+  attestation_object: string;
+  /**
+   * Gateway-issued registration challenge consumed exactly once.
+   */
+  challenge_id: string;
+  /**
+   * Canonical unpadded base64url collected-client-data JSON.
+   */
+  client_data_json: string;
+  /**
+   * Canonical unpadded base64url credential identity.
+   */
+  credential_id: string;
+  /**
+   * User-visible method label.
+   */
+  label: string;
+  /**
+   * Client-generated identity for the authoritative method creation.
+   */
+  operation_id: string;
+  /**
+   * Authenticator transports reported for a newly registered credential.
+   */
+  transports: Array<
+    "usb" | "nfc" | "ble" | "smart-card" | "hybrid" | "internal"
+  >;
 };
 
 /**
@@ -714,3 +892,111 @@ export type GetSetupStatusResponses = {
 
 export type GetSetupStatusResponse =
   GetSetupStatusResponses[keyof GetSetupStatusResponses];
+
+export type CreateCurrentUserPasskeyData = {
+  /**
+   * Current-user passkey registration response
+   */
+  body: CreatePasskeyRegistrationRequestWritable;
+  path?: never;
+  query?: never;
+  url: "/users/current/authentication-methods/passkeys";
+};
+
+export type CreateCurrentUserPasskeyErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry, duplicate credential or ceremony conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateCurrentUserPasskeyError =
+  CreateCurrentUserPasskeyErrors[keyof CreateCurrentUserPasskeyErrors];
+
+export type CreateCurrentUserPasskeyResponses = {
+  /**
+   * Committed passkey authentication method
+   */
+  201: CreatePasskeyRegistrationResponse;
+};
+
+export type CreateCurrentUserPasskeyResponse =
+  CreateCurrentUserPasskeyResponses[keyof CreateCurrentUserPasskeyResponses];
+
+export type CreateCurrentUserPasskeyRegistrationChallengeData = {
+  /**
+   * Current-user passkey registration challenge
+   */
+  body: CreatePasskeyRegistrationChallengeRequest;
+  path?: never;
+  query?: never;
+  url: "/users/current/authentication-methods/passkeys/registration-challenges";
+};
+
+export type CreateCurrentUserPasskeyRegistrationChallengeErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or ceremony conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Bounded admission rejected the request
+   */
+  429: ApiError;
+  /**
+   * Outgoing contract failure
+   */
+  500: ApiError;
+  /**
+   * Authentication authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateCurrentUserPasskeyRegistrationChallengeError =
+  CreateCurrentUserPasskeyRegistrationChallengeErrors[keyof CreateCurrentUserPasskeyRegistrationChallengeErrors];
+
+export type CreateCurrentUserPasskeyRegistrationChallengeResponses = {
+  /**
+   * Browser-ready passkey creation options
+   */
+  201: CreatePasskeyRegistrationChallengeResponse;
+};
+
+export type CreateCurrentUserPasskeyRegistrationChallengeResponse =
+  CreateCurrentUserPasskeyRegistrationChallengeResponses[keyof CreateCurrentUserPasskeyRegistrationChallengeResponses];
