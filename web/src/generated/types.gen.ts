@@ -78,6 +78,108 @@ export type AbortUploadResponse = {
 };
 
 /**
+ * AddGroupMemberRequest
+ *
+ * Idempotent administrator request to add one direct user or nested-group member.
+ */
+export type AddGroupMemberRequest = {
+  /**
+   * Whether this edge requires explicit, reasoned, time-bounded user activation.
+   */
+  activation_required: boolean;
+  /**
+   * Direct user or group to add.
+   */
+  member_principal_id: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Omitted applies policy defaults, null is unbounded, and a value is exact.
+   */
+  valid_from_epoch_micros?: number | null;
+  /**
+   * Omitted applies policy defaults, null is unbounded, and a value is exact.
+   */
+  valid_until_epoch_micros?: number | null;
+};
+
+/**
+ * AddGroupMemberResponse
+ *
+ * Durable result of adding or exactly replaying one direct membership.
+ */
+export type AddGroupMemberResponse = {
+  /**
+   * Newly active or exactly replayed direct membership.
+   */
+  membership: {
+    /**
+     * Whether the affected user must activate this membership before it contributes rights.
+     */
+    activation_required: boolean;
+    /**
+     * Original authoritative creation instant.
+     */
+    created_at_epoch_micros: number;
+    /**
+     * Administrator that originally created the current edge.
+     */
+    created_by: string;
+    /**
+     * Structurally containing group.
+     */
+    group_id: string;
+    /**
+     * Direct user or nested-group member.
+     */
+    member: {
+      /**
+       * Original authoritative creation instant as epoch microseconds.
+       */
+      created_at_epoch_micros: number;
+      /**
+       * Case-preserved NFC display name.
+       */
+      display_name: string;
+      /**
+       * User or nested group.
+       */
+      kind: "user" | "group";
+      /**
+       * Stable local identity.
+       */
+      principal_id: string;
+      /**
+       * Last authoritative metadata revision.
+       */
+      revision: number;
+      /**
+       * Current lifecycle state.
+       */
+      state: "active" | "suspended" | "retired";
+    };
+    /**
+     * Last authoritative membership revision.
+     */
+    revision: number;
+    /**
+     * Inclusive validity start, or null when unbounded below.
+     */
+    valid_from_epoch_micros: number | null;
+    /**
+     * Exclusive validity end, or null when unbounded above.
+     */
+    valid_until_epoch_micros: number | null;
+  };
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * ApiError
  *
  * Public error envelope that never includes raw untrusted values.
@@ -1218,6 +1320,84 @@ export type ListDirectoryResponse = {
 };
 
 /**
+ * ListGroupMembershipsResponse
+ *
+ * One bounded, stable direct-membership page.
+ */
+export type ListGroupMembershipsResponse = {
+  /**
+   * Group whose direct edges are represented.
+   */
+  group_id: string;
+  /**
+   * Direct active memberships ordered by stable member identity.
+   */
+  memberships: Array<{
+    /**
+     * Whether the affected user must activate this membership before it contributes rights.
+     */
+    activation_required: boolean;
+    /**
+     * Original authoritative creation instant.
+     */
+    created_at_epoch_micros: number;
+    /**
+     * Administrator that originally created the current edge.
+     */
+    created_by: string;
+    /**
+     * Structurally containing group.
+     */
+    group_id: string;
+    /**
+     * Direct user or nested-group member.
+     */
+    member: {
+      /**
+       * Original authoritative creation instant as epoch microseconds.
+       */
+      created_at_epoch_micros: number;
+      /**
+       * Case-preserved NFC display name.
+       */
+      display_name: string;
+      /**
+       * User or nested group.
+       */
+      kind: "user" | "group";
+      /**
+       * Stable local identity.
+       */
+      principal_id: string;
+      /**
+       * Last authoritative metadata revision.
+       */
+      revision: number;
+      /**
+       * Current lifecycle state.
+       */
+      state: "active" | "suspended" | "retired";
+    };
+    /**
+     * Last authoritative membership revision.
+     */
+    revision: number;
+    /**
+     * Inclusive validity start, or null when unbounded below.
+     */
+    valid_from_epoch_micros: number | null;
+    /**
+     * Exclusive validity end, or null when unbounded above.
+     */
+    valid_until_epoch_micros: number | null;
+  }>;
+  /**
+   * Ready-to-follow relative URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+};
+
+/**
  * ListPrincipalsResponse
  *
  * One bounded, permission-filtered administrator identity page.
@@ -1293,6 +1473,50 @@ export type ListUploadRangesResponse = {
    * Selected upload.
    */
   upload_id: string;
+};
+
+/**
+ * RemoveGroupMemberRequest
+ *
+ * Idempotent administrator request to remove one exact active direct membership.
+ */
+export type RemoveGroupMemberRequest = {
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Human-readable audit reason retained with the removal evidence.
+   */
+  reason: string;
+};
+
+/**
+ * RemoveGroupMemberResponse
+ *
+ * Durable result of removing or exactly replaying one direct membership.
+ */
+export type RemoveGroupMemberResponse = {
+  /**
+   * Structurally containing group.
+   */
+  group_id: string;
+  /**
+   * Direct user or group removed from it.
+   */
+  member_principal_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Original authoritative removal instant used by exact retries.
+   */
+  removed_at_epoch_micros: number;
+  /**
+   * Authoritative removal revision.
+   */
+  revision: number;
 };
 
 /**
@@ -1954,6 +2178,203 @@ export type CreateGroupResponses = {
 
 export type CreateGroupResponse =
   CreateGroupResponses[keyof CreateGroupResponses];
+
+export type ListGroupMembersData = {
+  body?: never;
+  path: {
+    /**
+     * Containing group identity
+     */
+    group_id: string;
+  };
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/groups/{group_id}/members";
+};
+
+export type ListGroupMembersErrors = {
+  /**
+   * Invalid group or query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Group not found
+   */
+  404: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Identity authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListGroupMembersError =
+  ListGroupMembersErrors[keyof ListGroupMembersErrors];
+
+export type ListGroupMembersResponses = {
+  /**
+   * One current direct-membership page
+   */
+  200: ListGroupMembershipsResponse;
+};
+
+export type ListGroupMembersResponse =
+  ListGroupMembersResponses[keyof ListGroupMembersResponses];
+
+export type AddGroupMemberData = {
+  /**
+   * Direct membership addition
+   */
+  body: AddGroupMemberRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    /**
+     * Containing group identity
+     */
+    group_id: string;
+  };
+  query?: never;
+  url: "/admin/groups/{group_id}/members";
+};
+
+export type AddGroupMemberErrors = {
+  /**
+   * Invalid membership request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Group or member not found
+   */
+  404: ApiError;
+  /**
+   * Cycle, duplicate edge or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Identity authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type AddGroupMemberError =
+  AddGroupMemberErrors[keyof AddGroupMemberErrors];
+
+export type AddGroupMemberResponses = {
+  /**
+   * Membership durably added or exactly replayed
+   */
+  201: AddGroupMemberResponse;
+};
+
+export type AddGroupMemberResponse2 =
+  AddGroupMemberResponses[keyof AddGroupMemberResponses];
+
+export type RemoveGroupMemberData = {
+  /**
+   * Audited direct membership removal
+   */
+  body: RemoveGroupMemberRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    /**
+     * Containing group identity
+     */
+    group_id: string;
+    /**
+     * Direct member identity
+     */
+    member_principal_id: string;
+  };
+  query?: never;
+  url: "/admin/groups/{group_id}/members/{member_principal_id}/removals";
+};
+
+export type RemoveGroupMemberErrors = {
+  /**
+   * Invalid membership request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Active direct membership not found
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Identity authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type RemoveGroupMemberError =
+  RemoveGroupMemberErrors[keyof RemoveGroupMemberErrors];
+
+export type RemoveGroupMemberResponses = {
+  /**
+   * Membership durably removed or exactly replayed
+   */
+  200: RemoveGroupMemberResponse;
+};
+
+export type RemoveGroupMemberResponse2 =
+  RemoveGroupMemberResponses[keyof RemoveGroupMemberResponses];
 
 export type ListUsersData = {
   body?: never;

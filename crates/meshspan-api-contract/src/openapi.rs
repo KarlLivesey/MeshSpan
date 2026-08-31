@@ -6,10 +6,11 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    AbortUploadRequest, AbortUploadResponse, ApiError, BeginUploadRequest, BeginUploadResponse,
-    CommitUploadRequest, CommitUploadResponse, CreateApiKeyRequest, CreateApiKeyResponse,
-    CreateDirectoryRequest, CreateDirectoryResponse, CreateGroupRequest, CreateMeshSetupRequest,
-    CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
+    AbortUploadRequest, AbortUploadResponse, AddGroupMemberRequest, AddGroupMemberResponse,
+    ApiError, BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
+    CreateApiKeyRequest, CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse,
+    CreateGroupRequest, CreateMeshSetupRequest, CreateMeshSetupResponse,
+    CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
     CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
     CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreatePrincipalResponse,
     CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
@@ -17,7 +18,8 @@ use crate::{
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
     CreateTotpRegistrationResponse, CreateUserRequest, CurrentSessionResponse, DeleteObjectRequest,
     DeleteObjectResponse, GetObjectResponse, HealthResponse, ListDirectoryResponse,
-    ListPrincipalsResponse, ListUploadRangesResponse, RenameObjectRequest, RenameObjectResponse,
+    ListGroupMembershipsResponse, ListPrincipalsResponse, ListUploadRangesResponse,
+    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
     StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
@@ -87,6 +89,8 @@ fn components() -> Value {
         schema_response::<ApiError>("ApiError"),
         schema_request::<AbortUploadRequest>("AbortUploadRequest"),
         schema_response::<AbortUploadResponse>("AbortUploadResponse"),
+        schema_request::<AddGroupMemberRequest>("AddGroupMemberRequest"),
+        schema_response::<AddGroupMemberResponse>("AddGroupMemberResponse"),
         schema_request::<BeginUploadRequest>("BeginUploadRequest"),
         schema_response::<BeginUploadResponse>("BeginUploadResponse"),
         schema_request::<CommitUploadRequest>("CommitUploadRequest"),
@@ -128,10 +132,13 @@ fn components() -> Value {
         schema_response::<GetObjectResponse>("GetObjectResponse"),
         schema_response::<HealthResponse>("HealthResponse"),
         schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
+        schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
         schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
         schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
         schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
+        schema_request::<RemoveGroupMemberRequest>("RemoveGroupMemberRequest"),
+        schema_response::<RemoveGroupMemberResponse>("RemoveGroupMemberResponse"),
         schema_request::<RenameObjectRequest>("RenameObjectRequest"),
         schema_response::<RenameObjectResponse>("RenameObjectResponse"),
         schema_request::<RevokeAuthenticationMethodRequest>("RevokeAuthenticationMethodRequest"),
@@ -156,16 +163,8 @@ fn schema_response<T: schemars::JsonSchema>(name: &str) -> (String, Value) {
 }
 
 fn paths() -> Value {
-    Value::Object(Map::from_iter([
+    Value::Object(Map::from_iter(administration_paths().into_iter().chain([
         ("/health".to_owned(), health_path()),
-        (
-            "/admin/users".to_owned(),
-            principal_administration_path(true),
-        ),
-        (
-            "/admin/groups".to_owned(),
-            principal_administration_path(false),
-        ),
         (
             "/volumes/{volume_id}/directory-entries".to_owned(),
             list_directory_path(),
@@ -253,7 +252,140 @@ fn paths() -> Value {
             "/sessions/current/revocations".to_owned(),
             revoke_current_session_path(),
         ),
-    ]))
+    ])))
+}
+
+fn administration_paths() -> [(String, Value); 4] {
+    [
+        (
+            "/admin/users".to_owned(),
+            principal_administration_path(true),
+        ),
+        (
+            "/admin/groups".to_owned(),
+            principal_administration_path(false),
+        ),
+        (
+            "/admin/groups/{group_id}/members".to_owned(),
+            group_membership_path(),
+        ),
+        (
+            "/admin/groups/{group_id}/members/{member_principal_id}/removals".to_owned(),
+            group_membership_removal_path(),
+        ),
+    ]
+}
+
+fn group_membership_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listGroupMembers",
+            "summary": "List one bounded page of direct group members",
+            "x-meshspan-access": "system-manager",
+            "parameters": [
+                principal_parameter("group_id", "Containing group identity"),
+                cursor_parameter(),
+                limit_parameter()
+            ],
+            "responses": {
+                "200": json_response("One current direct-membership page", "#/components/schemas/ListGroupMembershipsResponse"),
+                "400": json_response("Invalid group or query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Group not found", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Identity authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        },
+        "post": {
+            "operationId": "addGroupMember",
+            "summary": "Add one direct user or nested-group member",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [
+                principal_parameter("group_id", "Containing group identity"),
+                optional_csrf_parameter()
+            ],
+            "requestBody": json_request("Direct membership addition", "#/components/schemas/AddGroupMemberRequest"),
+            "responses": {
+                "201": json_response("Membership durably added or exactly replayed", "#/components/schemas/AddGroupMemberResponse"),
+                "400": json_response("Invalid membership request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Group or member not found", "#/components/schemas/ApiError"),
+                "409": json_response("Cycle, duplicate edge or operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Identity authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn group_membership_removal_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "removeGroupMember",
+            "summary": "Remove one exact direct group membership",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [
+                principal_parameter("group_id", "Containing group identity"),
+                principal_parameter("member_principal_id", "Direct member identity"),
+                optional_csrf_parameter()
+            ],
+            "requestBody": json_request("Audited direct membership removal", "#/components/schemas/RemoveGroupMemberRequest"),
+            "responses": {
+                "200": json_response("Membership durably removed or exactly replayed", "#/components/schemas/RemoveGroupMemberResponse"),
+                "400": json_response("Invalid membership request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Active direct membership not found", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Identity authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn cursor_parameter() -> Value {
+    json!({
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9._~-]+$"
+        }
+    })
+}
+
+fn limit_parameter() -> Value {
+    json!({
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "integer", "minimum": 1, "maximum": 256 }
+    })
+}
+
+fn principal_parameter(name: &str, description: &str) -> Value {
+    json!({
+        "name": name,
+        "in": "path",
+        "required": true,
+        "description": description,
+        "schema": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        }
+    })
 }
 
 fn principal_administration_path(user: bool) -> Value {

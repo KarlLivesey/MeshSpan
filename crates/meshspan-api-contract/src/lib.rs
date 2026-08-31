@@ -10,6 +10,8 @@ mod file_read;
 mod file_read_validation;
 mod file_upload;
 mod file_upload_validation;
+mod group_membership_administration;
+mod group_membership_administration_validation;
 mod identity_administration;
 mod identity_administration_validation;
 mod model;
@@ -29,6 +31,8 @@ mod validation;
 
 #[cfg(test)]
 mod file_upload_tests;
+#[cfg(test)]
+mod group_membership_administration_tests;
 #[cfg(test)]
 mod identity_administration_tests;
 #[cfg(test)]
@@ -68,6 +72,17 @@ pub use file_upload_validation::{
     encode_abort_upload_response, encode_begin_upload_response, encode_commit_upload_response,
     encode_list_upload_ranges_response, encode_upload_status_response,
     encode_write_upload_range_response, validate_list_upload_ranges_query,
+};
+pub use group_membership_administration::{
+    AddGroupMemberRequest, AddGroupMemberResponse, GroupMembershipCursor, GroupMembershipInstant,
+    GroupMembershipRemovalReason, GroupMembershipSummary, ListGroupMembershipsQuery,
+    ListGroupMembershipsResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+};
+pub use group_membership_administration_validation::{
+    MAX_GROUP_MEMBERSHIP_MUTATION_BYTES, decode_add_group_member_request,
+    decode_remove_group_member_request, encode_add_group_member_response,
+    encode_list_group_memberships_response, encode_remove_group_member_response,
+    validate_list_group_memberships_query,
 };
 pub use identity_administration::{
     CreateGroupRequest, CreatePrincipalResponse, CreateUserRequest, ListPrincipalsQuery,

@@ -78,6 +78,103 @@ export const zAbortUploadResponse = z
   .strict();
 
 /**
+ * AddGroupMemberRequest
+ *
+ * Idempotent administrator request to add one direct user or nested-group member.
+ */
+export const zAddGroupMemberRequest = z
+  .strictObject({
+    activation_required: z.boolean(),
+    member_principal_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    valid_from_epoch_micros: z.coerce
+      .bigint()
+      .gte(BigInt(0))
+      .lte(BigInt(9007199254740991))
+      .nullish(),
+    valid_until_epoch_micros: z.coerce
+      .bigint()
+      .gte(BigInt(0))
+      .lte(BigInt(9007199254740991))
+      .nullish(),
+  })
+  .strict();
+
+/**
+ * AddGroupMemberResponse
+ *
+ * Durable result of adding or exactly replaying one direct membership.
+ */
+export const zAddGroupMemberResponse = z
+  .strictObject({
+    membership: z
+      .strictObject({
+        activation_required: z.boolean(),
+        created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+        created_by: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        group_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        member: z
+          .strictObject({
+            created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+            display_name: z.string(),
+            kind: z.union([z.literal("user"), z.literal("group")]),
+            principal_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            revision: z.int().gte(1).lte(9007199254740991),
+            state: z.union([
+              z.literal("active"),
+              z.literal("suspended"),
+              z.literal("retired"),
+            ]),
+          })
+          .strict(),
+        revision: z.int().gte(1).lte(9007199254740991),
+        valid_from_epoch_micros: z.coerce
+          .bigint()
+          .gte(BigInt(0))
+          .lte(BigInt(9007199254740991))
+          .nullable(),
+        valid_until_epoch_micros: z.coerce
+          .bigint()
+          .gte(BigInt(0))
+          .lte(BigInt(9007199254740991))
+          .nullable(),
+      })
+      .strict(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * ApiError
  *
  * Public error envelope that never includes raw untrusted values.
@@ -1399,6 +1496,80 @@ export const zListDirectoryResponse = z
   .strict();
 
 /**
+ * ListGroupMembershipsResponse
+ *
+ * One bounded, stable direct-membership page.
+ */
+export const zListGroupMembershipsResponse = z
+  .strictObject({
+    group_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    memberships: z
+      .array(
+        z
+          .strictObject({
+            activation_required: z.boolean(),
+            created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+            created_by: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            group_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            member: z
+              .strictObject({
+                created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+                display_name: z.string(),
+                kind: z.union([z.literal("user"), z.literal("group")]),
+                principal_id: z
+                  .string()
+                  .length(36)
+                  .regex(
+                    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                  ),
+                revision: z.int().gte(1).lte(9007199254740991),
+                state: z.union([
+                  z.literal("active"),
+                  z.literal("suspended"),
+                  z.literal("retired"),
+                ]),
+              })
+              .strict(),
+            revision: z.int().gte(1).lte(9007199254740991),
+            valid_from_epoch_micros: z.coerce
+              .bigint()
+              .gte(BigInt(0))
+              .lte(BigInt(9007199254740991))
+              .nullable(),
+            valid_until_epoch_micros: z.coerce
+              .bigint()
+              .gte(BigInt(0))
+              .lte(BigInt(9007199254740991))
+              .nullable(),
+          })
+          .strict(),
+      )
+      .max(256),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/groups\//)
+      .nullable(),
+  })
+  .strict();
+
+/**
  * ListPrincipalsResponse
  *
  * One bounded, permission-filtered administrator identity page.
@@ -1468,6 +1639,57 @@ export const zListUploadRangesResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * RemoveGroupMemberRequest
+ *
+ * Idempotent administrator request to remove one exact active direct membership.
+ */
+export const zRemoveGroupMemberRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    reason: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^\S(?:[\s\S]*\S)?$/),
+  })
+  .strict();
+
+/**
+ * RemoveGroupMemberResponse
+ *
+ * Durable result of removing or exactly replaying one direct membership.
+ */
+export const zRemoveGroupMemberResponse = z
+  .strictObject({
+    group_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    member_principal_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    removed_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    revision: z.int().gte(1).lte(9007199254740991),
   })
   .strict();
 
@@ -2118,6 +2340,100 @@ export const zCreateGroupBody = zCreateGroupRequest;
  * Principal durably created or exactly replayed
  */
 export const zCreateGroupResponse = zCreatePrincipalResponse;
+
+export const zListGroupMembersPath = z
+  .object({
+    group_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+export const zListGroupMembersQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One current direct-membership page
+ */
+export const zListGroupMembersResponse = zListGroupMembershipsResponse;
+
+/**
+ * Direct membership addition
+ */
+export const zAddGroupMemberBody = zAddGroupMemberRequest;
+
+export const zAddGroupMemberHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zAddGroupMemberPath = z
+  .object({
+    group_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Membership durably added or exactly replayed
+ */
+export const zAddGroupMemberResponse2 = zAddGroupMemberResponse;
+
+/**
+ * Audited direct membership removal
+ */
+export const zRemoveGroupMemberBody = zRemoveGroupMemberRequest;
+
+export const zRemoveGroupMemberHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zRemoveGroupMemberPath = z
+  .object({
+    group_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    member_principal_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Membership durably removed or exactly replayed
+ */
+export const zRemoveGroupMemberResponse2 = zRemoveGroupMemberResponse;
 
 export const zListUsersQuery = z
   .object({
