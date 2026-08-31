@@ -29,6 +29,16 @@
                 "type": "string"
               },
               {
+                "const": "not_found",
+                "description": "The selected resource does not exist or is intentionally indistinguishable from absence.",
+                "type": "string"
+              },
+              {
+                "const": "state_conflict",
+                "description": "Current state no longer matches a continuation or mutation precondition.",
+                "type": "string"
+              },
+              {
                 "const": "busy",
                 "description": "Work was rejected by a bounded admission policy.",
                 "type": "string"
@@ -1417,7 +1427,7 @@
                   "description": "Case-preserved child name.",
                   "maxLength": 255,
                   "minLength": 1,
-                  "pattern": "^[^\\x00-\\x1f\\x7f/\\\\]+$",
+                  "pattern": "^[^\\x00-\\x1f\\x7f\\x2f\\\\]+$",
                   "type": "string"
                 },
                 "object_id": {
@@ -1458,7 +1468,7 @@
           },
           "next_page_url": {
             "description": "Ready-to-follow relative URL, or null when this is the terminal page.",
-            "maxLength": 8192,
+            "maxLength": 16384,
             "minLength": 1,
             "pattern": "^/api/latest/",
             "type": [

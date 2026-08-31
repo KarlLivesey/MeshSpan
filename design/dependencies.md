@@ -71,6 +71,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `bytes`                            |           1.12.1 | `MIT`                      |
 | `chacha20poly1305`                 |           0.11.0 | `Apache-2.0 OR MIT`        |
 | `ed25519-dalek`                    |            3.0.0 | `BSD-3-Clause`             |
+| `form_urlencoded`                  |            1.2.2 | `MIT OR Apache-2.0`        |
 | `quinn`                            |          0.11.11 | `MIT OR Apache-2.0`        |
 | `rcgen`                            |           0.14.9 | `MIT OR Apache-2.0`        |
 | `rustls`                           |          0.23.43 | `Apache-2.0 OR ISC OR MIT` |
@@ -143,6 +144,7 @@ MeshSpan-owned core.
 | Direct dependency | Need                                                                                |
 | ----------------- | ----------------------------------------------------------------------------------- |
 | `axum`            | Embedded HTTPS API, administration panel assets and HTTP-01 route                   |
+| `form_urlencoded` | Maintained percent-decoding primitive beneath MeshSpan's strict bounded query parser |
 | `tower`           | Explicit service boundaries, timeouts, concurrency and observability layers         |
 | `tower-http`      | Narrow HTTP middleware such as tracing, limits and static asset handling            |
 | `serde`           | Typed configuration and public JSON models                                          |
@@ -155,6 +157,14 @@ runtime request/response validation through the admitted `schemars` and
 `jsonschema` boundary. Every public route must prove that the same declared
 constraint appears in runtime validation, OpenAPI and hostile fixtures without
 a second hand-written model.
+
+The native file API does not enable Axum's optional `query` feature because it
+currently selects the old `serde_urlencoded` 0.7.1 line. MeshSpan uses the
+current `form_urlencoded` parser under its MIT licence option and owns the small
+bounded layer which rejects malformed percent escapes, duplicate parameters,
+unknown parameters and decoded values outside the Rust-authored contract. This
+is a deliberate maintained dependency boundary, not permission to retain an
+obsolete transitive release.
 
 Private Protobuf encoding and generation use the independently extractable
 `GPL-2.0-only` `meshspan-protobuf` workspace crate. It uses only the Rust

@@ -15,6 +15,8 @@ export const zApiError = z
       z.literal("forbidden"),
       z.literal("invalid_request"),
       z.literal("operation_conflict"),
+      z.literal("not_found"),
+      z.literal("state_conflict"),
       z.literal("busy"),
       z.literal("internal_contract"),
     ]),
@@ -774,7 +776,7 @@ export const zListDirectoryResponse = z
               .string()
               .min(1)
               .max(255)
-              .regex(/^[^\x00-\x1f\x7f\/\\]+$/),
+              .regex(/^[^\x00-\x1f\x7f\x2f\\]+$/),
             object_id: z
               .string()
               .length(36)
@@ -800,7 +802,7 @@ export const zListDirectoryResponse = z
     next_page_url: z
       .string()
       .min(1)
-      .max(8192)
+      .max(16384)
       .regex(/^\/api\/latest\//)
       .nullable(),
     path: z

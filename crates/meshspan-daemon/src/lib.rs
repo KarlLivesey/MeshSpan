@@ -37,6 +37,9 @@ mod create_session_tests;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
+mod directory_listing_api;
+#[cfg(test)]
+mod directory_listing_api_tests;
 mod multi_factor_session;
 mod passkey_challenge;
 mod passkey_challenge_api;
@@ -145,6 +148,11 @@ pub use create_session::{
 pub use current_session_api::{
     CurrentSessionApiError, CurrentSessionController, CurrentSessionError,
     current_session_api_router,
+};
+pub use directory_listing_api::{
+    DirectoryLister, DirectoryListingApiError, DirectoryListingController, DirectoryListingError,
+    DirectoryListingFailure, DirectoryListingService, FileApiAuthenticator,
+    directory_listing_api_router,
 };
 pub use passkey_challenge::{
     PasskeyCeremonyStore, PasskeyCeremonyStoreError, PasskeyChallengeError, PasskeyChallengeService,

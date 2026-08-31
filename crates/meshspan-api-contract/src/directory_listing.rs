@@ -21,6 +21,12 @@ macro_rules! public_uuid {
         );
 
         impl $name {
+            /// Parses exact canonical versioned UUID text.
+            #[must_use]
+            pub fn parse(value: &str) -> Option<Self> {
+                parse_public_uuid(value).map(Self)
+            }
+
             /// Constructs canonical UUID text from validated versioned UUID bytes.
             #[must_use]
             pub fn from_uuid_bytes(value: [u8; 16]) -> Option<Self> {
@@ -38,6 +44,42 @@ macro_rules! public_uuid {
             }
         }
     };
+}
+
+fn parse_public_uuid(value: &str) -> Option<String> {
+    if value.len() != 36 {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    if [8, 13, 18, 23]
+        .into_iter()
+        .any(|index| bytes.get(index) != Some(&b'-'))
+    {
+        return None;
+    }
+    let mut decoded = [0_u8; 16];
+    let mut source = bytes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, byte)| (![8, 13, 18, 23].contains(&index)).then_some(*byte));
+    for destination in &mut decoded {
+        let high = source.next().and_then(decode_hex)?;
+        let low = source.next().and_then(decode_hex)?;
+        *destination = (high << 4) | low;
+    }
+    let version = decoded[6] >> 4;
+    if source.next().is_some() || !(1..=8).contains(&version) || decoded[8] >> 6 != 2 {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
+const fn decode_hex(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
 }
 
 public_uuid!(VolumeId, "A public logical-volume identifier.");
@@ -63,6 +105,21 @@ pub struct DirectoryPath(
 );
 
 impl DirectoryPath {
+    /// Constructs one decoded canonical relative path.
+    #[must_use]
+    pub fn from_decoded(value: String) -> Option<Self> {
+        let valid = (1..=4_096).contains(&value.len())
+            && !value.starts_with('/')
+            && !value.ends_with('/')
+            && value
+                .chars()
+                .all(|character| !character.is_control() && character != '\u{7f}')
+            && value
+                .split('/')
+                .all(|component| !component.is_empty() && component != "." && component != "..");
+        valid.then_some(Self(value))
+    }
+
     /// Returns the untrusted relative path candidate.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -123,7 +180,7 @@ pub enum DirectoryEntryKind {
 #[serde(deny_unknown_fields)]
 pub struct DirectoryEntryResponse {
     /// Case-preserved child name.
-    #[schemars(length(min = 1, max = 255), pattern(r"^[^\x00-\x1f\x7f/\\]+$"))]
+    #[schemars(length(min = 1, max = 255), pattern(r"^[^\x00-\x1f\x7f\x2f\\]+$"))]
     pub name: String,
     /// Stable logical child identity.
     pub object_id: ObjectId,
@@ -159,6 +216,6 @@ pub struct ListDirectoryResponse {
     #[schemars(length(max = 256))]
     pub entries: Vec<DirectoryEntryResponse>,
     /// Ready-to-follow relative URL, or null when this is the terminal page.
-    #[schemars(length(min = 1, max = 8192), pattern(r"^/api/latest/"))]
+    #[schemars(length(min = 1, max = 16384), pattern(r"^/api/latest/"))]
     pub next_page_url: Option<String>,
 }

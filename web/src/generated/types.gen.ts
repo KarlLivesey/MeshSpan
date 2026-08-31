@@ -19,6 +19,8 @@ export type ApiError = {
     | "forbidden"
     | "invalid_request"
     | "operation_conflict"
+    | "not_found"
+    | "state_conflict"
     | "busy"
     | "internal_contract";
   /**

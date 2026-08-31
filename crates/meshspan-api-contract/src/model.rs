@@ -521,6 +521,10 @@ pub enum ApiErrorCode {
     InvalidRequest,
     /// An idempotency key was reused with different canonical input.
     OperationConflict,
+    /// The selected resource does not exist or is intentionally indistinguishable from absence.
+    NotFound,
+    /// Current state no longer matches a continuation or mutation precondition.
+    StateConflict,
     /// Work was rejected by a bounded admission policy.
     Busy,
     /// An outgoing response failed its own contract.
