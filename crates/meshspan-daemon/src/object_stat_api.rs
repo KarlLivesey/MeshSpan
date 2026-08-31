@@ -6,5 +6,6 @@ mod codec;
 mod http;
 mod service;
 
+pub(crate) use codec::response as object_stat_response;
 pub use http::{ObjectStatApiError, object_stat_api_router};
 pub use service::{ObjectStatController, ObjectStatError, ObjectStatReader, ObjectStatService};

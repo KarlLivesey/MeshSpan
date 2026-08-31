@@ -144,7 +144,7 @@ where
     value.parse().map_err(|_| NativeUploadError::InvalidInput)
 }
 
-fn decode_digest(value: &str) -> Result<[u8; 32], NativeUploadError> {
+pub(super) fn decode_digest(value: &str) -> Result<[u8; 32], NativeUploadError> {
     if value.len() != 64 {
         return Err(NativeUploadError::InvalidInput);
     }

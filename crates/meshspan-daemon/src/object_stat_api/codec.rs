@@ -40,7 +40,7 @@ pub(super) fn parse_object_query(
     Ok(query)
 }
 
-pub(super) fn response(
+pub(crate) fn response(
     volume_id: VolumeId,
     query: GetObjectQuery,
     stat: &NamespaceObjectStat,

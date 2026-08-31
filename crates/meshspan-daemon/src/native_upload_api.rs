@@ -4,6 +4,7 @@
 
 mod codec;
 mod http;
+mod service;
 
 use axum::http::HeaderMap;
 use meshspan_api_contract::{
@@ -19,6 +20,7 @@ use thiserror::Error;
 use crate::{FileApiAuthenticationError, NativeFileRequestProtection};
 
 pub use http::{NativeUploadApiError, native_upload_api_router};
+pub use service::{NativeUploadService, NativeUploadServicePolicy};
 
 /// Exact decoded continuation for an immutable upload range traversal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

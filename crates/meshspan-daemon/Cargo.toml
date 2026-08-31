@@ -29,6 +29,7 @@ tokio.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+blake3.workspace = true
 p256.workspace = true
 tempfile = "3.27.0"
 tower.workspace = true

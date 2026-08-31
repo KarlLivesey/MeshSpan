@@ -51,6 +51,8 @@ mod native_query;
 mod native_upload_api;
 #[cfg(test)]
 mod native_upload_api_tests;
+#[cfg(test)]
+mod native_upload_service_tests;
 mod object_stat_api;
 #[cfg(test)]
 mod object_stat_api_tests;
@@ -176,8 +178,9 @@ pub use native_api_authentication::{
     NativeApiKeyAuthority, NativeApiKeyAuthorityError,
 };
 pub use native_upload_api::{
-    NativeUploadApiError, NativeUploadController, NativeUploadError, UploadRangeCursor,
-    UploadRangePageRequest, UploadRangeWriteRequest, native_upload_api_router,
+    NativeUploadApiError, NativeUploadController, NativeUploadError, NativeUploadService,
+    NativeUploadServicePolicy, UploadRangeCursor, UploadRangePageRequest, UploadRangeWriteRequest,
+    native_upload_api_router,
 };
 pub use object_stat_api::{
     ObjectStatApiError, ObjectStatController, ObjectStatError, ObjectStatReader, ObjectStatService,
