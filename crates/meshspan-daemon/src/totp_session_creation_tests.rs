@@ -90,7 +90,7 @@ fn api_key_and_totp_commit_once_and_replay_after_the_code_expires()
     Ok(())
 }
 
-fn create_totp_method(
+pub(super) fn create_totp_method(
     authority: &mut RepositorySessionAuthority,
     material: &InitialBootstrapMaterial,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -141,7 +141,7 @@ fn create_totp_method(
     Ok(())
 }
 
-fn session_request(
+pub(super) fn session_request(
     material: &InitialBootstrapMaterial,
     operation_id: &str,
     code: &str,

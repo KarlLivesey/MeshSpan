@@ -64,6 +64,14 @@ mod passkey_session_creation_tests;
 mod passkey_session_tests;
 #[cfg(test)]
 mod passkey_test_support;
+mod recovery_code_issuance;
+mod recovery_code_issuance_api;
+#[cfg(test)]
+mod recovery_code_issuance_api_tests;
+mod recovery_code_issuance_contract;
+mod recovery_code_issuance_model;
+#[cfg(test)]
+mod recovery_code_issuance_tests;
 mod revoke_session;
 mod revoke_session_api;
 mod setup_api;
@@ -156,6 +164,14 @@ pub use passkey_session::{
 };
 pub use passkey_session_contract::{
     DisabledPasskeyProof, DisabledPasskeySessions, PasskeySessionCeremony, PreparedPasskeyProof,
+};
+pub use recovery_code_issuance::RecoveryCodeIssuanceService;
+pub use recovery_code_issuance_api::{
+    RecoveryCodeIssuanceApiError, RecoveryCodeIssuanceController, recovery_code_issuance_api_router,
+};
+pub use recovery_code_issuance_contract::{
+    RecoveryCodeIssuanceAuthority, RecoveryCodeIssuanceAuthorityError, RecoveryCodeIssuanceCommit,
+    RecoveryCodeIssuanceError,
 };
 pub use revoke_session::{
     RevokeCurrentSessionError, RevokeCurrentSessionService, SessionRevocationAuthority,
