@@ -731,6 +731,94 @@ export const zHealthResponse = z
   .strict();
 
 /**
+ * ListDirectoryResponse
+ *
+ * One immutable, bounded directory page.
+ */
+export const zListDirectoryResponse = z
+  .strictObject({
+    directory_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    directory_object_revision_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    entries: z
+      .array(
+        z
+          .strictObject({
+            entry_generation: z.coerce
+              .bigint()
+              .gte(BigInt(0))
+              .lte(BigInt(9007199254740991)),
+            file_version_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              )
+              .nullable(),
+            kind: z.union([z.literal("directory"), z.literal("file")]),
+            logical_length: z.coerce
+              .bigint()
+              .gte(BigInt(0))
+              .lte(BigInt(9007199254740991))
+              .nullable(),
+            name: z
+              .string()
+              .min(1)
+              .max(255)
+              .regex(/^[^\x00-\x1f\x7f\/\\]+$/),
+            object_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            object_revision_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+          })
+          .strict(),
+      )
+      .max(256),
+    namespace_commit_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(8192)
+      .regex(/^\/api\/latest\//)
+      .nullable(),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/)
+      .nullable(),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * RevokeAuthenticationMethodRequest
  *
  * One idempotent request to revoke an owned authentication method.
@@ -1317,3 +1405,37 @@ export const zRevokeCurrentUserAuthenticationMethodPath = z
  */
 export const zRevokeCurrentUserAuthenticationMethodResponse =
   zRevokeAuthenticationMethodResponse;
+
+export const zListDirectoryPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+export const zListDirectoryQuery = z
+  .object({
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\u0000-\u001f\u007f]+$/)
+      .optional(),
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * Complete metadata for one immutable directory page
+ */
+export const zListDirectoryResponse2 = zListDirectoryResponse;
