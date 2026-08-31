@@ -35,7 +35,9 @@ import type {
   CreateSessionRequestWritable,
   CreateSessionResponse,
   CurrentSessionResponse,
+  GetObjectResponse,
   HealthResponse,
+  ListDirectoryResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -52,22 +54,70 @@ import {
   zCreateSessionResponse2,
   zGetCurrentSessionResponse,
   zGetHealthResponse,
+  zGetObjectPath,
+  zGetObjectQuery,
+  zGetObjectResponse2,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
+  zListDirectoryPath,
+  zListDirectoryQuery,
+  zListDirectoryResponse2,
+  zReadFilePath,
+  zReadFileQuery,
   zRevokeCurrentUserAuthenticationMethodBody,
   zRevokeCurrentUserAuthenticationMethodPath,
   zRevokeCurrentUserAuthenticationMethodResponse,
   zRevokeCurrentSessionBody,
   zRevokeCurrentSessionResponse2,
 } from "./zod.gen";
+import {
+  appendQuery,
+  authenticatedHeaders,
+  parseSafeDecimalHeader,
+  substitutePathParameter,
+  validateNamespacePath,
+} from "../native-api/request";
+import {
+  readBoundedBytes,
+  rejectOversizedContentLength,
+} from "../native-api/response";
 
 const MAX_JSON_RESPONSE_BYTES = 65_536;
+const MAX_FILE_READ_BYTES = 8_388_608;
 const SCHEMA_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CSRF_TOKEN_PATTERN = ${regexLiteral(routes.createSession.csrfPattern)};
+const API_KEY_PATTERN = /^meshspan-key-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$/u;
+const FILE_VERSION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export type MeshSpanFetchClientOptions = Readonly<{
   baseUrl: string;
   fetch?: typeof globalThis.fetch;
+  apiKey?: string;
+}>;
+
+export type ListDirectoryRequest = Readonly<{
+  volumeId: string;
+  path?: string;
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type GetObjectRequest = Readonly<{
+  volumeId: string;
+  path: string;
+}>;
+
+export type ReadFileRequest = Readonly<{
+  volumeId: string;
+  path: string;
+  offset?: number;
+  length?: number;
+}>;
+
+export type ReadFileResult = Readonly<{
+  bytes: Uint8Array;
+  fileVersionId: string;
+  offset: number;
 }>;
 
 export type CreateSessionResult = Readonly<{
@@ -83,9 +133,12 @@ export interface MeshSpanFetchClient {
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
   getCurrentSession(): Promise<CurrentSessionResponse>;
+  getObject(request: GetObjectRequest): Promise<GetObjectResponse>;
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
+  listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
+  readFile(request: ReadFileRequest): Promise<ReadFileResult>;
   revokeCurrentSession(
     request: RevokeCurrentSessionRequest,
     csrfToken: string,
@@ -115,14 +168,20 @@ interface JsonParser<T> {
 
 interface RequestContext {
   apiRoot: URL;
+  authorization: string | undefined;
   fetch: typeof globalThis.fetch;
 }
 
 export function createMeshSpanFetchClient(
   options: MeshSpanFetchClientOptions,
 ): MeshSpanFetchClient {
+  if (options.apiKey !== undefined && !API_KEY_PATTERN.test(options.apiKey)) {
+    throw new TypeError("client has an invalid MeshSpan API key");
+  }
   const context: RequestContext = {
     apiRoot: normalizeApiRoot(options.baseUrl),
+    authorization:
+      options.apiKey === undefined ? undefined : \`Bearer \${options.apiKey}\`,
     fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
   };
 
@@ -195,6 +254,24 @@ export function createMeshSpanFetchClient(
         zGetCurrentSessionResponse,
       );
     },
+    async getObject(request): Promise<GetObjectResponse> {
+      const path = zGetObjectPath.parse({ volume_id: request.volumeId });
+      const query = zGetObjectQuery.parse({ path: request.path });
+      validateNamespacePath(query.path);
+      return requestJson(
+        context,
+        appendQuery(
+          substitutePathParameter(
+            ${JSON.stringify(routes.getObject.route)},
+            "volume_id",
+            path.volume_id,
+          ),
+          query,
+        ),
+        { method: ${JSON.stringify(routes.getObject.method)} },
+        zGetObjectResponse2,
+      );
+    },
     async getOpenApi(): Promise<Record<string, unknown>> {
       return requestJson(
         context,
@@ -209,6 +286,52 @@ export function createMeshSpanFetchClient(
         ${JSON.stringify(routes.getSetupStatus.route)},
         { method: ${JSON.stringify(routes.getSetupStatus.method)} },
         zGetSetupStatusResponse,
+      );
+    },
+    async listDirectory(request): Promise<ListDirectoryResponse> {
+      const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
+      const query = zListDirectoryQuery.parse({
+        cursor: request.cursor,
+        limit: request.limit,
+        path: request.path,
+      });
+      if (query.path !== undefined) {
+        validateNamespacePath(query.path);
+      }
+      return requestJson(
+        context,
+        appendQuery(
+          substitutePathParameter(
+            ${JSON.stringify(routes.listDirectory.route)},
+            "volume_id",
+            path.volume_id,
+          ),
+          query,
+        ),
+        { method: ${JSON.stringify(routes.listDirectory.method)} },
+        zListDirectoryResponse2,
+      );
+    },
+    async readFile(request): Promise<ReadFileResult> {
+      const path = zReadFilePath.parse({ volume_id: request.volumeId });
+      const query = zReadFileQuery.parse({
+        length: request.length,
+        offset: request.offset,
+        path: request.path,
+      });
+      validateNamespacePath(query.path);
+      return requestFileRange(
+        context,
+        appendQuery(
+          substitutePathParameter(
+            ${JSON.stringify(routes.readFile.route)},
+            "volume_id",
+            path.volume_id,
+          ),
+          query,
+        ),
+        query.offset,
+        query.length,
       );
     },
     async revokeCurrentSession(
@@ -266,18 +389,6 @@ export function createMeshSpanFetchClient(
   };
 }
 
-function substitutePathParameter(
-  route: string,
-  name: string,
-  value: string,
-): string {
-  const placeholder = \`{\${name}}\`;
-  if (!route.includes(placeholder)) {
-    throw new TypeError("generated route is missing a required path parameter");
-  }
-  return route.replace(placeholder, encodeURIComponent(value));
-}
-
 async function requestJson<T>(
   context: RequestContext,
   route: string,
@@ -298,11 +409,11 @@ async function requestJsonResponse<T>(
   request: RequestInit,
   parser: JsonParser<T>,
 ): Promise<JsonResponse<T>> {
-  const headers = new Headers(request.headers);
+  const headers = authenticatedHeaders(context.authorization, request.headers);
   headers.set("Accept", "application/json");
   const response = await context.fetch(resolveRoute(context.apiRoot, route), {
     ...request,
-    credentials: "same-origin",
+    credentials: context.authorization === undefined ? "same-origin" : "omit",
     headers,
   });
   validateContractHeaders(response);
@@ -317,6 +428,52 @@ async function requestJsonResponse<T>(
   }
 
   return { body: parser.parse(value), headers: response.headers };
+}
+
+async function requestFileRange(
+  context: RequestContext,
+  route: string,
+  expectedOffset: number,
+  maximumBytes: number,
+): Promise<ReadFileResult> {
+  if (maximumBytes > MAX_FILE_READ_BYTES) {
+    throw new RangeError("file request exceeds the native range limit");
+  }
+  const response = await context.fetch(resolveRoute(context.apiRoot, route), {
+    credentials: context.authorization === undefined ? "same-origin" : "omit",
+    headers: authenticatedHeaders(context.authorization, {
+      Accept: "application/octet-stream",
+    }),
+    method: "GET",
+  });
+  validateContractHeaders(response);
+  if (!response.ok) {
+    const value = await readBoundedJson(response);
+    const parsedError = zApiError.safeParse(value);
+    throw new MeshSpanApiError(
+      response.status,
+      parsedError.success ? parsedError.data : undefined,
+    );
+  }
+  if (response.headers.get("content-type") !== "application/octet-stream") {
+    throw new TypeError("file response is not application/octet-stream");
+  }
+  const version = response.headers.get("MeshSpan-File-Version");
+  if (version === null || !FILE_VERSION_PATTERN.test(version)) {
+    throw new TypeError("file response has an invalid immutable version");
+  }
+  const offset = parseSafeDecimalHeader(
+    response.headers.get("MeshSpan-Read-Offset"),
+  );
+  if (offset !== expectedOffset) {
+    throw new TypeError("file response has an unexpected range offset");
+  }
+  rejectOversizedContentLength(
+    response.headers.get("content-length"),
+    maximumBytes,
+  );
+  const bytes = await readBoundedBytes(response.body, maximumBytes);
+  return { bytes, fileVersionId: version, offset };
 }
 
 function readCsrfToken(headers: Headers): string {
@@ -357,56 +514,15 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   if (!contentType?.startsWith("application/json")) {
     throw new TypeError("response is not application/json");
   }
-  rejectOversizedContentLength(response.headers.get("content-length"));
-  const bytes = await readBoundedBytes(response.body);
+  rejectOversizedContentLength(
+    response.headers.get("content-length"),
+    MAX_JSON_RESPONSE_BYTES,
+  );
+  const bytes = await readBoundedBytes(response.body, MAX_JSON_RESPONSE_BYTES);
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   return JSON.parse(text) as unknown;
 }
 
-function rejectOversizedContentLength(value: string | null): void {
-  if (value === null) {
-    return;
-  }
-  const length = Number(value);
-  if (!Number.isSafeInteger(length) || length < 0) {
-    throw new TypeError("response has an invalid Content-Length");
-  }
-  if (length > MAX_JSON_RESPONSE_BYTES) {
-    throw new RangeError("response exceeds the JSON byte limit");
-  }
-}
-
-async function readBoundedBytes(
-  body: ReadableStream<Uint8Array> | null,
-): Promise<Uint8Array> {
-  if (body === null) {
-    throw new TypeError("response has no body");
-  }
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalLength = 0;
-
-  for (;;) {
-    const result = await reader.read();
-    if (result.done) {
-      break;
-    }
-    totalLength += result.value.byteLength;
-    if (totalLength > MAX_JSON_RESPONSE_BYTES) {
-      await reader.cancel();
-      throw new RangeError("response exceeds the JSON byte limit");
-    }
-    chunks.push(result.value);
-  }
-
-  const bytes = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
 `;
 
 await writeAtomically(OUTPUT_PATH, source);

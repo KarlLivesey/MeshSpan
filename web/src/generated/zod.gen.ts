@@ -710,6 +710,64 @@ export const zCurrentSessionResponse = z
   .strict();
 
 /**
+ * GetObjectResponse
+ *
+ * Complete immutable metadata for one logical object.
+ */
+export const zGetObjectResponse = z
+  .strictObject({
+    namespace_commit_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    object: z
+      .strictObject({
+        entry_generation: z.int().gte(0).lte(9007199254740991),
+        file_version_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          )
+          .nullable(),
+        kind: z.union([z.literal("directory"), z.literal("file")]),
+        logical_length: z.int().gte(0).lte(9007199254740991).nullable(),
+        name: z
+          .string()
+          .min(1)
+          .max(255)
+          .regex(/^[^\x00-\x1f\x7f\x2f\\]+$/),
+        object_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        object_revision_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      })
+      .strict(),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * HealthResponse
  *
  * Bounded anonymous health response.
@@ -755,10 +813,7 @@ export const zListDirectoryResponse = z
       .array(
         z
           .strictObject({
-            entry_generation: z.coerce
-              .bigint()
-              .gte(BigInt(0))
-              .lte(BigInt(9007199254740991)),
+            entry_generation: z.int().gte(0).lte(9007199254740991),
             file_version_id: z
               .string()
               .length(36)
@@ -767,11 +822,7 @@ export const zListDirectoryResponse = z
               )
               .nullable(),
             kind: z.union([z.literal("directory"), z.literal("file")]),
-            logical_length: z.coerce
-              .bigint()
-              .gte(BigInt(0))
-              .lte(BigInt(9007199254740991))
-              .nullable(),
+            logical_length: z.int().gte(0).lte(9007199254740991).nullable(),
             name: z
               .string()
               .min(1)
@@ -1441,3 +1492,57 @@ export const zListDirectoryQuery = z
  * Complete metadata for one immutable directory page
  */
 export const zListDirectoryResponse2 = zListDirectoryResponse;
+
+export const zReadFilePath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+export const zReadFileQuery = z
+  .object({
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\u0000-\u001f\u007f]+$/),
+    offset: z.int().gte(0).lte(9007199254740991).optional().default(0),
+    length: z.int().gte(1).lte(8388608).optional().default(8388608),
+  })
+  .strict();
+
+/**
+ * Verified bounded logical-file bytes
+ */
+export const zReadFileResponse = z.string().max(8388608);
+
+export const zGetObjectPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+export const zGetObjectQuery = z
+  .object({
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^[^\u0000-\u001f\u007f]+$/),
+  })
+  .strict();
+
+/**
+ * Complete immutable metadata for the selected logical object
+ */
+export const zGetObjectResponse2 = zGetObjectResponse;

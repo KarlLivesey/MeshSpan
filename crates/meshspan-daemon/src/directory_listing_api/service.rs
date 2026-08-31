@@ -99,7 +99,7 @@ where
 
 /// Publicly meaningful category selected by the daemon composition for an adapter error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectoryListingFailure {
+pub enum FileApiFailure {
     /// Request or continuation is malformed.
     InvalidInput,
     /// Volume or directory does not exist for this caller.
@@ -108,6 +108,8 @@ pub enum DirectoryListingFailure {
     AccessDenied,
     /// Continuation belongs to an obsolete immutable view.
     StaleCursor,
+    /// A live connector share or mutation conflicts with this operation.
+    Conflict,
     /// Required committed authority is temporarily unavailable.
     Unavailable,
     /// Persisted evidence or an internal invariant failed closed.
@@ -153,7 +155,7 @@ impl<A, F, M> DirectoryListingController for DirectoryListingService<A, F, M>
 where
     A: FileApiAuthenticator,
     F: DirectoryLister,
-    M: Fn(&F::Error) -> DirectoryListingFailure + Send + 'static,
+    M: Fn(&F::Error) -> FileApiFailure + Send + 'static,
 {
     fn list_directory(
         &mut self,
@@ -197,14 +199,14 @@ where
     }
 }
 
-fn map_filesystem_failure(value: DirectoryListingFailure) -> DirectoryListingError {
+fn map_filesystem_failure(value: FileApiFailure) -> DirectoryListingError {
     match value {
-        DirectoryListingFailure::InvalidInput => DirectoryListingError::InvalidInput,
-        DirectoryListingFailure::NotFound => DirectoryListingError::NotFound,
-        DirectoryListingFailure::AccessDenied => DirectoryListingError::AccessDenied,
-        DirectoryListingFailure::StaleCursor => DirectoryListingError::StaleCursor,
-        DirectoryListingFailure::Unavailable => DirectoryListingError::Unavailable,
-        DirectoryListingFailure::Failed => DirectoryListingError::Failed,
+        FileApiFailure::InvalidInput => DirectoryListingError::InvalidInput,
+        FileApiFailure::NotFound => DirectoryListingError::NotFound,
+        FileApiFailure::AccessDenied => DirectoryListingError::AccessDenied,
+        FileApiFailure::StaleCursor => DirectoryListingError::StaleCursor,
+        FileApiFailure::Unavailable => DirectoryListingError::Unavailable,
+        FileApiFailure::Conflict | FileApiFailure::Failed => DirectoryListingError::Failed,
     }
 }
 

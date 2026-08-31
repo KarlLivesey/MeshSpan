@@ -6,7 +6,11 @@ mod api_key_management;
 mod api_key_validation;
 mod directory_listing;
 mod directory_listing_validation;
+mod file_read;
+mod file_read_validation;
 mod model;
+mod object_stat;
+mod object_stat_validation;
 mod openapi;
 mod passkey_registration;
 mod passkey_validation;
@@ -30,14 +34,15 @@ pub use api_key_validation::{
     validate_revoke_authentication_method_response_value,
 };
 pub use directory_listing::{
-    DirectoryCursor, DirectoryEntryKind, DirectoryEntryResponse, DirectoryPath, FileVersionId,
-    ListDirectoryQuery, ListDirectoryResponse, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    VolumeId,
+    DirectoryCursor, DirectoryEntryKind, FileVersionId, ListDirectoryQuery, ListDirectoryResponse,
+    NamespaceCommitId, NamespacePath, ObjectId, ObjectMetadataResponse, ObjectRevisionId, VolumeId,
 };
 pub use directory_listing_validation::{
     encode_list_directory_response, validate_list_directory_query,
     validate_list_directory_query_value, validate_list_directory_response_value,
 };
+pub use file_read::{MAX_FILE_READ_BYTES, MAX_SAFE_FILE_OFFSET, ReadFileQuery};
+pub use file_read_validation::{validate_read_file_query, validate_read_file_query_value};
 pub use model::{
     ApiError, ApiErrorCode, ApiErrorIssue, AssuranceLevel, CreateMeshSetupRequest,
     CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
@@ -46,6 +51,11 @@ pub use model::{
     PrincipalId, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
     SessionAdditionalFactor, SessionAuthentication, SessionId, SetupClaim, SetupName, SetupState,
     SetupStatusResponse, StepUpCurrentSessionRequest,
+};
+pub use object_stat::{GetObjectQuery, GetObjectResponse};
+pub use object_stat_validation::{
+    encode_get_object_response, validate_get_object_query, validate_get_object_query_value,
+    validate_get_object_response_value,
 };
 pub use openapi::{OPENAPI_PATH, OpenApiDocument, generate_openapi};
 pub use passkey_registration::{

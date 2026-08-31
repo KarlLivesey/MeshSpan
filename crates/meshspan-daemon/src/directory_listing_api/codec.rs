@@ -4,16 +4,17 @@
 
 use meshspan_api_contract::{
     DirectoryCursor as ApiDirectoryCursor, DirectoryEntryKind as ApiDirectoryEntryKind,
-    DirectoryEntryResponse, DirectoryPath, FileVersionId as ApiFileVersionId, ListDirectoryQuery,
-    ListDirectoryResponse, NamespaceCommitId as ApiNamespaceCommitId, ObjectId as ApiObjectId,
-    ObjectRevisionId as ApiObjectRevisionId, VolumeId as ApiVolumeId,
-    validate_list_directory_query,
+    FileVersionId as ApiFileVersionId, ListDirectoryQuery, ListDirectoryResponse,
+    NamespaceCommitId as ApiNamespaceCommitId, NamespacePath as ApiNamespacePath,
+    ObjectId as ApiObjectId, ObjectMetadataResponse, ObjectRevisionId as ApiObjectRevisionId,
+    VolumeId as ApiVolumeId, validate_list_directory_query,
 };
 use meshspan_filesystem::{
     DirectoryEntryKind, DirectoryListCursor, NamespaceComponent, NamespaceLimits, NamespaceListPage,
 };
 
 use super::service::DirectoryListingError;
+use crate::native_query::has_valid_percent_encoding;
 
 pub(super) fn parse_directory_query(
     raw_query: Option<&str>,
@@ -33,7 +34,7 @@ pub(super) fn parse_directory_query(
             "path" if !path_seen => {
                 path_seen = true;
                 query.path = Some(
-                    DirectoryPath::from_decoded(value.into_owned())
+                    ApiNamespacePath::from_decoded(value.into_owned())
                         .ok_or(DirectoryListingError::InvalidInput)?,
                 );
             }
@@ -70,11 +71,12 @@ pub(super) fn response(
         .entries
         .into_iter()
         .map(|entry| {
-            Ok(DirectoryEntryResponse {
+            Ok(ObjectMetadataResponse {
                 name: entry.name.display().to_owned(),
                 object_id: api_object_id(entry.object_id.as_bytes())?,
                 object_revision_id: api_object_revision_id(entry.object_revision_id.as_bytes())?,
-                entry_generation: entry.entry_generation,
+                entry_generation: i64::try_from(entry.entry_generation)
+                    .map_err(|_| DirectoryListingError::Failed)?,
                 kind: match entry.kind {
                     DirectoryEntryKind::Directory => ApiDirectoryEntryKind::Directory,
                     DirectoryEntryKind::File => ApiDirectoryEntryKind::File,
@@ -83,7 +85,11 @@ pub(super) fn response(
                     .file_version_id
                     .map(|value| api_file_version_id(value.as_bytes()))
                     .transpose()?,
-                logical_length: entry.logical_length,
+                logical_length: entry
+                    .logical_length
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|_| DirectoryListingError::Failed)?,
             })
         })
         .collect::<Result<Vec<_>, DirectoryListingError>>()?;
@@ -169,24 +175,6 @@ fn encode_cursor(
         append_hex(&mut encoded, bytes);
     }
     ApiDirectoryCursor::from_encoded(encoded).ok_or(DirectoryListingError::Failed)
-}
-
-fn has_valid_percent_encoding(bytes: &[u8]) -> bool {
-    let mut index = 0_usize;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            if index + 2 >= bytes.len()
-                || hex_nibble(bytes[index + 1]).is_none()
-                || hex_nibble(bytes[index + 2]).is_none()
-            {
-                return false;
-            }
-            index += 3;
-        } else {
-            index += 1;
-        }
-    }
-    true
 }
 
 fn decode_array<const N: usize>(value: &str) -> Result<[u8; N], DirectoryListingError> {

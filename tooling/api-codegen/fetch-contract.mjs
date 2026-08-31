@@ -32,8 +32,11 @@ export function readRequiredRoutes(document) {
     ),
     getHealth: requireOperation(operations, "getHealth"),
     getCurrentSession: requireOperation(operations, "getCurrentSession"),
+    getObject: requireOperation(operations, "getObject"),
     getOpenApi: requireOperation(operations, "getOpenApi"),
     getSetupStatus: requireOperation(operations, "getSetupStatus"),
+    listDirectory: requireOperation(operations, "listDirectory"),
+    readFile: requireOperation(operations, "readFile"),
     revokeCurrentSession: requireOperation(operations, "revokeCurrentSession"),
     revokeCurrentUserAuthenticationMethod: requireOperation(
       operations,

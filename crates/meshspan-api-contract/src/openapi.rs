@@ -13,8 +13,8 @@ use crate::{
     CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
     CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CurrentSessionResponse, HealthResponse, ListDirectoryResponse,
-    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    CreateTotpRegistrationResponse, CurrentSessionResponse, GetObjectResponse, HealthResponse,
+    ListDirectoryResponse, RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
     StepUpCurrentSessionRequest, schema,
 };
@@ -94,6 +94,7 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
                 "CreateTotpRegistrationRequest": request_component::<CreateTotpRegistrationRequest>(),
                 "CreateTotpRegistrationResponse": response_component::<CreateTotpRegistrationResponse>(),
                 "CurrentSessionResponse": response_component::<CurrentSessionResponse>(),
+                "GetObjectResponse": response_component::<GetObjectResponse>(),
                 "HealthResponse": response_component::<HealthResponse>(),
                 "ListDirectoryResponse": response_component::<ListDirectoryResponse>(),
                 "RevokeCurrentSessionRequest": request_component::<RevokeCurrentSessionRequest>(),
@@ -115,6 +116,11 @@ fn paths() -> Value {
         (
             "/volumes/{volume_id}/directory-entries".to_owned(),
             list_directory_path(),
+        ),
+        ("/volumes/{volume_id}/objects".to_owned(), get_object_path()),
+        (
+            "/volumes/{volume_id}/file-content".to_owned(),
+            read_file_path(),
         ),
         ("/openapi.json".to_owned(), openapi_path()),
         ("/setup/status".to_owned(), setup_status_path()),
@@ -162,6 +168,143 @@ fn paths() -> Value {
             revoke_current_session_path(),
         ),
     ]))
+}
+
+fn read_file_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "readFile",
+            "summary": "Read one bounded byte range from a logical regular file",
+            "x-meshspan-access": "authenticated",
+            "parameters": [
+                {
+                    "name": "volume_id",
+                    "in": "path",
+                    "required": true,
+                    "schema": uuid_parameter_schema()
+                },
+                {
+                    "name": "path",
+                    "in": "query",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                    }
+                },
+                {
+                    "name": "offset",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9_007_199_254_740_991_u64,
+                        "default": 0
+                    }
+                },
+                {
+                    "name": "length",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 8_388_608,
+                        "default": 8_388_608
+                    }
+                }
+            ],
+            "responses": {
+                "200": binary_file_response(),
+                "400": json_response("Invalid path, range or volume identity", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "404": json_response("Volume or regular file not found", "#/components/schemas/ApiError"),
+                "409": json_response("Concurrent share mode rejected the read", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("File authority or content temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn binary_file_response() -> Value {
+    let mut headers = response_headers();
+    if let Some(headers) = headers.as_object_mut() {
+        headers.insert(
+            "MeshSpan-File-Version".to_owned(),
+            json!({
+                "required": true,
+                "schema": uuid_parameter_schema()
+            }),
+        );
+        headers.insert(
+            "MeshSpan-Read-Offset".to_owned(),
+            json!({
+                "required": true,
+                "schema": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9_007_199_254_740_991_u64
+                }
+            }),
+        );
+    }
+    json!({
+        "description": "Verified bounded logical-file bytes",
+        "headers": headers,
+        "content": {
+            "application/octet-stream": {
+                "schema": {
+                    "type": "string",
+                    "format": "binary",
+                    "maxLength": 8_388_608
+                }
+            }
+        }
+    })
+}
+
+fn get_object_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getObject",
+            "summary": "Read complete immutable metadata for one logical object path",
+            "x-meshspan-access": "authenticated",
+            "parameters": [
+                {
+                    "name": "volume_id",
+                    "in": "path",
+                    "required": true,
+                    "schema": uuid_parameter_schema()
+                },
+                {
+                    "name": "path",
+                    "in": "query",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                    }
+                }
+            ],
+            "responses": {
+                "200": json_response(
+                    "Complete immutable metadata for the selected logical object",
+                    "#/components/schemas/GetObjectResponse"
+                ),
+                "400": json_response("Invalid path or volume identity", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "404": json_response("Volume or object not found", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn list_directory_path() -> Value {

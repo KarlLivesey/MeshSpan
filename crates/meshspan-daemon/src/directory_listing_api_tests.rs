@@ -25,8 +25,8 @@ use meshspan_filesystem::{
 use tower::ServiceExt;
 
 use crate::{
-    DirectoryLister, DirectoryListingFailure, DirectoryListingService, FileApiAuthenticationError,
-    FileApiAuthenticator, directory_listing_api_router,
+    DirectoryLister, DirectoryListingService, FileApiAuthenticationError, FileApiAuthenticator,
+    FileApiFailure, directory_listing_api_router,
 };
 
 const VOLUME_ID: &str = "01010101-0101-4101-8101-010101010101";
@@ -142,8 +142,8 @@ fn request(uri: &str) -> Request<Body> {
         .expect("request fixture must build")
 }
 
-const fn classify_unit_error(_error: &TestListerError) -> DirectoryListingFailure {
-    DirectoryListingFailure::Failed
+const fn classify_unit_error(_error: &TestListerError) -> FileApiFailure {
+    FileApiFailure::Failed
 }
 
 enum TestListerError {
