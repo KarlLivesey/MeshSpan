@@ -195,6 +195,7 @@ fn begin_request() -> Result<UploadBeginRequest, Box<dyn std::error::Error>> {
         upload_id: UploadId::from_bytes([11; 16])?,
         stage_id: StageId::from_bytes([12; 16])?,
         volume_id: VolumeId::from_bytes([13; 16])?,
+        authority_object_id: ObjectId::from_bytes([15; 16])?,
         path: NamespacePath::from_components(["result.bin"], NamespaceLimits::PORTABLE)?,
         principal_id: PrincipalId::from_bytes([14; 16])?,
         authorization_revision: Revision::new(6),

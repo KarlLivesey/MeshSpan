@@ -215,6 +215,24 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         crate::upload_service::begin(&mut self.uploads, &mut self.stages, request)
     }
 
+    pub(crate) fn upload_session(
+        &self,
+        upload_id: meshspan_domain::UploadId,
+    ) -> Result<crate::UploadSession, crate::UploadServiceError> {
+        self.uploads.load(upload_id).map_err(Into::into)
+    }
+
+    pub(crate) fn upload_authority_target(
+        &self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        path: &crate::NamespacePath,
+        disposition: crate::UploadDisposition,
+    ) -> Result<ObjectId, crate::HandleError> {
+        self.publications
+            .upload_authority_target(branch_id, volume_id, path, disposition)
+    }
+
     /// Writes one independently idempotent bounded range to a private upload.
     ///
     /// # Errors

@@ -6,12 +6,15 @@ use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{BranchId, HandleId, LockId, OperationId, UnixMicros, VolumeId};
 
 use crate::{
-    AuthorisedFilesystemError, AuthorisedFilesystemService, CreateDisposition,
-    DurableContentPublisher, DurableContentReader, FilesystemAccessAuthority,
-    FilesystemAccessContext, FilesystemHandleCloseReceipt, FilesystemHandleFlushRequest,
-    FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt, HandleAccess, HandleLeaseReceipt,
-    HandleShare, LockRangeReceipt, NamespaceListPage, NamespaceObjectStat, NamespacePath,
-    NamespacePublicationReceipt, OpenHandleReceipt, RangeLockKind, UnlockRangeReceipt,
+    AdapterUploadAbortRequest, AdapterUploadBeginRequest, AdapterUploadRangePageRequest,
+    AdapterUploadStatusRequest, AdapterUploadWriteRequest, AuthorisedFilesystemError,
+    AuthorisedFilesystemService, CreateDisposition, DurableContentPublisher, DurableContentReader,
+    FilesystemAccessAuthority, FilesystemAccessContext, FilesystemHandleCloseReceipt,
+    FilesystemHandleFlushRequest, FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt,
+    HandleAccess, HandleLeaseReceipt, HandleShare, LockRangeReceipt, NamespaceListPage,
+    NamespaceObjectStat, NamespacePath, NamespacePublicationReceipt, OpenHandleReceipt,
+    RangeLockKind, UnlockRangeReceipt, UploadRangePageReceipt, UploadSession, UploadStatusReceipt,
+    UploadWriteReceipt,
 };
 
 /// Daemon-owned publication policy that access connectors cannot override.
@@ -468,6 +471,67 @@ pub trait FilesystemFileAdapter {
     ) -> Result<UnlockRangeReceipt, Self::Error>;
 }
 
+/// Connector-neutral resumable-upload boundary with operation-time authority on every call.
+pub trait FilesystemUploadAdapter {
+    /// Closed connector-specific authority or durability error.
+    type Error;
+
+    /// Begins or exactly resumes one private upload.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid destinations, stale authority and unavailable durable state.
+    fn begin_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterUploadBeginRequest,
+    ) -> Result<UploadStatusReceipt, Self::Error>;
+
+    /// Reads exact current durable upload state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent uploads, stale authority and corrupt durable state.
+    fn upload_status(
+        &self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadStatusRequest,
+    ) -> Result<UploadStatusReceipt, Self::Error>;
+
+    /// Writes one independently idempotent bounded range.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale fences or authority, conflicting retries and persistence failure.
+    fn write_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterUploadWriteRequest,
+    ) -> Result<UploadWriteReceipt, Self::Error>;
+
+    /// Lists one checkpoint-pinned bounded coverage page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale cursors or authority, invalid bounds and corrupt durable state.
+    fn upload_range_page(
+        &self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadRangePageRequest,
+    ) -> Result<UploadRangePageReceipt, Self::Error>;
+
+    /// Permanently abandons one unpublished upload.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale fences or authority, conflicting retries and persistence failure.
+    fn abort_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadAbortRequest,
+    ) -> Result<UploadSession, Self::Error>;
+}
+
 /// Daemon composition binding semantic connector operations to one local branch and policy.
 pub struct BoundFilesystemAdapter<P, A> {
     filesystem: AuthorisedFilesystemService<P, A>,
@@ -621,6 +685,55 @@ where
         request: AdapterUnlockRequest,
     ) -> Result<UnlockRangeReceipt, Self::Error> {
         self.filesystem.adapter_unlock(context, request)
+    }
+}
+
+impl<P, A> FilesystemUploadAdapter for BoundFilesystemAdapter<P, A>
+where
+    P: DurableContentPublisher,
+    A: FilesystemAccessAuthority,
+{
+    type Error = AuthorisedFilesystemError<A::Error>;
+
+    fn begin_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterUploadBeginRequest,
+    ) -> Result<UploadStatusReceipt, Self::Error> {
+        self.filesystem
+            .adapter_begin_upload(self.branch_id, context, request)
+    }
+
+    fn upload_status(
+        &self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadStatusRequest,
+    ) -> Result<UploadStatusReceipt, Self::Error> {
+        self.filesystem.adapter_upload_status(context, request)
+    }
+
+    fn write_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &AdapterUploadWriteRequest,
+    ) -> Result<UploadWriteReceipt, Self::Error> {
+        self.filesystem.adapter_write_upload(context, request)
+    }
+
+    fn upload_range_page(
+        &self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadRangePageRequest,
+    ) -> Result<UploadRangePageReceipt, Self::Error> {
+        self.filesystem.adapter_upload_range_page(context, request)
+    }
+
+    fn abort_upload(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterUploadAbortRequest,
+    ) -> Result<UploadSession, Self::Error> {
+        self.filesystem.adapter_abort_upload(context, request)
     }
 }
 

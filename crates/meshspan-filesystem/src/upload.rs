@@ -14,6 +14,85 @@ use crate::{
     StageWriteOutcome,
 };
 
+/// Connector-supplied upload creation intent before current authority is resolved.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterUploadBeginRequest {
+    /// Stable client idempotency identity.
+    pub operation_id: OperationId,
+    /// Deterministic opaque upload identity derived from the operation.
+    pub upload_id: UploadId,
+    /// Deterministic private stage identity distinct from the upload identity.
+    pub stage_id: StageId,
+    /// Selected logical volume.
+    pub volume_id: VolumeId,
+    /// Canonical destination path.
+    pub path: NamespacePath,
+    /// Final namespace precondition.
+    pub disposition: UploadDisposition,
+    /// Hard logical-byte ceiling.
+    pub maximum_bytes: u64,
+    /// Exclusive upload expiry.
+    pub expires_at: UnixMicros,
+    /// Authoritative creation instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Connector-supplied upload write before current authority is resolved.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterUploadWriteRequest {
+    /// Selected upload.
+    pub upload_id: UploadId,
+    /// Independently idempotent range operation.
+    pub operation_id: OperationId,
+    /// Exact writer fence.
+    pub stage_fence: u64,
+    /// First replaced logical byte.
+    pub offset: u64,
+    /// Already bounded hostile bytes.
+    pub bytes: BoundedBytes,
+    /// Caller-declared BLAKE3 digest independently verified by the stage.
+    pub digest: [u8; 32],
+    /// Authoritative attempt instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Connector-supplied upload-state query.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterUploadStatusRequest {
+    /// Selected upload.
+    pub upload_id: UploadId,
+    /// Authoritative query instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Connector-supplied bounded upload-range query.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterUploadRangePageRequest {
+    /// Selected upload.
+    pub upload_id: UploadId,
+    /// Exact pinned checkpoint on continuation pages.
+    pub expected_sequence: Option<u64>,
+    /// Exclusive prior range start.
+    pub after_start: Option<u64>,
+    /// Positive page bound.
+    pub limit: u16,
+    /// Authoritative query instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Connector-supplied upload abandonment intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterUploadAbortRequest {
+    /// Stable client idempotency identity.
+    pub operation_id: OperationId,
+    /// Selected upload.
+    pub upload_id: UploadId,
+    /// Exact writer fence.
+    pub stage_fence: u64,
+    /// Authoritative attempt instant.
+    pub observed_at: UnixMicros,
+}
+
 /// Namespace precondition applied when an upload is eventually published.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UploadDisposition {
@@ -53,6 +132,8 @@ pub struct UploadBeginRequest {
     pub stage_id: StageId,
     /// Logical volume containing the destination.
     pub volume_id: VolumeId,
+    /// Stable destination object or parent against which every operation is reauthorised.
+    pub authority_object_id: ObjectId,
     /// Canonical bounded logical destination path.
     pub path: NamespacePath,
     /// Authenticated principal creating the upload.
@@ -85,6 +166,8 @@ pub enum UploadState {
 /// Durable upload identity and authority returned to connector implementations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UploadSession {
+    /// Stable idempotency identity that created this session.
+    pub begin_operation_id: OperationId,
     /// Opaque upload identity.
     pub upload_id: UploadId,
     /// Private stage identity.
@@ -93,6 +176,8 @@ pub struct UploadSession {
     pub stage_fence: u64,
     /// Logical volume containing the destination.
     pub volume_id: VolumeId,
+    /// Stable destination object or parent selected when the upload began.
+    pub authority_object_id: ObjectId,
     /// Canonical destination path.
     pub path: NamespacePath,
     /// Principal owning this upload session.

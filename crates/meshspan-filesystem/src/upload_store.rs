@@ -18,7 +18,7 @@ use crate::{
 };
 
 const DATABASE_FILE: &str = "filesystem-uploads.sqlite3";
-const MIGRATIONS: [Migration; 2] = [
+const MIGRATIONS: [Migration; 3] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/upload/001_initial.sql"),
@@ -27,8 +27,12 @@ const MIGRATIONS: [Migration; 2] = [
         version: 2,
         sql: include_str!("../schema/upload/002_commit_operations.sql"),
     },
+    Migration {
+        version: 3,
+        sql: include_str!("../schema/upload/003_authority_target.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 
 const STATE_PREPARING: u8 = 1;
@@ -96,15 +100,17 @@ impl UploadSessionStore {
         transaction.execute(
             "INSERT INTO upload_sessions(
                 upload_id, begin_operation_id, request_digest, stage_id, stage_fence, volume_id,
-                principal_id, authorization_revision, disposition, expected_version_id,
-                maximum_bytes, state, created_at, expires_at, path_depth, result_digest
-             ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13, ?14)",
+                authority_object_id, principal_id, authorization_revision, disposition,
+                expected_version_id, maximum_bytes, state, created_at, expires_at, path_depth,
+                result_digest
+             ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14, ?15)",
             params![
                 request.upload_id.as_bytes().as_slice(),
                 request.operation_id.as_bytes().as_slice(),
                 digest.as_slice(),
                 request.stage_id.as_bytes().as_slice(),
                 request.volume_id.as_bytes().as_slice(),
+                request.authority_object_id.as_bytes().as_slice(),
                 request.principal_id.as_bytes().as_slice(),
                 to_i64(request.authorization_revision.get())?,
                 request.disposition.code(),
@@ -317,6 +323,7 @@ struct StoredSession {
     stage: Vec<u8>,
     stage_fence: i64,
     volume: Vec<u8>,
+    authority_object: Option<Vec<u8>>,
     principal: Vec<u8>,
     authorization_revision: i64,
     disposition: u8,
@@ -344,7 +351,7 @@ fn load_stored(
     connection
         .query_row(
             "SELECT upload_id, begin_operation_id, request_digest, stage_id, stage_fence,
-                    volume_id, principal_id, authorization_revision, disposition,
+                    volume_id, authority_object_id, principal_id, authorization_revision, disposition,
                     expected_version_id, maximum_bytes, state, created_at, expires_at, path_depth,
                     result_digest, abort_operation_id, abort_request_digest, aborted_at,
                     commit_operation_id, commit_request_digest, committed_object_id,
@@ -359,24 +366,25 @@ fn load_stored(
                     stage: row.get(3)?,
                     stage_fence: row.get(4)?,
                     volume: row.get(5)?,
-                    principal: row.get(6)?,
-                    authorization_revision: row.get(7)?,
-                    disposition: row.get(8)?,
-                    expected_version: row.get(9)?,
-                    maximum_bytes: row.get(10)?,
-                    state: row.get(11)?,
-                    created_at: row.get(12)?,
-                    expires_at: row.get(13)?,
-                    path_depth: row.get(14)?,
-                    result_digest: row.get(15)?,
-                    abort_operation: row.get(16)?,
-                    abort_request_digest: row.get(17)?,
-                    aborted_at: row.get(18)?,
-                    commit_operation: row.get(19)?,
-                    commit_request_digest: row.get(20)?,
-                    committed_object: row.get(21)?,
-                    committed_version: row.get(22)?,
-                    committed_at: row.get(23)?,
+                    authority_object: row.get(6)?,
+                    principal: row.get(7)?,
+                    authorization_revision: row.get(8)?,
+                    disposition: row.get(9)?,
+                    expected_version: row.get(10)?,
+                    maximum_bytes: row.get(11)?,
+                    state: row.get(12)?,
+                    created_at: row.get(13)?,
+                    expires_at: row.get(14)?,
+                    path_depth: row.get(15)?,
+                    result_digest: row.get(16)?,
+                    abort_operation: row.get(17)?,
+                    abort_request_digest: row.get(18)?,
+                    aborted_at: row.get(19)?,
+                    commit_operation: row.get(20)?,
+                    commit_request_digest: row.get(21)?,
+                    committed_object: row.get(22)?,
+                    committed_version: row.get(23)?,
+                    committed_at: row.get(24)?,
                 })
             },
         )
@@ -404,10 +412,18 @@ fn decode_session_allow_transition(
     let disposition = decode_disposition(stored.disposition, stored.expected_version.as_deref())?;
     validate_stored_digest(stored, &path, disposition)?;
     Ok(UploadSession {
+        begin_operation_id: identifier(&stored.operation, OperationId::from_bytes)?,
         upload_id,
         stage_id: identifier(&stored.stage, StageId::from_bytes)?,
         stage_fence: positive(stored.stage_fence)?,
         volume_id: identifier(&stored.volume, VolumeId::from_bytes)?,
+        authority_object_id: identifier(
+            stored
+                .authority_object
+                .as_deref()
+                .ok_or(UploadStoreError::Corrupt)?,
+            ObjectId::from_bytes,
+        )?,
         path,
         principal_id: identifier(&stored.principal, PrincipalId::from_bytes)?,
         authorization_revision: Revision::new(positive(stored.authorization_revision)?),
@@ -518,6 +534,13 @@ fn validate_stored_digest(
         upload_id: identifier(&stored.upload, UploadId::from_bytes)?,
         stage_id: identifier(&stored.stage, StageId::from_bytes)?,
         volume_id: identifier(&stored.volume, VolumeId::from_bytes)?,
+        authority_object_id: identifier(
+            stored
+                .authority_object
+                .as_deref()
+                .ok_or(UploadStoreError::Corrupt)?,
+            ObjectId::from_bytes,
+        )?,
         path: path.clone(),
         principal_id: identifier(&stored.principal, PrincipalId::from_bytes)?,
         authorization_revision: Revision::new(positive(stored.authorization_revision)?),
@@ -626,11 +649,12 @@ fn decode_state(code: u8) -> Result<UploadState, UploadStoreError> {
 
 fn begin_digest(request: &UploadBeginRequest) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.upload-begin.v1\0");
+    digest.update(b"meshspan.filesystem.upload-begin.v2\0");
     digest.update(&request.operation_id.as_bytes());
     digest.update(&request.upload_id.as_bytes());
     digest.update(&request.stage_id.as_bytes());
     digest.update(&request.volume_id.as_bytes());
+    digest.update(&request.authority_object_id.as_bytes());
     digest.update(&request.principal_id.as_bytes());
     digest.update(&request.authorization_revision.get().to_be_bytes());
     digest.update(&[request.disposition.code()]);
@@ -654,7 +678,7 @@ fn begin_digest(request: &UploadBeginRequest) -> [u8; 32] {
 
 fn begin_result_digest(request: &UploadBeginRequest, request_digest: [u8; 32]) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.upload-session.v1\0");
+    digest.update(b"meshspan.filesystem.upload-session.v2\0");
     digest.update(&request.upload_id.as_bytes());
     digest.update(&request.stage_id.as_bytes());
     digest.update(&request_digest);

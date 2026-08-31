@@ -1547,6 +1547,22 @@ impl VersionPublicationStore {
         crate::handles::resolve_path_object(&self.connection, branch_id, volume_id, path)
     }
 
+    pub(crate) fn upload_authority_target(
+        &self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        path: &crate::NamespacePath,
+        disposition: crate::UploadDisposition,
+    ) -> Result<ObjectId, crate::HandleError> {
+        crate::namespace_planning::upload_authority_target(
+            &self.connection,
+            branch_id,
+            volume_id,
+            path,
+            disposition,
+        )
+    }
+
     /// Validates a prospective open without reserving a handle or changing durable state.
     ///
     /// The final open repeats every check transactionally. This preflight exists so a composed

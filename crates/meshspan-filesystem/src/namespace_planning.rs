@@ -18,8 +18,33 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use crate::{
     AdapterCreateDirectoryRequest, DirectoryPublication, DirectoryRevisionTransition, HandleError,
-    NamespacePublicationPath,
+    NamespacePath, NamespacePublicationPath, UploadDisposition,
 };
+
+pub(crate) fn upload_authority_target(
+    connection: &Connection,
+    branch_id: BranchId,
+    volume_id: meshspan_domain::VolumeId,
+    path: &NamespacePath,
+    disposition: UploadDisposition,
+) -> Result<ObjectId, HandleError> {
+    let current = resolution::resolve(connection, branch_id, volume_id, path)?;
+    match (disposition, current.leaf) {
+        (UploadDisposition::CreateNew, None) => Ok(current.parent_object),
+        (UploadDisposition::CreateNew, Some(_)) => Err(HandleError::AlreadyExists),
+        (_, None) => Err(HandleError::NotFound),
+        (_, Some(leaf)) if leaf.kind != crate::DirectoryEntryKind::File => {
+            Err(HandleError::NotFound)
+        }
+        (UploadDisposition::ReplaceIfVersion(expected), Some(leaf))
+            if leaf.version != Some(expected) =>
+        {
+            Err(HandleError::StaleHandle)
+        }
+        (_, Some(leaf)) if leaf.version.is_none() => Err(HandleError::Corrupt),
+        (_, Some(leaf)) => Ok(leaf.object),
+    }
+}
 
 struct StoredPlan {
     request_digest: Vec<u8>,
