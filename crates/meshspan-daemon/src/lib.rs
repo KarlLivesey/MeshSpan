@@ -37,6 +37,7 @@ mod create_session_tests;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
+mod multi_factor_session;
 mod passkey_challenge;
 mod passkey_challenge_api;
 #[cfg(test)]
@@ -72,6 +73,9 @@ mod recovery_code_issuance_contract;
 mod recovery_code_issuance_model;
 #[cfg(test)]
 mod recovery_code_issuance_tests;
+mod recovery_code_session_creation;
+#[cfg(test)]
+mod recovery_code_session_creation_tests;
 mod revoke_session;
 mod revoke_session_api;
 mod setup_api;

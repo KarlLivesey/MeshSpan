@@ -15,8 +15,8 @@ use meshspan_domain::{
 use meshspan_metadata::{
     ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthenticationSessionReplay,
     AuthoritativeCommand, CommandContext, IssueAuthenticationSession, PasskeySessionReplay,
-    PasskeyVerificationMaterial, SessionAuthenticationFactor, SessionClientLabel,
-    TotpVerificationMaterial,
+    PasskeyVerificationMaterial, RecoveryCodeVerificationMaterial, SessionAuthenticationFactor,
+    SessionClientLabel, TotpVerificationMaterial,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -73,6 +73,22 @@ pub trait SessionAuthority {
         principal_id: meshspan_domain::PrincipalId,
         now: UnixMicros,
     ) -> Result<Vec<TotpVerificationMaterial>, SessionAuthorityError>;
+
+    /// Resolves one digest-matched recovery code for an already-authenticated user.
+    ///
+    /// Used codes remain visible as bounded replay evidence; callers must reject them for a new
+    /// operation and accept them only when their consumption instant matches an exact replay.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when current authority cannot provide trustworthy evidence.
+    fn recovery_code_verification_material(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        code_id: meshspan_domain::RecoveryCodeId,
+        digest: [u8; 32],
+        now: UnixMicros,
+    ) -> Result<Option<RecoveryCodeVerificationMaterial>, SessionAuthorityError>;
 
     /// Loads the current HTTPS session-establishment policy.
     ///
@@ -221,8 +237,8 @@ where
                 Some(meshspan_api_contract::SessionAdditionalFactor::Totp { code }) => {
                     self.create_api_key_totp(request, secret, code, operation_id, now)
                 }
-                Some(meshspan_api_contract::SessionAdditionalFactor::RecoveryCode { .. }) => {
-                    Err(CreateSessionError::UnsupportedCeremony)
+                Some(meshspan_api_contract::SessionAdditionalFactor::RecoveryCode { code }) => {
+                    self.create_api_key_recovery(request, secret, code, operation_id, now)
                 }
                 None => self.create_api_key(request, secret, operation_id, now),
             },
@@ -230,8 +246,8 @@ where
                 Some(meshspan_api_contract::SessionAdditionalFactor::Totp { code }) => {
                     self.create_passkey_totp(request, code, operation_id, now)
                 }
-                Some(meshspan_api_contract::SessionAdditionalFactor::RecoveryCode { .. }) => {
-                    Err(CreateSessionError::UnsupportedCeremony)
+                Some(meshspan_api_contract::SessionAdditionalFactor::RecoveryCode { code }) => {
+                    self.create_passkey_recovery(request, code, operation_id, now)
                 }
                 None => self.create_passkey(request, operation_id, now),
             },

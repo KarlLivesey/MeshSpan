@@ -329,6 +329,25 @@ impl SessionAuthority for RepositorySessionAuthority {
             .map_err(|error| map_repository_error(&error))
     }
 
+    fn recovery_code_verification_material(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        code_id: meshspan_domain::RecoveryCodeId,
+        digest: [u8; 32],
+        now: UnixMicros,
+    ) -> Result<Option<meshspan_metadata::RecoveryCodeVerificationMaterial>, SessionAuthorityError>
+    {
+        self.repository
+            .recovery_code_verification_material(
+                principal_id,
+                code_id,
+                digest,
+                AuthenticationService::Https,
+                now,
+            )
+            .map_err(|error| map_repository_error(&error))
+    }
+
     fn session_policy(&self) -> Result<AuthenticationPolicy, SessionAuthorityError> {
         self.repository
             .authentication_policy(
