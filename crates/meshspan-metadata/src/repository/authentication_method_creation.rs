@@ -153,6 +153,9 @@ fn insert_passkey(
     backup_state: bool,
     revision: i64,
 ) -> Result<(), RepositoryError> {
+    if public_key_algorithm != -7 || public_key.len() != 65 {
+        return Err(RepositoryError::InvalidCommand);
+    }
     reject_existing_blob(
         transaction,
         "SELECT EXISTS(SELECT 1 FROM webauthn_credentials WHERE credential_id = ?1)",

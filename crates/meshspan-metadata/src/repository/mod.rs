@@ -101,7 +101,7 @@ pub use access_query::{
     AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
     PermissionGrantRecord, ScopedGrantCursor, SubjectGrantCursor,
 };
-pub use authentication_method::ApiKeyAuthentication;
+pub use authentication_method::{ApiKeyAuthentication, PasskeyVerificationMaterial};
 pub use authentication_policy::AuthenticationPolicy;
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
@@ -622,6 +622,28 @@ impl AuthoritativeRepository {
             presented_key_digest,
             service,
             required_scopes,
+            now,
+        )
+    }
+
+    /// Resolves current public passkey verification material without authenticating the caller.
+    ///
+    /// Absence and ordinary inactive/expired/service-policy rejection return `None`; the caller
+    /// must still verify the complete assertion before treating the principal as authenticated.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when matching persisted evidence is structurally invalid.
+    pub fn passkey_verification_material(
+        &self,
+        credential_id: &[u8],
+        service: AuthenticationService,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Option<PasskeyVerificationMaterial>, RepositoryError> {
+        authentication_method::passkey_verification_material(
+            self.database.connection(),
+            credential_id,
+            service,
             now,
         )
     }

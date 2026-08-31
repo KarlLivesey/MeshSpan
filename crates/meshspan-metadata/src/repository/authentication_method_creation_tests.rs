@@ -137,7 +137,10 @@ fn typed_creation_rejects_incompatible_or_ambiguous_evidence_atomically()
     Ok(())
 }
 
-fn passkey(method_id: AuthenticationMethodId, owner: PrincipalId) -> AuthoritativeCommand {
+pub(super) fn passkey(
+    method_id: AuthenticationMethodId,
+    owner: PrincipalId,
+) -> AuthoritativeCommand {
     method(
         method_id,
         owner,
@@ -145,7 +148,11 @@ fn passkey(method_id: AuthenticationMethodId, owner: PrincipalId) -> Authoritati
         NewAuthenticationCredential::Passkey {
             credential_id: vec![10; 32],
             public_key_algorithm: -7,
-            public_key: vec![11; 77],
+            public_key: {
+                let mut key = vec![11; 65];
+                key[0] = 0x04;
+                key
+            },
             signature_counter: 0,
             authenticator_guid: Some([12; 16]),
             transports: 1,
