@@ -8,6 +8,8 @@ mod directory_listing;
 mod directory_listing_validation;
 mod file_read;
 mod file_read_validation;
+mod file_upload;
+mod file_upload_validation;
 mod model;
 mod object_stat;
 mod object_stat_validation;
@@ -20,6 +22,9 @@ mod schema;
 mod totp_registration;
 mod totp_validation;
 mod validation;
+
+#[cfg(test)]
+mod file_upload_tests;
 
 pub use api_key_management::{
     ApiKeyExpiry, ApiKeyId, ApiKeyScope, AuthenticationMethodRevocationReason, CreateApiKeyRequest,
@@ -43,6 +48,17 @@ pub use directory_listing_validation::{
 };
 pub use file_read::{MAX_FILE_READ_BYTES, MAX_SAFE_FILE_OFFSET, ReadFileQuery};
 pub use file_read_validation::{validate_read_file_query, validate_read_file_query_value};
+pub use file_upload::{
+    AbortUploadRequest, AbortUploadResponse, BeginUploadRequest, BeginUploadResponse,
+    CommitUploadRequest, CommitUploadResponse, MAX_UPLOAD_RANGE_BYTES, UploadDisposition, UploadId,
+    UploadState, UploadStatusResponse, WriteUploadRangeResponse,
+};
+pub use file_upload_validation::{
+    MAX_ABORT_UPLOAD_BYTES, MAX_BEGIN_UPLOAD_BYTES, MAX_COMMIT_UPLOAD_BYTES,
+    decode_abort_upload_request, decode_begin_upload_request, decode_commit_upload_request,
+    encode_abort_upload_response, encode_begin_upload_response, encode_commit_upload_response,
+    encode_upload_status_response, encode_write_upload_range_response,
+};
 pub use model::{
     ApiError, ApiErrorCode, ApiErrorIssue, AssuranceLevel, CreateMeshSetupRequest,
     CreateMeshSetupResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
