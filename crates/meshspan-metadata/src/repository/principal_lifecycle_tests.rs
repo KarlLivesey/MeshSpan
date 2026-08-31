@@ -58,7 +58,7 @@ fn suspension_reactivation_and_retirement_fence_access_and_survive_restart()
         fixture
             .repository
             .evaluate_access(request(&fixture, [81; 32], Rights::READ_DATA, 211))?,
-        AccessDecision::Denied(AccessDenial::SessionUnavailable)
+        AccessDecision::Denied(AccessDenial::AuthenticationUnavailable)
     );
     assert_rejected_session_issue(&mut fixture, user)?;
     change_state(

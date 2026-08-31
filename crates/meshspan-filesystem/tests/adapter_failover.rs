@@ -6,9 +6,9 @@ use std::{cell::RefCell, collections::BTreeMap, io::Write, rc::Rc};
 
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
-    AssuranceLevel, BranchId, ContentManifestId, FileVersionId, HandleId, LockId,
-    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
-    UnixMicros, VolumeId,
+    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId, HandleId,
+    LockId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId,
+    Revision, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
@@ -756,7 +756,8 @@ impl InProcessAdapter {
 
     const fn context(self, now: UnixMicros) -> FilesystemAccessContext {
         FilesystemAccessContext {
-            token_digest: self.token_digest,
+            authentication_service: AuthenticationService::Https,
+            credential_digest: self.token_digest,
             required_assurance: AssuranceLevel::SingleFactor,
             gateway_node_id: self.node_id,
             gateway_incarnation: 1,

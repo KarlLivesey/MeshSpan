@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use super::codec::parse_directory_query;
 use super::service::{DirectoryListingController, DirectoryListingError};
-use crate::BrowserAuthenticationError;
+use crate::FileApiAuthenticationError;
 use crate::api_http::{
     boundary_issues, current_time, error_response, internal_error_response, json_response,
     request_identifier,
@@ -106,7 +106,7 @@ fn service_error_response(
             ApiErrorCode::InvalidRequest,
             "directory query is invalid",
         ),
-        DirectoryListingError::Authentication(BrowserAuthenticationError::Rejected)
+        DirectoryListingError::Authentication(FileApiAuthenticationError::Rejected)
         | DirectoryListingError::AccessDenied => (
             StatusCode::UNAUTHORIZED,
             ApiErrorCode::Unauthenticated,
@@ -123,13 +123,18 @@ fn service_error_response(
             "directory continuation is stale",
         ),
         DirectoryListingError::Unavailable
-        | DirectoryListingError::Authentication(BrowserAuthenticationError::Authority(_)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            ApiErrorCode::Busy,
-            "file authority is temporarily unavailable",
-        ),
+        | DirectoryListingError::Authentication(FileApiAuthenticationError::AuthorityUnavailable) => {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                ApiErrorCode::Busy,
+                "file authority is temporarily unavailable",
+            )
+        }
         DirectoryListingError::Failed
-        | DirectoryListingError::Authentication(BrowserAuthenticationError::InvalidGateway) => {
+        | DirectoryListingError::Authentication(
+            FileApiAuthenticationError::InvalidGateway
+            | FileApiAuthenticationError::AuthorityFailed,
+        ) => {
             return failed_closed(request_id, schema_digest);
         }
     };

@@ -38,7 +38,7 @@ where
         let api_key = ApiKeyBundle::parse(secret)?;
         let primary = self
             .authority
-            .authenticate_api_key(api_key.secret_digest(), now)?
+            .authenticate_api_key(api_key.key_id(), api_key.secret_digest(), now)?
             .ok_or(CreateSessionError::Rejected)?;
         let recovery = parse_recovery_code(recovery_code)?;
         let material = self.recovery_material(primary.principal_id, &recovery, now)?;

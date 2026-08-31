@@ -343,11 +343,15 @@ Build:
 
 - first-start claim-bundle create/join experience and headless equivalents;
 - HTTPS authentication, session, CSRF and step-up flows;
-- user file browser with upload/download/create/rename/delete;
+- MeshSpan's native specialised HTTPS file/data API for generated clients, CLIs,
+  automation, bespoke applications and the shipped file browser, with
+  upload/download/create/rename/delete;
 - administrator panels for users, groups, owners, grants, nodes, targets, fault
   groups, volumes and operation status;
-- a public administration API sufficient for the shipped panel, CLI and a
-  replacement panel without private daemon access;
+- the same native HTTPS contract exposes public administration operations
+  sufficient for the shipped panel, CLI and a replacement panel without
+  private daemon access; it is not an S3, WebDAV, NFS or other compatibility
+  surface;
 - asynchronous progress and safe retry for long operations.
 
 First vertical proof:

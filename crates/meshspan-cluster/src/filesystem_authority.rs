@@ -31,7 +31,8 @@ impl FilesystemAccessAuthority for MetadataFilesystemAuthority<'_> {
         request: FilesystemAuthorityRequest,
     ) -> Result<FilesystemAuthorityGrant, Self::Error> {
         let decision = self.repository.evaluate_access(AccessRequest {
-            token_digest: request.context.token_digest,
+            authentication_service: request.context.authentication_service,
+            credential_digest: request.context.credential_digest,
             required_assurance: request.context.required_assurance,
             gateway_node_id: request.context.gateway_node_id,
             gateway_incarnation: request.context.gateway_incarnation,
@@ -83,14 +84,14 @@ mod tests {
     use meshspan_metadata::{
         AuthoritativeCommand, BootstrapMesh, CommandContext, CreateAuthenticationMethod,
         CreateUser, CreateVolume, IssueAuthenticationSession, LogPosition,
-        NewAuthenticationCredential, PartitionDatabase, RecordName, RevokeAuthenticationSession,
-        SessionAuthenticationFactor, TotpAlgorithm,
+        NewAuthenticationCredential, PartitionDatabase, RecordName, RevokeAuthenticationMethod,
+        RevokeAuthenticationSession, SessionAuthenticationFactor, TotpAlgorithm,
     };
 
     use super::*;
 
     #[test]
-    fn adapter_returns_current_metadata_capability_and_observes_session_revocation()
+    fn adapter_revalidates_browser_sessions_and_direct_native_api_keys()
     -> Result<(), Box<dyn std::error::Error>> {
         let partition_id = PartitionId::from_bytes([1; 16])?;
         let administrator_id = PrincipalId::from_bytes([2; 16])?;
@@ -148,7 +149,8 @@ mod tests {
 
         let request = FilesystemAuthorityRequest {
             context: FilesystemAccessContext {
-                token_digest,
+                authentication_service: AuthenticationService::Https,
+                credential_digest: token_digest,
                 required_assurance: AssuranceLevel::SingleFactor,
                 gateway_node_id,
                 gateway_incarnation: 1,
@@ -176,7 +178,80 @@ mod tests {
         assert!(matches!(
             MetadataFilesystemAuthority::new(&repository).authorise(request),
             Err(MetadataFilesystemAuthorityError::Denied(
-                AccessDenial::SessionUnavailable
+                AccessDenial::AuthenticationUnavailable
+            ))
+        ));
+
+        assert_direct_key_revalidation(
+            &mut repository,
+            user_id,
+            gateway_node_id,
+            volume_id,
+            root_object_id,
+        )?;
+        Ok(())
+    }
+
+    fn assert_direct_key_revalidation(
+        repository: &mut AuthoritativeRepository,
+        user_id: PrincipalId,
+        gateway_node_id: NodeId,
+        volume_id: VolumeId,
+        root_object_id: ObjectId,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let direct_method_id = AuthenticationMethodId::from_bytes([18; 16])?;
+        let direct_key_id = ApiKeyId::from_bytes([19; 16])?;
+        let direct_digest = [20; 32];
+        apply(
+            repository,
+            8,
+            user_id,
+            &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+                method_id: direct_method_id,
+                principal_id: user_id,
+                label: "Native API key".to_owned(),
+                service_scope: AuthenticationService::HeadlessApi.scope_bit(),
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: direct_key_id,
+                    key_digest: direct_digest,
+                    scopes: AuthenticationService::HeadlessApi.api_key_login_scope(),
+                    valid_from: UnixMicros::new(100),
+                },
+            }),
+        )?;
+        let direct_request = FilesystemAuthorityRequest {
+            context: FilesystemAccessContext {
+                authentication_service: AuthenticationService::HeadlessApi,
+                credential_digest: direct_digest,
+                required_assurance: AssuranceLevel::SingleFactor,
+                gateway_node_id,
+                gateway_incarnation: 1,
+                now: UnixMicros::new(200),
+            },
+            volume_id,
+            object_id: root_object_id,
+            requested_rights: Rights::READ_DATA,
+        };
+        assert!(
+            MetadataFilesystemAuthority::new(repository)
+                .authorise(direct_request)
+                .is_ok()
+        );
+        apply(
+            repository,
+            9,
+            user_id,
+            &AuthoritativeCommand::RevokeAuthenticationMethod(RevokeAuthenticationMethod {
+                method_id: direct_method_id,
+                principal_id: user_id,
+                reason: "test revocation".to_owned(),
+            }),
+        )?;
+        assert!(matches!(
+            MetadataFilesystemAuthority::new(repository).authorise(direct_request),
+            Err(MetadataFilesystemAuthorityError::Denied(
+                AccessDenial::AuthenticationUnavailable
             ))
         ));
         Ok(())

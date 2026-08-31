@@ -7,7 +7,7 @@ use meshspan_api_contract::{
     ListDirectoryQuery, ListDirectoryResponse, VolumeId as ApiVolumeId,
     validate_list_directory_query,
 };
-use meshspan_domain::{AssuranceLevel, UnixMicros, VolumeId};
+use meshspan_domain::{AssuranceLevel, AuthenticationService, UnixMicros, VolumeId};
 use meshspan_filesystem::{
     AdapterListRequest, FilesystemAccessContext, FilesystemFileAdapter, NamespaceLimits,
     NamespaceListPage, NamespacePath,
@@ -17,8 +17,8 @@ use thiserror::Error;
 use super::codec::{decode_cursor, response};
 use crate::create_mesh_setup::parse_uuid;
 use crate::{
-    BrowserAuthenticationError, BrowserRequestProtection, BrowserSessionAuthenticator,
-    BrowserSessionAuthority,
+    BrowserRequestProtection, BrowserSessionAuthenticator, BrowserSessionAuthority,
+    FileApiAuthenticationError,
 };
 
 const DEFAULT_PAGE_LIMIT: u16 = 100;
@@ -34,7 +34,7 @@ pub trait FileApiAuthenticator: Send + 'static {
         &self,
         headers: &HeaderMap,
         now: UnixMicros,
-    ) -> Result<FilesystemAccessContext, BrowserAuthenticationError>;
+    ) -> Result<FilesystemAccessContext, FileApiAuthenticationError>;
 }
 
 impl<A> FileApiAuthenticator for BrowserSessionAuthenticator<A>
@@ -45,15 +45,18 @@ where
         &self,
         headers: &HeaderMap,
         now: UnixMicros,
-    ) -> Result<FilesystemAccessContext, BrowserAuthenticationError> {
-        let (capability, evidence) = self.authenticate_with_evidence(
-            headers,
-            BrowserRequestProtection::Read,
-            AssuranceLevel::SingleFactor,
-            now,
-        )?;
+    ) -> Result<FilesystemAccessContext, FileApiAuthenticationError> {
+        let (capability, evidence) = self
+            .authenticate_with_evidence(
+                headers,
+                BrowserRequestProtection::Read,
+                AssuranceLevel::SingleFactor,
+                now,
+            )
+            .map_err(FileApiAuthenticationError::from)?;
         Ok(FilesystemAccessContext {
-            token_digest: evidence.token_digest,
+            authentication_service: AuthenticationService::Https,
+            credential_digest: evidence.token_digest,
             required_assurance: AssuranceLevel::SingleFactor,
             gateway_node_id: capability.gateway_node_id,
             gateway_incarnation: capability.gateway_incarnation,
@@ -210,7 +213,7 @@ fn map_filesystem_failure(value: DirectoryListingFailure) -> DirectoryListingErr
 pub enum DirectoryListingError {
     /// Authentication failed without credential details.
     #[error("native file API authentication failed")]
-    Authentication(#[from] BrowserAuthenticationError),
+    Authentication(#[from] FileApiAuthenticationError),
     /// Public path, identifier, cursor or page bound is invalid.
     #[error("directory listing input is invalid")]
     InvalidInput,

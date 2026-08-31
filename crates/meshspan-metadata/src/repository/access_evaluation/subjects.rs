@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 use meshspan_domain::{PrincipalId, UnixMicros};
 use rusqlite::params;
 
-use super::Session;
+use super::AuthenticatedPrincipal;
 use super::authority::{parse_principal, to_i64};
 use crate::PartitionDatabase;
 use crate::repository::RepositoryError;
@@ -24,13 +24,13 @@ struct MembershipEdge {
 
 pub(super) fn load_group_activations(
     database: &PartitionDatabase,
-    session: Session,
+    authentication: AuthenticatedPrincipal,
     now: UnixMicros,
 ) -> Result<BTreeMap<PrincipalId, UnixMicros>, RepositoryError> {
     load_group_activations_for_principal(
         database,
-        session.principal_id,
-        session.identity_revision,
+        authentication.principal_id,
+        authentication.identity_revision,
         now,
     )
 }
@@ -48,11 +48,11 @@ pub(crate) fn load_effective_subjects_for_principal(
 
 pub(super) fn load_effective_subjects(
     database: &PartitionDatabase,
-    session: Session,
+    authentication: AuthenticatedPrincipal,
     now: UnixMicros,
     activations: &BTreeMap<PrincipalId, UnixMicros>,
 ) -> Result<BTreeMap<PrincipalId, Option<UnixMicros>>, RepositoryError> {
-    load_effective_subjects_inner(database, session.principal_id, now, activations)
+    load_effective_subjects_inner(database, authentication.principal_id, now, activations)
 }
 
 fn load_effective_subjects_inner(

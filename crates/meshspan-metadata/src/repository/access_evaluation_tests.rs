@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use super::{
-    AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository,
+    AccessAuthentication, AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository,
     BrowserSessionAccessRequest, BrowserSessionProtection, LogPosition, SessionAccessDecision,
     SessionAccessDenial, SessionAccessRequest,
 };
@@ -10,7 +10,8 @@ use crate::{
     CreateActivationPolicy, CreateAuthenticationMethod, CreateGroup, CreateObject, CreateUser,
     CreateVolume, GrantInheritance, GrantPermission, IssueAuthenticationSession,
     NamespaceObjectKind, NewAuthenticationCredential, PartitionDatabase, PermissionScope,
-    RecordName, SessionAuthenticationFactor, SetObjectGrantInheritance, TotpAlgorithm,
+    RecordName, RevokeAuthenticationMethod, SessionAuthenticationFactor, SetObjectGrantInheritance,
+    TotpAlgorithm,
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
@@ -83,6 +84,72 @@ fn nested_inherited_grant_is_bounded_and_admin_role_is_not_file_authority()
             .repository
             .evaluate_access(request(&fixture, [43; 32], Rights::READ_DATA, 200,))?,
         AccessDecision::Denied(AccessDenial::MissingRights)
+    );
+    Ok(())
+}
+
+#[test]
+fn direct_headless_key_is_service_scoped_and_revoked_at_operation_time()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = build_fixture(false)?;
+    let method_id = AuthenticationMethodId::from_bytes([70; 16])?;
+    let key_id = ApiKeyId::from_bytes([71; 16])?;
+    let key_digest = [72; 32];
+    let user = fixture.user;
+    apply(
+        &mut fixture,
+        user,
+        130,
+        AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id,
+            principal_id: user,
+            label: "Native API key".to_owned(),
+            service_scope: AuthenticationService::HeadlessApi.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::ApiKey {
+                key_id,
+                key_digest,
+                scopes: AuthenticationService::HeadlessApi.api_key_login_scope(),
+                valid_from: UnixMicros::new(100),
+            },
+        }),
+    )?;
+
+    let mut direct = request(&fixture, key_digest, Rights::READ_DATA, 200);
+    direct.authentication_service = AuthenticationService::HeadlessApi;
+    let AccessDecision::Granted(capability) = fixture.repository.evaluate_access(direct)? else {
+        return Err("current native API key was unexpectedly denied".into());
+    };
+    assert_eq!(
+        capability.authentication,
+        AccessAuthentication::ApiKey(key_id)
+    );
+    assert_eq!(
+        capability.authentication_service,
+        AuthenticationService::HeadlessApi
+    );
+
+    let mut wrong_service = direct;
+    wrong_service.authentication_service = AuthenticationService::Https;
+    assert_eq!(
+        fixture.repository.evaluate_access(wrong_service)?,
+        AccessDecision::Denied(AccessDenial::AuthenticationUnavailable)
+    );
+
+    apply(
+        &mut fixture,
+        user,
+        210,
+        AuthoritativeCommand::RevokeAuthenticationMethod(RevokeAuthenticationMethod {
+            method_id,
+            principal_id: user,
+            reason: "operator revoked native API access".to_owned(),
+        }),
+    )?;
+    direct.now = UnixMicros::new(220);
+    assert_eq!(
+        fixture.repository.evaluate_access(direct)?,
+        AccessDecision::Denied(AccessDenial::AuthenticationUnavailable)
     );
     Ok(())
 }
@@ -702,7 +769,8 @@ pub(super) fn request(
     now: i64,
 ) -> AccessRequest {
     AccessRequest {
-        token_digest,
+        authentication_service: AuthenticationService::Https,
+        credential_digest: token_digest,
         required_assurance: AssuranceLevel::SingleFactor,
         gateway_node_id: fixture.gateway,
         gateway_incarnation: 1,

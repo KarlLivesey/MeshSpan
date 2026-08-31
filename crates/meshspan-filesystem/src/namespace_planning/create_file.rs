@@ -132,7 +132,7 @@ fn validate_request(
     );
     if context.now != request.observed_at
         || context.gateway_incarnation == 0
-        || context.token_digest == [0; 32]
+        || context.credential_digest == [0; 32]
         || request.path.components().is_empty()
         || request.lease_expires_at <= request.observed_at
         || request.content_deadline <= request.observed_at

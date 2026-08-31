@@ -48,6 +48,7 @@ pub trait SessionAuthority {
     /// Fails closed when current authority cannot provide trustworthy evidence.
     fn authenticate_api_key(
         &self,
+        key_id: meshspan_domain::ApiKeyId,
         digest: [u8; 32],
         now: UnixMicros,
     ) -> Result<Option<ApiKeyAuthentication>, SessionAuthorityError>;
@@ -264,7 +265,7 @@ where
         let api_key = ApiKeyBundle::parse(secret)?;
         let authenticated = self
             .authority
-            .authenticate_api_key(api_key.secret_digest(), now)?
+            .authenticate_api_key(api_key.key_id(), api_key.secret_digest(), now)?
             .ok_or(CreateSessionError::Rejected)?;
         let bearer = SessionTokenBundle::derive(&api_key, operation_id)?;
         let csrf = SessionCsrfBundle::derive(&api_key, operation_id)?;

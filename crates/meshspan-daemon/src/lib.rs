@@ -41,6 +41,9 @@ mod directory_listing_api;
 #[cfg(test)]
 mod directory_listing_api_tests;
 mod multi_factor_session;
+mod native_api_authentication;
+#[cfg(test)]
+mod native_api_authentication_tests;
 mod passkey_challenge;
 mod passkey_challenge_api;
 #[cfg(test)]
@@ -153,6 +156,10 @@ pub use directory_listing_api::{
     DirectoryLister, DirectoryListingApiError, DirectoryListingController, DirectoryListingError,
     DirectoryListingFailure, DirectoryListingService, FileApiAuthenticator,
     directory_listing_api_router,
+};
+pub use native_api_authentication::{
+    FileApiAuthenticationError, NativeApiAuthenticator, NativeApiKeyAuthenticator,
+    NativeApiKeyAuthority, NativeApiKeyAuthorityError,
 };
 pub use passkey_challenge::{
     PasskeyCeremonyStore, PasskeyCeremonyStoreError, PasskeyChallengeError, PasskeyChallengeService,

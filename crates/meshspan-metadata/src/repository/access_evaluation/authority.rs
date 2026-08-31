@@ -5,11 +5,14 @@
 use std::collections::BTreeSet;
 
 use meshspan_domain::{
-    AssuranceLevel, GrantId, ObjectId, PrincipalId, Revision, SessionId, UnixMicros,
+    AssuranceLevel, AuthenticationMethodKind, AuthenticationService, GrantId, ObjectId,
+    PrincipalId, Revision, SessionId, UnixMicros,
 };
 use rusqlite::{OptionalExtension, params};
 
-use super::{AccessRequest, AuthorityRevisions, Session, Target};
+use super::{
+    AccessAuthentication, AccessRequest, AuthenticatedPrincipal, AuthorityRevisions, Target,
+};
 use crate::PartitionDatabase;
 use crate::repository::RepositoryError;
 
@@ -17,11 +20,24 @@ const MAXIMUM_ANCESTORS: usize = 1_024;
 
 type TargetRow = (Vec<u8>, Option<Vec<u8>>, Vec<u8>, i64, i64);
 
-pub(super) fn load_session(
+pub(super) fn load_authentication(
     database: &PartitionDatabase,
-    token_digest: [u8; 32],
-    now: UnixMicros,
-) -> Result<Option<Session>, RepositoryError> {
+    request: AccessRequest,
+    current_identity_revision: Revision,
+) -> Result<Option<AuthenticatedPrincipal>, RepositoryError> {
+    match request.authentication_service {
+        AuthenticationService::Https => load_session(database, request),
+        AuthenticationService::HeadlessApi => {
+            load_direct_api_key(database, request, current_identity_revision)
+        }
+        AuthenticationService::Smb => Ok(None),
+    }
+}
+
+fn load_session(
+    database: &PartitionDatabase,
+    request: AccessRequest,
+) -> Result<Option<AuthenticatedPrincipal>, RepositoryError> {
     let row = database
         .connection()
         .query_row(
@@ -31,7 +47,7 @@ pub(super) fn load_session(
              JOIN principals p ON p.principal_id = s.user_principal_id
              WHERE s.token_digest = ?1 AND s.revoked_at IS NULL AND s.issued_at <= ?2
                AND s.expires_at > ?2 AND p.state = 1",
-            params![token_digest.as_slice(), now.get()],
+            params![request.credential_digest.as_slice(), request.now.get()],
             |row| {
                 Ok((
                     row.get::<_, Vec<u8>>(0)?,
@@ -50,7 +66,7 @@ pub(super) fn load_session(
     let Some(factors) = super::super::session::active_factor_state(
         database.connection(),
         &session_id.as_bytes(),
-        now,
+        request.now,
     )?
     else {
         return Ok(None);
@@ -58,12 +74,46 @@ pub(super) fn load_session(
     if factors.assurance != parse_assurance(value.2)? {
         return Err(RepositoryError::CorruptState);
     }
-    Ok(Some(Session {
-        id: session_id,
+    if factors.service != request.authentication_service {
+        return Ok(None);
+    }
+    Ok(Some(AuthenticatedPrincipal {
+        authentication: AccessAuthentication::Session(session_id),
         principal_id: parse_principal(&value.1)?,
         factor_state: factors,
         identity_revision: parse_revision(value.3)?,
         expires_at: UnixMicros::new(value.4),
+    }))
+}
+
+fn load_direct_api_key(
+    database: &PartitionDatabase,
+    request: AccessRequest,
+    current_identity_revision: Revision,
+) -> Result<Option<AuthenticatedPrincipal>, RepositoryError> {
+    let Some(key) = super::super::authentication_method::authenticate_api_key(
+        database.connection(),
+        request.credential_digest,
+        AuthenticationService::HeadlessApi,
+        AuthenticationService::HeadlessApi.api_key_login_scope(),
+        request.now,
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(AuthenticatedPrincipal {
+        authentication: AccessAuthentication::ApiKey(key.key_id),
+        principal_id: key.principal_id,
+        factor_state: super::super::session::SessionFactorState {
+            assurance: AssuranceLevel::SingleFactor,
+            service: AuthenticationService::HeadlessApi,
+            factor_classes: AuthenticationMethodKind::ApiKey.class_bit(),
+            factor_count: 1,
+            issued_at: request.now,
+            latest_authenticated_at: request.now,
+        },
+        identity_revision: current_identity_revision,
+        expires_at: key.expires_at.unwrap_or(UnixMicros::new(i64::MAX)),
     }))
 }
 

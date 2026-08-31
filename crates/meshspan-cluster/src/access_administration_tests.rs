@@ -340,7 +340,7 @@ fn assert_authentication_precedes_projection_validation(
             PageLimit::new(10)?,
         ),
         Err(AccessAdministrationError::ObjectDenied(
-            AccessDenial::SessionUnavailable
+            AccessDenial::AuthenticationUnavailable
         ))
     ));
     assert!(matches!(
@@ -413,7 +413,8 @@ fn context(
     required_assurance: AssuranceLevel,
 ) -> FilesystemAccessContext {
     FilesystemAccessContext {
-        token_digest,
+        authentication_service: AuthenticationService::Https,
+        credential_digest: token_digest,
         required_assurance,
         gateway_node_id,
         gateway_incarnation: 1,
