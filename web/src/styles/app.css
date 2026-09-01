@@ -242,6 +242,128 @@ main {
   max-width: 76rem;
 }
 
+.file-browser {
+  display: grid;
+  gap: var(--space-xl);
+  container-type: inline-size;
+}
+
+.file-browser-heading,
+.directory-location,
+.directory-mutations,
+.entry-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.file-browser-heading > div {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.volume-picker {
+  min-width: min(100%, 20rem);
+}
+
+.directory-tools {
+  display: grid;
+  gap: var(--space-lg);
+  padding-block: var(--space-lg);
+  border-block: 1px solid var(--line);
+}
+
+.directory-location {
+  justify-content: flex-start;
+}
+
+.current-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+}
+
+.current-path span {
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.directory-mutations {
+  align-items: end;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.compact-action {
+  display: flex;
+  align-items: end;
+  gap: var(--space-sm);
+}
+
+.file-input-action {
+  position: relative;
+  display: inline-flex;
+  min-height: 3rem;
+  align-items: center;
+  padding: 0.7rem 1.15rem;
+  border: 1px solid var(--signal);
+  border-radius: 0.25rem;
+  background: var(--signal);
+  color: var(--signal-ink);
+  cursor: pointer;
+}
+
+.file-input-action input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.directory-table-wrap {
+  overflow-x: auto;
+}
+
+.entry-link {
+  min-height: 2.75rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 750;
+  text-decoration: underline;
+  text-decoration-color: var(--signal);
+  text-underline-offset: 0.25rem;
+}
+
+.entry-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.row-error {
+  display: block;
+  font-size: 0.8rem;
+}
+
+.row-confirmation {
+  display: flex;
+  align-items: end;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-md);
+  border: 1px solid var(--line);
+  background: var(--paper-deep);
+}
+
+progress {
+  width: min(100%, 36rem);
+  accent-color: var(--signal);
+}
+
 .primary-action {
   display: inline-flex;
   min-height: 3rem;

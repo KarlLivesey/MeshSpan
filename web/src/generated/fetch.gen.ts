@@ -44,6 +44,7 @@ import type {
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
+  ListVolumesResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -124,6 +125,8 @@ import {
   zListUploadRangesResponse2,
   zListUsersQuery,
   zListUsersResponse,
+  zListVolumesQuery,
+  zListVolumesResponse2,
   zReadFilePath,
   zReadFileQuery,
   zRevokeCurrentUserAuthenticationMethodBody,
@@ -207,6 +210,11 @@ export type ListGroupMembersRequest = Readonly<{
 }>;
 
 export type ListAuthenticationMethodsRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type ListVolumesRequest = Readonly<{
   cursor?: string;
   limit?: number;
 }>;
@@ -340,6 +348,10 @@ export interface MeshSpanFetchClient {
     request: WriteUploadRangeRequest,
     csrfToken?: string,
   ): Promise<WriteUploadRangeResponse>;
+  listVolumes(request?: ListVolumesRequest): Promise<ListVolumesResponse>;
+  listNextVolumes(nextPageUrl: string): Promise<ListVolumesResponse>;
+  listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
+  listNextDirectory(nextPageUrl: string): Promise<ListDirectoryResponse>;
   createMeshSetup(
     request: CreateMeshSetupRequestWritable,
   ): Promise<CreateMeshSetupResponse>;
@@ -351,7 +363,6 @@ export interface MeshSpanFetchClient {
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
-  listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   readFile(request: ReadFileRequest): Promise<ReadFileResult>;
   revokeCurrentSession(
     request: RevokeCurrentSessionRequest,
@@ -925,6 +936,59 @@ export function createMeshSpanFetchClient(
         zWriteUploadRangeResponse2,
       );
     },
+    async listVolumes(request = {}): Promise<ListVolumesResponse> {
+      const query = zListVolumesQuery.parse(request);
+      return validateVolumePage(
+        await requestJson(
+          context,
+          appendQuery("/volumes", query),
+          { method: "GET" },
+          zListVolumesResponse2,
+        ),
+      );
+    },
+    async listNextVolumes(nextPageUrl): Promise<ListVolumesResponse> {
+      return validateVolumePage(
+        await requestJson(
+          context,
+          validateVolumePageUrl(context.apiRoot, nextPageUrl),
+          { method: "GET" },
+          zListVolumesResponse2,
+        ),
+      );
+    },
+    async listDirectory(request): Promise<ListDirectoryResponse> {
+      const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
+      const query = zListDirectoryQuery.parse({
+        cursor: request.cursor,
+        limit: request.limit,
+        path: request.path,
+      });
+      if (query.path !== undefined) {
+        validateNamespacePath(query.path);
+      }
+      return requestJson(
+        context,
+        appendQuery(
+          substitutePathParameter(
+            "/volumes/{volume_id}/directory-entries",
+            "volume_id",
+            path.volume_id,
+          ),
+          query,
+        ),
+        { method: "GET" },
+        zListDirectoryResponse2,
+      );
+    },
+    async listNextDirectory(nextPageUrl): Promise<ListDirectoryResponse> {
+      return requestJson(
+        context,
+        validateDirectoryPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListDirectoryResponse2,
+      );
+    },
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -1003,30 +1067,6 @@ export function createMeshSpanFetchClient(
         "/setup/status",
         { method: "GET" },
         zGetSetupStatusResponse,
-      );
-    },
-    async listDirectory(request): Promise<ListDirectoryResponse> {
-      const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
-      const query = zListDirectoryQuery.parse({
-        cursor: request.cursor,
-        limit: request.limit,
-        path: request.path,
-      });
-      if (query.path !== undefined) {
-        validateNamespacePath(query.path);
-      }
-      return requestJson(
-        context,
-        appendQuery(
-          substitutePathParameter(
-            "/volumes/{volume_id}/directory-entries",
-            "volume_id",
-            path.volume_id,
-          ),
-          query,
-        ),
-        { method: "GET" },
-        zListDirectoryResponse2,
       );
     },
     async readFile(request): Promise<ReadFileResult> {
@@ -1229,6 +1269,55 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   return JSON.parse(text) as unknown;
 }
 
+function validateDirectoryPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("directory page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  validateDirectoryPageLocation(apiRoot, route);
+  validateDirectoryPageQuery(route);
+  return route.pathname + route.search;
+}
+
+function validateDirectoryPageLocation(apiRoot: URL, route: URL): void {
+  const segments = route.pathname.split("/");
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    segments.length !== 6 ||
+    segments[1] !== "api" ||
+    segments[2] !== "latest" ||
+    segments[3] !== "volumes" ||
+    segments[5] !== "directory-entries"
+  ) {
+    throw new TypeError("directory page URL is outside the native file API");
+  }
+  zListDirectoryPath.parse({ volume_id: segments[4] });
+}
+
+function validateDirectoryPageQuery(route: URL): void {
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some(
+      (name) => name !== "cursor" && name !== "limit" && name !== "path",
+    ) ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("directory page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  const query = zListDirectoryQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+    path: route.searchParams.get("path") ?? undefined,
+  });
+  if (query.path !== undefined) {
+    validateNamespacePath(query.path);
+  }
+}
+
 function validatePrincipalPageUrl(apiRoot: URL, value: string): string {
   if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
     throw new TypeError("principal page URL is invalid");
@@ -1348,6 +1437,78 @@ function validateAuthenticationMethodPageQuery(route: URL): void {
   }
   const rawLimit = route.searchParams.get("limit");
   zListCurrentUserAuthenticationMethodsQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+}
+
+const VOLUME_RIGHT_ORDER = [
+  "traverse",
+  "list",
+  "read_data",
+  "create_child",
+  "write_data",
+  "append_data",
+  "rename",
+  "delete",
+  "read_attributes",
+  "write_attributes",
+  "read_permissions",
+  "change_permissions",
+  "change_owner",
+] as const;
+
+function validateVolumePage(page: ListVolumesResponse): ListVolumesResponse {
+  for (const volume of page.volumes) {
+    validateVolumeRights(volume.effective_rights);
+  }
+  return page;
+}
+
+function validateVolumeRights(rights: readonly string[]): void {
+  let previous = -1;
+  for (const right of rights) {
+    const position = VOLUME_RIGHT_ORDER.indexOf(
+      right as (typeof VOLUME_RIGHT_ORDER)[number],
+    );
+    if (position <= previous) {
+      throw new TypeError("volume rights are duplicated or out of order");
+    }
+    previous = position;
+  }
+  if (rights[0] !== "traverse" || rights[1] !== "list") {
+    throw new TypeError("volume page contains a non-browseable volume");
+  }
+}
+
+function validateVolumePageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("volume page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    route.pathname !== "/api/latest/volumes"
+  ) {
+    throw new TypeError("volume page URL is outside the volume API");
+  }
+  validateVolumePageQuery(route);
+  return route.pathname + route.search;
+}
+
+function validateVolumePageQuery(route: URL): void {
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("volume page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListVolumesQuery.parse({
     cursor: route.searchParams.get("cursor") ?? undefined,
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
   });

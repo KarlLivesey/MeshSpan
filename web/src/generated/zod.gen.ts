@@ -1729,6 +1729,69 @@ export const zListUploadRangesResponse = z
   .strict();
 
 /**
+ * ListVolumesResponse
+ *
+ * One bounded current-user volume page.
+ */
+export const zListVolumesResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/volumes/)
+      .nullable(),
+    volumes: z
+      .array(
+        z
+          .strictObject({
+            created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+            effective_rights: z
+              .array(
+                z.union([
+                  z.literal("traverse"),
+                  z.literal("list"),
+                  z.literal("read_data"),
+                  z.literal("create_child"),
+                  z.literal("write_data"),
+                  z.literal("append_data"),
+                  z.literal("rename"),
+                  z.literal("delete"),
+                  z.literal("read_attributes"),
+                  z.literal("write_attributes"),
+                  z.literal("read_permissions"),
+                  z.literal("change_permissions"),
+                  z.literal("change_owner"),
+                ]),
+              )
+              .min(2)
+              .max(13),
+            name: z
+              .string()
+              .min(1)
+              .max(256)
+              .regex(/^[^\x00-\x1f\x7f]+$/),
+            revision: z.int().gte(1).lte(9007199254740991),
+            state: z.union([
+              z.literal("active"),
+              z.literal("suspended"),
+              z.literal("draining"),
+              z.literal("retired"),
+            ]),
+            volume_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+          })
+          .strict(),
+      )
+      .max(256),
+  })
+  .strict();
+
+/**
  * RemoveGroupMemberRequest
  *
  * Idempotent administrator request to remove one exact active direct membership.
@@ -2866,6 +2929,23 @@ export const zRevokeCurrentUserAuthenticationMethodPath = z
  */
 export const zRevokeCurrentUserAuthenticationMethodResponse =
   zRevokeAuthenticationMethodResponse;
+
+export const zListVolumesQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One current-authority volume page
+ */
+export const zListVolumesResponse2 = zListVolumesResponse;
 
 /**
  * Exact idempotent logical-delete intent

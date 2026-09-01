@@ -1561,6 +1561,61 @@ export type ListUploadRangesResponse = {
 };
 
 /**
+ * ListVolumesResponse
+ *
+ * One bounded current-user volume page.
+ */
+export type ListVolumesResponse = {
+  /**
+   * Ready-to-follow relative URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Stable ordered volumes visible under the caller's current permissions.
+   */
+  volumes: Array<{
+    /**
+     * Authoritative creation instant as epoch microseconds.
+     */
+    created_at_epoch_micros: number;
+    /**
+     * Protocol-neutral namespace authority currently available to this caller.
+     */
+    effective_rights: Array<
+      | "traverse"
+      | "list"
+      | "read_data"
+      | "create_child"
+      | "write_data"
+      | "append_data"
+      | "rename"
+      | "delete"
+      | "read_attributes"
+      | "write_attributes"
+      | "read_permissions"
+      | "change_permissions"
+      | "change_owner"
+    >;
+    /**
+     * Case-preserved user-facing name.
+     */
+    name: string;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+    /**
+     * Current authoritative lifecycle state.
+     */
+    state: "active" | "suspended" | "draining" | "retired";
+    /**
+     * Stable logical-volume identity.
+     */
+    volume_id: string;
+  }>;
+};
+
+/**
  * RemoveGroupMemberRequest
  *
  * Idempotent administrator request to remove one exact active direct membership.
@@ -3649,6 +3704,47 @@ export type RevokeCurrentUserAuthenticationMethodResponses = {
 
 export type RevokeCurrentUserAuthenticationMethodResponse =
   RevokeCurrentUserAuthenticationMethodResponses[keyof RevokeCurrentUserAuthenticationMethodResponses];
+
+export type ListVolumesData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/volumes";
+};
+
+export type ListVolumesErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Namespace authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListVolumesError = ListVolumesErrors[keyof ListVolumesErrors];
+
+export type ListVolumesResponses = {
+  /**
+   * One current-authority volume page
+   */
+  200: ListVolumesResponse;
+};
+
+export type ListVolumesResponse2 =
+  ListVolumesResponses[keyof ListVolumesResponses];
 
 export type DeleteObjectData = {
   /**

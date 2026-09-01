@@ -30,6 +30,8 @@ mod schema;
 mod totp_registration;
 mod totp_validation;
 mod validation;
+mod volume_inventory;
+mod volume_inventory_validation;
 
 #[cfg(test)]
 mod authentication_method_listing_tests;
@@ -41,6 +43,8 @@ mod group_membership_administration_tests;
 mod identity_administration_tests;
 #[cfg(test)]
 mod namespace_mutation_tests;
+#[cfg(test)]
+mod volume_inventory_tests;
 
 pub use api_key_management::{
     ApiKeyExpiry, ApiKeyId, ApiKeyScope, AuthenticationMethodRevocationReason, CreateApiKeyRequest,
@@ -179,4 +183,10 @@ pub use validation::{
     validate_create_session_request_value, validate_create_session_response_value,
     validate_revoke_current_session_request_value, validate_revoke_current_session_response_value,
     validate_setup_status_response_value, validate_step_up_current_session_request_value,
+};
+pub use volume_inventory::{
+    ListVolumesQuery, ListVolumesResponse, NamespaceRight, VolumeCursor, VolumeState, VolumeSummary,
+};
+pub use volume_inventory_validation::{
+    encode_list_volumes_response, validate_list_volumes_query, validate_list_volumes_query_value,
 };
