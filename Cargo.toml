@@ -3,6 +3,7 @@
 [workspace]
 members = [
     "crates/meshspan-api-contract",
+    "crates/meshspan-certificates",
     "crates/meshspan-cluster",
     "crates/meshspan-contracts",
     "crates/meshspan-consensus",

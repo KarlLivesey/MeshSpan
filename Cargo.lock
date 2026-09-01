@@ -1033,6 +1033,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-certificates"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "p256",
+ "rcgen",
+ "sha2",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "meshspan-cluster"
 version = "0.1.0"
 dependencies = [
@@ -1254,12 +1266,7 @@ dependencies = [
 name = "meshspan-test-certificates"
 version = "0.1.0"
 dependencies = [
- "getrandom 0.4.3",
- "p256",
- "rcgen",
- "sha2",
- "thiserror",
- "zeroize",
+ "meshspan-certificates",
 ]
 
 [[package]]
