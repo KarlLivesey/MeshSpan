@@ -46,7 +46,7 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
-use crate::headless_node_join::{activate_and_install_headless_node, admit_headless_node};
+use crate::headless_node_join::{activate_and_install_node, admit_headless_node};
 use crate::private_consensus_runtime::{
     NetworkRegisteringEnrolment, PrivateConsensusRuntime, certificate_name,
 };
@@ -282,9 +282,9 @@ where
                 .await
                 .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?
         {
-            let joined = activate_and_install_headless_node(
+            let joined = activate_and_install_node(
                 &mut local_state,
-                &config,
+                config.private_listen(),
                 &admission,
                 data_streams.clone(),
                 current_time()?,

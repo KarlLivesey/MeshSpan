@@ -20,6 +20,7 @@ use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One bound, fully in-process HTTPS appliance listener.
 pub struct HttpsServer {
@@ -93,7 +94,10 @@ impl HttpsServer {
                 }
             }
         }
-        connections.shutdown().await;
+        let drain = async { while connections.join_next().await.is_some() {} };
+        if timeout(CONNECTION_DRAIN_TIMEOUT, drain).await.is_err() {
+            connections.shutdown().await;
+        }
         Ok(())
     }
 }
