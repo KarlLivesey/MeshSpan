@@ -12,14 +12,61 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
-    CreateDisposition, DurableContentPublisher, DurableContentReader, FilePublication,
-    FilesystemHandleOpenRequest, FilesystemHandleReadRequest, FilesystemHandleWriteRequest,
-    HandleShare, ManifestPublication, NamespaceLimits, NamespaceListRequest, NamespacePath,
-    NamespacePublicationPath, NamespaceQueryError, NamespaceStatRequest, OpenHandleRequest,
-    PublicationDisposition, PublishedContentReference, RootFilePublication, StageWrite,
-    StageWriteOutcome, UploadDisposition, UploadState, VersionPublicationStore,
+    AdapterCreateDirectoryRequest, BoundFilesystemAdapter, ContentPublicationError,
+    ContentPublicationRequest, ContentReadError, ContentReadRequest, CreateDisposition,
+    DurableContentPublisher, DurableContentReader, FilePublication, FilesystemAdapterPolicy,
+    FilesystemFileAdapter, FilesystemHandleOpenRequest, FilesystemHandleReadRequest,
+    FilesystemHandleWriteRequest, HandleShare, ManifestPublication, NamespaceLimits,
+    NamespaceListRequest, NamespacePath, NamespacePublicationPath, NamespaceQueryError,
+    NamespaceStatRequest, OpenHandleRequest, PublicationDisposition, PublishedContentReference,
+    RootFilePublication, StageWrite, StageWriteOutcome, UploadDisposition, UploadState,
+    VersionPublicationStore,
 };
+
+#[test]
+fn first_directory_materialises_the_committed_volume_root_without_a_fake_genesis_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let volume_id = VolumeId::from_bytes([12; 16])?;
+    let principal_id = PrincipalId::from_bytes([18; 16])?;
+    let allowed = Rc::new(Cell::new(true));
+    let authority = TestAuthority::new(allowed, principal_id);
+    let filesystem =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(1), UnusedPublisher)?;
+    let authorised = AuthorisedFilesystemService::new(filesystem, authority);
+    let branch_id = BranchId::from_bytes([11; 16])?;
+    let mut adapter = BoundFilesystemAdapter::new(
+        authorised,
+        branch_id,
+        FilesystemAdapterPolicy::new(true, 1, 1)?,
+    );
+    let request = AdapterCreateDirectoryRequest {
+        operation_id: OperationId::from_bytes([70; 16])?,
+        volume_id,
+        path: NamespacePath::from_components(["first"], NamespaceLimits::PORTABLE)?,
+        observed_at: UnixMicros::new(10),
+    };
+
+    let receipt = adapter.create_directory(context(request.observed_at)?, &request)?;
+    assert_eq!(receipt.head_sequence, 1);
+    assert_eq!(
+        adapter
+            .list(
+                context(request.observed_at)?,
+                &crate::AdapterListRequest {
+                    volume_id,
+                    directory_path: None,
+                    cursor: None,
+                    maximum_results: 10,
+                    observed_at: request.observed_at,
+                },
+            )?
+            .entries
+            .len(),
+        1
+    );
+    Ok(())
+}
 
 #[test]
 fn open_authorises_the_resolved_object_and_binds_the_returned_principal()
@@ -414,6 +461,21 @@ impl FilesystemAccessAuthority for TestAuthority {
             evidence_digest: [7; 32],
         })
     }
+
+    fn authorise_volume_root(
+        &self,
+        context: FilesystemAccessContext,
+        volume_id: VolumeId,
+        requested_rights: Rights,
+    ) -> Result<FilesystemAuthorityGrant, Self::Error> {
+        let root = ObjectId::from_bytes(volume_id.as_bytes()).map_err(|_| TestAuthorityError)?;
+        self.authorise(FilesystemAuthorityRequest {
+            context,
+            volume_id,
+            object_id: root,
+            requested_rights,
+        })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -675,6 +737,16 @@ impl DurableContentPublisher for UnusedPublisher {
         _completed: crate::CompletedStage,
     ) -> Result<ManifestPublication, ContentPublicationError> {
         Err(ContentPublicationError::Unavailable)
+    }
+}
+
+impl DurableContentReader for UnusedPublisher {
+    fn stream_range(
+        &mut self,
+        _request: ContentReadRequest,
+        _destination: &mut dyn std::io::Write,
+    ) -> Result<(), ContentReadError> {
+        Err(ContentReadError::Unavailable)
     }
 }
 

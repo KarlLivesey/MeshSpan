@@ -9,6 +9,7 @@ mod marker;
 mod pack;
 mod provider;
 mod shard;
+mod shared_provider;
 
 pub use config::{HeadlessStorageConfig, StorageConfigError, UsageLimit};
 pub use folder::{FolderRegistration, RegisteredFolder, StorageFolderError};
@@ -23,3 +24,4 @@ pub use provider::{
     FolderShardStore, FolderShardStoreError, RecoveryPage, StoragePermitVerifier,
     TombstoneRecoveryPage,
 };
+pub use shared_provider::SharedStorageProvider;

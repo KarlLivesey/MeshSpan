@@ -2,8 +2,10 @@
 
 //! Adapter from replicated metadata access decisions to the logical filesystem contract.
 
+use meshspan_domain::{Rights, VolumeId};
 use meshspan_filesystem::{
-    FilesystemAccessAuthority, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
+    FilesystemAccessAuthority, FilesystemAccessContext, FilesystemAuthorityGrant,
+    FilesystemAuthorityRequest,
 };
 use meshspan_metadata::{
     AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository, RepositoryError,
@@ -59,6 +61,24 @@ impl FilesystemAccessAuthority for MetadataFilesystemAuthority<'_> {
             AccessDecision::Denied(denial) => Err(MetadataFilesystemAuthorityError::Denied(denial)),
         }
     }
+
+    fn authorise_volume_root(
+        &self,
+        context: FilesystemAccessContext,
+        volume_id: VolumeId,
+        requested_rights: Rights,
+    ) -> Result<FilesystemAuthorityGrant, Self::Error> {
+        let volume = self
+            .repository
+            .volume_inventory_record(volume_id)?
+            .ok_or(MetadataFilesystemAuthorityError::VolumeUnavailable)?;
+        self.authorise(FilesystemAuthorityRequest {
+            context,
+            volume_id,
+            object_id: volume.root_object_id,
+            requested_rights,
+        })
+    }
 }
 
 /// Stable distinction between an intentional denial and unavailable/corrupt committed authority.
@@ -67,6 +87,9 @@ pub enum MetadataFilesystemAuthorityError {
     /// The current committed identity, gateway, object or grants deny the operation.
     #[error("committed metadata denied filesystem access: {0:?}")]
     Denied(AccessDenial),
+    /// The requested volume has no committed root object.
+    #[error("committed metadata volume root is unavailable")]
+    VolumeUnavailable,
     /// The committed metadata projection could not be evaluated safely.
     #[error("committed metadata access evaluation failed")]
     Repository(#[from] RepositoryError),
@@ -165,6 +188,7 @@ mod tests {
         assert_eq!(grant.object_id, root_object_id);
         assert_eq!(grant.requested_rights, Rights::READ_DATA);
         assert_ne!(grant.evidence_digest, [0; 32]);
+        assert_volume_root_authority(&repository, request.context, volume_id, grant)?;
 
         apply(
             &mut repository,
@@ -189,6 +213,21 @@ mod tests {
             volume_id,
             root_object_id,
         )?;
+        Ok(())
+    }
+
+    fn assert_volume_root_authority(
+        repository: &AuthoritativeRepository,
+        context: FilesystemAccessContext,
+        volume_id: VolumeId,
+        expected: FilesystemAuthorityGrant,
+    ) -> Result<(), MetadataFilesystemAuthorityError> {
+        let observed = MetadataFilesystemAuthority::new(repository).authorise_volume_root(
+            context,
+            volume_id,
+            Rights::READ_DATA,
+        )?;
+        assert_eq!(observed, expected);
         Ok(())
     }
 

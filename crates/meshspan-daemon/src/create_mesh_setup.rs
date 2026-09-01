@@ -10,20 +10,24 @@ use meshspan_api_contract::{
 };
 use meshspan_domain::{
     ClaimBundle, ClaimBundleError, InitialBootstrapMaterial, InitialBootstrapMaterialError,
-    OperationId, UnixMicros,
+    OperationId, RandomSource, UnixMicros,
 };
 use meshspan_metadata::{
-    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, CommandContext,
-    CreateAuthenticationMethod, LocalDatabase, LocalSetupError, LocalSetupKind, LocalSetupState,
-    NewAuthenticationCredential, NewLocalSetup, RecordName, RecordNameError,
+    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommandContext, CreateAuthenticationMethod, LocalDatabase, LocalSetupError, LocalSetupKind,
+    LocalSetupState, NewAuthenticationCredential, NewLocalSetup, RecordName, RecordNameError,
 };
+use meshspan_recovery_bundle::{OfflineRecoveryIdentity, RecoveryBundleCode, RecoveryBundleError};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{ClaimFile, ClaimFileError, SetupLifecycleError, SetupStateSnapshot};
+use crate::{
+    ClaimFile, ClaimFileError, PendingRecoveryBundle, PendingRecoveryBundleError,
+    SetupLifecycleError, SetupStateSnapshot,
+};
 
 const ALL_INITIAL_SERVICE_SCOPES: u8 = 1 | 2 | 4;
-const LOGIN_SCOPE: u64 = 1;
+const ALL_INITIAL_LOGIN_SCOPES: u64 = 1 | 2 | 4;
 
 /// Minimal committed result needed to bridge consensus into the local setup journal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,16 +65,19 @@ pub enum BootstrapAuthorityError {
 }
 
 /// Owns the two-database first-mesh transition and protected claim-file cleanup.
-pub struct CreateMeshSetupService<A> {
+pub struct CreateMeshSetupService<A, R> {
     local_database: LocalDatabase,
     authority: A,
     claim_output_path: PathBuf,
+    recovery_bundle_path: PathBuf,
     setup_state: Arc<SetupStateSnapshot>,
+    random: R,
 }
 
-impl<A> CreateMeshSetupService<A>
+impl<A, R> CreateMeshSetupService<A, R>
 where
     A: BootstrapAuthority,
+    R: RandomSource,
 {
     /// Creates a service around already identity-bound durable stores.
     #[must_use]
@@ -78,13 +85,17 @@ where
         local_database: LocalDatabase,
         authority: A,
         claim_output_path: PathBuf,
+        recovery_bundle_path: PathBuf,
         setup_state: Arc<SetupStateSnapshot>,
+        random: R,
     ) -> Self {
         Self {
             local_database,
             authority,
             claim_output_path,
+            recovery_bundle_path,
             setup_state,
+            random,
         }
     }
 
@@ -115,6 +126,15 @@ where
             request_digest,
             created_at: now,
         })?;
+        let recovery_code =
+            RecoveryBundleCode::from_high_entropy_seed(material.recovery_bundle_code_seed())?;
+        let recovery_bundle = PendingRecoveryBundle::open_or_create(
+            &self.recovery_bundle_path,
+            material.mesh_id,
+            &recovery_code,
+            &mut self.random,
+        )?;
+        let recovery_identity = recovery_bundle.public_identity()?;
         let setup = self
             .local_database
             .local_setup()?
@@ -129,7 +149,12 @@ where
                 occurred_at: setup.created_at,
                 expected_revision: Some(meshspan_domain::Revision::ZERO),
             };
-            let command = input.command(&material, setup.created_at);
+            let command = input.command(
+                &material,
+                &recovery_identity,
+                recovery_bundle.challenge(&recovery_code).commitment(),
+                setup.created_at,
+            );
             let committed = self.authority.commit_or_resolve(context, &command)?;
             self.local_database.record_local_setup_authority_commit(
                 input.operation_id,
@@ -156,7 +181,7 @@ where
             claim.secret_digest(),
         )?;
         self.setup_state.reconcile(&self.local_database)?;
-        Ok(input.response(&material))
+        input.response(&material, &recovery_bundle, &recovery_code)
     }
 
     /// Returns the protected claim-output path owned by this service.
@@ -192,6 +217,8 @@ impl ValidatedSetupInput {
     fn command(
         &self,
         material: &InitialBootstrapMaterial,
+        recovery: &OfflineRecoveryIdentity,
+        save_challenge_commitment: [u8; 32],
         occurred_at: UnixMicros,
     ) -> AuthoritativeCommand {
         AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
@@ -216,10 +243,18 @@ impl ValidatedSetupInput {
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: material.api_key.key_id(),
                     key_digest: material.api_key.secret_digest(),
-                    scopes: LOGIN_SCOPE,
+                    scopes: ALL_INITIAL_LOGIN_SCOPES,
                     valid_from: occurred_at,
                 },
             },
+            recovery: Box::new(BootstrapRecoveryIdentity {
+                public_wrapping_key: recovery.public_wrapping_key().as_bytes(),
+                key_fingerprint: recovery.public_wrapping_key().fingerprint(),
+                root_certificate_digest: Sha256::digest(recovery.root_certificate_der()).into(),
+                root_certificate_der: recovery.root_certificate_der().to_vec(),
+                bundle_digest: recovery.bundle_digest(),
+                save_challenge_commitment,
+            }),
         })
     }
 
@@ -234,13 +269,23 @@ impl ValidatedSetupInput {
         digest.finalize().into()
     }
 
-    fn response(&self, material: &InitialBootstrapMaterial) -> CreateMeshSetupResponse {
-        CreateMeshSetupResponse {
+    fn response(
+        &self,
+        material: &InitialBootstrapMaterial,
+        recovery_bundle: &PendingRecoveryBundle,
+        recovery_code: &RecoveryBundleCode,
+    ) -> Result<CreateMeshSetupResponse, CreateMeshSetupError> {
+        Ok(CreateMeshSetupResponse {
             operation_id: self.api_operation_id.clone(),
             mesh_id: format_uuid(material.mesh_id.as_bytes()),
             node_id: format_uuid(material.node_id.as_bytes()),
             api_key: material.api_key.expose_encoded().to_string(),
-        }
+            recovery_bundle: recovery_bundle.download_text()?,
+            recovery_code: recovery_code.expose_once(),
+            recovery_challenge: recovery_bundle
+                .challenge(recovery_code)
+                .expose_for_verification(),
+        })
     }
 }
 
@@ -323,6 +368,12 @@ pub enum CreateMeshSetupError {
     /// Restart-stable bootstrap material could not be derived.
     #[error("bootstrap material could not be derived")]
     Material(#[from] InitialBootstrapMaterialError),
+    /// Recovery-code derivation failed closed.
+    #[error("recovery code could not be derived")]
+    RecoveryCode(#[from] RecoveryBundleError),
+    /// Protected offline recovery delivery could not be created or resumed.
+    #[error("pending offline recovery bundle failed")]
+    RecoveryBundle(#[from] PendingRecoveryBundleError),
     /// Node-local setup state rejected the transition.
     #[error("local setup transition failed")]
     Local(#[from] LocalSetupError),

@@ -188,7 +188,7 @@ pub async fn execute_cleanup_work_over_quic(
             )?;
             let receipt =
                 tombstone_shard(connection, header, attempt.permit, context.wire_limits).await?;
-            Ok(CleanupWorkerOutcome::CommandReady(
+            Ok(CleanupWorkerOutcome::CommandReady(Box::new(
                 version_cleanup_tombstone_completion(
                     inventory_sealed_revision,
                     attempt,
@@ -197,7 +197,7 @@ pub async fn execute_cleanup_work_over_quic(
                     peer.incarnation(),
                 )
                 .map_err(CleanupWorkerError::from)?,
-            ))
+            )))
         }
         CleanupWorkAction::Reclaim(completion) => {
             validate_completion(entry.cleanup_operation_id, entry.item, completion)?;
@@ -206,7 +206,7 @@ pub async fn execute_cleanup_work_over_quic(
                 context.request_header(completion.receipt.operation_id, observed_at, None)?;
             let receipt =
                 reclaim_shard(connection, header, completion.receipt, context.wire_limits).await?;
-            Ok(CleanupWorkerOutcome::CommandReady(
+            Ok(CleanupWorkerOutcome::CommandReady(Box::new(
                 version_cleanup_reclamation(
                     completion,
                     receipt,
@@ -214,7 +214,7 @@ pub async fn execute_cleanup_work_over_quic(
                     peer.incarnation(),
                 )
                 .map_err(CleanupWorkerError::from)?,
-            ))
+            )))
         }
         CleanupWorkAction::Complete(reclamation) => {
             validate_reclamation(entry.cleanup_operation_id, entry.item, &reclamation)?;

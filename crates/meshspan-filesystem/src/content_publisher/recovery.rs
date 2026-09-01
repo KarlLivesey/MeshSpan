@@ -30,8 +30,10 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
         header: ContentLayoutTransferHeader,
     ) -> Result<(), ContentPublicationError> {
         self.key_envelopes
+            .cipher(request.volume_id, header.wrapped_key.key_generation)
+            .map_err(map_key)?
             .unwrap(header.manifest.manifest_id, header.wrapped_key)
-            .map_err(|_| ContentPublicationError::Corrupt)?;
+            .map_err(map_key)?;
         self.catalog
             .begin_layout_import(request, header)
             .map_err(map_catalog)
@@ -114,7 +116,13 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
             ciphertext_digest: chunk.ciphertext_digest,
             ciphertext,
         };
-        verify_recovered_chunk(&self.key_envelopes, layout, chunk_index, &encrypted)?;
+        verify_recovered_chunk(
+            &self.key_envelopes,
+            request.volume_id,
+            layout,
+            chunk_index,
+            &encrypted,
+        )?;
         let context = RequestContext {
             contract_version: ContractVersion::V1_0,
             operation_id: chunk.provider_operation_id,
@@ -172,7 +180,8 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
 }
 
 fn verify_recovered_chunk(
-    key_envelopes: &crate::ContentKeyEnvelopeCipher,
+    key_envelopes: &crate::VolumeContentKeyring,
+    volume_id: meshspan_domain::VolumeId,
     layout: crate::PreparedContentLayout,
     chunk_index: u64,
     encrypted: &EncryptedContentChunk,
@@ -184,8 +193,10 @@ fn verify_recovered_chunk(
         return Err(ContentPublicationError::Corrupt);
     }
     let content_key = key_envelopes
+        .cipher(volume_id, layout.wrapped_key.key_generation)
+        .map_err(map_key)?
         .unwrap(layout.manifest.manifest_id, layout.wrapped_key)
-        .map_err(|_| ContentPublicationError::Corrupt)?;
+        .map_err(map_key)?;
     let limits = ContentChunkLimits::new(
         usize::try_from(layout.chunk_bytes).map_err(|_| ContentPublicationError::Corrupt)?,
     )
@@ -199,4 +210,13 @@ fn verify_recovered_chunk(
         )
         .map_err(|_| ContentPublicationError::Corrupt)?;
     Ok(())
+}
+
+fn map_key(error: crate::ContentKeyError) -> ContentPublicationError {
+    match error {
+        crate::ContentKeyError::InvalidInput | crate::ContentKeyError::Corrupt => {
+            ContentPublicationError::Corrupt
+        }
+        crate::ContentKeyError::Unavailable => ContentPublicationError::Unavailable,
+    }
 }

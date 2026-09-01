@@ -11,8 +11,9 @@ use super::version_cleanup_tests::{cleanup_command, terminal_digest};
 use super::volume_head_tests::{context, fixture, open_and_prepare, publication_command};
 use super::{ApplyDisposition, EntityKind, LogPosition, RepositoryError};
 use crate::{
-    AttestVersionCleanup, AuthoritativeCommand, ConsumeJoinGrant, IssueJoinGrant, JoinRoles,
-    PartitionDatabase, RecordName, RegisterCleanupAttestationKey, VersionCleanupAttestation,
+    AttestVersionCleanup, AuthoritativeCommand, ConfirmRecoveryBundleSaved, ConsumeJoinGrant,
+    IssueJoinGrant, JoinRoles, PartitionDatabase, RecordName, RegisterCleanupAttestationKey,
+    VersionCleanupAttestation,
 };
 
 const NODE_IDENTITY: u8 = 15;
@@ -191,25 +192,25 @@ fn every_snapshotted_gateway_must_attest_before_coverage_is_complete()
     let mut repository = open_and_prepare(&directory.path().join("coverage.sqlite3"), &fixture)?;
     let second_node = enrol_second_gateway(&mut repository, fixture.administrator)?;
     repository.apply_committed(
-        LogPosition { index: 5, term: 1 },
-        context(30, fixture.administrator, 31, 102, Some(4))?,
+        LogPosition { index: 6, term: 1 },
+        context(30, fixture.administrator, 31, 102, Some(5))?,
         &publication_command(&fixture, None, 32, 33, 34, 35, 36)?,
     )?;
     let root_summary = retained_root_summary(
         repository.database.connection(),
         fixture.volume,
-        Revision::new(5),
+        Revision::new(6),
     )?;
     let AuthoritativeCommand::ProposeVersionCleanup(mut proposal) =
         cleanup_command(fixture.volume, root_summary, 40)?
     else {
         return Err("wrong proposal fixture".into());
     };
-    proposal.reachability_revision = Revision::new(5);
+    proposal.reachability_revision = Revision::new(6);
     proposal.proof_result_digest = terminal_digest(&proposal);
-    let cleanup_context = context(41, fixture.administrator, 42, 103, Some(5))?;
+    let cleanup_context = context(41, fixture.administrator, 42, 103, Some(6))?;
     repository.apply_committed(
-        LogPosition { index: 6, term: 1 },
+        LogPosition { index: 7, term: 1 },
         cleanup_context,
         &AuthoritativeCommand::ProposeVersionCleanup(proposal),
     )?;
@@ -221,20 +222,20 @@ fn every_snapshotted_gateway_must_attest_before_coverage_is_complete()
     register_node_key(
         &mut repository,
         fixture.administrator,
-        7,
+        8,
         NodeId::from_bytes([NODE_IDENTITY; 16])?,
         first_key,
     )?;
     register_node_key(
         &mut repository,
         fixture.administrator,
-        8,
+        9,
         second_node,
         second_key,
     )?;
     let first = signed_attestation_for(
         cleanup_id,
-        Revision::new(6),
+        Revision::new(7),
         [120; 32],
         proposal.reachability_subject_digest,
         121,
@@ -242,15 +243,15 @@ fn every_snapshotted_gateway_must_attest_before_coverage_is_complete()
         first_key,
     )?;
     repository.apply_committed(
-        LogPosition { index: 9, term: 1 },
-        context(122, fixture.administrator, 123, 110, Some(8))?,
+        LogPosition { index: 10, term: 1 },
+        context(122, fixture.administrator, 123, 110, Some(9))?,
         &first,
     )?;
     assert_eq!(progress(&repository, cleanup_id)?, (2, 1, false));
 
     let second = signed_attestation_for(
         cleanup_id,
-        Revision::new(6),
+        Revision::new(7),
         [124; 32],
         proposal.reachability_subject_digest,
         125,
@@ -258,8 +259,8 @@ fn every_snapshotted_gateway_must_attest_before_coverage_is_complete()
         second_key,
     )?;
     repository.apply_committed(
-        LogPosition { index: 10, term: 1 },
-        context(126, fixture.administrator, 127, 111, Some(9))?,
+        LogPosition { index: 11, term: 1 },
+        context(126, fixture.administrator, 127, 111, Some(10))?,
         &second,
     )?;
     assert_eq!(progress(&repository, cleanup_id)?, (2, 2, true));
@@ -270,12 +271,21 @@ fn enrol_second_gateway(
     repository: &mut super::AuthoritativeRepository,
     administrator: meshspan_domain::PrincipalId,
 ) -> Result<NodeId, Box<dyn std::error::Error>> {
+    repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(227, administrator, 228, 99, Some(2))?,
+        &AuthoritativeCommand::ConfirmRecoveryBundleSaved(ConfirmRecoveryBundleSaved {
+            mesh_id: meshspan_domain::MeshId::from_bytes([12; 16])?,
+            bundle_digest: [225; 32],
+            save_challenge_commitment: [226; 32],
+        }),
+    )?;
     let grant_id = JoinGrantId::from_bytes([90; 16])?;
     let secret_digest = [91; 32];
     let roles = JoinRoles::new(JoinRoles::GATEWAY)?;
     repository.apply_committed(
-        LogPosition { index: 3, term: 1 },
-        context(92, administrator, 93, 100, Some(2))?,
+        LogPosition { index: 4, term: 1 },
+        context(92, administrator, 93, 100, Some(3))?,
         &AuthoritativeCommand::IssueJoinGrant(IssueJoinGrant {
             join_grant_id: grant_id,
             secret_digest,
@@ -288,8 +298,8 @@ fn enrol_second_gateway(
     let certificate_fingerprint = Sha256::digest(&certificate_der).into();
     let node_id = NodeId::from_bytes([94; 16])?;
     repository.apply_committed(
-        LogPosition { index: 4, term: 1 },
-        context(95, administrator, 96, 101, Some(3))?,
+        LogPosition { index: 5, term: 1 },
+        context(95, administrator, 96, 101, Some(4))?,
         &AuthoritativeCommand::ConsumeJoinGrant(ConsumeJoinGrant {
             join_grant_id: grant_id,
             secret_digest,

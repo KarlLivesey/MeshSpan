@@ -123,6 +123,45 @@ impl RegisteredFolder {
         })
     }
 
+    /// Reopens a marker created after a durable local intent but before its fingerprint journaled.
+    ///
+    /// This recovery path still requires the exact mesh, target and generation from the earlier
+    /// local intent. It accepts the marker's self-validated fingerprint only after those identities,
+    /// exclusive ownership, known private layout and filesystem capabilities all pass.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent/corrupt/substituted markers, unknown private entries, concurrent ownership
+    /// and failed capability probes.
+    pub fn reopen_pending(
+        storage_path: &Path,
+        expected: FolderRegistration,
+    ) -> Result<Self, StorageFolderError> {
+        if expected.generation == 0 {
+            return Err(StorageFolderError::InvalidRegistration);
+        }
+        let (canonical_path, private_directory, lock) = open_and_lock(storage_path)?;
+        clear_interrupted_probe(&private_directory)?;
+        recover_pending_marker(&private_directory, expected)?;
+        validate_known_entries(&private_directory)?;
+        let marker = read_marker(&private_directory)?;
+        if marker.mesh_id() != expected.mesh_id
+            || marker.target_id() != expected.target_id
+            || marker.generation() != expected.generation
+        {
+            return Err(StorageFolderError::IdentityMismatch);
+        }
+        probe_capabilities(&private_directory)?;
+        create_pack_directory(&private_directory)?;
+        Ok(Self {
+            canonical_path,
+            private_directory,
+            marker,
+            usage_limit: expected.usage_limit,
+            _lock: lock,
+        })
+    }
+
     /// Returns the identity read from durable target media.
     #[must_use]
     pub const fn marker(&self) -> TargetMarker {
@@ -283,11 +322,47 @@ fn write_new_marker(directory: &Dir, marker: TargetMarker) -> Result<(), Storage
     sync_directory(directory)
 }
 
+fn recover_pending_marker(
+    directory: &Dir,
+    expected: FolderRegistration,
+) -> Result<(), StorageFolderError> {
+    let Some(pending) = read_optional_marker(directory, PENDING_MARKER_FILE)? else {
+        return Ok(());
+    };
+    if read_optional_marker(directory, MARKER_FILE)?.is_some() {
+        return Err(StorageFolderError::UnknownPrivateEntry);
+    }
+    if pending.mesh_id() != expected.mesh_id
+        || pending.target_id() != expected.target_id
+        || pending.generation() != expected.generation
+    {
+        return Err(StorageFolderError::IdentityMismatch);
+    }
+    directory.rename(PENDING_MARKER_FILE, directory, MARKER_FILE)?;
+    sync_directory(directory)
+}
+
 fn read_marker(directory: &Dir) -> Result<TargetMarker, StorageFolderError> {
-    let mut file = directory.open(MARKER_FILE)?;
+    read_optional_marker(directory, MARKER_FILE)?.ok_or_else(|| {
+        StorageFolderError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "storage marker is absent",
+        ))
+    })
+}
+
+fn read_optional_marker(
+    directory: &Dir,
+    name: &str,
+) -> Result<Option<TargetMarker>, StorageFolderError> {
+    let mut file = match directory.open(name) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     let mut bytes = Vec::with_capacity(MARKER_BYTES);
     file.read_to_end(&mut bytes)?;
-    TargetMarker::decode(&bytes)
+    TargetMarker::decode(&bytes).map(Some)
 }
 
 fn create_pack_directory(directory: &Dir) -> Result<(), StorageFolderError> {
@@ -444,6 +519,56 @@ mod tests {
             RegisteredFolder::reopen(&folder_path, registration, fingerprint),
             Err(StorageFolderError::CorruptMarker)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn pending_reopen_recovers_only_the_exact_journalled_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let folder_path = directory.path().join("interrupted-registration");
+        fs::create_dir(&folder_path)?;
+        let registration = registration()?;
+        let mut random = FixedRandom(11);
+        let created = RegisteredFolder::register_new(&folder_path, registration, &mut random)?;
+        let fingerprint = created.marker().fingerprint();
+        drop(created);
+
+        fs::rename(
+            folder_path.join(".meshspan").join("target.marker"),
+            folder_path.join(".meshspan").join("target.marker.pending"),
+        )?;
+
+        let recovered = RegisteredFolder::reopen_pending(&folder_path, registration)?;
+        assert_eq!(recovered.marker().fingerprint(), fingerprint);
+        drop(recovered);
+
+        let wrong_mesh = FolderRegistration {
+            mesh_id: MeshId::from_bytes([7; 16])?,
+            ..registration
+        };
+        assert!(matches!(
+            RegisteredFolder::reopen_pending(&folder_path, wrong_mesh),
+            Err(StorageFolderError::IdentityMismatch)
+        ));
+        let wrong_target = FolderRegistration {
+            target_id: TargetId::from_bytes([8; 16])?,
+            ..registration
+        };
+        assert!(matches!(
+            RegisteredFolder::reopen_pending(&folder_path, wrong_target),
+            Err(StorageFolderError::IdentityMismatch)
+        ));
+        let wrong_generation = FolderRegistration {
+            generation: registration.generation + 1,
+            ..registration
+        };
+        assert!(matches!(
+            RegisteredFolder::reopen_pending(&folder_path, wrong_generation),
+            Err(StorageFolderError::IdentityMismatch)
+        ));
+
+        RegisteredFolder::reopen(&folder_path, registration, fingerprint)?;
         Ok(())
     }
 

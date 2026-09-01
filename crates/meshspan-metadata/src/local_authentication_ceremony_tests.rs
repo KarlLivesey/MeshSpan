@@ -171,6 +171,6 @@ fn totp_registration_has_a_distinct_restart_safe_ceremony_kind()
         .ok_or("TOTP registration ceremony missing after restart")?;
     assert_eq!(record.challenge_id, challenge_id);
     assert_eq!(record.kind, AuthenticationCeremonyKind::TotpRegistration);
-    assert_eq!(database.schema_version(), 10);
+    assert_eq!(database.schema_version(), 11);
     Ok(())
 }

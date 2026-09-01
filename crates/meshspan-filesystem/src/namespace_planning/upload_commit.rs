@@ -33,7 +33,13 @@ pub(crate) fn prepare(
         return Ok(plan);
     }
     reject_collision(&transaction, session, request.operation_id)?;
-    let current = resolution::resolve(&transaction, branch_id, session.volume_id, &session.path)?;
+    let current = resolution::resolve_or_initial(
+        &transaction,
+        branch_id,
+        session.volume_id,
+        &session.path,
+        grant.object_id,
+    )?;
     let plan = build(branch_id, session, request, policy, grant, &current)?;
     let encoded = codec::encode(&plan)?;
     let result_digest = result_digest(request_digest, &encoded);
@@ -128,7 +134,7 @@ fn build(
         content_authorization_revision: grant.identity_revision,
         content_deadline: request.content_deadline,
         root_object_id: current.root_object,
-        expected_namespace_commit_id: Some(current.namespace_commit),
+        expected_namespace_commit_id: current.namespace_commit,
         expected_file_object_revision_id: target.expected_revision,
         file_object_revision_id: derive_revision(request.operation_id, b"file", 0)?,
         root_object_revision_id: derive_revision(request.operation_id, b"root", 0)?,

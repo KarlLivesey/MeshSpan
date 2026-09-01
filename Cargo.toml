@@ -17,7 +17,9 @@ members = [
     "crates/meshspan-protobuf",
     "crates/meshspan-protocol",
     "crates/meshspan-quinn-rustls",
+    "crates/meshspan-recovery-bundle",
     "crates/meshspan-rustls-provider",
+    "crates/meshspan-secret-envelope",
     "crates/meshspan-storage",
     "crates/meshspan-sync-wrapper",
     "crates/meshspan-test-certificates",
@@ -65,12 +67,13 @@ sha2 = "0.11.0"
 sha1 = "0.11.0"
 subtle = "2.6.1"
 thiserror = "2.0.16"
-tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26.4", default-features = false }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 unicode-normalization = "0.1.25"
 unicode-casefold = "0.2.0"
 zeroize = "1.9.0"
+x25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize"] }
 
 [patch.crates-io]
 sync_wrapper = { path = "crates/meshspan-sync-wrapper" }

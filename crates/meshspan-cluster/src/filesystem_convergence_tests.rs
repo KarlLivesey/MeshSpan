@@ -5,7 +5,7 @@ use std::{cell::RefCell, collections::BTreeMap, io::Write, path::Path, rc::Rc};
 use meshspan_domain::{
     AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId, HandleId,
     NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
-    UnixMicros, VolumeId,
+    Rights, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateFileRequest, AuthorisedFilesystemService,
@@ -303,6 +303,23 @@ impl FilesystemAccessAuthority for AllowAll {
             gateway_revision: Revision::new(1),
             expires_at: UnixMicros::new(1_000),
             evidence_digest: [91; 32],
+        })
+    }
+
+    fn authorise_volume_root(
+        &self,
+        context: FilesystemAccessContext,
+        volume_id: VolumeId,
+        requested_rights: Rights,
+    ) -> Result<FilesystemAuthorityGrant, Self::Error> {
+        let Ok(root) = ObjectId::from_bytes(volume_id.as_bytes()) else {
+            unreachable!("a valid volume identity is a valid non-zero object identity")
+        };
+        self.authorise(FilesystemAuthorityRequest {
+            context,
+            volume_id,
+            object_id: root,
+            requested_rights,
         })
     }
 }

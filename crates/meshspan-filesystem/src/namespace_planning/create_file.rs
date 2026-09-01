@@ -240,7 +240,7 @@ fn build_plan(
             content_authorization_revision: grant.identity_revision,
             content_deadline: request.content_deadline,
             root_object_id: current.root_object,
-            expected_namespace_commit_id: Some(current.namespace_commit),
+            expected_namespace_commit_id: current.namespace_commit,
             expected_file_object_revision_id: None,
             file_object_revision_id: derive_revision(request.operation_id, b"file", 0)?,
             root_object_revision_id: derive_revision(request.operation_id, b"root", 0)?,

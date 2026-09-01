@@ -74,6 +74,9 @@ mod identity;
 mod kernel;
 mod membership;
 mod namespace;
+mod node_wrapping_key;
+#[cfg(test)]
+mod node_wrapping_key_tests;
 mod passkey_registration;
 #[cfg(test)]
 mod passkey_registration_tests;
@@ -81,16 +84,25 @@ mod query;
 mod quorum_plan;
 mod reachability;
 mod receipt;
+mod recovery_authority;
+#[cfg(test)]
+mod recovery_authority_tests;
 mod retention;
 mod root_delegation;
 mod root_delegation_evidence;
 mod routing;
+mod secret_generation;
+#[cfg(test)]
+mod secret_generation_tests;
 mod session;
 mod session_access;
 #[cfg(test)]
 mod session_tests;
 mod snapshot;
 mod snapshot_schedule;
+mod storage_target;
+#[cfg(test)]
+mod storage_target_tests;
 mod tags;
 mod user_snapshot;
 mod verify;
@@ -159,6 +171,7 @@ pub use kernel::{
 };
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
+pub use node_wrapping_key::NodeWrappingKeyRecord;
 pub use passkey_registration::{
     AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
@@ -173,7 +186,9 @@ pub use reachability::{
     RetainedNamespaceRootSource,
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
+pub use recovery_authority::{MeshRecoveryAuthority, RecoveryBundleState};
 pub use retention::VersionRetentionPolicy;
+pub use secret_generation::SecretGenerationRecord;
 pub use session::{
     ApiKeySessionReplay, AuthenticationSessionReplay, AuthenticationSessionReplayCredential,
     AuthenticationSessionReplayFactor, PasskeySessionReplay, SessionRevocationReplay,
@@ -184,6 +199,7 @@ pub use session_access::{
 };
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use snapshot_schedule::{SnapshotSchedule, SnapshotScheduleCursor};
+pub use storage_target::StorageTargetRegistrationContext;
 pub use user_snapshot::{
     SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor, VolumeSnapshot,
 };
@@ -505,6 +521,24 @@ impl AuthoritativeRepository {
         command: &crate::AuthoritativeCommand,
     ) -> Result<CommandReceipt, RepositoryError> {
         apply::apply_committed(&mut self.database, position, context, command)
+    }
+
+    /// Executes the exact command transaction and rolls it back before consensus admission.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any command which could not be applied immediately after current durable state.
+    pub fn preflight_command(
+        &mut self,
+        preceding: &[(
+            LogPosition,
+            crate::CommandContext,
+            crate::AuthoritativeCommand,
+        )],
+        context: crate::CommandContext,
+        command: &crate::AuthoritativeCommand,
+    ) -> Result<(), RepositoryError> {
+        apply::preflight_command(&mut self.database, preceding, context, command)
     }
 
     #[cfg(test)]
@@ -972,6 +1006,58 @@ impl AuthoritativeRepository {
         session_access::is_system_manager(&self.database, principal_id, now)
     }
 
+    /// Resolves the current mesh, host and system-manager authority for local target registration.
+    ///
+    /// Returns none until exactly one mesh, the requested active node and host, and at least one
+    /// current non-activated system manager all exist.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed authoritative identities or database failure.
+    pub fn storage_target_registration_context(
+        &self,
+        node_id: meshspan_domain::NodeId,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Option<StorageTargetRegistrationContext>, RepositoryError> {
+        storage_target::registration_context(&self.database, node_id, now)
+    }
+
+    /// Returns the current public secret-wrapping-key generation for one node.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed stored public material or database failure.
+    pub fn node_wrapping_key(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<NodeWrappingKeyRecord>, RepositoryError> {
+        node_wrapping_key::current(&self.database, node_id)
+    }
+
+    /// Returns one exact encrypted secret generation and its complete recipient set.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for incomplete, substituted or malformed stored cryptographic evidence.
+    pub fn secret_generation(
+        &self,
+        context: meshspan_secret_envelope::SecretContext,
+    ) -> Result<Option<SecretGenerationRecord>, RepositoryError> {
+        secret_generation::load(&self.database, context)
+    }
+
+    /// Returns the public offline authority and recovery-bundle verification state for one mesh.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed keys, certificates, lifecycle evidence or database failure.
+    pub fn mesh_recovery_authority(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<MeshRecoveryAuthority>, RepositoryError> {
+        recovery_authority::current(&self.database, mesh_id)
+    }
+
     /// Returns one stable, bounded page of principals in a selected family.
     ///
     /// # Errors
@@ -1016,6 +1102,18 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<VolumeInventoryRecord, VolumeInventoryCursor>, RepositoryError> {
         volume_inventory::volume_inventory_candidates(&self.database, after, limit)
+    }
+
+    /// Returns one exact logical-volume record and its stable root identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed stored identities, names, lifecycle or revision values.
+    pub fn volume_inventory_record(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VolumeInventoryRecord>, RepositoryError> {
+        volume_inventory::volume_inventory_record(&self.database, volume_id)
     }
 
     /// Returns one stable, bounded page of active namespace children.
@@ -1461,6 +1559,27 @@ pub enum RepositoryError {
     /// Deterministic internal transaction interruption used by the crash-proof harness.
     #[error("injected authoritative transaction interruption")]
     InjectedFault,
+}
+
+impl RepositoryError {
+    /// Reports whether an admission failure is a deterministic outcome of the supplied command.
+    #[must_use]
+    pub fn is_command_rejection(&self) -> bool {
+        match self {
+            Self::StaleRevision
+            | Self::StaleVolumeHead
+            | Self::StaleRetentionPolicy
+            | Self::StaleAuthenticationPolicy
+            | Self::StaleSnapshot
+            | Self::StaleSnapshotSchedule
+            | Self::InvalidCommand
+            | Self::CapacityExceeded => true,
+            Self::Sqlite(rusqlite::Error::SqliteFailure(error, _)) => {
+                error.code == rusqlite::ErrorCode::ConstraintViolation
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]

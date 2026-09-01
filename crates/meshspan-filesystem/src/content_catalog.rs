@@ -145,11 +145,12 @@ impl DurableContentCatalog {
         }
         self.connection.execute(
             "INSERT INTO content_publications(
-                operation_id, request_digest, manifest_id, format_version, logical_length,
-                authorization_revision, deadline, state
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+                operation_id, volume_id, request_digest, manifest_id, format_version,
+                logical_length, authorization_revision, deadline, state
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
             params![
                 request.operation_id.as_bytes().as_slice(),
+                request.volume_id.as_bytes().as_slice(),
                 request.request_digest.as_slice(),
                 request.manifest_id.as_bytes().as_slice(),
                 i64::from(request.format_version),

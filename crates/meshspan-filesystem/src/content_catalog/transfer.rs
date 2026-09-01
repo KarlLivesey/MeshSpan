@@ -119,13 +119,14 @@ impl DurableContentCatalog {
         }
         transaction.execute(
             "INSERT INTO content_publications(
-                operation_id, request_digest, manifest_id, format_version, logical_length,
-                authorization_revision, deadline, state, content_digest, chunk_bytes, chunk_count,
-                key_generation, key_nonce, key_ciphertext, key_envelope_digest,
-                import_header_digest, import_expected_root_digest
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,1,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                operation_id, volume_id, request_digest, manifest_id, format_version,
+                logical_length, authorization_revision, deadline, state, content_digest,
+                chunk_bytes, chunk_count, key_generation, key_nonce, key_ciphertext,
+                key_envelope_digest, import_header_digest, import_expected_root_digest
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,1,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 request.operation_id.as_bytes().as_slice(),
+                request.volume_id.as_bytes().as_slice(),
                 request.request_digest.as_slice(),
                 request.manifest_id.as_bytes().as_slice(),
                 i64::from(request.format_version),

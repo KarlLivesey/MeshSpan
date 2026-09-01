@@ -321,10 +321,10 @@ fn completion(
     cleanup_operation_id: OperationId,
     reporter_node_id: NodeId,
 ) -> Result<VersionCleanupItemCompletion, Box<dyn std::error::Error>> {
-    let CleanupWorkerOutcome::CommandReady(AuthoritativeCommand::CompleteVersionCleanupItem(
-        command,
-    )) = outcome
-    else {
+    let CleanupWorkerOutcome::CommandReady(command) = outcome else {
+        return Err("worker did not produce a tombstone completion".into());
+    };
+    let AuthoritativeCommand::CompleteVersionCleanupItem(command) = command.as_ref() else {
         return Err("worker did not produce a tombstone completion".into());
     };
     Ok(VersionCleanupItemCompletion {

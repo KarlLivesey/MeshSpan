@@ -14,6 +14,7 @@ mod api_key_issuance_tests;
 mod appliance_api;
 #[cfg(test)]
 mod appliance_api_tests;
+mod appliance_runtime;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
@@ -36,7 +37,13 @@ mod claim_file;
 mod claim_service;
 #[cfg(test)]
 mod claim_service_tests;
+mod consensus_authentication_authority;
+#[cfg(test)]
+mod consensus_authentication_authority_tests;
+mod consensus_authentication_methods;
 mod consensus_bootstrap_authority;
+mod consensus_filesystem_authority;
+mod consensus_identity_administration;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;
@@ -67,6 +74,7 @@ mod identity_administration_tests;
 mod local_node_identity;
 #[cfg(test)]
 mod local_node_identity_tests;
+mod local_wrapping_key;
 mod multi_factor_session;
 mod namespace_mutation_api;
 mod native_api_authentication;
@@ -78,6 +86,9 @@ mod native_upload_api;
 mod native_upload_api_tests;
 #[cfg(test)]
 mod native_upload_service_tests;
+mod node_wrapping_key_registration;
+#[cfg(test)]
+mod node_wrapping_key_registration_tests;
 mod object_stat_api;
 #[cfg(test)]
 mod object_stat_api_tests;
@@ -108,10 +119,17 @@ mod passkey_session_creation_tests;
 mod passkey_session_tests;
 #[cfg(test)]
 mod passkey_test_support;
+mod pending_recovery_bundle;
+#[cfg(test)]
+mod pending_recovery_bundle_tests;
 mod protected_file;
 mod public_contract_api;
 #[cfg(test)]
 mod public_contract_api_tests;
+mod recovery_bundle_verification;
+mod recovery_bundle_verification_api;
+#[cfg(test)]
+mod recovery_bundle_verification_tests;
 mod recovery_code_issuance;
 mod recovery_code_issuance_api;
 #[cfg(test)]
@@ -134,6 +152,9 @@ mod step_up_session_api;
 mod step_up_session_api_tests;
 #[cfg(test)]
 mod step_up_session_tests;
+mod storage_target_registration;
+#[cfg(test)]
+mod storage_target_registration_tests;
 mod totp_registration;
 mod totp_registration_api;
 #[cfg(test)]
@@ -150,6 +171,8 @@ mod totp_session_contract;
 mod totp_session_creation;
 #[cfg(test)]
 mod totp_session_creation_tests;
+mod volume_administration;
+mod volume_administration_api;
 mod volume_inventory;
 #[cfg(test)]
 mod volume_inventory_api_tests;
@@ -168,6 +191,7 @@ pub use appliance_api::{
     AdministrationApiRoutes, ApplianceApiRoutes, AuthenticationApiRoutes, FileApiRoutes,
     SessionApiRoutes,
 };
+pub use appliance_runtime::{DaemonProcessError, run_headless_daemon};
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
 pub use authentication_method_listing::{
     AuthenticationMethodListingApiError, AuthenticationMethodListingAuthority,
@@ -196,6 +220,7 @@ pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,
     FirstBootClaimError, FirstBootClaimService,
 };
+pub use consensus_authentication_authority::ConsensusAuthenticationAuthority;
 pub use consensus_bootstrap_authority::ConsensusBootstrapAuthority;
 pub use create_mesh_setup::{
     BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, CreateMeshSetupError,
@@ -228,6 +253,7 @@ pub use identity_administration::{
     IdentityAdministrationService, IdentityAdministrator, identity_administration_api_router,
 };
 pub use local_node_identity::{LocalNodeIdentity, LocalNodeIdentityError};
+pub use local_wrapping_key::{LocalWrappingKey, LocalWrappingKeyError};
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,
     NativeNamespaceMutationError, NativeNamespaceMutationService,
@@ -241,6 +267,10 @@ pub use native_upload_api::{
     NativeUploadApiError, NativeUploadController, NativeUploadError, NativeUploadService,
     NativeUploadServicePolicy, UploadRangeCursor, UploadRangePageRequest, UploadRangeWriteRequest,
     native_upload_api_router,
+};
+pub use node_wrapping_key_registration::{
+    NodeWrappingKeyRegistrationAuthority, NodeWrappingKeyRegistrationAuthorityError,
+    NodeWrappingKeyRegistrationError, NodeWrappingKeyRegistrationService,
 };
 pub use object_stat_api::{
     ObjectStatApiError, ObjectStatController, ObjectStatError, ObjectStatReader, ObjectStatService,
@@ -275,8 +305,19 @@ pub use passkey_session::{
 pub use passkey_session_contract::{
     DisabledPasskeyProof, DisabledPasskeySessions, PasskeySessionCeremony, PreparedPasskeyProof,
 };
+pub use pending_recovery_bundle::{
+    PendingRecoveryBundle, PendingRecoveryBundleError, PendingRecoveryBundleRemoval,
+};
 pub use public_contract_api::{
     PublicContractApiError, ReadinessSource, public_contract_api_router,
+};
+pub use recovery_bundle_verification::{
+    RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
+    RecoveryBundleVerificationCommit, RecoveryBundleVerificationController,
+    RecoveryBundleVerificationError, RecoveryBundleVerificationService,
+};
+pub use recovery_bundle_verification_api::{
+    RecoveryBundleVerificationApiError, recovery_bundle_verification_api_router,
 };
 pub use recovery_code_issuance::RecoveryCodeIssuanceService;
 pub use recovery_code_issuance_api::{
@@ -304,6 +345,10 @@ pub use step_up_session_api::{
     StepUpCurrentSessionApiError, StepUpCurrentSessionController,
     step_up_current_session_api_router,
 };
+pub use storage_target_registration::{
+    StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
+    StorageTargetRegistrationError, StorageTargetRegistrationService,
+};
 pub use totp_registration::TotpRegistrationService;
 pub use totp_registration_api::{
     TotpRegistrationApiError, TotpRegistrationController, totp_registration_api_router,
@@ -320,6 +365,13 @@ pub use totp_secret::{TotpEnvelopeKey, TotpSecretBinding, TotpSecretCipher, Totp
 pub use totp_session::TotpSessionVerifier;
 pub use totp_session_contract::{
     DisabledTotpFactors, TotpFactorVerifier, TotpSessionError, VerifiedTotpFactor,
+};
+pub use volume_administration::{
+    VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
+    VolumeAdministrationController, VolumeAdministrationError, VolumeAdministrationService,
+};
+pub use volume_administration_api::{
+    VolumeAdministrationApiError, volume_administration_api_router,
 };
 pub use volume_inventory::{
     VolumeInventoryApiError, VolumeInventoryAuthority, VolumeInventoryAuthorityError,

@@ -72,7 +72,7 @@ pub(super) async fn prove_initial_authority(
     assert_eq!(snapshot.relationship.relationship.authority_epoch, 1);
     assert_eq!(snapshot.relationship.local_identity.identity.generation, 1);
     assert!(page.next_cursor().is_empty());
-    prove_branch_page_service(proof).await?;
+    Box::pin(prove_branch_page_service(proof)).await?;
     Ok(())
 }
 

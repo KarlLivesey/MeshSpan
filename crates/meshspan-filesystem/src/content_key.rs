@@ -2,9 +2,11 @@
 
 //! Authenticated wrapping and rewrapping of per-layout content-encryption keys.
 
+use std::collections::BTreeMap;
+
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use meshspan_domain::{ContentManifestId, RandomSource};
+use meshspan_domain::{ContentManifestId, RandomSource, VolumeId};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -71,6 +73,12 @@ impl ContentKeyEnvelopeCipher {
     #[must_use]
     pub const fn new(key: VolumeKeyEncryptionKey) -> Self {
         Self { key }
+    }
+
+    /// Returns the exact wrapping-key generation owned by this codec.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.key.generation()
     }
 
     /// Wraps a content key under a fresh random nonce and manifest-bound associated data.
@@ -180,6 +188,81 @@ impl ContentKeyEnvelopeCipher {
     }
 }
 
+/// In-memory volume-to-key capability map used only after protected key installation.
+///
+/// The keyring owns neither persistence nor network distribution. Those daemon boundaries unwrap
+/// only the generations this gateway may use, then install them here. Historical generations
+/// remain readable while exactly one monotonic active generation receives new content keys.
+pub struct VolumeContentKeyring {
+    active_generations: BTreeMap<VolumeId, u64>,
+    ciphers: BTreeMap<(VolumeId, u64), ContentKeyEnvelopeCipher>,
+}
+
+impl VolumeContentKeyring {
+    /// Creates a keyring with one active volume generation.
+    #[must_use]
+    pub fn new(volume_id: VolumeId, key: VolumeKeyEncryptionKey) -> Self {
+        let generation = key.generation();
+        Self {
+            active_generations: BTreeMap::from([(volume_id, generation)]),
+            ciphers: BTreeMap::from([(
+                (volume_id, generation),
+                ContentKeyEnvelopeCipher::new(key),
+            )]),
+        }
+    }
+
+    /// Installs one additional historical or active volume generation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate generations and active rotation that does not advance monotonically.
+    pub fn install(
+        &mut self,
+        volume_id: VolumeId,
+        key: VolumeKeyEncryptionKey,
+        make_active: bool,
+    ) -> Result<(), ContentKeyError> {
+        let generation = key.generation();
+        if self.ciphers.contains_key(&(volume_id, generation))
+            || (make_active
+                && self
+                    .active_generations
+                    .get(&volume_id)
+                    .is_some_and(|current| generation <= *current))
+        {
+            return Err(ContentKeyError::InvalidInput);
+        }
+        self.ciphers
+            .insert((volume_id, generation), ContentKeyEnvelopeCipher::new(key));
+        if make_active {
+            self.active_generations.insert(volume_id, generation);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn active_cipher(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<&ContentKeyEnvelopeCipher, ContentKeyError> {
+        let generation = self
+            .active_generations
+            .get(&volume_id)
+            .ok_or(ContentKeyError::Unavailable)?;
+        self.cipher(volume_id, *generation)
+    }
+
+    pub(crate) fn cipher(
+        &self,
+        volume_id: VolumeId,
+        generation: u64,
+    ) -> Result<&ContentKeyEnvelopeCipher, ContentKeyError> {
+        self.ciphers
+            .get(&(volume_id, generation))
+            .ok_or(ContentKeyError::Unavailable)
+    }
+}
+
 impl WrappedContentKey {
     pub(crate) fn valid_for(self, manifest_id: ContentManifestId) -> bool {
         self.key_generation != 0
@@ -257,10 +340,11 @@ fn map_content_crypto(error: ContentCryptoError) -> ContentKeyError {
 #[cfg(test)]
 mod tests {
     use meshspan_contracts::BoundedBytes;
-    use meshspan_domain::{ContentManifestId, EntropyError, RandomSource};
+    use meshspan_domain::{ContentManifestId, EntropyError, RandomSource, VolumeId};
 
     use super::{
-        ContentKeyEnvelopeCipher, ContentKeyError, VolumeKeyEncryptionKey, rewrap_content_key,
+        ContentKeyEnvelopeCipher, ContentKeyError, VolumeContentKeyring, VolumeKeyEncryptionKey,
+        rewrap_content_key,
     };
     use crate::{ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey};
 
@@ -292,6 +376,57 @@ mod tests {
         assert!(matches!(
             cipher.unwrap(ContentManifestId::from_bytes([6; 16])?, envelope),
             Err(ContentKeyError::Corrupt)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn keyring_isolates_volumes_and_retains_exact_historical_generations()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let first_volume = VolumeId::from_bytes([21; 16])?;
+        let second_volume = VolumeId::from_bytes([22; 16])?;
+        let manifest = ContentManifestId::from_bytes([23; 16])?;
+        let content_key = ContentEncryptionKey::from_bytes([24; 32])?;
+        let mut keyring = VolumeContentKeyring::new(
+            first_volume,
+            VolumeKeyEncryptionKey::from_bytes(1, [25; 32])?,
+        );
+        keyring.install(
+            second_volume,
+            VolumeKeyEncryptionKey::from_bytes(1, [26; 32])?,
+            true,
+        )?;
+        let first_envelope = keyring.active_cipher(first_volume)?.wrap(
+            manifest,
+            &content_key,
+            &mut FixedRandom(27),
+        )?;
+        assert!(matches!(
+            keyring
+                .cipher(second_volume, 1)?
+                .unwrap(manifest, first_envelope),
+            Err(ContentKeyError::Corrupt)
+        ));
+        keyring.install(
+            first_volume,
+            VolumeKeyEncryptionKey::from_bytes(2, [28; 32])?,
+            true,
+        )?;
+        assert_eq!(keyring.active_cipher(first_volume)?.generation(), 2);
+        assert_same_chunk_ciphertext(
+            content_key,
+            keyring
+                .cipher(first_volume, 1)?
+                .unwrap(manifest, first_envelope)?,
+            manifest,
+        )?;
+        assert!(matches!(
+            keyring.install(
+                first_volume,
+                VolumeKeyEncryptionKey::from_bytes(1, [29; 32])?,
+                true,
+            ),
+            Err(ContentKeyError::InvalidInput)
         ));
         Ok(())
     }

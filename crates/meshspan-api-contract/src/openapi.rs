@@ -8,15 +8,16 @@ use sha2::{Digest, Sha256};
 use crate::{
     AbortUploadRequest, AbortUploadResponse, AddGroupMemberRequest, AddGroupMemberResponse,
     ApiError, BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
-    CreateApiKeyRequest, CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse,
-    CreateGroupRequest, CreateMeshSetupRequest, CreateMeshSetupResponse,
-    CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
-    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreatePrincipalResponse,
-    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
-    CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
-    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CreateUserRequest, CurrentSessionResponse, DeleteObjectRequest,
+    ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse, CreateApiKeyRequest,
+    CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse, CreateGroupRequest,
+    CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
+    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
+    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
+    CreatePasskeyRegistrationResponse, CreatePrincipalResponse, CreateRecoveryCodesRequest,
+    CreateRecoveryCodesResponse, CreateSessionRequest, CreateSessionResponse,
+    CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
+    CreateTotpRegistrationRequest, CreateTotpRegistrationResponse, CreateUserRequest,
+    CreateVolumeRequest, CreateVolumeResponse, CurrentSessionResponse, DeleteObjectRequest,
     DeleteObjectResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
     ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
     ListUploadRangesResponse, ListVolumesResponse, RemoveGroupMemberRequest,
@@ -96,6 +97,8 @@ fn components() -> Value {
         schema_response::<BeginUploadResponse>("BeginUploadResponse"),
         schema_request::<CommitUploadRequest>("CommitUploadRequest"),
         schema_response::<CommitUploadResponse>("CommitUploadResponse"),
+        schema_request::<ConfirmRecoveryBundleRequest>("ConfirmRecoveryBundleRequest"),
+        schema_response::<ConfirmRecoveryBundleResponse>("ConfirmRecoveryBundleResponse"),
         schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
         schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
         schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
@@ -127,6 +130,8 @@ fn components() -> Value {
         schema_request::<CreateTotpRegistrationRequest>("CreateTotpRegistrationRequest"),
         schema_response::<CreateTotpRegistrationResponse>("CreateTotpRegistrationResponse"),
         schema_request::<CreateUserRequest>("CreateUserRequest"),
+        schema_request::<CreateVolumeRequest>("CreateVolumeRequest"),
+        schema_response::<CreateVolumeResponse>("CreateVolumeResponse"),
         schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
         schema_request::<DeleteObjectRequest>("DeleteObjectRequest"),
         schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
@@ -214,6 +219,10 @@ fn paths() -> Value {
         ("/openapi.json".to_owned(), openapi_path()),
         ("/setup/status".to_owned(), setup_status_path()),
         ("/setup/meshes".to_owned(), create_mesh_path()),
+        (
+            "/admin/recovery-bundle-verifications".to_owned(),
+            confirm_recovery_bundle_path(),
+        ),
         ("/sessions".to_owned(), create_session_path()),
         (
             "/sessions/passkey/challenges".to_owned(),
@@ -299,7 +308,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 4] {
+fn administration_paths() -> [(String, Value); 5] {
     [
         (
             "/admin/users".to_owned(),
@@ -317,7 +326,31 @@ fn administration_paths() -> [(String, Value); 4] {
             "/admin/groups/{group_id}/members/{member_principal_id}/removals".to_owned(),
             group_membership_removal_path(),
         ),
+        ("/admin/volumes".to_owned(), create_volume_path()),
     ]
+}
+
+fn create_volume_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createVolume",
+            "summary": "Create one logical volume with an explicit owner set",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [optional_csrf_parameter()],
+            "requestBody": json_request("Logical-volume creation", "#/components/schemas/CreateVolumeRequest"),
+            "responses": {
+                "201": json_response("Volume durably created or exactly replayed", "#/components/schemas/CreateVolumeResponse"),
+                "400": json_response("Invalid volume request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Name, owner or operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Volume authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn group_membership_path() -> Value {
@@ -1288,6 +1321,34 @@ fn create_mesh_path() -> Value {
                 "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
                 "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "503": json_response("Bootstrap authority temporarily unavailable", "#/components/schemas/ApiError"),
+                "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn confirm_recovery_bundle_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "confirmRecoveryBundleSaved",
+            "summary": "Verify that the exact offline recovery bundle and code were saved",
+            "x-meshspan-access": "system-manager",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Offline recovery save proof",
+                "#/components/schemas/ConfirmRecoveryBundleRequest"
+            ),
+            "responses": {
+                "200": json_response(
+                    "Recovery bundle verified and removed from online state",
+                    "#/components/schemas/ConfirmRecoveryBundleResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Wrong bundle proof or changed retry", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "503": json_response("Recovery authority temporarily unavailable", "#/components/schemas/ApiError"),
                 "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
             }
         }

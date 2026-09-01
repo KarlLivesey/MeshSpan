@@ -20,7 +20,7 @@ use meshspan_filesystem::{
     EncryptedContentChunk, FilesystemCommitError, FilesystemCommitService, NamespaceLimits,
     NamespacePath, NamespacePublicationPath, RootFileCommitRequest, StageCompletionRequest,
     StageRegistration, StageWrite, UnprotectedContentAccess, UnprotectedContentPublisher,
-    VolumeKeyEncryptionKey,
+    VolumeContentKeyring, VolumeKeyEncryptionKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -128,7 +128,8 @@ fn open_publisher<P: StorageProvider>(
         opened_at,
         provider,
         FixedRandom,
-        ContentKeyEnvelopeCipher::new(
+        VolumeContentKeyring::new(
+            VolumeId::from_bytes([12; 16]).map_err(|_| ContentPublicationError::InvalidInput)?,
             VolumeKeyEncryptionKey::from_bytes(1, [24; 32])
                 .map_err(|_| ContentPublicationError::InvalidInput)?,
         ),

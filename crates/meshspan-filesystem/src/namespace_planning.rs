@@ -59,7 +59,7 @@ struct StoredPlan {
     branch: Vec<u8>,
     volume: Vec<u8>,
     root_object: Vec<u8>,
-    expected_commit: Vec<u8>,
+    expected_commit: Option<Vec<u8>>,
     directory_object: Vec<u8>,
     directory_revision: Vec<u8>,
     root_revision: Vec<u8>,
@@ -102,7 +102,7 @@ pub(crate) fn prepare_directory(
         return Err(HandleError::OperationConflict);
     }
     reject_operation_collision(&transaction, request.operation_id)?;
-    let current = resolve_current(&transaction, branch_id, request)?;
+    let current = resolve_current_or_initial(&transaction, branch_id, request, expected_parent)?;
     if current.parent_object != expected_parent {
         return Err(HandleError::StaleHandle);
     }
@@ -126,6 +126,26 @@ fn resolve_current(
     request: &AdapterCreateDirectoryRequest,
 ) -> Result<resolution::ResolvedNamespacePath, HandleError> {
     let current = resolution::resolve(connection, branch_id, request.volume_id, &request.path)?;
+    if current.leaf.is_some() {
+        Err(HandleError::AlreadyExists)
+    } else {
+        Ok(current)
+    }
+}
+
+fn resolve_current_or_initial(
+    connection: &Connection,
+    branch_id: BranchId,
+    request: &AdapterCreateDirectoryRequest,
+    root_object: ObjectId,
+) -> Result<resolution::ResolvedNamespacePath, HandleError> {
+    let current = resolution::resolve_or_initial(
+        connection,
+        branch_id,
+        request.volume_id,
+        &request.path,
+        root_object,
+    )?;
     if current.leaf.is_some() {
         Err(HandleError::AlreadyExists)
     } else {
@@ -157,7 +177,7 @@ fn build_plan(
         branch_id,
         volume_id: request.volume_id,
         root_object_id: current.root_object,
-        expected_namespace_commit_id: Some(current.namespace_commit),
+        expected_namespace_commit_id: current.namespace_commit,
         directory_object_id: derive_object(request.operation_id)?,
         directory_object_revision_id: derive_revision(request.operation_id, b"directory", 0)?,
         root_object_revision_id: derive_revision(request.operation_id, b"root", 0)?,
@@ -177,6 +197,9 @@ fn persist_plan(
     parent_object: ObjectId,
 ) -> Result<(), HandleError> {
     let result_digest = plan_digest(request_digest, plan, parent_object);
+    let expected_commit = plan
+        .expected_namespace_commit_id
+        .map(NamespaceCommitId::as_bytes);
     transaction.execute(
         "INSERT INTO adapter_directory_plans(
             operation_id, request_digest, branch_id, volume_id, root_object_id,
@@ -190,10 +213,7 @@ fn persist_plan(
             plan.branch_id.as_bytes().as_slice(),
             plan.volume_id.as_bytes().as_slice(),
             plan.root_object_id.as_bytes().as_slice(),
-            plan.expected_namespace_commit_id
-                .ok_or(HandleError::Corrupt)?
-                .as_bytes()
-                .as_slice(),
+            expected_commit.as_ref().map(<[u8; 16]>::as_slice),
             plan.directory_object_id.as_bytes().as_slice(),
             plan.directory_object_revision_id.as_bytes().as_slice(),
             plan.root_object_revision_id.as_bytes().as_slice(),
@@ -290,10 +310,11 @@ fn decode_plan(
         branch_id,
         volume_id: request.volume_id,
         root_object_id: identifier(&stored.root_object, ObjectId::from_bytes)?,
-        expected_namespace_commit_id: Some(identifier(
-            &stored.expected_commit,
-            NamespaceCommitId::from_bytes,
-        )?),
+        expected_namespace_commit_id: stored
+            .expected_commit
+            .as_deref()
+            .map(|bytes| identifier(bytes, NamespaceCommitId::from_bytes))
+            .transpose()?,
         directory_object_id: identifier(&stored.directory_object, ObjectId::from_bytes)?,
         directory_object_revision_id: identifier(
             &stored.directory_revision,

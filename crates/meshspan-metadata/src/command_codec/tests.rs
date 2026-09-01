@@ -3,16 +3,23 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationMethodId, AuthenticationService,
-    GroupId, HostId, MeshId, NodeId, OperationId, PrincipalId, RecoveryCodeId, Revision, RoleId,
-    SessionId, UnixMicros,
+    ComponentInstanceId, EntropyError, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId,
+    OwnerSetId, PrincipalId, RandomSource, RecoveryCodeId, Revision, RoleId, SessionId, TargetId,
+    UnixMicros, VolumeId,
 };
+use meshspan_secret_envelope::{
+    SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
+};
+use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
-    AddGroupMember, BootstrapAppliance, BootstrapMesh, CreateAuthenticationMethod, CreateGroup,
-    CreateUser, IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode,
-    RecordName, RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SessionAuthenticationFactor, SessionClientLabel, StepUpAuthenticationSession, TotpAlgorithm,
+    AddGroupMember, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommitSecretGeneration, CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateUser,
+    CreateVolume, IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode,
+    RecordName, RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember,
+    RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAuthenticationFactor,
+    SessionClientLabel, StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm,
 };
 
 #[test]
@@ -95,6 +102,183 @@ fn identity_commands_round_trip_without_losing_optional_intent()
     ] {
         assert_round_trip(context, command)?;
     }
+    Ok(())
+}
+
+#[test]
+fn volume_creation_round_trips_every_identity_and_owner() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (context, _) = fixture()?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::CreateVolume(CreateVolume {
+            volume_id: VolumeId::from_bytes([61; 16])?,
+            name: RecordName::new("Shared files")?,
+            root_object_id: ObjectId::from_bytes([62; 16])?,
+            owner_set_id: OwnerSetId::from_bytes([63; 16])?,
+            owners: BoundedItems::new(
+                vec![
+                    PrincipalId::from_bytes([64; 16])?,
+                    PrincipalId::from_bytes([65; 16])?,
+                ],
+                1_024,
+            )?,
+        }),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn storage_target_registration_round_trips_topology_and_optional_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    for (offset, backing_device_fingerprint, filesystem_fingerprint, usage_limit) in [
+        (
+            0_u8,
+            Some([20; 32]),
+            Some([21; 32]),
+            StorageUsageLimit::Percent(95),
+        ),
+        (1, None, None, StorageUsageLimit::Bytes(1_000_000)),
+    ] {
+        assert_round_trip(
+            context,
+            AuthoritativeCommand::RegisterStorageTarget(RegisterStorageTarget {
+                target_id: TargetId::from_bytes([30 + offset; 16])?,
+                node_id: NodeId::from_bytes([31 + offset; 16])?,
+                host_id: HostId::from_bytes([32 + offset; 16])?,
+                provider: storage_provider(33 + offset)?,
+                name: RecordName::new(&format!("Storage {offset}"))?,
+                generation: u64::from(offset) + 1,
+                marker_fingerprint: [34 + offset; 32],
+                backing_device_fingerprint,
+                filesystem_fingerprint,
+                usage_limit,
+            }),
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn storage_target_codec_rejects_invalid_limits_and_fingerprints()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let valid = RegisterStorageTarget {
+        target_id: TargetId::from_bytes([30; 16])?,
+        node_id: NodeId::from_bytes([31; 16])?,
+        host_id: HostId::from_bytes([32; 16])?,
+        provider: storage_provider(33)?,
+        name: RecordName::new("Storage")?,
+        generation: 1,
+        marker_fingerprint: [34; 32],
+        backing_device_fingerprint: None,
+        filesystem_fingerprint: None,
+        usage_limit: StorageUsageLimit::Percent(95),
+    };
+    for invalid in [
+        RegisterStorageTarget {
+            generation: 0,
+            ..valid.clone()
+        },
+        RegisterStorageTarget {
+            marker_fingerprint: [0; 32],
+            ..valid.clone()
+        },
+        RegisterStorageTarget {
+            usage_limit: StorageUsageLimit::Percent(101),
+            ..valid
+        },
+    ] {
+        assert_eq!(
+            encode_authoritative_command(
+                context,
+                &AuthoritativeCommand::RegisterStorageTarget(invalid),
+            ),
+            Err(MetadataCommandCodecError::Invalid)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn node_wrapping_key_round_trips_and_rejects_substitution() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (context, _) = fixture()?;
+    let public_key = WrappingPrivateKey::from_bytes([44; 32])?.public_key();
+    let valid = RegisterNodeWrappingKey {
+        node_id: NodeId::from_bytes([45; 16])?,
+        generation: 1,
+        public_key: public_key.as_bytes(),
+        key_fingerprint: public_key.fingerprint(),
+    };
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::RegisterNodeWrappingKey(valid),
+    )?;
+    for invalid in [
+        RegisterNodeWrappingKey {
+            generation: 0,
+            ..valid
+        },
+        RegisterNodeWrappingKey {
+            key_fingerprint: [0; 32],
+            ..valid
+        },
+    ] {
+        assert_eq!(
+            encode_authoritative_command(
+                context,
+                &AuthoritativeCommand::RegisterNodeWrappingKey(invalid),
+            ),
+            Err(MetadataCommandCodecError::Invalid)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn encrypted_secret_generation_round_trips_only_in_canonical_recipient_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (command_context, _) = fixture()?;
+    let first = WrappingPrivateKey::from_bytes([61; 32])?.public_key();
+    let second = WrappingPrivateKey::from_bytes([62; 32])?.public_key();
+    let (secret, recipients) = encrypt_secret(
+        SecretContext::new(1, [63; 16], 1)?,
+        b"volume content key",
+        &[second, first],
+        &mut SecretRandom(70),
+    )?;
+    let valid = CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: recipients
+            .iter()
+            .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+            .collect(),
+    };
+    assert_round_trip(
+        command_context,
+        AuthoritativeCommand::CommitSecretGeneration(valid.clone()),
+    )?;
+
+    let mut reversed = valid.clone();
+    reversed.recipients.reverse();
+    assert_eq!(
+        encode_authoritative_command(
+            command_context,
+            &AuthoritativeCommand::CommitSecretGeneration(reversed),
+        ),
+        Err(MetadataCommandCodecError::Invalid)
+    );
+    let mut tampered = valid;
+    tampered.secret.digest[0] ^= 1;
+    assert_eq!(
+        encode_authoritative_command(
+            command_context,
+            &AuthoritativeCommand::CommitSecretGeneration(tampered),
+        ),
+        Err(MetadataCommandCodecError::Invalid)
+    );
     Ok(())
 }
 
@@ -248,6 +432,21 @@ fn assert_round_trip(
     Ok(())
 }
 
+fn storage_provider(marker: u8) -> Result<CreateComponent, Box<dyn std::error::Error>> {
+    let configuration = b"{\"provider\":\"folder\"}".to_vec();
+    Ok(CreateComponent {
+        instance_id: ComponentInstanceId::from_bytes([marker; 16])?,
+        component_kind: 1,
+        name: RecordName::new(&format!("Folder provider {marker}"))?,
+        implementation_id: "meshspan-folder".to_owned(),
+        contract_major: 1,
+        contract_minor: 0,
+        schema_version: 1,
+        configuration_digest: Sha256::digest(&configuration).into(),
+        canonical_configuration: configuration,
+    })
+}
+
 fn fixture() -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::error::Error>> {
     let context = CommandContext {
         operation_id: OperationId::from_bytes([1; 16])?,
@@ -282,6 +481,32 @@ fn fixture() -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::erro
                 valid_from: context.occurred_at,
             },
         },
+        recovery: Box::new(recovery_identity()?),
     });
     Ok((context, command))
+}
+
+fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::Error>> {
+    let public_key = WrappingPublicKey::from_bytes([12; 32])?;
+    let certificate = vec![13; 64];
+    Ok(BootstrapRecoveryIdentity {
+        public_wrapping_key: public_key.as_bytes(),
+        key_fingerprint: public_key.fingerprint(),
+        root_certificate_digest: Sha256::digest(&certificate).into(),
+        root_certificate_der: certificate,
+        bundle_digest: [14; 32],
+        save_challenge_commitment: [15; 32],
+    })
+}
+
+struct SecretRandom(u8);
+
+impl RandomSource for SecretRandom {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        for byte in destination {
+            *byte = self.0;
+            self.0 = self.0.wrapping_add(1).max(1);
+        }
+        Ok(())
+    }
 }

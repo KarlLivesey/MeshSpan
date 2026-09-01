@@ -74,6 +74,12 @@ impl LocalNodeIdentity {
         self.key.public_key_fingerprint()
     }
 
+    /// Returns the temporary public certificate used only by first-start HTTPS clients.
+    #[must_use]
+    pub fn bootstrap_certificate_der(&self) -> &[u8] {
+        &self.bootstrap_certificate
+    }
+
     /// Builds the TLS 1.3-only first-start public HTTPS server configuration.
     ///
     /// Public HTTPS authenticates users at the application layer and therefore requests no client

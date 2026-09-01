@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use meshspan_contracts::ShardReceipt;
-use meshspan_domain::{ContentManifestId, OperationId, TargetId, UnixMicros};
+use meshspan_domain::{ContentManifestId, OperationId, TargetId, UnixMicros, VolumeId};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::{CommittedShardPage, ContentCatalogError, PreparedContentChunk};
@@ -20,6 +20,7 @@ const DATABASE_FILE: &str = "filesystem-content.sqlite3";
 const MIGRATIONS: &[&str] = &[
     include_str!("../../schema/content/001_initial.sql"),
     include_str!("../../schema/content/002_layout_import.sql"),
+    include_str!("../../schema/content/003_publication_volume.sql"),
 ];
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 
@@ -99,19 +100,20 @@ pub(super) fn load_request(
 ) -> Result<Option<ContentPublicationRequest>, ContentCatalogError> {
     connection
         .query_row(
-            "SELECT request_digest, manifest_id, format_version, logical_length,
+            "SELECT volume_id, request_digest, manifest_id, format_version, logical_length,
                 authorization_revision, deadline FROM content_publications WHERE operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
                 Ok(ContentPublicationRequest {
                     operation_id,
-                    request_digest: copy_array(&row.get::<_, Vec<u8>>(0)?)?,
-                    manifest_id: decode_manifest(&row.get::<_, Vec<u8>>(1)?)?,
-                    format_version: u16::try_from(row.get::<_, i64>(2)?)
+                    volume_id: decode_volume(&row.get::<_, Vec<u8>>(0)?)?,
+                    request_digest: copy_array(&row.get::<_, Vec<u8>>(1)?)?,
+                    manifest_id: decode_manifest(&row.get::<_, Vec<u8>>(2)?)?,
+                    format_version: u16::try_from(row.get::<_, i64>(3)?)
                         .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    logical_length: from_sql(row.get(3)?)?,
-                    authorization_revision: meshspan_domain::Revision::new(from_sql(row.get(4)?)?),
-                    deadline: UnixMicros::new(row.get(5)?),
+                    logical_length: from_sql(row.get(4)?)?,
+                    authorization_revision: meshspan_domain::Revision::new(from_sql(row.get(5)?)?),
+                    deadline: UnixMicros::new(row.get(6)?),
                     observed_at: UnixMicros::new(i64::MIN),
                 })
             },
@@ -503,6 +505,10 @@ fn from_i64(value: i64) -> Result<u64, ContentCatalogError> {
 
 fn decode_manifest(bytes: &[u8]) -> Result<ContentManifestId, rusqlite::Error> {
     ContentManifestId::from_bytes(copy_array(bytes)?).map_err(|_| rusqlite::Error::InvalidQuery)
+}
+
+fn decode_volume(bytes: &[u8]) -> Result<VolumeId, rusqlite::Error> {
+    VolumeId::from_bytes(copy_array(bytes)?).map_err(|_| rusqlite::Error::InvalidQuery)
 }
 
 fn decode_operation(bytes: &[u8]) -> Result<OperationId, rusqlite::Error> {

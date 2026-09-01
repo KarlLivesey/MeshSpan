@@ -207,12 +207,20 @@ struct PendingOperation {
     waiters: Vec<oneshot::Sender<Result<CommandReceipt, MetadataAuthorityRequestError>>>,
 }
 
+struct QueuedOperation {
+    context: CommandContext,
+    command: AuthoritativeCommand,
+    request_digest: [u8; 32],
+    waiters: Vec<oneshot::Sender<Result<CommandReceipt, MetadataAuthorityRequestError>>>,
+}
+
 struct MetadataAuthorityRuntime {
     driver: PartitionConsensusDriver<AuthoritativeRepository>,
     transport: Arc<dyn ConsensusMessageTransport>,
     config: MetadataAuthorityConfig,
     events: mpsc::Receiver<AuthorityEvent>,
     pending: BTreeMap<OperationId, PendingOperation>,
+    queued: VecDeque<QueuedOperation>,
     next_proposal_id: u64,
     last_leader_contact: Instant,
 }
@@ -230,6 +238,7 @@ impl MetadataAuthorityRuntime {
             config,
             events,
             pending: BTreeMap::new(),
+            queued: VecDeque::new(),
             next_proposal_id: 1,
             last_leader_contact: Instant::now(),
         }
@@ -314,21 +323,84 @@ impl MetadataAuthorityRuntime {
             }
             return Ok(());
         }
+        if let Some(queued) = self
+            .queued
+            .iter_mut()
+            .find(|queued| queued.context.operation_id == context.operation_id)
+        {
+            if queued.request_digest == request_digest {
+                queued.waiters.push(respond);
+            } else {
+                let _closed = respond.send(Err(MetadataAuthorityRequestError::Conflict));
+            }
+            return Ok(());
+        }
         if self.driver.role() != Role::Leader {
             let _closed = respond.send(Err(MetadataAuthorityRequestError::NotLeader {
                 leader_id: self.driver.leader_id(),
             }));
             return Ok(());
         }
-        let bytes = match encode_authoritative_command(context, &command) {
+        if self.queued.len() >= self.config.event_capacity {
+            let _closed = respond.send(Err(MetadataAuthorityRequestError::Unavailable));
+            return Ok(());
+        }
+        self.queued.push_back(QueuedOperation {
+            context,
+            command,
+            request_digest,
+            waiters: vec![respond],
+        });
+        self.process_effects(Vec::new(), None)
+    }
+
+    fn admit_next(
+        &mut self,
+    ) -> Result<Option<(Vec<DriverEffect>, OperationId)>, MetadataAuthorityRuntimeError> {
+        let Some(queued) = self.queued.pop_front() else {
+            return Ok(None);
+        };
+        if self.driver.role() != Role::Leader {
+            respond_to_waiters(
+                queued.waiters,
+                Err(MetadataAuthorityRequestError::NotLeader {
+                    leader_id: self.driver.leader_id(),
+                }),
+            );
+            return Ok(Some((Vec::new(), queued.context.operation_id)));
+        }
+        if let Some(receipt) = self
+            .driver
+            .persistence()
+            .resolve_operation(queued.context.operation_id)?
+        {
+            let outcome = if receipt.request_digest == queued.request_digest {
+                Ok(receipt)
+            } else {
+                Err(MetadataAuthorityRequestError::Conflict)
+            };
+            respond_to_waiters(queued.waiters, outcome);
+            return Ok(Some((Vec::new(), queued.context.operation_id)));
+        }
+        if let Err(error) = self
+            .driver
+            .preflight_authoritative_command(queued.context, &queued.command)
+        {
+            respond_to_waiters(queued.waiters, Err(map_preflight_error(&error)));
+            return Ok(Some((Vec::new(), queued.context.operation_id)));
+        }
+        let bytes = match encode_authoritative_command(queued.context, &queued.command) {
             Ok(bytes) => bytes,
             Err(meshspan_metadata::MetadataCommandCodecError::Unsupported) => {
-                let _closed = respond.send(Err(MetadataAuthorityRequestError::Unsupported));
-                return Ok(());
+                respond_to_waiters(
+                    queued.waiters,
+                    Err(MetadataAuthorityRequestError::Unsupported),
+                );
+                return Ok(Some((Vec::new(), queued.context.operation_id)));
             }
             Err(_) => {
-                let _closed = respond.send(Err(MetadataAuthorityRequestError::Failed));
-                return Ok(());
+                respond_to_waiters(queued.waiters, Err(MetadataAuthorityRequestError::Failed));
+                return Ok(Some((Vec::new(), queued.context.operation_id)));
             }
         };
         let proposal_id = ProposalId(self.next_proposal_id);
@@ -337,16 +409,16 @@ impl MetadataAuthorityRuntime {
             .checked_add(1)
             .ok_or(MetadataAuthorityRuntimeError::ProposalSpaceExhausted)?;
         self.pending.insert(
-            context.operation_id,
+            queued.context.operation_id,
             PendingOperation {
-                request_digest,
-                waiters: vec![respond],
+                request_digest: queued.request_digest,
+                waiters: queued.waiters,
             },
         );
         let effects = match self.driver.step(
             CoreInput::Propose {
                 proposal_id,
-                operation_id: context.operation_id,
+                operation_id: queued.context.operation_id,
                 command_version: METADATA_COMMAND_VERSION,
                 command: bytes,
             },
@@ -354,11 +426,11 @@ impl MetadataAuthorityRuntime {
         ) {
             Ok(effects) => effects,
             Err(error) => {
-                self.finish_pending(context.operation_id, Err(map_driver_error(&error)));
+                self.finish_pending(queued.context.operation_id, Err(map_driver_error(&error)));
                 return Err(error.into());
             }
         };
-        self.process_effects(effects, Some(context.operation_id))
+        Ok(Some((effects, queued.context.operation_id)))
     }
 
     fn receive_peer(
@@ -404,8 +476,25 @@ impl MetadataAuthorityRuntime {
         effects: Vec<DriverEffect>,
         rejection_operation: Option<OperationId>,
     ) -> Result<(), MetadataAuthorityRuntimeError> {
-        let mut pending_effects = VecDeque::from(effects);
-        while let Some(effect) = pending_effects.pop_front() {
+        let mut pending_effects = effects
+            .into_iter()
+            .map(|effect| (effect, rejection_operation))
+            .collect::<VecDeque<_>>();
+        loop {
+            let Some((effect, rejection_operation)) = pending_effects.pop_front() else {
+                if !self.pending.is_empty() {
+                    break;
+                }
+                let Some((effects, operation_id)) = self.admit_next()? else {
+                    break;
+                };
+                pending_effects.extend(
+                    effects
+                        .into_iter()
+                        .map(|effect| (effect, Some(operation_id))),
+                );
+                continue;
+            };
             match effect {
                 DriverEffect::Send { to, message } => self.transport.send(to, message),
                 DriverEffect::ApplyCommitted { entries } => {
@@ -415,7 +504,8 @@ impl MetadataAuthorityRuntime {
                         }
                         let applied = self.driver.apply_authoritative_committed(&entry, now())?;
                         self.finish_pending(applied.receipt.operation_id, Ok(applied.receipt));
-                        pending_effects.extend(applied.effects);
+                        pending_effects
+                            .extend(applied.effects.into_iter().map(|effect| (effect, None)));
                     }
                 }
                 DriverEffect::Rejected { .. } => {
@@ -453,6 +543,34 @@ impl MetadataAuthorityRuntime {
                 let _closed = waiter.send(Err(MetadataAuthorityRequestError::Unavailable));
             }
         }
+        let queued = std::mem::take(&mut self.queued);
+        for operation in queued {
+            respond_to_waiters(
+                operation.waiters,
+                Err(MetadataAuthorityRequestError::Unavailable),
+            );
+        }
+    }
+}
+
+fn respond_to_waiters(
+    waiters: Vec<oneshot::Sender<Result<CommandReceipt, MetadataAuthorityRequestError>>>,
+    outcome: Result<CommandReceipt, MetadataAuthorityRequestError>,
+) {
+    for waiter in waiters {
+        let _closed = waiter.send(outcome);
+    }
+}
+
+fn map_preflight_error(error: &ClusterDriverError) -> MetadataAuthorityRequestError {
+    match error {
+        ClusterDriverError::Authority(meshspan_metadata::RepositoryError::OperationConflict) => {
+            MetadataAuthorityRequestError::Conflict
+        }
+        ClusterDriverError::Authority(error) if error.is_command_rejection() => {
+            MetadataAuthorityRequestError::Rejected
+        }
+        _ => MetadataAuthorityRequestError::Failed,
     }
 }
 
@@ -492,6 +610,9 @@ pub enum MetadataAuthorityRequestError {
     /// Operation identity is already bound to different semantic input.
     #[error("metadata operation conflicts with durable state")]
     Conflict,
+    /// The exact command is well-formed but violates current authoritative state.
+    #[error("metadata operation is rejected by authoritative state")]
+    Rejected,
     /// This closed command codec version does not support the requested family.
     #[error("metadata operation is unsupported")]
     Unsupported,

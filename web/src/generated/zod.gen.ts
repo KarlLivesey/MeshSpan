@@ -455,6 +455,68 @@ export const zCommitUploadResponse = z
   .strict();
 
 /**
+ * ConfirmRecoveryBundleRequest
+ *
+ * One authenticated idempotent save-verification request.
+ */
+export const zConfirmRecoveryBundleRequest = z
+  .strictObject({
+    mesh_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    recovery_challenge: z
+      .string()
+      .length(34)
+      .regex(/^meshspan-check-v1\.[0-9a-f]{16}$/),
+  })
+  .strict();
+
+/**
+ * ConfirmRecoveryBundleResponse
+ *
+ * Durable proof that the offline recovery bundle may no longer remain on the daemon.
+ */
+export const zConfirmRecoveryBundleResponse = z
+  .strictObject({
+    mesh_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revision: z.coerce
+      .bigint()
+      .gte(BigInt(1))
+      .max(BigInt("18446744073709551615"), {
+        error: "Invalid value: Expected uint64 to be <= 18446744073709551615",
+      }),
+    verified_at_epoch_micros: z.coerce
+      .bigint()
+      .min(BigInt("-9223372036854775808"), {
+        error: "Invalid value: Expected int64 to be >= -9223372036854775808",
+      })
+      .max(BigInt("9223372036854775807"), {
+        error: "Invalid value: Expected int64 to be <= 9223372036854775807",
+      }),
+  })
+  .strict();
+
+/**
  * CreateApiKeyRequest
  *
  * One idempotent request to issue a current-user API key.
@@ -685,6 +747,19 @@ export const zCreateMeshSetupResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+    recovery_bundle: z
+      .string()
+      .min(256)
+      .max(33000)
+      .regex(/^meshspan-recovery-file-v1\.[0-9a-f]+$/),
+    recovery_challenge: z
+      .string()
+      .length(34)
+      .regex(/^meshspan-check-v1\.[0-9a-f]{16}$/),
+    recovery_code: z
+      .string()
+      .length(84)
+      .regex(/^meshspan-offline-v1\.[0-9a-f]{64}$/),
   })
   .strict();
 
@@ -1224,6 +1299,80 @@ export const zCreateUserRequest = z
       .max(256)
       .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
     operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateVolumeRequest
+ *
+ * Idempotent administrator request to create one logical volume.
+ */
+export const zCreateVolumeRequest = z
+  .strictObject({
+    name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    owner_principal_ids: z
+      .array(
+        z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      )
+      .min(1)
+      .max(1024),
+  })
+  .strict();
+
+/**
+ * CreateVolumeResponse
+ *
+ * Durable authoritative volume-creation outcome.
+ */
+export const zCreateVolumeResponse = z
+  .strictObject({
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    name: z.string(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    owner_principal_ids: z
+      .array(
+        z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      )
+      .min(1)
+      .max(1024),
+    revision: z.int().gte(1).lte(9007199254740991),
+    root_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    volume_id: z
       .string()
       .length(36)
       .regex(
@@ -2584,6 +2733,17 @@ export const zRemoveGroupMemberPath = z
  */
 export const zRemoveGroupMemberResponse2 = zRemoveGroupMemberResponse;
 
+/**
+ * Offline recovery save proof
+ */
+export const zConfirmRecoveryBundleSavedBody = zConfirmRecoveryBundleRequest;
+
+/**
+ * Recovery bundle verified and removed from online state
+ */
+export const zConfirmRecoveryBundleSavedResponse =
+  zConfirmRecoveryBundleResponse;
+
 export const zListUsersQuery = z
   .object({
     cursor: z
@@ -2610,6 +2770,25 @@ export const zCreateUserBody = zCreateUserRequest;
  * Principal durably created or exactly replayed
  */
 export const zCreateUserResponse = zCreatePrincipalResponse;
+
+/**
+ * Logical-volume creation
+ */
+export const zCreateVolumeBody = zCreateVolumeRequest;
+
+export const zCreateVolumeHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Volume durably created or exactly replayed
+ */
+export const zCreateVolumeResponse2 = zCreateVolumeResponse;
 
 /**
  * Process readiness

@@ -104,6 +104,14 @@ pub enum EntityKind {
     FederationGrantAssignment = 34,
     /// Time-bounded activation of one federation grant assignment.
     FederationGrantAssignmentActivation = 35,
+    /// Registered storage target and its first marker generation.
+    StorageTarget = 36,
+    /// Public secret-wrapping-key generation for one node.
+    NodeWrappingKey = 37,
+    /// Atomic encrypted secret generation and complete recipient set.
+    SecretGeneration = 38,
+    /// Offline recovery identity and bundle-verification state.
+    RecoveryAuthority = 39,
 }
 
 impl EntityKind {
@@ -144,6 +152,10 @@ impl EntityKind {
             33 => Ok(Self::AuthenticationPolicy),
             34 => Ok(Self::FederationGrantAssignment),
             35 => Ok(Self::FederationGrantAssignmentActivation),
+            36 => Ok(Self::StorageTarget),
+            37 => Ok(Self::NodeWrappingKey),
+            38 => Ok(Self::SecretGeneration),
+            39 => Ok(Self::RecoveryAuthority),
             _ => Err(RepositoryError::CorruptState),
         }
     }

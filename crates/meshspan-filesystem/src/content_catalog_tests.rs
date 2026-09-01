@@ -3,6 +3,7 @@
 use meshspan_contracts::{ShardIdentity, ShardReceipt};
 use meshspan_domain::{
     ContentManifestId, EntropyError, OperationId, RandomSource, Revision, TargetId, UnixMicros,
+    VolumeId,
 };
 use tempfile::tempdir;
 
@@ -41,6 +42,12 @@ fn absent_exact_and_conflicting_lookups_are_distinct() -> Result<(), Box<dyn std
     ));
     assert!(matches!(
         catalog.prepared_layout(conflict),
+        Err(ContentCatalogError::Conflict)
+    ));
+    let mut wrong_volume = request;
+    wrong_volume.volume_id = VolumeId::from_bytes([10; 16])?;
+    assert!(matches!(
+        catalog.resolve(wrong_volume),
         Err(ContentCatalogError::Conflict)
     ));
     Ok(())
@@ -276,7 +283,7 @@ fn portable_layout_import_resumes_rewraps_and_collects_only_local_receipts()
                 .get::<_, u32>(
                 0
             ))?,
-        2
+        3
     );
     Ok(())
 }
@@ -435,6 +442,7 @@ fn committed_manifest_lookup_hides_incomplete_state_and_reconstructs_exact_refer
 fn request() -> Result<ContentPublicationRequest, Box<dyn std::error::Error>> {
     Ok(ContentPublicationRequest {
         operation_id: OperationId::from_bytes([1; 16])?,
+        volume_id: VolumeId::from_bytes([9; 16])?,
         request_digest: [2; 32],
         manifest_id: ContentManifestId::from_bytes([3; 16])?,
         format_version: 1,
@@ -487,6 +495,7 @@ fn imported_request(
 ) -> Result<ContentPublicationRequest, Box<dyn std::error::Error>> {
     Ok(ContentPublicationRequest {
         operation_id: OperationId::from_bytes([40; 16])?,
+        volume_id: VolumeId::from_bytes([9; 16])?,
         request_digest: [41; 32],
         manifest_id: manifest.manifest_id,
         format_version: manifest.format_version,

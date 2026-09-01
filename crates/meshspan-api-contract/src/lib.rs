@@ -24,6 +24,8 @@ mod object_stat_validation;
 mod openapi;
 mod passkey_registration;
 mod passkey_validation;
+mod recovery_bundle_verification;
+mod recovery_bundle_verification_validation;
 mod recovery_code_management;
 mod recovery_code_validation;
 mod schema;
@@ -43,6 +45,8 @@ mod group_membership_administration_tests;
 mod identity_administration_tests;
 #[cfg(test)]
 mod namespace_mutation_tests;
+#[cfg(test)]
+mod recovery_bundle_verification_tests;
 #[cfg(test)]
 mod volume_inventory_tests;
 
@@ -153,6 +157,13 @@ pub use passkey_validation::{
     validate_create_passkey_registration_request_value,
     validate_create_passkey_registration_response_value,
 };
+pub use recovery_bundle_verification::{
+    ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse,
+};
+pub use recovery_bundle_verification_validation::{
+    MAX_CONFIRM_RECOVERY_BUNDLE_BYTES, decode_confirm_recovery_bundle_request,
+    encode_confirm_recovery_bundle_response, validate_confirm_recovery_bundle_request_value,
+};
 pub use recovery_code_management::{
     CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, RECOVERY_CODES_PER_SET, RecoveryCode,
 };
@@ -185,8 +196,10 @@ pub use validation::{
     validate_setup_status_response_value, validate_step_up_current_session_request_value,
 };
 pub use volume_inventory::{
-    ListVolumesQuery, ListVolumesResponse, NamespaceRight, VolumeCursor, VolumeState, VolumeSummary,
+    CreateVolumeRequest, CreateVolumeResponse, ListVolumesQuery, ListVolumesResponse,
+    NamespaceRight, VolumeCursor, VolumeName, VolumeState, VolumeSummary,
 };
 pub use volume_inventory_validation::{
+    MAX_CREATE_VOLUME_BYTES, decode_create_volume_request, encode_create_volume_response,
     encode_list_volumes_response, validate_list_volumes_query, validate_list_volumes_query_value,
 };

@@ -40,6 +40,14 @@ fn first_start_and_restart_preserve_one_locked_identity_and_claim()
     );
     let node_id = first.node_id();
     let fingerprint = first.public_key_fingerprint();
+    let wrapping_public_key = first.wrapping_public_key();
+    assert_eq!(
+        fs::metadata(state_path.join("secrets/node-wrapping-key.x25519"))?
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
     let claim = ClaimFile::read(first.claim_output_path())?;
     let record = first
         .local_database()
@@ -56,6 +64,7 @@ fn first_start_and_restart_preserve_one_locked_identity_and_claim()
     let reopened = DaemonLocalState::open(&config, UnixMicros::new(12))?;
     assert_eq!(reopened.node_id(), node_id);
     assert_eq!(reopened.public_key_fingerprint(), fingerprint);
+    assert_eq!(reopened.wrapping_public_key(), wrapping_public_key);
     assert_eq!(
         reopened.claim_outcome().disposition,
         ClaimEnsureDisposition::Existing

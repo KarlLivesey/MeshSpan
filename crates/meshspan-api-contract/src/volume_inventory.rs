@@ -5,7 +5,26 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::VolumeId;
+use crate::{OperationId, PrincipalId, VolumeId};
+
+/// A bounded logical-volume display name with no path semantics.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct VolumeName(
+    #[schemars(length(min = 1, max = 256), pattern(r"^[^\x00-\x1f\x2f\x7f\\]+$"))] String,
+);
+
+impl VolumeName {
+    /// Returns the untrusted display-name candidate for authoritative canonicalisation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn is_domain_candidate(&self) -> bool {
+        self.0 == self.0.trim() && !matches!(self.0.as_str(), "." | "..")
+    }
+}
 
 /// Opaque continuation for one permission-filtered volume page.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -123,4 +142,40 @@ pub struct ListVolumesResponse {
     /// Ready-to-follow relative URL, or null at the terminal page.
     #[schemars(length(min = 1, max = 16_384), pattern(r"^/api/latest/volumes"))]
     pub next_page_url: Option<String>,
+}
+
+/// Idempotent administrator request to create one logical volume.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateVolumeRequest {
+    /// Client-generated exact-retry identity.
+    pub operation_id: OperationId,
+    /// Human-readable logical-volume name.
+    pub name: VolumeName,
+    /// Non-empty user/group owner set; ownership is never inferred from shard placement.
+    #[schemars(length(min = 1, max = 1_024))]
+    pub owner_principal_ids: Vec<PrincipalId>,
+}
+
+/// Durable authoritative volume-creation outcome.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateVolumeResponse {
+    /// Exact idempotency identity whose committed result was resolved.
+    pub operation_id: OperationId,
+    /// Stable logical-volume identity.
+    pub volume_id: VolumeId,
+    /// Stable root-directory identity used by connectors.
+    pub root_object_id: crate::ObjectId,
+    /// Case-preserved authoritative name.
+    pub name: String,
+    /// Exact immutable initial owner set.
+    #[schemars(length(min = 1, max = 1_024))]
+    pub owner_principal_ids: Vec<PrincipalId>,
+    /// Original authoritative creation instant as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_i64))]
+    pub created_at_epoch_micros: i64,
+    /// Authoritative revision created by the operation.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub revision: u64,
 }

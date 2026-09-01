@@ -64,6 +64,13 @@ pub(super) fn bootstrap_appliance(
         &command.authentication,
         revision,
     )?;
+    super::recovery_authority::insert_bootstrap(
+        transaction,
+        context,
+        command.mesh.mesh_id,
+        &command.recovery,
+        revision,
+    )?;
     Ok(mesh)
 }
 

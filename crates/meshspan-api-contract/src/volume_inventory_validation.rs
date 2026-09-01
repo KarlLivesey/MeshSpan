@@ -8,10 +8,59 @@ use schemars::JsonSchema;
 use serde_json::Value;
 
 use crate::validation::{CompiledValidator, compile, validate, validator_from};
-use crate::{BoundaryError, ListVolumesQuery, ListVolumesResponse, NamespaceRight, schema};
+use crate::{
+    BoundaryError, CreateVolumeRequest, CreateVolumeResponse, ListVolumesQuery,
+    ListVolumesResponse, NamespaceRight, schema,
+};
 
 static LIST_QUERY: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static LIST_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static CREATE_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static CREATE_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+
+/// Maximum accepted bytes for one volume-creation request.
+pub const MAX_CREATE_VOLUME_BYTES: usize = 64 * 1_024;
+
+/// Decodes and structurally validates one hostile volume-creation body.
+///
+/// # Errors
+///
+/// Rejects empty, oversized, malformed, schema-invalid or ambiguous input.
+pub fn decode_create_volume_request(bytes: &[u8]) -> Result<CreateVolumeRequest, BoundaryError> {
+    if bytes.is_empty() || bytes.len() > MAX_CREATE_VOLUME_BYTES {
+        return Err(BoundaryError::BodyTooLarge {
+            limit: MAX_CREATE_VOLUME_BYTES,
+        });
+    }
+    let value = serde_json::from_slice(bytes).map_err(|_| BoundaryError::MalformedJson)?;
+    validate(
+        request_validator::<CreateVolumeRequest>(&CREATE_REQUEST)?,
+        &value,
+    )?;
+    let request: CreateVolumeRequest =
+        serde_json::from_value(value).map_err(|_| BoundaryError::DecodeMismatch)?;
+    request
+        .name
+        .is_domain_candidate()
+        .then_some(request)
+        .ok_or(BoundaryError::DecodeMismatch)
+}
+
+/// Validates and encodes one authoritative volume-creation response.
+///
+/// # Errors
+///
+/// Refuses to emit a response outside the Rust-authored contract.
+pub fn encode_create_volume_response(
+    response: &CreateVolumeResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate(
+        response_validator::<CreateVolumeResponse>(&CREATE_RESPONSE)?,
+        &value,
+    )?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
 
 /// Validates one decoded volume list query.
 ///

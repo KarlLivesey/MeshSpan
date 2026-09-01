@@ -55,6 +55,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `meshspan-passkey` (workspace)           |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-quinn-rustls` (workspace)      |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-rustls-provider` (workspace)   |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-secret-envelope` (workspace)   |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-test-certificates` (workspace) |            0.1.0 | `GPL-2.0-only`             |
 | `sync_wrapper` (workspace)               |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                                   |           0.14.0 | `Apache-2.0 OR MIT`        |
@@ -77,6 +78,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `rustls`                                 |          0.23.43 | `Apache-2.0 OR ISC OR MIT` |
 | `tokio`                                  |           1.53.1 | `MIT`                      |
 | `tower`                                  |            0.5.3 | `MIT`                      |
+| `x25519-dalek`                           |            3.0.0 | `BSD-3-Clause`             |
 | `zeroize`                                |            1.9.0 | `Apache-2.0 OR MIT`        |
 
 The workspace `sync_wrapper` package is a clean-room, narrow compatibility implementation for the
@@ -99,6 +101,12 @@ address-validation-token protection without enabling Quinn's Ring or AWS-LC adap
 the QUIC transport on maintained upstream Quinn while making the provider boundary explicit and
 independently testable. The real transport suite proves mutual TLS, topology binding, independent
 streams, saturation isolation, snapshots and federation framing through this adapter.
+
+The workspace `meshspan-secret-envelope` package owns bounded, generation-fenced secret
+ciphertexts and per-recipient X25519 data-key envelopes. It uses the maintained pure-Rust
+`x25519-dalek` 3 line under its `BSD-3-Clause` licence, with existing HKDF-SHA-256 and
+XChaCha20-Poly1305 primitives. Private wrapping keys remain node-local, while the same random data
+key can be opened independently by each exact authorised node and the offline recovery identity.
 
 The production Rustls/Quinn dependency graph no longer resolves `ring`, whose declared licence is
 `Apache-2.0 AND ISC`. No MeshSpan release artefact may ship while that conjunctive Apache-2.0

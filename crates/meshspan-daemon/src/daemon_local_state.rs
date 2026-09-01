@@ -15,7 +15,8 @@ use thiserror::Error;
 
 use crate::{
     ClaimEnsureOutcome, FirstBootClaimError, FirstBootClaimService, HeadlessDaemonConfig,
-    LocalNodeIdentity, LocalNodeIdentityError, OperatingSystemRandom,
+    LocalNodeIdentity, LocalNodeIdentityError, LocalWrappingKey, LocalWrappingKeyError,
+    OperatingSystemRandom,
 };
 
 const DIRECTORY_MODE: u32 = 0o700;
@@ -24,6 +25,8 @@ const LOCAL_DATABASE_FILE: &str = "local.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
 const SECRET_DIRECTORY: &str = "secrets";
 const IDENTITY_FILE: &str = "node-identity.pk8";
+const WRAPPING_KEY_FILE: &str = "node-wrapping-key.x25519";
+const PENDING_RECOVERY_BUNDLE_FILE: &str = "pending-offline-recovery.bundle";
 const DEFAULT_CLAIM_FILE: &str = "first-boot.claim";
 const BOOTSTRAP_DNS_NAME: &str = "meshspan.local";
 
@@ -35,6 +38,7 @@ pub struct DaemonLocalState {
     directory: StateDirectory,
     database: LocalDatabase,
     identity: LocalNodeIdentity,
+    wrapping_key: LocalWrappingKey,
     claim_output_path: PathBuf,
     claim_outcome: ClaimEnsureOutcome,
 }
@@ -64,6 +68,12 @@ impl DaemonLocalState {
         } else {
             LocalNodeIdentity::open_or_create(&identity_path, BOOTSTRAP_DNS_NAME)?
         };
+        let wrapping_key_path = secret_directory.join(WRAPPING_KEY_FILE);
+        let wrapping_key = if database_exists {
+            LocalWrappingKey::open(&wrapping_key_path)?
+        } else {
+            LocalWrappingKey::open_or_create(&wrapping_key_path)?
+        };
         let expected_node_id =
             InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
         let mut database = if database_exists {
@@ -89,6 +99,7 @@ impl DaemonLocalState {
             directory,
             database,
             identity,
+            wrapping_key,
             claim_output_path,
             claim_outcome,
         })
@@ -129,10 +140,38 @@ impl DaemonLocalState {
         &mut self.database
     }
 
+    /// Opens another hardened connection to this daemon's identity-bound local database.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a missing, replaced, corrupt or differently identified local database.
+    pub fn open_local_database(
+        &self,
+        now: UnixMicros,
+    ) -> Result<LocalDatabase, DaemonLocalStateError> {
+        LocalDatabase::open_existing(&self.directory.path().join(LOCAL_DATABASE_FILE), now)
+            .map_err(Into::into)
+    }
+
     /// Returns the node public-key fingerprint safe for claim and enrolment binding.
     #[must_use]
     pub fn public_key_fingerprint(&self) -> [u8; 32] {
         self.identity.public_key_fingerprint()
+    }
+
+    /// Returns the node's public secret-wrapping key safe for authoritative metadata.
+    #[must_use]
+    pub fn wrapping_public_key(&self) -> meshspan_secret_envelope::WrappingPublicKey {
+        self.wrapping_key.public_key()
+    }
+
+    /// Returns the protected pending recovery-bundle path retained until save verification.
+    #[must_use]
+    pub fn pending_recovery_bundle_path(&self) -> PathBuf {
+        self.directory
+            .path()
+            .join(SECRET_DIRECTORY)
+            .join(PENDING_RECOVERY_BUNDLE_FILE)
     }
 
     /// Builds the first-start TLS 1.3 public HTTPS configuration.
@@ -282,6 +321,9 @@ pub enum DaemonLocalStateError {
     /// Protected node identity handling failed.
     #[error("daemon node identity failed")]
     Identity(#[from] LocalNodeIdentityError),
+    /// Protected node secret-wrapping key handling failed.
+    #[error("daemon node wrapping key failed")]
+    WrappingKey(#[from] LocalWrappingKeyError),
     /// The private key and local database identify different nodes.
     #[error("daemon node identity does not match local metadata")]
     IdentityMismatch,

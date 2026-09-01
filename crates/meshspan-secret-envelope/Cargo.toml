@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-secret-envelope"
+description = "Bounded X25519 envelope encryption for MeshSpan secret generations"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+meshspan-domain = { path = "../meshspan-domain" }
+sha2.workspace = true
+thiserror.workspace = true
+x25519-dalek.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true
