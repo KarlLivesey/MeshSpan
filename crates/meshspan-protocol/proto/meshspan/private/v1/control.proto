@@ -394,6 +394,8 @@ message ControlEnvelope {
     ProtocolError protocol_error = 15;
     NodeActivationRequest node_activation_request = 16;
     NodeActivationResult node_activation_result = 17;
+    NodeTopologyUpdate node_topology_update = 18;
+    NodeTopologyResult node_topology_result = 19;
     VoteRequest vote_request = 20;
     VoteResponse vote_response = 21;
     AppendRequest append_request = 22;

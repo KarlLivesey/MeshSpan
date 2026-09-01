@@ -17,10 +17,11 @@ use meshspan_api_contract::{
     CreateMeshSetupRequest, CreateMeshSetupResponse, HealthStatus, SetupState,
 };
 use meshspan_cluster::{
-    ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, MetadataAuthorityConfig,
-    MetadataAuthorityHandle, MetadataAuthorityRequestError, MetadataAuthorityRuntimeError,
-    MetadataAuthorityStartError, OutboundConsensusSnapshot, PartitionConsensusDriver,
-    PeerControlRequest, restore_member_incarnations, spawn_metadata_authority,
+    ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
+    MetadataAuthorityConfig, MetadataAuthorityHandle, MetadataAuthorityRequestError,
+    MetadataAuthorityRuntimeError, MetadataAuthorityStartError, OutboundConsensusSnapshot,
+    PartitionConsensusDriver, PeerControlRequest, restore_member_incarnations,
+    spawn_metadata_authority,
 };
 use meshspan_consensus::{
     ActiveQuorumPlan, ConsensusCore, CoreConfig, CoreError, QuorumPlanError, compile_plan,
@@ -36,15 +37,18 @@ use meshspan_metadata::{
 };
 use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::{
-    ControlEnvelope, ErrorCode, NodeActivationResult, NodeRole, OperationOutcome, OperationResult,
-    WireError,
+    ControlEnvelope, ErrorCode, NodeActivationResult, NodeRole, NodeRoute, NodeTopologyResult,
+    NodeTopologyUpdate, OperationOutcome, OperationResult, WireError,
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
 use crate::headless_node_join::{activate_and_install_headless_node, admit_headless_node};
-use crate::private_consensus_runtime::{NetworkRegisteringEnrolment, PrivateConsensusRuntime};
+use crate::private_consensus_runtime::{
+    NetworkRegisteringEnrolment, PrivateConsensusRuntime, certificate_name,
+};
 use crate::{
     ApiKeyIssuanceApiError, AuthenticationMethodListingApiError,
     AuthenticationMethodListingService, AuthenticationMethodRevocationApiError,
@@ -728,9 +732,9 @@ async fn handle_private_control(
             .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
     )
     .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
-    let outcome = match envelope.message.as_ref() {
+    match envelope.message.as_ref() {
         Some(Message::NodeActivationRequest(activation)) => {
-            activate_private_node(
+            let outcome = activate_private_node(
                 network,
                 authority,
                 state_directory,
@@ -739,25 +743,131 @@ async fn handle_private_control(
                 operation_id,
                 activation,
             )
-            .await
+            .await;
+            if let Ok(commit) = &outcome {
+                spawn_learner_snapshot(
+                    network.clone(),
+                    state_directory.to_path_buf(),
+                    commit.record.node_id,
+                );
+                spawn_topology_broadcast(network.clone(), commit.record.revision.get());
+            }
+            let (result, active_revision) = activation_result(outcome);
+            Ok(ControlEnvelope {
+                header: Some(network.control_header(operation_id, header.deadline_unix_micros)?),
+                message: Some(Message::NodeActivationResult(NodeActivationResult {
+                    result: Some(result),
+                    active_revision,
+                })),
+            })
         }
-        _ => Err(NodeActivationError::Rejected),
-    };
-    if let Ok(commit) = &outcome {
-        spawn_learner_snapshot(
-            network.clone(),
-            state_directory.to_path_buf(),
-            commit.record.node_id,
-        );
+        Some(Message::NodeTopologyUpdate(update)) => {
+            apply_topology_update(network, update).await?;
+            let result_digest = topology_result_digest(update.topology_revision);
+            Ok(ControlEnvelope {
+                header: Some(network.control_header(operation_id, header.deadline_unix_micros)?),
+                message: Some(Message::NodeTopologyResult(NodeTopologyResult {
+                    result: Some(OperationResult {
+                        outcome: OperationOutcome::Durable.into(),
+                        committed_revision: Some(update.topology_revision),
+                        error: None,
+                        result: None,
+                        result_digest: result_digest.to_vec(),
+                    }),
+                    applied_revision: update.topology_revision,
+                })),
+            })
+        }
+        _ => Err(DaemonProcessError::PrivateNetworkState),
     }
-    let (result, active_revision) = activation_result(outcome);
-    Ok(ControlEnvelope {
-        header: Some(network.control_header(operation_id, header.deadline_unix_micros)?),
-        message: Some(Message::NodeActivationResult(NodeActivationResult {
-            result: Some(result),
-            active_revision,
-        })),
-    })
+}
+
+async fn apply_topology_update(
+    network: &ConsensusNetwork,
+    update: &NodeTopologyUpdate,
+) -> Result<(), DaemonProcessError> {
+    for route in &update.routes {
+        let node_id = NodeId::from_bytes(
+            route
+                .node_id
+                .as_slice()
+                .try_into()
+                .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
+        )
+        .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
+        if node_id == network.local_node_id() {
+            continue;
+        }
+        let address = tokio::net::lookup_host(&route.private_endpoint)
+            .await
+            .map_err(|_| DaemonProcessError::PrivateNetworkState)?
+            .next()
+            .ok_or(DaemonProcessError::PrivateNetworkState)?;
+        network.upsert_peer(ConsensusPeerConfig {
+            node_id,
+            incarnation: route.incarnation,
+            address,
+            certificate_der: route.certificate_der.clone(),
+            certificate_name: certificate_name(node_id),
+        })?;
+    }
+    Ok(())
+}
+
+fn spawn_topology_broadcast(network: ConsensusNetwork, topology_revision: u64) {
+    tokio::spawn(async move {
+        let Ok(peers) = network.peer_routes() else {
+            return;
+        };
+        let routes = peers
+            .iter()
+            .map(|peer| NodeRoute {
+                node_id: peer.node_id.as_bytes().to_vec(),
+                incarnation: peer.incarnation,
+                private_endpoint: peer.address.to_string(),
+                certificate_der: peer.certificate_der.clone(),
+            })
+            .collect::<Vec<_>>();
+        for peer in peers {
+            let Ok(operation_id) = topology_operation_id(peer.node_id, topology_revision) else {
+                continue;
+            };
+            let Ok(header) = network.control_header(operation_id, i64::MAX) else {
+                continue;
+            };
+            let request = ControlEnvelope {
+                header: Some(header),
+                message: Some(Message::NodeTopologyUpdate(NodeTopologyUpdate {
+                    topology_revision,
+                    routes: routes.clone(),
+                })),
+            };
+            let _response = network.request_control(peer.node_id, &request).await;
+        }
+    });
+}
+
+fn topology_operation_id(
+    peer: NodeId,
+    topology_revision: u64,
+) -> Result<OperationId, DaemonProcessError> {
+    let mut material = Vec::with_capacity(24);
+    material.extend_from_slice(&peer.as_bytes());
+    material.extend_from_slice(&topology_revision.to_be_bytes());
+    let digest = Sha256::digest(&material);
+    OperationId::from_bytes(
+        digest[..16]
+            .try_into()
+            .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
+    )
+    .map_err(|_| DaemonProcessError::PrivateNetworkState)
+}
+
+fn topology_result_digest(topology_revision: u64) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"meshspan.node-topology-result.v1\0");
+    digest.update(&topology_revision.to_be_bytes());
+    digest.finalize().into()
 }
 
 fn spawn_learner_snapshot(network: ConsensusNetwork, state_directory: PathBuf, learner: NodeId) {

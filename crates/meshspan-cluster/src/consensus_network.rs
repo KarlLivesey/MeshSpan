@@ -364,6 +364,28 @@ impl ConsensusNetwork {
         node_capability_digest(&self.hello())
     }
 
+    /// Returns this transport's permanent local node identity.
+    #[must_use]
+    pub const fn local_node_id(&self) -> NodeId {
+        self.local_node_id
+    }
+
+    /// Returns a consistent snapshot of every currently enrolled peer route.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if another thread poisoned the route registry lock.
+    pub fn peer_routes(&self) -> Result<Vec<ConsensusPeerConfig>, ConsensusNetworkError> {
+        Ok(self
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .routes
+            .values()
+            .cloned()
+            .collect())
+    }
+
     fn spawn_outbound_worker(&self, peer: NodeId, mut messages: mpsc::Receiver<CoreMessage>) {
         let network = self.clone();
         self.runtime.spawn(async move {
