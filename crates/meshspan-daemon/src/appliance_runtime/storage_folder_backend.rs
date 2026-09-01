@@ -16,6 +16,7 @@ use crate::{
     NativeStorageTarget, StorageFolderAdministrationBackend,
     StorageFolderAdministrationBackendError, StorageProviderOpeningError,
     StorageTargetRegistrationAuthorityError, StorageTargetRegistrationError,
+    create_mesh_setup::format_uuid,
 };
 
 impl StorageTargetRuntime {
@@ -46,8 +47,8 @@ impl StorageTargetRuntime {
                 let path = PathBuf::from(OsString::from_vec(record.intent.canonical_path));
                 let state = local_folder_state(self.active.contains_key(&path), record.state);
                 Ok(StorageFolderSummary {
-                    target_id: record.intent.target_id.to_string(),
-                    node_id: record.intent.node_id.to_string(),
+                    target_id: format_uuid(record.intent.target_id.as_bytes()),
+                    node_id: format_uuid(record.intent.node_id.as_bytes()),
                     path: path.into_os_string().into_string().ok(),
                     generation: record.intent.generation.to_string(),
                     usage_limit: api_usage_limit(record.intent.usage_limit),
@@ -82,9 +83,10 @@ impl StorageTargetRuntime {
         if !self.configured_paths.contains(&canonical_path) {
             self.configured_paths.push(canonical_path);
         }
+        let public_target_id = format_uuid(context.target_id.as_bytes());
         self.folder_summaries()?
             .into_iter()
-            .find(|folder| folder.target_id == context.target_id.to_string())
+            .find(|folder| folder.target_id == public_target_id)
             .ok_or(StorageFolderAdministrationBackendError::Failed)
     }
 }
