@@ -76,8 +76,9 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
         fs::read(fixture.storage_path.join("operator-file.txt"))?,
         b"untouched"
     );
-    assert_session_created(fixture.address, &client, &session_body).await?;
+    let browser_session = create_browser_session(fixture.address, &client, &session_body).await?;
     assert_live_totp_verifier_rejects_unknown_factor(fixture.address, &client, api_key).await?;
+    assert_api_key_lifecycle(fixture.address, &client, api_key, &browser_session).await?;
     assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
     let volume_id = create_volume(fixture.address, &client, api_key, &administrator_id).await?;
@@ -96,7 +97,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     );
     assert_eq!(wait_for_live_provider(&fixture).await?, provider_journal);
     assert_wrapping_key_committed(&fixture)?;
-    assert_session_created(fixture.address, &client, &session_body).await?;
+    create_browser_session(fixture.address, &client, &session_body).await?;
     assert_volume_visible(fixture.address, &client, api_key).await?;
     assert_user_visible(fixture.address, &client, api_key).await?;
     assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
@@ -130,6 +131,98 @@ async fn assert_live_totp_verifier_rejects_unknown_factor(
         )
         .into())
     }
+}
+
+async fn assert_api_key_lifecycle(
+    address: SocketAddr,
+    client: &ClientConfig,
+    bootstrap_api_key: &str,
+    session: &BrowserSessionHeaders,
+) -> Result<(), Box<dyn Error>> {
+    let issue_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-00000000000a",
+        "label": "Headless process automation",
+        "scopes": ["headless_api"]
+    }))?;
+    let issued = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/users/current/authentication-methods/api-keys",
+        Some(&issue_body),
+        &session.mutation_headers(),
+    )
+    .await?;
+    require_status(&issued, "201 Created", "issue protected API key")?;
+    let issued: serde_json::Value = serde_json::from_str(response_body(&issued)?)?;
+    let method_id = issued["method_id"]
+        .as_str()
+        .ok_or("API-key issuance omitted its method identity")?;
+    let issued_key = issued["secret"]
+        .as_str()
+        .ok_or("API-key issuance omitted its one-time secret")?;
+
+    let issued_authorization = format!("Bearer {issued_key}");
+    let inventory = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/users/current/authentication-methods?limit=100",
+        None,
+        &[("Authorization", issued_authorization.as_str())],
+    )
+    .await?;
+    require_status(&inventory, "200 OK", "list methods with issued API key")?;
+    if !response_body(&inventory)?.contains("Headless process automation") {
+        return Err("authentication-method inventory omitted the issued key".into());
+    }
+
+    let revoke_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-00000000000b",
+        "reason": "Real-process lifecycle proof"
+    }))?;
+    let revoked = request_with_headers(
+        address,
+        client,
+        "POST",
+        &format!("/api/latest/users/current/authentication-methods/{method_id}/revocations"),
+        Some(&revoke_body),
+        &session.mutation_headers(),
+    )
+    .await?;
+    require_status(&revoked, "200 OK", "revoke issued API key")?;
+
+    let rejected = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/users/current/authentication-methods?limit=100",
+        None,
+        &[("Authorization", issued_authorization.as_str())],
+    )
+    .await?;
+    require_status(
+        &rejected,
+        "401 Unauthorized",
+        "reject revoked issued API key",
+    )?;
+    let bootstrap_authorization = format!("Bearer {bootstrap_api_key}");
+    let retained = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/users/current/authentication-methods?limit=100",
+        None,
+        &[("Authorization", bootstrap_authorization.as_str())],
+    )
+    .await?;
+    require_status(&retained, "200 OK", "list retained revoked method")?;
+    if !response_body(&retained)?.contains("Headless process automation")
+        || !response_body(&retained)?.contains("\"state\":\"revoked\"")
+    {
+        return Err("revoked authentication method was not retained as evidence".into());
+    }
+    Ok(())
 }
 
 fn assert_wrapping_key_committed(fixture: &ProcessFixture) -> Result<(), Box<dyn Error>> {
@@ -564,20 +657,55 @@ async fn assert_user_visible(
     }
 }
 
-async fn assert_session_created(
+struct BrowserSessionHeaders {
+    cookie: String,
+    csrf: String,
+}
+
+impl BrowserSessionHeaders {
+    fn mutation_headers(&self) -> [(&str, &str); 2] {
+        [
+            ("Cookie", self.cookie.as_str()),
+            ("MeshSpan-CSRF-Token", self.csrf.as_str()),
+        ]
+    }
+}
+
+async fn create_browser_session(
     address: SocketAddr,
     client: &ClientConfig,
     body: &[u8],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<BrowserSessionHeaders, Box<dyn Error>> {
     let response = request(address, client, "POST", "/api/latest/sessions", Some(body)).await?;
     if response.starts_with("HTTP/1.1 201 Created\r\n")
         && response.contains("set-cookie: meshspan_session=")
         && response.contains("meshspan-csrf-token:")
     {
-        Ok(())
+        let cookie = response_header(&response, "set-cookie")?
+            .split(';')
+            .next()
+            .ok_or("session cookie was empty")?
+            .to_owned();
+        let csrf = response_header(&response, "meshspan-csrf-token")?.to_owned();
+        Ok(BrowserSessionHeaders { cookie, csrf })
     } else {
         Err("headless process did not create the expected HTTPS session".into())
     }
+}
+
+fn response_header<'a>(response: &'a str, name: &str) -> Result<&'a str, Box<dyn Error>> {
+    response
+        .split_once("\r\n\r\n")
+        .map(|(headers, _)| headers)
+        .and_then(|headers| {
+            headers.lines().skip(1).find_map(|line| {
+                let (candidate, value) = line.split_once(':')?;
+                candidate
+                    .eq_ignore_ascii_case(name)
+                    .then_some(value.trim_start())
+            })
+        })
+        .ok_or_else(|| format!("HTTP response omitted the {name} header").into())
 }
 
 fn response_body(response: &str) -> Result<&str, Box<dyn Error>> {
