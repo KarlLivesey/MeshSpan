@@ -15,7 +15,8 @@ use thiserror::Error;
 
 use crate::{
     ClaimEnsureOutcome, FirstBootClaimError, FirstBootClaimService, HeadlessDaemonConfig,
-    LocalNodeIdentity, LocalNodeIdentityError, LocalTotpCeremonyKey, LocalTotpCeremonyKeyError,
+    LocalNodeIdentity, LocalNodeIdentityError, LocalPasskeyCeremonyKey,
+    LocalPasskeyCeremonyKeyError, LocalTotpCeremonyKey, LocalTotpCeremonyKeyError,
     LocalWrappingKey, LocalWrappingKeyError, OperatingSystemRandom,
 };
 
@@ -27,6 +28,7 @@ const SECRET_DIRECTORY: &str = "secrets";
 const IDENTITY_FILE: &str = "node-identity.pk8";
 const WRAPPING_KEY_FILE: &str = "node-wrapping-key.x25519";
 const TOTP_CEREMONY_KEY_FILE: &str = "totp-ceremony.key";
+const PASSKEY_CEREMONY_KEY_FILE: &str = "passkey-ceremony.key";
 const PENDING_RECOVERY_BUNDLE_FILE: &str = "pending-offline-recovery.bundle";
 const DEFAULT_CLAIM_FILE: &str = "first-boot.claim";
 const BOOTSTRAP_DNS_NAME: &str = "meshspan.local";
@@ -80,6 +82,12 @@ impl DaemonLocalState {
             LocalTotpCeremonyKey::open(&totp_ceremony_key_path)?;
         } else {
             LocalTotpCeremonyKey::open_or_create(&totp_ceremony_key_path)?;
+        }
+        let passkey_ceremony_key_path = secret_directory.join(PASSKEY_CEREMONY_KEY_FILE);
+        if database_exists {
+            LocalPasskeyCeremonyKey::open(&passkey_ceremony_key_path)?;
+        } else {
+            LocalPasskeyCeremonyKey::open_or_create(&passkey_ceremony_key_path)?;
         }
         let expected_node_id =
             InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
@@ -204,6 +212,24 @@ impl DaemonLocalState {
             .path()
             .join(SECRET_DIRECTORY)
             .join(TOTP_CEREMONY_KEY_FILE)
+    }
+
+    /// Reopens the protected restart-stable key for one live passkey ceremony service.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, replaced, malformed or unsafe protected key state.
+    pub fn open_passkey_ceremony_key(
+        &self,
+    ) -> Result<crate::PasskeyCeremonyKey, DaemonLocalStateError> {
+        Ok(LocalPasskeyCeremonyKey::open(&self.passkey_ceremony_key_path())?.into_key())
+    }
+
+    fn passkey_ceremony_key_path(&self) -> PathBuf {
+        self.directory
+            .path()
+            .join(SECRET_DIRECTORY)
+            .join(PASSKEY_CEREMONY_KEY_FILE)
     }
 
     /// Returns the protected pending recovery-bundle path retained until save verification.
@@ -368,6 +394,9 @@ pub enum DaemonLocalStateError {
     /// Protected node-local TOTP ceremony key handling failed.
     #[error("daemon TOTP ceremony key failed")]
     TotpCeremonyKey(#[from] LocalTotpCeremonyKeyError),
+    /// Protected node-local passkey ceremony key handling failed.
+    #[error("daemon passkey ceremony key failed")]
+    PasskeyCeremonyKey(#[from] LocalPasskeyCeremonyKeyError),
     /// The private key and local database identify different nodes.
     #[error("daemon node identity does not match local metadata")]
     IdentityMismatch,

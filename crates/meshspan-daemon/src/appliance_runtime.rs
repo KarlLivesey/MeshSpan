@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -41,17 +42,19 @@ use crate::{
     ConsensusAuthenticationAuthority, ConsensusBootstrapAuthority, CreateMeshSetupController,
     CreateMeshSetupError, CreateMeshSetupService, CreateSessionService, CurrentSessionApiError,
     DaemonLocalState, DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService,
-    DisabledPasskeySessions, FileApiRoutes, FileReadApiError, FileReadService,
-    GatewaySessionIdentity, HeadlessDaemonConfig, HeadlessDaemonConfigError, HttpsServer,
-    HttpsServerError, IdentityAdministrationApiError, IdentityAdministrationService,
-    NativeApiAuthenticator, NativeApiKeyAuthenticator, NativeFilesystemRuntime,
-    NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
+    FileApiRoutes, FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
+    HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
+    IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
+    NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
     NativeUploadServicePolicy, NodeWrappingKeyRegistrationService, ObjectStatApiError,
-    ObjectStatService, OperatingSystemRandom, ProtectedApiKeyIssuanceController,
-    ProtectedRecoveryCodeIssuanceController, ProtectedTotpFactorVerifier,
-    ProtectedTotpRegistrationSecretProtector, PublicContractApiError, ReadinessSource,
-    RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
+    ObjectStatService, OperatingSystemRandom, PasskeyChallengeApiError,
+    PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError, PasskeyChallengeService,
+    PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
+    PasskeyRegistrationConfigurationError, PasskeyRegistrationService, PasskeySessionService,
+    ProtectedApiKeyIssuanceController, ProtectedRecoveryCodeIssuanceController,
+    ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector, PublicContractApiError,
+    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
     StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageProviderOpeningError,
@@ -62,7 +65,8 @@ use crate::{
     authentication_method_revocation_api_router, classify_native_filesystem_error,
     current_session_api_router, directory_listing_api_router, file_read_api_router,
     identity_administration_api_router, native_namespace_mutation_api_router,
-    native_upload_api_router, object_stat_api_router, public_contract_api_router,
+    native_upload_api_router, object_stat_api_router, passkey_challenge_api_router,
+    passkey_registration_api_router, public_contract_api_router,
     recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
     revoke_current_session_api_router, session_api_router, setup_api_router_with_creation,
     step_up_current_session_api_router, totp_registration_api_router,
@@ -75,6 +79,9 @@ const UPLOAD_LIFETIME_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
 const CONTENT_OPERATION_DEADLINE_MICROS: u64 = 60 * 1_000_000;
 const TOTP_REGISTRATION_LIFETIME_MICROS: u64 = 5 * 60 * 1_000_000;
 const TOTP_ISSUER: &str = "MeshSpan";
+const PASSKEY_RELYING_PARTY_ID: &str = "meshspan.local";
+const PASSKEY_RELYING_PARTY_NAME: &str = "MeshSpan";
+const PASSKEY_CEREMONY_LIFETIME_MICROS: u64 = 5 * 60 * 1_000_000;
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
@@ -150,6 +157,7 @@ where
             &authority,
             gateway,
             started_at,
+            config.https_listen(),
         )?)
         .merge(native_file_routes(
             &local_state,
@@ -277,62 +285,121 @@ fn authentication_session_routes(
     authority: &MetadataAuthorityHandle,
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
+    https_listen: SocketAddr,
 ) -> Result<Router, DaemonProcessError> {
-    let runtime = tokio::runtime::Handle::current();
-    let authentication_authority = || {
-        Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new(
-            open_root_repository(local_state, now)?,
-            authority.clone(),
-            runtime.clone(),
-        ))
-    };
+    let passkey_origin = passkey_origin(https_listen);
+    Ok(Router::new()
+        .merge(session_lifecycle_routes(
+            local_state,
+            authority,
+            gateway,
+            now,
+            &passkey_origin,
+        )?)
+        .merge(authentication_method_routes(
+            local_state,
+            authority,
+            gateway,
+            now,
+            passkey_origin,
+        )?)
+        .merge(authenticated_administration_routes(
+            local_state,
+            authority,
+            gateway,
+            now,
+        )?))
+}
+
+fn session_lifecycle_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    passkey_origin: &str,
+) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
         .merge(session_api_router(CreateSessionService::with_factors(
-            authentication_authority()?,
-            DisabledPasskeySessions,
+            open_authentication_authority(local_state, authority, now)?,
+            PasskeySessionService::new(
+                local_state.open_local_database(now)?,
+                local_state.open_passkey_ceremony_key()?,
+            ),
             ProtectedTotpFactorVerifier::new(
-                authentication_authority()?,
+                open_authentication_authority(local_state, authority, now)?,
                 local_state.open_wrapping_key()?,
             ),
         ))?)
+        .merge(passkey_challenge_api_router(PasskeyChallengeService::new(
+            local_state.open_local_database(now)?,
+            OperatingSystemRandom,
+            local_state.open_passkey_ceremony_key()?,
+            PasskeyChallengeConfiguration::new(
+                PASSKEY_RELYING_PARTY_ID.to_owned(),
+                vec![passkey_origin.to_owned()],
+                DurationMicros::new(PASSKEY_CEREMONY_LIFETIME_MICROS),
+            )?,
+        ))?)
         .merge(current_session_api_router(
-            BrowserSessionAuthenticator::new(authentication_authority()?, gateway),
+            BrowserSessionAuthenticator::new(
+                open_authentication_authority(local_state, authority, now)?,
+                gateway,
+            ),
         )?)
         .merge(revoke_current_session_api_router(
-            RevokeCurrentSessionService::new(authentication_authority()?, gateway),
+            RevokeCurrentSessionService::new(
+                open_authentication_authority(local_state, authority, now)?,
+                gateway,
+            ),
         )?)
         .merge(step_up_current_session_api_router(
             StepUpCurrentSessionService::new(
-                authentication_authority()?,
+                open_authentication_authority(local_state, authority, now)?,
                 gateway,
                 ProtectedTotpFactorVerifier::new(
-                    authentication_authority()?,
+                    open_authentication_authority(local_state, authority, now)?,
                     local_state.open_wrapping_key()?,
                 ),
             ),
-        )?)
+        )?))
+}
+
+fn authentication_method_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    passkey_origin: String,
+) -> Result<Router, DaemonProcessError> {
+    Ok(Router::new()
         .merge(api_key_issuance_api_router(
             ProtectedApiKeyIssuanceController::new(
-                authentication_authority()?,
-                authentication_authority()?,
+                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(local_state, authority, now)?,
                 local_state.open_wrapping_key()?,
                 gateway,
             ),
         )?)
         .merge(authentication_method_listing_api_router(
-            AuthenticationMethodListingService::new(authentication_authority()?, gateway),
+            AuthenticationMethodListingService::new(
+                open_authentication_authority(local_state, authority, now)?,
+                gateway,
+            ),
         )?)
         .merge(authentication_method_revocation_api_router(
-            AuthenticationMethodRevocationService::new(authentication_authority()?, gateway),
+            AuthenticationMethodRevocationService::new(
+                open_authentication_authority(local_state, authority, now)?,
+                gateway,
+            ),
         )?)
         .merge(totp_registration_api_router(
             TotpRegistrationService::with_secret_protector(
                 local_state.open_local_database(now)?,
-                authentication_authority()?,
+                open_authentication_authority(local_state, authority, now)?,
                 OperatingSystemRandom,
                 local_state.open_totp_ceremony_key()?,
                 ProtectedTotpRegistrationSecretProtector::new(
-                    authentication_authority()?,
+                    open_authentication_authority(local_state, authority, now)?,
                     local_state.open_wrapping_key()?,
                 ),
                 TotpRegistrationConfiguration::new(
@@ -342,31 +409,78 @@ fn authentication_session_routes(
                 gateway,
             ),
         )?)
-        .merge(recovery_code_issuance_api_router(
-            ProtectedRecoveryCodeIssuanceController::new(
-                authentication_authority()?,
-                authentication_authority()?,
-                local_state.open_wrapping_key()?,
+        .merge(passkey_registration_api_router(
+            PasskeyRegistrationService::new(
+                local_state.open_local_database(now)?,
+                open_authentication_authority(local_state, authority, now)?,
+                OperatingSystemRandom,
+                local_state.open_passkey_ceremony_key()?,
+                PasskeyRegistrationConfiguration::new(
+                    PASSKEY_RELYING_PARTY_ID.to_owned(),
+                    PASSKEY_RELYING_PARTY_NAME.to_owned(),
+                    vec![passkey_origin],
+                    DurationMicros::new(PASSKEY_CEREMONY_LIFETIME_MICROS),
+                )?,
                 gateway,
             ),
         )?)
+        .merge(recovery_code_issuance_api_router(
+            ProtectedRecoveryCodeIssuanceController::new(
+                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(local_state, authority, now)?,
+                local_state.open_wrapping_key()?,
+                gateway,
+            ),
+        )?))
+}
+
+fn authenticated_administration_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+) -> Result<Router, DaemonProcessError> {
+    Ok(Router::new()
         .merge(identity_administration_api_router(
-            IdentityAdministrationService::new(authentication_authority()?, gateway),
+            IdentityAdministrationService::new(
+                open_authentication_authority(local_state, authority, now)?,
+                gateway,
+            ),
         )?)
         .merge(volume_administration_api_router(
             VolumeAdministrationService::new(
-                authentication_authority()?,
+                open_authentication_authority(local_state, authority, now)?,
                 gateway,
                 OperatingSystemRandom,
             ),
         )?)
         .merge(recovery_bundle_verification_api_router(
             RecoveryBundleVerificationService::new(
-                authentication_authority()?,
+                open_authentication_authority(local_state, authority, now)?,
                 gateway,
                 local_state.pending_recovery_bundle_path(),
             ),
         )?))
+}
+
+fn open_authentication_authority(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    now: UnixMicros,
+) -> Result<ConsensusAuthenticationAuthority, DaemonProcessError> {
+    Ok(ConsensusAuthenticationAuthority::new(
+        open_root_repository(local_state, now)?,
+        authority.clone(),
+        tokio::runtime::Handle::current(),
+    ))
+}
+
+fn passkey_origin(https_listen: SocketAddr) -> String {
+    if https_listen.port() == 443 {
+        format!("https://{PASSKEY_RELYING_PARTY_ID}")
+    } else {
+        format!("https://{PASSKEY_RELYING_PARTY_ID}:{}", https_listen.port())
+    }
 }
 
 fn native_file_routes(
@@ -660,6 +774,18 @@ pub enum DaemonProcessError {
     /// Current-user recovery-code issuance API construction failed.
     #[error("daemon recovery-code issuance API failed")]
     RecoveryCodeIssuanceApi(#[from] RecoveryCodeIssuanceApiError),
+    /// Passkey authentication challenge API construction failed.
+    #[error("daemon passkey challenge API failed")]
+    PasskeyChallengeApi(#[from] PasskeyChallengeApiError),
+    /// Passkey authentication challenge policy is invalid.
+    #[error("daemon passkey challenge policy failed")]
+    PasskeyChallengeConfiguration(#[from] PasskeyChallengeConfigurationError),
+    /// Current-user passkey registration API construction failed.
+    #[error("daemon passkey registration API failed")]
+    PasskeyRegistrationApi(#[from] PasskeyRegistrationApiError),
+    /// Current-user passkey registration policy is invalid.
+    #[error("daemon passkey registration policy failed")]
+    PasskeyRegistrationConfiguration(#[from] PasskeyRegistrationConfigurationError),
     /// Identity-administration API construction failed.
     #[error("daemon identity-administration API failed")]
     IdentityAdministrationApi(#[from] IdentityAdministrationApiError),

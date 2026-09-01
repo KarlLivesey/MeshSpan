@@ -77,6 +77,7 @@ mod identity_administration_tests;
 mod local_node_identity;
 #[cfg(test)]
 mod local_node_identity_tests;
+mod local_passkey_ceremony_key;
 mod local_totp_ceremony_key;
 mod local_wrapping_key;
 mod multi_factor_session;
@@ -276,6 +277,7 @@ pub use identity_administration::{
     IdentityAdministrationService, IdentityAdministrator, identity_administration_api_router,
 };
 pub use local_node_identity::{LocalNodeIdentity, LocalNodeIdentityError};
+pub use local_passkey_ceremony_key::{LocalPasskeyCeremonyKey, LocalPasskeyCeremonyKeyError};
 pub use local_totp_ceremony_key::{LocalTotpCeremonyKey, LocalTotpCeremonyKeyError};
 pub use local_wrapping_key::{LocalWrappingKey, LocalWrappingKeyError};
 pub use namespace_mutation_api::{
