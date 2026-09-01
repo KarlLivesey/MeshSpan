@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -13,8 +14,11 @@ use meshspan_metadata::{
     BootstrapAppliance, BootstrapMesh, CreateAuthenticationMethod, NewAuthenticationCredential,
     PartitionDatabase, RecordName,
 };
+use meshspan_test_certificates::{CertificateAuthority, IssuedCertificate};
+use zeroize::Zeroizing;
 
 use super::*;
+use crate::{ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig};
 
 #[tokio::test]
 async fn single_owner_returns_only_a_durable_exact_receipt()
@@ -125,6 +129,203 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
         runtime.await??;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut cluster = RealAuthorityCluster::start()?;
+    cluster.authorities[0].0.begin_election().await?;
+    let (bootstrap_context, bootstrap) = command(cluster.nodes[0], [85; 16])?;
+    let bootstrap_receipt = tokio::time::timeout(
+        Duration::from_secs(5),
+        commit_after_election(&cluster.authorities[0].0, bootstrap_context, &bootstrap),
+    )
+    .await??;
+    assert_eq!(bootstrap_receipt.committed_revision, Revision::new(1));
+
+    cluster.stop_first_authority().await?;
+    let (user_context, user) = user_command(bootstrap_context.actor_principal_id)?;
+    let user_receipt = tokio::time::timeout(
+        Duration::from_secs(8),
+        commit_after_election(&cluster.authorities[0].0, user_context, &user),
+    )
+    .await??;
+    assert_eq!(user_receipt.committed_revision, Revision::new(2));
+    let follower_receipt = tokio::time::timeout(
+        Duration::from_secs(5),
+        resolve_after_replication(&cluster.authorities[1].0, user_context, &user),
+    )
+    .await??;
+    assert_eq!(follower_receipt.result_digest, user_receipt.result_digest);
+
+    cluster.shutdown().await?;
+    Ok(())
+}
+
+type AuthorityTask = (
+    MetadataAuthorityHandle,
+    JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
+);
+
+struct RealAuthorityCluster {
+    _directory: tempfile::TempDir,
+    nodes: [NodeId; 3],
+    authorities: Vec<AuthorityTask>,
+    forwarders: Vec<JoinHandle<()>>,
+}
+
+impl RealAuthorityCluster {
+    fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let certificate_authority = CertificateAuthority::new()?;
+        let authority_certificate = certificate_authority.certificate_der().to_vec();
+        let nodes = [
+            NodeId::from_bytes([81; 16])?,
+            NodeId::from_bytes([82; 16])?,
+            NodeId::from_bytes([83; 16])?,
+        ];
+        let identities = [
+            certificate_authority.issue_node("meshspan.internal")?,
+            certificate_authority.issue_node("meshspan.internal")?,
+            certificate_authority.issue_node("meshspan.internal")?,
+        ];
+        let addresses = [
+            unused_udp_address()?,
+            unused_udp_address()?,
+            unused_udp_address()?,
+        ];
+        let partition_id = PartitionId::from_bytes([20; 16])?;
+        let plan = plan(&nodes)?;
+        let (networks, inbound) = start_networks(
+            &nodes,
+            &addresses,
+            &identities,
+            &authority_certificate,
+            MeshId::from_bytes([84; 16])?,
+            partition_id,
+        )?;
+        let authorities = start_authorities(&directory, &nodes, &plan, networks)?;
+        let forwarders = start_forwarders(inbound, &authorities);
+        Ok(Self {
+            _directory: directory,
+            nodes,
+            authorities,
+            forwarders,
+        })
+    }
+
+    async fn stop_first_authority(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let (authority, runtime) = self.authorities.remove(0);
+        authority.shutdown().await?;
+        runtime.await??;
+        Ok(())
+    }
+
+    async fn shutdown(self) -> Result<(), Box<dyn std::error::Error>> {
+        for (authority, _) in &self.authorities {
+            authority.shutdown().await?;
+        }
+        for (_, runtime) in self.authorities {
+            runtime.await??;
+        }
+        for forwarder in self.forwarders {
+            forwarder.abort();
+            let _cancelled = forwarder.await;
+        }
+        Ok(())
+    }
+}
+
+fn start_networks(
+    nodes: &[NodeId; 3],
+    addresses: &[SocketAddr; 3],
+    identities: &[IssuedCertificate; 3],
+    trust_anchor: &[u8],
+    mesh_id: MeshId,
+    partition_id: PartitionId,
+) -> Result<
+    (
+        Vec<ConsensusNetwork>,
+        Vec<mpsc::Receiver<PeerConsensusMessage>>,
+    ),
+    ConsensusNetworkError,
+> {
+    let mut networks = Vec::new();
+    let mut inbound = Vec::new();
+    for index in 0..nodes.len() {
+        let (sender, receiver) = mpsc::channel(256);
+        networks.push(ConsensusNetwork::start(
+            network_config(
+                index,
+                nodes,
+                addresses,
+                identities,
+                trust_anchor,
+                mesh_id,
+                partition_id,
+            ),
+            sender,
+        )?);
+        inbound.push(receiver);
+    }
+    Ok((networks, inbound))
+}
+
+fn start_authorities(
+    directory: &tempfile::TempDir,
+    nodes: &[NodeId; 3],
+    plan: &meshspan_consensus::CompiledQuorumPlan,
+    networks: Vec<ConsensusNetwork>,
+) -> Result<Vec<AuthorityTask>, Box<dyn std::error::Error>> {
+    networks
+        .into_iter()
+        .enumerate()
+        .map(|(index, network)| {
+            let driver = driver_with_plan(
+                &directory.path().join(format!("quinn-node-{index}.sqlite3")),
+                nodes[index],
+                plan,
+            )?;
+            let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(network);
+            let config = authority_config(index)?;
+            Ok(spawn_metadata_authority(driver, transport, config)?)
+        })
+        .collect()
+}
+
+fn authority_config(index: usize) -> Result<MetadataAuthorityConfig, Box<dyn std::error::Error>> {
+    let election_timeout = Duration::from_millis(
+        350_u64
+            .checked_add(u64::try_from(index)?.saturating_mul(250))
+            .ok_or("election timeout overflowed")?,
+    );
+    Ok(MetadataAuthorityConfig {
+        heartbeat_interval: Duration::from_millis(40),
+        election_timeout,
+        election_check_interval: Duration::from_millis(20),
+        ..MetadataAuthorityConfig::default()
+    })
+}
+
+fn start_forwarders(
+    inbound: Vec<mpsc::Receiver<PeerConsensusMessage>>,
+    authorities: &[AuthorityTask],
+) -> Vec<JoinHandle<()>> {
+    inbound
+        .into_iter()
+        .zip(authorities)
+        .map(|(mut receiver, (authority, _))| {
+            let authority = authority.clone();
+            tokio::spawn(async move {
+                while let Some(message) = receiver.recv().await {
+                    if authority.receive_peer(message).await.is_err() {
+                        return;
+                    }
+                }
+            })
+        })
+        .collect()
 }
 
 struct InMemoryTransport {
@@ -267,4 +468,61 @@ fn command(
             },
         }),
     ))
+}
+
+fn user_command(
+    administrator_id: PrincipalId,
+) -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::error::Error>> {
+    let context = CommandContext {
+        operation_id: OperationId::from_bytes([91; 16])?,
+        actor_principal_id: administrator_id,
+        audit_event_id: AuditEventId::from_bytes([92; 16])?,
+        occurred_at: UnixMicros::new(20),
+        expected_revision: Some(Revision::new(1)),
+    };
+    Ok((
+        context,
+        AuthoritativeCommand::CreateUser(meshspan_metadata::CreateUser {
+            principal_id: PrincipalId::from_bytes([93; 16])?,
+            name: RecordName::new("Post-failover user")?,
+        }),
+    ))
+}
+
+fn network_config(
+    local_index: usize,
+    nodes: &[NodeId; 3],
+    addresses: &[SocketAddr; 3],
+    identities: &[IssuedCertificate; 3],
+    trust_anchor: &[u8],
+    mesh_id: MeshId,
+    partition_id: PartitionId,
+) -> ConsensusNetworkConfig {
+    let peers = (0..nodes.len())
+        .filter(|index| *index != local_index)
+        .map(|index| ConsensusPeerConfig {
+            node_id: nodes[index],
+            incarnation: 1,
+            address: addresses[index],
+            certificate_der: identities[index].certificate_der().to_vec(),
+        })
+        .collect();
+    ConsensusNetworkConfig {
+        local_node_id: nodes[local_index],
+        local_incarnation: 1,
+        mesh_id,
+        partition_id,
+        routing_epoch: 1,
+        listen_address: addresses[local_index],
+        client_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+        certificate_name: "meshspan.internal".to_owned(),
+        certificate_der: identities[local_index].certificate_der().to_vec(),
+        private_key_pkcs8: Zeroizing::new(identities[local_index].private_key().to_vec()),
+        trust_anchors: vec![trust_anchor.to_vec()],
+        peers,
+    }
+}
+
+fn unused_udp_address() -> Result<SocketAddr, std::io::Error> {
+    UdpSocket::bind("127.0.0.1:0")?.local_addr()
 }
