@@ -47,6 +47,7 @@ mod consensus_authentication_methods;
 mod consensus_bootstrap_authority;
 mod consensus_filesystem_authority;
 mod consensus_identity_administration;
+mod consensus_node_enrolment;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;
@@ -92,12 +93,15 @@ mod native_upload_api;
 mod native_upload_api_tests;
 #[cfg(test)]
 mod native_upload_service_tests;
+mod node_join_grant;
+mod node_join_grant_api;
 mod node_wrapping_key_registration;
 #[cfg(test)]
 mod node_wrapping_key_registration_tests;
 mod object_stat_api;
 #[cfg(test)]
 mod object_stat_api_tests;
+mod online_authority_loading;
 mod passkey_challenge;
 mod passkey_challenge_api;
 #[cfg(test)]
@@ -298,6 +302,12 @@ pub use native_upload_api::{
     NativeUploadServicePolicy, UploadRangeCursor, UploadRangePageRequest, UploadRangeWriteRequest,
     native_upload_api_router,
 };
+pub use node_join_grant::{
+    NodeJoinGrantIssuanceAuthority, NodeJoinGrantIssuanceAuthorityError,
+    NodeJoinGrantIssuanceCommit, NodeJoinGrantIssuanceController, NodeJoinGrantIssuanceError,
+    NodeJoinGrantIssuanceService,
+};
+pub use node_join_grant_api::{NodeJoinGrantIssuanceApiError, node_join_grant_api_router};
 pub use node_wrapping_key_registration::{
     NodeWrappingKeyRegistrationAuthority, NodeWrappingKeyRegistrationAuthorityError,
     NodeWrappingKeyRegistrationError, NodeWrappingKeyRegistrationService,
@@ -305,6 +315,9 @@ pub use node_wrapping_key_registration::{
 pub use object_stat_api::{
     ObjectStatApiError, ObjectStatController, ObjectStatError, ObjectStatReader, ObjectStatService,
     object_stat_api_router,
+};
+pub use online_authority_loading::{
+    OnlineAuthorityLoadingAuthority, OnlineAuthorityLoadingError, OnlineAuthorityLoadingService,
 };
 pub use passkey_challenge::{
     PasskeyCeremonyStore, PasskeyCeremonyStoreError, PasskeyChallengeError, PasskeyChallengeService,

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use meshspan_certificates::{CertificateError, NodeIdentityKey};
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::protected_file::{self, ProtectedFileError, PublishMode};
@@ -78,6 +79,12 @@ impl LocalNodeIdentity {
     #[must_use]
     pub fn bootstrap_certificate_der(&self) -> &[u8] {
         &self.bootstrap_certificate
+    }
+
+    /// Returns the exact SHA-256 pin for the currently served first-start certificate.
+    #[must_use]
+    pub fn bootstrap_certificate_fingerprint(&self) -> [u8; 32] {
+        Sha256::digest(&self.bootstrap_certificate).into()
     }
 
     /// Builds the TLS 1.3-only first-start public HTTPS server configuration.

@@ -85,8 +85,14 @@ impl JoinGrantBundle {
         enrolment_endpoint: &str,
         gateway_certificate_fingerprint: [u8; CERTIFICATE_FINGERPRINT_BYTES],
     ) -> Result<Self, JoinGrantBundleError> {
-        let mut join_grant_id =
-            issuance_key.derive(ISSUED_GRANT_ID_DOMAIN, mesh_id, principal_id, operation_id)?;
+        let mut join_grant_id = issuance_key.derive(
+            ISSUED_GRANT_ID_DOMAIN,
+            mesh_id,
+            principal_id,
+            operation_id,
+            enrolment_endpoint,
+            gateway_certificate_fingerprint,
+        )?;
         join_grant_id[6] = (join_grant_id[6] & 0x0f) | 0x40;
         join_grant_id[8] = (join_grant_id[8] & 0x3f) | 0x80;
         let secret = Zeroizing::new(issuance_key.derive(
@@ -94,6 +100,8 @@ impl JoinGrantBundle {
             mesh_id,
             principal_id,
             operation_id,
+            enrolment_endpoint,
+            gateway_certificate_fingerprint,
         )?);
         Self::from_parts(
             mesh_id.as_bytes(),
@@ -241,6 +249,8 @@ impl JoinGrantIssuanceKey {
         mesh_id: MeshId,
         principal_id: PrincipalId,
         operation_id: OperationId,
+        enrolment_endpoint: &str,
+        gateway_certificate_fingerprint: [u8; CERTIFICATE_FINGERPRINT_BYTES],
     ) -> Result<[u8; 32], JoinGrantBundleError> {
         let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_ref())
             .map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
@@ -248,6 +258,13 @@ impl JoinGrantIssuanceKey {
         mac.update(&mesh_id.as_bytes());
         mac.update(&principal_id.as_bytes());
         mac.update(&operation_id.as_bytes());
+        mac.update(
+            &u64::try_from(enrolment_endpoint.len())
+                .map_err(|_| JoinGrantBundleError::InvalidEncoding)?
+                .to_be_bytes(),
+        );
+        mac.update(enrolment_endpoint.as_bytes());
+        mac.update(&gateway_certificate_fingerprint);
         let output: [u8; 32] = mac.finalize().into_bytes().into();
         if output == [0; 32] {
             Err(JoinGrantBundleError::InvalidEncoding)

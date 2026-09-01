@@ -174,6 +174,12 @@ impl DaemonLocalState {
         self.identity.public_key_fingerprint()
     }
 
+    /// Returns the exact public HTTPS certificate pin used by first-start and enrolment routes.
+    #[must_use]
+    pub fn https_certificate_fingerprint(&self) -> [u8; 32] {
+        self.identity.bootstrap_certificate_fingerprint()
+    }
+
     /// Returns the node's public secret-wrapping key safe for authoritative metadata.
     #[must_use]
     pub fn wrapping_public_key(&self) -> meshspan_secret_envelope::WrappingPublicKey {

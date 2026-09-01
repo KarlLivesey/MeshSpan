@@ -2,7 +2,7 @@
 
 //! Administrator join grants and certificate-bound node enrolment.
 
-use meshspan_domain::Revision;
+use meshspan_domain::{JoinGrantId, PrincipalId, Revision, UnixMicros};
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 
@@ -11,6 +11,82 @@ use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{CommandContext, ConsumeJoinGrant, IssueJoinGrant, JoinRoles};
 
 const MAXIMUM_CERTIFICATE_BYTES: usize = 64 * 1_024;
+
+/// Current immutable issuance facts for one node join grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JoinGrantRecord {
+    /// Stable public grant identity.
+    pub join_grant_id: JoinGrantId,
+    /// Administrator that issued and owns the grant.
+    pub issued_by: PrincipalId,
+    /// Exact admitted role ceiling.
+    pub allowed_roles: JoinRoles,
+    /// Total successful-consumption ceiling.
+    pub maximum_uses: u16,
+    /// Authoritative issuance instant.
+    pub created_at: UnixMicros,
+    /// Exclusive authoritative expiry.
+    pub expires_at: UnixMicros,
+    /// Revision last affecting this grant.
+    pub revision: Revision,
+}
+
+pub(super) fn join_grant(
+    database: &crate::PartitionDatabase,
+    join_grant_id: JoinGrantId,
+) -> Result<Option<JoinGrantRecord>, RepositoryError> {
+    let stored = database
+        .connection()
+        .query_row(
+            "SELECT issued_by, allowed_roles, maximum_uses, created_at, expires_at, revision
+             FROM join_grants WHERE join_grant_id = ?1",
+            [join_grant_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, u8>(1)?,
+                    row.get::<_, u16>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    stored.map_or(Ok(None), |stored| {
+        decode_join_grant(join_grant_id, stored).map(Some)
+    })
+}
+
+fn decode_join_grant(
+    join_grant_id: JoinGrantId,
+    stored: (Vec<u8>, u8, u16, i64, i64, i64),
+) -> Result<JoinGrantRecord, RepositoryError> {
+    let (issued_by, allowed_roles, maximum_uses, created_at, expires_at, revision) = stored;
+    let issued_by = PrincipalId::from_bytes(
+        issued_by
+            .try_into()
+            .map_err(|_| RepositoryError::CorruptState)?,
+    )
+    .map_err(|_| RepositoryError::CorruptState)?;
+    let allowed_roles = JoinRoles::new(allowed_roles).map_err(|_| RepositoryError::CorruptState)?;
+    let created_at = UnixMicros::new(created_at);
+    let expires_at = UnixMicros::new(expires_at);
+    let revision =
+        Revision::new(u64::try_from(revision).map_err(|_| RepositoryError::CorruptState)?);
+    if maximum_uses == 0 || expires_at <= created_at || revision == Revision::ZERO {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(JoinGrantRecord {
+        join_grant_id,
+        issued_by,
+        allowed_roles,
+        maximum_uses,
+        created_at,
+        expires_at,
+        revision,
+    })
+}
 
 pub(super) fn issue_join_grant(
     transaction: &Transaction<'_>,

@@ -16,12 +16,12 @@ use meshspan_metadata::{
 use crate::{
     AuthenticationRootAuthority, ConsensusAuthenticationAuthority,
     NodeWrappingKeyRegistrationAuthority, NodeWrappingKeyRegistrationAuthorityError,
-    RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
-    RecoveryBundleVerificationCommit, SecretGenerationAuthority, SecretGenerationAuthorityError,
-    StoragePermitAuthority, StorageTargetRegistrationAuthority,
-    StorageTargetRegistrationAuthorityError, VolumeAdministrationAuthority,
-    VolumeAdministrationAuthorityError, VolumeAdministrationCommit, VolumeInventoryAuthority,
-    VolumeInventoryAuthorityError, VolumeKeyAuthority,
+    OnlineAuthorityLoadingAuthority, RecoveryBundleVerificationAuthority,
+    RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
+    SecretGenerationAuthority, SecretGenerationAuthorityError, StoragePermitAuthority,
+    StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
+    VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
+    VolumeInventoryAuthority, VolumeInventoryAuthorityError, VolumeKeyAuthority,
 };
 
 impl FilesystemAccessAuthority for ConsensusAuthenticationAuthority {
@@ -163,6 +163,28 @@ impl AuthenticationRootAuthority for ConsensusAuthenticationAuthority {
     ) -> Result<Option<u64>, SecretGenerationAuthorityError> {
         self.reader()
             .latest_authentication_root_generation(mesh_id)
+            .map_err(|error| map_volume_key_repository_error(&error))
+    }
+}
+
+impl OnlineAuthorityLoadingAuthority for ConsensusAuthenticationAuthority {
+    fn local_mesh_id(
+        &self,
+    ) -> Result<Option<meshspan_domain::MeshId>, SecretGenerationAuthorityError> {
+        self.reader()
+            .local_mesh_id()
+            .map_err(|error| map_volume_key_repository_error(&error))
+    }
+
+    fn online_certificate_authority(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<
+        Option<meshspan_metadata::OnlineCertificateAuthorityRecord>,
+        SecretGenerationAuthorityError,
+    > {
+        self.reader()
+            .online_certificate_authority(mesh_id)
             .map_err(|error| map_volume_key_repository_error(&error))
     }
 }

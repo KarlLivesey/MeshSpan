@@ -145,6 +145,7 @@ pub use cleanup_permit::{
     VersionCleanupPermitAuthority,
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
+pub use cluster::JoinGrantRecord;
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use federation_actor_attestation::FederatedActorAttestationRecord;
 pub use federation_assignment::FederationGrantAssignmentAuthority;
@@ -275,6 +276,18 @@ impl AuthoritativeRepository {
     /// Fails closed if a root partition contains multiple meshes or malformed identity bytes.
     pub fn local_mesh_id(&self) -> Result<Option<meshspan_domain::MeshId>, RepositoryError> {
         mesh_identity::local_mesh_id(&self.database)
+    }
+
+    /// Returns immutable issuance facts for one current node join grant.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored grant identity, roles, time or revision state is malformed.
+    pub fn join_grant(
+        &self,
+        join_grant_id: meshspan_domain::JoinGrantId,
+    ) -> Result<Option<JoinGrantRecord>, RepositoryError> {
+        cluster::join_grant(&self.database, join_grant_id)
     }
 
     /// Wraps one already migrated and identity-verified partition database.

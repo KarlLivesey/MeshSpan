@@ -47,14 +47,15 @@ use crate::{
     IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
     NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
-    NativeUploadServicePolicy, NodeWrappingKeyRegistrationService, ObjectStatApiError,
-    ObjectStatService, OperatingSystemRandom, PasskeyChallengeApiError,
-    PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError, PasskeyChallengeService,
-    PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
-    PasskeyRegistrationConfigurationError, PasskeyRegistrationService, PasskeySessionService,
-    ProtectedApiKeyIssuanceController, ProtectedRecoveryCodeIssuanceController,
-    ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector, PublicContractApiError,
-    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
+    NativeUploadServicePolicy, NodeJoinGrantIssuanceApiError, NodeJoinGrantIssuanceService,
+    NodeWrappingKeyRegistrationService, ObjectStatApiError, ObjectStatService,
+    OperatingSystemRandom, PasskeyChallengeApiError, PasskeyChallengeConfiguration,
+    PasskeyChallengeConfigurationError, PasskeyChallengeService, PasskeyRegistrationApiError,
+    PasskeyRegistrationConfiguration, PasskeyRegistrationConfigurationError,
+    PasskeyRegistrationService, PasskeySessionService, ProtectedApiKeyIssuanceController,
+    ProtectedRecoveryCodeIssuanceController, ProtectedTotpFactorVerifier,
+    ProtectedTotpRegistrationSecretProtector, PublicContractApiError, ReadinessSource,
+    RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
     StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageProviderOpeningError,
@@ -65,8 +66,8 @@ use crate::{
     authentication_method_revocation_api_router, classify_native_filesystem_error,
     current_session_api_router, directory_listing_api_router, file_read_api_router,
     identity_administration_api_router, native_namespace_mutation_api_router,
-    native_upload_api_router, object_stat_api_router, passkey_challenge_api_router,
-    passkey_registration_api_router, public_contract_api_router,
+    native_upload_api_router, node_join_grant_api_router, object_stat_api_router,
+    passkey_challenge_api_router, passkey_registration_api_router, public_contract_api_router,
     recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
     revoke_current_session_api_router, session_api_router, setup_api_router_with_creation,
     step_up_current_session_api_router, totp_registration_api_router,
@@ -447,6 +448,15 @@ fn authenticated_administration_routes(
                 gateway,
             ),
         )?)
+        .merge(node_join_grant_api_router(
+            NodeJoinGrantIssuanceService::new(
+                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(local_state, authority, now)?,
+                local_state.open_wrapping_key()?,
+                gateway,
+                local_state.https_certificate_fingerprint(),
+            ),
+        )?)
         .merge(volume_administration_api_router(
             VolumeAdministrationService::new(
                 open_authentication_authority(local_state, authority, now)?,
@@ -789,6 +799,9 @@ pub enum DaemonProcessError {
     /// Identity-administration API construction failed.
     #[error("daemon identity-administration API failed")]
     IdentityAdministrationApi(#[from] IdentityAdministrationApiError),
+    /// Manager-only node join-grant API construction failed.
+    #[error("daemon node join-grant API failed")]
+    NodeJoinGrantIssuanceApi(#[from] NodeJoinGrantIssuanceApiError),
     /// Permission-filtered volume inventory API construction failed.
     #[error("daemon volume-inventory API failed")]
     VolumeInventoryApi(#[from] VolumeInventoryApiError),
