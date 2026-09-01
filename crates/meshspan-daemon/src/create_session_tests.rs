@@ -37,7 +37,11 @@ fn api_key_session_commits_exact_delivery_intent_and_changed_retry_conflicts()
 -> Result<(), Box<dyn std::error::Error>> {
     let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let directory = tempdir()?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),
@@ -87,7 +91,11 @@ async fn public_http_session_round_trip_commits_and_replays_real_sqlite_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let directory = tempdir()?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),
@@ -142,7 +150,11 @@ async fn public_revocation_commits_then_replays_after_the_session_is_unusable()
 -> Result<(), Box<dyn std::error::Error>> {
     let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let directory = tempdir()?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),

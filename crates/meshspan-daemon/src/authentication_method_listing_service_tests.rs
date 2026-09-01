@@ -27,7 +27,11 @@ fn real_sqlite_inventory_authenticates_browser_sessions_and_rejects_mixed_creden
 -> Result<(), Box<dyn std::error::Error>> {
     let claim = ClaimBundle::generate(&mut SequentialRandom::default())?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let directory = tempdir()?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),

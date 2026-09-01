@@ -101,7 +101,11 @@ where
     ) -> Result<CreateMeshSetupResponse, CreateMeshSetupError> {
         let input = ValidatedSetupInput::new(request)?;
         let claim = ClaimBundle::parse(request.claim.expose_for_verification())?;
-        let material = InitialBootstrapMaterial::derive(&claim, input.operation_id)?;
+        let material = InitialBootstrapMaterial::derive(
+            &claim,
+            input.operation_id,
+            self.local_database.node_id(),
+        )?;
         let request_digest = input.request_digest(claim.claim_id().as_bytes());
         self.local_database.prepare_local_setup(NewLocalSetup {
             operation_id: input.operation_id,

@@ -11,6 +11,9 @@ mod api_key_issuance_contract;
 mod api_key_issuance_model;
 #[cfg(test)]
 mod api_key_issuance_tests;
+mod appliance_api;
+#[cfg(test)]
+mod appliance_api_tests;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
@@ -42,15 +45,27 @@ mod create_session_tests;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
+mod daemon_local_state;
+#[cfg(test)]
+mod daemon_local_state_tests;
 mod directory_listing_api;
 #[cfg(test)]
 mod directory_listing_api_tests;
 mod file_read_api;
 #[cfg(test)]
 mod file_read_api_tests;
+mod headless_config;
+#[cfg(test)]
+mod headless_config_tests;
+mod https_server;
+#[cfg(test)]
+mod https_server_tests;
 mod identity_administration;
 #[cfg(test)]
 mod identity_administration_tests;
+mod local_node_identity;
+#[cfg(test)]
+mod local_node_identity_tests;
 mod multi_factor_session;
 mod namespace_mutation_api;
 mod native_api_authentication;
@@ -92,6 +107,10 @@ mod passkey_session_creation_tests;
 mod passkey_session_tests;
 #[cfg(test)]
 mod passkey_test_support;
+mod protected_file;
+mod public_contract_api;
+#[cfg(test)]
+mod public_contract_api_tests;
 mod recovery_code_issuance;
 mod recovery_code_issuance_api;
 #[cfg(test)]
@@ -144,6 +163,10 @@ pub use api_key_issuance_contract::{
     ApiKeyIssuanceAuthority, ApiKeyIssuanceAuthorityError, ApiKeyIssuanceCommit,
     ApiKeyIssuanceError,
 };
+pub use appliance_api::{
+    AdministrationApiRoutes, ApplianceApiRoutes, AuthenticationApiRoutes, FileApiRoutes,
+    SessionApiRoutes,
+};
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
 pub use authentication_method_listing::{
     AuthenticationMethodListingApiError, AuthenticationMethodListingAuthority,
@@ -184,6 +207,7 @@ pub use current_session_api::{
     CurrentSessionApiError, CurrentSessionController, CurrentSessionError,
     current_session_api_router,
 };
+pub use daemon_local_state::{DaemonLocalState, DaemonLocalStateError};
 pub use directory_listing_api::{
     DirectoryLister, DirectoryListingApiError, DirectoryListingController, DirectoryListingError,
     DirectoryListingService, FileApiFailure, NativeFileApiAuthenticator,
@@ -193,12 +217,15 @@ pub use file_read_api::{
     FileRangeReader, FileReadApiError, FileReadController, FileReadError, FileReadResult,
     FileReadService, file_read_api_router,
 };
+pub use headless_config::{HeadlessDaemonConfig, HeadlessDaemonConfigError};
+pub use https_server::{HttpsServer, HttpsServerError};
 pub use identity_administration::{
     GroupMembershipAdministrationCommit, IdentityAdministrationApiError,
     IdentityAdministrationAuthority, IdentityAdministrationAuthorityError,
     IdentityAdministrationCommit, IdentityAdministrationController, IdentityAdministrationError,
     IdentityAdministrationService, IdentityAdministrator, identity_administration_api_router,
 };
+pub use local_node_identity::{LocalNodeIdentity, LocalNodeIdentityError};
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,
     NativeNamespaceMutationError, NativeNamespaceMutationService,
@@ -245,6 +272,9 @@ pub use passkey_session::{
 };
 pub use passkey_session_contract::{
     DisabledPasskeyProof, DisabledPasskeySessions, PasskeySessionCeremony, PreparedPasskeyProof,
+};
+pub use public_contract_api::{
+    PublicContractApiError, ReadinessSource, public_contract_api_router,
 };
 pub use recovery_code_issuance::RecoveryCodeIssuanceService;
 pub use recovery_code_issuance_api::{

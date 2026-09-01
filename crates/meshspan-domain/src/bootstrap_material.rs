@@ -2,6 +2,7 @@
 
 //! Restart-stable, domain-separated identities for one first-appliance bootstrap.
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::secret_text::derive;
@@ -37,6 +38,27 @@ pub struct InitialBootstrapMaterial {
 }
 
 impl InitialBootstrapMaterial {
+    /// Derives the first node identity from its locally generated public key.
+    ///
+    /// The node-local database and identity key lifecycle begin before a browser or headless client
+    /// chooses its idempotency operation or claim rotation. Binding the node solely to its public
+    /// key therefore keeps that identity stable across setup retries, claim rotation and restarts.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the cryptographically negligible nil derivation.
+    pub fn node_id(
+        public_key_fingerprint: [u8; 32],
+    ) -> Result<NodeId, InitialBootstrapMaterialError> {
+        if public_key_fingerprint == [0; 32] {
+            return Err(InitialBootstrapMaterialError::Identifier);
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"meshspan.setup.node-id.v1");
+        digest.update(public_key_fingerprint);
+        NodeId::from_bytes(uuid_identifier(digest.finalize().into())).map_err(Into::into)
+    }
+
     /// Derives the same independent values for every exact retry of one claimed operation.
     ///
     /// # Errors
@@ -45,6 +67,7 @@ impl InitialBootstrapMaterial {
     pub fn derive(
         claim: &ClaimBundle,
         operation_id: OperationId,
+        node_id: NodeId,
     ) -> Result<Self, InitialBootstrapMaterialError> {
         Ok(Self {
             mesh_id: MeshId::from_bytes(identifier(
@@ -67,11 +90,7 @@ impl InitialBootstrapMaterial {
                 claim,
                 operation_id,
             ))?,
-            node_id: NodeId::from_bytes(identifier(
-                b"meshspan.setup.node-id.v1",
-                claim,
-                operation_id,
-            ))?,
+            node_id,
             partition_id: PartitionId::from_bytes(identifier(
                 b"meshspan.setup.partition-id.v1",
                 claim,
@@ -122,6 +141,10 @@ impl From<ApiKeyBundleError> for InitialBootstrapMaterialError {
 
 fn identifier(domain: &[u8], claim: &ClaimBundle, operation_id: OperationId) -> [u8; 16] {
     let digest = derive(domain, claim.secret_bytes(), operation_id);
+    uuid_identifier(digest)
+}
+
+fn uuid_identifier(digest: [u8; 32]) -> [u8; 16] {
     let mut identifier = [0_u8; 16];
     identifier.copy_from_slice(&digest[..16]);
     identifier[6] = (identifier[6] & 0x0f) | 0x40;
@@ -139,10 +162,17 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
         let operation = OperationId::from_bytes([99; 16])?;
-        let first = InitialBootstrapMaterial::derive(&claim, operation)?;
-        let replay = InitialBootstrapMaterial::derive(&claim, operation)?;
+        let node_id = InitialBootstrapMaterial::node_id([77; 32])?;
+        let first = InitialBootstrapMaterial::derive(&claim, operation, node_id)?;
+        let replay = InitialBootstrapMaterial::derive(&claim, operation, node_id)?;
         assert_eq!(first.mesh_id, replay.mesh_id);
         assert_eq!(first.node_id, replay.node_id);
+        let another_operation =
+            InitialBootstrapMaterial::derive(&claim, OperationId::from_bytes([100; 16])?, node_id)?;
+        assert_eq!(first.node_id, another_operation.node_id);
+        assert_ne!(first.mesh_id, another_operation.mesh_id);
+        assert_ne!(InitialBootstrapMaterial::node_id([78; 32])?, node_id);
+        assert!(InitialBootstrapMaterial::node_id([0; 32]).is_err());
         assert_eq!(
             first.api_key.expose_encoded(),
             replay.api_key.expose_encoded()

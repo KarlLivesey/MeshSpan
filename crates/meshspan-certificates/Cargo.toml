@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-certificates"
+description = "Provider-neutral X.509 certificate construction for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+p256.workspace = true
+rcgen.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

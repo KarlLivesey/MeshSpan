@@ -118,7 +118,8 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
     operation_bytes[8] = 0x80;
     operation_bytes[15] = 1;
     let operation_id = OperationId::from_bytes(operation_bytes)?;
-    let material = InitialBootstrapMaterial::derive(&claim, operation_id)?;
+    let node_id = InitialBootstrapMaterial::node_id([99; 32])?;
+    let material = InitialBootstrapMaterial::derive(&claim, operation_id, node_id)?;
     let local_path = directory.join("local.sqlite3");
     let claim_path = directory.join("first-boot.claim");
     ClaimFile::create(&claim_path, &claim)?;

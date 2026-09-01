@@ -621,7 +621,11 @@ fn fixture() -> Result<
 > {
     let claim = ClaimBundle::generate(&mut CountingRandom::default())?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let directory = tempdir()?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),

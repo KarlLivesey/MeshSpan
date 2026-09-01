@@ -59,6 +59,47 @@ pub struct HeadlessStorageConfig {
 }
 
 impl HeadlessStorageConfig {
+    /// Validates one state directory and one or more independent storage folders.
+    ///
+    /// Paths remain operating-system strings; non-UTF paths are not lossy-converted.
+    /// Filesystem identity and overlap checks happen when folders are opened because the paths
+    /// may not exist while configuration is being assembled.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty paths, duplicate storage paths, an exact state/storage path collision and
+    /// inputs beyond the compiled path-count bound.
+    pub fn new(
+        daemon_state_dir: PathBuf,
+        storage_paths: Vec<PathBuf>,
+    ) -> Result<Self, StorageConfigError> {
+        if daemon_state_dir.as_os_str().is_empty() {
+            return Err(StorageConfigError::MissingStateDirectory);
+        }
+        if storage_paths.is_empty() {
+            return Err(StorageConfigError::MissingStoragePath);
+        }
+        if storage_paths.len() > MAXIMUM_STORAGE_PATHS {
+            return Err(StorageConfigError::InvalidArguments);
+        }
+        let mut unique_paths = BTreeSet::new();
+        for folder in &storage_paths {
+            if folder.as_os_str().is_empty() {
+                return Err(StorageConfigError::InvalidArguments);
+            }
+            if folder == &daemon_state_dir {
+                return Err(StorageConfigError::StateStorageConflict);
+            }
+            if !unique_paths.insert(folder) {
+                return Err(StorageConfigError::DuplicateStoragePath);
+            }
+        }
+        Ok(Self {
+            daemon_state_dir,
+            storage_paths,
+        })
+    }
+
     /// Parses one required `--daemon-state-dir` and repeatable `--storage-path` flags.
     ///
     /// Paths remain operating-system strings; non-UTF paths are not lossy-converted.
@@ -77,7 +118,6 @@ impl HeadlessStorageConfig {
         }
         let mut daemon_state_dir = None;
         let mut storage_paths = Vec::new();
-        let mut unique_paths = BTreeSet::new();
         for pair in values.as_chunks::<2>().0 {
             let flag = &pair[0];
             let value = &pair[1];
@@ -89,22 +129,15 @@ impl HeadlessStorageConfig {
                     return Err(StorageConfigError::InvalidArguments);
                 }
             } else if flag == OsStr::new("--storage-path") {
-                let folder = PathBuf::from(value);
-                if !unique_paths.insert(folder.clone()) {
-                    return Err(StorageConfigError::DuplicateStoragePath);
-                }
-                storage_paths.push(folder);
+                storage_paths.push(PathBuf::from(value));
             } else {
                 return Err(StorageConfigError::InvalidArguments);
             }
         }
-        if storage_paths.is_empty() {
-            return Err(StorageConfigError::MissingStoragePath);
-        }
-        Ok(Self {
-            daemon_state_dir: daemon_state_dir.ok_or(StorageConfigError::MissingStateDirectory)?,
+        Self::new(
+            daemon_state_dir.ok_or(StorageConfigError::MissingStateDirectory)?,
             storage_paths,
-        })
+        )
     }
 
     /// Returns the daemon-owned state directory, which is never a storage provider folder.
@@ -135,6 +168,9 @@ pub enum StorageConfigError {
     /// The same storage path was supplied more than once.
     #[error("storage path is duplicated")]
     DuplicateStoragePath,
+    /// The daemon state directory was also supplied as a storage folder.
+    #[error("daemon state directory cannot also be a storage path")]
+    StateStorageConflict,
     /// A target usage ceiling is zero or outside its valid percentage range.
     #[error("storage usage limit is invalid")]
     InvalidUsageLimit,
@@ -183,6 +219,7 @@ mod tests {
                 "/data",
             ],
             vec!["--state", "/state", "--storage-path", "/data"],
+            vec!["--daemon-state-dir", "/same", "--storage-path", "/same"],
         ] {
             assert!(
                 HeadlessStorageConfig::parse(arguments.into_iter().map(OsString::from)).is_err()

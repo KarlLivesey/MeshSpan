@@ -12,6 +12,7 @@ mod federation_graph;
 mod federation_mutation;
 mod federation_route;
 mod federation_storage;
+mod join_grant;
 mod lifecycle;
 mod operation;
 mod partitioning;
@@ -55,6 +56,7 @@ pub use federation_storage::{
     FederationStorageAction, FederationStorageActionError, FederationStorageAllocation,
     FederationStorageAllocationError,
 };
+pub use join_grant::{ENCODED_JOIN_GRANT_LENGTH, JoinGrantBundle, JoinGrantBundleError};
 pub use lifecycle::{LifecycleEvent, LifecycleState, LifecycleTransitionError};
 pub use operation::{
     CommitOutcome, DurabilityScope, OperationDecision, OperationReceipt, classify_operation,

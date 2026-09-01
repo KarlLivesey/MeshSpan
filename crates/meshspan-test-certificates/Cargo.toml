@@ -2,7 +2,7 @@
 
 [package]
 name = "meshspan-test-certificates"
-description = "Provider-neutral X.509 test certificate fixtures for MeshSpan"
+description = "Thin test-fixture export of MeshSpan's provider-neutral certificate library"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,12 +11,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-getrandom.workspace = true
-p256.workspace = true
-rcgen.workspace = true
-sha2.workspace = true
-thiserror.workspace = true
-zeroize.workspace = true
+meshspan-certificates = { path = "../meshspan-certificates" }
 
 [lints]
 workspace = true
