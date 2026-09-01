@@ -13,10 +13,10 @@ use crate::v1::{
     ComponentLifecycleState, FetchBranchCommits, FetchCertificateEnvelope, FetchIdentityProjection,
     FetchImmutableObjects, IdentityProjection, InventoryBatch, InventoryBegin, InventoryFinish,
     MetadataChangeBatch, MetadataCommand, MetadataPage, MetadataQuery, MetadataWatch,
-    ProposeBranchInclusion, PublishCertificateBundle, PublishComponentObservation,
-    PublishComponentSupport, PublishConvergenceReceipt, PublishIsolationDelegation,
-    PublishPresence, PublishTargetStatus, QueryConsistency, RenewWork, ReportWorkProgress,
-    RevokeCertificateEnvelope, ScrubObservation, WorkLease,
+    NodeActivationRequest, NodeActivationResult, ProposeBranchInclusion, PublishCertificateBundle,
+    PublishComponentObservation, PublishComponentSupport, PublishConvergenceReceipt,
+    PublishIsolationDelegation, PublishPresence, PublishTargetStatus, QueryConsistency, RenewWork,
+    ReportWorkProgress, RevokeCertificateEnvelope, ScrubObservation, WorkLease,
 };
 
 use super::{
@@ -28,6 +28,8 @@ use super::{
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
         Message::MetadataCommand(value) => metadata_command(value, limits),
+        Message::NodeActivationRequest(value) => node_activation_request(value),
+        Message::NodeActivationResult(value) => node_activation_result(value, limits),
         Message::MetadataQuery(value) => metadata_query(value, limits),
         Message::MetadataPage(value) => metadata_page(value, limits),
         Message::OperationStatusRequest(value) => valid_identifier(&value.operation_id),
@@ -102,6 +104,37 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         Message::AcknowledgeCertificateInstall(value) => acknowledge_certificate(value),
         Message::RevokeCertificateEnvelope(value) => revoke_certificate(value),
         _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn node_activation_request(value: &NodeActivationRequest) -> Result<(), WireContractError> {
+    if value.roles.is_empty() || value.roles.len() > 4 {
+        return Err(WireContractError::InvalidMessage);
+    }
+    let mut seen = [false; 5];
+    for encoded in &value.roles {
+        let role = crate::v1::NodeRole::try_from(*encoded)
+            .map_err(|_| WireContractError::InvalidMessage)?;
+        let index = usize::try_from(*encoded).map_err(|_| WireContractError::InvalidMessage)?;
+        if role == crate::v1::NodeRole::Unspecified
+            || index >= seen.len()
+            || std::mem::replace(&mut seen[index], true)
+        {
+            return Err(WireContractError::InvalidMessage);
+        }
+    }
+    valid_digest(&value.capability_digest)
+}
+
+fn node_activation_result(
+    value: &NodeActivationResult,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_operation_result(value.result.as_ref(), limits)?;
+    if value.active_revision == Some(0) {
+        Err(WireContractError::InvalidMessage)
+    } else {
+        Ok(())
     }
 }
 

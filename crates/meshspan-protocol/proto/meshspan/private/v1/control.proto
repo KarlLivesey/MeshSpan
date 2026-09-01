@@ -392,6 +392,8 @@ message ControlEnvelope {
     Pong pong = 13;
     GoAway go_away = 14;
     ProtocolError protocol_error = 15;
+    NodeActivationRequest node_activation_request = 16;
+    NodeActivationResult node_activation_result = 17;
     VoteRequest vote_request = 20;
     VoteResponse vote_response = 21;
     AppendRequest append_request = 22;

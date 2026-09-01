@@ -4,8 +4,8 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use meshspan_consensus::CoreMessage;
@@ -88,8 +88,7 @@ pub struct ConsensusNetworkConfig {
 #[derive(Clone)]
 pub struct ConsensusNetwork {
     client: quinn::Endpoint,
-    registry: Arc<PeerRegistry>,
-    peers: Arc<BTreeMap<NodeId, ConsensusPeerConfig>>,
+    peers: Arc<RwLock<ConsensusPeers>>,
     local_node_id: NodeId,
     local_incarnation: u64,
     mesh_id: MeshId,
@@ -97,8 +96,13 @@ pub struct ConsensusNetwork {
     routing_epoch: u64,
     certificate_name: Arc<str>,
     wire_limits: WireLimits,
-    outbound: Arc<BTreeMap<NodeId, mpsc::Sender<CoreMessage>>>,
     next_request: Arc<AtomicU64>,
+}
+
+struct ConsensusPeers {
+    routes: BTreeMap<NodeId, ConsensusPeerConfig>,
+    registry: PeerRegistry,
+    outbound: BTreeMap<NodeId, mpsc::Sender<CoreMessage>>,
 }
 
 impl ConsensusNetwork {
@@ -129,11 +133,14 @@ impl ConsensusNetwork {
         )?;
         let client = client_endpoint(config.client_address, credentials(&config)?, roots, limits)?;
         let peers = peer_map(config.peers)?;
-        let registry = Arc::new(peer_registry(&peers)?);
-        let mut network = Self {
+        let registry = peer_registry(&peers)?;
+        let network = Self {
             client,
-            registry,
-            peers: Arc::new(peers),
+            peers: Arc::new(RwLock::new(ConsensusPeers {
+                routes: peers,
+                registry,
+                outbound: BTreeMap::new(),
+            })),
             local_node_id: config.local_node_id,
             local_incarnation: config.local_incarnation,
             mesh_id: config.mesh_id,
@@ -141,18 +148,59 @@ impl ConsensusNetwork {
             routing_epoch: config.routing_epoch,
             certificate_name: Arc::from(config.certificate_name),
             wire_limits,
-            outbound: Arc::new(BTreeMap::new()),
             next_request: Arc::new(AtomicU64::new(1)),
         };
-        let mut outbound = BTreeMap::new();
-        for peer in network.peers.keys().copied() {
+        let peer_ids = network
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .routes
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut workers = Vec::with_capacity(peer_ids.len());
+        for peer in peer_ids {
             let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
-            network.spawn_outbound_worker(peer, receiver);
-            outbound.insert(peer, sender);
+            workers.push((peer, receiver));
+            network
+                .peers
+                .write()
+                .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+                .outbound
+                .insert(peer, sender);
         }
-        network.outbound = Arc::new(outbound);
+        for (peer, receiver) in workers {
+            network.spawn_outbound_worker(peer, receiver);
+        }
         network.spawn_accept_loop(server, incoming_messages);
         Ok(network)
+    }
+
+    /// Adds or atomically replaces one current enrolled peer route and certificate binding.
+    ///
+    /// Existing queued traffic is retained for an unchanged identity and replaced for a new
+    /// incarnation or certificate. The authoritative caller remains responsible for fencing.
+    pub fn upsert_peer(&self, peer: ConsensusPeerConfig) -> Result<(), ConsensusNetworkError> {
+        if peer.node_id == self.local_node_id
+            || peer.incarnation == 0
+            || peer.certificate_der.is_empty()
+        {
+            return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        let mut peers = self
+            .peers
+            .write()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?;
+        let mut routes = peers.routes.clone();
+        routes.insert(peer.node_id, peer.clone());
+        let registry = peer_registry(&routes)?;
+        let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        peers.routes = routes;
+        peers.registry = registry;
+        peers.outbound.insert(peer.node_id, sender);
+        drop(peers);
+        self.spawn_outbound_worker(peer.node_id, receiver);
+        Ok(())
     }
 
     fn spawn_outbound_worker(&self, peer: NodeId, mut messages: mpsc::Receiver<CoreMessage>) {
@@ -184,7 +232,12 @@ impl ConsensusNetwork {
                 let Ok(connection) = incoming.await else {
                     continue;
                 };
-                let Ok(peer) = network.registry.authenticate_connection(&connection) else {
+                let peer = network
+                    .peers
+                    .read()
+                    .ok()
+                    .and_then(|peers| peers.registry.authenticate_connection(&connection).ok());
+                let Some(peer) = peer else {
                     connection.close(1_u32.into(), b"unknown peer");
                     continue;
                 };
@@ -279,10 +332,19 @@ impl ConsensusNetwork {
     async fn connect_peer(&self, to: NodeId) -> Result<quinn::Connection, ConsensusNetworkError> {
         let peer = self
             .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .routes
             .get(&to)
+            .cloned()
             .ok_or(ConsensusNetworkError::InvalidConfiguration)?;
         let connection = connect(&self.client, peer.address, &self.certificate_name).await?;
-        let authenticated = self.registry.authenticate_connection(&connection)?;
+        let authenticated = self
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .registry
+            .authenticate_connection(&connection)?;
         if authenticated.node_id() != to || authenticated.incarnation() != peer.incarnation {
             return Err(ConsensusNetworkError::InvalidTraffic);
         }
@@ -399,7 +461,12 @@ impl ConsensusNetwork {
 
 impl ConsensusMessageTransport for ConsensusNetwork {
     fn send(&self, to: NodeId, message: CoreMessage) {
-        if let Some(sender) = self.outbound.get(&to) {
+        let sender = self
+            .peers
+            .read()
+            .ok()
+            .and_then(|peers| peers.outbound.get(&to).cloned());
+        if let Some(sender) = sender {
             let _full_or_closed = sender.try_send(message);
         }
     }
@@ -413,7 +480,6 @@ fn validate_config(config: &ConsensusNetworkConfig) -> Result<(), ConsensusNetwo
         || config.certificate_der.is_empty()
         || config.private_key_pkcs8.is_empty()
         || config.trust_anchors.is_empty()
-        || config.peers.is_empty()
         || config
             .peers
             .iter()
@@ -456,6 +522,9 @@ fn roots(certificates: &[Vec<u8>]) -> Result<RootCertStore, ConsensusNetworkErro
 fn peer_registry(
     peers: &BTreeMap<NodeId, ConsensusPeerConfig>,
 ) -> Result<PeerRegistry, ConsensusNetworkError> {
+    if peers.is_empty() {
+        return Ok(PeerRegistry::empty());
+    }
     PeerRegistry::new(peers.values().map(|peer| PeerBinding {
         node_id: peer.node_id,
         incarnation: peer.incarnation,

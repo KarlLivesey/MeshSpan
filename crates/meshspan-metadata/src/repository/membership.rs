@@ -83,7 +83,7 @@ pub(super) fn load(
             (ACTIVE_VOTER_ROLE, ACTIVE_MEMBER_STATE, ACTIVE_NODE_STATE) => {
                 active_voters.insert(node_id, incarnation)
             }
-            (STAGED_LEARNER_ROLE, STAGED_MEMBER_STATE, ADMITTED_NODE_STATE) => {
+            (STAGED_LEARNER_ROLE, STAGED_MEMBER_STATE, ADMITTED_NODE_STATE | ACTIVE_NODE_STATE) => {
                 admitted_learners.insert(node_id, incarnation)
             }
             _ => return Err(RepositoryError::CorruptState),

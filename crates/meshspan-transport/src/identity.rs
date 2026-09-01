@@ -29,6 +29,14 @@ pub struct PeerRegistry {
 }
 
 impl PeerRegistry {
+    /// Creates a closed registry which authenticates no peers until authoritative bindings arrive.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            by_fingerprint: BTreeMap::new(),
+        }
+    }
+
     /// Builds an unambiguous registry from one binding per active node and certificate.
     ///
     /// # Errors
