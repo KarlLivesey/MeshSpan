@@ -85,7 +85,10 @@ pub use cleanup_worker::{
 #[cfg(test)]
 mod cleanup_worker_tests;
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
-pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};
+pub use driver::{
+    AppliedAuthoritativeCommand, ClusterDriverError, DriverEffect, PartitionConsensusDriver,
+    ScopedProposal,
+};
 pub use federation_authority::{
     FederationAuthorityError, FederationConnectionAuthority, federation_connection_authority,
 };
