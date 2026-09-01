@@ -21,6 +21,16 @@ export function parseContract(sourceText) {
 
 export function readRequiredRoutes(document) {
   const operations = collectOperations(document);
+  return {
+    ...readAdministrationRoutes(operations),
+    ...readAuthenticationRoutes(operations),
+    ...readFileRoutes(operations),
+    ...readLifecycleRoutes(operations),
+    ...readSessionRoutes(operations),
+  };
+}
+
+function readSessionRoutes(operations) {
   const createSession = readSessionOperation(
     requireOperation(operations, "createSession"),
   );
@@ -31,20 +41,18 @@ export function readRequiredRoutes(document) {
     throw new Error("session rotation must preserve the CSRF token contract");
   }
   return {
-    abortUpload: requireOperation(operations, "abortUpload"),
-    addGroupMember: requireOperation(operations, "addGroupMember"),
-    beginUpload: requireOperation(operations, "beginUpload"),
-    commitUpload: requireOperation(operations, "commitUpload"),
-    createGroup: requireOperation(operations, "createGroup"),
-    createDirectory: requireOperation(operations, "createDirectory"),
+    createSession,
+    getCurrentSession: requireOperation(operations, "getCurrentSession"),
+    revokeCurrentSession: requireOperation(operations, "revokeCurrentSession"),
+    stepUpCurrentSession,
+  };
+}
+
+function readAuthenticationRoutes(operations) {
+  return {
     createCurrentUserApiKey: requireOperation(
       operations,
       "createCurrentUserApiKey",
-    ),
-    createMeshSetup: requireOperation(operations, "createMeshSetup"),
-    createPasskeyChallenge: requireOperation(
-      operations,
-      "createPasskeyChallenge",
     ),
     createCurrentUserPasskey: requireOperation(
       operations,
@@ -66,46 +74,72 @@ export function readRequiredRoutes(document) {
       operations,
       "createCurrentUserTotpRegistrationChallenge",
     ),
-    createSession,
+    createPasskeyChallenge: requireOperation(
+      operations,
+      "createPasskeyChallenge",
+    ),
+    listCurrentUserAuthenticationMethods: requireOperation(
+      operations,
+      "listCurrentUserAuthenticationMethods",
+    ),
+    revokeCurrentUserAuthenticationMethod: requireOperation(
+      operations,
+      "revokeCurrentUserAuthenticationMethod",
+    ),
+  };
+}
+
+function readAdministrationRoutes(operations) {
+  return {
+    addGroupMember: requireOperation(operations, "addGroupMember"),
+    createGroup: requireOperation(operations, "createGroup"),
     createUser: requireOperation(operations, "createUser"),
     createVolume: requireOperation(operations, "createVolume"),
     createVolumePermissionGrant: requireOperation(
       operations,
       "createVolumePermissionGrant",
     ),
-    deleteObject: requireOperation(operations, "deleteObject"),
-    getHealth: requireOperation(operations, "getHealth"),
-    getCurrentSession: requireOperation(operations, "getCurrentSession"),
-    getObject: requireOperation(operations, "getObject"),
-    getOperationStatus: requireOperation(operations, "getOperationStatus"),
-    getOpenApi: requireOperation(operations, "getOpenApi"),
-    getSetupStatus: requireOperation(operations, "getSetupStatus"),
-    getUpload: requireOperation(operations, "getUpload"),
-    listDirectory: requireOperation(operations, "listDirectory"),
     listGroups: requireOperation(operations, "listGroups"),
     listGroupMembers: requireOperation(operations, "listGroupMembers"),
-    listCurrentUserAuthenticationMethods: requireOperation(
-      operations,
-      "listCurrentUserAuthenticationMethods",
-    ),
-    listUploadRanges: requireOperation(operations, "listUploadRanges"),
+    listOperations: requireOperation(operations, "listOperations"),
     listVolumePermissionGrants: requireOperation(
       operations,
       "listVolumePermissionGrants",
     ),
     listUsers: requireOperation(operations, "listUsers"),
     listVolumes: requireOperation(operations, "listVolumes"),
+    removeGroupMember: requireOperation(operations, "removeGroupMember"),
+    revokePermissionGrant: requireOperation(
+      operations,
+      "revokePermissionGrant",
+    ),
+  };
+}
+
+function readFileRoutes(operations) {
+  return {
+    abortUpload: requireOperation(operations, "abortUpload"),
+    beginUpload: requireOperation(operations, "beginUpload"),
+    commitUpload: requireOperation(operations, "commitUpload"),
+    createDirectory: requireOperation(operations, "createDirectory"),
+    deleteObject: requireOperation(operations, "deleteObject"),
+    getObject: requireOperation(operations, "getObject"),
+    getUpload: requireOperation(operations, "getUpload"),
+    listDirectory: requireOperation(operations, "listDirectory"),
+    listUploadRanges: requireOperation(operations, "listUploadRanges"),
     readFile: requireOperation(operations, "readFile"),
     renameObject: requireOperation(operations, "renameObject"),
-    removeGroupMember: requireOperation(operations, "removeGroupMember"),
-    revokeCurrentSession: requireOperation(operations, "revokeCurrentSession"),
-    revokePermissionGrant: requireOperation(operations, "revokePermissionGrant"),
-    revokeCurrentUserAuthenticationMethod: requireOperation(
-      operations,
-      "revokeCurrentUserAuthenticationMethod",
-    ),
-    stepUpCurrentSession,
     writeUploadRange: requireOperation(operations, "writeUploadRange"),
+  };
+}
+
+function readLifecycleRoutes(operations) {
+  return {
+    createMeshSetup: requireOperation(operations, "createMeshSetup"),
+    getHealth: requireOperation(operations, "getHealth"),
+    getOpenApi: requireOperation(operations, "getOpenApi"),
+    getOperationStatus: requireOperation(operations, "getOperationStatus"),
+    getSetupStatus: requireOperation(operations, "getSetupStatus"),
   };
 }
 

@@ -526,6 +526,38 @@ select:hover {
   container-type: inline-size;
 }
 
+.operation-administration {
+  display: grid;
+  gap: var(--space-3xl);
+}
+
+.operation-kind {
+  display: block;
+  margin-bottom: var(--space-xs);
+  text-transform: capitalize;
+}
+
+.operation-administration code {
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.state-succeeded::before {
+  background: var(--success);
+}
+
+.state-failed::before,
+.state-cancelled::before {
+  background: var(--danger);
+}
+
+.state-running::before,
+.state-queued::before,
+.state-awaiting_action::before {
+  background: var(--signal);
+}
+
 .administration-nav {
   display: flex;
   gap: var(--space-lg);

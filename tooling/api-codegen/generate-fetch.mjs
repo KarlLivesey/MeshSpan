@@ -49,6 +49,8 @@ import {
 import {
   renderOperationStatusClientInterface,
   renderOperationStatusClientMethods,
+  renderOperationStatusRequestTypes,
+  renderOperationStatusRuntime,
 } from "./render-operation-status-client.mjs";
 
 const OPENAPI_PATH = new URL(
@@ -111,6 +113,7 @@ import type {
   HealthResponse,
   ListDirectoryResponse,
   ListGroupMembershipsResponse,
+  ListOperationsResponse,
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
@@ -195,6 +198,8 @@ import {
   zListDirectoryResponse2,
   zListGroupsQuery,
   zListGroupsResponse,
+  zListOperationsQuery,
+  zListOperationsResponse,
   zListGroupMembersPath,
   zListGroupMembersQuery,
   zListGroupMembersResponse,
@@ -301,6 +306,8 @@ export type ListVolumesRequest = Readonly<{
 }>;
 
 ${renderPermissionAdministrationRequestTypes()}
+
+${renderOperationStatusRequestTypes()}
 
 ${renderUploadRequestTypes()}
 
@@ -514,6 +521,8 @@ ${renderAuthenticationClientRuntime(routes)}
 ${renderVolumeClientRuntime(routes)}
 
 ${renderPermissionAdministrationRuntime()}
+
+${renderOperationStatusRuntime()}
 
 `;
 

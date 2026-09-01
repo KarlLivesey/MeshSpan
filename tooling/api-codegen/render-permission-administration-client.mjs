@@ -32,6 +32,12 @@ export function renderPermissionAdministrationClientInterface() {
 
 /** Renders permission-administration client implementations. */
 export function renderPermissionAdministrationClientMethods(routes) {
+  return `${renderGrantCreation(routes)}
+    ${renderGrantListing(routes)}
+    ${renderGrantRevocation(routes)}`;
+}
+
+function renderGrantCreation(routes) {
   return `async createVolumePermissionGrant(
       volumeId,
       request,
@@ -55,8 +61,11 @@ export function renderPermissionAdministrationClientMethods(routes) {
         },
         zCreateVolumePermissionGrantResponse2,
       );
-    },
-    async listVolumePermissionGrants(
+    },`;
+}
+
+function renderGrantListing(routes) {
+  return `async listVolumePermissionGrants(
       request,
     ): Promise<ListVolumePermissionGrantsResponse> {
       const path = zListVolumePermissionGrantsPath.parse({
@@ -89,8 +98,11 @@ export function renderPermissionAdministrationClientMethods(routes) {
         { method: "GET" },
         zListVolumePermissionGrantsResponse2,
       );
-    },
-    async revokePermissionGrant(
+    },`;
+}
+
+function renderGrantRevocation(routes) {
+  return `async revokePermissionGrant(
       volumeId,
       grantId,
       request,
@@ -134,14 +146,7 @@ export function renderPermissionAdministrationRuntime() {
   const route = new URL(value, apiRoot.origin);
   const prefix = "/api/latest/admin/volumes/";
   const suffix = "/permission-grants";
-  if (
-    route.origin !== apiRoot.origin ||
-    route.username !== "" ||
-    route.password !== "" ||
-    route.hash !== "" ||
-    !route.pathname.startsWith(prefix) ||
-    !route.pathname.endsWith(suffix)
-  ) {
+  if (!isPermissionGrantPageRoute(apiRoot, route, prefix, suffix)) {
     throw new TypeError("permission-grant page URL is outside the administration API");
   }
   const volumeId = route.pathname.slice(prefix.length, -suffix.length);
@@ -159,5 +164,21 @@ export function renderPermissionAdministrationRuntime() {
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
   });
   return route.pathname + route.search;
+}
+
+function isPermissionGrantPageRoute(
+  apiRoot: URL,
+  route: URL,
+  prefix: string,
+  suffix: string,
+): boolean {
+  return (
+    route.origin === apiRoot.origin &&
+    route.username === "" &&
+    route.password === "" &&
+    route.hash === "" &&
+    route.pathname.startsWith(prefix) &&
+    route.pathname.endsWith(suffix)
+  );
 }`;
 }

@@ -69,6 +69,7 @@ export function IdentityAdministrationPanel(
           People and groups
         </a>
         <a href="/admin/volumes">Volumes</a>
+        <a href="/admin/operations">Operations</a>
       </nav>
       <CreatePrincipalForm create={create} />
       <div class="principal-columns">

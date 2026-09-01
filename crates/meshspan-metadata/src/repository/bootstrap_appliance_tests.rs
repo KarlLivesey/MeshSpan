@@ -256,7 +256,7 @@ fn missing_authentication_recipient_rejects_the_complete_bootstrap()
     Ok(())
 }
 
-fn fixture(
+pub(super) fn fixture(
     partition_id: PartitionId,
 ) -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::error::Error>> {
     let administrator = PrincipalId::from_bytes([2; 16])?;

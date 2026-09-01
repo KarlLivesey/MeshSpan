@@ -3,7 +3,9 @@
 //! Consensus-owned adapter for durable operation status.
 
 use meshspan_domain::{OperationId, PrincipalId, UnixMicros};
-use meshspan_metadata::{AuthoritativeOperationStatus, RepositoryError};
+use meshspan_metadata::{
+    AuthoritativeOperationCursor, AuthoritativeOperationStatus, Page, PageLimit, RepositoryError,
+};
 
 use crate::{
     ConsensusAuthenticationAuthority, OperationStatusAuthority, OperationStatusAuthorityError,
@@ -16,6 +18,19 @@ impl OperationStatusAuthority for ConsensusAuthenticationAuthority {
     ) -> Result<Option<AuthoritativeOperationStatus>, OperationStatusAuthorityError> {
         self.reader()
             .operation_status(operation_id)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn operation_statuses(
+        &self,
+        after: Option<AuthoritativeOperationCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<AuthoritativeOperationStatus, AuthoritativeOperationCursor>,
+        OperationStatusAuthorityError,
+    > {
+        self.reader()
+            .operation_statuses(after, limit)
             .map_err(|error| map_repository_error(&error))
     }
 

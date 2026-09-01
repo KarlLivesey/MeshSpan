@@ -79,6 +79,8 @@ mod node_wrapping_key;
 #[cfg(test)]
 mod node_wrapping_key_tests;
 mod operation_status;
+#[cfg(test)]
+mod operation_status_tests;
 mod passkey_registration;
 #[cfg(test)]
 mod passkey_registration_tests;
@@ -178,7 +180,9 @@ pub use kernel::{
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
 pub use node_wrapping_key::NodeWrappingKeyRecord;
-pub use operation_status::{AuthoritativeOperationState, AuthoritativeOperationStatus};
+pub use operation_status::{
+    AuthoritativeOperationCursor, AuthoritativeOperationState, AuthoritativeOperationStatus,
+};
 pub use passkey_registration::{
     AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
@@ -658,6 +662,20 @@ impl AuthoritativeRepository {
         operation_id: OperationId,
     ) -> Result<Option<AuthoritativeOperationStatus>, RepositoryError> {
         operation_status::read(&self.database, operation_id)
+    }
+
+    /// Returns one bounded reverse-chronological page of authoritative operations.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when any listed lifecycle, actor, result or timestamp is inconsistent.
+    pub fn operation_statuses(
+        &self,
+        after: Option<AuthoritativeOperationCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<AuthoritativeOperationStatus, AuthoritativeOperationCursor>, RepositoryError>
+    {
+        operation_status::list(&self.database, after, limit)
     }
 
     /// Resolves the durable delivery facts for one prior API-key session operation.

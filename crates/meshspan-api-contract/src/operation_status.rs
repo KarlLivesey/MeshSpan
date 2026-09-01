@@ -7,6 +7,42 @@ use serde::{Deserialize, Serialize};
 
 use crate::OperationId;
 
+/// Opaque continuation for one reverse-chronological operation page.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct OperationCursor(
+    #[schemars(length(min = 1, max = 256), pattern(r"^[A-Za-z0-9._~-]+$"))] String,
+);
+
+impl OperationCursor {
+    /// Constructs a cursor after its authoritative fields have been validated.
+    #[must_use]
+    pub fn from_encoded(value: String) -> Option<Self> {
+        let valid_length = (1..=256).contains(&value.len());
+        let valid_alphabet = value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._~-".contains(&byte));
+        (valid_length && valid_alphabet).then_some(Self(value))
+    }
+
+    /// Returns the opaque continuation token.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One bounded administrator operation-inventory query.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListOperationsQuery {
+    /// Exact continuation returned by the preceding page.
+    pub cursor: Option<OperationCursor>,
+    /// Requested result bound; omission applies the server default.
+    #[schemars(range(min = 1, max = 200))]
+    pub limit: Option<u16>,
+}
+
 /// Stable operation families shared by browser, CLI and future access connectors.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,7 +123,7 @@ pub struct OperationProgress {
 pub enum OperationRetryClass {
     /// The operation is terminal and another attempt would not help.
     Never,
-    /// MeshSpan owns bounded automatic retries.
+    /// `MeshSpan` owns bounded automatic retries.
     Automatic,
     /// A caller may retry only with the same operation identity.
     SameOperation,
@@ -143,4 +179,19 @@ pub struct OperationStatusResponse {
     /// Authoritative operation revision used by conditional clients and event projections.
     #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
     pub revision: u64,
+}
+
+/// One bounded reverse-chronological administrator operation page.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListOperationsResponse {
+    /// Current authoritative operation projections, newest revision first.
+    #[schemars(length(max = 200))]
+    pub operations: Vec<OperationStatusResponse>,
+    /// Ready-to-follow relative URL, or null at the terminal page.
+    #[schemars(
+        length(min = 1, max = 16_384),
+        pattern(r"^/api/latest/admin/operations")
+    )]
+    pub next_page_url: Option<String>,
 }
