@@ -15,7 +15,7 @@ use super::{
     federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
     namespace, node_wrapping_key, recovery_authority, retention, root_delegation, routing,
-    secret_generation, session, snapshot_schedule, storage_target, tags, user_snapshot,
+    secret_generation, session, snapshot_schedule, storage_target, tags, topology, user_snapshot,
     version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
@@ -549,6 +549,8 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ConfigureComponent(_)
             | AuthoritativeCommand::AssignComponent(_)
             | AuthoritativeCommand::RegisterStorageTarget(_)
+            | AuthoritativeCommand::CreateFaultGroup(_)
+            | AuthoritativeCommand::SetHostFaultGroupMembership(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
             | AuthoritativeCommand::CommitSecretGeneration(_)
             | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
@@ -577,6 +579,12 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::RegisterStorageTarget(value) => {
             storage_target::register(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CreateFaultGroup(value) => {
+            topology::create_fault_group(transaction, value, revision)
+        }
+        AuthoritativeCommand::SetHostFaultGroupMembership(value) => {
+            topology::set_host_membership(transaction, *value, revision)
         }
         AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
             node_wrapping_key::register(transaction, context, *value, revision)
@@ -1094,6 +1102,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CommitSecretGeneration(_) => 84,
         AuthoritativeCommand::ConfirmRecoveryBundleSaved(_) => 85,
         AuthoritativeCommand::ActivateNode(_) => 86,
+        AuthoritativeCommand::CreateFaultGroup(_) => 88,
+        AuthoritativeCommand::SetHostFaultGroupMembership(_) => 89,
     }
 }
 

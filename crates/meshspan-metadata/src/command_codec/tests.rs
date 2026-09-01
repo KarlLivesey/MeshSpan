@@ -3,9 +3,10 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId,
-    AuthenticationService, ComponentInstanceId, DurationMicros, EntropyError, GrantId, GroupId,
-    HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PrincipalId, RandomSource,
-    RecoveryCodeId, Revision, Rights, RoleId, SessionId, TargetId, UnixMicros, VolumeId,
+    AuthenticationService, ComponentInstanceId, DurationMicros, EntropyError, FaultGroupClassId,
+    FaultGroupId, GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
+    PrincipalId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId, TargetId,
+    UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -15,13 +16,13 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::{
     AddGroupMember, BootstrapMesh, BootstrapRecoveryIdentity, CommitSecretGeneration,
-    CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateUser,
-    CreateVolume, GrantInheritance, GrantPermission, GrantPermissionWithActivation,
-    IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
-    RecordName, RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember,
-    RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAuthenticationFactor,
-    SessionClientLabel, StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm,
-    VOLUME_CONTENT_KEY_SECRET_KIND,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent, CreateFaultGroup,
+    CreateGroup, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    GrantPermissionWithActivation, IssueAuthenticationSession, NewAuthenticationCredential,
+    NewRecoveryCode, PermissionScope, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
+    RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SessionAuthenticationFactor, SessionClientLabel, SetHostFaultGroupMembership,
+    StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 #[test]
@@ -100,6 +101,28 @@ fn identity_commands_round_trip_without_losing_optional_intent()
             containing_group_id: group,
             member_principal_id: principal,
             reason: "Access ended".to_owned(),
+        }),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn topology_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let group_id = FaultGroupId::from_bytes([91; 16])?;
+    for command in [
+        AuthoritativeCommand::CreateFaultGroup(CreateFaultGroup {
+            class_id: FaultGroupClassId::from_bytes([90; 16])?,
+            class_name: RecordName::new("Power source")?,
+            group_id,
+            group_name: RecordName::new("UPS A")?,
+        }),
+        AuthoritativeCommand::SetHostFaultGroupMembership(SetHostFaultGroupMembership {
+            group_id,
+            host_id: HostId::from_bytes([92; 16])?,
+            present: true,
         }),
     ] {
         assert_round_trip(context, command)?;

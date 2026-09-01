@@ -7,6 +7,7 @@ mod bootstrap;
 mod decoder;
 mod encoder;
 mod enrolment;
+mod fault_group;
 mod identity;
 mod namespace;
 mod node_wrapping_key;
@@ -137,6 +138,10 @@ fn encode_command(
         AuthoritativeCommand::RegisterStorageTarget(value) => {
             storage_target::encode(encoder, value)
         }
+        AuthoritativeCommand::CreateFaultGroup(value) => fault_group::encode_create(encoder, value),
+        AuthoritativeCommand::SetHostFaultGroupMembership(value) => {
+            fault_group::encode_membership(encoder, *value)
+        }
         AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
             node_wrapping_key::encode(encoder, value)
         }
@@ -189,6 +194,11 @@ fn decode_command(
         storage_target::REGISTER_STORAGE_TARGET => {
             storage_target::decode(decoder).map(AuthoritativeCommand::RegisterStorageTarget)
         }
+        fault_group::CREATE_FAULT_GROUP => {
+            fault_group::decode_create(decoder).map(AuthoritativeCommand::CreateFaultGroup)
+        }
+        fault_group::SET_HOST_FAULT_GROUP_MEMBERSHIP => fault_group::decode_membership(decoder)
+            .map(AuthoritativeCommand::SetHostFaultGroupMembership),
         node_wrapping_key::REGISTER_NODE_WRAPPING_KEY => {
             node_wrapping_key::decode(decoder).map(AuthoritativeCommand::RegisterNodeWrappingKey)
         }

@@ -9,27 +9,30 @@ use crate::{
     AbortUploadRequest, AbortUploadResponse, AddGroupMemberRequest, AddGroupMemberResponse,
     ApiError, BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
     ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse, CreateApiKeyRequest,
-    CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse, CreateGroupRequest,
-    CreateMeshSetupRequest, CreateMeshSetupResponse, CreateNodeJoinGrantRequest,
-    CreateNodeJoinGrantResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
-    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreatePrincipalResponse,
-    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
-    CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
-    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumePermissionGrantRequest,
-    CreateVolumePermissionGrantResponse, CreateVolumeRequest, CreateVolumeResponse,
-    CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
-    EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
+    CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse, CreateFaultGroupRequest,
+    CreateFaultGroupResponse, CreateGroupRequest, CreateMeshSetupRequest, CreateMeshSetupResponse,
+    CreateNodeJoinGrantRequest, CreateNodeJoinGrantResponse, CreatePasskeyChallengeRequest,
+    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
+    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
+    CreatePasskeyRegistrationResponse, CreatePrincipalResponse, CreateRecoveryCodesRequest,
+    CreateRecoveryCodesResponse, CreateSessionRequest, CreateSessionResponse,
+    CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
+    CreateTotpRegistrationRequest, CreateTotpRegistrationResponse, CreateUserRequest,
+    CreateVolumePermissionGrantRequest, CreateVolumePermissionGrantResponse, CreateVolumeRequest,
+    CreateVolumeResponse, CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse,
+    EnrolNodeRequest, EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
     JoinMeshSetupResponse, ListAuthenticationMethodsResponse, ListDirectoryResponse,
-    ListGroupMembershipsResponse, ListOperationsResponse, ListPrincipalsResponse,
-    ListStorageFoldersResponse, ListUploadRangesResponse, ListVolumePermissionGrantsResponse,
-    ListVolumesResponse, OperationStatusResponse, RegisterStorageFolderRequest,
-    RegisterStorageFolderResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
-    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
-    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
-    RevokePermissionGrantRequest, RevokePermissionGrantResponse, SetupStatusResponse,
-    StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
+    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListGroupMembershipsResponse,
+    ListOperationsResponse, ListPrincipalsResponse, ListStorageFoldersResponse,
+    ListTopologyNodesResponse, ListTopologyTargetsResponse, ListUploadRangesResponse,
+    ListVolumePermissionGrantsResponse, ListVolumesResponse, OperationStatusResponse,
+    RegisterStorageFolderRequest, RegisterStorageFolderResponse, RemoveGroupMemberRequest,
+    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
+    RevokePermissionGrantResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
+    SetupStatusResponse, StepUpCurrentSessionRequest, UploadStatusResponse,
+    WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -108,6 +111,8 @@ fn components() -> Value {
         schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
         schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
         schema_response::<CreateDirectoryResponse>("CreateDirectoryResponse"),
+        schema_request::<CreateFaultGroupRequest>("CreateFaultGroupRequest"),
+        schema_response::<CreateFaultGroupResponse>("CreateFaultGroupResponse"),
         schema_request::<CreateGroupRequest>("CreateGroupRequest"),
         schema_request::<CreateMeshSetupRequest>("CreateMeshSetupRequest"),
         schema_response::<CreateMeshSetupResponse>("CreateMeshSetupResponse"),
@@ -154,10 +159,14 @@ fn components() -> Value {
         schema_response::<JoinMeshSetupResponse>("JoinMeshSetupResponse"),
         schema_response::<ListAuthenticationMethodsResponse>("ListAuthenticationMethodsResponse"),
         schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
+        schema_response::<ListFaultGroupMembershipsResponse>("ListFaultGroupMembershipsResponse"),
+        schema_response::<ListFaultGroupsResponse>("ListFaultGroupsResponse"),
         schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
         schema_response::<ListOperationsResponse>("ListOperationsResponse"),
         schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
         schema_response::<ListStorageFoldersResponse>("ListStorageFoldersResponse"),
+        schema_response::<ListTopologyNodesResponse>("ListTopologyNodesResponse"),
+        schema_response::<ListTopologyTargetsResponse>("ListTopologyTargetsResponse"),
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
         schema_response::<ListVolumePermissionGrantsResponse>("ListVolumePermissionGrantsResponse"),
         schema_response::<ListVolumesResponse>("ListVolumesResponse"),
@@ -175,6 +184,8 @@ fn components() -> Value {
         schema_request::<RevokeAuthenticationMethodRequest>("RevokeAuthenticationMethodRequest"),
         schema_response::<RevokeAuthenticationMethodResponse>("RevokeAuthenticationMethodResponse"),
         schema_response::<SetupStatusResponse>("SetupStatusResponse"),
+        schema_request::<SetFaultGroupMembershipRequest>("SetFaultGroupMembershipRequest"),
+        schema_response::<SetFaultGroupMembershipResponse>("SetFaultGroupMembershipResponse"),
         schema_request::<StepUpCurrentSessionRequest>("StepUpCurrentSessionRequest"),
         schema_response::<UploadStatusResponse>("UploadStatusResponse"),
         schema_response::<WriteUploadRangeResponse>("WriteUploadRangeResponse"),
@@ -376,7 +387,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 9] {
+fn administration_paths() -> [(String, Value); 14] {
     [
         (
             "/admin/users".to_owned(),
@@ -401,6 +412,38 @@ fn administration_paths() -> [(String, Value); 9] {
             storage_folder_administration_path(),
         ),
         (
+            "/admin/topology/nodes".to_owned(),
+            topology_inventory_path(
+                "listTopologyNodes",
+                "List daemon nodes",
+                "ListTopologyNodesResponse",
+            ),
+        ),
+        (
+            "/admin/topology/targets".to_owned(),
+            topology_inventory_path(
+                "listTopologyTargets",
+                "List mesh-wide storage targets",
+                "ListTopologyTargetsResponse",
+            ),
+        ),
+        (
+            "/admin/topology/fault-groups".to_owned(),
+            fault_group_administration_path(),
+        ),
+        (
+            "/admin/topology/fault-group-memberships".to_owned(),
+            topology_inventory_path(
+                "listFaultGroupMemberships",
+                "List overlapping machine failure-group memberships",
+                "ListFaultGroupMembershipsResponse",
+            ),
+        ),
+        (
+            "/admin/topology/fault-groups/{group_id}/hosts/{host_id}".to_owned(),
+            fault_group_membership_path(),
+        ),
+        (
             "/admin/volumes/{volume_id}/permission-grants".to_owned(),
             volume_permission_grants_path(),
         ),
@@ -409,6 +452,89 @@ fn administration_paths() -> [(String, Value); 9] {
             permission_grant_revocation_path(),
         ),
     ]
+}
+
+fn topology_inventory_path(operation_id: &str, summary: &str, response_schema: &str) -> Value {
+    json!({
+        "get": {
+            "operationId": operation_id,
+            "summary": summary,
+            "x-meshspan-access": "system-manager",
+            "parameters": [cursor_parameter(), limit_parameter()],
+            "responses": {
+                "200": json_response(
+                    "One bounded topology page",
+                    &format!("#/components/schemas/{response_schema}")
+                ),
+                "400": json_response("Invalid query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or topology integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn fault_group_administration_path() -> Value {
+    let mut value = topology_inventory_path(
+        "listFaultGroups",
+        "List shared machine-failure groups",
+        "ListFaultGroupsResponse",
+    );
+    value["post"] = json!({
+        "operationId": "createFaultGroup",
+        "summary": "Create one shared machine-failure group",
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "parameters": [optional_csrf_parameter()],
+        "requestBody": json_request(
+            "Shared-failure group",
+            "#/components/schemas/CreateFaultGroupRequest"
+        ),
+        "responses": {
+            "201": json_response("Shared-failure group committed", "#/components/schemas/CreateFaultGroupResponse"),
+            "400": json_response("Invalid group request", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "409": json_response("Name or operation conflict", "#/components/schemas/ApiError"),
+            "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+            "500": json_response("Outgoing contract or topology integrity failure", "#/components/schemas/ApiError"),
+            "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+        }
+    });
+    value
+}
+
+fn fault_group_membership_path() -> Value {
+    json!({
+        "put": {
+            "operationId": "setFaultGroupMembership",
+            "summary": "Set one machine's membership in one shared-failure group",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [
+                principal_parameter("group_id", "Shared-failure group identity"),
+                principal_parameter("host_id", "Machine identity"),
+                optional_csrf_parameter()
+            ],
+            "requestBody": json_request(
+                "Desired membership",
+                "#/components/schemas/SetFaultGroupMembershipRequest"
+            ),
+            "responses": {
+                "200": json_response("Desired membership committed", "#/components/schemas/SetFaultGroupMembershipResponse"),
+                "400": json_response("Invalid membership request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Machine or fault group does not exist", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or topology integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn storage_folder_administration_path() -> Value {

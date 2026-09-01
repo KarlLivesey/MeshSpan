@@ -15,6 +15,8 @@ import type {
   CreateApiKeyResponse,
   CreateDirectoryRequest,
   CreateDirectoryResponse,
+  CreateFaultGroupRequest,
+  CreateFaultGroupResponse,
   CreateGroupRequest,
   CreatePasskeyChallengeRequest,
   CreatePasskeyChallengeResponse,
@@ -46,11 +48,15 @@ import type {
   JoinMeshSetupRequestWritable,
   JoinMeshSetupResponse,
   ListDirectoryResponse,
+  ListFaultGroupMembershipsResponse,
+  ListFaultGroupsResponse,
   ListGroupMembershipsResponse,
   ListOperationsResponse,
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListStorageFoldersResponse,
+  ListTopologyNodesResponse,
+  ListTopologyTargetsResponse,
   ListUploadRangesResponse,
   ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
@@ -68,6 +74,8 @@ import type {
   RegisterStorageFolderRequest,
   RegisterStorageFolderResponse,
   SetupStatusResponse,
+  SetFaultGroupMembershipRequest,
+  SetFaultGroupMembershipResponse,
   StepUpCurrentSessionRequestWritable,
   UploadStatusResponse,
   WriteUploadRangeResponse,
@@ -101,6 +109,8 @@ import {
   zCreateDirectoryBody,
   zCreateDirectoryPath,
   zCreateDirectoryResponse2,
+  zCreateFaultGroupBody,
+  zCreateFaultGroupResponse2,
   zCreateGroupBody,
   zCreateGroupResponse,
   zCreateMeshSetupBody,
@@ -135,12 +145,20 @@ import {
   zListDirectoryPath,
   zListDirectoryQuery,
   zListDirectoryResponse2,
+  zListFaultGroupMembershipsQuery,
+  zListFaultGroupMembershipsResponse2,
+  zListFaultGroupsQuery,
+  zListFaultGroupsResponse2,
   zListGroupsQuery,
   zListGroupsResponse,
   zListOperationsQuery,
   zListOperationsResponse,
   zListStorageFoldersQuery,
   zListStorageFoldersResponse2,
+  zListTopologyNodesQuery,
+  zListTopologyNodesResponse2,
+  zListTopologyTargetsQuery,
+  zListTopologyTargetsResponse2,
   zListGroupMembersPath,
   zListGroupMembersQuery,
   zListGroupMembersResponse,
@@ -175,6 +193,9 @@ import {
   zRemoveGroupMemberResponse2,
   zRegisterStorageFolderBody,
   zRegisterStorageFolderResponse2,
+  zSetFaultGroupMembershipBody,
+  zSetFaultGroupMembershipPath,
+  zSetFaultGroupMembershipResponse2,
   zStepUpCurrentSessionBody,
   zStepUpCurrentSessionResponse,
   zWriteUploadRangeHeaders,
@@ -268,6 +289,17 @@ export type ListOperationsRequest = Readonly<{
 export type ListStorageFoldersRequest = Readonly<{
   cursor?: string;
   limit?: number;
+}>;
+
+export type ListTopologyRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type SetFaultGroupMembershipInput = Readonly<{
+  groupId: string;
+  hostId: string;
+  request: SetFaultGroupMembershipRequest;
 }>;
 
 export type ListUploadRangesRequest = Readonly<{
@@ -437,6 +469,36 @@ export interface MeshSpanFetchClient {
     request: RegisterStorageFolderRequest,
     csrfToken?: string,
   ): Promise<RegisterStorageFolderResponse>;
+  listTopologyNodes(
+    request?: ListTopologyRequest,
+  ): Promise<ListTopologyNodesResponse>;
+  listNextTopologyNodes(
+    nextPageUrl: string,
+  ): Promise<ListTopologyNodesResponse>;
+  listTopologyTargets(
+    request?: ListTopologyRequest,
+  ): Promise<ListTopologyTargetsResponse>;
+  listNextTopologyTargets(
+    nextPageUrl: string,
+  ): Promise<ListTopologyTargetsResponse>;
+  listFaultGroups(
+    request?: ListTopologyRequest,
+  ): Promise<ListFaultGroupsResponse>;
+  listNextFaultGroups(nextPageUrl: string): Promise<ListFaultGroupsResponse>;
+  listFaultGroupMemberships(
+    request?: ListTopologyRequest,
+  ): Promise<ListFaultGroupMembershipsResponse>;
+  listNextFaultGroupMemberships(
+    nextPageUrl: string,
+  ): Promise<ListFaultGroupMembershipsResponse>;
+  createFaultGroup(
+    request: CreateFaultGroupRequest,
+    csrfToken?: string,
+  ): Promise<CreateFaultGroupResponse>;
+  setFaultGroupMembership(
+    input: SetFaultGroupMembershipInput,
+    csrfToken?: string,
+  ): Promise<SetFaultGroupMembershipResponse>;
   listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   listNextDirectory(nextPageUrl: string): Promise<ListDirectoryResponse>;
 
@@ -1216,6 +1278,113 @@ export function createMeshSpanFetchClient(
         zRegisterStorageFolderResponse2,
       );
     },
+    async listTopologyNodes(request = {}) {
+      const query = zListTopologyNodesQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/admin/topology/nodes", query),
+        { method: "GET" },
+        zListTopologyNodesResponse2,
+      );
+    },
+    async listNextTopologyNodes(nextPageUrl) {
+      return requestJson(
+        context,
+        validateTopologyPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListTopologyNodesResponse2,
+      );
+    },
+    async listTopologyTargets(request = {}) {
+      const query = zListTopologyTargetsQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/admin/topology/targets", query),
+        { method: "GET" },
+        zListTopologyTargetsResponse2,
+      );
+    },
+    async listNextTopologyTargets(nextPageUrl) {
+      return requestJson(
+        context,
+        validateTopologyPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListTopologyTargetsResponse2,
+      );
+    },
+    async listFaultGroups(request = {}) {
+      const query = zListFaultGroupsQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/admin/topology/fault-groups", query),
+        { method: "GET" },
+        zListFaultGroupsResponse2,
+      );
+    },
+    async listNextFaultGroups(nextPageUrl) {
+      return requestJson(
+        context,
+        validateTopologyPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListFaultGroupsResponse2,
+      );
+    },
+    async listFaultGroupMemberships(request = {}) {
+      const query = zListFaultGroupMembershipsQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/admin/topology/fault-group-memberships", query),
+        { method: "GET" },
+        zListFaultGroupMembershipsResponse2,
+      );
+    },
+    async listNextFaultGroupMemberships(nextPageUrl) {
+      return requestJson(
+        context,
+        validateTopologyPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListFaultGroupMembershipsResponse2,
+      );
+    },
+    async createFaultGroup(request, csrfToken) {
+      const body = zCreateFaultGroupBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/topology/fault-groups",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateFaultGroupResponse2,
+      );
+    },
+    async setFaultGroupMembership(input, csrfToken) {
+      const path = zSetFaultGroupMembershipPath.parse({
+        group_id: input.groupId,
+        host_id: input.hostId,
+      });
+      const body = zSetFaultGroupMembershipBody.parse(input.request);
+      const route = substitutePathParameter(
+        substitutePathParameter(
+          "/admin/topology/fault-groups/{group_id}/hosts/{host_id}",
+          "group_id",
+          path.group_id,
+        ),
+        "host_id",
+        path.host_id,
+      );
+      return requestJson(
+        context,
+        route,
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "PUT",
+        },
+        zSetFaultGroupMembershipResponse2,
+      );
+    },
     async listDirectory(request): Promise<ListDirectoryResponse> {
       const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
       const query = zListDirectoryQuery.parse({
@@ -1890,6 +2059,40 @@ function validateStorageFolderPageUrl(apiRoot: URL, value: string): string {
   }
   const rawLimit = route.searchParams.get("limit");
   zListStorageFoldersQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+  return route.pathname + route.search;
+}
+
+function validateTopologyPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("topology page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    ![
+      "/api/latest/admin/topology/nodes",
+      "/api/latest/admin/topology/targets",
+      "/api/latest/admin/topology/fault-groups",
+      "/api/latest/admin/topology/fault-group-memberships",
+    ].includes(route.pathname)
+  ) {
+    throw new TypeError("topology page URL is outside the administration API");
+  }
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("topology page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListTopologyNodesQuery.parse({
     cursor: route.searchParams.get("cursor") ?? undefined,
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
   });

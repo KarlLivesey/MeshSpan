@@ -37,6 +37,8 @@ mod recovery_code_validation;
 mod schema;
 mod storage_folder_administration;
 mod storage_folder_administration_validation;
+mod topology_administration;
+mod topology_administration_validation;
 mod totp_registration;
 mod totp_validation;
 mod validation;
@@ -221,6 +223,21 @@ pub use storage_folder_administration_validation::{
     MAX_REGISTER_STORAGE_FOLDER_BYTES, decode_register_storage_folder_request,
     encode_list_storage_folders_response, encode_register_storage_folder_response,
     validate_list_storage_folders_query,
+};
+pub use topology_administration::{
+    CreateFaultGroupRequest, CreateFaultGroupResponse, FaultGroupClassName,
+    FaultGroupMembershipSummary, FaultGroupName, FaultGroupSummary,
+    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListTopologyNodesResponse,
+    ListTopologyQuery, ListTopologyTargetsResponse, SetFaultGroupMembershipRequest,
+    SetFaultGroupMembershipResponse, TopologyCursor, TopologyNodeRoles, TopologyNodeState,
+    TopologyNodeSummary, TopologyTargetState, TopologyTargetSummary,
+};
+pub use topology_administration_validation::{
+    MAX_TOPOLOGY_MUTATION_BYTES, decode_create_fault_group_request,
+    decode_set_fault_group_membership_request, encode_create_fault_group_response,
+    encode_list_fault_group_memberships_response, encode_list_fault_groups_response,
+    encode_list_topology_nodes_response, encode_list_topology_targets_response,
+    encode_set_fault_group_membership_response, validate_list_topology_query,
 };
 pub use totp_registration::{
     CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,

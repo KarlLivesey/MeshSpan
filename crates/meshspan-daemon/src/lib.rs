@@ -52,6 +52,7 @@ mod consensus_identity_administration;
 mod consensus_node_enrolment;
 mod consensus_operation_status;
 mod consensus_permission_administration;
+mod consensus_topology_administration;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;
@@ -196,6 +197,9 @@ mod storage_provider_opening_tests;
 mod storage_target_registration;
 #[cfg(test)]
 mod storage_target_registration_tests;
+mod topology_administration;
+#[cfg(test)]
+mod topology_administration_api_tests;
 mod totp_registration;
 mod totp_registration_api;
 #[cfg(test)]
@@ -455,6 +459,11 @@ pub use storage_target_registration::{
     RegisteredStorageTarget, StorageTargetRegistrationAuthority,
     StorageTargetRegistrationAuthorityError, StorageTargetRegistrationError,
     StorageTargetRegistrationService,
+};
+pub use topology_administration::{
+    TopologyAdministrationApiError, TopologyAdministrationAuthority,
+    TopologyAdministrationAuthorityError, TopologyAdministrationController,
+    TopologyAdministrationError, TopologyAdministrationService, topology_administration_api_router,
 };
 pub use totp_registration::TotpRegistrationService;
 pub use totp_registration_api::{

@@ -11,11 +11,12 @@ use meshspan_domain::{
     ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
     AuthenticationFactorClasses, AuthenticationMethodId, AuthenticationOperationClass,
     AuthenticationPolicyId, AuthenticationService, ComponentInstanceId, ContentManifestId,
-    DelegatedMetadataScope, DelegationAdmission, DurationMicros, FileVersionId, GrantId, GroupId,
-    HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily,
-    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
-    PrincipalId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId, SessionId, SnapshotId,
-    SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
+    DelegatedMetadataScope, DelegationAdmission, DurationMicros, FaultGroupClassId, FaultGroupId,
+    FileVersionId, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId,
+    MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId, ObjectId,
+    ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, RecoveryCodeId, Revision,
+    Rights, RoleId, ScopeId, SessionId, SnapshotId, SnapshotScheduleId, TagId, TargetId,
+    UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
 use sha2::{Digest, Sha256};
@@ -158,6 +159,10 @@ pub enum AuthoritativeCommand {
     AssignComponent(AssignComponent),
     /// Registers one identity-bound storage target and its first marker generation.
     RegisterStorageTarget(RegisterStorageTarget),
+    /// Creates one named shared-failure group, creating its class when first used.
+    CreateFaultGroup(CreateFaultGroup),
+    /// Adds or removes one machine from one shared-failure group.
+    SetHostFaultGroupMembership(SetHostFaultGroupMembership),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -302,6 +307,8 @@ impl AuthoritativeCommand {
             Self::ConfigureComponent(value) => value.update_digest(digest),
             Self::AssignComponent(value) => value.update_digest(digest),
             Self::RegisterStorageTarget(value) => value.update_digest(digest),
+            Self::CreateFaultGroup(value) => value.update_digest(digest),
+            Self::SetHostFaultGroupMembership(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -1646,6 +1653,30 @@ pub struct RegisterStorageTarget {
     pub usage_limit: StorageUsageLimit,
 }
 
+/// One administrator-defined shared machine-failure boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateFaultGroup {
+    /// Stable identity of the class, such as building, power source or hypervisor.
+    pub class_id: FaultGroupClassId,
+    /// Human-readable class name, reused exactly by every group in this class.
+    pub class_name: RecordName,
+    /// Stable identity of this concrete shared-failure group.
+    pub group_id: FaultGroupId,
+    /// Human-readable group name within the class.
+    pub group_name: RecordName,
+}
+
+/// Desired membership of one machine in one shared-failure group.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetHostFaultGroupMembership {
+    /// Existing shared-failure group.
+    pub group_id: FaultGroupId,
+    /// Existing non-retired machine.
+    pub host_id: HostId,
+    /// `true` to add the machine or `false` to remove it.
+    pub present: bool,
+}
+
 /// First public secret-wrapping-key generation for one exact active node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RegisterNodeWrappingKey {
@@ -2635,6 +2666,21 @@ digest_simple_record!(
                 digest.unsigned(bytes);
             }
         }
+    }
+);
+digest_simple_record!(CreateFaultGroup, b"create-fault-group", |value, digest| {
+    digest.identifier(value.class_id.as_bytes());
+    digest.name(&value.class_name);
+    digest.identifier(value.group_id.as_bytes());
+    digest.name(&value.group_name);
+});
+digest_simple_record!(
+    SetHostFaultGroupMembership,
+    b"set-host-fault-group-membership",
+    |value, digest| {
+        digest.identifier(value.group_id.as_bytes());
+        digest.identifier(value.host_id.as_bytes());
+        digest.boolean(value.present);
     }
 );
 digest_simple_record!(

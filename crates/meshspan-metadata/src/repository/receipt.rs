@@ -112,6 +112,10 @@ pub enum EntityKind {
     SecretGeneration = 38,
     /// Offline recovery identity and bundle-verification state.
     RecoveryAuthority = 39,
+    /// Administrator-defined shared machine-failure boundary.
+    FaultGroup = 40,
+    /// Desired machine membership in one shared-failure boundary.
+    FaultGroupMembership = 41,
 }
 
 impl EntityKind {
@@ -156,6 +160,8 @@ impl EntityKind {
             37 => Ok(Self::NodeWrappingKey),
             38 => Ok(Self::SecretGeneration),
             39 => Ok(Self::RecoveryAuthority),
+            40 => Ok(Self::FaultGroup),
+            41 => Ok(Self::FaultGroupMembership),
             _ => Err(RepositoryError::CorruptState),
         }
     }

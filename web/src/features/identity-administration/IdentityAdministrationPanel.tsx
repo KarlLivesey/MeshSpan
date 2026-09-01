@@ -70,6 +70,7 @@ export function IdentityAdministrationPanel(
         </a>
         <a href="/admin/volumes">Volumes</a>
         <a href="/admin/storage-folders">Storage folders</a>
+        <a href="/admin/topology">Mesh topology</a>
         <a href="/admin/operations">Operations</a>
       </nav>
       <CreatePrincipalForm create={create} />

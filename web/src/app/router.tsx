@@ -8,6 +8,7 @@ import { OperationAdministrationPage } from "./OperationAdministrationPage";
 import { SecurityPage } from "./SecurityPage";
 import { SignInPage } from "./SignInPage";
 import { StorageFolderAdministrationPage } from "./StorageFolderAdministrationPage";
+import { TopologyAdministrationPage } from "./TopologyAdministrationPage";
 import { VolumeAdministrationPage } from "./VolumeAdministrationPage";
 
 function NotFoundPage() {
@@ -31,6 +32,7 @@ export const AppRouter = createRouter({
       component: StorageFolderAdministrationPage,
       path: "/admin/storage-folders",
     },
+    { component: TopologyAdministrationPage, path: "/admin/topology" },
     { component: VolumeAdministrationPage, path: "/admin/volumes" },
     { component: NotFoundPage, path: "*404" },
   ],

@@ -621,6 +621,63 @@ export type CreateDirectoryResponse = {
 };
 
 /**
+ * CreateFaultGroupRequest
+ *
+ * Exact-retry request to create one shared-failure group.
+ */
+export type CreateFaultGroupRequest = {
+  /**
+   * Failure-boundary class, such as room, building, PSU or hypervisor.
+   */
+  class_name: string;
+  /**
+   * Concrete group within that class.
+   */
+  group_name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreateFaultGroupResponse
+ *
+ * Durable shared-failure-group creation result.
+ */
+export type CreateFaultGroupResponse = {
+  /**
+   * Current created group.
+   */
+  group: {
+    /**
+     * Stable failure-class identity.
+     */
+    class_id: string;
+    /**
+     * User-visible failure-class name, such as room or power source.
+     */
+    class_name: string;
+    /**
+     * Stable concrete group identity.
+     */
+    group_id: string;
+    /**
+     * User-visible concrete boundary name.
+     */
+    group_name: string;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+  };
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateGroupRequest
  *
  * Idempotent administrator request to create one nested group.
@@ -1858,6 +1915,72 @@ export type ListDirectoryResponse = {
 };
 
 /**
+ * ListFaultGroupMembershipsResponse
+ *
+ * One bounded page of overlapping membership edges.
+ */
+export type ListFaultGroupMembershipsResponse = {
+  /**
+   * Stable machine/group-ordered membership edges.
+   */
+  memberships: Array<{
+    /**
+     * Shared-failure group identity.
+     */
+    group_id: string;
+    /**
+     * Member machine identity.
+     */
+    host_id: string;
+    /**
+     * Last authoritative edge revision.
+     */
+    revision: number;
+  }>;
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+};
+
+/**
+ * ListFaultGroupsResponse
+ *
+ * One bounded page of shared-failure groups.
+ */
+export type ListFaultGroupsResponse = {
+  /**
+   * Stable class/name-ordered groups.
+   */
+  groups: Array<{
+    /**
+     * Stable failure-class identity.
+     */
+    class_id: string;
+    /**
+     * User-visible failure-class name, such as room or power source.
+     */
+    class_name: string;
+    /**
+     * Stable concrete group identity.
+     */
+    group_id: string;
+    /**
+     * User-visible concrete boundary name.
+     */
+    group_name: string;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+  }>;
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+};
+
+/**
  * ListGroupMembershipsResponse
  *
  * One bounded, stable direct-membership page.
@@ -2140,6 +2263,131 @@ export type ListStorageFoldersResponse = {
    * Ready-to-follow same-origin URL, or null at the terminal page.
    */
   next_page_url: string | null;
+};
+
+/**
+ * ListTopologyNodesResponse
+ *
+ * One bounded page of daemon nodes.
+ */
+export type ListTopologyNodesResponse = {
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Stable name-ordered node summaries.
+   */
+  nodes: Array<{
+    /**
+     * User-visible node name.
+     */
+    display_name: string;
+    /**
+     * Stable machine identity shared by daemons on the same machine.
+     */
+    host_id: string;
+    /**
+     * Current restart incarnation as lossless positive decimal text.
+     */
+    incarnation: string;
+    /**
+     * Stable daemon identity.
+     */
+    node_id: string;
+    /**
+     * Private mesh endpoint once activated.
+     */
+    private_endpoint: string | null;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+    /**
+     * Configured daemon roles.
+     */
+    roles: {
+      /**
+       * May expose configured access protocols.
+       */
+      gateway: boolean;
+      /**
+       * Eligible for metadata learner/voter placement.
+       */
+      metadata_eligible: boolean;
+      /**
+       * May host encrypted storage shards.
+       */
+      storage: boolean;
+    };
+    /**
+     * Current lifecycle state.
+     */
+    state: "joining" | "active" | "draining" | "retired";
+  }>;
+};
+
+/**
+ * ListTopologyTargetsResponse
+ *
+ * One bounded page of mesh-wide targets.
+ */
+export type ListTopologyTargetsResponse = {
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Stable name-ordered target summaries.
+   */
+  targets: Array<{
+    /**
+     * User-visible target name.
+     */
+    display_name: string;
+    /**
+     * Current authority-fenced generation as lossless positive decimal text.
+     */
+    generation: string;
+    /**
+     * Owning machine identity.
+     */
+    host_id: string;
+    /**
+     * Owning daemon identity.
+     */
+    node_id: string;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+    /**
+     * Current target state.
+     */
+    state: "configuring" | "active" | "draining" | "unavailable" | "retired";
+    /**
+     * Stable target identity.
+     */
+    target_id: string;
+    /**
+     * Current provider-owned capacity ceiling.
+     */
+    usage_limit:
+      | {
+          kind: "percent";
+          /**
+           * Inclusive percentage from 1 through 100.
+           */
+          percent: number;
+        }
+      | {
+          /**
+           * Positive unsigned 64-bit decimal bytes.
+           */
+          bytes: string;
+          kind: "bytes";
+        };
+  }>;
 };
 
 /**
@@ -2706,6 +2954,50 @@ export type RevokePermissionGrantResponse = {
    * Original authoritative revocation instant used by exact retries.
    */
   revoked_at_epoch_micros: number;
+};
+
+/**
+ * SetFaultGroupMembershipRequest
+ *
+ * Exact-retry desired machine/group membership.
+ */
+export type SetFaultGroupMembershipRequest = {
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * `true` to add the machine or `false` to remove it.
+   */
+  present: boolean;
+};
+
+/**
+ * SetFaultGroupMembershipResponse
+ *
+ * Durable desired-membership result.
+ */
+export type SetFaultGroupMembershipResponse = {
+  /**
+   * Group identity from the route.
+   */
+  group_id: string;
+  /**
+   * Machine identity from the route.
+   */
+  host_id: string;
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Current desired membership state.
+   */
+  present: boolean;
+  /**
+   * Authoritative mutation revision.
+   */
+  revision: number;
 };
 
 /**
@@ -3806,6 +4098,323 @@ export type RegisterStorageFolderResponses = {
 
 export type RegisterStorageFolderResponse2 =
   RegisterStorageFolderResponses[keyof RegisterStorageFolderResponses];
+
+export type ListFaultGroupMembershipsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/topology/fault-group-memberships";
+};
+
+export type ListFaultGroupMembershipsErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListFaultGroupMembershipsError =
+  ListFaultGroupMembershipsErrors[keyof ListFaultGroupMembershipsErrors];
+
+export type ListFaultGroupMembershipsResponses = {
+  /**
+   * One bounded topology page
+   */
+  200: ListFaultGroupMembershipsResponse;
+};
+
+export type ListFaultGroupMembershipsResponse2 =
+  ListFaultGroupMembershipsResponses[keyof ListFaultGroupMembershipsResponses];
+
+export type ListFaultGroupsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/topology/fault-groups";
+};
+
+export type ListFaultGroupsErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListFaultGroupsError =
+  ListFaultGroupsErrors[keyof ListFaultGroupsErrors];
+
+export type ListFaultGroupsResponses = {
+  /**
+   * One bounded topology page
+   */
+  200: ListFaultGroupsResponse;
+};
+
+export type ListFaultGroupsResponse2 =
+  ListFaultGroupsResponses[keyof ListFaultGroupsResponses];
+
+export type CreateFaultGroupData = {
+  /**
+   * Shared-failure group
+   */
+  body: CreateFaultGroupRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/topology/fault-groups";
+};
+
+export type CreateFaultGroupErrors = {
+  /**
+   * Invalid group request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Name or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateFaultGroupError =
+  CreateFaultGroupErrors[keyof CreateFaultGroupErrors];
+
+export type CreateFaultGroupResponses = {
+  /**
+   * Shared-failure group committed
+   */
+  201: CreateFaultGroupResponse;
+};
+
+export type CreateFaultGroupResponse2 =
+  CreateFaultGroupResponses[keyof CreateFaultGroupResponses];
+
+export type SetFaultGroupMembershipData = {
+  /**
+   * Desired membership
+   */
+  body: SetFaultGroupMembershipRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    /**
+     * Shared-failure group identity
+     */
+    group_id: string;
+    /**
+     * Machine identity
+     */
+    host_id: string;
+  };
+  query?: never;
+  url: "/admin/topology/fault-groups/{group_id}/hosts/{host_id}";
+};
+
+export type SetFaultGroupMembershipErrors = {
+  /**
+   * Invalid membership request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Machine or fault group does not exist
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type SetFaultGroupMembershipError =
+  SetFaultGroupMembershipErrors[keyof SetFaultGroupMembershipErrors];
+
+export type SetFaultGroupMembershipResponses = {
+  /**
+   * Desired membership committed
+   */
+  200: SetFaultGroupMembershipResponse;
+};
+
+export type SetFaultGroupMembershipResponse2 =
+  SetFaultGroupMembershipResponses[keyof SetFaultGroupMembershipResponses];
+
+export type ListTopologyNodesData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/topology/nodes";
+};
+
+export type ListTopologyNodesErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListTopologyNodesError =
+  ListTopologyNodesErrors[keyof ListTopologyNodesErrors];
+
+export type ListTopologyNodesResponses = {
+  /**
+   * One bounded topology page
+   */
+  200: ListTopologyNodesResponse;
+};
+
+export type ListTopologyNodesResponse2 =
+  ListTopologyNodesResponses[keyof ListTopologyNodesResponses];
+
+export type ListTopologyTargetsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/topology/targets";
+};
+
+export type ListTopologyTargetsErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListTopologyTargetsError =
+  ListTopologyTargetsErrors[keyof ListTopologyTargetsErrors];
+
+export type ListTopologyTargetsResponses = {
+  /**
+   * One bounded topology page
+   */
+  200: ListTopologyTargetsResponse;
+};
+
+export type ListTopologyTargetsResponse2 =
+  ListTopologyTargetsResponses[keyof ListTopologyTargetsResponses];
 
 export type ListUsersData = {
   body?: never;

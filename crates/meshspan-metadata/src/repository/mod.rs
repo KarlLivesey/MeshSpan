@@ -108,6 +108,9 @@ mod storage_target;
 #[cfg(test)]
 mod storage_target_tests;
 mod tags;
+mod topology;
+#[cfg(test)]
+mod topology_tests;
 mod user_snapshot;
 mod verify;
 mod version_cleanup;
@@ -213,6 +216,10 @@ pub use session_access::{
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use snapshot_schedule::{SnapshotSchedule, SnapshotScheduleCursor};
 pub use storage_target::{StorageTargetProviderContext, StorageTargetRegistrationContext};
+pub use topology::{
+    FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord,
+    TopologyNodeCursor, TopologyNodeRecord, TopologyTargetCursor, TopologyTargetRecord,
+};
 pub use user_snapshot::{
     SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor, VolumeSnapshot,
 };
@@ -1222,6 +1229,70 @@ impl AuthoritativeRepository {
         target_id: meshspan_domain::TargetId,
     ) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
         storage_target::provider_context_by_target(&self.database, target_id)
+    }
+
+    /// Returns a bounded stable page of daemon nodes and their machine boundaries.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored identities, roles or lifecycle state are malformed.
+    pub fn topology_nodes(
+        &self,
+        after: Option<&TopologyNodeCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<TopologyNodeRecord, TopologyNodeCursor>, RepositoryError> {
+        topology::nodes(&self.database, after, limit)
+    }
+
+    /// Returns a bounded stable page of mesh-wide targets without node-local paths.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored topology, capacity or lifecycle state are malformed.
+    pub fn topology_targets(
+        &self,
+        after: Option<&TopologyTargetCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<TopologyTargetRecord, TopologyTargetCursor>, RepositoryError> {
+        topology::targets(&self.database, after, limit)
+    }
+
+    /// Returns a bounded stable page of administrator-defined shared-failure groups.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored identities, names or revisions are malformed.
+    pub fn fault_groups(
+        &self,
+        after: Option<&FaultGroupCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<FaultGroupRecord, FaultGroupCursor>, RepositoryError> {
+        topology::fault_groups(&self.database, after, limit)
+    }
+
+    /// Returns one current shared-failure group by exact identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when its persisted class, names or revision are malformed.
+    pub fn fault_group(
+        &self,
+        group_id: meshspan_domain::FaultGroupId,
+    ) -> Result<Option<FaultGroupRecord>, RepositoryError> {
+        topology::fault_group(&self.database, group_id)
+    }
+
+    /// Returns a bounded stable page of overlapping machine/group membership edges.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored identities or revisions are malformed.
+    pub fn fault_group_memberships(
+        &self,
+        after: Option<FaultGroupMembershipCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<FaultGroupMembershipRecord, FaultGroupMembershipCursor>, RepositoryError> {
+        topology::fault_group_memberships(&self.database, after, limit)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.
