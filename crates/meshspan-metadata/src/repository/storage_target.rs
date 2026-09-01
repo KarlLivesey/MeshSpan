@@ -112,10 +112,10 @@ pub(super) fn provider_context_by_target(
         policy_revision: revision(policy)?,
         catalogue_revision: revision(catalogue)?,
     };
-    if context.target_id != target_id {
-        Err(RepositoryError::CorruptState)
-    } else {
+    if context.target_id == target_id {
         Ok(Some(context))
+    } else {
+        Err(RepositoryError::CorruptState)
     }
 }
 

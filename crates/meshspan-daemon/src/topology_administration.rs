@@ -25,6 +25,10 @@ pub use service::TopologyAdministrationService;
 /// Synchronous topology controller executed on Tokio's bounded blocking pool.
 pub trait TopologyAdministrationController: Send + 'static {
     /// Authenticates current manager authority before parsing or state access.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, ambiguous, expired or insufficient manager authority.
     fn authenticate(
         &self,
         headers: &HeaderMap,
@@ -33,6 +37,10 @@ pub trait TopologyAdministrationController: Send + 'static {
     ) -> Result<IdentityAdministrator, TopologyAdministrationError>;
 
     /// Returns one bounded daemon-node page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed topology.
     fn list_nodes(
         &self,
         administrator: IdentityAdministrator,
@@ -40,6 +48,10 @@ pub trait TopologyAdministrationController: Send + 'static {
     ) -> Result<ListTopologyNodesResponse, TopologyAdministrationError>;
 
     /// Returns one bounded mesh-wide storage-target page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed topology.
     fn list_targets(
         &self,
         administrator: IdentityAdministrator,
@@ -47,6 +59,10 @@ pub trait TopologyAdministrationController: Send + 'static {
     ) -> Result<ListTopologyTargetsResponse, TopologyAdministrationError>;
 
     /// Returns one bounded shared-failure-group page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed topology.
     fn list_fault_groups(
         &self,
         administrator: IdentityAdministrator,
@@ -54,6 +70,10 @@ pub trait TopologyAdministrationController: Send + 'static {
     ) -> Result<ListFaultGroupsResponse, TopologyAdministrationError>;
 
     /// Returns one bounded overlapping machine/group-membership page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed topology.
     fn list_fault_group_memberships(
         &self,
         administrator: IdentityAdministrator,
@@ -61,6 +81,10 @@ pub trait TopologyAdministrationController: Send + 'static {
     ) -> Result<ListFaultGroupMembershipsResponse, TopologyAdministrationError>;
 
     /// Creates or exactly resolves one named shared-failure group.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, conflicting, unauthorised or uncommitted mutations.
     fn create_fault_group(
         &mut self,
         administrator: IdentityAdministrator,
@@ -68,6 +92,10 @@ pub trait TopologyAdministrationController: Send + 'static {
     ) -> Result<CreateFaultGroupResponse, TopologyAdministrationError>;
 
     /// Sets or exactly resolves one desired machine/group membership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
     fn set_fault_group_membership(
         &mut self,
         administrator: IdentityAdministrator,

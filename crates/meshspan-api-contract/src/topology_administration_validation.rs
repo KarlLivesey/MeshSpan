@@ -20,11 +20,19 @@ static CREATE_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::n
 static MEMBERSHIP_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 
 /// Validates one decoded topology-list query.
+///
+/// # Errors
+///
+/// Returns a boundary error when the query violates the generated contract.
 pub fn validate_list_topology_query(query: &ListTopologyQuery) -> Result<(), BoundaryError> {
     validate_serialized(query, query_validator()?)
 }
 
 /// Decodes one bounded fault-group creation request without coercion.
+///
+/// # Errors
+///
+/// Returns a boundary error for empty, oversized, malformed or invalid input.
 pub fn decode_create_fault_group_request(
     bytes: &[u8],
 ) -> Result<CreateFaultGroupRequest, BoundaryError> {
@@ -32,6 +40,10 @@ pub fn decode_create_fault_group_request(
 }
 
 /// Decodes one bounded desired-membership request without coercion.
+///
+/// # Errors
+///
+/// Returns a boundary error for empty, oversized, malformed or invalid input.
 pub fn decode_set_fault_group_membership_request(
     bytes: &[u8],
 ) -> Result<SetFaultGroupMembershipRequest, BoundaryError> {
@@ -39,6 +51,10 @@ pub fn decode_set_fault_group_membership_request(
 }
 
 /// Validates and encodes one node page.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
 pub fn encode_list_topology_nodes_response(
     response: &ListTopologyNodesResponse,
 ) -> Result<Vec<u8>, BoundaryError> {
@@ -46,6 +62,10 @@ pub fn encode_list_topology_nodes_response(
 }
 
 /// Validates and encodes one target page.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
 pub fn encode_list_topology_targets_response(
     response: &ListTopologyTargetsResponse,
 ) -> Result<Vec<u8>, BoundaryError> {
@@ -53,6 +73,10 @@ pub fn encode_list_topology_targets_response(
 }
 
 /// Validates and encodes one fault-group page.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
 pub fn encode_list_fault_groups_response(
     response: &ListFaultGroupsResponse,
 ) -> Result<Vec<u8>, BoundaryError> {
@@ -60,6 +84,10 @@ pub fn encode_list_fault_groups_response(
 }
 
 /// Validates and encodes one fault-group membership page.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
 pub fn encode_list_fault_group_memberships_response(
     response: &ListFaultGroupMembershipsResponse,
 ) -> Result<Vec<u8>, BoundaryError> {
@@ -67,6 +95,10 @@ pub fn encode_list_fault_group_memberships_response(
 }
 
 /// Validates and encodes one created fault group.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
 pub fn encode_create_fault_group_response(
     response: &CreateFaultGroupResponse,
 ) -> Result<Vec<u8>, BoundaryError> {
@@ -74,6 +106,10 @@ pub fn encode_create_fault_group_response(
 }
 
 /// Validates and encodes one desired-membership result.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
 pub fn encode_set_fault_group_membership_response(
     response: &SetFaultGroupMembershipResponse,
 ) -> Result<Vec<u8>, BoundaryError> {

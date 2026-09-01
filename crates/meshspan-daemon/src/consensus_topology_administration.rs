@@ -25,7 +25,7 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     {
         self.reader()
             .topology_nodes(after, limit)
-            .map_err(map_repository_error)
+            .map_err(|error| map_repository_error(&error))
     }
 
     fn topology_targets(
@@ -38,7 +38,7 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     > {
         self.reader()
             .topology_targets(after, limit)
-            .map_err(map_repository_error)
+            .map_err(|error| map_repository_error(&error))
     }
 
     fn fault_groups(
@@ -49,7 +49,7 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     {
         self.reader()
             .fault_groups(after, limit)
-            .map_err(map_repository_error)
+            .map_err(|error| map_repository_error(&error))
     }
 
     fn fault_group(
@@ -58,7 +58,7 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     ) -> Result<Option<FaultGroupRecord>, TopologyAdministrationAuthorityError> {
         self.reader()
             .fault_group(group_id)
-            .map_err(map_repository_error)
+            .map_err(|error| map_repository_error(&error))
     }
 
     fn fault_group_memberships(
@@ -71,7 +71,7 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     > {
         self.reader()
             .fault_group_memberships(after, limit)
-            .map_err(map_repository_error)
+            .map_err(|error| map_repository_error(&error))
     }
 
     fn resolve_topology_operation(
@@ -80,7 +80,7 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     ) -> Result<Option<CommandReceipt>, TopologyAdministrationAuthorityError> {
         self.reader()
             .resolve_operation(operation_id)
-            .map_err(map_repository_error)
+            .map_err(|error| map_repository_error(&error))
     }
 
     fn commit_topology_operation(
@@ -110,7 +110,7 @@ fn map_authority_error(
     }
 }
 
-fn map_repository_error(error: RepositoryError) -> TopologyAdministrationAuthorityError {
+fn map_repository_error(error: &RepositoryError) -> TopologyAdministrationAuthorityError {
     match error {
         RepositoryError::OperationConflict
         | RepositoryError::StaleRevision

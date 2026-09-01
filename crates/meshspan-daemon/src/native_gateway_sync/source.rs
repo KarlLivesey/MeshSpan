@@ -87,7 +87,7 @@ pub(super) fn history_page(
 pub(super) fn history_object(
     state_directory: &Path,
     requester: NodeId,
-    request: FetchNamespaceHistoryObject,
+    request: &FetchNamespaceHistoryObject,
 ) -> Result<Message, NativeGatewaySyncError> {
     let now = current_time().map_err(|_| NativeGatewaySyncError::Unavailable)?;
     let volume_id = volume(&request.volume_id)?;
@@ -113,7 +113,7 @@ pub(super) fn history_object(
 
 pub(super) fn content_layout(
     state_directory: &Path,
-    request: FetchNativeContentLayout,
+    request: &FetchNativeContentLayout,
 ) -> Result<Message, NativeGatewaySyncError> {
     let now = current_time().map_err(|_| NativeGatewaySyncError::Unavailable)?;
     let operation_id = OperationId::from_bytes(identifier(&request.publication_operation_id)?)

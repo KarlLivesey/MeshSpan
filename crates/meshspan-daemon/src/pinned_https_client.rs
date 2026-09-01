@@ -95,7 +95,7 @@ pub(crate) async fn post_pinned_json(
     if response.len() > limit {
         return Err(PinnedHttpsClientError::InvalidResponse);
     }
-    parse_response(response, maximum_response_bytes)
+    parse_response(&response, maximum_response_bytes)
 }
 
 fn request_head(
@@ -117,7 +117,7 @@ fn request_head(
 }
 
 fn parse_response(
-    response: Vec<u8>,
+    response: &[u8],
     maximum_body_bytes: usize,
 ) -> Result<Vec<u8>, PinnedHttpsClientError> {
     let split = response

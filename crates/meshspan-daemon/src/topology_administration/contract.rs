@@ -15,6 +15,10 @@ use crate::IdentityAdministrationAuthority;
 /// Replicated reads and consensus mutations required by topology administration.
 pub trait TopologyAdministrationAuthority: IdentityAdministrationAuthority {
     /// Returns one bounded daemon-node page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed topology cannot be read safely.
     fn topology_nodes(
         &self,
         after: Option<&TopologyNodeCursor>,
@@ -22,6 +26,10 @@ pub trait TopologyAdministrationAuthority: IdentityAdministrationAuthority {
     ) -> Result<Page<TopologyNodeRecord, TopologyNodeCursor>, TopologyAdministrationAuthorityError>;
 
     /// Returns one bounded mesh-wide target page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed topology cannot be read safely.
     fn topology_targets(
         &self,
         after: Option<&TopologyTargetCursor>,
@@ -32,6 +40,10 @@ pub trait TopologyAdministrationAuthority: IdentityAdministrationAuthority {
     >;
 
     /// Returns one bounded shared-failure-group page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed topology cannot be read safely.
     fn fault_groups(
         &self,
         after: Option<&FaultGroupCursor>,
@@ -39,12 +51,20 @@ pub trait TopologyAdministrationAuthority: IdentityAdministrationAuthority {
     ) -> Result<Page<FaultGroupRecord, FaultGroupCursor>, TopologyAdministrationAuthorityError>;
 
     /// Returns one current shared-failure group.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed topology cannot be read safely.
     fn fault_group(
         &self,
         group_id: FaultGroupId,
     ) -> Result<Option<FaultGroupRecord>, TopologyAdministrationAuthorityError>;
 
     /// Returns one bounded overlapping membership page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed topology cannot be read safely.
     fn fault_group_memberships(
         &self,
         after: Option<FaultGroupMembershipCursor>,
@@ -55,12 +75,20 @@ pub trait TopologyAdministrationAuthority: IdentityAdministrationAuthority {
     >;
 
     /// Resolves an already committed topology operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when the operation receipt cannot be trusted.
     fn resolve_topology_operation(
         &self,
         operation_id: OperationId,
     ) -> Result<Option<CommandReceipt>, TopologyAdministrationAuthorityError>;
 
     /// Commits or exactly resolves one topology mutation through consensus.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when consensus cannot commit or resolve safely.
     fn commit_topology_operation(
         &mut self,
         context: CommandContext,

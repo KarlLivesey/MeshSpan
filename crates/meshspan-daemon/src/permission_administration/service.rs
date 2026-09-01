@@ -192,25 +192,24 @@ where
         let occurred_at = revocation.map_or(administrator.now, |value| value.revoked_at);
         let context = command_context(operation_id, administrator, occurred_at)?;
         let expected_digest = command.request_digest(context);
-        let receipt = match existing {
-            Some(receipt) => receipt,
-            None => {
-                let active = self
+        let receipt = if let Some(receipt) = existing {
+            receipt
+        } else {
+            let active = self
+                .authority
+                .grant(grant_id)
+                .map_err(map_authority_error)?
+                .ok_or(PermissionAdministrationError::NotFound)?;
+            if active.scope != PermissionScope::Volume(volume_id) {
+                return Err(PermissionAdministrationError::NotFound);
+            }
+            match self.authority.commit_permission(context, &command) {
+                Ok(receipt) => receipt,
+                Err(commit_error) => self
                     .authority
-                    .grant(grant_id)
+                    .resolve_operation(operation_id)
                     .map_err(map_authority_error)?
-                    .ok_or(PermissionAdministrationError::NotFound)?;
-                if active.scope != PermissionScope::Volume(volume_id) {
-                    return Err(PermissionAdministrationError::NotFound);
-                }
-                match self.authority.commit_permission(context, &command) {
-                    Ok(receipt) => receipt,
-                    Err(commit_error) => self
-                        .authority
-                        .resolve_operation(operation_id)
-                        .map_err(map_authority_error)?
-                        .ok_or_else(|| map_authority_error(commit_error))?,
-                }
+                    .ok_or_else(|| map_authority_error(commit_error))?,
             }
         };
         validate_receipt(receipt, grant_id, expected_digest)?;

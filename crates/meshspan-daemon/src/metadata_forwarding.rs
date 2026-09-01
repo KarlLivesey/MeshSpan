@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use meshspan_cluster::{ConsensusNetwork, MetadataAuthorityHandle, MetadataAuthorityRequestError};
-use meshspan_domain::{NodeId, OperationId};
+use meshspan_domain::{NodeId, OperationId, Revision};
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, CommandContext, CommandReceipt,
     METADATA_COMMAND_VERSION, decode_authoritative_command, encode_authoritative_command,
@@ -55,7 +55,7 @@ pub(crate) async fn forward(
                         .map_err(|_| MetadataAuthorityRequestError::Unavailable)?,
                 ),
                 message: Some(Message::MetadataCommand(MetadataCommand {
-                    expected_revision: context.expected_revision.map(|revision| revision.get()),
+                    expected_revision: context.expected_revision.map(Revision::get),
                     request_digest: request_digest.to_vec(),
                     command: Some(Command::ClusterControl(VersionedPayload {
                         format_version: u32::from(METADATA_COMMAND_VERSION),
@@ -102,16 +102,16 @@ pub(crate) async fn handle(
     request_deadline: i64,
     request: &MetadataCommand,
 ) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
-    let payload = match request.command.as_ref() {
-        Some(
-            Command::Topology(payload)
-            | Command::IdentityAccess(payload)
-            | Command::Namespace(payload)
-            | Command::Policy(payload)
-            | Command::Lifecycle(payload)
-            | Command::ClusterControl(payload),
-        ) => payload,
-        None => return Err(MetadataAuthorityRequestError::Rejected),
+    let Some(
+        Command::Topology(payload)
+        | Command::IdentityAccess(payload)
+        | Command::Namespace(payload)
+        | Command::Policy(payload)
+        | Command::Lifecycle(payload)
+        | Command::ClusterControl(payload),
+    ) = request.command.as_ref()
+    else {
+        return Err(MetadataAuthorityRequestError::Rejected);
     };
     if payload.format_version != u32::from(METADATA_COMMAND_VERSION) {
         return Err(MetadataAuthorityRequestError::Unsupported);
@@ -120,11 +120,7 @@ pub(crate) async fn handle(
         .map_err(|_| MetadataAuthorityRequestError::Rejected)?;
     let expected_digest = decoded.command.request_digest(decoded.context);
     if decoded.context.operation_id != operation_id
-        || decoded
-            .context
-            .expected_revision
-            .map(|revision| revision.get())
-            != request.expected_revision
+        || decoded.context.expected_revision.map(Revision::get) != request.expected_revision
         || decoded.context.occurred_at.get() > request_deadline
         || request.request_digest.as_slice() != expected_digest
     {

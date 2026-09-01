@@ -319,9 +319,11 @@ pub(super) fn nodes(
         params![after_name, after_id.as_slice(), row_limit(limit)?],
         decode_node,
     )?;
-    page(rows.collect::<Result<Vec<_>, _>>()?, limit, |record| {
-        TopologyNodeCursor::new(record.canonical_name.clone(), record.node_id)
-    })
+    Ok(page(
+        rows.collect::<Result<Vec<_>, _>>()?,
+        limit,
+        |record| TopologyNodeCursor::new(record.canonical_name.clone(), record.node_id),
+    ))
 }
 
 pub(super) fn targets(
@@ -342,9 +344,11 @@ pub(super) fn targets(
         params![after_name, after_id.as_slice(), row_limit(limit)?],
         decode_target,
     )?;
-    page(rows.collect::<Result<Vec<_>, _>>()?, limit, |record| {
-        TopologyTargetCursor::new(record.canonical_name.clone(), record.target_id)
-    })
+    Ok(page(
+        rows.collect::<Result<Vec<_>, _>>()?,
+        limit,
+        |record| TopologyTargetCursor::new(record.canonical_name.clone(), record.target_id),
+    ))
 }
 
 pub(super) fn fault_groups(
@@ -374,13 +378,17 @@ pub(super) fn fault_groups(
         ],
         decode_fault_group,
     )?;
-    page(rows.collect::<Result<Vec<_>, _>>()?, limit, |record| {
-        FaultGroupCursor::new(
-            record.class_canonical_name.clone(),
-            record.group_canonical_name.clone(),
-            record.group_id,
-        )
-    })
+    Ok(page(
+        rows.collect::<Result<Vec<_>, _>>()?,
+        limit,
+        |record| {
+            FaultGroupCursor::new(
+                record.class_canonical_name.clone(),
+                record.group_canonical_name.clone(),
+                record.group_id,
+            )
+        },
+    ))
 }
 
 pub(super) fn fault_group(
@@ -431,9 +439,11 @@ pub(super) fn fault_group_memberships(
             })
         },
     )?;
-    page(rows.collect::<Result<Vec<_>, _>>()?, limit, |record| {
-        FaultGroupMembershipCursor::new(record.host_id, record.group_id)
-    })
+    Ok(page(
+        rows.collect::<Result<Vec<_>, _>>()?,
+        limit,
+        |record| FaultGroupMembershipCursor::new(record.host_id, record.group_id),
+    ))
 }
 
 fn require_active_host_and_group(
@@ -534,11 +544,7 @@ fn decode_fault_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultGroupRec
     })
 }
 
-fn page<T, C>(
-    mut items: Vec<T>,
-    limit: PageLimit,
-    cursor: impl FnOnce(&T) -> C,
-) -> Result<Page<T, C>, RepositoryError> {
+fn page<T, C>(mut items: Vec<T>, limit: PageLimit, cursor: impl FnOnce(&T) -> C) -> Page<T, C> {
     let has_more = items.len() > limit.get();
     if has_more {
         items.pop();
@@ -548,7 +554,7 @@ fn page<T, C>(
     } else {
         None
     };
-    Ok(Page { items, next })
+    Page { items, next }
 }
 
 fn row_limit(limit: PageLimit) -> Result<i64, RepositoryError> {

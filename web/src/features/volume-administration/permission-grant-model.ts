@@ -34,18 +34,13 @@ export type PermissionGrantDirectory = Readonly<{
 export function createPermissionGrantDirectory(
   client: Accessor<PermissionGrantClient>,
 ): PermissionGrantDirectory {
-  const [items, setItems] = createSignal<readonly VolumePermissionGrant[]>([], {
-    ownedWrite: true,
-  });
-  const [nextPageUrl, setNextPageUrl] = createSignal<string | null>(null, {
-    ownedWrite: true,
-  });
+  let selectedVolumeId: string | undefined;
+  const collection = createGrantCollection(() => selectedVolumeId);
   const [phase, setPhase] = createSignal<"idle" | "loading" | "loading_more">(
     "idle",
     { ownedWrite: true },
   );
   const [error, setError] = createSignal<string>();
-  let selectedVolumeId: string | undefined;
   let loadGeneration = 0;
 
   const load = async (volumeId: string): Promise<void> => {
@@ -58,11 +53,10 @@ export function createPermissionGrantDirectory(
       if (generation !== loadGeneration || selectedVolumeId !== volumeId) {
         return;
       }
-      applyPage(page, false, volumeId);
+      collection.applyPage(page, false, volumeId);
     } catch {
       if (generation === loadGeneration) {
-        setItems([]);
-        setNextPageUrl(null);
+        collection.clear();
         setError("MeshSpan could not load the current permission grants.");
       }
     } finally {
@@ -73,7 +67,7 @@ export function createPermissionGrantDirectory(
   };
 
   const loadNext = async (): Promise<void> => {
-    const next = nextPageUrl();
+    const next = collection.nextPageUrl();
     const volumeId = selectedVolumeId;
     if (next === null || volumeId === undefined || phase() !== "idle") {
       return;
@@ -81,7 +75,7 @@ export function createPermissionGrantDirectory(
     setPhase("loading_more");
     setError(undefined);
     try {
-      applyPage(
+      collection.applyPage(
         await client().listNextVolumePermissionGrants(next),
         true,
         volumeId,
@@ -93,6 +87,25 @@ export function createPermissionGrantDirectory(
     }
   };
 
+  return {
+    error,
+    items: collection.items,
+    load,
+    loadNext,
+    nextPageUrl: collection.nextPageUrl,
+    phase,
+    record: collection.record,
+    remove: collection.remove,
+  };
+}
+
+function createGrantCollection(selectedVolumeId: Accessor<string | undefined>) {
+  const [items, setItems] = createSignal<readonly VolumePermissionGrant[]>([], {
+    ownedWrite: true,
+  });
+  const [nextPageUrl, setNextPageUrl] = createSignal<string | null>(null, {
+    ownedWrite: true,
+  });
   const applyPage = (
     page: ListVolumePermissionGrantsResponse,
     append: boolean,
@@ -104,29 +117,27 @@ export function createPermissionGrantDirectory(
     setItems((current) => mergeGrants(append ? current : [], page.grants));
     setNextPageUrl(page.next_page_url);
   };
-
-  const record = (response: CreateVolumePermissionGrantResponse): void => {
-    if (response.grant.volume_id !== selectedVolumeId) {
-      throw new TypeError("created permission grant belongs to another volume");
-    }
-    setItems((current) => mergeGrants([response.grant], current));
-  };
-
-  const remove = (response: RevokePermissionGrantResponse): void => {
-    setItems((current) =>
-      current.filter((grant) => grant.grant_id !== response.grant_id),
-    );
-  };
-
   return {
-    error,
+    applyPage,
+    clear: (): void => {
+      setItems([]);
+      setNextPageUrl(null);
+    },
     items,
-    load,
-    loadNext,
     nextPageUrl,
-    phase,
-    record,
-    remove,
+    record: (response: CreateVolumePermissionGrantResponse): void => {
+      if (response.grant.volume_id !== selectedVolumeId()) {
+        throw new TypeError(
+          "created permission grant belongs to another volume",
+        );
+      }
+      setItems((current) => mergeGrants([response.grant], current));
+    },
+    remove: (response: RevokePermissionGrantResponse): void => {
+      setItems((current) =>
+        current.filter((grant) => grant.grant_id !== response.grant_id),
+      );
+    },
   };
 }
 

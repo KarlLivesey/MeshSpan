@@ -1121,7 +1121,7 @@ async fn apply_topology_update(
             .map_err(|_| DaemonProcessError::PrivateNetworkState)?
             .next()
             .ok_or(DaemonProcessError::PrivateNetworkState)?;
-        network.upsert_peer(ConsensusPeerConfig {
+        network.upsert_peer(&ConsensusPeerConfig {
             node_id,
             incarnation: route.incarnation,
             address,

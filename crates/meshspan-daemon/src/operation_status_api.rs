@@ -36,6 +36,10 @@ impl<C> Clone for ApiState<C> {
 }
 
 /// Builds the rolling authenticated operation-status route.
+///
+/// # Errors
+///
+/// Returns an API-construction error when the generated contract or digest header is invalid.
 pub fn operation_status_api_router<C>(controller: C) -> Result<Router, OperationStatusApiError>
 where
     C: OperationStatusController,
@@ -61,11 +65,8 @@ where
     let Some(now) = current_time() else {
         return failed(&state, request_id);
     };
-    let query = match parse_query(request.uri().query()) {
-        Ok(value) => value,
-        Err(()) => {
-            return service_error(&state, OperationStatusError::InvalidInput, request_id);
-        }
+    let Ok(query) = parse_query(request.uri().query()) else {
+        return service_error(&state, OperationStatusError::InvalidInput, request_id);
     };
     let headers = request.headers().clone();
     let controller = Arc::clone(&state.controller);

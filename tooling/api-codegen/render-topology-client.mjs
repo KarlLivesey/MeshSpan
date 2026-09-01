@@ -30,7 +30,13 @@ export function renderTopologyClientInterface() {
 
 /** Renders topology client implementations. */
 export function renderTopologyClientMethods(routes) {
-  const listMethod = (name, nextName, route, querySchema, responseSchema) => `async ${name}(request = {}) {
+  const listMethod = (
+    name,
+    nextName,
+    route,
+    querySchema,
+    responseSchema,
+  ) => `async ${name}(request = {}) {
       const query = ${querySchema}.parse(request);
       return requestJson(context, appendQuery(${JSON.stringify(route.route)}, query), { method: ${JSON.stringify(route.method)} }, ${responseSchema});
     },

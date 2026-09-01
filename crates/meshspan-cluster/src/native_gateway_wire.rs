@@ -44,6 +44,10 @@ pub fn version_native_content_layout_header(
 }
 
 /// Decodes and revalidates one same-swarm content layout header.
+///
+/// # Errors
+///
+/// Rejects a wrong version, domain, length or invalid content-layout field.
 pub fn decode_native_content_layout_header(
     payload: &VersionedPayload,
 ) -> Result<ContentLayoutTransferHeader, NativeGatewayWireError> {
@@ -71,6 +75,10 @@ pub fn decode_native_content_layout_header(
 }
 
 /// Encodes one independently verifiable encrypted-chunk identity.
+///
+/// # Errors
+///
+/// Rejects a chunk whose lengths, index or digests violate the layout contract.
 pub fn version_native_content_layout_chunk(
     chunk: ContentLayoutChunk,
 ) -> Result<VersionedPayload, NativeGatewayWireError> {
@@ -90,6 +98,10 @@ pub fn version_native_content_layout_chunk(
 }
 
 /// Decodes and revalidates one encrypted-chunk identity.
+///
+/// # Errors
+///
+/// Rejects a wrong version, domain, length or invalid chunk field.
 pub fn decode_native_content_layout_chunk(
     payload: &VersionedPayload,
 ) -> Result<ContentLayoutChunk, NativeGatewayWireError> {
@@ -128,6 +140,10 @@ pub fn version_native_shard_receipt(receipt: ShardReceipt) -> VersionedPayload {
 }
 
 /// Decodes one exact source-provider receipt without trusting any field.
+///
+/// # Errors
+///
+/// Rejects a wrong version, domain, length, identity or zero-valued fence.
 pub fn decode_native_shard_receipt(
     payload: &VersionedPayload,
 ) -> Result<ShardReceipt, NativeGatewayWireError> {
