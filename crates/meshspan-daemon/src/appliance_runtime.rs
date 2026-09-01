@@ -35,10 +35,12 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 
 use crate::{
-    BrowserAuthenticationError, BrowserSessionAuthenticator, ConsensusAuthenticationAuthority,
-    ConsensusBootstrapAuthority, CreateMeshSetupController, CreateMeshSetupError,
-    CreateMeshSetupService, CreateSessionService, CurrentSessionApiError, DaemonLocalState,
-    DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService,
+    ApiKeyIssuanceApiError, AuthenticationMethodListingApiError,
+    AuthenticationMethodListingService, AuthenticationMethodRevocationApiError,
+    AuthenticationMethodRevocationService, BrowserAuthenticationError, BrowserSessionAuthenticator,
+    ConsensusAuthenticationAuthority, ConsensusBootstrapAuthority, CreateMeshSetupController,
+    CreateMeshSetupError, CreateMeshSetupService, CreateSessionService, CurrentSessionApiError,
+    DaemonLocalState, DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService,
     DisabledPasskeySessions, FileApiRoutes, FileReadApiError, FileReadService,
     GatewaySessionIdentity, HeadlessDaemonConfig, HeadlessDaemonConfigError, HttpsServer,
     HttpsServerError, IdentityAdministrationApiError, IdentityAdministrationService,
@@ -46,15 +48,17 @@ use crate::{
     NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
     NativeUploadServicePolicy, NodeWrappingKeyRegistrationService, ObjectStatApiError,
-    ObjectStatService, OperatingSystemRandom, ProtectedTotpFactorVerifier, PublicContractApiError,
-    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
+    ObjectStatService, OperatingSystemRandom, ProtectedApiKeyIssuanceController,
+    ProtectedTotpFactorVerifier, PublicContractApiError, ReadinessSource,
+    RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RevokeCurrentSessionApiError, RevokeCurrentSessionService, SessionApiError, SetupApiError,
     SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, StepUpCurrentSessionApiError,
     StepUpCurrentSessionService, StorageProviderOpeningError, StorageProviderOpeningService,
     StorageTargetRegistrationService, VolumeAdministrationApiError, VolumeAdministrationService,
-    VolumeInventoryApiError, VolumeInventoryService, classify_native_filesystem_error,
-    current_session_api_router, directory_listing_api_router, file_read_api_router,
-    identity_administration_api_router, native_namespace_mutation_api_router,
+    VolumeInventoryApiError, VolumeInventoryService, api_key_issuance_api_router,
+    authentication_method_listing_api_router, authentication_method_revocation_api_router,
+    classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
+    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, object_stat_api_router, public_contract_api_router,
     recovery_bundle_verification_api_router, revoke_current_session_api_router, session_api_router,
     setup_api_router_with_creation, step_up_current_session_api_router,
@@ -300,6 +304,20 @@ fn authentication_session_routes(
                     local_state.open_wrapping_key()?,
                 ),
             ),
+        )?)
+        .merge(api_key_issuance_api_router(
+            ProtectedApiKeyIssuanceController::new(
+                authentication_authority()?,
+                authentication_authority()?,
+                local_state.open_wrapping_key()?,
+                gateway,
+            ),
+        )?)
+        .merge(authentication_method_listing_api_router(
+            AuthenticationMethodListingService::new(authentication_authority()?, gateway),
+        )?)
+        .merge(authentication_method_revocation_api_router(
+            AuthenticationMethodRevocationService::new(authentication_authority()?, gateway),
         )?)
         .merge(identity_administration_api_router(
             IdentityAdministrationService::new(authentication_authority()?, gateway),
@@ -593,6 +611,15 @@ pub enum DaemonProcessError {
     /// Session step-up API construction failed.
     #[error("daemon session step-up API failed")]
     StepUpSessionApi(#[from] StepUpCurrentSessionApiError),
+    /// Current-user API-key issuance construction failed.
+    #[error("daemon API-key issuance API failed")]
+    ApiKeyIssuanceApi(#[from] ApiKeyIssuanceApiError),
+    /// Current-user authentication-method inventory construction failed.
+    #[error("daemon authentication-method inventory API failed")]
+    AuthenticationMethodListingApi(#[from] AuthenticationMethodListingApiError),
+    /// Current-user authentication-method revocation construction failed.
+    #[error("daemon authentication-method revocation API failed")]
+    AuthenticationMethodRevocationApi(#[from] AuthenticationMethodRevocationApiError),
     /// Identity-administration API construction failed.
     #[error("daemon identity-administration API failed")]
     IdentityAdministrationApi(#[from] IdentityAdministrationApiError),

@@ -57,54 +57,70 @@ where
         headers: &HeaderMap,
         now: UnixMicros,
     ) -> Result<CreateApiKeyResponse, ApiKeyIssuanceError> {
-        let normalized = normalize_request(request)?;
-        let capability = BrowserSessionAuthenticator::new(&self.authority, self.gateway)
-            .authenticate(
-                headers,
-                BrowserRequestProtection::Mutation,
-                AssuranceLevel::SingleFactor,
-                now,
-            )?;
-        let key = ApiKeyBundle::derive_issued(
+        issue_api_key_with(
+            &mut self.authority,
             &self.issuance_key,
-            capability.principal_id,
-            normalized.operation_id,
-        )
-        .map_err(|_| ApiKeyIssuanceError::Material)?;
-        let method_id = method_id(capability.principal_id, normalized.operation_id)?;
-        let existing = self
-            .authority
-            .resolve_api_key_issuance(normalized.operation_id)?;
-        let occurred_at = existing.map_or(now, |commit| commit.created_at);
-        let expires_at = expiry(request, occurred_at)?;
-        let command = command(
+            self.gateway,
             request,
-            &normalized,
-            &key,
-            method_id,
-            capability.principal_id,
-            occurred_at,
-            expires_at,
-        );
-        let context = context(
-            normalized.operation_id,
-            capability.principal_id,
-            &key,
-            occurred_at,
-        )?;
-        let expected_request_digest = command.request_digest(context);
-        let commit = match existing {
-            Some(commit) => commit,
-            None => self
-                .authority
-                .commit_or_resolve_api_key_issuance(context, &command)?,
-        };
-        validate_commit(
-            commit,
-            expected_request_digest,
-            method_id,
-            capability.principal_id,
-        )?;
-        response(request, normalized, &key, commit, expires_at)
+            headers,
+            now,
+        )
     }
+}
+
+pub(crate) fn issue_api_key_with<A>(
+    authority: &mut A,
+    issuance_key: &ApiKeyIssuanceKey,
+    gateway: GatewaySessionIdentity,
+    request: &CreateApiKeyRequest,
+    headers: &HeaderMap,
+    now: UnixMicros,
+) -> Result<CreateApiKeyResponse, ApiKeyIssuanceError>
+where
+    A: ApiKeyIssuanceAuthority,
+{
+    let normalized = normalize_request(request)?;
+    let capability = BrowserSessionAuthenticator::new(&*authority, gateway).authenticate(
+        headers,
+        BrowserRequestProtection::Mutation,
+        AssuranceLevel::SingleFactor,
+        now,
+    )?;
+    let key = ApiKeyBundle::derive_issued(
+        issuance_key,
+        capability.principal_id,
+        normalized.operation_id,
+    )
+    .map_err(|_| ApiKeyIssuanceError::Material)?;
+    let method_id = method_id(capability.principal_id, normalized.operation_id)?;
+    let existing = authority.resolve_api_key_issuance(normalized.operation_id)?;
+    let occurred_at = existing.map_or(now, |commit| commit.created_at);
+    let expires_at = expiry(request, occurred_at)?;
+    let command = command(
+        request,
+        &normalized,
+        &key,
+        method_id,
+        capability.principal_id,
+        occurred_at,
+        expires_at,
+    );
+    let context = context(
+        normalized.operation_id,
+        capability.principal_id,
+        &key,
+        occurred_at,
+    )?;
+    let expected_request_digest = command.request_digest(context);
+    let commit = match existing {
+        Some(commit) => commit,
+        None => authority.commit_or_resolve_api_key_issuance(context, &command)?,
+    };
+    validate_commit(
+        commit,
+        expected_request_digest,
+        method_id,
+        capability.principal_id,
+    )?;
+    response(request, normalized, &key, commit, expires_at)
 }

@@ -62,6 +62,12 @@ impl AuthenticationRuntimeKeys {
         )
     }
 
+    /// Transfers only the API-key issuance capability into an issuance service.
+    #[must_use]
+    pub fn into_api_key_issuance_key(self) -> ApiKeyIssuanceKey {
+        self.api_key_issuance
+    }
+
     /// Transfers only the TOTP envelope capability into a verifier.
     #[must_use]
     pub fn into_totp_envelope_key(self) -> TotpEnvelopeKey {

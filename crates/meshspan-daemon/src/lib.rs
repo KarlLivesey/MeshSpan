@@ -126,6 +126,7 @@ mod passkey_test_support;
 mod pending_recovery_bundle;
 #[cfg(test)]
 mod pending_recovery_bundle_tests;
+mod protected_api_key_issuance;
 mod protected_file;
 mod public_contract_api;
 #[cfg(test)]
@@ -331,6 +332,7 @@ pub use passkey_session_contract::{
 pub use pending_recovery_bundle::{
     PendingRecoveryBundle, PendingRecoveryBundleError, PendingRecoveryBundleRemoval,
 };
+pub use protected_api_key_issuance::ProtectedApiKeyIssuanceController;
 pub use public_contract_api::{
     PublicContractApiError, ReadinessSource, public_contract_api_router,
 };
