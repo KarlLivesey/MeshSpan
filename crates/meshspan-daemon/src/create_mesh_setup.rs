@@ -8,6 +8,7 @@ use std::sync::Arc;
 use meshspan_api_contract::{
     CreateMeshSetupRequest, CreateMeshSetupResponse, OperationId as ApiOperationId,
 };
+use meshspan_certificates::OnlineCertificateAuthority;
 use meshspan_domain::{
     ClaimBundle, ClaimBundleError, InitialBootstrapMaterial, InitialBootstrapMaterialError,
     OperationId, RandomSource, UnixMicros,
@@ -16,11 +17,13 @@ use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, BootstrapAppliance, BootstrapMesh,
     BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration, CreateAuthenticationMethod,
     LocalDatabase, LocalSetupError, LocalSetupKind, LocalSetupState, NewAuthenticationCredential,
-    NewLocalSetup, RecordName, RecordNameError, RegisterNodeWrappingKey,
-    STORAGE_PERMIT_KEY_SECRET_KIND,
+    NewLocalSetup, ONLINE_AUTHORITY_KEY_SECRET_KIND, RecordName, RecordNameError,
+    RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_recovery_bundle::{OfflineRecoveryIdentity, RecoveryBundleCode, RecoveryBundleError};
-use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
+use meshspan_secret_envelope::{
+    EncryptedSecret, RecipientKeyEnvelope, SecretContext, WrappingPublicKey, encrypt_secret,
+};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -148,6 +151,9 @@ where
         self.setup_state.reconcile(&self.local_database)?;
 
         if setup.state == LocalSetupState::Prepared {
+            let online_material = material.online_authority_material();
+            let online_authority =
+                recovery_bundle.online_authority(&recovery_code, *online_material.key_seed())?;
             let context = CommandContext {
                 operation_id: input.operation_id,
                 actor_principal_id: material.administrator_id,
@@ -161,6 +167,7 @@ where
                 recovery_bundle.challenge(&recovery_code).commitment(),
                 setup.created_at,
                 self.wrapping_public_key,
+                &online_authority,
             )?;
             let committed = self.authority.commit_or_resolve(context, &command)?;
             self.local_database.record_local_setup_authority_commit(
@@ -228,33 +235,14 @@ impl ValidatedSetupInput {
         save_challenge_commitment: [u8; 32],
         occurred_at: UnixMicros,
         wrapping_public_key: WrappingPublicKey,
+        online_authority: &OnlineCertificateAuthority,
     ) -> Result<AuthoritativeCommand, CreateMeshSetupError> {
         let recovery_public_key = recovery.public_wrapping_key();
-        let mut permit_material = material.storage_permit_material();
-        let permit_key = permit_material.key();
-        let context = SecretContext::new(
-            STORAGE_PERMIT_KEY_SECRET_KIND,
-            material.mesh_id.as_bytes(),
-            1,
-        )?;
-        let (secret, recipients) = encrypt_secret(
-            context,
-            permit_key.as_ref(),
-            &[wrapping_public_key, recovery_public_key],
-            &mut permit_material,
-        )?;
-        let mut authentication_material = material.authentication_root_material();
-        let authentication_root = authentication_material.key();
-        let authentication_context = SecretContext::new(
-            AUTHENTICATION_ROOT_KEY_SECRET_KIND,
-            material.mesh_id.as_bytes(),
-            1,
-        )?;
-        let (authentication_secret, authentication_recipients) = encrypt_secret(
-            authentication_context,
-            authentication_root.as_ref(),
-            &[wrapping_public_key, recovery_public_key],
-            &mut authentication_material,
+        let generations = initial_authority_generations(
+            material,
+            wrapping_public_key,
+            recovery_public_key,
+            online_authority,
         )?;
         Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
             BootstrapAppliance {
@@ -288,6 +276,11 @@ impl ValidatedSetupInput {
                     key_fingerprint: recovery_public_key.fingerprint(),
                     root_certificate_digest: Sha256::digest(recovery.root_certificate_der()).into(),
                     root_certificate_der: recovery.root_certificate_der().to_vec(),
+                    online_authority_certificate_der: online_authority.certificate_der().to_vec(),
+                    online_authority_certificate_digest: Sha256::digest(
+                        online_authority.certificate_der(),
+                    )
+                    .into(),
                     bundle_digest: recovery.bundle_digest(),
                     save_challenge_commitment,
                 }),
@@ -297,20 +290,9 @@ impl ValidatedSetupInput {
                     public_key: wrapping_public_key.as_bytes(),
                     key_fingerprint: wrapping_public_key.fingerprint(),
                 },
-                storage_permit_key_generation: Box::new(CommitSecretGeneration {
-                    secret: secret.parts(),
-                    recipients: recipients
-                        .iter()
-                        .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
-                        .collect(),
-                }),
-                authentication_root_key_generation: Box::new(CommitSecretGeneration {
-                    secret: authentication_secret.parts(),
-                    recipients: authentication_recipients
-                        .iter()
-                        .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
-                        .collect(),
-                }),
+                storage_permit_key_generation: generations.storage_permit,
+                authentication_root_key_generation: generations.authentication_root,
+                online_authority_key_generation: generations.online_authority,
             },
         )))
     }
@@ -344,6 +326,70 @@ impl ValidatedSetupInput {
                 .expose_for_verification(),
         })
     }
+}
+
+struct InitialAuthorityGenerations {
+    storage_permit: Box<CommitSecretGeneration>,
+    authentication_root: Box<CommitSecretGeneration>,
+    online_authority: Box<CommitSecretGeneration>,
+}
+
+fn initial_authority_generations(
+    material: &InitialBootstrapMaterial,
+    node: WrappingPublicKey,
+    recovery: WrappingPublicKey,
+    online_authority: &OnlineCertificateAuthority,
+) -> Result<InitialAuthorityGenerations, CreateMeshSetupError> {
+    let recipients = [node, recovery];
+    let mut permit_material = material.storage_permit_material();
+    let permit_key = permit_material.key();
+    let permit = encrypt_secret(
+        SecretContext::new(
+            STORAGE_PERMIT_KEY_SECRET_KIND,
+            material.mesh_id.as_bytes(),
+            1,
+        )?,
+        permit_key.as_ref(),
+        &recipients,
+        &mut permit_material,
+    )?;
+    let mut authentication_material = material.authentication_root_material();
+    let authentication_key = authentication_material.key();
+    let authentication = encrypt_secret(
+        SecretContext::new(
+            AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+            material.mesh_id.as_bytes(),
+            1,
+        )?,
+        authentication_key.as_ref(),
+        &recipients,
+        &mut authentication_material,
+    )?;
+    let mut online_material = material.online_authority_material();
+    let online = encrypt_secret(
+        SecretContext::new(
+            ONLINE_AUTHORITY_KEY_SECRET_KIND,
+            material.mesh_id.as_bytes(),
+            1,
+        )?,
+        online_authority.private_key_pkcs8(),
+        &recipients,
+        &mut online_material,
+    )?;
+    Ok(InitialAuthorityGenerations {
+        storage_permit: committed_generation(permit),
+        authentication_root: committed_generation(authentication),
+        online_authority: committed_generation(online),
+    })
+}
+
+fn committed_generation(
+    (secret, recipients): (EncryptedSecret, Vec<RecipientKeyEnvelope>),
+) -> Box<CommitSecretGeneration> {
+    Box::new(CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: recipients.iter().map(RecipientKeyEnvelope::parts).collect(),
+    })
 }
 
 fn append_name(digest: &mut Sha256, name: &RecordName) {

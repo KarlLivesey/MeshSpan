@@ -17,9 +17,9 @@ use meshspan_metadata::{
     BeginScopeHandoff, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
     CommandContext, CommitSecretGeneration, ConfirmRecoveryBundleSaved, ConsumeJoinGrant,
     CreateAuthenticationMethod, CreateGroup, CreateMetadataPartition, CreateScopeRoute,
-    FreezeScopeHandoff, IssueJoinGrant, JoinRoles, NewAuthenticationCredential, RecordName,
-    RegisterNodeWrappingKey, RegisterRoutingSigner, RouteAttestation,
-    STORAGE_PERMIT_KEY_SECRET_KIND,
+    FreezeScopeHandoff, IssueJoinGrant, JoinRoles, NewAuthenticationCredential,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, RecordName, RegisterNodeWrappingKey, RegisterRoutingSigner,
+    RouteAttestation, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -157,6 +157,14 @@ fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
         &mut ProofRandom(24),
     )
     .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+    let (online_authority_secret, online_authority_recipients) = encrypt_secret(
+        SecretContext::new(ONLINE_AUTHORITY_KEY_SECRET_KIND, mesh.mesh_id.as_bytes(), 1)
+            .map_err(|_| NodeRuntimeError::InvalidConfiguration)?,
+        &[25; 96],
+        &[node_key, recovery_key],
+        &mut ProofRandom(26),
+    )
+    .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
     Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         BootstrapAppliance {
             mesh,
@@ -194,6 +202,13 @@ fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
                     .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
                     .collect(),
             }),
+            online_authority_key_generation: Box::new(CommitSecretGeneration {
+                secret: online_authority_secret.parts(),
+                recipients: online_authority_recipients
+                    .iter()
+                    .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                    .collect(),
+            }),
         },
     )))
 }
@@ -214,11 +229,14 @@ fn recovery_identity() -> Result<BootstrapRecoveryIdentity, NodeRuntimeError> {
     let public_key = WrappingPublicKey::from_bytes([16; 32])
         .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
     let certificate = vec![17; 64];
+    let online_certificate = vec![27; 64];
     Ok(BootstrapRecoveryIdentity {
         public_wrapping_key: public_key.as_bytes(),
         key_fingerprint: public_key.fingerprint(),
         root_certificate_digest: Sha256::digest(&certificate).into(),
         root_certificate_der: certificate,
+        online_authority_certificate_digest: Sha256::digest(&online_certificate).into(),
+        online_authority_certificate_der: online_certificate,
         bundle_digest: [18; 32],
         save_challenge_commitment: [19; 32],
     })

@@ -187,7 +187,9 @@ pub use reachability::{
     RetainedNamespaceRootSource,
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
-pub use recovery_authority::{MeshRecoveryAuthority, RecoveryBundleState};
+pub use recovery_authority::{
+    MeshRecoveryAuthority, OnlineCertificateAuthorityRecord, RecoveryBundleState,
+};
 pub use retention::VersionRetentionPolicy;
 pub use secret_generation::SecretGenerationRecord;
 pub use session::{
@@ -1148,6 +1150,18 @@ impl AuthoritativeRepository {
         secret_generation::latest_authentication_root_generation(&self.database, mesh_id)
     }
 
+    /// Returns the newest committed online node-certificate authority key generation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed generation state or database failure.
+    pub fn latest_online_authority_generation(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<u64>, RepositoryError> {
+        secret_generation::latest_online_authority_generation(&self.database, mesh_id)
+    }
+
     /// Returns every current gateway and the exact verified offline recovery recipient.
     ///
     /// Storage-only nodes are deliberately excluded because they retain encrypted shards without
@@ -1172,6 +1186,18 @@ impl AuthoritativeRepository {
         mesh_id: meshspan_domain::MeshId,
     ) -> Result<Option<MeshRecoveryAuthority>, RepositoryError> {
         recovery_authority::current(&self.database, mesh_id)
+    }
+
+    /// Returns the current root-signed online node-certificate authority certificate.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed certificate, generation or digest state.
+    pub fn online_certificate_authority(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<OnlineCertificateAuthorityRecord>, RepositoryError> {
+        recovery_authority::current_online_authority(&self.database, mesh_id)
     }
 
     /// Returns one stable, bounded page of principals in a selected family.

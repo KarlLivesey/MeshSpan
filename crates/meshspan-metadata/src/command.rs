@@ -378,6 +378,8 @@ pub struct BootstrapAppliance {
     pub storage_permit_key_generation: Box<CommitSecretGeneration>,
     /// Initial recoverable gateway-only authentication-root authority.
     pub authentication_root_key_generation: Box<CommitSecretGeneration>,
+    /// Initial recoverable online node-certificate authority private-key generation.
+    pub online_authority_key_generation: Box<CommitSecretGeneration>,
 }
 
 /// Public offline authority committed atomically with the first mesh.
@@ -391,6 +393,10 @@ pub struct BootstrapRecoveryIdentity {
     pub root_certificate_der: Vec<u8>,
     /// SHA-256 digest of the exact root certificate bytes.
     pub root_certificate_digest: [u8; 32],
+    /// Root-signed online node-certificate authority certificate in DER form.
+    pub online_authority_certificate_der: Vec<u8>,
+    /// SHA-256 digest of the exact online-authority certificate bytes.
+    pub online_authority_certificate_digest: [u8; 32],
     /// Digest of the exact encrypted portable recovery-bundle file.
     pub bundle_digest: [u8; 32],
     /// Non-reversible commitment to the short save-verification challenge.
@@ -520,6 +526,9 @@ pub const STORAGE_PERMIT_KEY_SECRET_KIND: u16 = 2;
 
 /// Secret-envelope kind reserved for the gateway-only mesh authentication root.
 pub const AUTHENTICATION_ROOT_KEY_SECRET_KIND: u16 = 3;
+
+/// Secret-envelope kind reserved for the rotatable online node-certificate authority key.
+pub const ONLINE_AUTHORITY_KEY_SECRET_KIND: u16 = 4;
 
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1871,6 +1880,8 @@ digest_simple_record!(
         digest.bytes(&value.recovery.key_fingerprint);
         digest.bytes(&value.recovery.root_certificate_der);
         digest.bytes(&value.recovery.root_certificate_digest);
+        digest.bytes(&value.recovery.online_authority_certificate_der);
+        digest.bytes(&value.recovery.online_authority_certificate_digest);
         digest.bytes(&value.recovery.bundle_digest);
         digest.bytes(&value.recovery.save_challenge_commitment);
         value.node_wrapping_key.update_digest(digest);
@@ -1878,6 +1889,7 @@ digest_simple_record!(
         value
             .authentication_root_key_generation
             .update_digest(digest);
+        value.online_authority_key_generation.update_digest(digest);
     }
 );
 digest_simple_record!(

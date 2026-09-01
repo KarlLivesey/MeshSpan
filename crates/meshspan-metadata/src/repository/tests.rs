@@ -77,6 +77,8 @@ pub(super) fn protected_bootstrap(
             Box::new(BootstrapRecoveryIdentity {
                 public_wrapping_key: public_key.as_bytes(),
                 key_fingerprint: public_key.fingerprint(),
+                online_authority_certificate_digest: Sha256::digest(&certificate).into(),
+                online_authority_certificate_der: certificate.clone(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
                 root_certificate_der: certificate,
                 bundle_digest: [151; 32],
@@ -737,7 +739,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 17);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        54
+        55
     );
     Ok(())
 }
@@ -894,6 +896,8 @@ fn join_bootstrap(
             Box::new(BootstrapRecoveryIdentity {
                 public_wrapping_key: recovery_key.as_bytes(),
                 key_fingerprint: recovery_key.fingerprint(),
+                online_authority_certificate_digest: Sha256::digest(&certificate).into(),
+                online_authority_certificate_der: certificate.clone(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
                 root_certificate_der: certificate,
                 bundle_digest: [148; 32],

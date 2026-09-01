@@ -32,6 +32,17 @@ fn bootstrap_commits_recovery_recipient_and_exact_pending_bundle_atomically()
     assert_eq!(pending.bundle_digest, [14; 32]);
     assert_eq!(pending.verified_by, None);
     assert_eq!(pending.verified_at, None);
+    let online = repository
+        .online_certificate_authority(mesh_id)?
+        .ok_or("online certificate authority missing")?;
+    assert_eq!(online.mesh_id, mesh_id);
+    assert_eq!(online.generation, 1);
+    assert_eq!(online.certificate_der, root_certificate());
+    assert_eq!(online.revision, Revision::new(1));
+    assert_eq!(
+        repository.latest_online_authority_generation(mesh_id)?,
+        Some(1)
+    );
 
     let confirm_context = CommandContext {
         operation_id: OperationId::from_bytes([16; 16])?,
@@ -165,6 +176,8 @@ fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::
     Ok(BootstrapRecoveryIdentity {
         public_wrapping_key: public_key.as_bytes(),
         key_fingerprint: public_key.fingerprint(),
+        online_authority_certificate_digest: Sha256::digest(&certificate).into(),
+        online_authority_certificate_der: certificate.clone(),
         root_certificate_digest: Sha256::digest(&certificate).into(),
         root_certificate_der: certificate,
         bundle_digest: [14; 32],

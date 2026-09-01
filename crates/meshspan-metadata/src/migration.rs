@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 54;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 55;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 11;
 
-const PARTITION_MIGRATIONS: [Migration; 54] = [
+const PARTITION_MIGRATIONS: [Migration; 55] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -227,8 +227,12 @@ const PARTITION_MIGRATIONS: [Migration; 54] = [
         sql: include_str!("../schema/partition/053_secret_generations.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 54,
         sql: include_str!("../schema/partition/054_recovery_authority.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/055_online_certificate_authority.sql"),
     },
 ];
 
@@ -732,6 +736,11 @@ pub(crate) fn partition_secret_generations_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn partition_recovery_authority_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[53].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_online_certificate_authority_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[54].sql)
 }
 
 #[cfg(test)]

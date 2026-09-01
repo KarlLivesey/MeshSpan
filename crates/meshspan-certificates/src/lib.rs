@@ -229,6 +229,26 @@ impl CertificateAuthority {
     /// Fails when entropy, key generation or X.509 construction is unavailable.
     pub fn issue_online_authority(&self) -> Result<OnlineCertificateAuthority, CertificateError> {
         let key = RustCryptoKey::generate()?;
+        self.issue_online_authority_for_key(key)
+    }
+
+    /// Deterministically recreates one exact online-authority generation for a restart-safe
+    /// first-mesh transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero seed or a seed whose bounded derivation cannot produce a P-256 scalar.
+    pub fn issue_online_authority_from_seed(
+        &self,
+        seed: [u8; KEY_BYTES],
+    ) -> Result<OnlineCertificateAuthority, CertificateError> {
+        self.issue_online_authority_for_key(RustCryptoKey::from_seed(seed)?)
+    }
+
+    fn issue_online_authority_for_key(
+        &self,
+        key: RustCryptoKey,
+    ) -> Result<OnlineCertificateAuthority, CertificateError> {
         let parameters = online_authority_parameters(&key)?;
         let certificate_der = parameters.signed_by(&key, &self.issuer)?.der().to_vec();
         OnlineCertificateAuthority::from_parts(key, certificate_der)
@@ -423,6 +443,43 @@ impl RustCryptoKey {
             key,
             public_key,
             private_key: Zeroizing::new(canonical.as_bytes().to_vec()),
+        })
+    }
+
+    fn from_seed(seed: [u8; KEY_BYTES]) -> Result<Self, CertificateError> {
+        if seed == [0; KEY_BYTES] {
+            return Err(CertificateError::KeyGeneration);
+        }
+        let mut candidate = Zeroizing::new(seed);
+        for attempt in 0..KEY_GENERATION_ATTEMPTS {
+            if let Ok(key) = p256::ecdsa::SigningKey::from_slice(candidate.as_ref()) {
+                return Self::from_signing_key(key);
+            }
+            let mut digest = Sha256::new();
+            digest.update(b"meshspan.online-certificate-authority-key.v1");
+            digest.update(seed);
+            digest.update(
+                u64::try_from(attempt)
+                    .map_err(|_| CertificateError::KeyGeneration)?
+                    .to_be_bytes(),
+            );
+            candidate.copy_from_slice(&digest.finalize());
+        }
+        Err(CertificateError::KeyGeneration)
+    }
+
+    fn from_signing_key(key: p256::ecdsa::SigningKey) -> Result<Self, CertificateError> {
+        let public_key = key.verifying_key().to_sec1_point(false).as_bytes().to_vec();
+        let private_key = Zeroizing::new(
+            key.to_pkcs8_der()
+                .map_err(|_| CertificateError::KeyEncoding)?
+                .as_bytes()
+                .to_vec(),
+        );
+        Ok(Self {
+            key,
+            public_key,
+            private_key,
         })
     }
 
@@ -621,6 +678,17 @@ mod tests {
             reopened.sign_node_public_identity(&public_node, "meshspan.internal")?,
             expected
         );
+        Ok(())
+    }
+
+    #[test]
+    fn online_authority_seed_is_exact_retry_stable() -> Result<(), Box<dyn std::error::Error>> {
+        let root = CertificateAuthority::new()?;
+        let first = root.issue_online_authority_from_seed([41; 32])?;
+        let replay = root.issue_online_authority_from_seed([41; 32])?;
+        assert_eq!(first.certificate_der(), replay.certificate_der());
+        assert_eq!(first.private_key_pkcs8(), replay.private_key_pkcs8());
+        assert!(root.issue_online_authority_from_seed([0; 32]).is_err());
         Ok(())
     }
 }

@@ -97,6 +97,15 @@ pub(super) fn bootstrap_appliance(
         &command.authentication_root_key_generation,
         revision,
     )?;
+    super::secret_generation::commit_initial_online_authority_key(
+        transaction,
+        context,
+        command.mesh.mesh_id,
+        node_recipient,
+        recovery_recipient,
+        &command.online_authority_key_generation,
+        revision,
+    )?;
     Ok(mesh)
 }
 

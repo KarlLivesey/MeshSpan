@@ -8,7 +8,7 @@ use meshspan_secret_envelope::{
 use crate::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, BootstrapAppliance, BootstrapMesh,
     BootstrapRecoveryIdentity, CommitSecretGeneration, CreateAuthenticationMethod,
-    RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 
 pub(crate) fn bootstrap_appliance(
@@ -37,6 +37,12 @@ pub(crate) fn bootstrap_appliance(
         &[wrapping_public_key, recovery_public_key],
         &mut SequentialRandom(21),
     )?;
+    let (online_authority_secret, online_authority_recipients) = encrypt_secret(
+        SecretContext::new(ONLINE_AUTHORITY_KEY_SECRET_KIND, mesh.mesh_id.as_bytes(), 1)?,
+        &[204; 96],
+        &[wrapping_public_key, recovery_public_key],
+        &mut SequentialRandom(31),
+    )?;
     Ok(BootstrapAppliance {
         node_wrapping_key: RegisterNodeWrappingKey {
             node_id: mesh.node_id,
@@ -54,6 +60,13 @@ pub(crate) fn bootstrap_appliance(
         authentication_root_key_generation: Box::new(CommitSecretGeneration {
             secret: authentication_secret.parts(),
             recipients: authentication_recipients
+                .iter()
+                .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                .collect(),
+        }),
+        online_authority_key_generation: Box::new(CommitSecretGeneration {
+            secret: online_authority_secret.parts(),
+            recipients: online_authority_recipients
                 .iter()
                 .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
                 .collect(),

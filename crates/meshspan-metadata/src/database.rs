@@ -323,6 +323,7 @@ mod tests {
         partition_federation_storage_allocation_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
         partition_node_wrapping_keys_migration_digest,
+        partition_online_certificate_authority_migration_digest,
         partition_principal_inactive_quarantine_migration_digest,
         partition_principal_lifecycle_migration_digest,
         partition_recovery_authority_migration_digest, partition_roles_migration_digest,
@@ -356,7 +357,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 54);
+        assert_eq!(database.check_integrity()?.schema_version, 55);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -406,7 +407,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            54
+            55
         );
         Ok(())
     }
@@ -1508,6 +1509,18 @@ mod tests {
     }
 
     #[test]
+    fn online_certificate_authority_migration_digest_is_committed() {
+        assert_eq!(
+            partition_online_certificate_authority_migration_digest(),
+            [
+                0xf6, 0x6e, 0x98, 0xc4, 0xc2, 0x18, 0xac, 0xc2, 0xd7, 0x8e, 0xc6, 0xe5, 0x27, 0x22,
+                0x1d, 0x7f, 0x08, 0x05, 0x9e, 0xf5, 0x06, 0xbc, 0xcd, 0x11, 0x51, 0xcb, 0xdf, 0xad,
+                0x9d, 0x53, 0x84, 0xfa,
+            ]
+        );
+    }
+
+    #[test]
     fn authentication_policy_migration_seeds_complete_existing_mesh_defaults()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;
@@ -1571,7 +1584,7 @@ mod tests {
         assert_eq!(policy_id, expected);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            54
+            55
         );
         Ok(())
     }
@@ -1615,7 +1628,7 @@ mod tests {
         assert_eq!(sessions, 0);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            54
+            55
         );
         Ok(())
     }

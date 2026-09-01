@@ -21,7 +21,8 @@ pub(super) fn encode(
     encode_recovery(encoder, &value.recovery)?;
     node_wrapping_key::encode_payload(encoder, &value.node_wrapping_key)?;
     secret_generation::encode_payload(encoder, &value.storage_permit_key_generation)?;
-    secret_generation::encode_payload(encoder, &value.authentication_root_key_generation)
+    secret_generation::encode_payload(encoder, &value.authentication_root_key_generation)?;
+    secret_generation::encode_payload(encoder, &value.online_authority_key_generation)
 }
 
 pub(super) fn decode(
@@ -34,6 +35,7 @@ pub(super) fn decode(
         node_wrapping_key: node_wrapping_key::decode_payload(decoder)?,
         storage_permit_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
         authentication_root_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
+        online_authority_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
     })
 }
 
@@ -45,6 +47,11 @@ fn encode_recovery(
     encoder.fixed(&value.key_fingerprint)?;
     encoder.bytes(&value.root_certificate_der, MAXIMUM_ROOT_CERTIFICATE_BYTES)?;
     encoder.fixed(&value.root_certificate_digest)?;
+    encoder.bytes(
+        &value.online_authority_certificate_der,
+        MAXIMUM_ROOT_CERTIFICATE_BYTES,
+    )?;
+    encoder.fixed(&value.online_authority_certificate_digest)?;
     encoder.fixed(&value.bundle_digest)?;
     encoder.fixed(&value.save_challenge_commitment)
 }
@@ -57,10 +64,14 @@ fn decode_recovery(
         key_fingerprint: decoder.fixed()?,
         root_certificate_der: decoder.bytes(MAXIMUM_ROOT_CERTIFICATE_BYTES)?,
         root_certificate_digest: decoder.fixed()?,
+        online_authority_certificate_der: decoder.bytes(MAXIMUM_ROOT_CERTIFICATE_BYTES)?,
+        online_authority_certificate_digest: decoder.fixed()?,
         bundle_digest: decoder.fixed()?,
         save_challenge_commitment: decoder.fixed()?,
     };
-    if recovery.root_certificate_der.is_empty() {
+    if recovery.root_certificate_der.is_empty()
+        || recovery.online_authority_certificate_der.is_empty()
+    {
         Err(MetadataCommandCodecError::Invalid)
     } else {
         Ok(recovery)

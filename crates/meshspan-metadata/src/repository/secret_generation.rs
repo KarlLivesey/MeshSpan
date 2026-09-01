@@ -12,11 +12,14 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, recovery_authority};
 use crate::{
-    AUTHENTICATION_ROOT_KEY_SECRET_KIND, CommandContext, CommitSecretGeneration, PartitionDatabase,
-    STORAGE_PERMIT_KEY_SECRET_KIND, VOLUME_CONTENT_KEY_SECRET_KIND,
+    AUTHENTICATION_ROOT_KEY_SECRET_KIND, CommandContext, CommitSecretGeneration,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, PartitionDatabase, STORAGE_PERMIT_KEY_SECRET_KIND,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 const VOLUME_CONTENT_KEY_BYTES: usize = 32;
+const MINIMUM_ONLINE_AUTHORITY_KEY_BYTES: usize = 64;
+const MAXIMUM_ONLINE_AUTHORITY_KEY_BYTES: usize = 512;
 const AUTHENTICATION_TAG_BYTES: usize = 16;
 const RECIPIENT_KIND_NODE: i64 = 1;
 const RECIPIENT_KIND_OFFLINE_RECOVERY: i64 = 2;
@@ -130,6 +133,48 @@ pub(super) fn commit_initial_authentication_root_key(
         || secret_context.generation() != 1
         || command.secret.ciphertext.len()
             != VOLUME_CONTENT_KEY_BYTES.saturating_add(AUTHENTICATION_TAG_BYTES)
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let mut expected_recipients = vec![node_recipient, recovery_recipient];
+    expected_recipients.sort_by_key(|recipient| recipient.fingerprint());
+    let supplied_recipients = recipients
+        .iter()
+        .map(RecipientKeyEnvelope::recipient_public_key)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    if supplied_recipients != expected_recipients {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    persist(
+        transaction,
+        context,
+        command,
+        &secret,
+        &recipients,
+        revision,
+    )
+    .map(|_| ())
+}
+
+pub(super) fn commit_initial_online_authority_key(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    mesh_id: MeshId,
+    node_recipient: WrappingPublicKey,
+    recovery_recipient: WrappingPublicKey,
+    command: &CommitSecretGeneration,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let (secret, recipients) = validate(command)?;
+    let secret_context = secret.context();
+    let ciphertext_length = command.secret.ciphertext.len();
+    if secret_context.kind() != ONLINE_AUTHORITY_KEY_SECRET_KIND
+        || secret_context.id() != mesh_id.as_bytes()
+        || secret_context.generation() != 1
+        || !(MINIMUM_ONLINE_AUTHORITY_KEY_BYTES.saturating_add(AUTHENTICATION_TAG_BYTES)
+            ..=MAXIMUM_ONLINE_AUTHORITY_KEY_BYTES.saturating_add(AUTHENTICATION_TAG_BYTES))
+            .contains(&ciphertext_length)
     {
         return Err(RepositoryError::InvalidCommand);
     }
@@ -356,6 +401,17 @@ pub(super) fn latest_authentication_root_generation(
     latest_generation(
         database,
         AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+        &mesh_id.as_bytes(),
+    )
+}
+
+pub(super) fn latest_online_authority_generation(
+    database: &PartitionDatabase,
+    mesh_id: MeshId,
+) -> Result<Option<u64>, RepositoryError> {
+    latest_generation(
+        database,
+        ONLINE_AUTHORITY_KEY_SECRET_KIND,
         &mesh_id.as_bytes(),
     )
 }

@@ -102,7 +102,7 @@ fn passkey_totp_and_recovery_methods_commit_exact_typed_rows()
             .connection()
             .query_row("SELECT count(*) FROM recovery_codes", [], |row| row.get(0))?;
     assert_eq!(recovery_count, 2);
-    assert_eq!(database.check_integrity()?.schema_version, 54);
+    assert_eq!(database.check_integrity()?.schema_version, 55);
     Ok(())
 }
 

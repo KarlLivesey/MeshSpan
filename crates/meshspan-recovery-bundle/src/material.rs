@@ -2,7 +2,7 @@
 
 //! Recovery authority creation and authenticated restoration.
 
-use meshspan_certificates::CertificateAuthority;
+use meshspan_certificates::{CertificateAuthority, OnlineCertificateAuthority};
 use meshspan_domain::{MeshId, RandomSource};
 use meshspan_secret_envelope::{WrappingPrivateKey, WrappingPublicKey};
 
@@ -83,6 +83,20 @@ impl RecoveredAuthority {
     #[must_use]
     pub const fn wrapping_key(&self) -> &WrappingPrivateKey {
         &self.recovery_key
+    }
+
+    /// Creates one exact root-signed online node-certificate authority generation.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the restart-stable seed cannot produce valid certificate material.
+    pub fn issue_online_authority_from_seed(
+        &self,
+        seed: [u8; 32],
+    ) -> Result<OnlineCertificateAuthority, RecoveryBundleError> {
+        self.root_authority
+            .issue_online_authority_from_seed(seed)
+            .map_err(|_| RecoveryBundleError::Certificate)
     }
 }
 

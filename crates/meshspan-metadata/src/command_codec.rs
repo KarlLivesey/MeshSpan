@@ -22,9 +22,9 @@ use self::encoder::Encoder;
 use crate::{AuthoritativeCommand, CommandContext};
 
 /// Current closed metadata-command wire format.
-pub const METADATA_COMMAND_VERSION: u16 = 2;
+pub const METADATA_COMMAND_VERSION: u16 = 3;
 
-const MAGIC: [u8; 4] = *b"MSC\x02";
+const MAGIC: [u8; 4] = *b"MSC\x03";
 const MAXIMUM_COMMAND_BYTES: usize = 1024 * 1024;
 
 /// One completely decoded replicated state-machine input.

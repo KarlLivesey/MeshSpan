@@ -38,7 +38,7 @@ pub use api_key::{
 };
 pub use bootstrap_material::{
     InitialAuthenticationRootMaterial, InitialBootstrapMaterial, InitialBootstrapMaterialError,
-    InitialStoragePermitMaterial,
+    InitialOnlineAuthorityMaterial, InitialStoragePermitMaterial,
 };
 pub use claim::{ClaimBundle, ClaimBundleError, ENCODED_CLAIM_BUNDLE_LENGTH};
 pub use federation::{
