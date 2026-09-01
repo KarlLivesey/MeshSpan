@@ -999,6 +999,32 @@ impl VersionPublicationStore {
         namespace::complete_namespace_history_receive(&mut self.connection, session_id, now)
     }
 
+    /// Fast-forwards one local connector branch to an already imported immutable head.
+    ///
+    /// This operation never rewrites or merges history. The advertised head must select the exact
+    /// root supplied by the caller and descend from the current local head. Exact retries return
+    /// the existing head without advancing its sequence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown or mismatched history, divergent heads, stale concurrent updates and
+    /// persistence failure.
+    pub fn adopt_imported_namespace_head(
+        &mut self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        namespace_commit_id: NamespaceCommitId,
+        root_object_revision_id: ObjectRevisionId,
+    ) -> Result<BranchNamespaceHead, PublicationError> {
+        namespace::adopt_imported_namespace_head(
+            &mut self.connection,
+            branch_id,
+            volume_id,
+            namespace_commit_id,
+            root_object_revision_id,
+        )
+    }
+
     /// Loads every complete staged mutation for authoritative federation admission.
     ///
     /// # Errors

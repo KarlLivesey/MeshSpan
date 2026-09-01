@@ -4,13 +4,16 @@
 
 use std::collections::BTreeSet;
 
-use meshspan_domain::{FederatedMutationAdmission, NamespaceCommitId, UnixMicros, VolumeId};
+use meshspan_domain::{
+    BranchId, FederatedMutationAdmission, NamespaceCommitId, ObjectRevisionId, UnixMicros, VolumeId,
+};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::history_export::NamespaceHistoryPage;
 use super::history_records::{NamespaceHistoryImmutableRecord, NamespaceHistoryRecordError};
 use crate::{
-    NamespaceHistoryImport, NamespaceHistoryLimits, PublicationDisposition, PublicationError,
+    BranchNamespaceHead, NamespaceHistoryImport, NamespaceHistoryLimits, PublicationDisposition,
+    PublicationError,
 };
 
 #[path = "history_import/complete.rs"]
@@ -123,6 +126,97 @@ impl NamespaceHistoryMutationDecision {
 pub struct NamespaceHistoryReceivePreparation {
     admission_at: UnixMicros,
     commits: Vec<super::history_records::NamespaceHistoryCommitRecord>,
+}
+
+pub(super) fn adopt_head(
+    connection: &mut Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    namespace_commit_id: NamespaceCommitId,
+    root_object_revision_id: ObjectRevisionId,
+) -> Result<BranchNamespaceHead, PublicationError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let selected = super::repository::load_commit(&transaction, namespace_commit_id)?;
+    if selected.volume_id != volume_id
+        || selected.root_object_revision_id != root_object_revision_id
+    {
+        return Err(PublicationError::InvalidInput);
+    }
+    let existing = super::repository::load_head(&transaction, branch_id, volume_id)?;
+    let sequence = match existing {
+        Some(head) if head.namespace_commit_id == namespace_commit_id => {
+            transaction.commit()?;
+            return Ok(head);
+        }
+        Some(head) => {
+            if !is_ancestor(&transaction, head.namespace_commit_id, namespace_commit_id)? {
+                return Err(PublicationError::StaleHead);
+            }
+            let next = head
+                .sequence
+                .checked_add(1)
+                .ok_or(PublicationError::InvalidInput)?;
+            let changed = transaction.execute(
+                "UPDATE branch_namespace_heads SET namespace_commit_id = ?1, head_sequence = ?2
+                 WHERE branch_id = ?3 AND volume_id = ?4
+                   AND namespace_commit_id = ?5 AND head_sequence = ?6",
+                params![
+                    namespace_commit_id.as_bytes().as_slice(),
+                    i64::try_from(next).map_err(|_| PublicationError::InvalidInput)?,
+                    branch_id.as_bytes().as_slice(),
+                    volume_id.as_bytes().as_slice(),
+                    head.namespace_commit_id.as_bytes().as_slice(),
+                    i64::try_from(head.sequence).map_err(|_| PublicationError::InvalidInput)?,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(PublicationError::StaleHead);
+            }
+            next
+        }
+        None => {
+            transaction.execute(
+                "INSERT INTO branch_namespace_heads(
+                    branch_id, volume_id, namespace_commit_id, head_sequence
+                 ) VALUES (?1, ?2, ?3, 1)",
+                params![
+                    branch_id.as_bytes().as_slice(),
+                    volume_id.as_bytes().as_slice(),
+                    namespace_commit_id.as_bytes().as_slice(),
+                ],
+            )?;
+            1
+        }
+    };
+    transaction.commit()?;
+    Ok(BranchNamespaceHead {
+        branch_id,
+        volume_id,
+        namespace_commit_id,
+        sequence,
+    })
+}
+
+fn is_ancestor(
+    connection: &Connection,
+    ancestor: NamespaceCommitId,
+    descendant: NamespaceCommitId,
+) -> Result<bool, PublicationError> {
+    Ok(connection.query_row(
+        "WITH RECURSIVE lineage(namespace_commit_id) AS (
+            SELECT ?1
+            UNION
+            SELECT parent.parent_commit_id
+            FROM namespace_commit_parents AS parent
+            JOIN lineage ON parent.namespace_commit_id = lineage.namespace_commit_id
+         )
+         SELECT EXISTS(SELECT 1 FROM lineage WHERE namespace_commit_id = ?2)",
+        params![
+            descendant.as_bytes().as_slice(),
+            ancestor.as_bytes().as_slice(),
+        ],
+        |row| row.get::<_, i64>(0),
+    )? != 0)
 }
 
 impl NamespaceHistoryReceivePreparation {

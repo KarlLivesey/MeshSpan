@@ -753,6 +753,22 @@ async fn handle_private_control(
             .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
     )
     .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
+    if let Some(response) = crate::native_gateway_sync::handle(
+        network,
+        state_directory,
+        request,
+        operation_id,
+        header,
+        envelope
+            .message
+            .as_ref()
+            .ok_or(DaemonProcessError::PrivateNetworkState)?,
+    )
+    .await
+    .map_err(|_| DaemonProcessError::PrivateNetworkState)?
+    {
+        return Ok(response);
+    }
     match envelope.message.as_ref() {
         Some(Message::NodeActivationRequest(activation)) => {
             let outcome = activate_private_node(

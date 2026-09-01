@@ -362,6 +362,7 @@ message NamespaceHistoryPageResult {
 message FetchNamespaceHistoryObject {
   bytes export_token = 1;
   bytes object_digest = 2;
+  bytes volume_id = 3;
 }
 
 message NamespaceHistoryObjectResult {

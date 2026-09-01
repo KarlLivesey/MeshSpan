@@ -132,7 +132,8 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         }
         Message::FetchNamespaceHistoryObject(value) => {
             valid_digest(&value.export_token)?;
-            valid_digest(&value.object_digest)
+            valid_digest(&value.object_digest)?;
+            valid_identifier(&value.volume_id)
         }
         Message::NamespaceHistoryObjectResult(value) => {
             validate_payload(value.object.as_ref(), limits)
