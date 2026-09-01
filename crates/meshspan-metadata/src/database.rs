@@ -114,6 +114,37 @@ impl LocalDatabase {
         Ok(database)
     }
 
+    /// Opens an existing daemon-local database using its durably bound node identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a missing database, SQLite failure, migration drift/newer schema, malformed or
+    /// absent stored identity and failed integrity checks.
+    pub fn open_existing(
+        file_path: &Path,
+        migration_time: UnixMicros,
+    ) -> Result<Self, MetadataStoreError> {
+        let mut connection = open_existing_connection(file_path)?;
+        migrate_local(&mut connection, migration_time.get())?;
+        let stored: Vec<u8> = connection.query_row(
+            "SELECT node_id FROM local_identity WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let node_bytes: [u8; 16] = stored
+            .try_into()
+            .map_err(|_| MetadataStoreError::IntegrityFailed)?;
+        let node_id =
+            NodeId::from_bytes(node_bytes).map_err(|_| MetadataStoreError::IntegrityFailed)?;
+        bind_local_identity(&mut connection, node_id)?;
+        let database = Self {
+            connection,
+            node_id,
+        };
+        database.check_integrity()?;
+        Ok(database)
+    }
+
     /// Returns the immutable node identity verified at open.
     #[must_use]
     pub const fn node_id(&self) -> NodeId {
@@ -148,6 +179,18 @@ fn open_connection(file_path: &Path) -> Result<Connection, MetadataStoreError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    open_connection_with_flags(file_path, flags)
+}
+
+fn open_existing_connection(file_path: &Path) -> Result<Connection, MetadataStoreError> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    open_connection_with_flags(file_path, flags)
+}
+
+fn open_connection_with_flags(
+    file_path: &Path,
+    flags: OpenFlags,
+) -> Result<Connection, MetadataStoreError> {
     let connection = Connection::open_with_flags(file_path, flags)?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection.execute_batch(
@@ -209,6 +252,10 @@ fn bind_local_identity(
     if stored.as_slice() != node_bytes {
         return Err(MetadataStoreError::IdentityMismatch);
     }
+    transaction.execute(
+        "UPDATE local_identity SET schema_version = ?1 WHERE singleton = 1",
+        [LOCAL_SCHEMA_VERSION],
+    )?;
     transaction.commit()?;
     Ok(())
 }
@@ -600,6 +647,15 @@ mod tests {
         assert_eq!(database.schema_version(), 10);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
+        let existing = LocalDatabase::open_existing(&file_path, UnixMicros::new(12))?;
+        assert_eq!(existing.node_id(), first);
+        assert!(matches!(
+            LocalDatabase::open_existing(
+                &directory.path().join("missing.sqlite3"),
+                UnixMicros::new(13)
+            ),
+            Err(MetadataStoreError::Sqlite(_))
+        ));
         assert!(matches!(
             LocalDatabase::open(&file_path, second, UnixMicros::new(11)),
             Err(MetadataStoreError::IdentityMismatch)

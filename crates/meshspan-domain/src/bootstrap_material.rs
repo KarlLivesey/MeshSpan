@@ -2,6 +2,7 @@
 
 //! Restart-stable, domain-separated identities for one first-appliance bootstrap.
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::secret_text::derive;
@@ -37,6 +38,20 @@ pub struct InitialBootstrapMaterial {
 }
 
 impl InitialBootstrapMaterial {
+    /// Derives the first node identity before the setup operation exists.
+    ///
+    /// The node-local database and identity key lifecycle begin before a browser or headless client
+    /// chooses its idempotency operation. Binding the node solely to its first-boot claim therefore
+    /// keeps that identity stable across setup retries and process restarts.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the cryptographically negligible nil derivation.
+    pub fn node_id(claim: &ClaimBundle) -> Result<NodeId, InitialBootstrapMaterialError> {
+        NodeId::from_bytes(claim_identifier(b"meshspan.setup.node-id.v1", claim)?)
+            .map_err(Into::into)
+    }
+
     /// Derives the same independent values for every exact retry of one claimed operation.
     ///
     /// # Errors
@@ -67,11 +82,7 @@ impl InitialBootstrapMaterial {
                 claim,
                 operation_id,
             ))?,
-            node_id: NodeId::from_bytes(identifier(
-                b"meshspan.setup.node-id.v1",
-                claim,
-                operation_id,
-            ))?,
+            node_id: Self::node_id(claim)?,
             partition_id: PartitionId::from_bytes(identifier(
                 b"meshspan.setup.partition-id.v1",
                 claim,
@@ -122,6 +133,27 @@ impl From<ApiKeyBundleError> for InitialBootstrapMaterialError {
 
 fn identifier(domain: &[u8], claim: &ClaimBundle, operation_id: OperationId) -> [u8; 16] {
     let digest = derive(domain, claim.secret_bytes(), operation_id);
+    uuid_identifier(digest)
+}
+
+fn claim_identifier(
+    domain: &[u8],
+    claim: &ClaimBundle,
+) -> Result<[u8; 16], InitialBootstrapMaterialError> {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(claim.claim_id().as_bytes());
+    digest.update(claim.secret_bytes());
+    let bytes: [u8; 32] = digest.finalize().into();
+    let identifier = uuid_identifier(bytes);
+    if identifier == [0; 16] {
+        Err(InitialBootstrapMaterialError::Identifier)
+    } else {
+        Ok(identifier)
+    }
+}
+
+fn uuid_identifier(digest: [u8; 32]) -> [u8; 16] {
     let mut identifier = [0_u8; 16];
     identifier.copy_from_slice(&digest[..16]);
     identifier[6] = (identifier[6] & 0x0f) | 0x40;
@@ -143,6 +175,10 @@ mod tests {
         let replay = InitialBootstrapMaterial::derive(&claim, operation)?;
         assert_eq!(first.mesh_id, replay.mesh_id);
         assert_eq!(first.node_id, replay.node_id);
+        let another_operation =
+            InitialBootstrapMaterial::derive(&claim, OperationId::from_bytes([100; 16])?)?;
+        assert_eq!(first.node_id, another_operation.node_id);
+        assert_ne!(first.mesh_id, another_operation.mesh_id);
         assert_eq!(
             first.api_key.expose_encoded(),
             replay.api_key.expose_encoded()
