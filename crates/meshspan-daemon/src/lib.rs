@@ -93,6 +93,7 @@ mod native_upload_api;
 mod native_upload_api_tests;
 #[cfg(test)]
 mod native_upload_service_tests;
+mod node_activation;
 mod node_enrolment;
 mod node_enrolment_api;
 mod node_join_grant;
@@ -303,6 +304,10 @@ pub use native_upload_api::{
     NativeUploadApiError, NativeUploadController, NativeUploadError, NativeUploadService,
     NativeUploadServicePolicy, UploadRangeCursor, UploadRangePageRequest, UploadRangeWriteRequest,
     native_upload_api_router,
+};
+pub use node_activation::{
+    NodeActivationAuthority, NodeActivationAuthorityError, NodeActivationCommit,
+    NodeActivationError, NodeActivationRequest, NodeActivationService,
 };
 pub use node_enrolment::{
     NodeEnrolmentAuthority, NodeEnrolmentAuthorityError, NodeEnrolmentCommit,

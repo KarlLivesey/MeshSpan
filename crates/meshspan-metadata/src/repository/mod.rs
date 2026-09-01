@@ -145,7 +145,9 @@ pub use cleanup_permit::{
     VersionCleanupPermitAuthority,
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
-pub use cluster::{JoinGrantRecord, NodeEnrolmentRecord};
+pub use cluster::{
+    JoinGrantRecord, NodeActivationCandidate, NodeActivationRecord, NodeEnrolmentRecord,
+};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use federation_actor_attestation::FederatedActorAttestationRecord;
 pub use federation_assignment::FederationGrantAssignmentAuthority;
@@ -300,6 +302,30 @@ impl AuthoritativeRepository {
         node_id: meshspan_domain::NodeId,
     ) -> Result<Option<NodeEnrolmentRecord>, RepositoryError> {
         cluster::node_enrolment(&self.database, node_id)
+    }
+
+    /// Returns one admitted node's exact pending private-activation facts.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when admission, certificate, role, endpoint or issuer state is malformed.
+    pub fn node_activation_candidate(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<NodeActivationCandidate>, RepositoryError> {
+        cluster::node_activation_candidate(&self.database, node_id)
+    }
+
+    /// Returns exact durable evidence for one active node.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when activation evidence is malformed.
+    pub fn node_activation(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<NodeActivationRecord>, RepositoryError> {
+        cluster::node_activation(&self.database, node_id)
     }
 
     /// Wraps one already migrated and identity-verified partition database.

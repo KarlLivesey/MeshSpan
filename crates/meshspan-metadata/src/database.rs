@@ -322,7 +322,7 @@ mod tests {
         partition_federation_relationship_history_migration_digest,
         partition_federation_storage_allocation_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
-        partition_node_wrapping_keys_migration_digest,
+        partition_node_activations_migration_digest, partition_node_wrapping_keys_migration_digest,
         partition_online_certificate_authority_migration_digest,
         partition_pending_node_activations_migration_digest,
         partition_principal_inactive_quarantine_migration_digest,
@@ -1529,6 +1529,18 @@ mod tests {
                 0x02, 0x7a, 0x6b, 0xbf, 0x07, 0xb2, 0x43, 0x9a, 0xa3, 0x91, 0x0d, 0x60, 0x06, 0x92,
                 0xb2, 0x6c, 0x63, 0x7d, 0xc7, 0x7c, 0xdf, 0x95, 0x13, 0xb5, 0xc4, 0x77, 0x84, 0x01,
                 0x33, 0xf2, 0x0a, 0x52,
+            ]
+        );
+    }
+
+    #[test]
+    fn node_activations_migration_digest_is_committed() {
+        assert_eq!(
+            partition_node_activations_migration_digest(),
+            [
+                0xff, 0x45, 0x62, 0x90, 0xb5, 0xf6, 0x67, 0xdb, 0xc4, 0x73, 0x62, 0x0e, 0xc9, 0x1d,
+                0xc8, 0x63, 0x6c, 0x5a, 0x66, 0x21, 0x16, 0x8f, 0x5e, 0x13, 0x5d, 0x87, 0xb5, 0xa6,
+                0x45, 0x01, 0xcc, 0x00,
             ]
         );
     }

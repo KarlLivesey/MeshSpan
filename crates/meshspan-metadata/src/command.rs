@@ -164,6 +164,8 @@ pub enum AuthoritativeCommand {
     IssueJoinGrant(IssueJoinGrant),
     /// Consumes a join grant to admit one certificate-bound learner node.
     ConsumeJoinGrant(ConsumeJoinGrant),
+    /// Activates one admitted node after certificate-bound private-protocol negotiation.
+    ActivateNode(ActivateNode),
     /// Registers an Ed25519 public key permitted to attest catalogue routes.
     RegisterRoutingSigner(RegisterRoutingSigner),
     /// Creates another metadata partition in the catalogue.
@@ -301,6 +303,7 @@ impl AuthoritativeCommand {
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
             Self::ConsumeJoinGrant(value) => value.update_digest(digest),
+            Self::ActivateNode(value) => value.update_digest(digest),
             Self::RegisterRoutingSigner(value) => value.update_digest(digest),
             Self::CreateMetadataPartition(value) => value.update_digest(digest),
             Self::CreateScopeRoute(value) => value.update_digest(digest),
@@ -1751,6 +1754,19 @@ pub struct ConsumeJoinGrant {
     pub certificate_valid_until: UnixMicros,
 }
 
+/// Certificate-bound completion of one staged node admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivateNode {
+    /// Exact admitted node proven by the mTLS leaf and `NodeHello`.
+    pub node_id: NodeId,
+    /// Positive process incarnation proven during private negotiation.
+    pub incarnation: u64,
+    /// Exact staged endpoint proven reachable by the accepting gateway.
+    pub private_endpoint: String,
+    /// Digest of the validated roles, protocol versions, features and component support.
+    pub capability_digest: [u8; 32],
+}
+
 /// Ed25519 signature and committed key identity for one resulting route state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RouteAttestation {
@@ -2658,6 +2674,12 @@ digest_simple_record!(ConsumeJoinGrant, b"consume-join-grant", |value, digest| {
     digest.bytes(&value.certificate_der);
     digest.bytes(&value.certificate_fingerprint);
     digest.signed(value.certificate_valid_until.get());
+});
+digest_simple_record!(ActivateNode, b"activate-node", |value, digest| {
+    digest.identifier(value.node_id.as_bytes());
+    digest.unsigned(value.incarnation);
+    digest.bytes(value.private_endpoint.as_bytes());
+    digest.bytes(&value.capability_digest);
 });
 digest_simple_record!(
     RegisterRoutingSigner,

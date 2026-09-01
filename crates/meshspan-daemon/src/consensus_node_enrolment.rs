@@ -7,8 +7,9 @@ use meshspan_domain::{JoinGrantId, MeshId, NodeId, OperationId, PrincipalId, Uni
 use meshspan_metadata::{AuthoritativeCommand, CommandContext, EntityKind, RepositoryError};
 
 use crate::{
-    ConsensusAuthenticationAuthority, NodeEnrolmentAuthority, NodeEnrolmentAuthorityError,
-    NodeEnrolmentCommit, NodeJoinGrantIssuanceAuthority, NodeJoinGrantIssuanceAuthorityError,
+    ConsensusAuthenticationAuthority, NodeActivationAuthority, NodeActivationAuthorityError,
+    NodeActivationCommit, NodeEnrolmentAuthority, NodeEnrolmentAuthorityError, NodeEnrolmentCommit,
+    NodeJoinGrantIssuanceAuthority, NodeJoinGrantIssuanceAuthorityError,
     NodeJoinGrantIssuanceCommit,
 };
 
@@ -100,6 +101,70 @@ impl NodeEnrolmentAuthority for ConsensusAuthenticationAuthority {
         };
         node_enrolment_commit(self, receipt, consumed.node_id)
     }
+}
+
+impl NodeActivationAuthority for ConsensusAuthenticationAuthority {
+    fn activation_candidate(
+        &self,
+        node_id: NodeId,
+    ) -> Result<Option<meshspan_metadata::NodeActivationCandidate>, NodeActivationAuthorityError>
+    {
+        self.reader()
+            .node_activation_candidate(node_id)
+            .map_err(|error| activation_repository_error(&error))
+    }
+
+    fn resolve_activation(
+        &self,
+        operation_id: OperationId,
+        node_id: NodeId,
+    ) -> Result<Option<NodeActivationCommit>, NodeActivationAuthorityError> {
+        self.reader()
+            .resolve_operation(operation_id)
+            .map_err(|error| activation_repository_error(&error))?
+            .map(|receipt| activation_commit(self, receipt, node_id))
+            .transpose()
+    }
+
+    fn commit_or_resolve_activation(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<NodeActivationCommit, NodeActivationAuthorityError> {
+        let receipt = self
+            .commit_authoritative(context, command)
+            .map_err(activation_authority_error)?;
+        let AuthoritativeCommand::ActivateNode(activation) = command else {
+            return Err(NodeActivationAuthorityError::Failed);
+        };
+        activation_commit(self, receipt, activation.node_id)
+    }
+}
+
+fn activation_commit(
+    authority: &ConsensusAuthenticationAuthority,
+    receipt: meshspan_metadata::CommandReceipt,
+    node_id: NodeId,
+) -> Result<NodeActivationCommit, NodeActivationAuthorityError> {
+    if receipt.entity.kind != EntityKind::Node
+        || receipt.entity.id != node_id.as_bytes()
+        || receipt.result_digest == [0; 32]
+    {
+        return Err(NodeActivationAuthorityError::Failed);
+    }
+    let record = authority
+        .reader()
+        .node_activation(node_id)
+        .map_err(|error| activation_repository_error(&error))?
+        .ok_or(NodeActivationAuthorityError::Failed)?;
+    if record.revision != receipt.committed_revision {
+        return Err(NodeActivationAuthorityError::Failed);
+    }
+    Ok(NodeActivationCommit {
+        request_digest: receipt.request_digest,
+        result_digest: receipt.result_digest,
+        record,
+    })
 }
 
 fn node_enrolment_commit(
@@ -200,6 +265,31 @@ const fn node_authority_error(error: MetadataAuthorityRequestError) -> NodeEnrol
         MetadataAuthorityRequestError::Rejected => NodeEnrolmentAuthorityError::Rejected,
         MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
             NodeEnrolmentAuthorityError::Failed
+        }
+    }
+}
+
+fn activation_repository_error(error: &RepositoryError) -> NodeActivationAuthorityError {
+    match error {
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            NodeActivationAuthorityError::Unavailable
+        }
+        RepositoryError::OperationConflict => NodeActivationAuthorityError::Conflict,
+        RepositoryError::InvalidCommand => NodeActivationAuthorityError::Rejected,
+        _ => NodeActivationAuthorityError::Failed,
+    }
+}
+
+const fn activation_authority_error(
+    error: MetadataAuthorityRequestError,
+) -> NodeActivationAuthorityError {
+    match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => NodeActivationAuthorityError::Unavailable,
+        MetadataAuthorityRequestError::Conflict => NodeActivationAuthorityError::Conflict,
+        MetadataAuthorityRequestError::Rejected => NodeActivationAuthorityError::Rejected,
+        MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
+            NodeActivationAuthorityError::Failed
         }
     }
 }

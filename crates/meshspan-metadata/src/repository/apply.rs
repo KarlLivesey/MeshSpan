@@ -369,7 +369,10 @@ fn authorise(
         AuthoritativeCommand::StepUpAuthenticationSession(value) => Some(value.principal_id),
         _ => None,
     };
-    if matches!(command, AuthoritativeCommand::ConsumeJoinGrant(_)) {
+    if matches!(
+        command,
+        AuthoritativeCommand::ConsumeJoinGrant(_) | AuthoritativeCommand::ActivateNode(_)
+    ) {
         return Ok(());
     }
     if let Some(principal_id) = self_activation_principal {
@@ -551,6 +554,7 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
             | AuthoritativeCommand::IssueJoinGrant(_)
             | AuthoritativeCommand::ConsumeJoinGrant(_)
+            | AuthoritativeCommand::ActivateNode(_)
     )
 }
 
@@ -590,6 +594,10 @@ fn execute_infrastructure_command(
         AuthoritativeCommand::ConsumeJoinGrant(value) => {
             recovery_authority::require_verified(transaction)?;
             cluster::consume_join_grant(transaction, partition_id, context, value, revision)
+        }
+        AuthoritativeCommand::ActivateNode(value) => {
+            recovery_authority::require_verified(transaction)?;
+            cluster::activate_node(transaction, context, value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1076,6 +1084,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RegisterNodeWrappingKey(_) => 83,
         AuthoritativeCommand::CommitSecretGeneration(_) => 84,
         AuthoritativeCommand::ConfirmRecoveryBundleSaved(_) => 85,
+        AuthoritativeCommand::ActivateNode(_) => 86,
     }
 }
 

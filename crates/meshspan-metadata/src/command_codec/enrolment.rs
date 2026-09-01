@@ -7,10 +7,11 @@ use sha2::{Digest, Sha256};
 use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
-use crate::{ConsumeJoinGrant, IssueJoinGrant, JoinRoles, RecordName};
+use crate::{ActivateNode, ConsumeJoinGrant, IssueJoinGrant, JoinRoles, RecordName};
 
 pub(super) const ISSUE_JOIN_GRANT: u16 = 16;
 pub(super) const CONSUME_JOIN_GRANT: u16 = 17;
+pub(super) const ACTIVATE_NODE: u16 = 18;
 const MAXIMUM_NAME_BYTES: usize = 256;
 const MAXIMUM_ENDPOINT_BYTES: usize = 512;
 const MAXIMUM_CERTIFICATE_BYTES: usize = 64 * 1_024;
@@ -87,6 +88,31 @@ pub(super) fn decode_consume(
     Ok(value)
 }
 
+pub(super) fn encode_activate(
+    encoder: &mut Encoder,
+    value: &ActivateNode,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_activate(value)?;
+    encoder.u16(ACTIVATE_NODE)?;
+    encoder.identifier(value.node_id.as_bytes())?;
+    encoder.u64(value.incarnation)?;
+    encoder.text(&value.private_endpoint, MAXIMUM_ENDPOINT_BYTES)?;
+    encoder.fixed(&value.capability_digest)
+}
+
+pub(super) fn decode_activate(
+    decoder: &mut Decoder<'_>,
+) -> Result<ActivateNode, MetadataCommandCodecError> {
+    let value = ActivateNode {
+        node_id: NodeId::from_bytes(decoder.identifier()?)?,
+        incarnation: decoder.u64()?,
+        private_endpoint: decoder.text(MAXIMUM_ENDPOINT_BYTES)?,
+        capability_digest: decoder.fixed()?,
+    };
+    validate_activate(&value)?;
+    Ok(value)
+}
+
 fn encode_optional_name(
     encoder: &mut Encoder,
     value: Option<&RecordName>,
@@ -120,6 +146,17 @@ fn validate_consume(value: &ConsumeJoinGrant) -> Result<(), MetadataCommandCodec
         || value.private_endpoint.is_empty()
         || value.certificate_der.is_empty()
         || value.certificate_fingerprint != <[u8; 32]>::from(Sha256::digest(&value.certificate_der))
+    {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_activate(value: &ActivateNode) -> Result<(), MetadataCommandCodecError> {
+    if value.incarnation == 0
+        || value.private_endpoint.is_empty()
+        || value.capability_digest == [0; 32]
     {
         Err(MetadataCommandCodecError::Invalid)
     } else {
