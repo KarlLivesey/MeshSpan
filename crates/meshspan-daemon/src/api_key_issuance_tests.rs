@@ -28,7 +28,11 @@ fn issued_key_replays_across_gateways_logs_in_and_rejects_changed_input()
     let directory = tempdir()?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
     let claim = ClaimBundle::generate(&mut CountingRandom::default())?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),
         material.partition_id,

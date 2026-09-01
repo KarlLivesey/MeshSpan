@@ -36,7 +36,11 @@ fn recovery_step_up_rotates_atomically_and_replays_exactly()
 -> Result<(), Box<dyn std::error::Error>> {
     let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let directory = tempdir()?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),
@@ -87,7 +91,11 @@ async fn public_step_up_round_trip_uses_real_sqlite_authority()
 -> Result<(), Box<dyn std::error::Error>> {
     let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let directory = tempdir()?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),

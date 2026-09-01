@@ -38,7 +38,11 @@ fn registration_commits_and_replays_after_code_expiry_and_restart()
     let directory = tempdir()?;
     let bootstrap_operation = OperationId::from_bytes([8; 16])?;
     let claim = ClaimBundle::generate(&mut CountingRandom::default())?;
-    let material = InitialBootstrapMaterial::derive(&claim, bootstrap_operation)?;
+    let material = InitialBootstrapMaterial::derive(
+        &claim,
+        bootstrap_operation,
+        InitialBootstrapMaterial::node_id([99; 32])?,
+    )?;
     let database = PartitionDatabase::open(
         &directory.path().join("root.sqlite3"),
         material.partition_id,
