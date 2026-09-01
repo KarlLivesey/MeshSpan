@@ -4,10 +4,10 @@ use meshspan_domain::{
     ApiKeyId, AuthenticationMethodId, EntropyError, MeshId, RandomSource, UnixMicros, VolumeId,
 };
 use meshspan_metadata::{
-    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommitSecretGeneration, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    NewAuthenticationCredential, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
-    VOLUME_CONTENT_KEY_SECRET_KIND,
+    AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, BootstrapAppliance, BootstrapMesh,
+    BootstrapRecoveryIdentity, CommitSecretGeneration, ConfirmRecoveryBundleSaved,
+    CreateAuthenticationMethod, NewAuthenticationCredential, RegisterNodeWrappingKey,
+    STORAGE_PERMIT_KEY_SECRET_KIND, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -31,9 +31,19 @@ pub(crate) fn protected_bootstrap(
         &[gateway_key, recovery_key],
         &mut TestRandom(212),
     )?;
+    let (authentication_secret, authentication_recipients) = encrypt_secret(
+        SecretContext::new(
+            AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+            mesh.mesh_id.as_bytes(),
+            1,
+        )?,
+        &[213; 32],
+        &[gateway_key, recovery_key],
+        &mut TestRandom(214),
+    )?;
     let administrator_id = mesh.administrator_id;
     let node_id = mesh.node_id;
-    Ok(AuthoritativeCommand::BootstrapAppliance(
+    Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         BootstrapAppliance {
             authentication: CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([205; 16])?,
@@ -69,9 +79,16 @@ pub(crate) fn protected_bootstrap(
                     .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
                     .collect(),
             }),
+            authentication_root_key_generation: Box::new(CommitSecretGeneration {
+                secret: authentication_secret.parts(),
+                recipients: authentication_recipients
+                    .iter()
+                    .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                    .collect(),
+            }),
             mesh,
         },
-    ))
+    )))
 }
 
 pub(crate) fn confirm_recovery(mesh_id: MeshId) -> AuthoritativeCommand {

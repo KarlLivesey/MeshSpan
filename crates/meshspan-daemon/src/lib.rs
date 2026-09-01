@@ -31,6 +31,9 @@ mod authentication_method_revocation_contract;
 mod authentication_method_revocation_model;
 #[cfg(test)]
 mod authentication_method_revocation_tests;
+mod authentication_root_loading;
+#[cfg(test)]
+mod authentication_root_loading_tests;
 mod browser_authentication;
 mod browser_session;
 mod claim_file;
@@ -219,6 +222,10 @@ pub use authentication_method_revocation_api::{
 pub use authentication_method_revocation_contract::{
     AuthenticationMethodRevocationAuthority, AuthenticationMethodRevocationAuthorityError,
     AuthenticationMethodRevocationCommit, AuthenticationMethodRevocationError,
+};
+pub use authentication_root_loading::{
+    AuthenticationRootAuthority, AuthenticationRootLoadingError, AuthenticationRootLoadingService,
+    AuthenticationRuntimeKeys,
 };
 pub use browser_authentication::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,

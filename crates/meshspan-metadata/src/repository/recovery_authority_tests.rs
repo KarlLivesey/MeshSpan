@@ -120,8 +120,8 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         occurred_at: UnixMicros::new(10),
         expected_revision: Some(Revision::ZERO),
     };
-    let command =
-        AuthoritativeCommand::BootstrapAppliance(crate::test_support::bootstrap_appliance(
+    let command = AuthoritativeCommand::BootstrapAppliance(Box::new(
+        crate::test_support::bootstrap_appliance(
             BootstrapMesh {
                 mesh_id,
                 mesh_name: RecordName::new("First mesh")?,
@@ -148,7 +148,8 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
                 },
             },
             Box::new(recovery_identity()?),
-        )?);
+        )?,
+    ));
     Ok((
         AuthoritativeRepository::new(database),
         context,

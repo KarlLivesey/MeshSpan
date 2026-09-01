@@ -88,6 +88,15 @@ pub(super) fn bootstrap_appliance(
         &command.storage_permit_key_generation,
         revision,
     )?;
+    super::secret_generation::commit_initial_authentication_root_key(
+        transaction,
+        context,
+        command.mesh.mesh_id,
+        node_recipient,
+        recovery_recipient,
+        &command.authentication_root_key_generation,
+        revision,
+    )?;
     Ok(mesh)
 }
 

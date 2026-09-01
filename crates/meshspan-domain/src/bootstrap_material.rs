@@ -46,6 +46,10 @@ pub struct InitialBootstrapMaterial {
     storage_permit_key: Zeroizing<[u8; 32]>,
     /// Domain-separated exact-retry entropy for the initial encrypted permit envelope.
     storage_permit_envelope_seed: Zeroizing<[u8; 32]>,
+    /// Domain-separated gateway-only authentication root retained for protected setup composition.
+    authentication_root_key: Zeroizing<[u8; 32]>,
+    /// Domain-separated exact-retry entropy for the initial authentication-root envelope.
+    authentication_root_envelope_seed: Zeroizing<[u8; 32]>,
 }
 
 /// Restart-stable secret and cryptographic stream for the initial storage-permit envelope.
@@ -54,6 +58,16 @@ pub struct InitialBootstrapMaterial {
 /// independently from the high-entropy one-time claim and is only valid for this one envelope. It
 /// deliberately implements neither `Clone` nor `Debug`.
 pub struct InitialStoragePermitMaterial {
+    key: Zeroizing<[u8; 32]>,
+    entropy_key: Zeroizing<[u8; 32]>,
+    counter: u64,
+}
+
+/// Restart-stable secret and cryptographic stream for the initial authentication-root envelope.
+///
+/// The root is encrypted independently from storage authority so storage-only nodes never receive
+/// credential-derivation material. This value deliberately implements neither `Clone` nor `Debug`.
+pub struct InitialAuthenticationRootMaterial {
     key: Zeroizing<[u8; 32]>,
     entropy_key: Zeroizing<[u8; 32]>,
     counter: u64,
@@ -162,6 +176,19 @@ impl InitialBootstrapMaterial {
         if storage_permit_key == [0; 32] || storage_permit_envelope_seed == [0; 32] {
             return Err(InitialBootstrapMaterialError::StoragePermit);
         }
+        let authentication_root_key = derive(
+            b"meshspan.setup.authentication-root-key.v1",
+            claim.secret_bytes(),
+            operation_id,
+        );
+        let authentication_root_envelope_seed = derive(
+            b"meshspan.setup.authentication-root-envelope.v1",
+            claim.secret_bytes(),
+            operation_id,
+        );
+        if authentication_root_key == [0; 32] || authentication_root_envelope_seed == [0; 32] {
+            return Err(InitialBootstrapMaterialError::AuthenticationRoot);
+        }
         Ok(Self {
             mesh_id: MeshId::from_bytes(identifier(
                 b"meshspan.setup.mesh-id.v1",
@@ -200,6 +227,8 @@ impl InitialBootstrapMaterial {
             recovery_bundle_code_seed: Zeroizing::new(recovery_bundle_code_seed),
             storage_permit_key: Zeroizing::new(storage_permit_key),
             storage_permit_envelope_seed: Zeroizing::new(storage_permit_envelope_seed),
+            authentication_root_key: Zeroizing::new(authentication_root_key),
+            authentication_root_envelope_seed: Zeroizing::new(authentication_root_envelope_seed),
         })
     }
 
@@ -218,6 +247,16 @@ impl InitialBootstrapMaterial {
             counter: 0,
         }
     }
+
+    /// Returns a fresh exact-retry stream and the initial gateway authentication root.
+    #[must_use]
+    pub fn authentication_root_material(&self) -> InitialAuthenticationRootMaterial {
+        InitialAuthenticationRootMaterial {
+            key: Zeroizing::new(*self.authentication_root_key),
+            entropy_key: Zeroizing::new(*self.authentication_root_envelope_seed),
+            counter: 0,
+        }
+    }
 }
 
 impl InitialStoragePermitMaterial {
@@ -230,17 +269,49 @@ impl InitialStoragePermitMaterial {
 
 impl RandomSource for InitialStoragePermitMaterial {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
-        for chunk in destination.chunks_mut(32) {
-            self.counter = self.counter.checked_add(1).ok_or(EntropyError)?;
-            let mut mac =
-                HmacSha256::new_from_slice(self.entropy_key.as_ref()).map_err(|_| EntropyError)?;
-            mac.update(b"meshspan.setup.storage-permit-envelope-block.v1");
-            mac.update(&self.counter.to_be_bytes());
-            let block = mac.finalize().into_bytes();
-            chunk.copy_from_slice(&block[..chunk.len()]);
-        }
-        Ok(())
+        fill_deterministic_stream(
+            &self.entropy_key,
+            &mut self.counter,
+            b"meshspan.setup.storage-permit-envelope-block.v1",
+            destination,
+        )
     }
+}
+
+impl InitialAuthenticationRootMaterial {
+    /// Copies the authentication root into the protected envelope composer.
+    #[must_use]
+    pub fn key(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.key)
+    }
+}
+
+impl RandomSource for InitialAuthenticationRootMaterial {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        fill_deterministic_stream(
+            &self.entropy_key,
+            &mut self.counter,
+            b"meshspan.setup.authentication-root-envelope-block.v1",
+            destination,
+        )
+    }
+}
+
+fn fill_deterministic_stream(
+    entropy_key: &[u8; 32],
+    counter: &mut u64,
+    domain: &[u8],
+    destination: &mut [u8],
+) -> Result<(), EntropyError> {
+    for chunk in destination.chunks_mut(32) {
+        *counter = counter.checked_add(1).ok_or(EntropyError)?;
+        let mut mac = HmacSha256::new_from_slice(entropy_key).map_err(|_| EntropyError)?;
+        mac.update(domain);
+        mac.update(&counter.to_be_bytes());
+        let block = mac.finalize().into_bytes();
+        chunk.copy_from_slice(&block[..chunk.len()]);
+    }
+    Ok(())
 }
 
 /// Failure to derive structurally valid initial bootstrap material.
@@ -258,6 +329,9 @@ pub enum InitialBootstrapMaterialError {
     /// The derived initial permit key or envelope stream was invalid.
     #[error("derived bootstrap storage permit material is invalid")]
     StoragePermit,
+    /// The derived authentication root or envelope stream was invalid.
+    #[error("derived bootstrap authentication-root material is invalid")]
+    AuthenticationRoot,
 }
 
 impl From<crate::IdentifierError> for InitialBootstrapMaterialError {
@@ -338,6 +412,22 @@ mod tests {
         replay_permit.fill_bytes(&mut replay_entropy)?;
         assert_eq!(first_entropy, replay_entropy);
         assert_ne!(first_permit.key().as_ref(), &first_entropy[..32]);
+        let mut first_authentication = first.authentication_root_material();
+        let mut replay_authentication = replay.authentication_root_material();
+        assert_eq!(
+            first_authentication.key().as_ref(),
+            replay_authentication.key().as_ref()
+        );
+        assert_ne!(
+            first_authentication.key().as_ref(),
+            first_permit.key().as_ref()
+        );
+        let mut first_authentication_entropy = [0_u8; 97];
+        let mut replay_authentication_entropy = [0_u8; 97];
+        first_authentication.fill_bytes(&mut first_authentication_entropy)?;
+        replay_authentication.fill_bytes(&mut replay_authentication_entropy)?;
+        assert_eq!(first_authentication_entropy, replay_authentication_entropy);
+        assert_ne!(first_authentication_entropy, first_entropy);
         let identities = [
             first.mesh_id.as_bytes(),
             first.administrator_id.as_bytes(),

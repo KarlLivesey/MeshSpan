@@ -12,8 +12,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, recovery_authority};
 use crate::{
-    CommandContext, CommitSecretGeneration, PartitionDatabase, STORAGE_PERMIT_KEY_SECRET_KIND,
-    VOLUME_CONTENT_KEY_SECRET_KIND,
+    AUTHENTICATION_ROOT_KEY_SECRET_KIND, CommandContext, CommitSecretGeneration, PartitionDatabase,
+    STORAGE_PERMIT_KEY_SECRET_KIND, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 const VOLUME_CONTENT_KEY_BYTES: usize = 32;
@@ -86,6 +86,46 @@ pub(super) fn commit_initial_storage_permit_key(
     let (secret, recipients) = validate(command)?;
     let secret_context = secret.context();
     if secret_context.kind() != STORAGE_PERMIT_KEY_SECRET_KIND
+        || secret_context.id() != mesh_id.as_bytes()
+        || secret_context.generation() != 1
+        || command.secret.ciphertext.len()
+            != VOLUME_CONTENT_KEY_BYTES.saturating_add(AUTHENTICATION_TAG_BYTES)
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let mut expected_recipients = vec![node_recipient, recovery_recipient];
+    expected_recipients.sort_by_key(|recipient| recipient.fingerprint());
+    let supplied_recipients = recipients
+        .iter()
+        .map(RecipientKeyEnvelope::recipient_public_key)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    if supplied_recipients != expected_recipients {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    persist(
+        transaction,
+        context,
+        command,
+        &secret,
+        &recipients,
+        revision,
+    )
+    .map(|_| ())
+}
+
+pub(super) fn commit_initial_authentication_root_key(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    mesh_id: MeshId,
+    node_recipient: WrappingPublicKey,
+    recovery_recipient: WrappingPublicKey,
+    command: &CommitSecretGeneration,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let (secret, recipients) = validate(command)?;
+    let secret_context = secret.context();
+    if secret_context.kind() != AUTHENTICATION_ROOT_KEY_SECRET_KIND
         || secret_context.id() != mesh_id.as_bytes()
         || secret_context.generation() != 1
         || command.secret.ciphertext.len()
@@ -305,6 +345,17 @@ pub(super) fn latest_storage_permit_generation(
     latest_generation(
         database,
         STORAGE_PERMIT_KEY_SECRET_KIND,
+        &mesh_id.as_bytes(),
+    )
+}
+
+pub(super) fn latest_authentication_root_generation(
+    database: &PartitionDatabase,
+    mesh_id: MeshId,
+) -> Result<Option<u64>, RepositoryError> {
+    latest_generation(
+        database,
+        AUTHENTICATION_ROOT_KEY_SECRET_KIND,
         &mesh_id.as_bytes(),
     )
 }

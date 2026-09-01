@@ -11,9 +11,9 @@ use tempfile::tempdir;
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CommandContext,
-    CreateAuthenticationMethod, NewAuthenticationCredential, PartitionDatabase, RecordName,
-    STORAGE_PERMIT_KEY_SECRET_KIND,
+    AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, BootstrapMesh,
+    BootstrapRecoveryIdentity, CommandContext, CreateAuthenticationMethod,
+    NewAuthenticationCredential, PartitionDatabase, RecordName, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 
 #[test]
@@ -63,6 +63,36 @@ fn first_mesh_and_login_method_commit_and_replay_as_one_operation()
         repository.latest_storage_permit_generation(MeshId::from_bytes([5; 16])?)?,
         Some(1)
     );
+    let authentication = repository
+        .secret_generation(SecretContext::new(
+            AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+            MeshId::from_bytes([5; 16])?.as_bytes(),
+            1,
+        )?)?
+        .ok_or("bootstrap authentication root missing")?;
+    assert_eq!(authentication.recipients.len(), 2);
+    for private_key in [
+        crate::test_support::node_wrapping_private_key()?,
+        recovery_private_key()?,
+    ] {
+        let public_key = private_key.public_key();
+        let envelope = authentication
+            .recipients
+            .iter()
+            .find(|recipient| {
+                recipient.recipient_fingerprint().ok() == Some(public_key.fingerprint())
+            })
+            .ok_or("bootstrap authentication recipient missing")?;
+        let data_key = envelope.open(&private_key)?;
+        assert_eq!(
+            authentication.secret.decrypt(&data_key)?.expose(),
+            &[203; 32]
+        );
+    }
+    assert_eq!(
+        repository.latest_authentication_root_generation(MeshId::from_bytes([5; 16])?)?,
+        Some(1)
+    );
 
     let database = repository.into_database();
     assert_eq!(count(database.connection(), "meshes")?, 1);
@@ -70,10 +100,10 @@ fn first_mesh_and_login_method_commit_and_replay_as_one_operation()
     assert_eq!(count(database.connection(), "authentication_methods")?, 1);
     assert_eq!(count(database.connection(), "api_keys")?, 1);
     assert_eq!(count(database.connection(), "node_wrapping_keys")?, 1);
-    assert_eq!(count(database.connection(), "secret_generations")?, 1);
+    assert_eq!(count(database.connection(), "secret_generations")?, 2);
     assert_eq!(
         count(database.connection(), "secret_recipient_envelopes")?,
-        2
+        4
     );
     assert_eq!(count(database.connection(), "operations")?, 1);
     Ok(())
@@ -158,6 +188,43 @@ fn missing_permit_recipient_rejects_the_complete_bootstrap()
     Ok(())
 }
 
+#[test]
+fn missing_authentication_recipient_rejects_the_complete_bootstrap()
+-> Result<(), Box<dyn std::error::Error>> {
+    let partition_id = PartitionId::from_bytes([22; 16])?;
+    let database = PartitionDatabase::open(
+        std::path::Path::new(":memory:"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    let (context, mut command) = fixture(partition_id)?;
+    let AuthoritativeCommand::BootstrapAppliance(bootstrap) = &mut command else {
+        return Err("bootstrap fixture changed".into());
+    };
+    bootstrap
+        .authentication_root_key_generation
+        .recipients
+        .pop();
+
+    assert!(matches!(
+        repository.apply_committed(LogPosition { index: 1, term: 1 }, context, &command),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    for table in [
+        "meshes",
+        "principals",
+        "authentication_methods",
+        "node_wrapping_keys",
+        "secret_generations",
+        "secret_recipient_envelopes",
+        "operations",
+    ] {
+        assert_eq!(count(repository.database.connection(), table)?, 0);
+    }
+    Ok(())
+}
+
 fn fixture(
     partition_id: PartitionId,
 ) -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::error::Error>> {
@@ -170,34 +237,36 @@ fn fixture(
             occurred_at: UnixMicros::new(10),
             expected_revision: Some(Revision::ZERO),
         },
-        AuthoritativeCommand::BootstrapAppliance(crate::test_support::bootstrap_appliance(
-            BootstrapMesh {
-                mesh_id: MeshId::from_bytes([5; 16])?,
-                mesh_name: RecordName::new("First mesh")?,
-                administrator_id: administrator,
-                administrator_name: RecordName::new("First administrator")?,
-                administrator_role_id: RoleId::from_bytes([6; 16])?,
-                host_id: HostId::from_bytes([7; 16])?,
-                host_name: RecordName::new("First host")?,
-                node_id: NodeId::from_bytes([8; 16])?,
-                node_name: RecordName::new("First node")?,
-                partition_name: RecordName::new(&partition_id.to_string())?,
-            },
-            CreateAuthenticationMethod {
-                method_id: AuthenticationMethodId::from_bytes([9; 16])?,
-                principal_id: administrator,
-                label: "Initial API key".to_owned(),
-                service_scope: 1 | 2 | 4,
-                expires_at: None,
-                credential: NewAuthenticationCredential::ApiKey {
-                    key_id: ApiKeyId::from_bytes([10; 16])?,
-                    key_digest: [11; 32],
-                    scopes: 1,
-                    valid_from: UnixMicros::new(10),
+        AuthoritativeCommand::BootstrapAppliance(Box::new(
+            crate::test_support::bootstrap_appliance(
+                BootstrapMesh {
+                    mesh_id: MeshId::from_bytes([5; 16])?,
+                    mesh_name: RecordName::new("First mesh")?,
+                    administrator_id: administrator,
+                    administrator_name: RecordName::new("First administrator")?,
+                    administrator_role_id: RoleId::from_bytes([6; 16])?,
+                    host_id: HostId::from_bytes([7; 16])?,
+                    host_name: RecordName::new("First host")?,
+                    node_id: NodeId::from_bytes([8; 16])?,
+                    node_name: RecordName::new("First node")?,
+                    partition_name: RecordName::new(&partition_id.to_string())?,
                 },
-            },
-            Box::new(recovery_identity()?),
-        )?),
+                CreateAuthenticationMethod {
+                    method_id: AuthenticationMethodId::from_bytes([9; 16])?,
+                    principal_id: administrator,
+                    label: "Initial API key".to_owned(),
+                    service_scope: 1 | 2 | 4,
+                    expires_at: None,
+                    credential: NewAuthenticationCredential::ApiKey {
+                        key_id: ApiKeyId::from_bytes([10; 16])?,
+                        key_digest: [11; 32],
+                        scopes: 1,
+                        valid_from: UnixMicros::new(10),
+                    },
+                },
+                Box::new(recovery_identity()?),
+            )?,
+        )),
     ))
 }
 

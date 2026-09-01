@@ -141,7 +141,9 @@ fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
     match decoder.u16()? {
-        1 => bootstrap::decode(decoder).map(AuthoritativeCommand::BootstrapAppliance),
+        1 => bootstrap::decode(decoder)
+            .map(Box::new)
+            .map(AuthoritativeCommand::BootstrapAppliance),
         recovery::CONFIRM_RECOVERY_BUNDLE_SAVED => {
             recovery::decode(decoder).map(AuthoritativeCommand::ConfirmRecoveryBundleSaved)
         }

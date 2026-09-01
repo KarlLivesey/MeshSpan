@@ -13,12 +13,13 @@ use meshspan_domain::{
     RootDelegatedRoute, ScopeId, UnixMicros,
 };
 use meshspan_metadata::{
-    ActivateScopeHandoff, AuthoritativeCommand, BeginScopeHandoff, BootstrapAppliance,
-    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration,
-    ConfirmRecoveryBundleSaved, ConsumeJoinGrant, CreateAuthenticationMethod, CreateGroup,
-    CreateMetadataPartition, CreateScopeRoute, FreezeScopeHandoff, IssueJoinGrant, JoinRoles,
-    NewAuthenticationCredential, RecordName, RegisterNodeWrappingKey, RegisterRoutingSigner,
-    RouteAttestation, STORAGE_PERMIT_KEY_SECRET_KIND,
+    AUTHENTICATION_ROOT_KEY_SECRET_KIND, ActivateScopeHandoff, AuthoritativeCommand,
+    BeginScopeHandoff, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommandContext, CommitSecretGeneration, ConfirmRecoveryBundleSaved, ConsumeJoinGrant,
+    CreateAuthenticationMethod, CreateGroup, CreateMetadataPartition, CreateScopeRoute,
+    FreezeScopeHandoff, IssueJoinGrant, JoinRoles, NewAuthenticationCredential, RecordName,
+    RegisterNodeWrappingKey, RegisterRoutingSigner, RouteAttestation,
+    STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -144,7 +145,19 @@ fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
         &mut ProofRandom(22),
     )
     .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-    Ok(AuthoritativeCommand::BootstrapAppliance(
+    let (authentication_secret, authentication_recipients) = encrypt_secret(
+        SecretContext::new(
+            AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+            mesh.mesh_id.as_bytes(),
+            1,
+        )
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?,
+        &[23; 32],
+        &[node_key, recovery_key],
+        &mut ProofRandom(24),
+    )
+    .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+    Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         BootstrapAppliance {
             mesh,
             authentication: CreateAuthenticationMethod {
@@ -174,8 +187,15 @@ fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
                     .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
                     .collect(),
             }),
+            authentication_root_key_generation: Box::new(CommitSecretGeneration {
+                secret: authentication_secret.parts(),
+                recipients: authentication_recipients
+                    .iter()
+                    .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                    .collect(),
+            }),
         },
-    ))
+    )))
 }
 
 struct ProofRandom(u8);

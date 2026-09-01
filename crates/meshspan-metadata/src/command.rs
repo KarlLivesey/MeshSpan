@@ -61,7 +61,7 @@ pub enum AuthoritativeCommand {
     /// Creates the first mesh, administrator, host, node and partition records.
     BootstrapMesh(BootstrapMesh),
     /// Atomically bootstraps the first mesh and its administrator's usable login method.
-    BootstrapAppliance(BootstrapAppliance),
+    BootstrapAppliance(Box<BootstrapAppliance>),
     /// Confirms that the exact encrypted offline recovery bundle was saved separately.
     ConfirmRecoveryBundleSaved(ConfirmRecoveryBundleSaved),
     /// Creates one user principal.
@@ -376,6 +376,8 @@ pub struct BootstrapAppliance {
     pub node_wrapping_key: RegisterNodeWrappingKey,
     /// Initial recoverable mesh-wide storage-permit authority.
     pub storage_permit_key_generation: Box<CommitSecretGeneration>,
+    /// Initial recoverable gateway-only authentication-root authority.
+    pub authentication_root_key_generation: Box<CommitSecretGeneration>,
 }
 
 /// Public offline authority committed atomically with the first mesh.
@@ -515,6 +517,9 @@ pub const VOLUME_CONTENT_KEY_SECRET_KIND: u16 = 1;
 
 /// Secret-envelope kind reserved for the mesh-wide storage-permit MAC key.
 pub const STORAGE_PERMIT_KEY_SECRET_KIND: u16 = 2;
+
+/// Secret-envelope kind reserved for the gateway-only mesh authentication root.
+pub const AUTHENTICATION_ROOT_KEY_SECRET_KIND: u16 = 3;
 
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1870,6 +1875,9 @@ digest_simple_record!(
         digest.bytes(&value.recovery.save_challenge_commitment);
         value.node_wrapping_key.update_digest(digest);
         value.storage_permit_key_generation.update_digest(digest);
+        value
+            .authentication_root_key_generation
+            .update_digest(digest);
     }
 );
 digest_simple_record!(
