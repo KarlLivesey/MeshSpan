@@ -968,6 +968,7 @@ impl MemoryPublisher {
     fn with_seed(publication: FilePublication, bytes: &[u8]) -> Self {
         let request = ContentPublicationRequest {
             operation_id: publication.operation_id,
+            volume_id: publication.volume_id,
             request_digest: [0; 32],
             manifest_id: publication.manifest.manifest_id,
             format_version: publication.manifest.format_version,

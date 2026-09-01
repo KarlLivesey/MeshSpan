@@ -16,6 +16,12 @@ const CHECKSUM_OFFSET: usize = MARKER_BYTES - 32;
 pub struct MarkerFingerprint([u8; 32]);
 
 impl MarkerFingerprint {
+    /// Reconstructs an exact fingerprint already validated by its authoritative journal.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     /// Returns the canonical fingerprint bytes.
     #[must_use]
     pub const fn as_bytes(self) -> [u8; 32] {

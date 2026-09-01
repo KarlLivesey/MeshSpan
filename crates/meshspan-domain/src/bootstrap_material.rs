@@ -4,6 +4,7 @@
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::secret_text::derive;
 use crate::{
@@ -35,6 +36,8 @@ pub struct InitialBootstrapMaterial {
     pub audit_event_id: AuditEventId,
     /// Initial administrator API key, exposed only at the successful response boundary.
     pub api_key: ApiKeyBundle,
+    /// Domain-separated recovery-code seed exposed only to the recovery-bundle composer.
+    recovery_bundle_code_seed: Zeroizing<[u8; 32]>,
 }
 
 impl InitialBootstrapMaterial {
@@ -102,6 +105,14 @@ impl InitialBootstrapMaterial {
         operation_id: OperationId,
         node_id: NodeId,
     ) -> Result<Self, InitialBootstrapMaterialError> {
+        let recovery_bundle_code_seed = derive(
+            b"meshspan.setup.recovery-bundle-code.v1",
+            claim.secret_bytes(),
+            operation_id,
+        );
+        if recovery_bundle_code_seed == [0; 32] {
+            return Err(InitialBootstrapMaterialError::RecoveryCode);
+        }
         Ok(Self {
             mesh_id: MeshId::from_bytes(identifier(
                 b"meshspan.setup.mesh-id.v1",
@@ -137,7 +148,14 @@ impl InitialBootstrapMaterial {
                 operation_id,
             ))?,
             api_key: ApiKeyBundle::derive_initial(claim, operation_id)?,
+            recovery_bundle_code_seed: Zeroizing::new(recovery_bundle_code_seed),
         })
+    }
+
+    /// Copies the restart-stable high-entropy recovery-code seed to its protected composer.
+    #[must_use]
+    pub fn recovery_bundle_code_seed(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.recovery_bundle_code_seed)
     }
 }
 
@@ -150,6 +168,9 @@ pub enum InitialBootstrapMaterialError {
     /// The derived initial API key was invalid.
     #[error("derived bootstrap API key is invalid")]
     ApiKey,
+    /// The derived offline recovery code was structurally invalid.
+    #[error("derived bootstrap recovery code is invalid")]
+    RecoveryCode,
 }
 
 impl From<crate::IdentifierError> for InitialBootstrapMaterialError {

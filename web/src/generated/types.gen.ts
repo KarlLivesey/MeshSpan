@@ -461,6 +461,50 @@ export type CommitUploadResponse = {
 };
 
 /**
+ * ConfirmRecoveryBundleRequest
+ *
+ * One authenticated idempotent save-verification request.
+ */
+export type ConfirmRecoveryBundleRequest = {
+  /**
+   * Exact mesh returned by first-mesh setup.
+   */
+  mesh_id: string;
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Short proof derived from the separately saved code and exact bundle.
+   */
+  recovery_challenge: string;
+};
+
+/**
+ * ConfirmRecoveryBundleResponse
+ *
+ * Durable proof that the offline recovery bundle may no longer remain on the daemon.
+ */
+export type ConfirmRecoveryBundleResponse = {
+  /**
+   * Verified mesh.
+   */
+  mesh_id: string;
+  /**
+   * Exact operation which committed or replayed verification.
+   */
+  operation_id: string;
+  /**
+   * Authoritative revision which verified the bundle.
+   */
+  revision: number;
+  /**
+   * Authoritative verification instant.
+   */
+  verified_at_epoch_micros: number;
+};
+
+/**
  * CreateApiKeyRequest
  *
  * One idempotent request to issue a current-user API key.
@@ -642,6 +686,18 @@ export type CreateMeshSetupResponse = {
    * Exact idempotency identity whose result was resolved.
    */
   operation_id: string;
+  /**
+   * Exact encrypted recovery-bundle file; save it separately before enrolling more nodes.
+   */
+  recovery_bundle: string;
+  /**
+   * Short proof entered after the administrator has saved the exact file and code.
+   */
+  recovery_challenge: string;
+  /**
+   * One-time high-entropy recovery code which must be stored separately from the bundle.
+   */
+  recovery_code: string;
 };
 
 /**
@@ -2571,6 +2627,60 @@ export type RemoveGroupMemberResponses = {
 
 export type RemoveGroupMemberResponse2 =
   RemoveGroupMemberResponses[keyof RemoveGroupMemberResponses];
+
+export type ConfirmRecoveryBundleSavedData = {
+  /**
+   * Offline recovery save proof
+   */
+  body: ConfirmRecoveryBundleRequest;
+  path?: never;
+  query?: never;
+  url: "/admin/recovery-bundle-verifications";
+};
+
+export type ConfirmRecoveryBundleSavedErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Wrong bundle proof or changed retry
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Internal contract failure
+   */
+  500: ApiError;
+  /**
+   * Recovery authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ConfirmRecoveryBundleSavedError =
+  ConfirmRecoveryBundleSavedErrors[keyof ConfirmRecoveryBundleSavedErrors];
+
+export type ConfirmRecoveryBundleSavedResponses = {
+  /**
+   * Recovery bundle verified and removed from online state
+   */
+  200: ConfirmRecoveryBundleResponse;
+};
+
+export type ConfirmRecoveryBundleSavedResponse =
+  ConfirmRecoveryBundleSavedResponses[keyof ConfirmRecoveryBundleSavedResponses];
 
 export type ListUsersData = {
   body?: never;

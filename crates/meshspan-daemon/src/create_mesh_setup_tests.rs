@@ -87,7 +87,7 @@ async fn public_http_request_commits_the_real_local_and_root_stores()
         )
         .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
-    let bytes = to_bytes(response.into_body(), 2_048).await?;
+    let bytes = to_bytes(response.into_body(), 40_000).await?;
     let created = serde_json::from_slice::<meshspan_api_contract::CreateMeshSetupResponse>(&bytes)?;
     assert_eq!(created.operation_id.as_str(), OPERATION_TEXT);
     assert_eq!(
@@ -99,7 +99,7 @@ async fn public_http_request_commits_the_real_local_and_root_stores()
 }
 
 struct Fixture {
-    service: CreateMeshSetupService<RepositoryBootstrapAuthority>,
+    service: CreateMeshSetupService<RepositoryBootstrapAuthority, SequentialRandom>,
     request: CreateMeshSetupRequest,
     claim: ClaimBundle,
     claim_id: meshspan_domain::ClaimId,
@@ -122,6 +122,7 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
     let material = InitialBootstrapMaterial::derive(&claim, operation_id, node_id)?;
     let local_path = directory.join("local.sqlite3");
     let claim_path = directory.join("first-boot.claim");
+    let recovery_path = directory.join("pending-recovery.bundle");
     ClaimFile::create(&claim_path, &claim)?;
     let mut local_database =
         LocalDatabase::open(&local_path, material.node_id, UnixMicros::new(1))?;
@@ -146,7 +147,9 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
             lose_first_response,
         },
         claim_path.clone(),
+        recovery_path,
         Arc::clone(&setup_state),
+        SequentialRandom(101),
     );
     let request = request(&claim, "First mesh")?;
     Ok(Fixture {

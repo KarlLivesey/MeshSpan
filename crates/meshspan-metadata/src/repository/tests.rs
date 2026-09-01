@@ -15,6 +15,7 @@ use meshspan_domain::{
     OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights, RoleId,
     RootDelegatedRoute, ScopeId, SessionId, SnapshotId, TagId, UnixMicros, VolumeId,
 };
+use meshspan_secret_envelope::WrappingPublicKey;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
@@ -27,8 +28,9 @@ use super::{
 };
 use crate::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
-    AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh,
-    CommandContext, ConfigureComponent, ConsumeJoinGrant, CreateActivationPolicy,
+    AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapAppliance,
+    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, ConfigureComponent,
+    ConfirmRecoveryBundleSaved, ConsumeJoinGrant, CreateActivationPolicy,
     CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateMetadataPartition,
     CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume, DetachTag,
     FreezeScopeHandoff, GrantInheritance, GrantPermission, InstallScopeRouteProjection,
@@ -630,7 +632,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 17);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        50
+        54
     );
     Ok(())
 }
@@ -647,39 +649,38 @@ fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
         &mut repository,
         1,
         context(130, ids.administrator, 131, 100, Some(0))?,
-        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
-            mesh_id: MeshId::from_bytes([132; 16])?,
-            mesh_name: RecordName::new("Join proof")?,
-            administrator_id: ids.administrator,
-            administrator_name: RecordName::new("Administrator")?,
-            administrator_role_id: RoleId::from_bytes([133; 16])?,
-            host_id: HostId::from_bytes([134; 16])?,
-            host_name: RecordName::new("First host")?,
-            node_id: NodeId::from_bytes([135; 16])?,
-            node_name: RecordName::new("First node")?,
-            partition_name: RecordName::new("Authority")?,
-        }),
+        &join_bootstrap(ids.administrator)?,
     )?;
     let grant_id = JoinGrantId::from_bytes([136; 16])?;
     let secret_digest = [137; 32];
     let roles =
         JoinRoles::new(JoinRoles::STORAGE | JoinRoles::GATEWAY | JoinRoles::METADATA_ELIGIBLE)?;
+    let issue = AuthoritativeCommand::IssueJoinGrant(IssueJoinGrant {
+        join_grant_id: grant_id,
+        secret_digest,
+        allowed_roles: roles,
+        maximum_uses: 1,
+        expires_at: UnixMicros::new(1_000),
+    });
+    assert!(matches!(
+        repository.apply_committed(
+            LogPosition { index: 2, term: 1 },
+            context(138, ids.administrator, 139, 150, Some(1))?,
+            &issue,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    confirm_bootstrap_recovery(&mut repository, ids.administrator)?;
     apply(
         &mut repository,
-        2,
-        context(138, ids.administrator, 139, 200, Some(1))?,
-        &AuthoritativeCommand::IssueJoinGrant(IssueJoinGrant {
-            join_grant_id: grant_id,
-            secret_digest,
-            allowed_roles: roles,
-            maximum_uses: 1,
-            expires_at: UnixMicros::new(1_000),
-        }),
+        3,
+        context(138, ids.administrator, 139, 200, Some(2))?,
+        &issue,
     )?;
 
     let certificate_der = b"public certificate only".to_vec();
     let certificate_fingerprint: [u8; 32] = Sha256::digest(&certificate_der).into();
-    let consume_context = context(140, ids.administrator, 141, 300, Some(2))?;
+    let consume_context = context(140, ids.administrator, 141, 300, Some(3))?;
     let mut consume = ConsumeJoinGrant {
         join_grant_id: grant_id,
         secret_digest: [0; 32],
@@ -695,21 +696,21 @@ fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
     };
     assert!(matches!(
         repository.apply_committed(
-            LogPosition { index: 3, term: 1 },
+            LogPosition { index: 4, term: 1 },
             consume_context,
             &AuthoritativeCommand::ConsumeJoinGrant(consume.clone()),
         ),
         Err(RepositoryError::InvalidCommand)
     ));
-    assert_eq!(repository.current_revision()?, Revision::new(2));
+    assert_eq!(repository.current_revision()?, Revision::new(3));
 
     consume.secret_digest = secret_digest;
     let command = AuthoritativeCommand::ConsumeJoinGrant(consume);
     let applied =
-        repository.apply_committed(LogPosition { index: 3, term: 1 }, consume_context, &command)?;
+        repository.apply_committed(LogPosition { index: 4, term: 1 }, consume_context, &command)?;
     assert_eq!(applied.entity.kind, super::EntityKind::Node);
     let replay =
-        repository.apply_committed(LogPosition { index: 4, term: 1 }, consume_context, &command)?;
+        repository.apply_committed(LogPosition { index: 5, term: 1 }, consume_context, &command)?;
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
 
     assert_authoritative_join_projection(&repository)?;
@@ -734,6 +735,67 @@ fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
         )?;
     assert_eq!((uses, nodes, learner, certificates), (1, 1, 1, 1));
     Ok(())
+}
+
+fn confirm_bootstrap_recovery(
+    repository: &mut AuthoritativeRepository,
+    administrator: PrincipalId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    apply(
+        repository,
+        2,
+        context(144, administrator, 145, 175, Some(1))?,
+        &AuthoritativeCommand::ConfirmRecoveryBundleSaved(ConfirmRecoveryBundleSaved {
+            mesh_id: MeshId::from_bytes([132; 16])?,
+            bundle_digest: [148; 32],
+            save_challenge_commitment: [149; 32],
+        }),
+    )?;
+    Ok(())
+}
+
+fn join_bootstrap(
+    administrator: PrincipalId,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let recovery_key = WrappingPublicKey::from_bytes([146; 32])?;
+    let certificate = vec![147; 64];
+    Ok(AuthoritativeCommand::BootstrapAppliance(
+        BootstrapAppliance {
+            mesh: BootstrapMesh {
+                mesh_id: MeshId::from_bytes([132; 16])?,
+                mesh_name: RecordName::new("Join proof")?,
+                administrator_id: administrator,
+                administrator_name: RecordName::new("Administrator")?,
+                administrator_role_id: RoleId::from_bytes([133; 16])?,
+                host_id: HostId::from_bytes([134; 16])?,
+                host_name: RecordName::new("First host")?,
+                node_id: NodeId::from_bytes([135; 16])?,
+                node_name: RecordName::new("First node")?,
+                partition_name: RecordName::new("Authority")?,
+            },
+            authentication: CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([150; 16])?,
+                principal_id: administrator,
+                label: "Initial API key".to_owned(),
+                service_scope: 7,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([151; 16])?,
+                    key_digest: [152; 32],
+                    scopes: 1,
+                    valid_from: UnixMicros::new(100),
+                },
+            },
+            recovery: Box::new(BootstrapRecoveryIdentity {
+                public_wrapping_key: recovery_key.as_bytes(),
+                key_fingerprint: recovery_key.fingerprint(),
+                root_certificate_digest: Sha256::digest(&certificate).into(),
+                root_certificate_der: certificate,
+                bundle_digest: [148; 32],
+                save_challenge_commitment: [149; 32],
+            }),
+        },
+    ))
 }
 
 fn assert_authoritative_join_projection(

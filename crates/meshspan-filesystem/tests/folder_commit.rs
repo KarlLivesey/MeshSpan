@@ -23,8 +23,8 @@ use meshspan_filesystem::{
     HandleAccess, HandleShare, ManifestPublication, NamespaceLimits, NamespacePath,
     NamespacePublicationPath, OpenHandleRequest, PublicationDisposition, PublishedContentReference,
     RootFileCommitRequest, StageCompletionRequest, StageRegistration, StageWrite,
-    UnprotectedContentAccess, UnprotectedContentPublisher, VolumeKeyEncryptionKey,
-    WrappedContentKey,
+    UnprotectedContentAccess, UnprotectedContentPublisher, VolumeContentKeyring,
+    VolumeKeyEncryptionKey, WrappedContentKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -358,7 +358,10 @@ fn production_publisher(
         opened_at,
         provider,
         FixedRandom,
-        ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(1, [24; 32])?),
+        VolumeContentKeyring::new(
+            VolumeId::from_bytes([12; 16])?,
+            VolumeKeyEncryptionKey::from_bytes(1, [24; 32])?,
+        ),
         ContentChunkLimits::new(4)?,
         UnprotectedContentAccess::new(
             registration.mesh_id,

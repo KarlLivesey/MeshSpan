@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Bounded HTTP boundary for manager-only offline recovery save verification.
+
+use std::sync::{Arc, Mutex};
+
+use axum::Router;
+use axum::body::{Body, to_bytes};
+use axum::extract::{Request, State};
+use axum::http::{HeaderValue, Response, StatusCode};
+use axum::routing::post;
+use meshspan_api_contract::{
+    ApiErrorCode, BoundaryError, MAX_CONFIRM_RECOVERY_BUNDLE_BYTES,
+    decode_confirm_recovery_bundle_request, encode_confirm_recovery_bundle_response,
+    generate_openapi,
+};
+use thiserror::Error;
+
+use crate::api_http::{
+    boundary_issues, current_time, error_response, has_json_content_type, internal_error_response,
+    json_response, request_identifier,
+};
+use crate::{RecoveryBundleVerificationController, RecoveryBundleVerificationError};
+
+struct ApiState<C> {
+    controller: Arc<Mutex<C>>,
+    schema_digest: HeaderValue,
+}
+
+impl<C> Clone for ApiState<C> {
+    fn clone(&self) -> Self {
+        Self {
+            controller: Arc::clone(&self.controller),
+            schema_digest: self.schema_digest.clone(),
+        }
+    }
+}
+
+/// Builds the rolling manager-only recovery-bundle verification route.
+///
+/// # Errors
+///
+/// Fails when the Rust-authored contract or schema header cannot be generated.
+pub fn recovery_bundle_verification_api_router<C>(
+    controller: C,
+) -> Result<Router, RecoveryBundleVerificationApiError>
+where
+    C: RecoveryBundleVerificationController,
+{
+    let document = generate_openapi()?;
+    Ok(Router::new()
+        .route(
+            "/api/latest/admin/recovery-bundle-verifications",
+            post(confirm_saved::<C>),
+        )
+        .with_state(ApiState {
+            controller: Arc::new(Mutex::new(controller)),
+            schema_digest: HeaderValue::from_str(document.digest())?,
+        }))
+}
+
+async fn confirm_saved<C>(State(state): State<ApiState<C>>, request: Request) -> Response<Body>
+where
+    C: RecoveryBundleVerificationController,
+{
+    let request_id = request_identifier();
+    let Some(now) = current_time() else {
+        return failed(&state, request_id);
+    };
+    let administrator = {
+        let controller = Arc::clone(&state.controller);
+        let headers = request.headers().clone();
+        match tokio::task::spawn_blocking(move || {
+            controller
+                .lock()
+                .map_err(|_| RecoveryBundleVerificationError::Unavailable)?
+                .authenticate(&headers, now)
+        })
+        .await
+        {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => return service_error(&state, error, request_id),
+            Err(_) => return failed(&state, request_id),
+        }
+    };
+    if !has_json_content_type(request.headers()) {
+        return public_error(
+            &state,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ApiErrorCode::InvalidRequest,
+            "recovery-bundle verification requires application/json",
+            request_id,
+            Vec::new(),
+        );
+    }
+    let Ok(body) = to_bytes(request.into_body(), MAX_CONFIRM_RECOVERY_BUNDLE_BYTES).await else {
+        return public_error(
+            &state,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            ApiErrorCode::InvalidRequest,
+            "recovery-bundle verification body exceeds its bound",
+            request_id,
+            Vec::new(),
+        );
+    };
+    let decoded = match decode_confirm_recovery_bundle_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    match tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| RecoveryBundleVerificationError::Unavailable)?
+            .confirm_saved(administrator, decoded)
+    })
+    .await
+    {
+        Ok(Ok(response)) => match encode_confirm_recovery_bundle_response(&response) {
+            Ok(body) => json_response(StatusCode::OK, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => failed(&state, request_id),
+    }
+}
+
+fn boundary_error<C>(
+    state: &ApiState<C>,
+    error: BoundaryError,
+    request_id: String,
+) -> Response<Body> {
+    let status = if matches!(error, BoundaryError::BodyTooLarge { .. }) {
+        StatusCode::PAYLOAD_TOO_LARGE
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    public_error(
+        state,
+        status,
+        ApiErrorCode::InvalidRequest,
+        "recovery-bundle verification body is invalid",
+        request_id,
+        boundary_issues(error),
+    )
+}
+
+fn service_error<C>(
+    state: &ApiState<C>,
+    error: RecoveryBundleVerificationError,
+    request_id: String,
+) -> Response<Body> {
+    let (status, code, message) = match error {
+        RecoveryBundleVerificationError::InvalidInput => (
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidRequest,
+            "recovery-bundle verification input is invalid",
+        ),
+        RecoveryBundleVerificationError::Unauthenticated => (
+            StatusCode::UNAUTHORIZED,
+            ApiErrorCode::Unauthenticated,
+            "authentication was rejected",
+        ),
+        RecoveryBundleVerificationError::Forbidden => (
+            StatusCode::FORBIDDEN,
+            ApiErrorCode::Forbidden,
+            "system-manager authority is required",
+        ),
+        RecoveryBundleVerificationError::Conflict => (
+            StatusCode::CONFLICT,
+            ApiErrorCode::OperationConflict,
+            "recovery-bundle verification conflicts with committed state",
+        ),
+        RecoveryBundleVerificationError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            ApiErrorCode::Busy,
+            "recovery authority is temporarily unavailable",
+        ),
+        RecoveryBundleVerificationError::Failed => return failed(state, request_id),
+    };
+    public_error(state, status, code, message, request_id, Vec::new())
+}
+
+fn public_error<C>(
+    state: &ApiState<C>,
+    status: StatusCode,
+    code: ApiErrorCode,
+    message: &str,
+    request_id: String,
+    issues: Vec<meshspan_api_contract::ApiErrorIssue>,
+) -> Response<Body> {
+    error_response(
+        status,
+        code,
+        message,
+        request_id,
+        None,
+        issues,
+        state.schema_digest.clone(),
+    )
+}
+
+fn failed<C>(state: &ApiState<C>, request_id: String) -> Response<Body> {
+    internal_error_response(
+        request_id,
+        None,
+        state.schema_digest.clone(),
+        "recovery-bundle verification failed closed",
+    )
+}
+
+/// Router-construction failure.
+#[derive(Debug, Error)]
+pub enum RecoveryBundleVerificationApiError {
+    /// The authoritative public contract could not be generated.
+    #[error("public API contract generation failed")]
+    Contract(#[from] serde_json::Error),
+    /// The schema digest could not be represented as an HTTP header.
+    #[error("public API schema digest is invalid")]
+    Header(#[from] axum::http::header::InvalidHeaderValue),
+}

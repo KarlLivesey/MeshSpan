@@ -31,6 +31,9 @@ mod local_claim_tests;
 mod local_setup;
 #[cfg(test)]
 mod local_setup_tests;
+mod local_target;
+#[cfg(test)]
+mod local_target_tests;
 mod migration;
 mod name;
 mod repository;
@@ -39,23 +42,24 @@ pub use command::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
     AppendVersionCleanupItems, AssignComponent, AttachTag, AttestVersionCleanup,
     AuthoriseVersionCleanup, AuthoritativeCommand, BeginScopeHandoff, BootstrapAppliance,
-    BootstrapMesh, CancelVersionCleanup, ChangePrincipalState, CommandContext,
-    CommitConvergedVolumeHead, CompleteVersionCleanupItem, ConfigureAuthenticationPolicy,
-    ConfigureComponent, ConfigureSnapshotSchedule, ConfigureVersionRetention,
-    ConfirmVersionCleanupReclamation, ConsumeJoinGrant, ConvergedHeadEvidence,
-    CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent, CreateGroup,
-    CreateMetadataPartition, CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume,
-    CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff, GrantInheritance, GrantPermission,
-    InstallScopeRouteProjection, IssueAuthenticationSession, IssueJoinGrant,
-    IssueVersionCleanupPermit, JoinRoles, NamespaceObjectKind, NewAuthenticationCredential,
-    NewRecoveryCode, PermissionScope, PrincipalLifecycleState, ProposeVersionCleanup,
-    RegisterCleanupAttestationKey, RegisterRoutingSigner, RemoveGroupMember,
-    RemoveVolumeSnapshotRoot, ReplaceObjectOwners, RepositoryCommandError,
-    RequestVolumeSnapshotExpiry, RestoreVolumeSnapshot, RetentionReclaimMode,
-    RevokeAccessActivation, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    RevokePermissionGrant, RouteAttestation, RunSnapshotSchedule, SealVersionCleanupInventory,
+    BootstrapMesh, BootstrapRecoveryIdentity, CancelVersionCleanup, ChangePrincipalState,
+    CommandContext, CommitConvergedVolumeHead, CommitSecretGeneration, CompleteVersionCleanupItem,
+    ConfigureAuthenticationPolicy, ConfigureComponent, ConfigureSnapshotSchedule,
+    ConfigureVersionRetention, ConfirmRecoveryBundleSaved, ConfirmVersionCleanupReclamation,
+    ConsumeJoinGrant, ConvergedHeadEvidence, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateComponent, CreateGroup, CreateMetadataPartition, CreateObject, CreateScopeRoute,
+    CreateTag, CreateUser, CreateVolume, CreateVolumeSnapshot, DetachTag, FreezeScopeHandoff,
+    GrantInheritance, GrantPermission, InstallScopeRouteProjection, IssueAuthenticationSession,
+    IssueJoinGrant, IssueVersionCleanupPermit, JoinRoles, NamespaceObjectKind,
+    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, PrincipalLifecycleState,
+    ProposeVersionCleanup, RegisterCleanupAttestationKey, RegisterNodeWrappingKey,
+    RegisterRoutingSigner, RegisterStorageTarget, RemoveGroupMember, RemoveVolumeSnapshotRoot,
+    ReplaceObjectOwners, RepositoryCommandError, RequestVolumeSnapshotExpiry,
+    RestoreVolumeSnapshot, RetentionReclaimMode, RevokeAccessActivation,
+    RevokeAuthenticationMethod, RevokeAuthenticationSession, RevokePermissionGrant,
+    RouteAttestation, RunSnapshotSchedule, SealVersionCleanupInventory,
     SessionAuthenticationFactor, SessionClientLabel, SetObjectGrantInheritance,
-    SnapshotExpiryReason, StepUpAuthenticationSession, TagTarget, TotpAlgorithm,
+    SnapshotExpiryReason, StepUpAuthenticationSession, StorageUsageLimit, TagTarget, TotpAlgorithm,
     VersionCleanupAttestation, VersionCleanupItemPlacement,
 };
 pub use command_codec::{
@@ -132,6 +136,9 @@ pub use local_setup::{
     LocalSetupDisposition, LocalSetupError, LocalSetupKind, LocalSetupRecord, LocalSetupState,
     NewLocalSetup,
 };
+pub use local_target::{
+    LocalTargetDisposition, LocalTargetError, LocalTargetRecord, LocalTargetState, NewLocalTarget,
+};
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
 pub use repository::{
@@ -155,22 +162,23 @@ pub use repository::{
     FederationTransportAuthority, FederationTrustIdentityRecord, GroupMemberCursor,
     GroupMembershipEventKind, GroupMembershipEventRecord, GroupMembershipRecord, InvariantFinding,
     InvariantKind, InvariantReport, LogPosition, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME,
-    NamespaceCursor, NamespaceRecord, ObjectOwnerCursor, ObjectOwnerRecord, Page, PageLimit,
-    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
-    PasskeyRegistrationProfile, PasskeyRegistrationReplay, PasskeySessionReplay,
-    PasskeyVerificationMaterial, PermissionGrantRecord, PreservedVote, PrincipalCursor,
-    PrincipalKind, PrincipalRecord, RecoveryCodeVerificationMaterial, RepositoryConformanceCheck,
+    MeshRecoveryAuthority, NamespaceCursor, NamespaceRecord, NodeWrappingKeyRecord,
+    ObjectOwnerCursor, ObjectOwnerRecord, Page, PageLimit, PartitionBackupManifest,
+    PartitionConsensusPersistence, PartitionSnapshotManifest, PasskeyRegistrationProfile,
+    PasskeyRegistrationReplay, PasskeySessionReplay, PasskeyVerificationMaterial,
+    PermissionGrantRecord, PreservedVote, PrincipalCursor, PrincipalKind, PrincipalRecord,
+    RecoveryBundleState, RecoveryCodeVerificationMaterial, RepositoryConformanceCheck,
     RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
     RetainedNamespaceRoot, RetainedNamespaceRootCursor, RetainedNamespaceRootPage,
-    RetainedNamespaceRootSource, ScopeWriteAuthority, ScopedGrantCursor, SessionAccessCapability,
-    SessionAccessDecision, SessionAccessDenial, SessionAccessRequest, SessionRevocationReplay,
-    SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor, SnapshotSchedule,
-    SnapshotScheduleCursor, SubjectGrantCursor, TotpVerificationMaterial,
-    VersionCleanupAttestationProgress, VersionCleanupCompletion, VersionCleanupIntent,
-    VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
-    VersionCleanupItemCompletion, VersionCleanupItemCursor, VersionCleanupItemReclamation,
-    VersionCleanupParticipant, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
-    VersionCleanupReclamation, VersionCleanupState, VersionRetentionPolicy, VolumeInventoryCursor,
-    VolumeInventoryRecord, VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
-    run_repository_conformance,
+    RetainedNamespaceRootSource, ScopeWriteAuthority, ScopedGrantCursor, SecretGenerationRecord,
+    SessionAccessCapability, SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
+    SessionRevocationReplay, SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor,
+    SnapshotSchedule, SnapshotScheduleCursor, StorageTargetRegistrationContext, SubjectGrantCursor,
+    TotpVerificationMaterial, VersionCleanupAttestationProgress, VersionCleanupCompletion,
+    VersionCleanupIntent, VersionCleanupInventory, VersionCleanupInventoryState,
+    VersionCleanupItem, VersionCleanupItemCompletion, VersionCleanupItemCursor,
+    VersionCleanupItemReclamation, VersionCleanupParticipant, VersionCleanupPermitAttempt,
+    VersionCleanupPermitAuthority, VersionCleanupReclamation, VersionCleanupState,
+    VersionRetentionPolicy, VolumeInventoryCursor, VolumeInventoryRecord, VolumeSnapshot,
+    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
 };

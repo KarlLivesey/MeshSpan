@@ -17,7 +17,9 @@ members = [
     "crates/meshspan-protobuf",
     "crates/meshspan-protocol",
     "crates/meshspan-quinn-rustls",
+    "crates/meshspan-recovery-bundle",
     "crates/meshspan-rustls-provider",
+    "crates/meshspan-secret-envelope",
     "crates/meshspan-storage",
     "crates/meshspan-sync-wrapper",
     "crates/meshspan-test-certificates",
@@ -71,6 +73,7 @@ tower = { version = "0.5.3", default-features = false, features = ["util"] }
 unicode-normalization = "0.1.25"
 unicode-casefold = "0.2.0"
 zeroize = "1.9.0"
+x25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize"] }
 
 [patch.crates-io]
 sync_wrapper = { path = "crates/meshspan-sync-wrapper" }

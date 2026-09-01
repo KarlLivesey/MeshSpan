@@ -14,8 +14,9 @@ use super::{
     cleanup_reclamation, cluster, component, federation_actor_attestation, federation_assignment,
     federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
-    namespace, retention, root_delegation, routing, session, snapshot_schedule, tags,
-    user_snapshot, version_cleanup, volume_head,
+    namespace, node_wrapping_key, recovery_authority, retention, root_delegation, routing,
+    secret_generation, session, snapshot_schedule, storage_target, tags, user_snapshot,
+    version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -475,6 +476,15 @@ fn execute(
     if is_routing_command(command) {
         return execute_routing_command(transaction, partition_id, context, command, revision);
     }
+    if is_infrastructure_command(command) {
+        return execute_infrastructure_command(
+            transaction,
+            partition_id,
+            context,
+            command,
+            revision,
+        );
+    }
     match command {
         AuthoritativeCommand::BootstrapMesh(value) => {
             bootstrap::bootstrap(transaction, partition_id, context, value, revision)
@@ -517,6 +527,33 @@ fn execute(
         AuthoritativeCommand::DetachTag(value) => {
             tags::detach(transaction, value.tag_id, value.target)
         }
+        _ => Err(RepositoryError::InvalidCommand),
+    }
+}
+
+fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
+    matches!(
+        command,
+        AuthoritativeCommand::CreateComponent(_)
+            | AuthoritativeCommand::ConfigureComponent(_)
+            | AuthoritativeCommand::AssignComponent(_)
+            | AuthoritativeCommand::RegisterStorageTarget(_)
+            | AuthoritativeCommand::RegisterNodeWrappingKey(_)
+            | AuthoritativeCommand::CommitSecretGeneration(_)
+            | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
+            | AuthoritativeCommand::IssueJoinGrant(_)
+            | AuthoritativeCommand::ConsumeJoinGrant(_)
+    )
+}
+
+fn execute_infrastructure_command(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    match command {
         AuthoritativeCommand::CreateComponent(value) => {
             component::create(transaction, context, value, revision)
         }
@@ -526,10 +563,24 @@ fn execute(
         AuthoritativeCommand::AssignComponent(value) => {
             component::assign(transaction, value, revision)
         }
+        AuthoritativeCommand::RegisterStorageTarget(value) => {
+            storage_target::register(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
+            node_wrapping_key::register(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CommitSecretGeneration(value) => {
+            secret_generation::commit(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ConfirmRecoveryBundleSaved(value) => {
+            recovery_authority::confirm_saved(transaction, context, *value, revision)
+        }
         AuthoritativeCommand::IssueJoinGrant(value) => {
+            recovery_authority::require_verified(transaction)?;
             cluster::issue_join_grant(transaction, context, *value, revision)
         }
         AuthoritativeCommand::ConsumeJoinGrant(value) => {
+            recovery_authority::require_verified(transaction)?;
             cluster::consume_join_grant(transaction, partition_id, context, value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
@@ -1013,6 +1064,10 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::AdmitFederatedMutation(_) => 73,
         AuthoritativeCommand::IssueFederationStorageAllocation(_) => 71,
         AuthoritativeCommand::RevokeFederationStorageAllocation(_) => 72,
+        AuthoritativeCommand::RegisterStorageTarget(_) => 82,
+        AuthoritativeCommand::RegisterNodeWrappingKey(_) => 83,
+        AuthoritativeCommand::CommitSecretGeneration(_) => 84,
+        AuthoritativeCommand::ConfirmRecoveryBundleSaved(_) => 85,
     }
 }
 

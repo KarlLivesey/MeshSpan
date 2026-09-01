@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::{DirectoryEntryKind, HandleError, NamespacePath};
 
 pub(super) struct ResolvedNamespacePath {
-    pub(super) namespace_commit: NamespaceCommitId,
+    pub(super) namespace_commit: Option<NamespaceCommitId>,
     pub(super) root_object: ObjectId,
     pub(super) parent_object: ObjectId,
     pub(super) ancestors: Vec<ResolvedAncestor>,
@@ -96,7 +96,7 @@ pub(super) fn resolve(
                 })
                 .transpose()?;
             return Ok(ResolvedNamespacePath {
-                namespace_commit,
+                namespace_commit: Some(namespace_commit),
                 root_object,
                 parent_object: selected_object,
                 ancestors,
@@ -115,6 +115,47 @@ pub(super) fn resolve(
         selected_revision = entry.object_revision_id();
     }
     Err(HandleError::InvalidInput)
+}
+
+pub(super) fn resolve_or_initial(
+    connection: &Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    path: &NamespacePath,
+    root_object: ObjectId,
+) -> Result<ResolvedNamespacePath, HandleError> {
+    match resolve(connection, branch_id, volume_id, path) {
+        Ok(current) => Ok(current),
+        Err(HandleError::NotFound) if !head_exists(connection, branch_id, volume_id)? => {
+            Ok(ResolvedNamespacePath {
+                namespace_commit: None,
+                root_object,
+                parent_object: root_object,
+                ancestors: Vec::new(),
+                leaf: None,
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn head_exists(
+    connection: &Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+) -> Result<bool, HandleError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM branch_namespace_heads WHERE branch_id = ?1 AND volume_id = ?2
+             )",
+            params![
+                branch_id.as_bytes().as_slice(),
+                volume_id.as_bytes().as_slice()
+            ],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
 }
 
 fn identifier<const N: usize, T>(

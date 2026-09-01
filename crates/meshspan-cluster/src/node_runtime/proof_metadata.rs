@@ -7,17 +7,22 @@ use std::collections::BTreeMap;
 use ed25519_dalek::{Signer, SigningKey};
 use meshspan_consensus::LogEntry;
 use meshspan_domain::{
-    AuditEventId, DelegatedMetadataScope, DelegationAdmission, GroupId, HandoffEvidence, HostId,
-    JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NodeId, PartitionId,
-    PrincipalId, Revision, RoleId, RootDelegatedRoute, ScopeId, UnixMicros,
+    ApiKeyId, AuditEventId, AuthenticationMethodId, DelegatedMetadataScope, DelegationAdmission,
+    GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange,
+    MetadataOperationFamily, NodeId, PartitionId, PrincipalId, Revision, RoleId,
+    RootDelegatedRoute, ScopeId, UnixMicros,
 };
 use meshspan_metadata::{
-    ActivateScopeHandoff, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh, CommandContext,
-    ConsumeJoinGrant, CreateGroup, CreateMetadataPartition, CreateScopeRoute, FreezeScopeHandoff,
-    IssueJoinGrant, JoinRoles, RecordName, RegisterRoutingSigner, RouteAttestation,
+    ActivateScopeHandoff, AuthoritativeCommand, BeginScopeHandoff, BootstrapAppliance,
+    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, ConfirmRecoveryBundleSaved,
+    ConsumeJoinGrant, CreateAuthenticationMethod, CreateGroup, CreateMetadataPartition,
+    CreateScopeRoute, FreezeScopeHandoff, IssueJoinGrant, JoinRoles, NewAuthenticationCredential,
+    RecordName, RegisterRoutingSigner, RouteAttestation,
 };
+use meshspan_secret_envelope::WrappingPublicKey;
 use meshspan_transport::certificate_fingerprint;
 use rustls::pki_types::CertificateDer;
+use sha2::{Digest, Sha256};
 
 use super::NodeRuntimeError;
 use super::config::NodeConfig;
@@ -33,6 +38,7 @@ const CREATE_SCOPE_ROUTE: u8 = 8;
 const BEGIN_SCOPE_HANDOFF: u8 = 9;
 const FREEZE_SCOPE_HANDOFF: u8 = 10;
 const ACTIVATE_SCOPE_HANDOFF: u8 = 11;
+const CONFIRM_RECOVERY: u8 = 12;
 const FIRST_USER_COMMAND: u8 = 21;
 
 pub(super) struct ProofMetadata {
@@ -73,6 +79,7 @@ impl ProofMetadata {
             BEGIN_SCOPE_HANDOFF => begin_scope_handoff()?,
             FREEZE_SCOPE_HANDOFF => freeze_scope_handoff()?,
             ACTIVATE_SCOPE_HANDOFF => activate_scope_handoff()?,
+            CONFIRM_RECOVERY => confirm_recovery()?,
             value if value >= FIRST_USER_COMMAND => create_group(value)?,
             _ => return Err(NodeRuntimeError::InvalidConfiguration),
         };
@@ -107,18 +114,61 @@ impl ProofMetadata {
 }
 
 fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
-    Ok(AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
-        mesh_id: MeshId::from_bytes([9; 16])?,
-        mesh_name: RecordName::new("Stage 3 proof mesh")?,
-        administrator_id: administrator_id()?,
-        administrator_name: RecordName::new("Proof administrator")?,
-        administrator_role_id: RoleId::from_bytes([11; 16])?,
-        host_id: HostId::from_bytes([12; 16])?,
-        host_name: RecordName::new("Proof host 1")?,
-        node_id: node_id(1)?,
-        node_name: RecordName::new("Proof node 1")?,
-        partition_name: RecordName::new("Proof authority")?,
-    }))
+    let administrator_id = administrator_id()?;
+    Ok(AuthoritativeCommand::BootstrapAppliance(
+        BootstrapAppliance {
+            mesh: BootstrapMesh {
+                mesh_id: MeshId::from_bytes([9; 16])?,
+                mesh_name: RecordName::new("Stage 3 proof mesh")?,
+                administrator_id,
+                administrator_name: RecordName::new("Proof administrator")?,
+                administrator_role_id: RoleId::from_bytes([11; 16])?,
+                host_id: HostId::from_bytes([12; 16])?,
+                host_name: RecordName::new("Proof host 1")?,
+                node_id: node_id(1)?,
+                node_name: RecordName::new("Proof node 1")?,
+                partition_name: RecordName::new("Proof authority")?,
+            },
+            authentication: CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([13; 16])?,
+                principal_id: administrator_id,
+                label: "Initial proof API key".to_owned(),
+                service_scope: 7,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([14; 16])?,
+                    key_digest: [15; 32],
+                    scopes: 1,
+                    valid_from: UnixMicros::new(1_001),
+                },
+            },
+            recovery: Box::new(recovery_identity()?),
+        },
+    ))
+}
+
+fn recovery_identity() -> Result<BootstrapRecoveryIdentity, NodeRuntimeError> {
+    let public_key = WrappingPublicKey::from_bytes([16; 32])
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+    let certificate = vec![17; 64];
+    Ok(BootstrapRecoveryIdentity {
+        public_wrapping_key: public_key.as_bytes(),
+        key_fingerprint: public_key.fingerprint(),
+        root_certificate_digest: Sha256::digest(&certificate).into(),
+        root_certificate_der: certificate,
+        bundle_digest: [18; 32],
+        save_challenge_commitment: [19; 32],
+    })
+}
+
+fn confirm_recovery() -> Result<AuthoritativeCommand, NodeRuntimeError> {
+    Ok(AuthoritativeCommand::ConfirmRecoveryBundleSaved(
+        ConfirmRecoveryBundleSaved {
+            mesh_id: MeshId::from_bytes([9; 16])?,
+            bundle_digest: [18; 32],
+            save_challenge_commitment: [19; 32],
+        },
+    ))
 }
 
 fn issue_join(number: u8) -> Result<AuthoritativeCommand, NodeRuntimeError> {
@@ -283,17 +333,18 @@ fn context(
 fn expected_revision(value: u8) -> Result<u64, NodeRuntimeError> {
     match value {
         BOOTSTRAP => Ok(0),
-        ISSUE_NODE_TWO => Ok(1),
-        ENROL_NODE_TWO => Ok(2),
-        ISSUE_NODE_THREE => Ok(3),
-        ENROL_NODE_THREE => Ok(4),
-        REGISTER_ROUTING_SIGNER => Ok(5),
-        CREATE_SECOND_PARTITION => Ok(6),
-        CREATE_SCOPE_ROUTE => Ok(7),
-        BEGIN_SCOPE_HANDOFF => Ok(8),
-        FREEZE_SCOPE_HANDOFF => Ok(9),
-        ACTIVATE_SCOPE_HANDOFF => Ok(10),
-        value if value >= FIRST_USER_COMMAND => Ok(u64::from(value - FIRST_USER_COMMAND) + 11),
+        CONFIRM_RECOVERY => Ok(1),
+        ISSUE_NODE_TWO => Ok(2),
+        ENROL_NODE_TWO => Ok(3),
+        ISSUE_NODE_THREE => Ok(4),
+        ENROL_NODE_THREE => Ok(5),
+        REGISTER_ROUTING_SIGNER => Ok(6),
+        CREATE_SECOND_PARTITION => Ok(7),
+        CREATE_SCOPE_ROUTE => Ok(8),
+        BEGIN_SCOPE_HANDOFF => Ok(9),
+        FREEZE_SCOPE_HANDOFF => Ok(10),
+        ACTIVATE_SCOPE_HANDOFF => Ok(11),
+        value if value >= FIRST_USER_COMMAND => Ok(u64::from(value - FIRST_USER_COMMAND) + 12),
         _ => Err(NodeRuntimeError::InvalidConfiguration),
     }
 }

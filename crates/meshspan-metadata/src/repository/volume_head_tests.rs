@@ -5,16 +5,20 @@ use std::collections::BTreeSet;
 use meshspan_contracts::BoundedItems;
 use meshspan_contracts::namespace_reconciliation_result_digest;
 use meshspan_domain::{
-    AuditEventId, HostId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
-    OperationId, OwnerSetId, PartitionId, PrincipalId, Revision, RoleId, UnixMicros, VolumeId,
+    ApiKeyId, AuditEventId, AuthenticationMethodId, HostId, MeshId, NamespaceCommitId, NodeId,
+    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, Revision,
+    RoleId, UnixMicros, VolumeId,
 };
+use meshspan_secret_envelope::WrappingPublicKey;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BootstrapMesh, CommandContext, CommitConvergedVolumeHead,
-    ConvergedHeadEvidence, CreateVolume, PartitionDatabase, RecordName,
+    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommandContext, CommitConvergedVolumeHead, ConvergedHeadEvidence, CreateAuthenticationMethod,
+    CreateVolume, NewAuthenticationCredential, PartitionDatabase, RecordName,
 };
 
 pub(super) struct HeadFixture {
@@ -299,18 +303,7 @@ pub(super) fn open_and_prepare(
     repository.apply_committed(
         LogPosition { index: 1, term: 1 },
         context(10, fixture.administrator, 11, 100, Some(0))?,
-        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
-            mesh_id: MeshId::from_bytes([12; 16])?,
-            mesh_name: RecordName::new("Head proof mesh")?,
-            administrator_id: fixture.administrator,
-            administrator_name: RecordName::new("Administrator")?,
-            administrator_role_id: RoleId::from_bytes([13; 16])?,
-            host_id: HostId::from_bytes([14; 16])?,
-            host_name: RecordName::new("Head host")?,
-            node_id: NodeId::from_bytes([15; 16])?,
-            node_name: RecordName::new("Head node")?,
-            partition_name: RecordName::new("Head authority")?,
-        }),
+        &head_bootstrap(fixture)?,
     )?;
     repository.apply_committed(
         LogPosition { index: 2, term: 1 },
@@ -324,6 +317,50 @@ pub(super) fn open_and_prepare(
         }),
     )?;
     Ok(repository)
+}
+
+fn head_bootstrap(
+    fixture: &HeadFixture,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let recovery_key = WrappingPublicKey::from_bytes([220; 32])?;
+    let certificate = vec![221; 64];
+    Ok(AuthoritativeCommand::BootstrapAppliance(
+        BootstrapAppliance {
+            mesh: BootstrapMesh {
+                mesh_id: MeshId::from_bytes([12; 16])?,
+                mesh_name: RecordName::new("Head proof mesh")?,
+                administrator_id: fixture.administrator,
+                administrator_name: RecordName::new("Administrator")?,
+                administrator_role_id: RoleId::from_bytes([13; 16])?,
+                host_id: HostId::from_bytes([14; 16])?,
+                host_name: RecordName::new("Head host")?,
+                node_id: NodeId::from_bytes([15; 16])?,
+                node_name: RecordName::new("Head node")?,
+                partition_name: RecordName::new("Head authority")?,
+            },
+            authentication: CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([222; 16])?,
+                principal_id: fixture.administrator,
+                label: "Initial API key".to_owned(),
+                service_scope: 7,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([223; 16])?,
+                    key_digest: [224; 32],
+                    scopes: 1,
+                    valid_from: UnixMicros::new(100),
+                },
+            },
+            recovery: Box::new(BootstrapRecoveryIdentity {
+                public_wrapping_key: recovery_key.as_bytes(),
+                key_fingerprint: recovery_key.fingerprint(),
+                root_certificate_digest: Sha256::digest(&certificate).into(),
+                root_certificate_der: certificate,
+                bundle_digest: [225; 32],
+                save_challenge_commitment: [226; 32],
+            }),
+        },
+    ))
 }
 
 pub(super) fn publication_command(

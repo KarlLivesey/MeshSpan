@@ -17,6 +17,7 @@ use meshspan_domain::{
     PrincipalId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId, SessionId, SnapshotId,
     SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
+use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
 use sha2::{Digest, Sha256};
 
 use crate::AdmitFederatedMutation;
@@ -61,6 +62,8 @@ pub enum AuthoritativeCommand {
     BootstrapMesh(BootstrapMesh),
     /// Atomically bootstraps the first mesh and its administrator's usable login method.
     BootstrapAppliance(BootstrapAppliance),
+    /// Confirms that the exact encrypted offline recovery bundle was saved separately.
+    ConfirmRecoveryBundleSaved(ConfirmRecoveryBundleSaved),
     /// Creates one user principal.
     CreateUser(CreateUser),
     /// Creates one group principal.
@@ -151,6 +154,12 @@ pub enum AuthoritativeCommand {
     ConfigureComponent(ConfigureComponent),
     /// Creates or replaces one bounded component assignment.
     AssignComponent(AssignComponent),
+    /// Registers one identity-bound storage target and its first marker generation.
+    RegisterStorageTarget(RegisterStorageTarget),
+    /// Registers one node-local public key for encrypted secret generations.
+    RegisterNodeWrappingKey(RegisterNodeWrappingKey),
+    /// Commits one encrypted secret generation and every exact recipient envelope atomically.
+    CommitSecretGeneration(CommitSecretGeneration),
     /// Issues one bounded administrator-authorised node join grant.
     IssueJoinGrant(IssueJoinGrant),
     /// Consumes a join grant to admit one certificate-bound learner node.
@@ -241,6 +250,7 @@ impl AuthoritativeCommand {
         match self {
             Self::BootstrapMesh(value) => value.update_digest(digest),
             Self::BootstrapAppliance(value) => value.update_digest(digest),
+            Self::ConfirmRecoveryBundleSaved(value) => value.update_digest(digest),
             Self::CreateUser(value) => value.update_digest(digest),
             Self::CreateGroup(value) => value.update_digest(digest),
             Self::ChangePrincipalState(value) => value.update_digest(digest),
@@ -286,6 +296,9 @@ impl AuthoritativeCommand {
             Self::CreateComponent(value) => value.update_digest(digest),
             Self::ConfigureComponent(value) => value.update_digest(digest),
             Self::AssignComponent(value) => value.update_digest(digest),
+            Self::RegisterStorageTarget(value) => value.update_digest(digest),
+            Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
+            Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
             Self::ConsumeJoinGrant(value) => value.update_digest(digest),
             Self::RegisterRoutingSigner(value) => value.update_digest(digest),
@@ -357,6 +370,36 @@ pub struct BootstrapAppliance {
     pub mesh: BootstrapMesh,
     /// Initial login-capable passkey or API key owned by the first administrator.
     pub authentication: CreateAuthenticationMethod,
+    /// Public offline authority and exact encrypted-bundle commitments.
+    pub recovery: Box<BootstrapRecoveryIdentity>,
+}
+
+/// Public offline authority committed atomically with the first mesh.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BootstrapRecoveryIdentity {
+    /// Initial offline-recovery X25519 public key.
+    pub public_wrapping_key: [u8; 32],
+    /// Domain-separated fingerprint of the public wrapping key.
+    pub key_fingerprint: [u8; 32],
+    /// Self-signed mesh root certificate in DER form.
+    pub root_certificate_der: Vec<u8>,
+    /// SHA-256 digest of the exact root certificate bytes.
+    pub root_certificate_digest: [u8; 32],
+    /// Digest of the exact encrypted portable recovery-bundle file.
+    pub bundle_digest: [u8; 32],
+    /// Non-reversible commitment to the short save-verification challenge.
+    pub save_challenge_commitment: [u8; 32],
+}
+
+/// Exact proof transitioning one offline bundle from pending delivery to verified saved state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfirmRecoveryBundleSaved {
+    /// Mesh whose offline bundle was saved.
+    pub mesh_id: MeshId,
+    /// Digest of the exact downloaded bundle.
+    pub bundle_digest: [u8; 32],
+    /// Commitment derived from the challenge entered by the administrator.
+    pub save_challenge_commitment: [u8; 32],
 }
 
 /// New user record.
@@ -1443,6 +1486,35 @@ pub struct CreateComponent {
     pub configuration_digest: [u8; 32],
 }
 
+impl CreateComponent {
+    /// Validates one component declaration at a caller-selected configuration byte bound.
+    pub(crate) fn validate_shape(
+        &self,
+        maximum_configuration_bytes: usize,
+    ) -> Result<(), RepositoryCommandError> {
+        let identifier_is_valid = !self.implementation_id.is_empty()
+            && self.implementation_id.len() <= 80
+            && self
+                .implementation_id
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !self.implementation_id.starts_with('-')
+            && !self.implementation_id.ends_with('-');
+        let configuration_digest: [u8; 32] = Sha256::digest(&self.canonical_configuration).into();
+        if !(1..=10).contains(&self.component_kind)
+            || self.contract_major == 0
+            || self.schema_version == 0
+            || self.canonical_configuration.len() > maximum_configuration_bytes
+            || configuration_digest != self.configuration_digest
+            || !identifier_is_valid
+        {
+            Err(RepositoryCommandError::InvalidComponent)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// New desired configuration revision for an existing component instance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfigureComponent {
@@ -1467,6 +1539,79 @@ pub struct AssignComponent {
     pub assignment_id: [u8; 16],
     /// Closed desired assignment state.
     pub desired_state: u8,
+}
+
+/// Authoritative capacity ceiling for one registered storage target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StorageUsageLimit {
+    /// Percentage of the target's measured capacity.
+    Percent(u8),
+    /// Fixed maximum physical bytes owned by `MeshSpan`.
+    Bytes(u64),
+}
+
+impl StorageUsageLimit {
+    /// Validates a value received from a command or wire boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero, percentages above 100 and zero-byte ceilings.
+    pub const fn validate(self) -> Result<Self, RepositoryCommandError> {
+        match self {
+            Self::Percent(value) if value > 0 && value <= 100 => Ok(self),
+            Self::Bytes(value) if value > 0 => Ok(self),
+            Self::Percent(_) | Self::Bytes(_) => {
+                Err(RepositoryCommandError::InvalidStorageUsageLimit)
+            }
+        }
+    }
+}
+
+/// First authoritative generation of one locally capability-probed folder target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisterStorageTarget {
+    /// Stable target identity independent of the local path.
+    pub target_id: TargetId,
+    /// Node that exclusively owns this generation.
+    pub node_id: NodeId,
+    /// Expected host of the owning node, binding the physical failure boundary.
+    pub host_id: HostId,
+    /// New provider component atomically selected for this target.
+    pub provider: CreateComponent,
+    /// Human-readable target name; never a path or identity.
+    pub name: RecordName,
+    /// Initial positive authority-fenced marker generation.
+    pub generation: u64,
+    /// Digest of the exact durable marker written beneath the provider folder.
+    pub marker_fingerprint: [u8; 32],
+    /// Optional observed backing-device identity evidence.
+    pub backing_device_fingerprint: Option<[u8; 32]>,
+    /// Optional observed filesystem identity evidence.
+    pub filesystem_fingerprint: Option<[u8; 32]>,
+    /// MeshSpan-owned physical capacity ceiling.
+    pub usage_limit: StorageUsageLimit,
+}
+
+/// First public secret-wrapping-key generation for one exact active node.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisterNodeWrappingKey {
+    /// Node which exclusively retains the matching private key.
+    pub node_id: NodeId,
+    /// Positive immutable key generation, initially one.
+    pub generation: u64,
+    /// Canonical X25519 public key bytes.
+    pub public_key: [u8; 32],
+    /// Domain-separated fingerprint of `public_key`.
+    pub key_fingerprint: [u8; 32],
+}
+
+/// One encrypted secret generation plus its complete bounded recipient set.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitSecretGeneration {
+    /// Authenticated secret ciphertext and immutable context.
+    pub secret: EncryptedSecretParts,
+    /// One authenticated data-key envelope for every exact authorised recipient.
+    pub recipients: Vec<RecipientEnvelopeParts>,
 }
 
 /// Non-empty subset of roles a join grant may admit.
@@ -1513,6 +1658,12 @@ pub enum RepositoryCommandError {
     /// Join-role bits are empty or unknown.
     #[error("join grant roles are invalid")]
     InvalidJoinRoles,
+    /// Storage usage ceiling is zero or outside the percentage range.
+    #[error("storage usage limit is invalid")]
+    InvalidStorageUsageLimit,
+    /// Component identity, contract or canonical configuration is invalid.
+    #[error("component declaration is invalid")]
+    InvalidComponent,
 }
 
 /// One administrator-created, digest-only pre-authorisation for node enrolment.
@@ -1699,6 +1850,21 @@ digest_simple_record!(
     |value, digest| {
         value.mesh.update_digest(digest);
         value.authentication.update_digest(digest);
+        digest.bytes(&value.recovery.public_wrapping_key);
+        digest.bytes(&value.recovery.key_fingerprint);
+        digest.bytes(&value.recovery.root_certificate_der);
+        digest.bytes(&value.recovery.root_certificate_digest);
+        digest.bytes(&value.recovery.bundle_digest);
+        digest.bytes(&value.recovery.save_challenge_commitment);
+    }
+);
+digest_simple_record!(
+    ConfirmRecoveryBundleSaved,
+    b"confirm-recovery-bundle-saved",
+    |value, digest| {
+        digest.identifier(value.mesh_id.as_bytes());
+        digest.bytes(&value.bundle_digest);
+        digest.bytes(&value.save_challenge_commitment);
     }
 );
 digest_simple_record!(CreateUser, b"create-user", |value, digest| {
@@ -2343,6 +2509,79 @@ digest_simple_record!(AssignComponent, b"assign-component", |value, digest| {
     digest.identifier(value.assignment_id);
     digest.byte(value.desired_state);
 });
+digest_simple_record!(
+    RegisterStorageTarget,
+    b"register-storage-target",
+    |value, digest| {
+        digest.identifier(value.target_id.as_bytes());
+        digest.identifier(value.node_id.as_bytes());
+        digest.identifier(value.host_id.as_bytes());
+        value.provider.update_digest(digest);
+        digest.name(&value.name);
+        digest.unsigned(value.generation);
+        digest.bytes(&value.marker_fingerprint);
+        match value.backing_device_fingerprint {
+            Some(fingerprint) => {
+                digest.byte(1);
+                digest.bytes(&fingerprint);
+            }
+            None => digest.byte(0),
+        }
+        match value.filesystem_fingerprint {
+            Some(fingerprint) => {
+                digest.byte(1);
+                digest.bytes(&fingerprint);
+            }
+            None => digest.byte(0),
+        }
+        match value.usage_limit {
+            StorageUsageLimit::Percent(percent) => {
+                digest.byte(1);
+                digest.unsigned(u64::from(percent));
+            }
+            StorageUsageLimit::Bytes(bytes) => {
+                digest.byte(2);
+                digest.unsigned(bytes);
+            }
+        }
+    }
+);
+digest_simple_record!(
+    RegisterNodeWrappingKey,
+    b"register-node-wrapping-key",
+    |value, digest| {
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.generation);
+        digest.bytes(&value.public_key);
+        digest.bytes(&value.key_fingerprint);
+    }
+);
+digest_simple_record!(
+    CommitSecretGeneration,
+    b"commit-secret-generation",
+    |value, digest| {
+        digest.byte(value.secret.format_version);
+        digest.unsigned(u64::from(value.secret.context.kind()));
+        digest.identifier(value.secret.context.id());
+        digest.unsigned(value.secret.context.generation());
+        digest.bytes(&value.secret.nonce);
+        digest.bytes(&value.secret.ciphertext);
+        digest.bytes(&value.secret.digest);
+        digest.unsigned(value.recipients.len() as u64);
+        for envelope in &value.recipients {
+            digest.byte(envelope.format_version);
+            digest.unsigned(u64::from(envelope.context.kind()));
+            digest.identifier(envelope.context.id());
+            digest.unsigned(envelope.context.generation());
+            digest.bytes(&envelope.recipient_public_key);
+            digest.bytes(&envelope.ephemeral_public_key);
+            digest.bytes(&envelope.salt);
+            digest.bytes(&envelope.nonce);
+            digest.bytes(&envelope.ciphertext);
+            digest.bytes(&envelope.digest);
+        }
+    }
+);
 digest_simple_record!(IssueJoinGrant, b"issue-join-grant", |value, digest| {
     digest.identifier(value.join_grant_id.as_bytes());
     digest.bytes(&value.secret_digest);

@@ -34,7 +34,7 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
         "ELECTION_STARTED"
     );
     wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
-    for operation in 1_u8..=3 {
+    for operation in [1_u8, 12, 2, 3] {
         commit_on_nodes(&launches, 0, operation, 1).await?;
     }
     wait_for_response(
@@ -43,7 +43,7 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
         Some("FOLLOWER_WITH_LEADER"),
     )
     .await?;
-    for operation in 1_u8..=3 {
+    for operation in [1_u8, 12, 2, 3] {
         wait_for_response(
             launches[1].control_address,
             &format!("STATUS {operation}"),
@@ -60,7 +60,7 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
         Some("FOLLOWER_WITH_LEADER"),
     )
     .await?;
-    for operation in 1_u8..=5 {
+    for operation in [1_u8, 12, 2, 3, 4, 5] {
         wait_for_response(
             launches[2].control_address,
             &format!("STATUS {operation}"),
@@ -139,7 +139,7 @@ async fn single_voter_restarts_and_resumes_writes() -> Result<(), Box<dyn Error>
         "ELECTION_STARTED"
     );
     wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
-    commit_on_nodes(&launches, 0, 2, 1).await?;
+    commit_on_nodes(&launches, 0, 12, 1).await?;
     cluster.stop(1)?;
     assert_plan_phase(&launches[..1], 1, true)?;
     Ok(())
@@ -157,7 +157,7 @@ async fn two_voters_fence_writes_after_one_loss_then_resume() -> Result<(), Box<
         "ELECTION_STARTED"
     );
     wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
-    for operation in 1_u8..=3 {
+    for operation in [1_u8, 12, 2, 3] {
         commit_on_nodes(&launches, 0, operation, 1).await?;
     }
     wait_for_plan_phase(&launches[..2], 3, true).await?;
@@ -224,6 +224,7 @@ async fn prove_promotion_restart(
     );
     wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
     commit_on_nodes(&launches, 0, 1, 1).await?;
+    commit_on_nodes(&launches, 0, 12, 1).await?;
     commit_on_nodes(&launches, 0, 2, 1).await?;
     assert_eq!(
         command(launches[0].control_address, "PROPOSE 3").await?,

@@ -148,9 +148,10 @@ pub trait CreateMeshSetupController: Send + 'static {
     ) -> Result<CreateMeshSetupResponse, CreateMeshSetupError>;
 }
 
-impl<A> CreateMeshSetupController for CreateMeshSetupService<A>
+impl<A, R> CreateMeshSetupController for CreateMeshSetupService<A, R>
 where
     A: BootstrapAuthority + Send + 'static,
+    R: meshspan_domain::RandomSource + Send + 'static,
 {
     fn create_mesh(
         &mut self,
@@ -327,6 +328,8 @@ fn service_error_response(
             "bootstrap authority is temporarily unavailable",
         ),
         CreateMeshSetupError::Material(_)
+        | CreateMeshSetupError::RecoveryCode(_)
+        | CreateMeshSetupError::RecoveryBundle(_)
         | CreateMeshSetupError::Local(LocalSetupError::Store | LocalSetupError::Invalid)
         | CreateMeshSetupError::Authority(BootstrapAuthorityError::Failed)
         | CreateMeshSetupError::ClaimFile(_)

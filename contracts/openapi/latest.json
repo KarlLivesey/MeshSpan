@@ -980,6 +980,80 @@
         "title": "CommitUploadResponse",
         "type": "object"
       },
+      "ConfirmRecoveryBundleRequest": {
+        "additionalProperties": false,
+        "description": "One authenticated idempotent save-verification request.",
+        "properties": {
+          "mesh_id": {
+            "description": "Exact mesh returned by first-mesh setup.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Client-generated idempotency identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "recovery_challenge": {
+            "description": "Short proof derived from the separately saved code and exact bundle.",
+            "maxLength": 34,
+            "minLength": 34,
+            "pattern": "^meshspan-check-v1\\.[0-9a-f]{16}$",
+            "type": "string",
+            "x-meshspan-sensitive": true
+          }
+        },
+        "required": [
+          "operation_id",
+          "mesh_id",
+          "recovery_challenge"
+        ],
+        "title": "ConfirmRecoveryBundleRequest",
+        "type": "object"
+      },
+      "ConfirmRecoveryBundleResponse": {
+        "additionalProperties": false,
+        "description": "Durable proof that the offline recovery bundle may no longer remain on the daemon.",
+        "properties": {
+          "mesh_id": {
+            "description": "Verified mesh.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact operation which committed or replayed verification.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Authoritative revision which verified the bundle.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "verified_at_epoch_micros": {
+            "description": "Authoritative verification instant.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operation_id",
+          "mesh_id",
+          "verified_at_epoch_micros",
+          "revision"
+        ],
+        "title": "ConfirmRecoveryBundleResponse",
+        "type": "object"
+      },
       "CreateApiKeyRequest": {
         "additionalProperties": false,
         "description": "One idempotent request to issue a current-user API key.",
@@ -1345,13 +1419,40 @@
             "minLength": 36,
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "type": "string"
+          },
+          "recovery_bundle": {
+            "description": "Exact encrypted recovery-bundle file; save it separately before enrolling more nodes.",
+            "maxLength": 33000,
+            "minLength": 256,
+            "pattern": "^meshspan-recovery-file-v1\\.[0-9a-f]+$",
+            "type": "string",
+            "x-meshspan-sensitive": true
+          },
+          "recovery_challenge": {
+            "description": "Short proof entered after the administrator has saved the exact file and code.",
+            "maxLength": 34,
+            "minLength": 34,
+            "pattern": "^meshspan-check-v1\\.[0-9a-f]{16}$",
+            "type": "string",
+            "x-meshspan-sensitive": true
+          },
+          "recovery_code": {
+            "description": "One-time high-entropy recovery code which must be stored separately from the bundle.",
+            "maxLength": 84,
+            "minLength": 84,
+            "pattern": "^meshspan-offline-v1\\.[0-9a-f]{64}$",
+            "type": "string",
+            "x-meshspan-sensitive": true
           }
         },
         "required": [
           "operation_id",
           "mesh_id",
           "node_id",
-          "api_key"
+          "api_key",
+          "recovery_bundle",
+          "recovery_code",
+          "recovery_challenge"
         ],
         "title": "CreateMeshSetupResponse",
         "type": "object"
@@ -5552,6 +5653,235 @@
         },
         "summary": "Remove one exact direct group membership",
         "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/recovery-bundle-verifications": {
+      "post": {
+        "operationId": "confirmRecoveryBundleSaved",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRecoveryBundleRequest"
+              }
+            }
+          },
+          "description": "Offline recovery save proof",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmRecoveryBundleResponse"
+                }
+              }
+            },
+            "description": "Recovery bundle verified and removed from online state",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Wrong bundle proof or changed retry",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Recovery authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Verify that the exact offline recovery bundle and code were saved",
+        "x-meshspan-access": "system-manager",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
     },

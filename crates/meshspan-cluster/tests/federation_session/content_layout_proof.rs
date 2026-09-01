@@ -21,13 +21,14 @@ use meshspan_cluster::{
 use meshspan_contracts::StoragePermitMacKey;
 use meshspan_domain::{
     ContentManifestId, DurationMicros, EntropyError, MeshId, NodeId, OperationId, RandomSource,
-    Revision, TargetId, UnixMicros,
+    Revision, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     CompletedStage, ContentChunkLimits, ContentKeyEnvelopeCipher, ContentPublicationError,
     ContentPublicationRequest, ContentReadRequest, DurableContentPublisher, DurableContentReader,
     NamespaceHistoryImmutableRecord, PublishedContentReference, UnprotectedContentAccess,
-    UnprotectedContentPublisher, VersionPublicationStore, VolumeKeyEncryptionKey,
+    UnprotectedContentPublisher, VersionPublicationStore, VolumeContentKeyring,
+    VolumeKeyEncryptionKey,
 };
 use meshspan_protocol::v1::ProtocolVersion;
 use meshspan_storage::{
@@ -885,7 +886,7 @@ fn publish_content(
         UnixMicros::new(1),
         provider,
         FixedRandom(7),
-        source_key_cipher()?,
+        source_keyring()?,
         ContentChunkLimits::new(4)?,
         UnprotectedContentAccess::new(
             registration.mesh_id,
@@ -935,6 +936,7 @@ fn publication_for(
 fn content_request() -> Result<ContentPublicationRequest, Box<dyn Error>> {
     Ok(ContentPublicationRequest {
         operation_id: OperationId::from_bytes([160; 16])?,
+        volume_id: VolumeId::from_bytes([163; 16])?,
         request_digest: [161; 32],
         manifest_id: ContentManifestId::from_bytes([162; 16])?,
         format_version: 1,
@@ -1033,7 +1035,7 @@ fn open_receiver(
         opened_at,
         provider,
         FixedRandom(random_seed),
-        target_key_cipher()?,
+        target_keyring()?,
         ContentChunkLimits::new(4)?,
         UnprotectedContentAccess::new(
             registration.mesh_id,
@@ -1050,6 +1052,7 @@ fn recovery_request(
 ) -> Result<ContentPublicationRequest, Box<dyn Error>> {
     Ok(ContentPublicationRequest {
         operation_id: OperationId::from_bytes([177; 16])?,
+        volume_id: VolumeId::from_bytes([163; 16])?,
         request_digest: [178; 32],
         manifest_id: content.manifest.manifest_id,
         format_version: content.manifest.format_version,
@@ -1092,6 +1095,20 @@ fn source_key_cipher() -> Result<ContentKeyEnvelopeCipher, Box<dyn Error>> {
 
 fn target_key_cipher() -> Result<ContentKeyEnvelopeCipher, Box<dyn Error>> {
     Ok(ContentKeyEnvelopeCipher::new(
+        VolumeKeyEncryptionKey::from_bytes(2, TARGET_VOLUME_KEY)?,
+    ))
+}
+
+fn source_keyring() -> Result<VolumeContentKeyring, Box<dyn Error>> {
+    Ok(VolumeContentKeyring::new(
+        VolumeId::from_bytes([163; 16])?,
+        VolumeKeyEncryptionKey::from_bytes(1, SOURCE_VOLUME_KEY)?,
+    ))
+}
+
+fn target_keyring() -> Result<VolumeContentKeyring, Box<dyn Error>> {
+    Ok(VolumeContentKeyring::new(
+        VolumeId::from_bytes([163; 16])?,
         VolumeKeyEncryptionKey::from_bytes(2, TARGET_VOLUME_KEY)?,
     ))
 }

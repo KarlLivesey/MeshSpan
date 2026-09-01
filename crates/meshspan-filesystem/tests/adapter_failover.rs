@@ -8,7 +8,7 @@ use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
     AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId, HandleId,
     LockId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId,
-    Revision, UnixMicros, VolumeId,
+    Revision, Rights, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
@@ -791,6 +791,21 @@ impl FilesystemAccessAuthority for AllowingAuthority {
             evidence_digest: [42; 32],
         })
     }
+
+    fn authorise_volume_root(
+        &self,
+        context: FilesystemAccessContext,
+        volume_id: VolumeId,
+        requested_rights: Rights,
+    ) -> Result<FilesystemAuthorityGrant, Self::Error> {
+        let root = ObjectId::from_bytes(volume_id.as_bytes()).map_err(|_| AuthorityError)?;
+        self.authorise(FilesystemAuthorityRequest {
+            context,
+            volume_id,
+            object_id: root,
+            requested_rights,
+        })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -944,6 +959,7 @@ fn manifest_for(
 fn seed_content(durable: &DurableContents, publication: FilePublication, bytes: &[u8]) {
     let request = ContentPublicationRequest {
         operation_id: publication.operation_id,
+        volume_id: publication.volume_id,
         request_digest: [0; 32],
         manifest_id: publication.manifest.manifest_id,
         format_version: publication.manifest.format_version,

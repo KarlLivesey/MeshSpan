@@ -12,11 +12,14 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthoritativeCommand,
-    AuthoritativeRepository, BootstrapAppliance, BootstrapMesh, BrowserSessionAccessRequest,
-    CommandContext, CreateAuthenticationMethod, LogPosition, NewAuthenticationCredential,
-    PartitionDatabase, PasskeySessionReplay, PasskeyVerificationMaterial, RecordName,
-    RepositoryError, SessionAccessDecision, SessionRevocationReplay,
+    AuthoritativeRepository, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
+    BrowserSessionAccessRequest, CommandContext, CreateAuthenticationMethod, LogPosition,
+    NewAuthenticationCredential, PartitionDatabase, PasskeySessionReplay,
+    PasskeyVerificationMaterial, RecordName, RepositoryError, SessionAccessDecision,
+    SessionRevocationReplay,
 };
+use meshspan_secret_envelope::WrappingPublicKey;
+use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
 use tower::ServiceExt;
@@ -255,6 +258,7 @@ pub(super) fn bootstrap(
                 valid_from: UnixMicros::new(10),
             },
         },
+        recovery: Box::new(recovery_identity()?),
     });
     authority.repository.apply_committed(
         LogPosition { index: 1, term: 1 },
@@ -269,6 +273,19 @@ pub(super) fn bootstrap(
     )?;
     authority.next_index = 2;
     Ok(())
+}
+
+fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::Error>> {
+    let public_key = WrappingPublicKey::from_bytes([90; 32])?;
+    let certificate = vec![91; 64];
+    Ok(BootstrapRecoveryIdentity {
+        public_wrapping_key: public_key.as_bytes(),
+        key_fingerprint: public_key.fingerprint(),
+        root_certificate_digest: Sha256::digest(&certificate).into(),
+        root_certificate_der: certificate,
+        bundle_digest: [92; 32],
+        save_challenge_commitment: [93; 32],
+    })
 }
 
 fn request(

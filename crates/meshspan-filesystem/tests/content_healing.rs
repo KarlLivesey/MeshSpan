@@ -11,13 +11,14 @@ use meshspan_contracts::{
 };
 use meshspan_domain::{
     ContentManifestId, EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId,
-    UnixMicros,
+    UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     CompletedStage, ContentChunkLimits, ContentEncryptionKey, ContentKeyEnvelopeCipher,
     ContentLayoutTransferHeader, ContentPublicationError, ContentPublicationRequest,
     ContentReadRequest, DurableContentPublisher, DurableContentReader, PublishedContentReference,
-    UnprotectedContentAccess, UnprotectedContentPublisher, VolumeKeyEncryptionKey,
+    UnprotectedContentAccess, UnprotectedContentPublisher, VolumeContentKeyring,
+    VolumeKeyEncryptionKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -299,6 +300,7 @@ fn publication_request(
 ) -> Result<ContentPublicationRequest, Box<dyn std::error::Error>> {
     Ok(ContentPublicationRequest {
         operation_id: OperationId::from_bytes([operation; 16])?,
+        volume_id: VolumeId::from_bytes([13; 16])?,
         request_digest: [11; 32],
         manifest_id: ContentManifestId::from_bytes([12; 16])?,
         format_version: 1,
@@ -315,6 +317,7 @@ fn recovery_request(
 ) -> Result<ContentPublicationRequest, Box<dyn std::error::Error>> {
     Ok(ContentPublicationRequest {
         operation_id: OperationId::from_bytes([40; 16])?,
+        volume_id: VolumeId::from_bytes([13; 16])?,
         request_digest: [41; 32],
         manifest_id: content.manifest.manifest_id,
         format_version: content.manifest.format_version,
@@ -339,10 +342,13 @@ fn open_publisher(
         opened_at,
         provider,
         FixedRandom(random_byte),
-        ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(
-            if volume_key_byte == 24 { 1 } else { 2 },
-            [volume_key_byte; 32],
-        )?),
+        VolumeContentKeyring::new(
+            VolumeId::from_bytes([13; 16])?,
+            VolumeKeyEncryptionKey::from_bytes(
+                if volume_key_byte == 24 { 1 } else { 2 },
+                [volume_key_byte; 32],
+            )?,
+        ),
         ContentChunkLimits::new(4)?,
         UnprotectedContentAccess::new(
             registration.mesh_id,

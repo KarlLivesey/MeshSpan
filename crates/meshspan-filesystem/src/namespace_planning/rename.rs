@@ -187,7 +187,10 @@ fn build_plan(
         branch_id,
         volume_id: request.volume_id,
         root_object_id: current.source.root_object,
-        expected_namespace_commit_id: current.source.namespace_commit,
+        expected_namespace_commit_id: current
+            .source
+            .namespace_commit
+            .ok_or(HandleError::Corrupt)?,
         expected_object_id: source_leaf.object,
         expected_object_revision_id: source_leaf.revision,
         expected_source_entry_generation: source_leaf.generation,

@@ -174,25 +174,9 @@ pub(super) fn assign(
 }
 
 fn validate(command: &CreateComponent) -> Result<(), RepositoryError> {
-    let identifier_is_valid = !command.implementation_id.is_empty()
-        && command.implementation_id.len() <= 80
-        && command
-            .implementation_id
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && !command.implementation_id.starts_with('-')
-        && !command.implementation_id.ends_with('-');
-    if !(1..=10).contains(&command.component_kind)
-        || command.contract_major == 0
-        || !identifier_is_valid
-    {
-        return Err(RepositoryError::InvalidCommand);
-    }
-    validate_configuration(
-        command.schema_version,
-        &command.canonical_configuration,
-        command.configuration_digest,
-    )
+    command
+        .validate_shape(MAXIMUM_CONFIGURATION_BYTES)
+        .map_err(|_| RepositoryError::InvalidCommand)
 }
 
 fn validate_configuration(

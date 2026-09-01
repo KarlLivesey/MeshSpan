@@ -5,11 +5,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
-use meshspan_api_contract::{HealthStatus, SetupState};
+use meshspan_api_contract::{
+    CreateMeshSetupRequest, CreateMeshSetupResponse, HealthStatus, SetupState,
+};
 use meshspan_cluster::{
     MetadataAuthorityConfig, MetadataAuthorityHandle, MetadataAuthorityRequestError,
     MetadataAuthorityRuntimeError, MetadataAuthorityStartError, PartitionConsensusDriver,
@@ -24,24 +29,27 @@ use meshspan_metadata::{
     AuthoritativeRepository, ConsensusStoreError, MetadataStoreError, PartitionDatabase,
     RepositoryError,
 };
+use meshspan_storage::RegisteredFolder;
 use thiserror::Error;
 use tokio::task::JoinHandle;
 
 use crate::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, ConsensusAuthenticationAuthority,
-    ConsensusBootstrapAuthority, CreateMeshSetupService, CreateSessionService,
-    CurrentSessionApiError, DaemonLocalState, DaemonLocalStateError, DisabledTotpFactors,
-    GatewaySessionIdentity, HeadlessDaemonConfig, HeadlessDaemonConfigError, HttpsServer,
-    HttpsServerError, IdentityAdministrationApiError, IdentityAdministrationService,
-    NativeApiAuthenticator, NativeApiKeyAuthenticator, PublicContractApiError, ReadinessSource,
+    ConsensusBootstrapAuthority, CreateMeshSetupController, CreateMeshSetupError,
+    CreateMeshSetupService, CreateSessionService, CurrentSessionApiError, DaemonLocalState,
+    DaemonLocalStateError, DisabledTotpFactors, GatewaySessionIdentity, HeadlessDaemonConfig,
+    HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
+    IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
+    NodeWrappingKeyRegistrationService, OperatingSystemRandom, PublicContractApiError,
+    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RevokeCurrentSessionApiError, RevokeCurrentSessionService, SessionApiError, SetupApiError,
-    SetupLifecycleError, SetupStateSnapshot, StepUpCurrentSessionApiError,
-    StepUpCurrentSessionService, VolumeAdministrationApiError, VolumeAdministrationService,
-    VolumeInventoryApiError, VolumeInventoryService, current_session_api_router,
-    identity_administration_api_router, public_contract_api_router,
-    revoke_current_session_api_router, session_api_router, setup_api_router_with_creation,
-    step_up_current_session_api_router, volume_administration_api_router,
-    volume_inventory_api_router,
+    SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, StepUpCurrentSessionApiError,
+    StepUpCurrentSessionService, StorageTargetRegistrationService, VolumeAdministrationApiError,
+    VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
+    current_session_api_router, identity_administration_api_router, public_contract_api_router,
+    recovery_bundle_verification_api_router, revoke_current_session_api_router, session_api_router,
+    setup_api_router_with_creation, step_up_current_session_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
@@ -73,17 +81,52 @@ where
 
     let (authority, authority_task) = start_root_authority(&local_state, started_at)?;
     authority.begin_election().await?;
+    let readiness = Arc::new(RuntimeReadiness::default());
+    let storage_targets = Arc::new(Mutex::new(StorageTargetRuntime::new(
+        NodeWrappingKeyRegistrationService::new(
+            local_state.node_id(),
+            local_state.wrapping_public_key(),
+            ConsensusAuthenticationAuthority::new(
+                open_root_repository(&local_state, started_at)?,
+                authority.clone(),
+                tokio::runtime::Handle::current(),
+            ),
+            OperatingSystemRandom,
+        ),
+        StorageTargetRegistrationService::new(
+            local_state.open_local_database(started_at)?,
+            ConsensusAuthenticationAuthority::new(
+                open_root_repository(&local_state, started_at)?,
+                authority.clone(),
+                tokio::runtime::Handle::current(),
+            ),
+            OperatingSystemRandom,
+        ),
+        config.storage().storage_paths().to_vec(),
+        Arc::clone(&readiness),
+    )));
+    if setup_state.setup_state() == SetupState::Configured {
+        let targets = Arc::clone(&storage_targets);
+        tokio::task::spawn_blocking(move || reconcile_storage_targets(&targets, started_at))
+            .await
+            .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?;
+    }
     let bootstrap =
         ConsensusBootstrapAuthority::new(authority.clone(), tokio::runtime::Handle::current());
-    let setup = CreateMeshSetupService::new(
-        local_state.open_local_database(started_at)?,
-        bootstrap,
-        local_state.claim_output_path().to_path_buf(),
-        Arc::clone(&setup_state),
-    );
+    let setup = SetupWithStorageTargets {
+        setup: CreateMeshSetupService::new(
+            local_state.open_local_database(started_at)?,
+            bootstrap,
+            local_state.claim_output_path().to_path_buf(),
+            local_state.pending_recovery_bundle_path(),
+            Arc::clone(&setup_state),
+            OperatingSystemRandom,
+        ),
+        storage_targets,
+    };
     let gateway = GatewaySessionIdentity::new(local_state.node_id(), 1)?;
     let router = Router::new()
-        .merge(public_contract_api_router(Arc::new(Ready))?)
+        .merge(public_contract_api_router(readiness)?)
         .merge(setup_api_router_with_creation(setup_state, setup)?)
         .merge(authentication_session_routes(
             &local_state,
@@ -184,6 +227,13 @@ fn authentication_session_routes(
         .merge(volume_administration_api_router(
             VolumeAdministrationService::new(authentication_authority()?, gateway),
         )?)
+        .merge(recovery_bundle_verification_api_router(
+            RecoveryBundleVerificationService::new(
+                authentication_authority()?,
+                gateway,
+                local_state.pending_recovery_bundle_path(),
+            ),
+        )?)
         .merge(volume_inventory_api_router(VolumeInventoryService::new(
             NativeApiAuthenticator::new(
                 BrowserSessionAuthenticator::new(authentication_authority()?, gateway),
@@ -215,11 +265,107 @@ fn current_time() -> Result<UnixMicros, DaemonProcessError> {
     Ok(UnixMicros::new(micros))
 }
 
-struct Ready;
+#[derive(Default)]
+struct RuntimeReadiness {
+    degraded: AtomicBool,
+}
 
-impl ReadinessSource for Ready {
+impl RuntimeReadiness {
+    fn store_degraded(&self, degraded: bool) {
+        self.degraded.store(degraded, Ordering::Release);
+    }
+}
+
+impl ReadinessSource for RuntimeReadiness {
     fn status(&self) -> HealthStatus {
-        HealthStatus::Ready
+        if self.degraded.load(Ordering::Acquire) {
+            HealthStatus::Degraded
+        } else {
+            HealthStatus::Ready
+        }
+    }
+}
+
+struct StorageTargetRuntime {
+    wrapping_registration:
+        NodeWrappingKeyRegistrationService<ConsensusAuthenticationAuthority, OperatingSystemRandom>,
+    registration:
+        StorageTargetRegistrationService<ConsensusAuthenticationAuthority, OperatingSystemRandom>,
+    configured_paths: Vec<PathBuf>,
+    active: BTreeMap<PathBuf, RegisteredFolder>,
+    readiness: Arc<RuntimeReadiness>,
+}
+
+impl StorageTargetRuntime {
+    fn new(
+        wrapping_registration: NodeWrappingKeyRegistrationService<
+            ConsensusAuthenticationAuthority,
+            OperatingSystemRandom,
+        >,
+        registration: StorageTargetRegistrationService<
+            ConsensusAuthenticationAuthority,
+            OperatingSystemRandom,
+        >,
+        configured_paths: Vec<PathBuf>,
+        readiness: Arc<RuntimeReadiness>,
+    ) -> Self {
+        Self {
+            wrapping_registration,
+            registration,
+            configured_paths,
+            active: BTreeMap::new(),
+            readiness,
+        }
+    }
+
+    fn reconcile(&mut self, now: UnixMicros) {
+        let mut failures = 0_usize;
+        if self.wrapping_registration.ensure(now).is_err() {
+            failures = failures.saturating_add(1);
+        }
+        for configured_path in &self.configured_paths {
+            let Ok(canonical_path) = std::fs::canonicalize(configured_path) else {
+                failures = failures.saturating_add(1);
+                continue;
+            };
+            if self.active.contains_key(&canonical_path) {
+                continue;
+            }
+            match self.registration.register(&canonical_path, now) {
+                Ok(folder) => {
+                    self.active.insert(canonical_path, folder);
+                }
+                Err(_) => failures = failures.saturating_add(1),
+            }
+        }
+        self.readiness.store_degraded(failures > 0);
+    }
+}
+
+struct SetupWithStorageTargets<C> {
+    setup: C,
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+}
+
+impl<C> CreateMeshSetupController for SetupWithStorageTargets<C>
+where
+    C: CreateMeshSetupController,
+{
+    fn create_mesh(
+        &mut self,
+        request: &CreateMeshSetupRequest,
+        now: UnixMicros,
+    ) -> Result<CreateMeshSetupResponse, CreateMeshSetupError> {
+        let response = self.setup.create_mesh(request, now)?;
+        reconcile_storage_targets(&self.storage_targets, now);
+        Ok(response)
+    }
+}
+
+fn reconcile_storage_targets(storage_targets: &Arc<Mutex<StorageTargetRuntime>>, now: UnixMicros) {
+    match storage_targets.lock() {
+        Ok(mut targets) => targets.reconcile(now),
+        Err(poisoned) => poisoned.into_inner().readiness.store_degraded(true),
     }
 }
 
@@ -289,12 +435,18 @@ pub enum DaemonProcessError {
     /// Manager-only volume-administration API construction failed.
     #[error("daemon volume-administration API failed")]
     VolumeAdministrationApi(#[from] VolumeAdministrationApiError),
+    /// Manager-only recovery-bundle verification API construction failed.
+    #[error("daemon recovery-bundle verification API failed")]
+    RecoveryBundleVerificationApi(#[from] RecoveryBundleVerificationApiError),
     /// The HTTPS listener failed.
     #[error("daemon HTTPS listener failed")]
     Https(#[from] HttpsServerError),
     /// The authority task ended without a typed result.
     #[error("daemon metadata authority task stopped unexpectedly")]
     AuthorityTaskStopped,
+    /// The blocking storage-target startup task ended without a typed result.
+    #[error("daemon storage target task stopped unexpectedly")]
+    StorageTargetTaskStopped,
     /// Gateway identity could not be represented safely.
     #[error("daemon gateway identity failed")]
     GatewayIdentity(#[from] BrowserAuthenticationError),

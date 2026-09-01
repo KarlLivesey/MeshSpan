@@ -16,18 +16,21 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, BootstrapAppliance, BootstrapMesh,
-    BrowserSessionAccessRequest, BrowserSessionProtection, CommandContext,
-    CreateAuthenticationMethod, IssueAuthenticationSession, NewAuthenticationCredential, PageLimit,
-    PartitionDatabase, PrincipalKind, RecordName, RevokeAuthenticationMethod,
-    RevokeAuthenticationSession, SessionAccessDecision, SessionAccessRequest,
-    SessionAuthenticationFactor, SessionClientLabel,
+    BootstrapRecoveryIdentity, BrowserSessionAccessRequest, BrowserSessionProtection,
+    CommandContext, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
+    IssueAuthenticationSession, NewAuthenticationCredential, PageLimit, PartitionDatabase,
+    PrincipalKind, RecordName, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SessionAccessDecision, SessionAccessRequest, SessionAuthenticationFactor, SessionClientLabel,
 };
+use meshspan_secret_envelope::WrappingPublicKey;
+use sha2::{Digest, Sha256};
 
 use crate::{
     ApiKeyIssuanceAuthority, AuthenticationMethodListingAuthority,
     AuthenticationMethodRevocationAuthority, BrowserSessionAuthority,
     ConsensusAuthenticationAuthority, IdentityAdministrationAuthority,
-    IdentityAdministrationAuthorityError, SessionAuthority, SessionRevocationAuthority,
+    IdentityAdministrationAuthorityError, RecoveryBundleVerificationAuthority,
+    RecoveryBundleVerificationAuthorityError, SessionAuthority, SessionRevocationAuthority,
     VolumeAdministrationAuthority,
 };
 
@@ -83,6 +86,21 @@ async fn volume_creation_returns_exact_committed_projection()
     let commit = fixture.volume_lifecycle()?;
     assert_eq!(commit.record.display_name, "Shared files");
     assert_eq!(commit.record.revision.get(), 2);
+    fixture.shutdown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recovery_bundle_verification_round_trips_through_consensus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = RunningAuthority::start().await?;
+    let (commit, replay, conflict) = fixture.recovery_lifecycle()?;
+    assert_eq!(commit, replay);
+    assert_eq!(
+        commit.authority.state,
+        meshspan_metadata::RecoveryBundleState::Verified
+    );
+    assert_eq!(commit.authority.revision, Revision::new(2));
+    assert_eq!(conflict, RecoveryBundleVerificationAuthorityError::Conflict);
     fixture.shutdown().await
 }
 
@@ -391,6 +409,54 @@ impl RunningAuthority {
         })
     }
 
+    fn recovery_lifecycle(
+        &mut self,
+    ) -> Result<
+        (
+            crate::RecoveryBundleVerificationCommit,
+            crate::RecoveryBundleVerificationCommit,
+            RecoveryBundleVerificationAuthorityError,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let reader = self
+            .reader
+            .take()
+            .ok_or("test read connection was already consumed")?;
+        let authority_handle = self.handle.clone();
+        let administrator_id = self.administrator_id;
+        tokio::task::block_in_place(move || {
+            let mut authority = ConsensusAuthenticationAuthority::new(
+                reader,
+                authority_handle,
+                tokio::runtime::Handle::current(),
+            );
+            let mesh_id = MeshId::from_bytes([9; 16])?;
+            let recovery_confirmation = ConfirmRecoveryBundleSaved {
+                mesh_id,
+                bundle_digest: [92; 32],
+                save_challenge_commitment: [93; 32],
+            };
+            let command = AuthoritativeCommand::ConfirmRecoveryBundleSaved(recovery_confirmation);
+            let context = command_context(administrator_id, 94, 95, 20, None)?;
+            let commit =
+                authority.commit_or_resolve_recovery_bundle_verification(context, &command)?;
+            let replay = authority
+                .resolve_recovery_bundle_verification(context.operation_id)?
+                .ok_or("recovery verification was not resolved")?;
+            let changed =
+                AuthoritativeCommand::ConfirmRecoveryBundleSaved(ConfirmRecoveryBundleSaved {
+                    save_challenge_commitment: [96; 32],
+                    ..recovery_confirmation
+                });
+            let conflict = authority
+                .commit_or_resolve_recovery_bundle_verification(context, &changed)
+                .err()
+                .ok_or("changed recovery proof reused an operation ID without conflict")?;
+            Ok::<_, Box<dyn std::error::Error>>((commit, replay, conflict))
+        })
+    }
+
     async fn shutdown(self) -> Result<(), Box<dyn std::error::Error>> {
         self.handle.shutdown().await?;
         self.runtime.await??;
@@ -467,8 +533,22 @@ fn bootstrap_command(
                     valid_from: UnixMicros::new(10),
                 },
             },
+            recovery: Box::new(recovery_identity()?),
         },
     ))
+}
+
+fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::Error>> {
+    let public_key = WrappingPublicKey::from_bytes([90; 32])?;
+    let certificate = vec![91; 64];
+    Ok(BootstrapRecoveryIdentity {
+        public_wrapping_key: public_key.as_bytes(),
+        key_fingerprint: public_key.fingerprint(),
+        root_certificate_digest: Sha256::digest(&certificate).into(),
+        root_certificate_der: certificate,
+        bundle_digest: [92; 32],
+        save_challenge_commitment: [93; 32],
+    })
 }
 
 fn session_command(

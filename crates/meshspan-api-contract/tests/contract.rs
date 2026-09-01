@@ -636,6 +636,9 @@ fn first_mesh_setup_is_exact_bounded_and_keeps_claim_out_of_debug_boundaries() {
         mesh_id: "00000000-0000-4000-8000-000000000002".to_owned(),
         node_id: "00000000-0000-4000-8000-000000000003".to_owned(),
         api_key: format!("meshspan-key-v1.{}.{}", "4".repeat(32), "5".repeat(64)),
+        recovery_bundle: format!("meshspan-recovery-file-v1.{}", "a5".repeat(128)),
+        recovery_code: format!("meshspan-offline-v1.{}", "6".repeat(64)),
+        recovery_challenge: format!("meshspan-check-v1.{}", "7".repeat(16)),
     };
     let encoded = encode_create_mesh_setup_response(&response).expect("response must validate");
     assert_eq!(

@@ -20,6 +20,7 @@ meshspan-domain = { path = "../meshspan-domain" }
 meshspan-filesystem = { path = "../meshspan-filesystem" }
 meshspan-metadata = { path = "../meshspan-metadata" }
 meshspan-protocol = { path = "../meshspan-protocol" }
+meshspan-secret-envelope = { path = "../meshspan-secret-envelope" }
 meshspan-transport = { path = "../meshspan-transport" }
 quinn.workspace = true
 rustls.workspace = true

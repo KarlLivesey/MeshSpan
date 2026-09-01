@@ -148,10 +148,10 @@ async fn prove_transitions(
     let reclaim_outcome =
         dispatch_cleanup_work_over_quic(source, context, reclaim_entry, UnixMicros::new(25))
             .await?;
-    let CleanupWorkerOutcome::CommandReady(AuthoritativeCommand::ConfirmVersionCleanupReclamation(
-        command,
-    )) = reclaim_outcome
-    else {
+    let CleanupWorkerOutcome::CommandReady(command) = reclaim_outcome else {
+        return Err("network cleanup did not return reclamation command".into());
+    };
+    let AuthoritativeCommand::ConfirmVersionCleanupReclamation(command) = command.as_ref() else {
         return Err("network cleanup did not return reclamation command".into());
     };
     assert_eq!(command.reporter_node_id, source.peer.node_id());
@@ -214,10 +214,10 @@ fn cleanup_network_context_rejects_unbounded_or_unfenced_requests() -> Result<()
 fn completion(
     outcome: &CleanupWorkerOutcome,
 ) -> Result<VersionCleanupItemCompletion, Box<dyn Error>> {
-    let CleanupWorkerOutcome::CommandReady(AuthoritativeCommand::CompleteVersionCleanupItem(
-        command,
-    )) = outcome
-    else {
+    let CleanupWorkerOutcome::CommandReady(command) = outcome else {
+        return Err("network cleanup did not return tombstone command".into());
+    };
+    let AuthoritativeCommand::CompleteVersionCleanupItem(command) = command.as_ref() else {
         return Err("network cleanup did not return tombstone command".into());
     };
     Ok(VersionCleanupItemCompletion {

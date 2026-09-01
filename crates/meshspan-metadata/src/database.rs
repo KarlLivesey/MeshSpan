@@ -295,8 +295,9 @@ mod tests {
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
         local_federation_storage_scrub_migration_digest, local_migration_digest,
-        local_setup_operation_migration_digest, local_totp_registration_ceremony_migration_digest,
-        migrate_local, migrate_local_through, migrate_partition, migrate_partition_through,
+        local_setup_operation_migration_digest, local_storage_target_registration_migration_digest,
+        local_totp_registration_ceremony_migration_digest, migrate_local, migrate_local_through,
+        migrate_partition, migrate_partition_through,
         partition_access_administration_migration_digest,
         partition_access_revocation_migration_digest,
         partition_active_quorum_plan_migration_digest,
@@ -321,13 +322,16 @@ mod tests {
         partition_federation_relationship_history_migration_digest,
         partition_federation_storage_allocation_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
+        partition_node_wrapping_keys_migration_digest,
         partition_principal_inactive_quarantine_migration_digest,
-        partition_principal_lifecycle_migration_digest, partition_roles_migration_digest,
+        partition_principal_lifecycle_migration_digest,
+        partition_recovery_authority_migration_digest, partition_roles_migration_digest,
         partition_root_delegation_directory_migration_digest, partition_routing_migration_digest,
-        partition_snapshot_expiry_migration_digest, partition_snapshot_restores_migration_digest,
+        partition_secret_generations_migration_digest, partition_snapshot_expiry_migration_digest,
+        partition_snapshot_restores_migration_digest,
         partition_snapshot_retention_selection_migration_digest,
         partition_snapshot_root_removals_migration_digest,
-        partition_snapshot_schedules_migration_digest,
+        partition_snapshot_schedules_migration_digest, partition_storage_targets_migration_digest,
         partition_totp_session_replay_steps_migration_digest,
         partition_typed_authentication_migration_digest,
         partition_version_cleanup_attestations_migration_digest,
@@ -352,7 +356,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 50);
+        assert_eq!(database.check_integrity()?.schema_version, 54);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -402,7 +406,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            50
+            54
         );
         Ok(())
     }
@@ -644,7 +648,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 10);
+        assert_eq!(database.schema_version(), 11);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         let existing = LocalDatabase::open_existing(&file_path, UnixMicros::new(12))?;
@@ -734,7 +738,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(database.check_integrity()?.schema_version, 10);
+        assert_eq!(database.check_integrity()?.schema_version, 11);
         Ok(())
     }
 
@@ -1047,6 +1051,14 @@ mod tests {
                 0x58, 0xf9, 0xa8, 0x28, 0x1a, 0xd5, 0xeb, 0x99, 0x47, 0x1a, 0x7f, 0xad, 0x97, 0x57,
                 0x44, 0x7e, 0x1f, 0x08, 0x8b, 0xc8, 0x66, 0x8d, 0x4a, 0xdd, 0xd8, 0x63, 0xd2, 0x3a,
                 0xf4, 0x2d, 0x46, 0xa4,
+            ]
+        );
+        assert_eq!(
+            local_storage_target_registration_migration_digest(),
+            [
+                0x67, 0x26, 0x17, 0xa3, 0xa0, 0xe8, 0xa5, 0xad, 0xd8, 0x52, 0x58, 0xff, 0xb6, 0x11,
+                0x6f, 0xc9, 0x8f, 0xcb, 0x48, 0x34, 0x41, 0x61, 0x1c, 0x4f, 0x29, 0x7e, 0x5f, 0xeb,
+                0xd0, 0xcf, 0x11, 0xdb,
             ]
         );
     }
@@ -1448,6 +1460,54 @@ mod tests {
     }
 
     #[test]
+    fn storage_targets_migration_digest_is_committed() {
+        assert_eq!(
+            partition_storage_targets_migration_digest(),
+            [
+                0x8d, 0x8c, 0x56, 0xd5, 0x91, 0xbc, 0x17, 0x85, 0x01, 0x64, 0xfd, 0x0d, 0x73, 0xcc,
+                0xba, 0x63, 0xb0, 0xa6, 0x63, 0xc4, 0x4a, 0x31, 0x34, 0x58, 0xc6, 0x6e, 0x72, 0xf2,
+                0x12, 0x61, 0xd4, 0x70,
+            ]
+        );
+    }
+
+    #[test]
+    fn node_wrapping_keys_migration_digest_is_committed() {
+        assert_eq!(
+            partition_node_wrapping_keys_migration_digest(),
+            [
+                0xba, 0x18, 0xb4, 0x1a, 0x73, 0x58, 0x0d, 0x92, 0xd6, 0xf2, 0x80, 0x70, 0x79, 0x42,
+                0xd9, 0x22, 0x03, 0x70, 0x00, 0x50, 0xd1, 0xe4, 0x00, 0xe5, 0x83, 0xd8, 0xde, 0x68,
+                0xfd, 0x74, 0x6f, 0xb1,
+            ]
+        );
+    }
+
+    #[test]
+    fn secret_generations_migration_digest_is_committed() {
+        assert_eq!(
+            partition_secret_generations_migration_digest(),
+            [
+                0xad, 0xe1, 0x28, 0xdc, 0x29, 0xa3, 0x3b, 0xe1, 0x6d, 0x63, 0x0a, 0x4a, 0xdd, 0xca,
+                0xff, 0x96, 0x71, 0xc3, 0x86, 0x66, 0x34, 0xe0, 0x55, 0x50, 0x6c, 0x2b, 0x82, 0x04,
+                0xbb, 0xf9, 0x65, 0x96,
+            ]
+        );
+    }
+
+    #[test]
+    fn recovery_authority_migration_digest_is_committed() {
+        assert_eq!(
+            partition_recovery_authority_migration_digest(),
+            [
+                0x67, 0x6a, 0x50, 0xd6, 0x39, 0xcc, 0x2d, 0x25, 0x45, 0x46, 0x87, 0x78, 0xb7, 0x3b,
+                0x6a, 0x6f, 0x1d, 0xac, 0xe3, 0xf7, 0x3a, 0x70, 0xb3, 0x9d, 0xee, 0x76, 0x66, 0x7d,
+                0x61, 0xcf, 0xed, 0xc6,
+            ]
+        );
+    }
+
+    #[test]
     fn authentication_policy_migration_seeds_complete_existing_mesh_defaults()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;
@@ -1511,7 +1571,7 @@ mod tests {
         assert_eq!(policy_id, expected);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            50
+            54
         );
         Ok(())
     }
@@ -1555,7 +1615,7 @@ mod tests {
         assert_eq!(sessions, 0);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            50
+            54
         );
         Ok(())
     }

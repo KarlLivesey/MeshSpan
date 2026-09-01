@@ -8,20 +8,21 @@ use sha2::{Digest, Sha256};
 use crate::{
     AbortUploadRequest, AbortUploadResponse, AddGroupMemberRequest, AddGroupMemberResponse,
     ApiError, BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
-    CreateApiKeyRequest, CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse,
-    CreateGroupRequest, CreateMeshSetupRequest, CreateMeshSetupResponse,
-    CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
-    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreatePrincipalResponse,
-    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
-    CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
-    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumeRequest, CreateVolumeResponse,
-    CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, GetObjectResponse,
-    HealthResponse, ListAuthenticationMethodsResponse, ListDirectoryResponse,
-    ListGroupMembershipsResponse, ListPrincipalsResponse, ListUploadRangesResponse,
-    ListVolumesResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest,
-    RenameObjectResponse, RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse, CreateApiKeyRequest,
+    CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse, CreateGroupRequest,
+    CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
+    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
+    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
+    CreatePasskeyRegistrationResponse, CreatePrincipalResponse, CreateRecoveryCodesRequest,
+    CreateRecoveryCodesResponse, CreateSessionRequest, CreateSessionResponse,
+    CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
+    CreateTotpRegistrationRequest, CreateTotpRegistrationResponse, CreateUserRequest,
+    CreateVolumeRequest, CreateVolumeResponse, CurrentSessionResponse, DeleteObjectRequest,
+    DeleteObjectResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
+    ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
+    ListUploadRangesResponse, ListVolumesResponse, RemoveGroupMemberRequest,
+    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
     StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
@@ -96,6 +97,8 @@ fn components() -> Value {
         schema_response::<BeginUploadResponse>("BeginUploadResponse"),
         schema_request::<CommitUploadRequest>("CommitUploadRequest"),
         schema_response::<CommitUploadResponse>("CommitUploadResponse"),
+        schema_request::<ConfirmRecoveryBundleRequest>("ConfirmRecoveryBundleRequest"),
+        schema_response::<ConfirmRecoveryBundleResponse>("ConfirmRecoveryBundleResponse"),
         schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
         schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
         schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
@@ -216,6 +219,10 @@ fn paths() -> Value {
         ("/openapi.json".to_owned(), openapi_path()),
         ("/setup/status".to_owned(), setup_status_path()),
         ("/setup/meshes".to_owned(), create_mesh_path()),
+        (
+            "/admin/recovery-bundle-verifications".to_owned(),
+            confirm_recovery_bundle_path(),
+        ),
         ("/sessions".to_owned(), create_session_path()),
         (
             "/sessions/passkey/challenges".to_owned(),
@@ -1314,6 +1321,34 @@ fn create_mesh_path() -> Value {
                 "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
                 "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "503": json_response("Bootstrap authority temporarily unavailable", "#/components/schemas/ApiError"),
+                "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn confirm_recovery_bundle_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "confirmRecoveryBundleSaved",
+            "summary": "Verify that the exact offline recovery bundle and code were saved",
+            "x-meshspan-access": "system-manager",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Offline recovery save proof",
+                "#/components/schemas/ConfirmRecoveryBundleRequest"
+            ),
+            "responses": {
+                "200": json_response(
+                    "Recovery bundle verified and removed from online state",
+                    "#/components/schemas/ConfirmRecoveryBundleResponse"
+                ),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Wrong bundle proof or changed retry", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "503": json_response("Recovery authority temporarily unavailable", "#/components/schemas/ApiError"),
                 "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
             }
         }

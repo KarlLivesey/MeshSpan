@@ -18,10 +18,10 @@ use meshspan_domain::{MeshId, OperationId, RandomSource, TargetId};
 use crate::content_transfer::provider_operation_id;
 use crate::{
     CompletedStage, ContentCatalogError, ContentChunkCipher, ContentChunkLimits,
-    ContentEncryptionKey, ContentKeyEnvelopeCipher, ContentPublicationError,
-    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentCatalog,
-    DurableContentPublisher, DurableContentReader, EncryptedContentChunk, ManifestPublication,
-    PreparedContentChunk,
+    ContentEncryptionKey, ContentKeyError, ContentPublicationError, ContentPublicationRequest,
+    ContentReadError, ContentReadRequest, DurableContentCatalog, DurableContentPublisher,
+    DurableContentReader, EncryptedContentChunk, ManifestPublication, PreparedContentChunk,
+    VolumeContentKeyring,
 };
 
 mod recovery;
@@ -100,7 +100,7 @@ pub struct UnprotectedContentPublisher<P, R> {
     spools: Dir,
     provider: P,
     random: R,
-    key_envelopes: ContentKeyEnvelopeCipher,
+    key_envelopes: VolumeContentKeyring,
     chunk_limits: ContentChunkLimits,
     access: UnprotectedContentAccess,
 }
@@ -116,7 +116,7 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
         opened_at: meshspan_domain::UnixMicros,
         provider: P,
         random: R,
-        key_envelopes: ContentKeyEnvelopeCipher,
+        key_envelopes: VolumeContentKeyring,
         chunk_limits: ContentChunkLimits,
         access: UnprotectedContentAccess,
     ) -> Result<Self, ContentPublicationError> {
@@ -169,8 +169,10 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
             .ok_or(ContentPublicationError::Corrupt)?;
         let content_key = self
             .key_envelopes
+            .cipher(request.volume_id, layout.wrapped_key.key_generation)
+            .map_err(map_key_publication)?
             .unwrap(request.manifest_id, layout.wrapped_key)
-            .map_err(|_| ContentPublicationError::Corrupt)?;
+            .map_err(map_key_publication)?;
         let limits = ContentChunkLimits::new(
             usize::try_from(layout.chunk_bytes).map_err(|_| ContentPublicationError::Corrupt)?,
         )
@@ -259,8 +261,10 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
             .map_err(|_| ContentPublicationError::Unavailable)?;
         let wrapped_key = self
             .key_envelopes
+            .active_cipher(request.volume_id)
+            .map_err(map_key_publication)?
             .wrap(request.manifest_id, &content_key, &mut self.random)
-            .map_err(|_| ContentPublicationError::Unavailable)?;
+            .map_err(map_key_publication)?;
         let cipher = ContentChunkCipher::new(content_key, self.chunk_limits);
         file.seek(SeekFrom::Start(0))?;
         let mut remaining = completed.logical_length;
@@ -418,11 +422,16 @@ impl<P: StorageProvider, R: RandomSource> DurableContentReader
         }
         let content_key = self
             .key_envelopes
+            .cipher(
+                committed.request.volume_id,
+                committed.layout.wrapped_key.key_generation,
+            )
+            .map_err(map_key_read)?
             .unwrap(
                 request.content.manifest.manifest_id,
                 committed.layout.wrapped_key,
             )
-            .map_err(|_| ContentReadError::Corrupt)?;
+            .map_err(map_key_read)?;
         let limits = ContentChunkLimits::new(
             usize::try_from(committed.layout.chunk_bytes).map_err(|_| ContentReadError::Corrupt)?,
         )
@@ -658,6 +667,15 @@ fn map_contract(error: ContractError) -> ContentPublicationError {
     }
 }
 
+fn map_key_publication(error: ContentKeyError) -> ContentPublicationError {
+    match error {
+        ContentKeyError::InvalidInput | ContentKeyError::Corrupt => {
+            ContentPublicationError::Corrupt
+        }
+        ContentKeyError::Unavailable => ContentPublicationError::Unavailable,
+    }
+}
+
 fn map_catalog_read(error: ContentCatalogError) -> ContentReadError {
     match error {
         ContentCatalogError::InvalidInput => ContentReadError::InvalidInput,
@@ -683,5 +701,12 @@ fn map_contract_read(error: ContractError) -> ContentReadError {
         | ContractError::ResourceExhausted
         | ContractError::DeadlineExceeded
         | ContractError::Unavailable => ContentReadError::Unavailable,
+    }
+}
+
+fn map_key_read(error: ContentKeyError) -> ContentReadError {
+    match error {
+        ContentKeyError::InvalidInput | ContentKeyError::Corrupt => ContentReadError::Corrupt,
+        ContentKeyError::Unavailable => ContentReadError::Unavailable,
     }
 }

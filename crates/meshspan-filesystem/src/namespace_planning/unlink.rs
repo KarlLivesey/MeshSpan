@@ -124,7 +124,7 @@ fn build_plan(
         branch_id,
         volume_id: request.volume_id,
         root_object_id: current.root_object,
-        expected_namespace_commit_id: current.namespace_commit,
+        expected_namespace_commit_id: current.namespace_commit.ok_or(HandleError::Corrupt)?,
         expected_object_id: leaf.object,
         expected_object_revision_id: leaf.revision,
         expected_kind: leaf.kind,

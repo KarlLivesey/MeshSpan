@@ -519,6 +519,27 @@ pub struct CreateMeshSetupResponse {
         extend("x-meshspan-sensitive" = true)
     )]
     pub api_key: String,
+    /// Exact encrypted recovery-bundle file; save it separately before enrolling more nodes.
+    #[schemars(
+        length(min = 256, max = 33000),
+        pattern(r"^meshspan-recovery-file-v1\.[0-9a-f]+$"),
+        extend("x-meshspan-sensitive" = true)
+    )]
+    pub recovery_bundle: String,
+    /// One-time high-entropy recovery code which must be stored separately from the bundle.
+    #[schemars(
+        length(equal = 84),
+        pattern(r"^meshspan-offline-v1\.[0-9a-f]{64}$"),
+        extend("x-meshspan-sensitive" = true)
+    )]
+    pub recovery_code: String,
+    /// Short proof entered after the administrator has saved the exact file and code.
+    #[schemars(
+        length(equal = 34),
+        pattern(r"^meshspan-check-v1\.[0-9a-f]{16}$"),
+        extend("x-meshspan-sensitive" = true)
+    )]
+    pub recovery_challenge: String,
 }
 
 /// Stable public error category.

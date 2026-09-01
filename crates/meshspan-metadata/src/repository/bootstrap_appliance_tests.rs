@@ -4,13 +4,16 @@ use meshspan_domain::{
     ApiKeyId, AuditEventId, AuthenticationMethodId, HostId, MeshId, NodeId, OperationId,
     PartitionId, PrincipalId, Revision, RoleId, UnixMicros,
 };
+use meshspan_secret_envelope::WrappingPublicKey;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, CommandContext,
-    CreateAuthenticationMethod, NewAuthenticationCredential, PartitionDatabase, RecordName,
+    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommandContext, CreateAuthenticationMethod, NewAuthenticationCredential, PartitionDatabase,
+    RecordName,
 };
 
 #[test]
@@ -119,8 +122,22 @@ fn fixture(
                     valid_from: UnixMicros::new(10),
                 },
             },
+            recovery: Box::new(recovery_identity()?),
         }),
     ))
+}
+
+fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::Error>> {
+    let public_key = WrappingPublicKey::from_bytes([12; 32])?;
+    let certificate = vec![13; 64];
+    Ok(BootstrapRecoveryIdentity {
+        public_wrapping_key: public_key.as_bytes(),
+        key_fingerprint: public_key.fingerprint(),
+        root_certificate_digest: Sha256::digest(&certificate).into(),
+        root_certificate_der: certificate,
+        bundle_digest: [14; 32],
+        save_challenge_commitment: [15; 32],
+    })
 }
 
 fn count(connection: &rusqlite::Connection, table: &'static str) -> Result<i64, rusqlite::Error> {

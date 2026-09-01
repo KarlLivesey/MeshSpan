@@ -30,6 +30,8 @@ const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 pub struct ContentPublicationRequest {
     /// Idempotency identity shared with the namespace publication.
     pub operation_id: meshspan_domain::OperationId,
+    /// Volume whose current key generation protects the per-layout content key.
+    pub volume_id: VolumeId,
     /// Digest binding the stage checkpoint and complete namespace mutation intent.
     pub request_digest: [u8; 32],
     /// Stable identity reserved for the resulting manifest root.
@@ -51,6 +53,7 @@ impl ContentPublicationRequest {
     #[must_use]
     pub fn same_intent(self, other: Self) -> bool {
         self.operation_id == other.operation_id
+            && self.volume_id == other.volume_id
             && self.request_digest == other.request_digest
             && self.manifest_id == other.manifest_id
             && self.format_version == other.format_version
@@ -157,6 +160,7 @@ impl RootFileCommitRequest {
     pub fn content_publication_request(&self) -> ContentPublicationRequest {
         ContentPublicationRequest {
             operation_id: self.completion.operation_id,
+            volume_id: self.volume_id,
             request_digest: commit_request_digest(self),
             manifest_id: self.manifest_id,
             format_version: self.manifest_format_version,

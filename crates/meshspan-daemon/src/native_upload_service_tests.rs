@@ -14,7 +14,7 @@ use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
     AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId,
     NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
-    UnixMicros, VolumeId,
+    Rights, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter, CompletedStage,
@@ -36,6 +36,56 @@ use crate::{
 };
 
 const AUTHENTICATION_PROOF: &str = "MeshSpan native-service-proof";
+
+#[test]
+fn first_upload_materialises_a_new_volume_root_and_publishes_exact_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let mut service = native_upload_service(directory.path())?;
+    let context = service.authenticate(
+        &authenticated_headers(),
+        NativeFileRequestProtection::Mutation,
+        UnixMicros::new(10),
+    )?;
+    let begin = service.begin_upload(
+        context,
+        &uuid_text(versioned(12)),
+        BeginUploadRequest {
+            operation_id: api_operation(versioned(110))?,
+            path: api_path("first.bin")?,
+            disposition: ApiUploadDisposition::CreateNew,
+            maximum_bytes: 64,
+        },
+    )?;
+    let bytes = BoundedBytes::copy_from(b"first durable bytes", 19)?;
+    let written = service.write_upload_range(
+        context,
+        begin.upload_id.as_str(),
+        UploadRangeWriteRequest {
+            operation_id: api_operation(versioned(111))?,
+            stage_fence: begin.stage_fence,
+            offset: 0,
+            content_blake3: blake3::hash(bytes.as_slice()).into(),
+            bytes,
+        },
+    )?;
+    let committed = service.commit_upload(
+        context,
+        begin.upload_id.as_str(),
+        CommitUploadRequest {
+            operation_id: api_operation(versioned(112))?,
+            stage_fence: written.stage_fence,
+            expected_sequence: written.checkpoint_sequence,
+            final_length: 19,
+            sparse: false,
+            expected_blake3: Some(blake3::hash(b"first durable bytes").to_hex().to_string()),
+        },
+    )?;
+    assert_eq!(committed.upload.state, ApiUploadState::Committed);
+    assert_eq!(committed.object.path.as_str(), "first.bin");
+    assert_eq!(committed.object.object.logical_length, Some(19));
+    Ok(())
+}
 
 #[test]
 fn specialised_native_service_publishes_a_real_authorised_upload()
@@ -364,6 +414,21 @@ impl FilesystemAccessAuthority for TestAuthority {
                 .checked_add(meshspan_domain::DurationMicros::new(60_000_000))
                 .ok_or(TestAuthorityError)?,
             evidence_digest: [7; 32],
+        })
+    }
+
+    fn authorise_volume_root(
+        &self,
+        context: FilesystemAccessContext,
+        volume_id: VolumeId,
+        requested_rights: Rights,
+    ) -> Result<FilesystemAuthorityGrant, Self::Error> {
+        let root = ObjectId::from_bytes(volume_id.as_bytes()).map_err(|_| TestAuthorityError)?;
+        self.authorise(FilesystemAuthorityRequest {
+            context,
+            volume_id,
+            object_id: root,
+            requested_rights,
         })
     }
 }

@@ -455,6 +455,68 @@ export const zCommitUploadResponse = z
   .strict();
 
 /**
+ * ConfirmRecoveryBundleRequest
+ *
+ * One authenticated idempotent save-verification request.
+ */
+export const zConfirmRecoveryBundleRequest = z
+  .strictObject({
+    mesh_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    recovery_challenge: z
+      .string()
+      .length(34)
+      .regex(/^meshspan-check-v1\.[0-9a-f]{16}$/),
+  })
+  .strict();
+
+/**
+ * ConfirmRecoveryBundleResponse
+ *
+ * Durable proof that the offline recovery bundle may no longer remain on the daemon.
+ */
+export const zConfirmRecoveryBundleResponse = z
+  .strictObject({
+    mesh_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revision: z.coerce
+      .bigint()
+      .gte(BigInt(1))
+      .max(BigInt("18446744073709551615"), {
+        error: "Invalid value: Expected uint64 to be <= 18446744073709551615",
+      }),
+    verified_at_epoch_micros: z.coerce
+      .bigint()
+      .min(BigInt("-9223372036854775808"), {
+        error: "Invalid value: Expected int64 to be >= -9223372036854775808",
+      })
+      .max(BigInt("9223372036854775807"), {
+        error: "Invalid value: Expected int64 to be <= 9223372036854775807",
+      }),
+  })
+  .strict();
+
+/**
  * CreateApiKeyRequest
  *
  * One idempotent request to issue a current-user API key.
@@ -685,6 +747,19 @@ export const zCreateMeshSetupResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+    recovery_bundle: z
+      .string()
+      .min(256)
+      .max(33000)
+      .regex(/^meshspan-recovery-file-v1\.[0-9a-f]+$/),
+    recovery_challenge: z
+      .string()
+      .length(34)
+      .regex(/^meshspan-check-v1\.[0-9a-f]{16}$/),
+    recovery_code: z
+      .string()
+      .length(84)
+      .regex(/^meshspan-offline-v1\.[0-9a-f]{64}$/),
   })
   .strict();
 
@@ -2657,6 +2732,17 @@ export const zRemoveGroupMemberPath = z
  * Membership durably removed or exactly replayed
  */
 export const zRemoveGroupMemberResponse2 = zRemoveGroupMemberResponse;
+
+/**
+ * Offline recovery save proof
+ */
+export const zConfirmRecoveryBundleSavedBody = zConfirmRecoveryBundleRequest;
+
+/**
+ * Recovery bundle verified and removed from online state
+ */
+export const zConfirmRecoveryBundleSavedResponse =
+  zConfirmRecoveryBundleResponse;
 
 export const zListUsersQuery = z
   .object({

@@ -415,6 +415,9 @@ function validSetupResponse() {
     mesh_id: "00000000-0000-4000-8000-000000000002",
     node_id: "00000000-0000-4000-8000-000000000003",
     operation_id: SETUP_OPERATION_ID,
+    recovery_bundle: `meshspan-recovery-file-v1.${"a".repeat(256)}`,
+    recovery_challenge: `meshspan-check-v1.${"b".repeat(16)}`,
+    recovery_code: `meshspan-offline-v1.${"c".repeat(64)}`,
   } as const;
 }
 

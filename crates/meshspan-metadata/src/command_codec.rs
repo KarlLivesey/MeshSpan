@@ -8,7 +8,11 @@ mod decoder;
 mod encoder;
 mod identity;
 mod namespace;
+mod node_wrapping_key;
+mod recovery;
+mod secret_generation;
 mod session;
+mod storage_target;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, Revision, UnixMicros};
 use thiserror::Error;
@@ -95,6 +99,9 @@ fn encode_command(
             encoder.u16(1)?;
             bootstrap::encode(encoder, value)
         }
+        AuthoritativeCommand::ConfirmRecoveryBundleSaved(value) => {
+            recovery::encode(encoder, *value)
+        }
         AuthoritativeCommand::CreateUser(value) => identity::encode_user(encoder, value),
         AuthoritativeCommand::CreateGroup(value) => identity::encode_group(encoder, value),
         AuthoritativeCommand::AddGroupMember(value) => identity::encode_add_member(encoder, value),
@@ -117,6 +124,15 @@ fn encode_command(
             session::encode_revoke_method(encoder, value)
         }
         AuthoritativeCommand::CreateVolume(value) => namespace::encode_volume(encoder, value),
+        AuthoritativeCommand::RegisterStorageTarget(value) => {
+            storage_target::encode(encoder, value)
+        }
+        AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
+            node_wrapping_key::encode(encoder, value)
+        }
+        AuthoritativeCommand::CommitSecretGeneration(value) => {
+            secret_generation::encode(encoder, value)
+        }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -126,6 +142,9 @@ fn decode_command(
 ) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
     match decoder.u16()? {
         1 => bootstrap::decode(decoder).map(AuthoritativeCommand::BootstrapAppliance),
+        recovery::CONFIRM_RECOVERY_BUNDLE_SAVED => {
+            recovery::decode(decoder).map(AuthoritativeCommand::ConfirmRecoveryBundleSaved)
+        }
         2 => identity::decode_user(decoder).map(AuthoritativeCommand::CreateUser),
         3 => identity::decode_group(decoder).map(AuthoritativeCommand::CreateGroup),
         4 => identity::decode_add_member(decoder).map(AuthoritativeCommand::AddGroupMember),
@@ -142,6 +161,15 @@ fn decode_command(
             .map(AuthoritativeCommand::RevokeAuthenticationMethod),
         namespace::CREATE_VOLUME => {
             namespace::decode_volume(decoder).map(AuthoritativeCommand::CreateVolume)
+        }
+        storage_target::REGISTER_STORAGE_TARGET => {
+            storage_target::decode(decoder).map(AuthoritativeCommand::RegisterStorageTarget)
+        }
+        node_wrapping_key::REGISTER_NODE_WRAPPING_KEY => {
+            node_wrapping_key::decode(decoder).map(AuthoritativeCommand::RegisterNodeWrappingKey)
+        }
+        secret_generation::COMMIT_SECRET_GENERATION => {
+            secret_generation::decode(decoder).map(AuthoritativeCommand::CommitSecretGeneration)
         }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
@@ -169,6 +197,12 @@ impl From<meshspan_domain::IdentifierError> for MetadataCommandCodecError {
 
 impl From<crate::RecordNameError> for MetadataCommandCodecError {
     fn from(_: crate::RecordNameError) -> Self {
+        Self::Invalid
+    }
+}
+
+impl From<crate::RepositoryCommandError> for MetadataCommandCodecError {
+    fn from(_: crate::RepositoryCommandError) -> Self {
         Self::Invalid
     }
 }

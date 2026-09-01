@@ -10,8 +10,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use meshspan_daemon::{ClaimFile, LocalNodeIdentity};
-use meshspan_domain::{InitialBootstrapMaterial, OperationId};
+use meshspan_daemon::{ClaimFile, LocalNodeIdentity, LocalWrappingKey};
+use meshspan_domain::{InitialBootstrapMaterial, OperationId, UnixMicros};
+use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use tempfile::TempDir;
@@ -65,6 +66,12 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     }))?;
     assert!(!fixture.claim_path.exists());
     wait_for_status(fixture.address, &client, "configured").await?;
+    let target_marker = wait_for_storage_marker(&fixture.storage_path).await?;
+    assert_wrapping_key_committed(&fixture)?;
+    assert_eq!(
+        fs::read(fixture.storage_path.join("operator-file.txt"))?,
+        b"untouched"
+    );
     assert_session_created(fixture.address, &client, &session_body).await?;
     assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
@@ -75,11 +82,34 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     process.wait()?;
     process = fixture.start()?;
     wait_for_status(fixture.address, &client, "configured").await?;
+    assert_eq!(
+        wait_for_storage_marker(&fixture.storage_path).await?,
+        target_marker
+    );
+    assert_wrapping_key_committed(&fixture)?;
     assert_session_created(fixture.address, &client, &session_body).await?;
     assert_volume_visible(fixture.address, &client, api_key).await?;
     assert_user_visible(fixture.address, &client, api_key).await?;
     process.kill()?;
     process.wait()?;
+    Ok(())
+}
+
+fn assert_wrapping_key_committed(fixture: &ProcessFixture) -> Result<(), Box<dyn Error>> {
+    let identity = LocalNodeIdentity::open(&fixture.identity_path, CERTIFICATE_NAME)?;
+    let node_id = InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
+    let local_key =
+        LocalWrappingKey::open(&fixture.state_path.join("secrets/node-wrapping-key.x25519"))?;
+    let database = PartitionDatabase::open(
+        &fixture.state_path.join("root-authority.sqlite3"),
+        InitialBootstrapMaterial::root_partition_id(node_id)?,
+        UnixMicros::new(1),
+    )?;
+    let stored = AuthoritativeRepository::new(database)
+        .node_wrapping_key(node_id)?
+        .ok_or("authoritative node wrapping key missing")?;
+    assert_eq!(stored.public_key, local_key.public_key());
+    assert_eq!(stored.generation, 1);
     Ok(())
 }
 
@@ -295,6 +325,7 @@ impl ProcessFixture {
         let state_path = temporary.path().join("state");
         let storage_path = temporary.path().join("storage");
         fs::create_dir(&storage_path)?;
+        fs::write(storage_path.join("operator-file.txt"), b"untouched")?;
         Ok(Self {
             address: unused_address()?,
             claim_path: state_path.join("first-boot.claim"),
@@ -317,6 +348,18 @@ impl ProcessFixture {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?)
+    }
+}
+
+async fn wait_for_storage_marker(storage_path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
+    let marker_path = storage_path.join(".meshspan/target.marker");
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        match fs::read(&marker_path) {
+            Ok(marker) => return Ok(marker),
+            Err(_) if Instant::now() < deadline => sleep(RETRY_INTERVAL).await,
+            Err(error) => return Err(error.into()),
+        }
     }
 }
 

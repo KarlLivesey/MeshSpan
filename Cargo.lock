@@ -1057,6 +1057,7 @@ dependencies = [
  "meshspan-filesystem",
  "meshspan-metadata",
  "meshspan-protocol",
+ "meshspan-secret-envelope",
  "meshspan-storage",
  "meshspan-test-certificates",
  "meshspan-transport",
@@ -1108,7 +1109,9 @@ dependencies = [
  "meshspan-metadata",
  "meshspan-otp",
  "meshspan-passkey",
+ "meshspan-recovery-bundle",
  "meshspan-rustls-provider",
+ "meshspan-secret-envelope",
  "meshspan-storage",
  "meshspan-test-certificates",
  "p256",
@@ -1178,6 +1181,7 @@ dependencies = [
  "meshspan-consensus",
  "meshspan-contracts",
  "meshspan-domain",
+ "meshspan-secret-envelope",
  "rusqlite",
  "sha2",
  "tempfile",
@@ -1237,6 +1241,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-recovery-bundle"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "hkdf",
+ "meshspan-certificates",
+ "meshspan-domain",
+ "meshspan-secret-envelope",
+ "sha2",
+ "subtle",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "meshspan-rustls-provider"
 version = "0.1.0"
 dependencies = [
@@ -1250,6 +1269,19 @@ dependencies = [
  "p256",
  "rustls",
  "sha2",
+]
+
+[[package]]
+name = "meshspan-secret-envelope"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "hkdf",
+ "meshspan-domain",
+ "sha2",
+ "thiserror",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -2390,6 +2422,17 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "x25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e8131a03190127fb2263afc72b322ecadae46b6ff8c6f399ff5d02f5559af6"
+dependencies = [
+ "curve25519-dalek",
+ "rand_core",
+ "zeroize",
+]
 
 [[package]]
 name = "yasna"

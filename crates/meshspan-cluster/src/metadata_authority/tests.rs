@@ -11,10 +11,12 @@ use meshspan_domain::{
     QuorumPlanId, Revision, RoleId,
 };
 use meshspan_metadata::{
-    BootstrapAppliance, BootstrapMesh, CreateAuthenticationMethod, NewAuthenticationCredential,
-    PartitionDatabase, RecordName,
+    BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity, CreateAuthenticationMethod,
+    NewAuthenticationCredential, PartitionDatabase, RecordName,
 };
+use meshspan_secret_envelope::WrappingPublicKey;
 use meshspan_test_certificates::{CertificateAuthority, IssuedCertificate};
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use super::*;
@@ -529,8 +531,22 @@ fn command(
                     valid_from: context.occurred_at,
                 },
             },
+            recovery: Box::new(recovery_identity(38)?),
         }),
     ))
+}
+
+fn recovery_identity(marker: u8) -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::Error>> {
+    let public_key = WrappingPublicKey::from_bytes([marker; 32])?;
+    let certificate = vec![marker.wrapping_add(1); 64];
+    Ok(BootstrapRecoveryIdentity {
+        public_wrapping_key: public_key.as_bytes(),
+        key_fingerprint: public_key.fingerprint(),
+        root_certificate_digest: Sha256::digest(&certificate).into(),
+        root_certificate_der: certificate,
+        bundle_digest: [marker.wrapping_add(2); 32],
+        save_challenge_commitment: [marker.wrapping_add(3); 32],
+    })
 }
 
 fn user_command(

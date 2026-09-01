@@ -177,7 +177,7 @@ pub enum CleanupWorkerOutcome {
     /// The current leader must construct and commit the next short-lived permit.
     PermitRequired(VersionCleanupPermitAuthority),
     /// Provider work is durable; this exact command must enter consensus before further work.
-    CommandReady(AuthoritativeCommand),
+    CommandReady(Box<AuthoritativeCommand>),
     /// Physical reclamation was already both durable and replicated.
     Complete(VersionCleanupItemReclamation),
 }
@@ -227,7 +227,7 @@ pub fn execute_cleanup_work<D: CleanupProviderDispatch>(
             validate_attempt(entry.cleanup_operation_id, entry.item, attempt)?;
             validate_reporter(entry.item, reporter_node_id)?;
             let receipt = dispatch.tombstone(entry.item.target_id, attempt.permit, observed_at)?;
-            Ok(CleanupWorkerOutcome::CommandReady(
+            Ok(CleanupWorkerOutcome::CommandReady(Box::new(
                 version_cleanup_tombstone_completion(
                     inventory_sealed_revision,
                     attempt,
@@ -235,21 +235,21 @@ pub fn execute_cleanup_work<D: CleanupProviderDispatch>(
                     reporter_node_id,
                     reporter_incarnation,
                 )?,
-            ))
+            )))
         }
         CleanupWorkAction::Reclaim(completion) => {
             validate_completion(entry.cleanup_operation_id, entry.item, completion)?;
             validate_reporter(entry.item, reporter_node_id)?;
             let receipt =
                 dispatch.reclaim(entry.item.target_id, completion.receipt, observed_at)?;
-            Ok(CleanupWorkerOutcome::CommandReady(
+            Ok(CleanupWorkerOutcome::CommandReady(Box::new(
                 version_cleanup_reclamation(
                     completion,
                     receipt,
                     reporter_node_id,
                     reporter_incarnation,
                 )?,
-            ))
+            )))
         }
         CleanupWorkAction::Complete(reclamation) => {
             validate_reclamation(entry.cleanup_operation_id, entry.item, &reclamation)?;

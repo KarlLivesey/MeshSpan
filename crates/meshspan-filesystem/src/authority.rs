@@ -104,6 +104,24 @@ pub trait FilesystemAccessAuthority {
         &self,
         request: FilesystemAuthorityRequest,
     ) -> Result<FilesystemAuthorityGrant, Self::Error>;
+
+    /// Resolves and authorises the committed root object of one volume.
+    ///
+    /// This is deliberately an authority operation rather than a caller-supplied object lookup:
+    /// a newly created volume has no local namespace head from which a connector can safely learn
+    /// its root identity. Implementations must resolve the root from committed metadata and return
+    /// the same exact-object grant that [`Self::authorise`] would return for that root.
+    ///
+    /// # Errors
+    ///
+    /// Returns the implementation's stable denial or unavailable-authority error when the volume
+    /// is absent, the caller is unauthenticated or the requested rights are not currently granted.
+    fn authorise_volume_root(
+        &self,
+        context: FilesystemAccessContext,
+        volume_id: VolumeId,
+        requested_rights: Rights,
+    ) -> Result<FilesystemAuthorityGrant, Self::Error>;
 }
 
 /// Filesystem service that cannot mutate or publish without a live committed authority decision.
@@ -676,11 +694,26 @@ where
         request: &AdapterCreateDirectoryRequest,
     ) -> Result<crate::DirectoryPublicationReceipt, AuthorisedFilesystemError<A::Error>> {
         require_adapter_context(context, request.observed_at)?;
-        let parent = self
-            .filesystem
-            .adapter_directory_parent(branch_id, request)
-            .map_err(AuthorisedFilesystemError::Handle)?;
-        let grant = self.authorise(context, request.volume_id, parent, Rights::CREATE_CHILD)?;
+        let grant = match self.filesystem.adapter_directory_parent(branch_id, request) {
+            Ok(parent) => {
+                self.authorise(context, request.volume_id, parent, Rights::CREATE_CHILD)?
+            }
+            Err(HandleError::NotFound) => self
+                .authority
+                .authorise_volume_root(context, request.volume_id, Rights::CREATE_CHILD)
+                .map_err(AuthorisedFilesystemError::Authority)?,
+            Err(error) => return Err(AuthorisedFilesystemError::Handle(error)),
+        };
+        validate_grant(
+            FilesystemAuthorityRequest {
+                context,
+                volume_id: request.volume_id,
+                object_id: grant.object_id,
+                requested_rights: Rights::CREATE_CHILD,
+            },
+            grant,
+        )?;
+        let parent = grant.object_id;
         let publication = self
             .filesystem
             .prepare_adapter_directory(branch_id, request, grant.principal_id, parent)
@@ -899,33 +932,59 @@ where
     ) -> Result<UploadStatusReceipt, AuthorisedFilesystemError<A::Error>> {
         require_adapter_context(context, request.observed_at)?;
         let existing = self.filesystem.upload_session(request.upload_id).ok();
-        let (target, created_at, expires_at) = if let Some(session) = existing.as_ref() {
+        let (target, created_at, expires_at, grant) = if let Some(session) = existing.as_ref() {
             validate_upload_begin_replay(session, request)?;
             (
                 session.authority_object_id,
                 session.created_at,
                 session.expires_at,
+                self.authorise(
+                    context,
+                    request.volume_id,
+                    session.authority_object_id,
+                    upload_rights(request.disposition),
+                )?,
             )
         } else {
+            let grant = match self.filesystem.upload_authority_target(
+                branch_id,
+                request.volume_id,
+                &request.path,
+                request.disposition,
+            ) {
+                Ok(target) => self.authorise(
+                    context,
+                    request.volume_id,
+                    target,
+                    upload_rights(request.disposition),
+                )?,
+                Err(HandleError::NotFound)
+                    if request.disposition == crate::UploadDisposition::CreateNew =>
+                {
+                    let grant = self
+                        .authority
+                        .authorise_volume_root(context, request.volume_id, Rights::CREATE_CHILD)
+                        .map_err(AuthorisedFilesystemError::Authority)?;
+                    validate_grant(
+                        FilesystemAuthorityRequest {
+                            context,
+                            volume_id: request.volume_id,
+                            object_id: grant.object_id,
+                            requested_rights: Rights::CREATE_CHILD,
+                        },
+                        grant,
+                    )?;
+                    grant
+                }
+                Err(error) => return Err(AuthorisedFilesystemError::Handle(error)),
+            };
             (
-                self.filesystem
-                    .upload_authority_target(
-                        branch_id,
-                        request.volume_id,
-                        &request.path,
-                        request.disposition,
-                    )
-                    .map_err(AuthorisedFilesystemError::Handle)?,
+                grant.object_id,
                 request.observed_at,
                 request.expires_at,
+                grant,
             )
         };
-        let rights = match request.disposition {
-            crate::UploadDisposition::CreateNew => Rights::CREATE_CHILD,
-            crate::UploadDisposition::ReplaceIfVersion(_)
-            | crate::UploadDisposition::ReplaceCurrent => Rights::WRITE_DATA,
-        };
-        let grant = self.authorise(context, request.volume_id, target, rights)?;
         let prepared = UploadBeginRequest {
             operation_id: request.operation_id,
             upload_id: request.upload_id,
@@ -1166,6 +1225,14 @@ fn validate_upload_begin_replay<E>(
         Err(AuthorisedFilesystemError::InvalidInput)
     } else {
         Ok(())
+    }
+}
+
+const fn upload_rights(disposition: crate::UploadDisposition) -> Rights {
+    match disposition {
+        crate::UploadDisposition::CreateNew => Rights::CREATE_CHILD,
+        crate::UploadDisposition::ReplaceIfVersion(_)
+        | crate::UploadDisposition::ReplaceCurrent => Rights::WRITE_DATA,
     }
 }
 

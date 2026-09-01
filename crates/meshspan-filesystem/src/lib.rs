@@ -69,8 +69,8 @@ pub use content_crypto::{
     EncryptedContentChunk,
 };
 pub use content_key::{
-    ContentKeyEnvelopeCipher, ContentKeyError, VolumeKeyEncryptionKey, WrappedContentKey,
-    rewrap_content_key,
+    ContentKeyEnvelopeCipher, ContentKeyError, VolumeContentKeyring, VolumeKeyEncryptionKey,
+    WrappedContentKey, rewrap_content_key,
 };
 pub use content_key_transit::{
     ContentKeyTransitCipher, ContentKeyTransitError, TransitWrappedContentKey,

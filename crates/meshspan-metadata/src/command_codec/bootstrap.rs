@@ -6,16 +6,18 @@ use super::MetadataCommandCodecError;
 use super::authentication;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
-use crate::{BootstrapAppliance, BootstrapMesh, RecordName};
+use crate::{BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity, RecordName};
 
 const MAXIMUM_NAME_BYTES: usize = 256;
+const MAXIMUM_ROOT_CERTIFICATE_BYTES: usize = 8 * 1_024;
 
 pub(super) fn encode(
     encoder: &mut Encoder,
     value: &BootstrapAppliance,
 ) -> Result<(), MetadataCommandCodecError> {
     encode_mesh(encoder, &value.mesh)?;
-    authentication::encode_payload(encoder, &value.authentication)
+    authentication::encode_payload(encoder, &value.authentication)?;
+    encode_recovery(encoder, &value.recovery)
 }
 
 pub(super) fn decode(
@@ -24,7 +26,38 @@ pub(super) fn decode(
     Ok(BootstrapAppliance {
         mesh: decode_mesh(decoder)?,
         authentication: authentication::decode_payload(decoder)?,
+        recovery: Box::new(decode_recovery(decoder)?),
     })
+}
+
+fn encode_recovery(
+    encoder: &mut Encoder,
+    value: &BootstrapRecoveryIdentity,
+) -> Result<(), MetadataCommandCodecError> {
+    encoder.fixed(&value.public_wrapping_key)?;
+    encoder.fixed(&value.key_fingerprint)?;
+    encoder.bytes(&value.root_certificate_der, MAXIMUM_ROOT_CERTIFICATE_BYTES)?;
+    encoder.fixed(&value.root_certificate_digest)?;
+    encoder.fixed(&value.bundle_digest)?;
+    encoder.fixed(&value.save_challenge_commitment)
+}
+
+fn decode_recovery(
+    decoder: &mut Decoder<'_>,
+) -> Result<BootstrapRecoveryIdentity, MetadataCommandCodecError> {
+    let recovery = BootstrapRecoveryIdentity {
+        public_wrapping_key: decoder.fixed()?,
+        key_fingerprint: decoder.fixed()?,
+        root_certificate_der: decoder.bytes(MAXIMUM_ROOT_CERTIFICATE_BYTES)?,
+        root_certificate_digest: decoder.fixed()?,
+        bundle_digest: decoder.fixed()?,
+        save_challenge_commitment: decoder.fixed()?,
+    };
+    if recovery.root_certificate_der.is_empty() {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(recovery)
+    }
 }
 
 fn encode_mesh(
