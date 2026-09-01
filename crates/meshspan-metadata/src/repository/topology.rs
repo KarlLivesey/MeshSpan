@@ -231,9 +231,7 @@ pub(super) fn create_fault_group(
         )
         .optional()?;
     match existing {
-        Some((Some(display), canonical))
-            if display == command.class_name.display()
-                && canonical == command.class_name.canonical() => {}
+        Some((Some(_), canonical)) if canonical == command.class_name.canonical() => {}
         Some(_) => return Err(RepositoryError::InvalidCommand),
         None => {
             transaction.execute(
@@ -383,6 +381,26 @@ pub(super) fn fault_groups(
             record.group_id,
         )
     })
+}
+
+pub(super) fn fault_group(
+    database: &PartitionDatabase,
+    group_id: FaultGroupId,
+) -> Result<Option<FaultGroupRecord>, RepositoryError> {
+    let group = group_id.as_bytes();
+    database
+        .connection()
+        .query_row(
+            "SELECT c.class_id, c.display_name, c.canonical_name,
+                    g.group_id, g.display_name, g.canonical_name, g.revision
+             FROM fault_groups g JOIN fault_group_classes c USING(class_id)
+             WHERE g.group_id = ?1 AND g.state = 1
+               AND c.display_name IS NOT NULL AND g.display_name IS NOT NULL",
+            [group.as_slice()],
+            decode_fault_group,
+        )
+        .optional()
+        .map_err(RepositoryError::from)
 }
 
 pub(super) fn fault_group_memberships(

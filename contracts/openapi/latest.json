@@ -1302,6 +1302,105 @@
         "title": "CreateDirectoryResponse",
         "type": "object"
       },
+      "CreateFaultGroupRequest": {
+        "additionalProperties": false,
+        "description": "Exact-retry request to create one shared-failure group.",
+        "properties": {
+          "class_name": {
+            "description": "Failure-boundary class, such as room, building, PSU or hypervisor.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "group_name": {
+            "description": "Concrete group within that class.",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Client-generated exact-retry identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "class_name",
+          "group_name"
+        ],
+        "title": "CreateFaultGroupRequest",
+        "type": "object"
+      },
+      "CreateFaultGroupResponse": {
+        "additionalProperties": false,
+        "description": "Durable shared-failure-group creation result.",
+        "properties": {
+          "group": {
+            "additionalProperties": false,
+            "description": "Current created group.",
+            "properties": {
+              "class_id": {
+                "description": "Stable failure-class identity.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f-]{36}$",
+                "type": "string"
+              },
+              "class_name": {
+                "description": "User-visible failure-class name, such as room or power source.",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "group_id": {
+                "description": "Stable concrete group identity.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f-]{36}$",
+                "type": "string"
+              },
+              "group_name": {
+                "description": "User-visible concrete boundary name.",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "description": "Last authoritative metadata revision.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "class_id",
+              "class_name",
+              "group_id",
+              "group_name",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "operation_id": {
+            "description": "Exact idempotency identity whose result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "group"
+        ],
+        "title": "CreateFaultGroupResponse",
+        "type": "object"
+      },
       "CreateGroupRequest": {
         "additionalProperties": false,
         "description": "Idempotent administrator request to create one nested group.",
@@ -4135,6 +4234,138 @@
         "title": "ListDirectoryResponse",
         "type": "object"
       },
+      "ListFaultGroupMembershipsResponse": {
+        "additionalProperties": false,
+        "description": "One bounded page of overlapping membership edges.",
+        "properties": {
+          "memberships": {
+            "description": "Stable machine/group-ordered membership edges.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One overlapping machine/group membership edge.",
+              "properties": {
+                "group_id": {
+                  "description": "Shared-failure group identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "host_id": {
+                  "description": "Member machine identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Last authoritative edge revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "host_id",
+                "group_id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "next_page_url": {
+            "description": "Ready-to-follow same-origin URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/admin/topology/fault-group-memberships",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "memberships",
+          "next_page_url"
+        ],
+        "title": "ListFaultGroupMembershipsResponse",
+        "type": "object"
+      },
+      "ListFaultGroupsResponse": {
+        "additionalProperties": false,
+        "description": "One bounded page of shared-failure groups.",
+        "properties": {
+          "groups": {
+            "description": "Stable class/name-ordered groups.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One named shared machine-failure boundary.",
+              "properties": {
+                "class_id": {
+                  "description": "Stable failure-class identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "class_name": {
+                  "description": "User-visible failure-class name, such as room or power source.",
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "group_id": {
+                  "description": "Stable concrete group identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "group_name": {
+                  "description": "User-visible concrete boundary name.",
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Last authoritative metadata revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "class_id",
+                "class_name",
+                "group_id",
+                "group_name",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "next_page_url": {
+            "description": "Ready-to-follow same-origin URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/admin/topology/fault-groups",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "groups",
+          "next_page_url"
+        ],
+        "title": "ListFaultGroupsResponse",
+        "type": "object"
+      },
       "ListGroupMembershipsResponse": {
         "additionalProperties": false,
         "description": "One bounded, stable direct-membership page.",
@@ -4867,6 +5098,304 @@
           "next_page_url"
         ],
         "title": "ListStorageFoldersResponse",
+        "type": "object"
+      },
+      "ListTopologyNodesResponse": {
+        "additionalProperties": false,
+        "description": "One bounded page of daemon nodes.",
+        "properties": {
+          "next_page_url": {
+            "description": "Ready-to-follow same-origin URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/admin/topology/nodes",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nodes": {
+            "description": "Stable name-ordered node summaries.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One daemon and its physical machine boundary.",
+              "properties": {
+                "display_name": {
+                  "description": "User-visible node name.",
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "host_id": {
+                  "description": "Stable machine identity shared by daemons on the same machine.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "incarnation": {
+                  "description": "Current restart incarnation as lossless positive decimal text.",
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "type": "string"
+                },
+                "node_id": {
+                  "description": "Stable daemon identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "private_endpoint": {
+                  "description": "Private mesh endpoint once activated.",
+                  "maxLength": 512,
+                  "minLength": 3,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "revision": {
+                  "description": "Last authoritative metadata revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "roles": {
+                  "additionalProperties": false,
+                  "description": "Configured daemon roles.",
+                  "properties": {
+                    "gateway": {
+                      "description": "May expose configured access protocols.",
+                      "type": "boolean"
+                    },
+                    "metadata_eligible": {
+                      "description": "Eligible for metadata learner/voter placement.",
+                      "type": "boolean"
+                    },
+                    "storage": {
+                      "description": "May host encrypted storage shards.",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "storage",
+                    "gateway",
+                    "metadata_eligible"
+                  ],
+                  "type": "object"
+                },
+                "state": {
+                  "description": "Current lifecycle state.",
+                  "oneOf": [
+                    {
+                      "const": "joining",
+                      "description": "Admitted learner not yet serving its full role set.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "active",
+                      "description": "Active mesh member.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "draining",
+                      "description": "Gracefully leaving or draining.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "retired",
+                      "description": "Terminally retired.",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "node_id",
+                "host_id",
+                "display_name",
+                "state",
+                "incarnation",
+                "roles",
+                "private_endpoint",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          }
+        },
+        "required": [
+          "nodes",
+          "next_page_url"
+        ],
+        "title": "ListTopologyNodesResponse",
+        "type": "object"
+      },
+      "ListTopologyTargetsResponse": {
+        "additionalProperties": false,
+        "description": "One bounded page of mesh-wide targets.",
+        "properties": {
+          "next_page_url": {
+            "description": "Ready-to-follow same-origin URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/admin/topology/targets",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targets": {
+            "description": "Stable name-ordered target summaries.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One mesh-wide target; its node-local filesystem path is deliberately absent.",
+              "properties": {
+                "display_name": {
+                  "description": "User-visible target name.",
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "generation": {
+                  "description": "Current authority-fenced generation as lossless positive decimal text.",
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "type": "string"
+                },
+                "host_id": {
+                  "description": "Owning machine identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "node_id": {
+                  "description": "Owning daemon identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Last authoritative metadata revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "state": {
+                  "description": "Current target state.",
+                  "oneOf": [
+                    {
+                      "const": "configuring",
+                      "description": "Registration is not yet available for placement.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "active",
+                      "description": "Target may accept and serve shards.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "draining",
+                      "description": "New placement is disabled while data leaves.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "unavailable",
+                      "description": "Target is temporarily unavailable.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "retired",
+                      "description": "Terminally retired.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "target_id": {
+                  "description": "Stable target identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "usage_limit": {
+                  "description": "Current provider-owned capacity ceiling.",
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "description": "Percentage of measured backing-filesystem capacity.",
+                      "properties": {
+                        "kind": {
+                          "const": "percent",
+                          "type": "string"
+                        },
+                        "percent": {
+                          "description": "Inclusive percentage from 1 through 100.",
+                          "format": "uint8",
+                          "maximum": 100,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "percent"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "Fixed byte ceiling represented as lossless decimal text.",
+                      "properties": {
+                        "bytes": {
+                          "description": "Positive unsigned 64-bit decimal bytes.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^[1-9][0-9]{0,19}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "bytes",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "bytes"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "target_id",
+                "node_id",
+                "host_id",
+                "display_name",
+                "state",
+                "generation",
+                "usage_limit",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets",
+          "next_page_url"
+        ],
+        "title": "ListTopologyTargetsResponse",
         "type": "object"
       },
       "ListUploadRangesResponse": {
@@ -6164,6 +6693,75 @@
           "revision"
         ],
         "title": "RevokePermissionGrantResponse",
+        "type": "object"
+      },
+      "SetFaultGroupMembershipRequest": {
+        "additionalProperties": false,
+        "description": "Exact-retry desired machine/group membership.",
+        "properties": {
+          "operation_id": {
+            "description": "Client-generated exact-retry identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "present": {
+            "description": "`true` to add the machine or `false` to remove it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation_id",
+          "present"
+        ],
+        "title": "SetFaultGroupMembershipRequest",
+        "type": "object"
+      },
+      "SetFaultGroupMembershipResponse": {
+        "additionalProperties": false,
+        "description": "Durable desired-membership result.",
+        "properties": {
+          "group_id": {
+            "description": "Group identity from the route.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f-]{36}$",
+            "type": "string"
+          },
+          "host_id": {
+            "description": "Machine identity from the route.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f-]{36}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact idempotency identity whose result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "present": {
+            "description": "Current desired membership state.",
+            "type": "boolean"
+          },
+          "revision": {
+            "description": "Authoritative mutation revision.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operation_id",
+          "host_id",
+          "group_id",
+          "present",
+          "revision"
+        ],
+        "title": "SetFaultGroupMembershipResponse",
         "type": "object"
       },
       "SetupStatusResponse": {
@@ -8810,6 +9408,1290 @@
         "summary": "Register one existing local folder without touching sibling content",
         "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/topology/fault-group-memberships": {
+      "get": {
+        "operationId": "listFaultGroupMemberships",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListFaultGroupMembershipsResponse"
+                }
+              }
+            },
+            "description": "One bounded topology page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or topology integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Metadata authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List overlapping machine failure-group memberships",
+        "x-meshspan-access": "system-manager"
+      }
+    },
+    "/admin/topology/fault-groups": {
+      "get": {
+        "operationId": "listFaultGroups",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListFaultGroupsResponse"
+                }
+              }
+            },
+            "description": "One bounded topology page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or topology integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Metadata authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List shared machine-failure groups",
+        "x-meshspan-access": "system-manager"
+      },
+      "post": {
+        "operationId": "createFaultGroup",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFaultGroupRequest"
+              }
+            }
+          },
+          "description": "Shared-failure group",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateFaultGroupResponse"
+                }
+              }
+            },
+            "description": "Shared-failure group committed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid group request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Name or operation conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or topology integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Metadata authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create one shared machine-failure group",
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/topology/fault-groups/{group_id}/hosts/{host_id}": {
+      "put": {
+        "operationId": "setFaultGroupMembership",
+        "parameters": [
+          {
+            "description": "Shared-failure group identity",
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Machine identity",
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetFaultGroupMembershipRequest"
+              }
+            }
+          },
+          "description": "Desired membership",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetFaultGroupMembershipResponse"
+                }
+              }
+            },
+            "description": "Desired membership committed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid membership request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Machine or fault group does not exist",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Operation conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or topology integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Metadata authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Set one machine's membership in one shared-failure group",
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/topology/nodes": {
+      "get": {
+        "operationId": "listTopologyNodes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListTopologyNodesResponse"
+                }
+              }
+            },
+            "description": "One bounded topology page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or topology integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Metadata authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List daemon nodes",
+        "x-meshspan-access": "system-manager"
+      }
+    },
+    "/admin/topology/targets": {
+      "get": {
+        "operationId": "listTopologyTargets",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListTopologyTargetsResponse"
+                }
+              }
+            },
+            "description": "One bounded topology page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or topology integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Metadata authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List mesh-wide storage targets",
+        "x-meshspan-access": "system-manager"
       }
     },
     "/admin/users": {

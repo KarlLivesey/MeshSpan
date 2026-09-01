@@ -662,6 +662,63 @@ export const zCreateDirectoryResponse = z
   .strict();
 
 /**
+ * CreateFaultGroupRequest
+ *
+ * Exact-retry request to create one shared-failure group.
+ */
+export const zCreateFaultGroupRequest = z
+  .strictObject({
+    class_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    group_name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateFaultGroupResponse
+ *
+ * Durable shared-failure-group creation result.
+ */
+export const zCreateFaultGroupResponse = z
+  .strictObject({
+    group: z
+      .strictObject({
+        class_id: z
+          .string()
+          .length(36)
+          .regex(/^[0-9a-f-]{36}$/),
+        class_name: z.string().min(1).max(128),
+        group_id: z
+          .string()
+          .length(36)
+          .regex(/^[0-9a-f-]{36}$/),
+        group_name: z.string().min(1).max(256),
+        revision: z.int().gte(1).lte(9007199254740991),
+      })
+      .strict(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateGroupRequest
  *
  * Idempotent administrator request to create one nested group.
@@ -2143,6 +2200,74 @@ export const zListDirectoryResponse = z
   .strict();
 
 /**
+ * ListFaultGroupMembershipsResponse
+ *
+ * One bounded page of overlapping membership edges.
+ */
+export const zListFaultGroupMembershipsResponse = z
+  .strictObject({
+    memberships: z
+      .array(
+        z
+          .strictObject({
+            group_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            host_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            revision: z.int().gte(1).lte(9007199254740991),
+          })
+          .strict(),
+      )
+      .max(256),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/topology\/fault-group-memberships/)
+      .nullable(),
+  })
+  .strict();
+
+/**
+ * ListFaultGroupsResponse
+ *
+ * One bounded page of shared-failure groups.
+ */
+export const zListFaultGroupsResponse = z
+  .strictObject({
+    groups: z
+      .array(
+        z
+          .strictObject({
+            class_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            class_name: z.string().min(1).max(128),
+            group_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            group_name: z.string().min(1).max(256),
+            revision: z.int().gte(1).lte(9007199254740991),
+          })
+          .strict(),
+      )
+      .max(256),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/topology\/fault-groups/)
+      .nullable(),
+  })
+  .strict();
+
+/**
  * ListGroupMembershipsResponse
  *
  * One bounded, stable direct-membership page.
@@ -2424,6 +2549,127 @@ export const zListStorageFoldersResponse = z
       .max(16384)
       .regex(/^\/api\/latest\/admin\/storage-folders/)
       .nullable(),
+  })
+  .strict();
+
+/**
+ * ListTopologyNodesResponse
+ *
+ * One bounded page of daemon nodes.
+ */
+export const zListTopologyNodesResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/topology\/nodes/)
+      .nullable(),
+    nodes: z
+      .array(
+        z
+          .strictObject({
+            display_name: z.string().min(1).max(256),
+            host_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            incarnation: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^[1-9][0-9]{0,19}$/),
+            node_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            private_endpoint: z.string().min(3).max(512).nullable(),
+            revision: z.int().gte(1).lte(9007199254740991),
+            roles: z
+              .strictObject({
+                gateway: z.boolean(),
+                metadata_eligible: z.boolean(),
+                storage: z.boolean(),
+              })
+              .strict(),
+            state: z.union([
+              z.literal("joining"),
+              z.literal("active"),
+              z.literal("draining"),
+              z.literal("retired"),
+            ]),
+          })
+          .strict(),
+      )
+      .max(256),
+  })
+  .strict();
+
+/**
+ * ListTopologyTargetsResponse
+ *
+ * One bounded page of mesh-wide targets.
+ */
+export const zListTopologyTargetsResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/topology\/targets/)
+      .nullable(),
+    targets: z
+      .array(
+        z
+          .strictObject({
+            display_name: z.string().min(1).max(256),
+            generation: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^[1-9][0-9]{0,19}$/),
+            host_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            node_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            revision: z.int().gte(1).lte(9007199254740991),
+            state: z.union([
+              z.literal("configuring"),
+              z.literal("active"),
+              z.literal("draining"),
+              z.literal("unavailable"),
+              z.literal("retired"),
+            ]),
+            target_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            usage_limit: z.union([
+              z
+                .strictObject({
+                  kind: z.literal("percent"),
+                  percent: z.int().gte(1).lte(100),
+                })
+                .strict(),
+              z
+                .strictObject({
+                  bytes: z
+                    .string()
+                    .min(1)
+                    .max(20)
+                    .regex(/^[1-9][0-9]{0,19}$/),
+                  kind: z.literal("bytes"),
+                })
+                .strict(),
+            ]),
+          })
+          .strict(),
+      )
+      .max(256),
   })
   .strict();
 
@@ -3062,6 +3308,49 @@ export const zRevokePermissionGrantResponse = z
       ),
     revision: z.int().gte(1).lte(9007199254740991),
     revoked_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+  })
+  .strict();
+
+/**
+ * SetFaultGroupMembershipRequest
+ *
+ * Exact-retry desired machine/group membership.
+ */
+export const zSetFaultGroupMembershipRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    present: z.boolean(),
+  })
+  .strict();
+
+/**
+ * SetFaultGroupMembershipResponse
+ *
+ * Durable desired-membership result.
+ */
+export const zSetFaultGroupMembershipResponse = z
+  .strictObject({
+    group_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+    host_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    present: z.boolean(),
+    revision: z.int().gte(1).lte(9007199254740991),
   })
   .strict();
 
@@ -3860,6 +4149,131 @@ export const zRegisterStorageFolderHeaders = z
  * Storage folder registered and open
  */
 export const zRegisterStorageFolderResponse2 = zRegisterStorageFolderResponse;
+
+export const zListFaultGroupMembershipsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded topology page
+ */
+export const zListFaultGroupMembershipsResponse2 =
+  zListFaultGroupMembershipsResponse;
+
+export const zListFaultGroupsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded topology page
+ */
+export const zListFaultGroupsResponse2 = zListFaultGroupsResponse;
+
+/**
+ * Shared-failure group
+ */
+export const zCreateFaultGroupBody = zCreateFaultGroupRequest;
+
+export const zCreateFaultGroupHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Shared-failure group committed
+ */
+export const zCreateFaultGroupResponse2 = zCreateFaultGroupResponse;
+
+/**
+ * Desired membership
+ */
+export const zSetFaultGroupMembershipBody = zSetFaultGroupMembershipRequest;
+
+export const zSetFaultGroupMembershipHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zSetFaultGroupMembershipPath = z
+  .object({
+    group_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    host_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Desired membership committed
+ */
+export const zSetFaultGroupMembershipResponse2 =
+  zSetFaultGroupMembershipResponse;
+
+export const zListTopologyNodesQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded topology page
+ */
+export const zListTopologyNodesResponse2 = zListTopologyNodesResponse;
+
+export const zListTopologyTargetsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded topology page
+ */
+export const zListTopologyTargetsResponse2 = zListTopologyTargetsResponse;
 
 export const zListUsersQuery = z
   .object({

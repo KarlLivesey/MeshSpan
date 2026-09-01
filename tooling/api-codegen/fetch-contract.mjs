@@ -93,6 +93,7 @@ function readAdministrationRoutes(operations) {
   return {
     addGroupMember: requireOperation(operations, "addGroupMember"),
     createGroup: requireOperation(operations, "createGroup"),
+    createFaultGroup: requireOperation(operations, "createFaultGroup"),
     createUser: requireOperation(operations, "createUser"),
     createVolume: requireOperation(operations, "createVolume"),
     createVolumePermissionGrant: requireOperation(
@@ -100,9 +101,16 @@ function readAdministrationRoutes(operations) {
       "createVolumePermissionGrant",
     ),
     listGroups: requireOperation(operations, "listGroups"),
+    listFaultGroups: requireOperation(operations, "listFaultGroups"),
+    listFaultGroupMemberships: requireOperation(
+      operations,
+      "listFaultGroupMemberships",
+    ),
     listGroupMembers: requireOperation(operations, "listGroupMembers"),
     listOperations: requireOperation(operations, "listOperations"),
     listStorageFolders: requireOperation(operations, "listStorageFolders"),
+    listTopologyNodes: requireOperation(operations, "listTopologyNodes"),
+    listTopologyTargets: requireOperation(operations, "listTopologyTargets"),
     listVolumePermissionGrants: requireOperation(
       operations,
       "listVolumePermissionGrants",
@@ -110,6 +118,10 @@ function readAdministrationRoutes(operations) {
     listUsers: requireOperation(operations, "listUsers"),
     listVolumes: requireOperation(operations, "listVolumes"),
     removeGroupMember: requireOperation(operations, "removeGroupMember"),
+    setFaultGroupMembership: requireOperation(
+      operations,
+      "setFaultGroupMembership",
+    ),
     revokePermissionGrant: requireOperation(
       operations,
       "revokePermissionGrant",

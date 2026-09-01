@@ -42,6 +42,10 @@ import {
   renderStorageFolderRuntime,
 } from "./render-storage-folder-client.mjs";
 import { renderClientContract } from "./render-client-contract.mjs";
+import {
+  renderTopologyClientMethods,
+  renderTopologyRuntime,
+} from "./render-topology-client.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -73,6 +77,8 @@ import type {
   CreateApiKeyResponse,
   CreateDirectoryRequest,
   CreateDirectoryResponse,
+  CreateFaultGroupRequest,
+  CreateFaultGroupResponse,
   CreateGroupRequest,
   CreatePasskeyChallengeRequest,
   CreatePasskeyChallengeResponse,
@@ -104,11 +110,15 @@ import type {
   JoinMeshSetupRequestWritable,
   JoinMeshSetupResponse,
   ListDirectoryResponse,
+  ListFaultGroupMembershipsResponse,
+  ListFaultGroupsResponse,
   ListGroupMembershipsResponse,
   ListOperationsResponse,
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListStorageFoldersResponse,
+  ListTopologyNodesResponse,
+  ListTopologyTargetsResponse,
   ListUploadRangesResponse,
   ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
@@ -126,6 +136,8 @@ import type {
   RegisterStorageFolderRequest,
   RegisterStorageFolderResponse,
   SetupStatusResponse,
+  SetFaultGroupMembershipRequest,
+  SetFaultGroupMembershipResponse,
   StepUpCurrentSessionRequestWritable,
   UploadStatusResponse,
   WriteUploadRangeResponse,
@@ -159,6 +171,8 @@ import {
   zCreateDirectoryBody,
   zCreateDirectoryPath,
   zCreateDirectoryResponse2,
+  zCreateFaultGroupBody,
+  zCreateFaultGroupResponse2,
   zCreateGroupBody,
   zCreateGroupResponse,
   zCreateMeshSetupBody,
@@ -193,12 +207,20 @@ import {
   zListDirectoryPath,
   zListDirectoryQuery,
   zListDirectoryResponse2,
+  zListFaultGroupMembershipsQuery,
+  zListFaultGroupMembershipsResponse2,
+  zListFaultGroupsQuery,
+  zListFaultGroupsResponse2,
   zListGroupsQuery,
   zListGroupsResponse,
   zListOperationsQuery,
   zListOperationsResponse,
   zListStorageFoldersQuery,
   zListStorageFoldersResponse2,
+  zListTopologyNodesQuery,
+  zListTopologyNodesResponse2,
+  zListTopologyTargetsQuery,
+  zListTopologyTargetsResponse2,
   zListGroupMembersPath,
   zListGroupMembersQuery,
   zListGroupMembersResponse,
@@ -233,6 +255,9 @@ import {
   zRemoveGroupMemberResponse2,
   zRegisterStorageFolderBody,
   zRegisterStorageFolderResponse2,
+  zSetFaultGroupMembershipBody,
+  zSetFaultGroupMembershipPath,
+  zSetFaultGroupMembershipResponse2,
   zStepUpCurrentSessionBody,
   zStepUpCurrentSessionResponse,
   zWriteUploadRangeHeaders,
@@ -305,6 +330,7 @@ export function createMeshSpanFetchClient(
     ${renderPermissionAdministrationClientMethods(routes)}
     ${renderOperationStatusClientMethods(routes)}
     ${renderStorageFolderClientMethods(routes)}
+    ${renderTopologyClientMethods(routes)}
     ${renderDirectoryClientMethods(routes)}
     ${renderSetupClientMethods(routes)}
     async createSession(request): Promise<CreateSessionResult> {
@@ -436,6 +462,8 @@ ${renderPermissionAdministrationRuntime()}
 ${renderOperationStatusRuntime()}
 
 ${renderStorageFolderRuntime(routes)}
+
+${renderTopologyRuntime(routes)}
 
 `;
 

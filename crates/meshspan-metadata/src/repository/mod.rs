@@ -1270,6 +1270,18 @@ impl AuthoritativeRepository {
         topology::fault_groups(&self.database, after, limit)
     }
 
+    /// Returns one current shared-failure group by exact identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when its persisted class, names or revision are malformed.
+    pub fn fault_group(
+        &self,
+        group_id: meshspan_domain::FaultGroupId,
+    ) -> Result<Option<FaultGroupRecord>, RepositoryError> {
+        topology::fault_group(&self.database, group_id)
+    }
+
     /// Returns a bounded stable page of overlapping machine/group membership edges.
     ///
     /// # Errors

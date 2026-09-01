@@ -25,6 +25,10 @@ import {
   renderUploadRequestTypes,
 } from "./render-upload-client.mjs";
 import { renderVolumeClientInterface } from "./render-volume-client.mjs";
+import {
+  renderTopologyClientInterface,
+  renderTopologyRequestTypes,
+} from "./render-topology-client.mjs";
 
 /** Renders the generated client's public request, result and operation surface. */
 export function renderClientContract() {
@@ -87,6 +91,8 @@ ${renderOperationStatusRequestTypes()}
 
 ${renderStorageFolderRequestTypes()}
 
+${renderTopologyRequestTypes()}
+
 ${renderUploadRequestTypes()}
 
 export type CreateSessionResult = Readonly<{
@@ -105,6 +111,7 @@ function renderClientInterface() {
   ${renderPermissionAdministrationClientInterface()}
   ${renderOperationStatusClientInterface()}
   ${renderStorageFolderClientInterface()}
+  ${renderTopologyClientInterface()}
   ${renderDirectoryClientInterface()}
   ${renderSetupClientInterface()}
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;

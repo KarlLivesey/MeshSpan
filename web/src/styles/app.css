@@ -531,6 +531,183 @@ select:hover {
   gap: var(--space-3xl);
 }
 
+.topology-administration {
+  display: grid;
+  gap: var(--space-3xl);
+  container-type: inline-size;
+}
+
+.topology-administration .administration-nav {
+  margin-bottom: 0;
+}
+
+.fault-group-create {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1.4fr) repeat(2, minmax(12rem, 1fr)) auto;
+  gap: var(--space-lg);
+  align-items: end;
+  padding: var(--space-xl);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.fault-group-create > div,
+.fault-group-create label,
+.topology-section,
+.topology-card,
+.fault-group-card {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.topology-section {
+  gap: var(--space-xl);
+  padding-top: var(--space-xl);
+  border-top: 1px solid var(--line);
+}
+
+.section-heading {
+  display: flex;
+  gap: var(--space-lg);
+  align-items: end;
+  justify-content: space-between;
+}
+
+.section-heading > span,
+.topology-card p,
+.topology-card small,
+.topology-section > p,
+.machine-membership-grid small {
+  color: var(--ink-soft);
+}
+
+.topology-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: var(--space-md);
+}
+
+.topology-card {
+  align-content: space-between;
+  min-height: 10rem;
+  padding: var(--space-lg);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.topology-card > div {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.state-pill {
+  width: fit-content;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 750;
+  text-transform: capitalize;
+}
+
+.state-active {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.role-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.role-list li {
+  padding: 0.2rem 0.5rem;
+  background: var(--paper);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.fault-group-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--space-lg);
+}
+
+.fault-group-card {
+  min-width: 0;
+  padding: var(--space-lg);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.fault-group-card legend {
+  padding-inline: var(--space-sm);
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.fault-group-card legend span {
+  display: block;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.machine-membership-grid {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.machine-membership-grid label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-sm);
+  align-items: start;
+  padding: var(--space-sm);
+  border: 1px solid transparent;
+}
+
+.machine-membership-grid label:has(input:checked) {
+  border-color: var(--signal);
+  background: var(--paper);
+}
+
+.machine-membership-grid span,
+.machine-membership-grid small {
+  display: block;
+}
+
+.topology-more-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+@container (max-width: 56rem) {
+  .fault-group-create {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fault-group-create > div {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 34rem) {
+  .fault-group-create {
+    grid-template-columns: 1fr;
+  }
+
+  .fault-group-create > div {
+    grid-column: auto;
+  }
+}
+
 .operation-kind {
   display: block;
   margin-bottom: var(--space-xs);
