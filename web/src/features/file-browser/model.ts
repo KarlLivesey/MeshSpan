@@ -12,6 +12,20 @@ import { uploadBrowserFile } from "./upload";
 
 export type VolumeSummary = ListVolumesResponse["volumes"][number];
 export type DirectoryEntry = ListDirectoryResponse["entries"][number];
+export type FileBrowserClient = Pick<
+  MeshSpanFetchClient,
+  | "abortUpload"
+  | "beginUpload"
+  | "commitUpload"
+  | "createDirectory"
+  | "deleteObject"
+  | "listDirectory"
+  | "listNextDirectory"
+  | "listNextVolumes"
+  | "listVolumes"
+  | "renameObject"
+  | "writeUploadRange"
+>;
 export type BrowserPhase =
   "idle" | "loading" | "loading_more" | "mutating" | "transferring";
 
@@ -56,7 +70,7 @@ type BrowserState = Readonly<{
 }>;
 
 type BrowserContext = Readonly<{
-  client: Accessor<MeshSpanFetchClient>;
+  client: Accessor<FileBrowserClient>;
   csrfToken: Accessor<string | undefined>;
   selectedVolume: Accessor<VolumeSummary | undefined>;
   state: BrowserState;
@@ -64,7 +78,7 @@ type BrowserContext = Readonly<{
 
 /** Owns one current-user view of the specialised native file API. */
 export function createFileBrowserModel(
-  client: Accessor<MeshSpanFetchClient>,
+  client: Accessor<FileBrowserClient>,
   csrfToken: Accessor<string | undefined>,
 ): FileBrowserModel {
   const state = createBrowserState();
@@ -102,7 +116,9 @@ function createBrowserState(): BrowserState {
   const [volumes, setVolumes] = createSignal<readonly VolumeSummary[]>([], {
     ownedWrite: true,
   });
-  const [selectedVolumeId, setSelectedVolumeId] = createSignal<string>();
+  const [selectedVolumeId, setSelectedVolumeId] = createSignal<
+    string | undefined
+  >(undefined, { ownedWrite: true });
   const [directory, setDirectory] = createSignal<
     ListDirectoryResponse | undefined
   >(undefined, {
@@ -111,10 +127,16 @@ function createBrowserState(): BrowserState {
   const [phase, setPhase] = createSignal<BrowserPhase>("idle", {
     ownedWrite: true,
   });
-  const [error, setError] = createSignal<string>();
-  const [progress, setProgress] = createSignal<TransferProgress>();
+  const [error, setError] = createSignal<string | undefined>(undefined, {
+    ownedWrite: true,
+  });
+  const [progress, setProgress] = createSignal<TransferProgress | undefined>(
+    undefined,
+    { ownedWrite: true },
+  );
   const [volumeNextPageUrl, setVolumeNextPageUrl] = createSignal<string | null>(
     null,
+    { ownedWrite: true },
   );
   return {
     directory,
@@ -144,7 +166,7 @@ async function loadInitial(context: BrowserContext): Promise<void> {
     const first = page.volumes[0];
     if (first !== undefined) {
       context.state.setSelectedVolumeId(first.volume_id);
-      await loadDirectory(context, "");
+      await loadDirectory(context, "", first);
     }
   } catch {
     context.state.setError(
@@ -174,8 +196,10 @@ async function loadMoreVolumes(context: BrowserContext): Promise<void> {
 async function loadDirectory(
   context: BrowserContext,
   selectedPath: string,
+  knownVolume?: VolumeSummary,
 ): Promise<void> {
-  const selected = requireSelectedVolume(context.selectedVolume());
+  const selected =
+    knownVolume ?? requireSelectedVolume(context.selectedVolume());
   context.state.setPhase("loading");
   context.state.setError(undefined);
   try {
@@ -214,14 +238,15 @@ async function selectVolume(
   context: BrowserContext,
   volumeId: string,
 ): Promise<void> {
-  if (
-    !context.state.volumes().some((volume) => volume.volume_id === volumeId)
-  ) {
+  const selected = context.state
+    .volumes()
+    .find((volume) => volume.volume_id === volumeId);
+  if (selected === undefined) {
     throw new TypeError("selected volume is not available");
   }
   context.state.setSelectedVolumeId(volumeId);
   context.state.setDirectory(undefined);
-  await loadDirectory(context, "");
+  await loadDirectory(context, "", selected);
 }
 
 async function openDirectory(

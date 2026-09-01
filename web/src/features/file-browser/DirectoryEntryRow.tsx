@@ -3,13 +3,12 @@
 import { createSignal, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
-import type { MeshSpanFetchClient } from "../../generated/fetch.gen";
-import { downloadFileBlob } from "./download";
+import { downloadFileBlob, type BrowserDownloadClient } from "./download";
 import { EntryActions } from "./EntryActions";
 import type { DirectoryEntry, FileBrowserModel } from "./model";
 
 type DirectoryEntryRowProps = Readonly<{
-  client: MeshSpanFetchClient;
+  client: BrowserDownloadClient;
   entry: DirectoryEntry;
   model: FileBrowserModel;
 }>;

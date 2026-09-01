@@ -3,12 +3,12 @@
 import { For, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
-import type { MeshSpanFetchClient } from "../../generated/fetch.gen";
 import { DirectoryEntryRow } from "./DirectoryEntryRow";
+import type { BrowserDownloadClient } from "./download";
 import type { FileBrowserModel } from "./model";
 
 type DirectoryListingProps = Readonly<{
-  client: MeshSpanFetchClient;
+  client: BrowserDownloadClient;
   model: FileBrowserModel;
 }>;
 

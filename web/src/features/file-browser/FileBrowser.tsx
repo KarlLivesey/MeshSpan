@@ -3,14 +3,14 @@
 import { Show, untrack } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
-import type { MeshSpanFetchClient } from "../../generated/fetch.gen";
+import type { BrowserDownloadClient } from "./download";
 import { DirectoryListing } from "./DirectoryListing";
 import { DirectoryToolbar } from "./DirectoryToolbar";
-import { createFileBrowserModel } from "./model";
+import { createFileBrowserModel, type FileBrowserClient } from "./model";
 import { VolumePicker } from "./VolumePicker";
 
 type FileBrowserProps = Readonly<{
-  client: MeshSpanFetchClient;
+  client: FileBrowserClient & BrowserDownloadClient;
   csrfToken: () => string | undefined;
 }>;
 
