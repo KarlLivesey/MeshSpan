@@ -48,6 +48,9 @@ mod directory_listing_api_tests;
 mod file_read_api;
 #[cfg(test)]
 mod file_read_api_tests;
+mod https_server;
+#[cfg(test)]
+mod https_server_tests;
 mod identity_administration;
 #[cfg(test)]
 mod identity_administration_tests;
@@ -193,6 +196,7 @@ pub use file_read_api::{
     FileRangeReader, FileReadApiError, FileReadController, FileReadError, FileReadResult,
     FileReadService, file_read_api_router,
 };
+pub use https_server::{HttpsServer, HttpsServerError};
 pub use identity_administration::{
     GroupMembershipAdministrationCommit, IdentityAdministrationApiError,
     IdentityAdministrationAuthority, IdentityAdministrationAuthorityError,

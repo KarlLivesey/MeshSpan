@@ -1083,6 +1083,8 @@ dependencies = [
  "chacha20poly1305",
  "form_urlencoded",
  "getrandom 0.4.3",
+ "hyper",
+ "hyper-util",
  "meshspan-api-contract",
  "meshspan-contracts",
  "meshspan-domain",
@@ -1090,12 +1092,16 @@ dependencies = [
  "meshspan-metadata",
  "meshspan-otp",
  "meshspan-passkey",
+ "meshspan-rustls-provider",
+ "meshspan-test-certificates",
  "p256",
+ "rustls",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tower",
  "zeroize",
 ]
@@ -2040,6 +2046,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.4",
+]
+
+[[package]]
+name = "tokio-rustls"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
+dependencies = [
+ "rustls",
+ "tokio",
 ]
 
 [[package]]
