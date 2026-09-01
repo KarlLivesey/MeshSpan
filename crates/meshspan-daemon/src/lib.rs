@@ -225,7 +225,7 @@ pub use authentication_method_revocation_contract::{
 };
 pub use authentication_root_loading::{
     AuthenticationRootAuthority, AuthenticationRootLoadingError, AuthenticationRootLoadingService,
-    AuthenticationRuntimeKeys,
+    AuthenticationRuntimeKeys, ProtectedTotpFactorVerifier,
 };
 pub use browser_authentication::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,

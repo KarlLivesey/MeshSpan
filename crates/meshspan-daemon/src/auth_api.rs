@@ -272,6 +272,11 @@ fn service_error_response(
             ApiErrorCode::Busy,
             "authentication authority is temporarily unavailable",
         ),
+        CreateSessionError::Totp(crate::TotpSessionError::Unavailable) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            ApiErrorCode::Busy,
+            "authentication factor is temporarily unavailable",
+        ),
         CreateSessionError::Material(_)
         | CreateSessionError::InvalidPolicy
         | CreateSessionError::InvalidReceipt

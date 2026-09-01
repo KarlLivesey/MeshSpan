@@ -149,6 +149,14 @@ impl StoragePermitAuthority for ConsensusAuthenticationAuthority {
 }
 
 impl AuthenticationRootAuthority for ConsensusAuthenticationAuthority {
+    fn local_mesh_id(
+        &self,
+    ) -> Result<Option<meshspan_domain::MeshId>, SecretGenerationAuthorityError> {
+        self.reader()
+            .local_mesh_id()
+            .map_err(|error| map_volume_key_repository_error(&error))
+    }
+
     fn latest_authentication_root_generation(
         &self,
         mesh_id: meshspan_domain::MeshId,

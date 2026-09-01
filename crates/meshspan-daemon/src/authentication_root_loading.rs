@@ -13,7 +13,8 @@ use zeroize::Zeroizing;
 use crate::volume_key_loading::load_secret_generation;
 use crate::{
     SecretGenerationAuthority, SecretGenerationAuthorityError, SecretGenerationDecryptor,
-    SecretGenerationLoadingError, TotpEnvelopeKey,
+    SecretGenerationLoadingError, TotpEnvelopeKey, TotpFactorVerifier, TotpSessionError,
+    TotpSessionVerifier, VerifiedTotpFactor,
 };
 
 const AUTHENTICATION_ROOT_BYTES: usize = 32;
@@ -25,6 +26,13 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Authoritative encrypted authentication-root head needed by one gateway.
 pub trait AuthenticationRootAuthority: SecretGenerationAuthority {
+    /// Returns the one intrinsic mesh identity owned by this root partition.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when replicated metadata is unavailable or structurally invalid.
+    fn local_mesh_id(&self) -> Result<Option<MeshId>, SecretGenerationAuthorityError>;
+
     /// Returns the newest committed generation used for new authentication material.
     ///
     /// # Errors
@@ -52,6 +60,12 @@ impl AuthenticationRuntimeKeys {
             self.recovery_code_issuance,
             self.totp_envelope,
         )
+    }
+
+    /// Transfers only the TOTP envelope capability into a verifier.
+    #[must_use]
+    pub fn into_totp_envelope_key(self) -> TotpEnvelopeKey {
+        self.totp_envelope
     }
 }
 
@@ -83,10 +97,11 @@ where
     ///
     /// Rejects absent authority, a missing local recipient, malformed plaintext and invalid
     /// domain-separated key output.
-    pub fn load_latest(
-        &self,
-        mesh_id: MeshId,
-    ) -> Result<AuthenticationRuntimeKeys, AuthenticationRootLoadingError> {
+    pub fn load_latest(&self) -> Result<AuthenticationRuntimeKeys, AuthenticationRootLoadingError> {
+        let mesh_id = self
+            .authority
+            .local_mesh_id()?
+            .ok_or(AuthenticationRootLoadingError::NotFound)?;
         let generation = self
             .authority
             .latest_authentication_root_generation(mesh_id)?
@@ -99,6 +114,76 @@ where
         .map_err(|_| AuthenticationRootLoadingError::InvalidInput)?;
         let plaintext = load_secret_generation(&self.authority, &self.decryptor, context)?;
         derive_runtime_keys(&plaintext, context)
+    }
+}
+
+/// Request-time TOTP verifier which never retains a decrypted root between calls.
+pub struct ProtectedTotpFactorVerifier<A, D> {
+    loader: AuthenticationRootLoadingService<A, D>,
+}
+
+impl<A, D> ProtectedTotpFactorVerifier<A, D> {
+    /// Composes current replicated root authority with one node-local wrapping key.
+    #[must_use]
+    pub const fn new(authority: A, decryptor: D) -> Self {
+        Self {
+            loader: AuthenticationRootLoadingService::new(authority, decryptor),
+        }
+    }
+
+    fn verifier(&self) -> Result<TotpSessionVerifier, TotpSessionError>
+    where
+        A: AuthenticationRootAuthority,
+        D: SecretGenerationDecryptor,
+    {
+        let envelope_key = self
+            .loader
+            .load_latest()
+            .map(AuthenticationRuntimeKeys::into_totp_envelope_key)
+            .map_err(map_totp_loading_error)?;
+        Ok(TotpSessionVerifier::new(crate::TotpSecretCipher::new(
+            envelope_key,
+        )))
+    }
+}
+
+impl<A, D> TotpFactorVerifier for ProtectedTotpFactorVerifier<A, D>
+where
+    A: AuthenticationRootAuthority,
+    D: SecretGenerationDecryptor,
+{
+    fn verify_current(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        materials: &[meshspan_metadata::TotpVerificationMaterial],
+        code: &str,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<VerifiedTotpFactor, TotpSessionError> {
+        self.verifier()?
+            .verify_current(principal_id, materials, code, now)
+    }
+
+    fn verify_replay(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        materials: &[meshspan_metadata::TotpVerificationMaterial],
+        method_id: meshspan_domain::AuthenticationMethodId,
+        code: &str,
+        accepted_step: u64,
+    ) -> Result<(), TotpSessionError> {
+        self.verifier()?
+            .verify_replay(principal_id, materials, method_id, code, accepted_step)
+    }
+}
+
+const fn map_totp_loading_error(error: AuthenticationRootLoadingError) -> TotpSessionError {
+    match error {
+        AuthenticationRootLoadingError::NotFound
+        | AuthenticationRootLoadingError::NotRecipient
+        | AuthenticationRootLoadingError::Unavailable => TotpSessionError::Unavailable,
+        AuthenticationRootLoadingError::InvalidInput | AuthenticationRootLoadingError::Failed => {
+            TotpSessionError::InvalidEvidence
+        }
     }
 }
 
@@ -188,6 +273,10 @@ impl<T> AuthenticationRootAuthority for &T
 where
     T: AuthenticationRootAuthority + ?Sized,
 {
+    fn local_mesh_id(&self) -> Result<Option<MeshId>, SecretGenerationAuthorityError> {
+        (*self).local_mesh_id()
+    }
+
     fn latest_authentication_root_generation(
         &self,
         mesh_id: MeshId,
@@ -200,6 +289,10 @@ impl<T> AuthenticationRootAuthority for std::sync::Arc<T>
 where
     T: AuthenticationRootAuthority + ?Sized,
 {
+    fn local_mesh_id(&self) -> Result<Option<MeshId>, SecretGenerationAuthorityError> {
+        self.as_ref().local_mesh_id()
+    }
+
     fn latest_authentication_root_generation(
         &self,
         mesh_id: MeshId,

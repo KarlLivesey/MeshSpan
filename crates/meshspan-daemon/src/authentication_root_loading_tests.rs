@@ -2,7 +2,7 @@
 
 use meshspan_domain::{
     ApiKeyBundle, EntropyError, MeshId, OperationId, PrincipalId, RandomSource, RecoveryCodeBundle,
-    Revision,
+    Revision, UnixMicros,
 };
 use meshspan_metadata::{AUTHENTICATION_ROOT_KEY_SECRET_KIND, SecretGenerationRecord};
 use meshspan_secret_envelope::{
@@ -11,8 +11,9 @@ use meshspan_secret_envelope::{
 
 use crate::{
     AuthenticationRootAuthority, AuthenticationRootLoadingError, AuthenticationRootLoadingService,
-    LocalWrappingKey, SecretGenerationAuthority, SecretGenerationAuthorityError, TotpSecretBinding,
-    TotpSecretCipher,
+    LocalWrappingKey, ProtectedTotpFactorVerifier, SecretGenerationAuthority,
+    SecretGenerationAuthorityError, TotpFactorVerifier, TotpSecretBinding, TotpSecretCipher,
+    TotpSessionError,
 };
 
 #[test]
@@ -21,9 +22,13 @@ fn exact_gateway_envelope_expands_stable_distinct_operational_keys()
     let directory = tempfile::tempdir()?;
     let local = LocalWrappingKey::open_or_create(&directory.path().join("node.key"))?;
     let mesh_id = MeshId::from_bytes([1; 16])?;
-    let record = generation_record(mesh_id, &[7; 32], &[local.public_key()], 10)?;
-    let keys = AuthenticationRootLoadingService::new(FakeAuthority::record(record), local)
-        .load_latest(mesh_id)?;
+    let authority = FakeAuthority::record(generation_record(
+        mesh_id,
+        &[7; 32],
+        &[local.public_key()],
+        10,
+    )?);
+    let keys = AuthenticationRootLoadingService::new(authority.clone(), &local).load_latest()?;
     let (api_key, recovery_key, totp_key) = keys.into_parts();
     let principal_id = PrincipalId::from_bytes([2; 16])?;
     let operation_id = OperationId::from_bytes([3; 16])?;
@@ -40,8 +45,27 @@ fn exact_gateway_envelope_expands_stable_distinct_operational_keys()
         accepted_step_window: 1,
     };
     let cipher = TotpSecretCipher::new(totp_key);
-    let envelope = cipher.encrypt(binding, &[5; 20], &mut FixedRandom(20))?;
-    assert_eq!(cipher.decrypt(binding, &envelope)?.as_slice(), &[5; 20]);
+    let secret = b"12345678901234567890";
+    let envelope = cipher.encrypt(binding, secret, &mut FixedRandom(20))?;
+    assert_eq!(cipher.decrypt(binding, &envelope)?.as_slice(), secret);
+    let materials = [meshspan_metadata::TotpVerificationMaterial {
+        principal_id,
+        method_id: binding.method_id,
+        credential_generation: 1,
+        revision: Revision::new(2),
+        secret_ciphertext: envelope,
+        algorithm: binding.algorithm,
+        digits: binding.digits,
+        period_seconds: binding.period_seconds,
+        accepted_step_window: binding.accepted_step_window,
+    }];
+    let protected = ProtectedTotpFactorVerifier::new(authority, &local);
+    assert_eq!(
+        protected
+            .verify_current(principal_id, &materials, "755224", UnixMicros::new(1))?
+            .method_id,
+        binding.method_id
+    );
     Ok(())
 }
 
@@ -53,7 +77,7 @@ fn absent_wrong_duplicate_and_malformed_authority_fail_closed()
     let mesh_id = MeshId::from_bytes([6; 16])?;
     assert_eq!(
         AuthenticationRootLoadingService::new(FakeAuthority::missing(), &local)
-            .load_latest(mesh_id)
+            .load_latest()
             .err(),
         Some(AuthenticationRootLoadingError::NotFound)
     );
@@ -62,35 +86,43 @@ fn absent_wrong_duplicate_and_malformed_authority_fail_closed()
     let wrong = generation_record(mesh_id, &[9; 32], &[other], 30)?;
     assert_eq!(
         AuthenticationRootLoadingService::new(FakeAuthority::record(wrong), &local)
-            .load_latest(mesh_id)
+            .load_latest()
             .err(),
         Some(AuthenticationRootLoadingError::NotRecipient)
     );
 
     let mut duplicate = generation_record(mesh_id, &[10; 32], &[local.public_key()], 40)?;
     duplicate.recipients.push(duplicate.recipients[0].clone());
-    assert_failed(&local, mesh_id, duplicate);
+    assert_failed(&local, duplicate);
     assert_failed(
         &local,
-        mesh_id,
         generation_record(mesh_id, &[11; 31], &[local.public_key()], 50)?,
     );
     let mut zero_revision = generation_record(mesh_id, &[12; 32], &[local.public_key()], 60)?;
     zero_revision.revision = Revision::ZERO;
-    assert_failed(&local, mesh_id, zero_revision);
+    assert_failed(&local, zero_revision);
     assert_eq!(
         AuthenticationRootLoadingService::new(FakeAuthority::unavailable(), &local)
-            .load_latest(mesh_id)
+            .load_latest()
             .err(),
         Some(AuthenticationRootLoadingError::Unavailable)
+    );
+    assert_eq!(
+        ProtectedTotpFactorVerifier::new(FakeAuthority::unavailable(), &local).verify_current(
+            PrincipalId::from_bytes([13; 16])?,
+            &[],
+            "000000",
+            UnixMicros::new(1),
+        ),
+        Err(TotpSessionError::Unavailable)
     );
     Ok(())
 }
 
-fn assert_failed(local: &LocalWrappingKey, mesh_id: MeshId, record: SecretGenerationRecord) {
+fn assert_failed(local: &LocalWrappingKey, record: SecretGenerationRecord) {
     assert_eq!(
         AuthenticationRootLoadingService::new(FakeAuthority::record(record), local)
-            .load_latest(mesh_id)
+            .load_latest()
             .err(),
         Some(AuthenticationRootLoadingError::Failed)
     );
@@ -137,6 +169,16 @@ impl FakeAuthority {
 }
 
 impl AuthenticationRootAuthority for FakeAuthority {
+    fn local_mesh_id(&self) -> Result<Option<MeshId>, SecretGenerationAuthorityError> {
+        match self {
+            Self::Record(record) => MeshId::from_bytes(record.secret.context().id())
+                .map(Some)
+                .map_err(|_| SecretGenerationAuthorityError::Failed),
+            Self::Missing => Ok(None),
+            Self::Unavailable => Err(SecretGenerationAuthorityError::Unavailable),
+        }
+    }
+
     fn latest_authentication_root_generation(
         &self,
         _mesh_id: MeshId,
