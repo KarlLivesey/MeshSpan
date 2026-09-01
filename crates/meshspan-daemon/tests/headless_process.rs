@@ -51,16 +51,51 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     .await?;
     assert!(response.starts_with("HTTP/1.1 201 Created\r\n"));
     assert!(response.contains("\"api_key\":\"meshspan-key-v1."));
+    let created: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
+    let api_key = created["api_key"]
+        .as_str()
+        .ok_or("setup response omitted the API key")?;
+    let session_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000002",
+        "authentication": { "method": "api_key", "secret": api_key },
+        "client_label": null,
+        "remember": false
+    }))?;
     assert!(!fixture.claim_path.exists());
     wait_for_status(fixture.address, &client, "configured").await?;
+    assert_session_created(fixture.address, &client, &session_body).await?;
 
     process.kill()?;
     process.wait()?;
     process = fixture.start()?;
     wait_for_status(fixture.address, &client, "configured").await?;
+    assert_session_created(fixture.address, &client, &session_body).await?;
     process.kill()?;
     process.wait()?;
     Ok(())
+}
+
+async fn assert_session_created(
+    address: SocketAddr,
+    client: &ClientConfig,
+    body: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let response = request(address, client, "POST", "/api/latest/sessions", Some(body)).await?;
+    if response.starts_with("HTTP/1.1 201 Created\r\n")
+        && response.contains("set-cookie: meshspan_session=")
+        && response.contains("meshspan-csrf-token:")
+    {
+        Ok(())
+    } else {
+        Err("headless process did not create the expected HTTPS session".into())
+    }
+}
+
+fn response_body(response: &str) -> Result<&str, Box<dyn Error>> {
+    response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .ok_or_else(|| "HTTP response omitted its body boundary".into())
 }
 
 struct ProcessFixture {

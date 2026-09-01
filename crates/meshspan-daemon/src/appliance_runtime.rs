@@ -28,10 +28,15 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 
 use crate::{
-    ConsensusBootstrapAuthority, CreateMeshSetupService, DaemonLocalState, DaemonLocalStateError,
-    HeadlessDaemonConfig, HeadlessDaemonConfigError, HttpsServer, HttpsServerError,
-    PublicContractApiError, ReadinessSource, SetupApiError, SetupLifecycleError,
-    SetupStateSnapshot, public_contract_api_router, setup_api_router_with_creation,
+    BrowserAuthenticationError, BrowserSessionAuthenticator, ConsensusAuthenticationAuthority,
+    ConsensusBootstrapAuthority, CreateMeshSetupService, CreateSessionService,
+    CurrentSessionApiError, DaemonLocalState, DaemonLocalStateError, DisabledTotpFactors,
+    GatewaySessionIdentity, HeadlessDaemonConfig, HeadlessDaemonConfigError, HttpsServer,
+    HttpsServerError, PublicContractApiError, ReadinessSource, RevokeCurrentSessionApiError,
+    RevokeCurrentSessionService, SessionApiError, SetupApiError, SetupLifecycleError,
+    SetupStateSnapshot, StepUpCurrentSessionApiError, StepUpCurrentSessionService,
+    current_session_api_router, public_contract_api_router, revoke_current_session_api_router,
+    session_api_router, setup_api_router_with_creation, step_up_current_session_api_router,
 };
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
@@ -71,9 +76,16 @@ where
         local_state.claim_output_path().to_path_buf(),
         Arc::clone(&setup_state),
     );
+    let gateway = GatewaySessionIdentity::new(local_state.node_id(), 1)?;
     let router = Router::new()
         .merge(public_contract_api_router(Arc::new(Ready))?)
-        .merge(setup_api_router_with_creation(setup_state, setup)?);
+        .merge(setup_api_router_with_creation(setup_state, setup)?)
+        .merge(authentication_session_routes(
+            &local_state,
+            &authority,
+            gateway,
+            started_at,
+        )?);
     let server = HttpsServer::bind(
         config.https_listen(),
         local_state.bootstrap_server_config()?,
@@ -101,12 +113,7 @@ fn start_root_authority(
         BTreeSet::from([node_id]),
         BTreeSet::new(),
     )?)?;
-    let database = PartitionDatabase::open(
-        &local_state.state_directory().join(ROOT_AUTHORITY_DATABASE),
-        partition_id,
-        now,
-    )?;
-    let mut repository = AuthoritativeRepository::new(database);
+    let mut repository = open_root_repository(local_state, now)?;
     let active_plan = match repository.load_active_consensus_quorum_plan()? {
         Some(active) => active,
         None => repository.initialise_consensus_quorum_plan(&plan, now)?,
@@ -133,6 +140,52 @@ fn start_root_authority(
         MetadataAuthorityConfig::default(),
     )
     .map_err(Into::into)
+}
+
+fn authentication_session_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+) -> Result<Router, DaemonProcessError> {
+    let runtime = tokio::runtime::Handle::current();
+    let authentication_authority = || {
+        Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new(
+            open_root_repository(local_state, now)?,
+            authority.clone(),
+            runtime.clone(),
+        ))
+    };
+    Ok(Router::new()
+        .merge(session_api_router(CreateSessionService::new(
+            authentication_authority()?,
+        ))?)
+        .merge(current_session_api_router(
+            BrowserSessionAuthenticator::new(authentication_authority()?, gateway),
+        )?)
+        .merge(revoke_current_session_api_router(
+            RevokeCurrentSessionService::new(authentication_authority()?, gateway),
+        )?)
+        .merge(step_up_current_session_api_router(
+            StepUpCurrentSessionService::new(
+                authentication_authority()?,
+                gateway,
+                DisabledTotpFactors,
+            ),
+        )?))
+}
+
+fn open_root_repository(
+    local_state: &DaemonLocalState,
+    now: UnixMicros,
+) -> Result<AuthoritativeRepository, DaemonProcessError> {
+    let partition_id = InitialBootstrapMaterial::root_partition_id(local_state.node_id())?;
+    let database = PartitionDatabase::open(
+        &local_state.state_directory().join(ROOT_AUTHORITY_DATABASE),
+        partition_id,
+        now,
+    )?;
+    Ok(AuthoritativeRepository::new(database))
 }
 
 fn current_time() -> Result<UnixMicros, DaemonProcessError> {
@@ -197,12 +250,27 @@ pub enum DaemonProcessError {
     /// Durable local setup state was inconsistent.
     #[error("daemon setup lifecycle failed")]
     SetupLifecycle(#[from] SetupLifecycleError),
+    /// Session creation API construction failed.
+    #[error("daemon session API failed")]
+    SessionApi(#[from] SessionApiError),
+    /// Current-session API construction failed.
+    #[error("daemon current-session API failed")]
+    CurrentSessionApi(#[from] CurrentSessionApiError),
+    /// Session-revocation API construction failed.
+    #[error("daemon session-revocation API failed")]
+    RevokeSessionApi(#[from] RevokeCurrentSessionApiError),
+    /// Session step-up API construction failed.
+    #[error("daemon session step-up API failed")]
+    StepUpSessionApi(#[from] StepUpCurrentSessionApiError),
     /// The HTTPS listener failed.
     #[error("daemon HTTPS listener failed")]
     Https(#[from] HttpsServerError),
     /// The authority task ended without a typed result.
     #[error("daemon metadata authority task stopped unexpectedly")]
     AuthorityTaskStopped,
+    /// Gateway identity could not be represented safely.
+    #[error("daemon gateway identity failed")]
+    GatewayIdentity(#[from] BrowserAuthenticationError),
     /// The host clock cannot be represented safely.
     #[error("daemon host clock is unavailable")]
     Clock,
