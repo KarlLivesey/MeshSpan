@@ -170,6 +170,8 @@ where
         CurrentNodeBootstrapPeerSource::new(
             open_authentication_authority(&local_state, &authority, started_at)?,
             local_state.node_id(),
+            open_root_repository(&local_state, started_at)?.partition_id(),
+            1,
             private_endpoint,
         ),
     );

@@ -314,8 +314,9 @@ pub use node_activation::{
     NodeActivationError, NodeActivationRequest, NodeActivationService,
 };
 pub use node_enrolment::{
-    NodeEnrolmentAuthority, NodeEnrolmentAuthorityError, NodeEnrolmentBootstrapSource,
-    NodeEnrolmentCommit, NodeEnrolmentController, NodeEnrolmentError, NodeEnrolmentService,
+    NodeEnrolmentAuthority, NodeEnrolmentAuthorityError, NodeEnrolmentBootstrap,
+    NodeEnrolmentBootstrapSource, NodeEnrolmentCommit, NodeEnrolmentController, NodeEnrolmentError,
+    NodeEnrolmentService,
 };
 pub use node_enrolment_api::{NodeEnrolmentApiError, node_enrolment_api_router};
 pub use node_join_grant::{

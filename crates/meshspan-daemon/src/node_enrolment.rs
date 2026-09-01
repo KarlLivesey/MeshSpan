@@ -10,7 +10,7 @@ use meshspan_api_contract::{
 use meshspan_certificates::NodePublicIdentity;
 use meshspan_domain::{
     AuditEventId, DurationMicros, HostId, InitialBootstrapMaterial, JoinGrantBundle, MeshId,
-    NodeId, OperationId, UnixMicros, uuid_v8,
+    NodeId, OperationId, PartitionId, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
     AuthoritativeCommand, CommandContext, ConsumeJoinGrant, JoinGrantRecord, JoinRoles,
@@ -131,12 +131,22 @@ pub trait NodeEnrolmentController: Send + 'static {
 
 /// Late-bound source of currently reachable, active bootstrap peers.
 pub trait NodeEnrolmentBootstrapSource {
-    /// Returns at least one current mesh-signed peer only after setup has completed.
+    /// Returns current root routing and at least one mesh-signed peer after setup completes.
     ///
     /// # Errors
     ///
     /// Fails closed when active certificate or endpoint state is unavailable or malformed.
-    fn bootstrap_peers(&self) -> Result<Vec<EnrolmentBootstrapPeer>, NodeEnrolmentAuthorityError>;
+    fn bootstrap(&self) -> Result<NodeEnrolmentBootstrap, NodeEnrolmentAuthorityError>;
+}
+
+/// Exact root route and authenticated peers needed to start one admitted learner.
+pub struct NodeEnrolmentBootstrap {
+    /// Immutable root metadata partition identity.
+    pub root_partition_id: PartitionId,
+    /// Current non-zero root route epoch.
+    pub routing_epoch: u64,
+    /// Current active peers through which the learner can catch up.
+    pub peers: Vec<EnrolmentBootstrapPeer>,
 }
 
 /// Complete admission service over replaceable consensus and online-authority boundaries.
@@ -219,18 +229,20 @@ where
             input.node_id,
             certificate_valid_until,
         )?;
-        let bootstrap_peers = self.bootstrap_peers.bootstrap_peers()?;
-        if bootstrap_peers.is_empty() {
+        let bootstrap = self.bootstrap_peers.bootstrap()?;
+        if bootstrap.routing_epoch == 0 || bootstrap.peers.is_empty() {
             return Err(NodeEnrolmentError::Unavailable);
         }
         Ok(EnrolNodeResponse {
             operation_id: request.operation_id,
             mesh_id: format_uuid(mesh_id.as_bytes()),
             node_id: format_uuid(input.node_id.as_bytes()),
+            root_partition_id: format_uuid(bootstrap.root_partition_id.as_bytes()),
+            routing_epoch: bootstrap.routing_epoch,
             node_certificate_der_hex: encode_hex(&commit.record.certificate_der),
             online_authority_certificate_der_hex: encode_hex(online_authority.certificate_der()),
             root_certificate_der_hex: encode_hex(&recovery.root_certificate_der),
-            bootstrap_peers,
+            bootstrap_peers: bootstrap.peers,
         })
     }
 }

@@ -167,6 +167,7 @@ fn validate_response(
     if response.operation_id != request.operation_id
         || response.mesh_id != crate::create_mesh_setup::format_uuid(mesh_id.as_bytes())
         || response.node_id != crate::create_mesh_setup::format_uuid(node_id.as_bytes())
+        || response.routing_epoch == 0
         || response.bootstrap_peers.is_empty()
         || response
             .bootstrap_peers

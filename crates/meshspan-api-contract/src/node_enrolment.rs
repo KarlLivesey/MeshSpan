@@ -148,6 +148,12 @@ pub struct EnrolNodeResponse {
     /// Permanent identity derived from the submitted public key.
     #[schemars(length(equal = 36), pattern(UUID_PATTERN))]
     pub node_id: String,
+    /// Root metadata partition the joining learner must restore and follow.
+    #[schemars(length(equal = 36), pattern(UUID_PATTERN))]
+    pub root_partition_id: String,
+    /// Current non-zero route epoch for the root metadata partition.
+    #[schemars(range(min = 1))]
+    pub routing_epoch: u64,
     /// Issued node leaf certificate DER as lowercase hex.
     #[schemars(length(min = 2, max = 131_072), pattern(r"^[0-9a-f]+$"))]
     pub node_certificate_der_hex: String,
