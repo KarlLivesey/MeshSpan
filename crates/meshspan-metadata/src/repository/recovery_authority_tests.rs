@@ -12,9 +12,9 @@ use super::{
     ApplyDisposition, AuthoritativeRepository, LogPosition, RecoveryBundleState, RepositoryError,
 };
 use crate::{
-    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommandContext, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    NewAuthenticationCredential, PartitionDatabase, RecordName,
+    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CommandContext,
+    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, NewAuthenticationCredential,
+    PartitionDatabase, RecordName,
 };
 
 #[test]
@@ -120,34 +120,35 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         occurred_at: UnixMicros::new(10),
         expected_revision: Some(Revision::ZERO),
     };
-    let command = AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
-        mesh: BootstrapMesh {
-            mesh_id,
-            mesh_name: RecordName::new("First mesh")?,
-            administrator_id: administrator,
-            administrator_name: RecordName::new("First administrator")?,
-            administrator_role_id: RoleId::from_bytes([6; 16])?,
-            host_id: HostId::from_bytes([7; 16])?,
-            host_name: RecordName::new("First host")?,
-            node_id: NodeId::from_bytes([8; 16])?,
-            node_name: RecordName::new("First node")?,
-            partition_name: RecordName::new("Root authority")?,
-        },
-        authentication: CreateAuthenticationMethod {
-            method_id: AuthenticationMethodId::from_bytes([9; 16])?,
-            principal_id: administrator,
-            label: "Initial API key".to_owned(),
-            service_scope: 7,
-            expires_at: None,
-            credential: NewAuthenticationCredential::ApiKey {
-                key_id: ApiKeyId::from_bytes([10; 16])?,
-                key_digest: [11; 32],
-                scopes: 1,
-                valid_from: UnixMicros::new(10),
+    let command =
+        AuthoritativeCommand::BootstrapAppliance(crate::test_support::bootstrap_appliance(
+            BootstrapMesh {
+                mesh_id,
+                mesh_name: RecordName::new("First mesh")?,
+                administrator_id: administrator,
+                administrator_name: RecordName::new("First administrator")?,
+                administrator_role_id: RoleId::from_bytes([6; 16])?,
+                host_id: HostId::from_bytes([7; 16])?,
+                host_name: RecordName::new("First host")?,
+                node_id: NodeId::from_bytes([8; 16])?,
+                node_name: RecordName::new("First node")?,
+                partition_name: RecordName::new("Root authority")?,
             },
-        },
-        recovery: Box::new(recovery_identity()?),
-    });
+            CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([9; 16])?,
+                principal_id: administrator,
+                label: "Initial API key".to_owned(),
+                service_scope: 7,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([10; 16])?,
+                    key_digest: [11; 32],
+                    scopes: 1,
+                    valid_from: UnixMicros::new(10),
+                },
+            },
+            Box::new(recovery_identity()?),
+        )?);
     Ok((
         AuthoritativeRepository::new(database),
         context,

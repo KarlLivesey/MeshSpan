@@ -37,6 +37,8 @@ mod local_target_tests;
 mod migration;
 mod name;
 mod repository;
+#[cfg(test)]
+mod test_support;
 
 pub use command::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
@@ -57,10 +59,11 @@ pub use command::{
     ReplaceObjectOwners, RepositoryCommandError, RequestVolumeSnapshotExpiry,
     RestoreVolumeSnapshot, RetentionReclaimMode, RevokeAccessActivation,
     RevokeAuthenticationMethod, RevokeAuthenticationSession, RevokePermissionGrant,
-    RouteAttestation, RunSnapshotSchedule, SealVersionCleanupInventory,
-    SessionAuthenticationFactor, SessionClientLabel, SetObjectGrantInheritance,
-    SnapshotExpiryReason, StepUpAuthenticationSession, StorageUsageLimit, TagTarget, TotpAlgorithm,
-    VOLUME_CONTENT_KEY_SECRET_KIND, VersionCleanupAttestation, VersionCleanupItemPlacement,
+    RouteAttestation, RunSnapshotSchedule, STORAGE_PERMIT_KEY_SECRET_KIND,
+    SealVersionCleanupInventory, SessionAuthenticationFactor, SessionClientLabel,
+    SetObjectGrantInheritance, SnapshotExpiryReason, StepUpAuthenticationSession,
+    StorageUsageLimit, TagTarget, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
+    VersionCleanupAttestation, VersionCleanupItemPlacement,
 };
 pub use command_codec::{
     DecodedAuthoritativeCommand, METADATA_COMMAND_VERSION, MetadataCommandCodecError,

@@ -16,7 +16,7 @@ use meshspan_metadata::{
 };
 
 use crate::protected_volume_test_support::{
-    confirm_recovery, initial_volume_key, protected_bootstrap, register_gateway_key,
+    confirm_recovery, initial_volume_key, protected_bootstrap,
 };
 use crate::{
     AccessAdministrationAuthority, AccessAdministrationError, MetadataAccessAdministration,
@@ -48,7 +48,7 @@ fn administration_pages_recheck_object_self_and_system_authority_before_disclosu
     assert_authentication_precedes_projection_validation(&fixture)?;
     apply(
         &mut fixture.repository,
-        13,
+        12,
         fixture.ids.administrator,
         &AuthoritativeCommand::RevokePermissionGrant(RevokePermissionGrant {
             grant_id: fixture.ids.grant,
@@ -113,12 +113,6 @@ fn create_identity_and_permissions(
         repository,
         3,
         ids.administrator,
-        &register_gateway_key(ids.gateway)?,
-    )?;
-    apply(
-        repository,
-        4,
-        ids.administrator,
         &AuthoritativeCommand::CreateUser(CreateUser {
             principal_id: ids.user,
             name: RecordName::new("User")?,
@@ -126,7 +120,7 @@ fn create_identity_and_permissions(
     )?;
     apply(
         repository,
-        5,
+        4,
         ids.administrator,
         &AuthoritativeCommand::CreateVolume(CreateVolume {
             volume_id: ids.volume,
@@ -139,7 +133,7 @@ fn create_identity_and_permissions(
     )?;
     apply(
         repository,
-        6,
+        5,
         ids.administrator,
         &AuthoritativeCommand::GrantPermission(GrantPermission {
             grant_id: ids.grant,
@@ -158,11 +152,11 @@ fn issue_sessions(
     repository: &mut AuthoritativeRepository,
     ids: TestIds,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let administrator_factors = create_factors(repository, 7, ids.administrator, 40, true)?;
-    let user_factors = create_factors(repository, 9, ids.user, 50, false)?;
+    let administrator_factors = create_factors(repository, 6, ids.administrator, 40, true)?;
+    let user_factors = create_factors(repository, 8, ids.user, 50, false)?;
     apply(
         repository,
-        11,
+        10,
         ids.administrator,
         &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
             session_id: SessionId::from_bytes([14; 16])?,
@@ -178,7 +172,7 @@ fn issue_sessions(
     )?;
     apply(
         repository,
-        12,
+        11,
         ids.user,
         &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
             session_id: SessionId::from_bytes([15; 16])?,
@@ -419,7 +413,7 @@ fn assert_revocation_rechecks_current_rights(
     assert!(matches!(
         current.authority,
         AccessAdministrationAuthority::Session(capability)
-            if capability.identity_revision.get() == 13
+            if capability.identity_revision.get() == 12
     ));
     Ok(())
 }

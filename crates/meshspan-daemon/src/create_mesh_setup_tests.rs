@@ -13,6 +13,7 @@ use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, CommandContext, LocalClaimState, LocalDatabase,
     LogPosition, NewLocalClaim, PartitionDatabase, RepositoryError,
 };
+use meshspan_secret_envelope::WrappingPrivateKey;
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -149,6 +150,7 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
         claim_path.clone(),
         recovery_path,
         Arc::clone(&setup_state),
+        WrappingPrivateKey::from_bytes([61; 32])?.public_key(),
         SequentialRandom(101),
     );
     let request = request(&claim, "First mesh")?;

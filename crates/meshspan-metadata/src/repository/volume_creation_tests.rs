@@ -69,7 +69,7 @@ fn wrong_key_context_rolls_back_every_volume_row() -> Result<(), Box<dyn std::er
     ));
     assert_eq!(repository.current_revision()?, Revision::new(1));
     assert!(repository.volume_inventory_record(volume_id)?.is_none());
-    assert_table_counts(&repository, (0, 0, 0, 0))
+    assert_table_counts(&repository, (0, 0, 1, 2))
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn rejected_duplicate_name_cannot_leave_an_orphan_key() -> Result<(), Box<dyn st
     ));
     assert_eq!(repository.current_revision()?, Revision::new(2));
     assert!(repository.volume_inventory_record(second)?.is_none());
-    assert_table_counts(&repository, (1, 1, 1, 2))
+    assert_table_counts(&repository, (1, 1, 2, 4))
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn omitted_eligible_gateway_recipient_rolls_back_the_volume()
     ));
     assert_eq!(repository.current_revision()?, Revision::new(1));
     assert!(repository.volume_inventory_record(volume_id)?.is_none());
-    assert_table_counts(&repository, (0, 0, 0, 0))
+    assert_table_counts(&repository, (0, 0, 1, 2))
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn volume_key_recipients_exclude_storage_only_and_inactive_gateways()
         .map(|recipient| recipient.fingerprint())
         .collect::<BTreeSet<_>>();
     let recovery = meshspan_secret_envelope::WrappingPublicKey::from_bytes([146; 32])?;
-    let bootstrap_gateway = meshspan_secret_envelope::WrappingPublicKey::from_bytes([145; 32])?;
+    let bootstrap_gateway = crate::test_support::node_wrapping_private_key()?.public_key();
     assert_eq!(actual.len(), 3);
     assert!(actual.contains(&recovery.fingerprint()));
     assert!(actual.contains(&bootstrap_gateway.fingerprint()));

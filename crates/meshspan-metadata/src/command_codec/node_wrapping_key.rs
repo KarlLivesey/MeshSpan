@@ -16,6 +16,14 @@ pub(super) fn encode(
 ) -> Result<(), MetadataCommandCodecError> {
     validate(value)?;
     encoder.u16(REGISTER_NODE_WRAPPING_KEY)?;
+    encode_payload(encoder, value)
+}
+
+pub(super) fn encode_payload(
+    encoder: &mut Encoder,
+    value: &RegisterNodeWrappingKey,
+) -> Result<(), MetadataCommandCodecError> {
+    validate(value)?;
     encoder.identifier(value.node_id.as_bytes())?;
     encoder.u64(value.generation)?;
     encoder.fixed(&value.public_key)?;
@@ -23,6 +31,12 @@ pub(super) fn encode(
 }
 
 pub(super) fn decode(
+    decoder: &mut Decoder<'_>,
+) -> Result<RegisterNodeWrappingKey, MetadataCommandCodecError> {
+    decode_payload(decoder)
+}
+
+pub(super) fn decode_payload(
     decoder: &mut Decoder<'_>,
 ) -> Result<RegisterNodeWrappingKey, MetadataCommandCodecError> {
     let value = RegisterNodeWrappingKey {

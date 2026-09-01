@@ -399,3 +399,5 @@ impl RandomSource for OperatingSystemRandom {
         getrandom::fill(destination).map_err(|_| EntropyError)
     }
 }
+#[cfg(test)]
+mod bootstrap_test_support;

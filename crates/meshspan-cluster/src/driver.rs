@@ -444,16 +444,13 @@ mod tests {
 
     use meshspan_consensus::{CoreConfig, MemberIncarnations, compile_plan, flat_plan};
     use meshspan_domain::{
-        ApiKeyId, AuditEventId, AuthenticationMethodId, HostId, MeshId, OperationId, PartitionId,
-        PrincipalId, QuorumPlanId, Revision, RoleId,
+        AuditEventId, HostId, MeshId, OperationId, PartitionId, PrincipalId, QuorumPlanId,
+        Revision, RoleId,
     };
     use meshspan_metadata::{
-        AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-        CommandContext, CreateAuthenticationMethod, NewAuthenticationCredential, PartitionDatabase,
-        RecordName, encode_authoritative_command,
+        AuthoritativeCommand, BootstrapMesh, CommandContext, PartitionDatabase, RecordName,
+        encode_authoritative_command,
     };
-    use meshspan_secret_envelope::WrappingPublicKey;
-    use sha2::{Digest, Sha256};
 
     use super::*;
 
@@ -625,49 +622,18 @@ mod tests {
             occurred_at: UnixMicros::new(10),
             expected_revision: Some(Revision::ZERO),
         };
-        let command = AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
-            mesh: BootstrapMesh {
-                mesh_id: MeshId::from_bytes([34; 16])?,
-                mesh_name: RecordName::new("Driver mesh")?,
-                administrator_id,
-                administrator_name: RecordName::new("Administrator")?,
-                administrator_role_id: RoleId::from_bytes([35; 16])?,
-                host_id: HostId::from_bytes([36; 16])?,
-                host_name: RecordName::new("Host")?,
-                node_id,
-                node_name: RecordName::new("Node")?,
-                partition_name: RecordName::new("Root authority")?,
-            },
-            authentication: CreateAuthenticationMethod {
-                method_id: AuthenticationMethodId::from_bytes([37; 16])?,
-                principal_id: administrator_id,
-                label: "Initial API key".to_owned(),
-                service_scope: 7,
-                expires_at: None,
-                credential: NewAuthenticationCredential::ApiKey {
-                    key_id: ApiKeyId::from_bytes([38; 16])?,
-                    key_digest: [39; 32],
-                    scopes: 1,
-                    valid_from: context.occurred_at,
-                },
-            },
-            recovery: Box::new(recovery_identity(40)?),
-        });
+        let command = crate::protected_volume_test_support::protected_bootstrap(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([34; 16])?,
+            mesh_name: RecordName::new("Driver mesh")?,
+            administrator_id,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([35; 16])?,
+            host_id: HostId::from_bytes([36; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id,
+            node_name: RecordName::new("Node")?,
+            partition_name: RecordName::new("Root authority")?,
+        })?;
         Ok((context, command))
-    }
-
-    fn recovery_identity(
-        marker: u8,
-    ) -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::Error>> {
-        let public_key = WrappingPublicKey::from_bytes([marker; 32])?;
-        let certificate = vec![marker.wrapping_add(1); 64];
-        Ok(BootstrapRecoveryIdentity {
-            public_wrapping_key: public_key.as_bytes(),
-            key_fingerprint: public_key.fingerprint(),
-            root_certificate_digest: Sha256::digest(&certificate).into(),
-            root_certificate_der: certificate,
-            bundle_digest: [marker.wrapping_add(2); 32],
-            save_challenge_commitment: [marker.wrapping_add(3); 32],
-        })
     }
 }

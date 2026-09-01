@@ -3,6 +3,7 @@
 //! Atomic creation of the first mesh, authority, administrator and voter.
 
 use meshspan_domain::Revision;
+use meshspan_secret_envelope::WrappingPublicKey;
 use rusqlite::{Transaction, params};
 
 use super::apply::to_i64;
@@ -54,9 +55,15 @@ pub(super) fn bootstrap_appliance(
     command: &BootstrapAppliance,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
-    if command.authentication.principal_id != command.mesh.administrator_id {
+    if command.authentication.principal_id != command.mesh.administrator_id
+        || command.node_wrapping_key.node_id != command.mesh.node_id
+    {
         return Err(RepositoryError::InvalidCommand);
     }
+    let node_recipient = WrappingPublicKey::from_bytes(command.node_wrapping_key.public_key)
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    let recovery_recipient = WrappingPublicKey::from_bytes(command.recovery.public_wrapping_key)
+        .map_err(|_| RepositoryError::InvalidCommand)?;
     let mesh = bootstrap(transaction, partition_id, context, &command.mesh, revision)?;
     super::authentication_method_creation::create(
         transaction,
@@ -69,6 +76,16 @@ pub(super) fn bootstrap_appliance(
         context,
         command.mesh.mesh_id,
         &command.recovery,
+        revision,
+    )?;
+    super::node_wrapping_key::register(transaction, context, command.node_wrapping_key, revision)?;
+    super::secret_generation::commit_initial_storage_permit_key(
+        transaction,
+        context,
+        command.mesh.mesh_id,
+        node_recipient,
+        recovery_recipient,
+        &command.storage_permit_key_generation,
         revision,
     )?;
     Ok(mesh)

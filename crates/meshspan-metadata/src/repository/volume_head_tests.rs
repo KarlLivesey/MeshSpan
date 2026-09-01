@@ -17,9 +17,9 @@ use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::tests::{initial_test_volume_key, mark_test_recovery_verified};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommandContext, CommitConvergedVolumeHead, ConvergedHeadEvidence, CreateAuthenticationMethod,
-    CreateVolume, NewAuthenticationCredential, PartitionDatabase, RecordName,
+    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CommandContext,
+    CommitConvergedVolumeHead, ConvergedHeadEvidence, CreateAuthenticationMethod, CreateVolume,
+    NewAuthenticationCredential, PartitionDatabase, RecordName,
 };
 
 pub(super) struct HeadFixture {
@@ -332,8 +332,8 @@ fn head_bootstrap(
     let recovery_key = WrappingPublicKey::from_bytes([146; 32])?;
     let certificate = vec![221; 64];
     Ok(AuthoritativeCommand::BootstrapAppliance(
-        BootstrapAppliance {
-            mesh: BootstrapMesh {
+        crate::test_support::bootstrap_appliance(
+            BootstrapMesh {
                 mesh_id: MeshId::from_bytes([12; 16])?,
                 mesh_name: RecordName::new("Head proof mesh")?,
                 administrator_id: fixture.administrator,
@@ -345,7 +345,7 @@ fn head_bootstrap(
                 node_name: RecordName::new("Head node")?,
                 partition_name: RecordName::new("Head authority")?,
             },
-            authentication: CreateAuthenticationMethod {
+            CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([222; 16])?,
                 principal_id: fixture.administrator,
                 label: "Initial API key".to_owned(),
@@ -358,7 +358,7 @@ fn head_bootstrap(
                     valid_from: UnixMicros::new(100),
                 },
             },
-            recovery: Box::new(BootstrapRecoveryIdentity {
+            Box::new(BootstrapRecoveryIdentity {
                 public_wrapping_key: recovery_key.as_bytes(),
                 key_fingerprint: recovery_key.fingerprint(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
@@ -366,7 +366,7 @@ fn head_bootstrap(
                 bundle_digest: [225; 32],
                 save_challenge_commitment: [226; 32],
             }),
-        },
+        )?,
     ))
 }
 

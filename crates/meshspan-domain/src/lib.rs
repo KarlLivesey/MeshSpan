@@ -36,7 +36,9 @@ pub use api_key::{
     ApiKeyBundle, ApiKeyBundleError, ApiKeyIssuanceKey, ApiKeyIssuanceKeyError,
     ENCODED_API_KEY_LENGTH,
 };
-pub use bootstrap_material::{InitialBootstrapMaterial, InitialBootstrapMaterialError};
+pub use bootstrap_material::{
+    InitialBootstrapMaterial, InitialBootstrapMaterialError, InitialStoragePermitMaterial,
+};
 pub use claim::{ClaimBundle, ClaimBundleError, ENCODED_CLAIM_BUNDLE_LENGTH};
 pub use federation::{
     DEFAULT_FEDERATION_OFFLINE_DURATION, FederatedPrincipal, FederationAccess, FederationPolicy,
