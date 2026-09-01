@@ -7,14 +7,31 @@ use meshspan_api_contract::{
     OperationId as ApiOperationId, SetupName, decode_enrol_node_response,
     encode_enrol_node_request,
 };
-use meshspan_domain::{InitialBootstrapMaterial, OperationId, UnixMicros, uuid_v8};
-use meshspan_metadata::{JoinRoles, LocalSetupKind, LocalSetupState, NewLocalSetup, RecordName};
+use meshspan_cluster::{
+    ConsensusNetwork, ConsensusNetworkConfig, ConsensusPeerConfig, PeerConsensusMessage,
+    PeerControlRequest,
+};
+use meshspan_consensus::ActiveQuorumPlan;
+use meshspan_domain::{
+    BackupId, InitialBootstrapMaterial, OperationId, PartitionId, Revision, SnapshotId, UnixMicros,
+    uuid_v8,
+};
+use meshspan_metadata::{
+    JoinRoles, LocalSetupKind, LocalSetupState, LogPosition as MetadataLogPosition, NewLocalSetup,
+    PartitionBackupManifest, PartitionSnapshotManifest, PreservedVote, RecordName,
+    restore_partition_snapshot,
+};
+use meshspan_protocol::v1::control_envelope::Message;
+use meshspan_protocol::v1::{
+    ControlEnvelope, NodeActivationRequest, NodeActivationResult, NodeRole, OperationOutcome,
+};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::claim_file::{ClaimFile, ClaimFileError};
 use crate::node_enrolment::{NodeEnrolmentTranscript, derived_new_host_id};
 use crate::pinned_https_client::{PinnedHttpsClientError, post_pinned_json};
+use crate::private_consensus_runtime::certificate_name;
 use crate::protected_file::{self, ProtectedFileError, PublishMode};
 use crate::{DaemonLocalState, DaemonLocalStateError, HeadlessDaemonConfig};
 
@@ -22,6 +39,15 @@ const ENROLMENT_ROUTE: &str = "/api/latest/setup/enrolments";
 const OPERATION_ID_DOMAIN: &[u8] = b"meshspan.headless-join.operation-id.v1\0";
 const REQUEST_DIGEST_DOMAIN: &[u8] = b"meshspan.headless-join.request.v1\0";
 const RESULT_DIGEST_DOMAIN: &[u8] = b"meshspan.headless-join.result.v1\0";
+const ACTIVATION_OPERATION_ID_DOMAIN: &[u8] = b"meshspan.headless-join.activation.v1\0";
+const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
+const PRIVATE_OPERATION_TIMEOUT_MICROS: i64 = 30 * 1_000_000;
+
+pub(crate) struct HeadlessJoinNetwork {
+    pub network: ConsensusNetwork,
+    pub peer_messages: tokio::sync::mpsc::Receiver<PeerConsensusMessage>,
+    pub control_requests: tokio::sync::mpsc::Receiver<PeerControlRequest>,
+}
 
 /// Admits an unconfigured daemon through the invitation-pinned HTTPS boundary.
 ///
@@ -131,6 +157,240 @@ pub(crate) async fn admit_headless_node(
     Ok(Some(response))
 }
 
+pub(crate) async fn activate_and_install_headless_node(
+    local_state: &mut DaemonLocalState,
+    config: &HeadlessDaemonConfig,
+    admission: &EnrolNodeResponse,
+    now: UnixMicros,
+) -> Result<HeadlessJoinNetwork, HeadlessNodeJoinError> {
+    let mesh_id = meshspan_domain::MeshId::from_bytes(parse_uuid(&admission.mesh_id)?)
+        .map_err(|_| HeadlessNodeJoinError::InvalidAdmissionResponse)?;
+    let partition_id = PartitionId::from_bytes(parse_uuid(&admission.root_partition_id)?)
+        .map_err(|_| HeadlessNodeJoinError::InvalidAdmissionResponse)?;
+    let local_node_id = local_state.node_id();
+    let mut peers = Vec::with_capacity(admission.bootstrap_peers.len());
+    for peer in &admission.bootstrap_peers {
+        let node_id = meshspan_domain::NodeId::from_bytes(parse_uuid(&peer.node_id)?)
+            .map_err(|_| HeadlessNodeJoinError::InvalidAdmissionResponse)?;
+        let address = tokio::net::lookup_host(&peer.private_endpoint)
+            .await
+            .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
+            .next()
+            .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
+        peers.push(ConsensusPeerConfig {
+            node_id,
+            incarnation: 1,
+            address,
+            certificate_der: decode_hex_vec(&peer.certificate_der_hex)?,
+            certificate_name: certificate_name(node_id),
+        });
+    }
+    let client_address = if config.private_listen().is_ipv4() {
+        std::net::SocketAddr::from(([0, 0, 0, 0], 0))
+    } else {
+        std::net::SocketAddr::from(([0_u16; 8], 0))
+    };
+    let (peer_messages, received_peer_messages) = tokio::sync::mpsc::channel(256);
+    let (control_requests, received_control_requests) = tokio::sync::mpsc::channel(64);
+    let (snapshots, mut received_snapshots) = tokio::sync::mpsc::channel(1);
+    let network = ConsensusNetwork::start_with_control_and_snapshots(
+        ConsensusNetworkConfig {
+            local_node_id,
+            local_incarnation: 1,
+            mesh_id,
+            partition_id,
+            routing_epoch: admission.routing_epoch,
+            roles: vec![
+                NodeRole::Storage,
+                NodeRole::Gateway,
+                NodeRole::MetadataLearner,
+            ],
+            listen_address: config.private_listen(),
+            client_address,
+            certificate_chain_der: vec![
+                decode_hex_vec(&admission.node_certificate_der_hex)?,
+                decode_hex_vec(&admission.online_authority_certificate_der_hex)?,
+            ],
+            private_key_pkcs8: zeroize::Zeroizing::new(
+                local_state.node_identity_private_key_pkcs8().to_vec(),
+            ),
+            trust_anchors: vec![decode_hex_vec(&admission.root_certificate_der_hex)?],
+            peers,
+            snapshot_staging_path: Some(
+                local_state.state_directory().join(ROOT_AUTHORITY_DATABASE),
+            ),
+        },
+        peer_messages,
+        control_requests,
+        snapshots,
+    )?;
+    let activation_operation = activation_operation_id(local_node_id)?;
+    let deadline = now
+        .get()
+        .checked_add(PRIVATE_OPERATION_TIMEOUT_MICROS)
+        .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
+    let request = ControlEnvelope {
+        header: Some(network.control_header(activation_operation, deadline)?),
+        message: Some(Message::NodeActivationRequest(NodeActivationRequest {
+            roles: vec![
+                NodeRole::Storage.into(),
+                NodeRole::Gateway.into(),
+                NodeRole::MetadataLearner.into(),
+            ],
+            capability_digest: network.local_capability_digest().to_vec(),
+        })),
+    };
+    let target = admission
+        .bootstrap_peers
+        .first()
+        .ok_or(HeadlessNodeJoinError::InvalidAdmissionResponse)?;
+    let target_id = meshspan_domain::NodeId::from_bytes(parse_uuid(&target.node_id)?)
+        .map_err(|_| HeadlessNodeJoinError::InvalidAdmissionResponse)?;
+    let response = network.request_control(target_id, &request).await?;
+    validate_activation_result(&response)?;
+    let received = tokio::time::timeout(
+        std::time::Duration::from_micros(
+            u64::try_from(PRIVATE_OPERATION_TIMEOUT_MICROS)
+                .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?,
+        ),
+        received_snapshots.recv(),
+    )
+    .await
+    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
+    .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
+    install_join_snapshot(local_state, partition_id, received, now)?;
+    complete_join_setup(local_state, now)?;
+    Ok(HeadlessJoinNetwork {
+        network,
+        peer_messages: received_peer_messages,
+        control_requests: received_control_requests,
+    })
+}
+
+fn validate_activation_result(
+    response: &meshspan_protocol::ValidatedControlEnvelope,
+) -> Result<(), HeadlessNodeJoinError> {
+    let Some(Message::NodeActivationResult(NodeActivationResult {
+        result: Some(result),
+        active_revision: Some(active_revision),
+    })) = response.as_inner().message.as_ref()
+    else {
+        return Err(HeadlessNodeJoinError::InvalidActivationResponse);
+    };
+    if result.outcome != i32::from(OperationOutcome::Durable)
+        || result.committed_revision != Some(*active_revision)
+        || result.error.is_some()
+        || result.result_digest.len() != 32
+    {
+        return Err(HeadlessNodeJoinError::InvalidActivationResponse);
+    }
+    Ok(())
+}
+
+fn install_join_snapshot(
+    local_state: &DaemonLocalState,
+    partition_id: PartitionId,
+    received: meshspan_cluster::ReceivedConsensusSnapshot,
+    now: UnixMicros,
+) -> Result<(), HeadlessNodeJoinError> {
+    let active = ActiveQuorumPlan::decode(&received.snapshot.quorum_plan)
+        .map_err(|_| HeadlessNodeJoinError::InvalidSnapshot)?;
+    let ActiveQuorumPlan::Stable(plan) = active else {
+        return Err(HeadlessNodeJoinError::InvalidSnapshot);
+    };
+    if !plan.spec().voters.contains(&received.from)
+        || !plan.spec().learners.contains(&local_state.node_id())
+        || plan.proof_digest() != received.snapshot.quorum_plan_digest
+        || plan.spec().membership_epoch != received.snapshot.membership_epoch
+    {
+        return Err(HeadlessNodeJoinError::InvalidSnapshot);
+    }
+    let snapshot_id = SnapshotId::from_bytes(received.snapshot.snapshot_id)
+        .map_err(|_| HeadlessNodeJoinError::InvalidSnapshot)?;
+    let included = received.snapshot.included_position;
+    let manifest = PartitionSnapshotManifest {
+        snapshot_id,
+        backup: PartitionBackupManifest {
+            backup_id: BackupId::from_bytes(snapshot_id.as_bytes())
+                .map_err(|_| HeadlessNodeJoinError::InvalidSnapshot)?,
+            partition_id,
+            applied_position: MetadataLogPosition {
+                term: included.term,
+                index: included.index,
+            },
+            state_revision: Revision::new(received.snapshot.state_revision),
+            schema_version: received.snapshot.format_version,
+            byte_length: received.snapshot.total_bytes,
+            digest: received.snapshot.digest,
+            created_at: now,
+        },
+        membership_epoch: received.snapshot.membership_epoch,
+        quorum_plan_digest: received.snapshot.quorum_plan_digest,
+    };
+    let destination = local_state.state_directory().join(ROOT_AUTHORITY_DATABASE);
+    let database = restore_partition_snapshot(
+        &received.snapshot.staging_path,
+        &destination,
+        manifest,
+        &plan,
+        PreservedVote {
+            current_term: 1,
+            voted_for: None,
+            membership_epoch: 0,
+        },
+        now,
+    )?;
+    let membership = meshspan_metadata::AuthoritativeRepository::new(database)
+        .partition_membership()?
+        .ok_or(HeadlessNodeJoinError::InvalidSnapshot)?;
+    if membership.admitted_learners().get(&local_state.node_id()) != Some(&1) {
+        return Err(HeadlessNodeJoinError::InvalidSnapshot);
+    }
+    received
+        .installed
+        .send(())
+        .map_err(|()| HeadlessNodeJoinError::PrivateNetwork)
+}
+
+fn complete_join_setup(
+    local_state: &mut DaemonLocalState,
+    now: UnixMicros,
+) -> Result<(), HeadlessNodeJoinError> {
+    let setup = local_state
+        .local_database()
+        .local_setup()?
+        .ok_or(HeadlessNodeJoinError::InvalidLocalState)?;
+    let claim = ClaimFile::read(local_state.claim_output_path())?;
+    local_state.local_database_mut().complete_local_setup(
+        setup.operation_id,
+        claim.claim_id(),
+        claim.secret_digest(),
+        now,
+    )?;
+    ClaimFile::remove_if_matches(
+        local_state.claim_output_path(),
+        claim.claim_id(),
+        claim.secret_digest(),
+    )?;
+    Ok(())
+}
+
+fn activation_operation_id(
+    node_id: meshspan_domain::NodeId,
+) -> Result<OperationId, HeadlessNodeJoinError> {
+    let bytes = digest(ACTIVATION_OPERATION_ID_DOMAIN, &node_id.as_bytes());
+    let mut exact: [u8; 16] = bytes[..16]
+        .try_into()
+        .map_err(|_| HeadlessNodeJoinError::InvalidLocalState)?;
+    exact = uuid_v8(exact);
+    OperationId::from_bytes(exact).map_err(|_| HeadlessNodeJoinError::InvalidLocalState)
+}
+
+fn parse_uuid(value: &str) -> Result<[u8; 16], HeadlessNodeJoinError> {
+    crate::create_mesh_setup::parse_uuid(value)
+        .map_err(|_| HeadlessNodeJoinError::InvalidAdmissionResponse)
+}
+
 fn derived_operation_id(join_grant_id: [u8; 16], node_id: [u8; 16]) -> [u8; 16] {
     let mut digest = Sha256::new();
     digest.update(OPERATION_ID_DOMAIN);
@@ -228,6 +488,25 @@ fn decode_hex<const N: usize>(value: &str) -> Result<[u8; N], HeadlessNodeJoinEr
     Ok(decoded)
 }
 
+fn decode_hex_vec(value: &str) -> Result<Vec<u8>, HeadlessNodeJoinError> {
+    if value.is_empty() || !value.len().is_multiple_of(2) {
+        return Err(HeadlessNodeJoinError::InvalidAdmissionResponse);
+    }
+    value
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            let high =
+                decode_nibble(pair[0]).ok_or(HeadlessNodeJoinError::InvalidAdmissionResponse)?;
+            let low =
+                decode_nibble(pair[1]).ok_or(HeadlessNodeJoinError::InvalidAdmissionResponse)?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
 const fn decode_nibble(value: u8) -> Option<u8> {
     match value {
         b'0'..=b'9' => Some(value - b'0'),
@@ -242,6 +521,16 @@ pub(crate) enum HeadlessNodeJoinError {
     InvalidLocalState,
     #[error("headless node admission response is invalid")]
     InvalidAdmissionResponse,
+    #[error("headless node activation response is invalid")]
+    InvalidActivationResponse,
+    #[error("headless node admission snapshot is invalid")]
+    InvalidSnapshot,
+    #[error("headless node private network failed")]
+    PrivateNetwork,
+    #[error("headless node private transport failed")]
+    ConsensusNetwork(#[from] meshspan_cluster::ConsensusNetworkError),
+    #[error("headless node metadata query failed")]
+    Repository(#[from] meshspan_metadata::RepositoryError),
     #[error("headless node claim failed")]
     Claim(#[from] ClaimFileError),
     #[error("headless node identity failed")]

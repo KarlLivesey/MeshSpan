@@ -90,7 +90,7 @@ pub use cleanup_worker::{
 mod cleanup_worker_tests;
 pub use consensus_network::{
     ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
-    PeerControlRequest,
+    OutboundConsensusSnapshot, PeerControlRequest, ReceivedConsensusSnapshot,
 };
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
 pub use driver::{
@@ -232,6 +232,7 @@ pub use filesystem_authority::{MetadataFilesystemAuthority, MetadataFilesystemAu
 pub use filesystem_convergence::{
     FilesystemConvergenceError, FilesystemConvergenceService, PreparedHistoryReconciliation,
 };
+pub use membership::{MembershipRestoreError, restore_member_incarnations};
 pub use meshspan_metadata::FederationRemoteAuthoritySnapshot;
 pub use metadata_authority::{
     ConsensusMessageTransport, MetadataAuthorityConfig, MetadataAuthorityHandle,

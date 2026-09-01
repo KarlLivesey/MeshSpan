@@ -586,6 +586,7 @@ fn network_config(
         private_key_pkcs8: Zeroizing::new(identities[local_index].private_key().to_vec()),
         trust_anchors: vec![trust_anchor.to_vec()],
         peers,
+        snapshot_staging_path: None,
     }
 }
 

@@ -19,16 +19,16 @@ use meshspan_api_contract::{
 use meshspan_cluster::{
     ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, MetadataAuthorityConfig,
     MetadataAuthorityHandle, MetadataAuthorityRequestError, MetadataAuthorityRuntimeError,
-    MetadataAuthorityStartError, PartitionConsensusDriver, PeerControlRequest,
-    spawn_metadata_authority,
+    MetadataAuthorityStartError, OutboundConsensusSnapshot, PartitionConsensusDriver,
+    PeerControlRequest, restore_member_incarnations, spawn_metadata_authority,
 };
 use meshspan_consensus::{
-    ConsensusCore, CoreConfig, CoreError, MemberIncarnations, QuorumPlanError, compile_plan,
+    ActiveQuorumPlan, ConsensusCore, CoreConfig, CoreError, QuorumPlanError, compile_plan,
     flat_plan,
 };
 use meshspan_domain::{
     DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, NodeId, OperationId,
-    UnixMicros,
+    SnapshotId, UnixMicros,
 };
 use meshspan_metadata::{
     AuthoritativeRepository, ConsensusStoreError, JoinRoles, MetadataStoreError, PartitionDatabase,
@@ -43,7 +43,7 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
-use crate::headless_node_join::admit_headless_node;
+use crate::headless_node_join::{activate_and_install_headless_node, admit_headless_node};
 use crate::private_consensus_runtime::{NetworkRegisteringEnrolment, PrivateConsensusRuntime};
 use crate::{
     ApiKeyIssuanceApiError, AuthenticationMethodListingApiError,
@@ -165,6 +165,7 @@ impl PrivateNetworkStarter {
             private_key_pkcs8: Zeroizing::new(self.local_private_key_pkcs8.to_vec()),
             trust_anchors: vec![recovery.root_certificate_der],
             peers: Vec::new(),
+            snapshot_staging_path: None,
         };
         let network = {
             let _entered = self.runtime.enter();
@@ -258,21 +259,48 @@ where
     let setup_state = Arc::new(SetupStateSnapshot::new(SetupState::ClaimRequired));
     setup_state.reconcile(local_state.local_database())?;
     let private_endpoint = advertised_private_endpoint(&config)?;
-    if setup_state.setup_state() != SetupState::Configured
-        && admit_headless_node(&mut local_state, &config, &private_endpoint, started_at)
+    let private_network = Arc::new(PrivateConsensusRuntime::default());
+    let mut joining_peer_messages = None;
+    let mut joining_control_requests = None;
+    if setup_state.setup_state() != SetupState::Configured {
+        if let Some(admission) =
+            admit_headless_node(&mut local_state, &config, &private_endpoint, started_at)
+                .await
+                .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?
+        {
+            let joined = activate_and_install_headless_node(
+                &mut local_state,
+                &config,
+                &admission,
+                current_time()?,
+            )
             .await
-            .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?
-            .is_some()
-    {
-        return Err(DaemonProcessError::NodeActivationPending);
+            .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?;
+            private_network
+                .install(joined.network)
+                .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
+            joining_peer_messages = Some(joined.peer_messages);
+            joining_control_requests = Some(joined.control_requests);
+            setup_state.reconcile(local_state.local_database())?;
+        }
     }
 
-    let private_network = Arc::new(PrivateConsensusRuntime::default());
     let consensus_transport: Arc<dyn meshspan_cluster::ConsensusMessageTransport> =
         private_network.clone();
     let (authority, authority_task, removal_authority_epoch) =
         start_root_authority(&local_state, started_at, consensus_transport)?;
-    authority.begin_election().await?;
+    if let Some(mut messages) = joining_peer_messages {
+        let joining_authority = authority.clone();
+        tokio::spawn(async move {
+            while let Some(message) = messages.recv().await {
+                if joining_authority.receive_peer(message).await.is_err() {
+                    break;
+                }
+            }
+        });
+    } else {
+        authority.begin_election().await?;
+    }
     let private_network_starter = PrivateNetworkStarter {
         runtime: tokio::runtime::Handle::current(),
         network: Arc::clone(&private_network),
@@ -284,6 +312,14 @@ where
         )),
         listen_address: config.private_listen(),
     };
+    if let Some(control_requests) = joining_control_requests {
+        private_network_starter.spawn_control_runtime(
+            private_network
+                .network()
+                .map_err(|()| DaemonProcessError::PrivateNetworkState)?,
+            control_requests,
+        );
+    }
     if setup_state.setup_state() == SetupState::Configured {
         private_network_starter.start(started_at)?;
     }
@@ -433,7 +469,6 @@ fn start_root_authority(
     transport: Arc<dyn meshspan_cluster::ConsensusMessageTransport>,
 ) -> Result<AuthorityTask, DaemonProcessError> {
     let node_id = local_state.node_id();
-    let partition_id = InitialBootstrapMaterial::root_partition_id(node_id)?;
     let plan = compile_plan(flat_plan(
         InitialBootstrapMaterial::initial_quorum_plan_id(node_id)?,
         INITIAL_MEMBERSHIP_EPOCH,
@@ -441,13 +476,14 @@ fn start_root_authority(
         BTreeSet::new(),
     )?)?;
     let mut repository = open_root_repository(local_state, now)?;
+    let partition_id = repository.partition_id();
     let active_plan = match repository.load_active_consensus_quorum_plan()? {
         Some(active) => active,
         None => repository.initialise_consensus_quorum_plan(&plan, now)?,
     };
     let recovery_plan = active_plan.recovery_configuration_plan().clone();
-    let incarnations =
-        MemberIncarnations::for_members(BTreeMap::from([(node_id, 1)]), &active_plan.members())?;
+    let incarnations = restore_member_incarnations(&repository, &active_plan)
+        .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
     let durable = repository.load_consensus_state(active_plan.membership_epoch())?;
     let authority_epoch = active_plan.membership_epoch();
     let core = ConsensusCore::restore_active(
@@ -707,6 +743,13 @@ async fn handle_private_control(
         }
         _ => Err(NodeActivationError::Rejected),
     };
+    if let Ok(commit) = &outcome {
+        spawn_learner_snapshot(
+            network.clone(),
+            state_directory.to_path_buf(),
+            commit.record.node_id,
+        );
+    }
     let (result, active_revision) = activation_result(outcome);
     Ok(ControlEnvelope {
         header: Some(network.control_header(operation_id, header.deadline_unix_micros)?),
@@ -715,6 +758,77 @@ async fn handle_private_control(
             active_revision,
         })),
     })
+}
+
+fn spawn_learner_snapshot(network: ConsensusNetwork, state_directory: PathBuf, learner: NodeId) {
+    tokio::spawn(async move {
+        let prepared = tokio::task::spawn_blocking(move || {
+            prepare_learner_snapshot(&state_directory, learner)
+        })
+        .await;
+        let Ok(Ok(snapshot)) = prepared else {
+            return;
+        };
+        let snapshot_path = snapshot.path.clone();
+        let _sent = network.send_snapshot(learner, &snapshot).await;
+        let _removed = tokio::fs::remove_file(snapshot_path).await;
+    });
+}
+
+fn prepare_learner_snapshot(
+    state_directory: &std::path::Path,
+    learner: NodeId,
+) -> Result<OutboundConsensusSnapshot, DaemonProcessError> {
+    const ATTEMPTS: usize = 200;
+    for attempt in 0..ATTEMPTS {
+        let repository = open_root_repository_at(state_directory, current_time()?)?;
+        let active = repository
+            .load_active_consensus_quorum_plan()?
+            .ok_or(DaemonProcessError::PrivateNetworkState)?;
+        if let ActiveQuorumPlan::Stable(plan) = active
+            && plan.spec().learners.contains(&learner)
+        {
+            let snapshot_id = learner_snapshot_id(&plan, learner)?;
+            let path = state_directory.join(format!(
+                "learner-{}-epoch-{}.snapshot",
+                learner,
+                plan.spec().membership_epoch
+            ));
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            let manifest =
+                repository.create_snapshot(snapshot_id, &path, &plan, current_time()?)?;
+            let quorum_plan = ActiveQuorumPlan::Stable(plan)
+                .encode()
+                .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
+            return Ok(OutboundConsensusSnapshot {
+                path,
+                manifest,
+                quorum_plan,
+            });
+        }
+        drop(repository);
+        if attempt + 1 < ATTEMPTS {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    Err(DaemonProcessError::PrivateNetworkState)
+}
+
+fn learner_snapshot_id(
+    plan: &meshspan_consensus::CompiledQuorumPlan,
+    learner: NodeId,
+) -> Result<SnapshotId, DaemonProcessError> {
+    let mut bytes: [u8; 16] = plan.proof_digest()[..16]
+        .try_into()
+        .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
+    for (target, source) in bytes.iter_mut().zip(learner.as_bytes()) {
+        *target ^= source;
+    }
+    SnapshotId::from_bytes(bytes).map_err(|_| DaemonProcessError::PrivateNetworkState)
 }
 
 async fn activate_private_node(

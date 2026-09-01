@@ -2,8 +2,11 @@
 
 //! Production-configurable authenticated QUIC transport for consensus messages.
 
+mod snapshot;
+
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -30,6 +33,7 @@ use crate::{
     ConsensusMessageTransport, PeerConsensusMessage, decode_consensus_message,
     encode_consensus_message,
 };
+pub use snapshot::{OutboundConsensusSnapshot, ReceivedConsensusSnapshot};
 
 const MAXIMUM_CONTROL_BYTES: usize = 64 * 1_024;
 const MAXIMUM_DATA_BYTES: usize = 64 * 1_024;
@@ -84,6 +88,8 @@ pub struct ConsensusNetworkConfig {
     pub trust_anchors: Vec<Vec<u8>>,
     /// Exact enrolled peers, excluding the local node.
     pub peers: Vec<ConsensusPeerConfig>,
+    /// Database path used only to derive owned temporary snapshot staging files.
+    pub snapshot_staging_path: Option<PathBuf>,
 }
 
 /// One authenticated non-consensus control request delivered to the appliance authority.
@@ -116,6 +122,7 @@ pub struct ConsensusNetwork {
     roles: Arc<[i32]>,
     wire_limits: WireLimits,
     next_request: Arc<AtomicU64>,
+    snapshot_staging_path: Option<Arc<PathBuf>>,
 }
 
 struct ConsensusPeers {
@@ -135,7 +142,7 @@ impl ConsensusNetwork {
         config: ConsensusNetworkConfig,
         incoming_messages: mpsc::Sender<PeerConsensusMessage>,
     ) -> Result<Self, ConsensusNetworkError> {
-        Self::start_inner(config, incoming_messages, None)
+        Self::start_inner(config, incoming_messages, None, None)
     }
 
     /// Starts the network with an additional authenticated metadata-control ingress.
@@ -148,13 +155,52 @@ impl ConsensusNetwork {
         incoming_messages: mpsc::Sender<PeerConsensusMessage>,
         incoming_control: mpsc::Sender<PeerControlRequest>,
     ) -> Result<Self, ConsensusNetworkError> {
-        Self::start_inner(config, incoming_messages, Some(incoming_control))
+        Self::start_inner(config, incoming_messages, Some(incoming_control), None)
+    }
+
+    /// Starts the network with authenticated snapshot ingress for an admitted learner.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent staging configuration and applies every normal private-network check.
+    pub fn start_with_snapshots(
+        config: ConsensusNetworkConfig,
+        incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+        incoming_snapshots: mpsc::Sender<ReceivedConsensusSnapshot>,
+    ) -> Result<Self, ConsensusNetworkError> {
+        if config.snapshot_staging_path.is_none() {
+            return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        Self::start_inner(config, incoming_messages, None, Some(incoming_snapshots))
+    }
+
+    /// Starts the complete authenticated consensus, control and snapshot ingress.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent staging configuration and applies every normal private-network check.
+    pub fn start_with_control_and_snapshots(
+        config: ConsensusNetworkConfig,
+        incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+        incoming_control: mpsc::Sender<PeerControlRequest>,
+        incoming_snapshots: mpsc::Sender<ReceivedConsensusSnapshot>,
+    ) -> Result<Self, ConsensusNetworkError> {
+        if config.snapshot_staging_path.is_none() {
+            return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        Self::start_inner(
+            config,
+            incoming_messages,
+            Some(incoming_control),
+            Some(incoming_snapshots),
+        )
     }
 
     fn start_inner(
         config: ConsensusNetworkConfig,
         incoming_messages: mpsc::Sender<PeerConsensusMessage>,
         incoming_control: Option<mpsc::Sender<PeerControlRequest>>,
+        incoming_snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
     ) -> Result<Self, ConsensusNetworkError> {
         validate_config(&config)?;
         let wire_limits = wire_limits()?;
@@ -190,6 +236,7 @@ impl ConsensusNetwork {
             roles: Arc::from(config.roles.into_iter().map(i32::from).collect::<Vec<_>>()),
             wire_limits,
             next_request: Arc::new(AtomicU64::new(1)),
+            snapshot_staging_path: config.snapshot_staging_path.map(Arc::new),
         };
         let peer_ids = network
             .peers
@@ -213,7 +260,12 @@ impl ConsensusNetwork {
         for (peer, receiver) in workers {
             network.spawn_outbound_worker(peer, receiver);
         }
-        network.spawn_accept_loop(server, incoming_messages, incoming_control);
+        network.spawn_accept_loop(
+            server,
+            incoming_messages,
+            incoming_control,
+            incoming_snapshots,
+        );
         Ok(network)
     }
 
@@ -335,6 +387,7 @@ impl ConsensusNetwork {
         server: quinn::Endpoint,
         messages: mpsc::Sender<PeerConsensusMessage>,
         controls: Option<mpsc::Sender<PeerControlRequest>>,
+        snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
     ) {
         let network = self.clone();
         self.runtime.spawn(async move {
@@ -354,6 +407,7 @@ impl ConsensusNetwork {
                 let connection_network = network.clone();
                 let connection_messages = messages.clone();
                 let connection_controls = controls.clone();
+                let connection_snapshots = snapshots.clone();
                 connection_network.runtime.clone().spawn(async move {
                     if connection_network
                         .receive_connection(
@@ -361,6 +415,7 @@ impl ConsensusNetwork {
                             peer,
                             connection_messages,
                             connection_controls,
+                            connection_snapshots,
                         )
                         .await
                         .is_err()
@@ -378,6 +433,7 @@ impl ConsensusNetwork {
         peer: meshspan_transport::AuthenticatedPeer,
         messages: mpsc::Sender<PeerConsensusMessage>,
         controls: Option<mpsc::Sender<PeerControlRequest>>,
+        snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
     ) -> Result<(), ConsensusNetworkError> {
         let mut negotiation = accept_stream(&connection).await?;
         if negotiation.kind != StreamKind::Metadata {
@@ -447,7 +503,18 @@ impl ConsensusNetwork {
                     send_control(&mut accepted.send, &response, self.wire_limits).await?;
                     accepted.send.finish()?;
                 }
-                StreamKind::Snapshot | StreamKind::Data | StreamKind::Federation => {
+                StreamKind::Snapshot => {
+                    let snapshots = snapshots
+                        .as_ref()
+                        .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+                    let staging_path = self
+                        .snapshot_staging_path
+                        .as_ref()
+                        .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+                    self.receive_snapshot(peer.node_id(), staging_path, &mut accepted, snapshots)
+                        .await?;
+                }
+                StreamKind::Data | StreamKind::Federation => {
                     return Err(ConsensusNetworkError::InvalidTraffic);
                 }
             }
@@ -784,6 +851,9 @@ pub enum ConsensusNetworkError {
     /// Quinn rejected a finished stream.
     #[error("consensus QUIC stream failed")]
     Quinn(#[from] quinn::ClosedStream),
+    /// Snapshot staging or streaming filesystem IO failed.
+    #[error("consensus snapshot IO failed")]
+    Io(#[from] std::io::Error),
 }
 
 #[cfg(test)]

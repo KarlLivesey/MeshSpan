@@ -2,12 +2,10 @@
 
 //! Learner admission, catch-up snapshots and automatic voter promotion.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use meshspan_consensus::{
-    ActiveQuorumPlan, CoreInput, MEMBERSHIP_COMMAND_VERSION, MemberIncarnations, Role,
-};
+use meshspan_consensus::{ActiveQuorumPlan, CoreInput, MEMBERSHIP_COMMAND_VERSION, Role};
 use meshspan_domain::{BackupId, NodeId, Revision, SnapshotId};
 use meshspan_metadata::{
     AuthoritativeRepository, LogPosition as MetadataLogPosition, PartitionBackupManifest,
@@ -181,34 +179,6 @@ pub(super) fn maybe_plan_membership_transition(
             now(),
         )
         .map_err(Into::into)
-}
-
-pub(super) fn restore_incarnations(
-    repository: &AuthoritativeRepository,
-    active_plan: &ActiveQuorumPlan,
-) -> Result<MemberIncarnations, NodeRuntimeError> {
-    let values = if let Some(membership) = repository.partition_membership()? {
-        let mut values = membership.active_voters().clone();
-        values.extend(membership.admitted_learners());
-        active_plan
-            .members()
-            .into_iter()
-            .map(|node| {
-                values
-                    .get(&node)
-                    .copied()
-                    .map(|incarnation| (node, incarnation))
-                    .ok_or(NodeRuntimeError::InvalidConfiguration)
-            })
-            .collect::<Result<BTreeMap<_, _>, _>>()?
-    } else {
-        active_plan
-            .members()
-            .into_iter()
-            .map(|node| (node, 1))
-            .collect()
-    };
-    MemberIncarnations::for_members(values, &active_plan.members()).map_err(Into::into)
 }
 
 fn learner_snapshot_id(
