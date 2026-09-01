@@ -129,6 +129,7 @@ mod pending_recovery_bundle;
 mod pending_recovery_bundle_tests;
 mod protected_api_key_issuance;
 mod protected_file;
+mod protected_recovery_code_issuance;
 mod public_contract_api;
 #[cfg(test)]
 mod public_contract_api_tests;
@@ -336,6 +337,7 @@ pub use pending_recovery_bundle::{
     PendingRecoveryBundle, PendingRecoveryBundleError, PendingRecoveryBundleRemoval,
 };
 pub use protected_api_key_issuance::ProtectedApiKeyIssuanceController;
+pub use protected_recovery_code_issuance::ProtectedRecoveryCodeIssuanceController;
 pub use public_contract_api::{
     PublicContractApiError, ReadinessSource, public_contract_api_router,
 };
