@@ -2,16 +2,13 @@
 
 //! Atomic owner-only filesystem presentation for one secret claim bundle.
 
-use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{self, Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 
 use meshspan_domain::{ClaimBundle, ClaimId, ENCODED_CLAIM_BUNDLE_LENGTH};
 use thiserror::Error;
 
-const OWNER_READ_WRITE: u32 = 0o600;
-const TEMPORARY_ATTEMPTS: u8 = 32;
+use crate::protected_file::{self, ProtectedFileError, PublishMode};
 
 /// Owner-only local automation-file operations for one claim bundle.
 pub struct ClaimFile;
@@ -46,23 +43,12 @@ impl ClaimFile {
     ///
     /// Rejects missing, permissive, non-regular, replaced, malformed or unreadable files.
     pub fn read(path: &Path) -> Result<ClaimBundle, ClaimFileError> {
-        let before = fs::symlink_metadata(path).map_err(map_read_error)?;
-        validate_metadata(&before)?;
-        validate_length(&before)?;
-        let mut file = OpenOptions::new().read(true).open(path)?;
-        let opened = file.metadata()?;
-        validate_metadata(&opened)?;
-        validate_length(&opened)?;
-        if !same_file(&before, &opened) {
-            return Err(ClaimFileError::Changed);
-        }
-        let mut bytes = [0_u8; ENCODED_CLAIM_BUNDLE_LENGTH];
-        file.read_exact(&mut bytes)
-            .map_err(map_bounded_read_error)?;
-        let mut excess = [0_u8; 1];
-        if file.read(&mut excess)? != 0 {
-            return Err(ClaimFileError::Invalid);
-        }
+        let bytes = protected_file::read_bounded(
+            path,
+            ENCODED_CLAIM_BUNDLE_LENGTH,
+            ENCODED_CLAIM_BUNDLE_LENGTH,
+        )
+        .map_err(map_protected_error)?;
         let encoded = std::str::from_utf8(&bytes).map_err(|_| ClaimFileError::Invalid)?;
         ClaimBundle::parse(encoded).map_err(|_| ClaimFileError::Invalid)
     }
@@ -87,16 +73,9 @@ impl ClaimFile {
         if claim.claim_id() != claim_id || !digests_match(claim.secret_digest(), secret_digest) {
             return Ok(false);
         }
-        fs::remove_file(path)?;
-        sync_parent(path)?;
+        protected_file::remove(path).map_err(map_protected_error)?;
         Ok(true)
     }
-}
-
-#[derive(Clone, Copy)]
-enum PublishMode {
-    Create,
-    Replace,
 }
 
 /// Stable protected-claim-file failure without secret or path contents.
@@ -123,111 +102,18 @@ pub enum ClaimFileError {
 }
 
 fn publish(path: &Path, claim: &ClaimBundle, mode: PublishMode) -> Result<(), ClaimFileError> {
-    validate_destination(path)?;
-    let (temporary_path, mut temporary_file) = create_temporary(path, claim.claim_id())?;
-    let result = (|| {
-        let encoded = claim.expose_encoded();
-        temporary_file.write_all(encoded.as_bytes())?;
-        temporary_file.sync_all()?;
-        let metadata = temporary_file.metadata()?;
-        validate_metadata(&metadata)?;
-        drop(temporary_file);
-        match mode {
-            PublishMode::Create => {
-                fs::hard_link(&temporary_path, path).map_err(map_publish_error)?;
-            }
-            PublishMode::Replace => {
-                fs::rename(&temporary_path, path)?;
-            }
-        }
-        sync_parent(path)?;
-        if matches!(mode, PublishMode::Create) {
-            fs::remove_file(&temporary_path)?;
-            sync_parent(path)?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ignored = fs::remove_file(&temporary_path);
-    }
-    result
+    let encoded = claim.expose_encoded();
+    protected_file::publish(path, encoded.as_bytes(), mode).map_err(map_protected_error)
 }
 
-fn create_temporary(path: &Path, claim_id: ClaimId) -> Result<(PathBuf, File), ClaimFileError> {
-    let parent = path.parent().ok_or(ClaimFileError::Unsafe)?;
-    for attempt in 0..TEMPORARY_ATTEMPTS {
-        let temporary_path = parent.join(format!(".meshspan-claim-{claim_id}-{attempt}.tmp"));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(OWNER_READ_WRITE)
-            .open(&temporary_path)
-        {
-            Ok(file) => return Ok((temporary_path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(ClaimFileError::Io(error)),
-        }
-    }
-    Err(ClaimFileError::Unsafe)
-}
-
-fn validate_destination(path: &Path) -> Result<(), ClaimFileError> {
-    let parent = path.parent().ok_or(ClaimFileError::Unsafe)?;
-    let file_name = path.file_name().ok_or(ClaimFileError::Unsafe)?;
-    if file_name.is_empty() || !fs::metadata(parent)?.is_dir() {
-        return Err(ClaimFileError::Unsafe);
-    }
-    Ok(())
-}
-
-fn validate_metadata(metadata: &Metadata) -> Result<(), ClaimFileError> {
-    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o077 != 0 {
-        return Err(ClaimFileError::Unsafe);
-    }
-    Ok(())
-}
-
-fn validate_length(metadata: &Metadata) -> Result<(), ClaimFileError> {
-    let expected =
-        u64::try_from(ENCODED_CLAIM_BUNDLE_LENGTH).map_err(|_| ClaimFileError::Invalid)?;
-    if metadata.len() == expected {
-        Ok(())
-    } else {
-        Err(ClaimFileError::Invalid)
-    }
-}
-
-fn same_file(before: &Metadata, opened: &Metadata) -> bool {
-    before.dev() == opened.dev() && before.ino() == opened.ino()
-}
-
-fn sync_parent(path: &Path) -> Result<(), ClaimFileError> {
-    let parent = path.parent().ok_or(ClaimFileError::Unsafe)?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-fn map_read_error(error: io::Error) -> ClaimFileError {
-    if error.kind() == io::ErrorKind::NotFound {
-        ClaimFileError::Missing
-    } else {
-        ClaimFileError::Io(error)
-    }
-}
-
-fn map_bounded_read_error(error: io::Error) -> ClaimFileError {
-    if error.kind() == io::ErrorKind::UnexpectedEof {
-        ClaimFileError::Invalid
-    } else {
-        ClaimFileError::Io(error)
-    }
-}
-
-fn map_publish_error(error: io::Error) -> ClaimFileError {
-    if error.kind() == io::ErrorKind::AlreadyExists {
-        ClaimFileError::Exists
-    } else {
-        ClaimFileError::Io(error)
+fn map_protected_error(error: ProtectedFileError) -> ClaimFileError {
+    match error {
+        ProtectedFileError::Missing => ClaimFileError::Missing,
+        ProtectedFileError::Exists => ClaimFileError::Exists,
+        ProtectedFileError::Unsafe => ClaimFileError::Unsafe,
+        ProtectedFileError::Changed => ClaimFileError::Changed,
+        ProtectedFileError::Invalid => ClaimFileError::Invalid,
+        ProtectedFileError::Io(error) => ClaimFileError::Io(error),
     }
 }
 

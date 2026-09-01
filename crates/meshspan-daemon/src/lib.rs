@@ -101,6 +101,7 @@ mod passkey_session_creation_tests;
 mod passkey_session_tests;
 #[cfg(test)]
 mod passkey_test_support;
+mod protected_file;
 mod public_contract_api;
 #[cfg(test)]
 mod public_contract_api_tests;
