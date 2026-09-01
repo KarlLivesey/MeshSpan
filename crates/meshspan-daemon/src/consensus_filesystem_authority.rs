@@ -229,6 +229,19 @@ impl StorageTargetRegistrationAuthority for ConsensusAuthenticationAuthority {
         self.commit_authoritative(context, command)
             .map_err(map_storage_target_authority_error)
     }
+
+    fn provider_context(
+        &self,
+        node_id: meshspan_domain::NodeId,
+        target_id: meshspan_domain::TargetId,
+    ) -> Result<
+        Option<meshspan_metadata::StorageTargetProviderContext>,
+        StorageTargetRegistrationAuthorityError,
+    > {
+        self.reader()
+            .storage_target_provider_context(node_id, target_id)
+            .map_err(StorageTargetRegistrationAuthorityError::from)
+    }
 }
 
 impl NodeWrappingKeyRegistrationAuthority for ConsensusAuthenticationAuthority {

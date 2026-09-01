@@ -63,6 +63,25 @@ fn registered_target_binds_provider_topology_marker_and_capacity()
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
     assert_eq!(replay.result_digest, receipt.result_digest);
 
+    let provider_context = fixture
+        .repository
+        .storage_target_provider_context(fixture.node, TargetId::from_bytes([40; 16])?)?
+        .ok_or("active provider context missing")?;
+    assert_eq!(provider_context.mesh_id, MeshId::from_bytes([7; 16])?);
+    assert_eq!(provider_context.node_id, fixture.node);
+    assert_eq!(provider_context.target_id, TargetId::from_bytes([40; 16])?);
+    assert_eq!(provider_context.generation, 1);
+    assert_eq!(provider_context.usage_limit, StorageUsageLimit::Percent(95));
+    assert_eq!(provider_context.policy_revision, Revision::new(2));
+    assert_eq!(provider_context.catalogue_revision, Revision::new(2));
+    assert_eq!(
+        fixture.repository.storage_target_provider_context(
+            NodeId::from_bytes([99; 16])?,
+            TargetId::from_bytes([40; 16])?
+        )?,
+        None
+    );
+
     let database = fixture.repository.into_database();
     let stored: StoredTarget = database.connection().query_row(
         "SELECT st.node_id, st.host_id, st.provider_instance_id, st.current_generation,

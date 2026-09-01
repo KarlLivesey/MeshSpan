@@ -199,7 +199,7 @@ pub use session_access::{
 };
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use snapshot_schedule::{SnapshotSchedule, SnapshotScheduleCursor};
-pub use storage_target::StorageTargetRegistrationContext;
+pub use storage_target::{StorageTargetProviderContext, StorageTargetRegistrationContext};
 pub use user_snapshot::{
     SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor, VolumeSnapshot,
 };
@@ -1020,6 +1020,22 @@ impl AuthoritativeRepository {
         now: meshspan_domain::UnixMicros,
     ) -> Result<Option<StorageTargetRegistrationContext>, RepositoryError> {
         storage_target::registration_context(&self.database, node_id, now)
+    }
+
+    /// Returns the current active replicated configuration for one node-local storage provider.
+    ///
+    /// A draining, retired, foreign or inactive target returns `None`. The returned catalogue
+    /// revision is the complete applied state against which removal authority must be fenced.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed target, topology, policy or revision state.
+    pub fn storage_target_provider_context(
+        &self,
+        node_id: meshspan_domain::NodeId,
+        target_id: meshspan_domain::TargetId,
+    ) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
+        storage_target::provider_context(&self.database, node_id, target_id)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.

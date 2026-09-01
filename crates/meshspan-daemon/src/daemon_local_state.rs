@@ -165,6 +165,22 @@ impl DaemonLocalState {
         self.wrapping_key.public_key()
     }
 
+    /// Reopens the protected node wrapping key for an independently owned runtime capability.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, replaced, malformed or unsafe protected key state.
+    pub fn open_wrapping_key(&self) -> Result<LocalWrappingKey, DaemonLocalStateError> {
+        LocalWrappingKey::open(
+            &self
+                .directory
+                .path()
+                .join(SECRET_DIRECTORY)
+                .join(WRAPPING_KEY_FILE),
+        )
+        .map_err(Into::into)
+    }
+
     /// Returns the protected pending recovery-bundle path retained until save verification.
     #[must_use]
     pub fn pending_recovery_bundle_path(&self) -> PathBuf {
