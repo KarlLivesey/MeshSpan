@@ -100,22 +100,27 @@ pub trait NodeEnrolmentController: Send + 'static {
     ) -> Result<EnrolNodeResponse, NodeEnrolmentError>;
 }
 
-/// Complete admission service over replaceable consensus and online-authority boundaries.
-pub struct NodeEnrolmentService<A, R, D> {
-    authority: A,
-    online_authority: OnlineAuthorityLoadingService<R, D>,
-    bootstrap_peers: Vec<EnrolmentBootstrapPeer>,
+/// Late-bound source of currently reachable, active bootstrap peers.
+pub trait NodeEnrolmentBootstrapSource {
+    /// Returns at least one current mesh-signed peer only after setup has completed.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when active certificate or endpoint state is unavailable or malformed.
+    fn bootstrap_peers(&self) -> Result<Vec<EnrolmentBootstrapPeer>, NodeEnrolmentAuthorityError>;
 }
 
-impl<A, R, D> NodeEnrolmentService<A, R, D> {
+/// Complete admission service over replaceable consensus and online-authority boundaries.
+pub struct NodeEnrolmentService<A, R, D, B> {
+    authority: A,
+    online_authority: OnlineAuthorityLoadingService<R, D>,
+    bootstrap_peers: B,
+}
+
+impl<A, R, D, B> NodeEnrolmentService<A, R, D, B> {
     /// Binds admission authority, protected certificate issuance and reachable bootstrap peers.
     #[must_use]
-    pub fn new(
-        authority: A,
-        online_authority: R,
-        decryptor: D,
-        bootstrap_peers: Vec<EnrolmentBootstrapPeer>,
-    ) -> Self {
+    pub fn new(authority: A, online_authority: R, decryptor: D, bootstrap_peers: B) -> Self {
         Self {
             authority,
             online_authority: OnlineAuthorityLoadingService::new(online_authority, decryptor),
@@ -124,11 +129,12 @@ impl<A, R, D> NodeEnrolmentService<A, R, D> {
     }
 }
 
-impl<A, R, D> NodeEnrolmentController for NodeEnrolmentService<A, R, D>
+impl<A, R, D, B> NodeEnrolmentController for NodeEnrolmentService<A, R, D, B>
 where
     A: NodeEnrolmentAuthority + Send + 'static,
     R: OnlineAuthorityLoadingAuthority + Send + 'static,
     D: SecretGenerationDecryptor + Send + 'static,
+    B: NodeEnrolmentBootstrapSource + Send + 'static,
 {
     fn enrol(
         &mut self,
@@ -184,7 +190,8 @@ where
             input.node_id,
             certificate_valid_until,
         )?;
-        if self.bootstrap_peers.is_empty() {
+        let bootstrap_peers = self.bootstrap_peers.bootstrap_peers()?;
+        if bootstrap_peers.is_empty() {
             return Err(NodeEnrolmentError::Unavailable);
         }
         Ok(EnrolNodeResponse {
@@ -194,7 +201,7 @@ where
             node_certificate_der_hex: encode_hex(&commit.record.certificate_der),
             online_authority_certificate_der_hex: encode_hex(online_authority.certificate_der()),
             root_certificate_der_hex: encode_hex(&recovery.root_certificate_der),
-            bootstrap_peers: self.bootstrap_peers.clone(),
+            bootstrap_peers,
         })
     }
 }

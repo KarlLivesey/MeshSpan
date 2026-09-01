@@ -147,9 +147,9 @@ pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
 pub use repository::{
     AccessActivationCursor, AccessActivationRecord, AccessAuthentication, AccessCapability,
-    AccessDecision, AccessDenial, AccessRequest, ApiKeyAuthentication, ApiKeySessionReplay,
-    ApplyDisposition, AuthenticationMethodCreationReplay, AuthenticationMethodCursor,
-    AuthenticationMethodRecord, AuthenticationMethodRecordDetails,
+    AccessDecision, AccessDenial, AccessRequest, ActiveNodeCertificate, ApiKeyAuthentication,
+    ApiKeySessionReplay, ApplyDisposition, AuthenticationMethodCreationReplay,
+    AuthenticationMethodCursor, AuthenticationMethodRecord, AuthenticationMethodRecordDetails,
     AuthenticationMethodRevocationReplay, AuthenticationPolicy, AuthenticationRegistrationProfile,
     AuthenticationService, AuthenticationSessionReplay, AuthenticationSessionReplayCredential,
     AuthenticationSessionReplayFactor, AuthoritativeMembership, AuthoritativeMetadataKernel,

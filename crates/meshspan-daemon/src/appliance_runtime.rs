@@ -40,14 +40,16 @@ use crate::{
     AuthenticationMethodListingService, AuthenticationMethodRevocationApiError,
     AuthenticationMethodRevocationService, BrowserAuthenticationError, BrowserSessionAuthenticator,
     ConsensusAuthenticationAuthority, ConsensusBootstrapAuthority, CreateMeshSetupController,
-    CreateMeshSetupError, CreateMeshSetupService, CreateSessionService, CurrentSessionApiError,
-    DaemonLocalState, DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService,
-    FileApiRoutes, FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
+    CreateMeshSetupError, CreateMeshSetupService, CreateSessionService,
+    CurrentNodeBootstrapPeerSource, CurrentSessionApiError, DaemonLocalState,
+    DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService, FileApiRoutes,
+    FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
     HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
     IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
     NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
-    NativeUploadServicePolicy, NodeJoinGrantIssuanceApiError, NodeJoinGrantIssuanceService,
+    NativeUploadServicePolicy, NodeEnrolmentApiError, NodeEnrolmentService,
+    NodeJoinGrantIssuanceApiError, NodeJoinGrantIssuanceService,
     NodeWrappingKeyRegistrationService, ObjectStatApiError, ObjectStatService,
     OperatingSystemRandom, PasskeyChallengeApiError, PasskeyChallengeConfiguration,
     PasskeyChallengeConfigurationError, PasskeyChallengeService, PasskeyRegistrationApiError,
@@ -66,12 +68,12 @@ use crate::{
     authentication_method_revocation_api_router, classify_native_filesystem_error,
     current_session_api_router, directory_listing_api_router, file_read_api_router,
     identity_administration_api_router, native_namespace_mutation_api_router,
-    native_upload_api_router, node_join_grant_api_router, object_stat_api_router,
-    passkey_challenge_api_router, passkey_registration_api_router, public_contract_api_router,
-    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
-    revoke_current_session_api_router, session_api_router, setup_api_router_with_creation,
-    step_up_current_session_api_router, totp_registration_api_router,
-    volume_administration_api_router, volume_inventory_api_router,
+    native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
+    object_stat_api_router, passkey_challenge_api_router, passkey_registration_api_router,
+    public_contract_api_router, recovery_bundle_verification_api_router,
+    recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
+    setup_api_router_with_creation, step_up_current_session_api_router,
+    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
 };
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
@@ -151,9 +153,20 @@ where
         storage_targets,
     };
     let gateway = GatewaySessionIdentity::new(local_state.node_id(), 1)?;
+    let enrolment = NodeEnrolmentService::new(
+        open_authentication_authority(&local_state, &authority, started_at)?,
+        open_authentication_authority(&local_state, &authority, started_at)?,
+        local_state.open_wrapping_key()?,
+        CurrentNodeBootstrapPeerSource::new(
+            open_authentication_authority(&local_state, &authority, started_at)?,
+            local_state.node_id(),
+            advertised_private_endpoint(&config)?,
+        ),
+    );
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
         .merge(setup_api_router_with_creation(setup_state, setup)?)
+        .merge(node_enrolment_api_router(enrolment)?)
         .merge(authentication_session_routes(
             &local_state,
             &authority,
@@ -494,6 +507,38 @@ fn passkey_origin(https_listen: SocketAddr) -> String {
     }
 }
 
+fn advertised_private_endpoint(
+    config: &HeadlessDaemonConfig,
+) -> Result<String, DaemonProcessError> {
+    if let Some(endpoint) = config.private_endpoint() {
+        return Ok(endpoint.to_owned());
+    }
+    let listen = config.private_listen();
+    if !listen.ip().is_unspecified() {
+        return Ok(listen.to_string().to_ascii_lowercase());
+    }
+    let probe_target = if listen.is_ipv4() {
+        SocketAddr::from(([192, 0, 2, 1], 9))
+    } else {
+        SocketAddr::from(([0x2001, 0x0db8, 0, 0, 0, 0, 0, 1], 9))
+    };
+    let socket = std::net::UdpSocket::bind(SocketAddr::new(listen.ip(), 0))
+        .map_err(|_| DaemonProcessError::PrivateEndpoint)?;
+    socket
+        .connect(probe_target)
+        .map_err(|_| DaemonProcessError::PrivateEndpoint)?;
+    let discovered = socket
+        .local_addr()
+        .map_err(|_| DaemonProcessError::PrivateEndpoint)?
+        .ip();
+    if discovered.is_unspecified() {
+        return Err(DaemonProcessError::PrivateEndpoint);
+    }
+    Ok(SocketAddr::new(discovered, listen.port())
+        .to_string()
+        .to_ascii_lowercase())
+}
+
 fn native_file_routes(
     local_state: &DaemonLocalState,
     authority: &MetadataAuthorityHandle,
@@ -803,6 +848,12 @@ pub enum DaemonProcessError {
     /// Manager-only node join-grant API construction failed.
     #[error("daemon node join-grant API failed")]
     NodeJoinGrantIssuanceApi(#[from] NodeJoinGrantIssuanceApiError),
+    /// Anonymous pre-authorised node-enrolment API construction failed.
+    #[error("daemon node-enrolment API failed")]
+    NodeEnrolmentApi(#[from] NodeEnrolmentApiError),
+    /// No reachable private endpoint could be derived or configured.
+    #[error("daemon private endpoint is unavailable")]
+    PrivateEndpoint,
     /// Permission-filtered volume inventory API construction failed.
     #[error("daemon volume-inventory API failed")]
     VolumeInventoryApi(#[from] VolumeInventoryApiError),

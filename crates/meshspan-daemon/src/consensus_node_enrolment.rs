@@ -7,11 +7,22 @@ use meshspan_domain::{JoinGrantId, MeshId, NodeId, OperationId, PrincipalId, Uni
 use meshspan_metadata::{AuthoritativeCommand, CommandContext, EntityKind, RepositoryError};
 
 use crate::{
-    ConsensusAuthenticationAuthority, NodeActivationAuthority, NodeActivationAuthorityError,
-    NodeActivationCommit, NodeEnrolmentAuthority, NodeEnrolmentAuthorityError, NodeEnrolmentCommit,
-    NodeJoinGrantIssuanceAuthority, NodeJoinGrantIssuanceAuthorityError,
-    NodeJoinGrantIssuanceCommit,
+    ActiveNodeCertificateAuthority, ConsensusAuthenticationAuthority, NodeActivationAuthority,
+    NodeActivationAuthorityError, NodeActivationCommit, NodeEnrolmentAuthority,
+    NodeEnrolmentAuthorityError, NodeEnrolmentCommit, NodeJoinGrantIssuanceAuthority,
+    NodeJoinGrantIssuanceAuthorityError, NodeJoinGrantIssuanceCommit,
 };
+
+impl ActiveNodeCertificateAuthority for ConsensusAuthenticationAuthority {
+    fn active_node_certificate(
+        &self,
+        node_id: NodeId,
+    ) -> Result<Option<meshspan_metadata::ActiveNodeCertificate>, NodeEnrolmentAuthorityError> {
+        self.reader()
+            .active_node_certificate(node_id)
+            .map_err(|error| node_repository_error(&error))
+    }
+}
 
 impl NodeJoinGrantIssuanceAuthority for ConsensusAuthenticationAuthority {
     fn is_system_manager(

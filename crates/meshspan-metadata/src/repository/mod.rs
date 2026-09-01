@@ -146,7 +146,8 @@ pub use cleanup_permit::{
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
 pub use cluster::{
-    JoinGrantRecord, NodeActivationCandidate, NodeActivationRecord, NodeEnrolmentRecord,
+    ActiveNodeCertificate, JoinGrantRecord, NodeActivationCandidate, NodeActivationRecord,
+    NodeEnrolmentRecord,
 };
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use federation_actor_attestation::FederatedActorAttestationRecord;
@@ -326,6 +327,18 @@ impl AuthoritativeRepository {
         node_id: meshspan_domain::NodeId,
     ) -> Result<Option<NodeActivationRecord>, RepositoryError> {
         cluster::node_activation(&self.database, node_id)
+    }
+
+    /// Returns the newest active mesh-signed leaf certificate for one active node.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when certificate identity, digest, validity or revision state is malformed.
+    pub fn active_node_certificate(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<ActiveNodeCertificate>, RepositoryError> {
+        cluster::active_node_certificate(&self.database, node_id)
     }
 
     /// Wraps one already migrated and identity-verified partition database.

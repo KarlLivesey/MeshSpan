@@ -54,6 +54,7 @@ mod create_mesh_setup_tests;
 mod create_session;
 #[cfg(test)]
 mod create_session_tests;
+mod current_node_bootstrap;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
@@ -261,6 +262,7 @@ pub use create_session::{
     CreateSessionError, CreateSessionResult, CreateSessionService, SessionAuthority,
     SessionAuthorityError, SessionCommit,
 };
+pub use current_node_bootstrap::{ActiveNodeCertificateAuthority, CurrentNodeBootstrapPeerSource};
 pub use current_session_api::{
     CurrentSessionApiError, CurrentSessionController, CurrentSessionError,
     current_session_api_router,
@@ -310,8 +312,8 @@ pub use node_activation::{
     NodeActivationError, NodeActivationRequest, NodeActivationService,
 };
 pub use node_enrolment::{
-    NodeEnrolmentAuthority, NodeEnrolmentAuthorityError, NodeEnrolmentCommit,
-    NodeEnrolmentController, NodeEnrolmentError, NodeEnrolmentService,
+    NodeEnrolmentAuthority, NodeEnrolmentAuthorityError, NodeEnrolmentBootstrapSource,
+    NodeEnrolmentCommit, NodeEnrolmentController, NodeEnrolmentError, NodeEnrolmentService,
 };
 pub use node_enrolment_api::{NodeEnrolmentApiError, node_enrolment_api_router};
 pub use node_join_grant::{
