@@ -48,6 +48,14 @@ fn first_start_and_restart_preserve_one_locked_identity_and_claim()
             & 0o777,
         0o600
     );
+    assert_eq!(
+        fs::metadata(state_path.join("secrets/totp-ceremony.key"))?
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    first.open_totp_ceremony_key()?;
     let claim = ClaimFile::read(first.claim_output_path())?;
     let record = first
         .local_database()
@@ -69,6 +77,24 @@ fn first_start_and_restart_preserve_one_locked_identity_and_claim()
         reopened.claim_outcome().disposition,
         ClaimEnsureDisposition::Existing
     );
+    Ok(())
+}
+
+#[test]
+fn missing_restart_stable_totp_ceremony_key_fails_closed() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempdir()?;
+    let state_path = directory.path().join("state");
+    let storage_path = directory.path().join("storage");
+    fs::create_dir(&storage_path)?;
+    let config = config(&state_path, &storage_path)?;
+    let state = DaemonLocalState::open(&config, UnixMicros::new(10))?;
+    drop(state);
+    fs::remove_file(state_path.join("secrets/totp-ceremony.key"))?;
+    assert!(matches!(
+        DaemonLocalState::open(&config, UnixMicros::new(11)),
+        Err(DaemonLocalStateError::TotpCeremonyKey(_))
+    ));
     Ok(())
 }
 

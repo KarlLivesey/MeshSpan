@@ -77,6 +77,7 @@ mod identity_administration_tests;
 mod local_node_identity;
 #[cfg(test)]
 mod local_node_identity_tests;
+mod local_totp_ceremony_key;
 mod local_wrapping_key;
 mod multi_factor_session;
 mod namespace_mutation_api;
@@ -227,6 +228,7 @@ pub use authentication_method_revocation_contract::{
 pub use authentication_root_loading::{
     AuthenticationRootAuthority, AuthenticationRootLoadingError, AuthenticationRootLoadingService,
     AuthenticationRuntimeKeys, ProtectedTotpFactorVerifier,
+    ProtectedTotpRegistrationSecretProtector,
 };
 pub use browser_authentication::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
@@ -273,6 +275,7 @@ pub use identity_administration::{
     IdentityAdministrationService, IdentityAdministrator, identity_administration_api_router,
 };
 pub use local_node_identity::{LocalNodeIdentity, LocalNodeIdentityError};
+pub use local_totp_ceremony_key::{LocalTotpCeremonyKey, LocalTotpCeremonyKeyError};
 pub use local_wrapping_key::{LocalWrappingKey, LocalWrappingKeyError};
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,
@@ -390,7 +393,7 @@ pub use totp_registration_configuration::{
 };
 pub use totp_registration_contract::{
     TotpRegistrationAuthority, TotpRegistrationAuthorityError, TotpRegistrationCommit,
-    TotpRegistrationError,
+    TotpRegistrationError, TotpRegistrationSecretProtector,
 };
 pub use totp_registration_state::{TotpCeremonyKey, TotpRegistrationStateError};
 pub use totp_secret::{TotpEnvelopeKey, TotpSecretBinding, TotpSecretCipher, TotpSecretError};

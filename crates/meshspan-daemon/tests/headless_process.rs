@@ -10,13 +10,15 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use hmac::{Hmac, Mac};
 use meshspan_daemon::{ClaimFile, LocalNodeIdentity, LocalWrappingKey};
 use meshspan_domain::{InitialBootstrapMaterial, OperationId, UnixMicros};
 use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
+use sha1::Sha1;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
@@ -78,6 +80,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     );
     let browser_session = create_browser_session(fixture.address, &client, &session_body).await?;
     assert_live_totp_verifier_rejects_unknown_factor(fixture.address, &client, api_key).await?;
+    let totp_secret = enrol_totp(fixture.address, &client, api_key, &browser_session).await?;
     assert_api_key_lifecycle(fixture.address, &client, api_key, &browser_session).await?;
     assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
@@ -98,12 +101,146 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert_eq!(wait_for_live_provider(&fixture).await?, provider_journal);
     assert_wrapping_key_committed(&fixture)?;
     create_browser_session(fixture.address, &client, &session_body).await?;
+    assert_totp_session(fixture.address, &client, api_key, &totp_secret).await?;
     assert_volume_visible(fixture.address, &client, api_key).await?;
     assert_user_visible(fixture.address, &client, api_key).await?;
     assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
     process.kill()?;
     process.wait()?;
     Ok(())
+}
+
+async fn enrol_totp(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    session: &BrowserSessionHeaders,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let challenge_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-00000000000c",
+        "label": "Headless process authenticator"
+    }))?;
+    let challenge = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/users/current/authentication-methods/totp/registration-challenges",
+        Some(&challenge_body),
+        &session.mutation_headers(),
+    )
+    .await?;
+    require_status(
+        &challenge,
+        "201 Created",
+        "create TOTP registration challenge",
+    )?;
+    let challenge: serde_json::Value = serde_json::from_str(response_body(&challenge)?)?;
+    let challenge_id = challenge["challenge_id"]
+        .as_str()
+        .ok_or("TOTP challenge omitted its identity")?;
+    let secret = decode_base32(
+        challenge["secret"]
+            .as_str()
+            .ok_or("TOTP challenge omitted its secret")?,
+    )?;
+    let code = current_totp_code(&secret)?;
+    let confirmation_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-00000000000d",
+        "challenge_id": challenge_id,
+        "code": code
+    }))?;
+    let confirmed = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/users/current/authentication-methods/totp",
+        Some(&confirmation_body),
+        &session.mutation_headers(),
+    )
+    .await?;
+    require_status(&confirmed, "201 Created", "confirm TOTP registration")?;
+
+    let authorization = format!("Bearer {api_key}");
+    let methods = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/users/current/authentication-methods?limit=100",
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&methods, "200 OK", "list enrolled TOTP method")?;
+    if !response_body(&methods)?.contains("Headless process authenticator") {
+        return Err("authentication-method inventory omitted the enrolled TOTP method".into());
+    }
+    Ok(secret)
+}
+
+async fn assert_totp_session(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    secret: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let code = current_totp_code(secret)?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-00000000000e",
+        "authentication": { "method": "api_key", "secret": api_key },
+        "additional_factor": { "method": "totp", "code": code },
+        "client_label": "Restarted TOTP proof",
+        "remember": false
+    }))?;
+    let response = request(address, client, "POST", "/api/latest/sessions", Some(&body)).await?;
+    require_status(
+        &response,
+        "201 Created",
+        "authenticate with TOTP after restart",
+    )
+}
+
+fn current_totp_code(secret: &[u8]) -> Result<String, Box<dyn Error>> {
+    let seconds = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let counter = (seconds / 30).to_be_bytes();
+    let mut mac = <Hmac<Sha1> as hmac::digest::KeyInit>::new_from_slice(secret)?;
+    mac.update(&counter);
+    let output = mac.finalize().into_bytes();
+    let offset = usize::from(output[output.len() - 1] & 0x0f);
+    let selected = output
+        .get(offset..offset + 4)
+        .ok_or("TOTP HMAC truncation was invalid")?;
+    let binary = (u32::from(selected[0] & 0x7f) << 24)
+        | (u32::from(selected[1]) << 16)
+        | (u32::from(selected[2]) << 8)
+        | u32::from(selected[3]);
+    Ok(format!("{:06}", binary % 1_000_000))
+}
+
+fn decode_base32(encoded: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut output = Vec::with_capacity(encoded.len() * 5 / 8);
+    let mut bits = 0_u32;
+    let mut bit_count = 0_u8;
+    for byte in encoded.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'2'..=b'7' => byte - b'2' + 26,
+            _ => return Err("TOTP secret was not canonical base32".into()),
+        };
+        bits = (bits << 5) | u32::from(value);
+        bit_count += 5;
+        if bit_count >= 8 {
+            bit_count -= 8;
+            output.push(
+                u8::try_from(bits >> bit_count)
+                    .map_err(|_| "TOTP base32 decoder overflowed one byte")?,
+            );
+            bits &= (1_u32 << bit_count) - 1;
+        }
+    }
+    if bit_count != 0 && bits != 0 {
+        return Err("TOTP secret had non-zero base32 padding bits".into());
+    }
+    Ok(output)
 }
 
 async fn assert_live_totp_verifier_rejects_unknown_factor(

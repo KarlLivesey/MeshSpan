@@ -49,26 +49,30 @@ use crate::{
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
     NativeUploadServicePolicy, NodeWrappingKeyRegistrationService, ObjectStatApiError,
     ObjectStatService, OperatingSystemRandom, ProtectedApiKeyIssuanceController,
-    ProtectedTotpFactorVerifier, PublicContractApiError, ReadinessSource,
-    RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
+    ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector, PublicContractApiError,
+    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RevokeCurrentSessionApiError, RevokeCurrentSessionService, SessionApiError, SetupApiError,
     SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, StepUpCurrentSessionApiError,
     StepUpCurrentSessionService, StorageProviderOpeningError, StorageProviderOpeningService,
-    StorageTargetRegistrationService, VolumeAdministrationApiError, VolumeAdministrationService,
-    VolumeInventoryApiError, VolumeInventoryService, api_key_issuance_api_router,
-    authentication_method_listing_api_router, authentication_method_revocation_api_router,
-    classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
-    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
+    StorageTargetRegistrationService, TotpRegistrationApiError, TotpRegistrationConfiguration,
+    TotpRegistrationConfigurationError, TotpRegistrationService, VolumeAdministrationApiError,
+    VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
+    api_key_issuance_api_router, authentication_method_listing_api_router,
+    authentication_method_revocation_api_router, classify_native_filesystem_error,
+    current_session_api_router, directory_listing_api_router, file_read_api_router,
+    identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, object_stat_api_router, public_contract_api_router,
     recovery_bundle_verification_api_router, revoke_current_session_api_router, session_api_router,
     setup_api_router_with_creation, step_up_current_session_api_router,
-    volume_administration_api_router, volume_inventory_api_router,
+    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
 };
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
 const INITIAL_MEMBERSHIP_EPOCH: u64 = 1;
 const UPLOAD_LIFETIME_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
 const CONTENT_OPERATION_DEADLINE_MICROS: u64 = 60 * 1_000_000;
+const TOTP_REGISTRATION_LIFETIME_MICROS: u64 = 5 * 60 * 1_000_000;
+const TOTP_ISSUER: &str = "MeshSpan";
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
@@ -318,6 +322,23 @@ fn authentication_session_routes(
         )?)
         .merge(authentication_method_revocation_api_router(
             AuthenticationMethodRevocationService::new(authentication_authority()?, gateway),
+        )?)
+        .merge(totp_registration_api_router(
+            TotpRegistrationService::with_secret_protector(
+                local_state.open_local_database(now)?,
+                authentication_authority()?,
+                OperatingSystemRandom,
+                local_state.open_totp_ceremony_key()?,
+                ProtectedTotpRegistrationSecretProtector::new(
+                    authentication_authority()?,
+                    local_state.open_wrapping_key()?,
+                ),
+                TotpRegistrationConfiguration::new(
+                    TOTP_ISSUER.to_owned(),
+                    DurationMicros::new(TOTP_REGISTRATION_LIFETIME_MICROS),
+                )?,
+                gateway,
+            ),
         )?)
         .merge(identity_administration_api_router(
             IdentityAdministrationService::new(authentication_authority()?, gateway),
@@ -620,6 +641,12 @@ pub enum DaemonProcessError {
     /// Current-user authentication-method revocation construction failed.
     #[error("daemon authentication-method revocation API failed")]
     AuthenticationMethodRevocationApi(#[from] AuthenticationMethodRevocationApiError),
+    /// Current-user TOTP registration API construction failed.
+    #[error("daemon TOTP registration API failed")]
+    TotpRegistrationApi(#[from] TotpRegistrationApiError),
+    /// Current-user TOTP registration policy is invalid.
+    #[error("daemon TOTP registration policy failed")]
+    TotpRegistrationConfiguration(#[from] TotpRegistrationConfigurationError),
     /// Identity-administration API construction failed.
     #[error("daemon identity-administration API failed")]
     IdentityAdministrationApi(#[from] IdentityAdministrationApiError),

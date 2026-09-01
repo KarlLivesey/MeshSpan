@@ -108,7 +108,7 @@ impl TotpSecretCipher {
         &self,
         binding: TotpSecretBinding,
         secret: &[u8],
-        random: &mut impl RandomSource,
+        random: &mut (impl RandomSource + ?Sized),
     ) -> Result<Vec<u8>, TotpSecretError> {
         validate_secret(secret)?;
         let aad = binding.associated_data()?;
@@ -171,6 +171,17 @@ impl TotpSecretCipher {
     fn cipher(&self) -> Result<XChaCha20Poly1305, TotpSecretError> {
         XChaCha20Poly1305::new_from_slice(self.key.0.as_ref())
             .map_err(|_| TotpSecretError::InvalidKey)
+    }
+}
+
+impl crate::TotpRegistrationSecretProtector for TotpSecretCipher {
+    fn protect_secret(
+        &self,
+        binding: TotpSecretBinding,
+        secret: &[u8],
+        random: &mut dyn RandomSource,
+    ) -> Result<Vec<u8>, crate::TotpRegistrationError> {
+        self.encrypt(binding, secret, random).map_err(Into::into)
     }
 }
 

@@ -29,21 +29,22 @@ use crate::totp_registration_state::{
 use crate::{
     AuthenticationRegistrationStore, BrowserRequestProtection, BrowserSessionAuthenticator,
     GatewaySessionIdentity, TotpCeremonyKey, TotpEnvelopeKey, TotpRegistrationAuthority,
-    TotpRegistrationConfiguration, TotpRegistrationError, TotpSecretBinding, TotpSecretCipher,
+    TotpRegistrationConfiguration, TotpRegistrationError, TotpRegistrationSecretProtector,
+    TotpSecretBinding, TotpSecretCipher,
 };
 
 /// Complete current-user TOTP registration application service.
-pub struct TotpRegistrationService<S, A, R> {
+pub struct TotpRegistrationService<S, A, R, P = TotpSecretCipher> {
     store: S,
     authority: A,
     random: R,
     protector: TotpRegistrationProtector,
-    envelope: TotpSecretCipher,
+    secret_protector: P,
     configuration: TotpRegistrationConfiguration,
     gateway: GatewaySessionIdentity,
 }
 
-impl<S, A, R> TotpRegistrationService<S, A, R>
+impl<S, A, R> TotpRegistrationService<S, A, R, TotpSecretCipher>
 where
     S: AuthenticationRegistrationStore,
     A: TotpRegistrationAuthority,
@@ -66,7 +67,37 @@ where
             authority,
             random,
             protector: TotpRegistrationProtector::new(ceremony_key),
-            envelope: TotpSecretCipher::new(envelope_key),
+            secret_protector: TotpSecretCipher::new(envelope_key),
+            configuration,
+            gateway,
+        }
+    }
+}
+
+impl<S, A, R, P> TotpRegistrationService<S, A, R, P>
+where
+    S: AuthenticationRegistrationStore,
+    A: TotpRegistrationAuthority,
+    R: RandomSource,
+    P: TotpRegistrationSecretProtector,
+{
+    /// Composes registration with a request-time replicated seed-protection boundary.
+    #[must_use]
+    pub const fn with_secret_protector(
+        store: S,
+        authority: A,
+        random: R,
+        ceremony_key: TotpCeremonyKey,
+        secret_protector: P,
+        configuration: TotpRegistrationConfiguration,
+        gateway: GatewaySessionIdentity,
+    ) -> Self {
+        Self {
+            store,
+            authority,
+            random,
+            protector: TotpRegistrationProtector::new(ceremony_key),
+            secret_protector,
             configuration,
             gateway,
         }
@@ -179,7 +210,7 @@ where
         let method_id = AuthenticationMethodId::from_bytes(random_uuid(&mut self.random)?)
             .map_err(|_| TotpRegistrationError::Unavailable)?;
         let secret = Zeroizing::new(random_nonzero::<SECRET_BYTES>(&mut self.random)?);
-        let secret_ciphertext = self.envelope.encrypt(
+        let secret_ciphertext = self.secret_protector.protect_secret(
             TotpSecretBinding {
                 method_id,
                 principal_id: capability.principal_id,

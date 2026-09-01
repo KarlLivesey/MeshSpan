@@ -44,6 +44,7 @@ zeroize.workspace = true
 blake3.workspace = true
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 p256.workspace = true
+sha1.workspace = true
 tempfile = "3.27.0"
 tower.workspace = true
 

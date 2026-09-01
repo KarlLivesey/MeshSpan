@@ -58,11 +58,12 @@ pub trait TotpRegistrationController: Send + 'static {
     ) -> Result<CreateTotpRegistrationResponse, TotpRegistrationError>;
 }
 
-impl<S, A, R> TotpRegistrationController for TotpRegistrationService<S, A, R>
+impl<S, A, R, P> TotpRegistrationController for TotpRegistrationService<S, A, R, P>
 where
     S: AuthenticationRegistrationStore + Send + 'static,
     A: TotpRegistrationAuthority + Send + 'static,
     R: meshspan_domain::RandomSource + Send + 'static,
+    P: crate::TotpRegistrationSecretProtector + Send + 'static,
 {
     fn create_registration_challenge(
         &mut self,

@@ -2,14 +2,34 @@
 
 //! Persistence, replicated-authority and failure contracts for TOTP registration.
 
-use meshspan_domain::{AuthenticationMethodId, OperationId, UnixMicros};
+use meshspan_domain::{AuthenticationMethodId, OperationId, RandomSource, UnixMicros};
 use meshspan_metadata::{AuthenticationRegistrationProfile, AuthoritativeCommand, CommandContext};
 use thiserror::Error;
 
 use crate::totp_registration_state::TotpRegistrationStateError;
 use crate::{
     AuthenticationRegistrationStoreError, BrowserAuthenticationError, BrowserSessionAuthority,
+    TotpSecretBinding,
 };
+
+/// Replaceable boundary which protects a newly generated TOTP seed for replicated storage.
+///
+/// Production implementations load the current mesh key for each call. The boundary accepts the
+/// caller's entropy source so challenge generation, seed encryption and persisted ceremony state
+/// remain one explicit operation with deterministic tests.
+pub trait TotpRegistrationSecretProtector {
+    /// Encrypts one seed under its exact method, owner and algorithm binding.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when key authority, entropy, binding or encryption is unavailable or invalid.
+    fn protect_secret(
+        &self,
+        binding: TotpSecretBinding,
+        secret: &[u8],
+        random: &mut dyn RandomSource,
+    ) -> Result<Vec<u8>, TotpRegistrationError>;
+}
 
 /// Replicated reads and mutation required by current-user TOTP registration.
 pub trait TotpRegistrationAuthority: BrowserSessionAuthority {
