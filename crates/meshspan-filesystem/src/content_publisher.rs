@@ -21,7 +21,7 @@ use crate::{
     ContentEncryptionKey, ContentKeyError, ContentPublicationError, ContentPublicationRequest,
     ContentReadError, ContentReadRequest, DurableContentCatalog, DurableContentPublisher,
     DurableContentReader, EncryptedContentChunk, ManifestPublication, PreparedContentChunk,
-    VolumeContentKeyring,
+    VolumeContentKeyring, VolumeContentKeys,
 };
 
 mod recovery;
@@ -95,17 +95,19 @@ impl Write for DurableContentSink {
 ///
 /// Stage 8 replaces the one-shard layout selection with placement and erasure coding while
 /// retaining this durable catalogue, wrapped-key, bounded-spool and exact-receipt lifecycle.
-pub struct UnprotectedContentPublisher<P, R> {
+pub struct UnprotectedContentPublisher<P, R, K = VolumeContentKeyring> {
     catalog: DurableContentCatalog,
     spools: Dir,
     provider: P,
     random: R,
-    key_envelopes: VolumeContentKeyring,
+    key_envelopes: K,
     chunk_limits: ContentChunkLimits,
     access: UnprotectedContentAccess,
 }
 
-impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
+impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys>
+    UnprotectedContentPublisher<P, R, K>
+{
     /// Opens the durable catalogue and private spool directory.
     ///
     /// # Errors
@@ -116,7 +118,7 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
         opened_at: meshspan_domain::UnixMicros,
         provider: P,
         random: R,
-        key_envelopes: VolumeContentKeyring,
+        key_envelopes: K,
         chunk_limits: ContentChunkLimits,
         access: UnprotectedContentAccess,
     ) -> Result<Self, ContentPublicationError> {
@@ -169,9 +171,7 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
             .ok_or(ContentPublicationError::Corrupt)?;
         let content_key = self
             .key_envelopes
-            .cipher(request.volume_id, layout.wrapped_key.key_generation)
-            .map_err(map_key_publication)?
-            .unwrap(request.manifest_id, layout.wrapped_key)
+            .unwrap_content_key(request.volume_id, request.manifest_id, layout.wrapped_key)
             .map_err(map_key_publication)?;
         let limits = ContentChunkLimits::new(
             usize::try_from(layout.chunk_bytes).map_err(|_| ContentPublicationError::Corrupt)?,
@@ -261,9 +261,12 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
             .map_err(|_| ContentPublicationError::Unavailable)?;
         let wrapped_key = self
             .key_envelopes
-            .active_cipher(request.volume_id)
-            .map_err(map_key_publication)?
-            .wrap(request.manifest_id, &content_key, &mut self.random)
+            .wrap_content_key(
+                request.volume_id,
+                request.manifest_id,
+                &content_key,
+                &mut self.random,
+            )
             .map_err(map_key_publication)?;
         let cipher = ContentChunkCipher::new(content_key, self.chunk_limits);
         file.seek(SeekFrom::Start(0))?;
@@ -330,8 +333,8 @@ impl<P: StorageProvider, R: RandomSource> UnprotectedContentPublisher<P, R> {
     }
 }
 
-impl<P: StorageProvider, R: RandomSource> DurableContentPublisher
-    for UnprotectedContentPublisher<P, R>
+impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys> DurableContentPublisher
+    for UnprotectedContentPublisher<P, R, K>
 {
     type Sink = DurableContentSink;
 
@@ -404,8 +407,8 @@ impl<P: StorageProvider, R: RandomSource> DurableContentPublisher
     }
 }
 
-impl<P: StorageProvider, R: RandomSource> DurableContentReader
-    for UnprotectedContentPublisher<P, R>
+impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys> DurableContentReader
+    for UnprotectedContentPublisher<P, R, K>
 {
     fn stream_range(
         &mut self,
@@ -422,12 +425,8 @@ impl<P: StorageProvider, R: RandomSource> DurableContentReader
         }
         let content_key = self
             .key_envelopes
-            .cipher(
+            .unwrap_content_key(
                 committed.request.volume_id,
-                committed.layout.wrapped_key.key_generation,
-            )
-            .map_err(map_key_read)?
-            .unwrap(
                 request.content.manifest.manifest_id,
                 committed.layout.wrapped_key,
             )
@@ -453,7 +452,7 @@ impl<P: StorageProvider, R: RandomSource> DurableContentReader
     }
 }
 
-impl<P: StorageProvider, R> UnprotectedContentPublisher<P, R> {
+impl<P: StorageProvider, R, K> UnprotectedContentPublisher<P, R, K> {
     fn stream_chunk_slice(
         &self,
         traversal: &ContentReadTraversal<'_>,
@@ -544,7 +543,7 @@ impl<P: StorageProvider, R> UnprotectedContentPublisher<P, R> {
     }
 }
 
-impl<P, R> UnprotectedContentPublisher<P, R> {
+impl<P, R, K> UnprotectedContentPublisher<P, R, K> {
     fn cleanup_spool(&self, operation_id: OperationId) -> std::io::Result<()> {
         match self.spools.remove_file(spool_name(operation_id)) {
             Ok(()) => sync_directory(&self.spools),

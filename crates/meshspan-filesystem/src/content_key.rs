@@ -100,7 +100,7 @@ impl ContentKeyEnvelopeCipher {
         &self,
         manifest_id: ContentManifestId,
         content_key: &ContentEncryptionKey,
-        random: &mut impl RandomSource,
+        random: &mut (impl RandomSource + ?Sized),
     ) -> Result<WrappedContentKey, ContentKeyError> {
         let nonce = self.derive_nonce(manifest_id, content_key, random)?;
         let cipher = self.cipher()?;
@@ -180,7 +180,7 @@ impl ContentKeyEnvelopeCipher {
         &self,
         manifest_id: ContentManifestId,
         content_key: &ContentEncryptionKey,
-        random: &mut impl RandomSource,
+        random: &mut (impl RandomSource + ?Sized),
     ) -> Result<[u8; 24], ContentKeyError> {
         let mut entropy = Zeroizing::new([0_u8; 32]);
         random
@@ -206,6 +206,38 @@ impl ContentKeyEnvelopeCipher {
 pub struct VolumeContentKeyring {
     active_generations: BTreeMap<VolumeId, u64>,
     ciphers: BTreeMap<(VolumeId, u64), ContentKeyEnvelopeCipher>,
+}
+
+/// Replaceable source of volume-scoped content-key wrapping capabilities.
+///
+/// Implementations may retain already-opened keys in memory or load one exact encrypted
+/// generation from authoritative metadata on demand. The boundary deliberately performs the
+/// wrap/unwrap operation itself so callers never receive exportable volume-key bytes.
+pub trait VolumeContentKeys {
+    /// Wraps one freshly generated content key under the volume's active key generation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing volume authority, unavailable entropy or authenticated-encryption failure.
+    fn wrap_content_key(
+        &self,
+        volume_id: VolumeId,
+        manifest_id: ContentManifestId,
+        content_key: &ContentEncryptionKey,
+        random: &mut dyn RandomSource,
+    ) -> Result<WrappedContentKey, ContentKeyError>;
+
+    /// Opens one stored content-key envelope under its exact recorded generation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing generations, substituted envelopes or authenticated-decryption failure.
+    fn unwrap_content_key(
+        &self,
+        volume_id: VolumeId,
+        manifest_id: ContentManifestId,
+        envelope: WrappedContentKey,
+    ) -> Result<ContentEncryptionKey, ContentKeyError>;
 }
 
 impl VolumeContentKeyring {
@@ -270,6 +302,29 @@ impl VolumeContentKeyring {
         self.ciphers
             .get(&(volume_id, generation))
             .ok_or(ContentKeyError::Unavailable)
+    }
+}
+
+impl VolumeContentKeys for VolumeContentKeyring {
+    fn wrap_content_key(
+        &self,
+        volume_id: VolumeId,
+        manifest_id: ContentManifestId,
+        content_key: &ContentEncryptionKey,
+        random: &mut dyn RandomSource,
+    ) -> Result<WrappedContentKey, ContentKeyError> {
+        self.active_cipher(volume_id)?
+            .wrap(manifest_id, content_key, random)
+    }
+
+    fn unwrap_content_key(
+        &self,
+        volume_id: VolumeId,
+        manifest_id: ContentManifestId,
+        envelope: WrappedContentKey,
+    ) -> Result<ContentEncryptionKey, ContentKeyError> {
+        self.cipher(volume_id, envelope.key_generation)?
+            .unwrap(manifest_id, envelope)
     }
 }
 
@@ -353,8 +408,8 @@ mod tests {
     use meshspan_domain::{ContentManifestId, EntropyError, RandomSource, VolumeId};
 
     use super::{
-        ContentKeyEnvelopeCipher, ContentKeyError, VolumeContentKeyring, VolumeKeyEncryptionKey,
-        rewrap_content_key,
+        ContentKeyEnvelopeCipher, ContentKeyError, VolumeContentKeyring, VolumeContentKeys,
+        VolumeKeyEncryptionKey, rewrap_content_key,
     };
     use crate::{ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey};
 
@@ -406,15 +461,10 @@ mod tests {
             VolumeKeyEncryptionKey::from_bytes(1, [26; 32])?,
             true,
         )?;
-        let first_envelope = keyring.active_cipher(first_volume)?.wrap(
-            manifest,
-            &content_key,
-            &mut FixedRandom(27),
-        )?;
+        let first_envelope =
+            keyring.wrap_content_key(first_volume, manifest, &content_key, &mut FixedRandom(27))?;
         assert!(matches!(
-            keyring
-                .cipher(second_volume, 1)?
-                .unwrap(manifest, first_envelope),
+            keyring.unwrap_content_key(second_volume, manifest, first_envelope),
             Err(ContentKeyError::Corrupt)
         ));
         keyring.install(
@@ -425,9 +475,7 @@ mod tests {
         assert_eq!(keyring.active_cipher(first_volume)?.generation(), 2);
         assert_same_chunk_ciphertext(
             content_key,
-            keyring
-                .cipher(first_volume, 1)?
-                .unwrap(manifest, first_envelope)?,
+            keyring.unwrap_content_key(first_volume, manifest, first_envelope)?,
             manifest,
         )?;
         assert!(matches!(
