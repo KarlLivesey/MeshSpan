@@ -231,7 +231,7 @@ pub(super) fn bootstrap(
     material: &InitialBootstrapMaterial,
     operation_id: OperationId,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let command = AuthoritativeCommand::BootstrapAppliance(
+    let command = AuthoritativeCommand::BootstrapAppliance(Box::new(
         crate::bootstrap_test_support::bootstrap_appliance(
             BootstrapMesh {
                 mesh_id: material.mesh_id,
@@ -260,7 +260,7 @@ pub(super) fn bootstrap(
             },
             Box::new(recovery_identity()?),
         )?,
-    );
+    ));
     authority.repository.apply_committed(
         LogPosition { index: 1, term: 1 },
         CommandContext {

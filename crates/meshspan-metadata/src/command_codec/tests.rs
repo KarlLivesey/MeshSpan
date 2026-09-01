@@ -456,8 +456,8 @@ fn fixture() -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::erro
         occurred_at: UnixMicros::new(-12),
         expected_revision: Some(Revision::new(4)),
     };
-    let command =
-        AuthoritativeCommand::BootstrapAppliance(crate::test_support::bootstrap_appliance(
+    let command = AuthoritativeCommand::BootstrapAppliance(Box::new(
+        crate::test_support::bootstrap_appliance(
             BootstrapMesh {
                 mesh_id: MeshId::from_bytes([5; 16])?,
                 mesh_name: RecordName::new("Mesh")?,
@@ -484,7 +484,8 @@ fn fixture() -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::erro
                 },
             },
             Box::new(recovery_identity()?),
-        )?);
+        )?,
+    ));
     Ok((context, command))
 }
 

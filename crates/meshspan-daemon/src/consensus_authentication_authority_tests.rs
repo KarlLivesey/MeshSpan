@@ -569,7 +569,7 @@ fn bootstrap_command(
     api_key: &ApiKeyBundle,
     wrapping_public_key: WrappingPublicKey,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
-    Ok(AuthoritativeCommand::BootstrapAppliance(
+    Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         crate::bootstrap_test_support::bootstrap_appliance_with_node_key(
             BootstrapMesh {
                 mesh_id: MeshId::from_bytes([9; 16])?,
@@ -601,7 +601,7 @@ fn bootstrap_command(
             Box::new(recovery_identity()?),
             wrapping_public_key,
         )?,
-    ))
+    )))
 }
 
 fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::Error>> {

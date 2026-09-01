@@ -331,7 +331,7 @@ fn head_bootstrap(
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     let recovery_key = WrappingPublicKey::from_bytes([146; 32])?;
     let certificate = vec![221; 64];
-    Ok(AuthoritativeCommand::BootstrapAppliance(
+    Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         crate::test_support::bootstrap_appliance(
             BootstrapMesh {
                 mesh_id: MeshId::from_bytes([12; 16])?,
@@ -367,7 +367,7 @@ fn head_bootstrap(
                 save_challenge_commitment: [226; 32],
             }),
         )?,
-    ))
+    )))
 }
 
 pub(super) fn publication_command(

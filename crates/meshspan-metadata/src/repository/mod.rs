@@ -1126,6 +1126,18 @@ impl AuthoritativeRepository {
         secret_generation::latest_storage_permit_generation(&self.database, mesh_id)
     }
 
+    /// Returns the newest committed gateway-only authentication-root generation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed generation state or database failure.
+    pub fn latest_authentication_root_generation(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<u64>, RepositoryError> {
+        secret_generation::latest_authentication_root_generation(&self.database, mesh_id)
+    }
+
     /// Returns every current gateway and the exact verified offline recovery recipient.
     ///
     /// Storage-only nodes are deliberately excluded because they retain encrypted shards without

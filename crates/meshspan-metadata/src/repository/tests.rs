@@ -58,7 +58,7 @@ pub(super) fn protected_bootstrap(
     let public_key = WrappingPublicKey::from_bytes(TEST_RECOVERY_KEY_BYTES)?;
     let certificate = vec![147; 64];
     let administrator_id = mesh.administrator_id;
-    Ok(AuthoritativeCommand::BootstrapAppliance(
+    Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         crate::test_support::bootstrap_appliance(
             mesh,
             CreateAuthenticationMethod {
@@ -83,7 +83,7 @@ pub(super) fn protected_bootstrap(
                 save_challenge_commitment: [152; 32],
             }),
         )?,
-    ))
+    )))
 }
 
 pub(super) fn mark_test_recovery_verified(
@@ -864,7 +864,7 @@ fn join_bootstrap(
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     let recovery_key = WrappingPublicKey::from_bytes([146; 32])?;
     let certificate = vec![147; 64];
-    Ok(AuthoritativeCommand::BootstrapAppliance(
+    Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         crate::test_support::bootstrap_appliance(
             BootstrapMesh {
                 mesh_id: MeshId::from_bytes([132; 16])?,
@@ -900,7 +900,7 @@ fn join_bootstrap(
                 save_challenge_commitment: [149; 32],
             }),
         )?,
-    ))
+    )))
 }
 
 fn assert_authoritative_join_projection(

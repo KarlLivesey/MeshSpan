@@ -164,41 +164,43 @@ fn fixture(verify_recovery: bool) -> Result<Fixture, Box<dyn std::error::Error>>
     repository.apply_committed(
         LogPosition { index: 1, term: 1 },
         context(5, administrator, 6, 10, Some(0))?,
-        &AuthoritativeCommand::BootstrapAppliance(crate::test_support::bootstrap_appliance(
-            BootstrapMesh {
-                mesh_id,
-                mesh_name: RecordName::new("Secret mesh")?,
-                administrator_id: administrator,
-                administrator_name: RecordName::new("Administrator")?,
-                administrator_role_id: RoleId::from_bytes([8; 16])?,
-                host_id: HostId::from_bytes([3; 16])?,
-                host_name: RecordName::new("Host")?,
-                node_id: node,
-                node_name: RecordName::new("Node")?,
-                partition_name: RecordName::new("Root authority")?,
-            },
-            CreateAuthenticationMethod {
-                method_id: AuthenticationMethodId::from_bytes([9; 16])?,
-                principal_id: administrator,
-                label: "Initial API key".to_owned(),
-                service_scope: 7,
-                expires_at: None,
-                credential: NewAuthenticationCredential::ApiKey {
-                    key_id: ApiKeyId::from_bytes([10; 16])?,
-                    key_digest: [11; 32],
-                    scopes: 1,
-                    valid_from: UnixMicros::new(10),
+        &AuthoritativeCommand::BootstrapAppliance(Box::new(
+            crate::test_support::bootstrap_appliance(
+                BootstrapMesh {
+                    mesh_id,
+                    mesh_name: RecordName::new("Secret mesh")?,
+                    administrator_id: administrator,
+                    administrator_name: RecordName::new("Administrator")?,
+                    administrator_role_id: RoleId::from_bytes([8; 16])?,
+                    host_id: HostId::from_bytes([3; 16])?,
+                    host_name: RecordName::new("Host")?,
+                    node_id: node,
+                    node_name: RecordName::new("Node")?,
+                    partition_name: RecordName::new("Root authority")?,
                 },
-            },
-            Box::new(BootstrapRecoveryIdentity {
-                public_wrapping_key: recovery_public_key.as_bytes(),
-                key_fingerprint: recovery_public_key.fingerprint(),
-                root_certificate_digest: Sha256::digest(&certificate).into(),
-                root_certificate_der: certificate,
-                bundle_digest: [14; 32],
-                save_challenge_commitment: [15; 32],
-            }),
-        )?),
+                CreateAuthenticationMethod {
+                    method_id: AuthenticationMethodId::from_bytes([9; 16])?,
+                    principal_id: administrator,
+                    label: "Initial API key".to_owned(),
+                    service_scope: 7,
+                    expires_at: None,
+                    credential: NewAuthenticationCredential::ApiKey {
+                        key_id: ApiKeyId::from_bytes([10; 16])?,
+                        key_digest: [11; 32],
+                        scopes: 1,
+                        valid_from: UnixMicros::new(10),
+                    },
+                },
+                Box::new(BootstrapRecoveryIdentity {
+                    public_wrapping_key: recovery_public_key.as_bytes(),
+                    key_fingerprint: recovery_public_key.fingerprint(),
+                    root_certificate_digest: Sha256::digest(&certificate).into(),
+                    root_certificate_der: certificate,
+                    bundle_digest: [14; 32],
+                    save_challenge_commitment: [15; 32],
+                }),
+            )?,
+        )),
     )?;
     if verify_recovery {
         repository.apply_committed(

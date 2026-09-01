@@ -13,10 +13,11 @@ use meshspan_domain::{
     OperationId, RandomSource, UnixMicros,
 };
 use meshspan_metadata::{
-    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommandContext, CommitSecretGeneration, CreateAuthenticationMethod, LocalDatabase,
-    LocalSetupError, LocalSetupKind, LocalSetupState, NewAuthenticationCredential, NewLocalSetup,
-    RecordName, RecordNameError, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
+    AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, BootstrapAppliance, BootstrapMesh,
+    BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration, CreateAuthenticationMethod,
+    LocalDatabase, LocalSetupError, LocalSetupKind, LocalSetupState, NewAuthenticationCredential,
+    NewLocalSetup, RecordName, RecordNameError, RegisterNodeWrappingKey,
+    STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_recovery_bundle::{OfflineRecoveryIdentity, RecoveryBundleCode, RecoveryBundleError};
 use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
@@ -242,7 +243,20 @@ impl ValidatedSetupInput {
             &[wrapping_public_key, recovery_public_key],
             &mut permit_material,
         )?;
-        Ok(AuthoritativeCommand::BootstrapAppliance(
+        let mut authentication_material = material.authentication_root_material();
+        let authentication_root = authentication_material.key();
+        let authentication_context = SecretContext::new(
+            AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+            material.mesh_id.as_bytes(),
+            1,
+        )?;
+        let (authentication_secret, authentication_recipients) = encrypt_secret(
+            authentication_context,
+            authentication_root.as_ref(),
+            &[wrapping_public_key, recovery_public_key],
+            &mut authentication_material,
+        )?;
+        Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
             BootstrapAppliance {
                 mesh: BootstrapMesh {
                     mesh_id: material.mesh_id,
@@ -290,8 +304,15 @@ impl ValidatedSetupInput {
                         .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
                         .collect(),
                 }),
+                authentication_root_key_generation: Box::new(CommitSecretGeneration {
+                    secret: authentication_secret.parts(),
+                    recipients: authentication_recipients
+                        .iter()
+                        .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                        .collect(),
+                }),
             },
-        ))
+        )))
     }
 
     fn request_digest(&self, claim_id: [u8; 16]) -> [u8; 32] {
@@ -410,9 +431,9 @@ pub enum CreateMeshSetupError {
     /// Protected offline recovery delivery could not be created or resumed.
     #[error("pending offline recovery bundle failed")]
     RecoveryBundle(#[from] PendingRecoveryBundleError),
-    /// Initial permit encryption or recipient composition failed closed.
-    #[error("storage permit envelope could not be created")]
-    StoragePermitEnvelope(#[from] meshspan_secret_envelope::SecretEnvelopeError),
+    /// Initial protected mesh-secret encryption or recipient composition failed closed.
+    #[error("initial protected mesh-secret envelope could not be created")]
+    InitialSecretEnvelope(#[from] meshspan_secret_envelope::SecretEnvelopeError),
     /// Node-local setup state rejected the transition.
     #[error("local setup transition failed")]
     Local(#[from] LocalSetupError),

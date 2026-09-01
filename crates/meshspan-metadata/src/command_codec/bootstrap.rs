@@ -20,7 +20,8 @@ pub(super) fn encode(
     authentication::encode_payload(encoder, &value.authentication)?;
     encode_recovery(encoder, &value.recovery)?;
     node_wrapping_key::encode_payload(encoder, &value.node_wrapping_key)?;
-    secret_generation::encode_payload(encoder, &value.storage_permit_key_generation)
+    secret_generation::encode_payload(encoder, &value.storage_permit_key_generation)?;
+    secret_generation::encode_payload(encoder, &value.authentication_root_key_generation)
 }
 
 pub(super) fn decode(
@@ -32,6 +33,7 @@ pub(super) fn decode(
         recovery: Box::new(decode_recovery(decoder)?),
         node_wrapping_key: node_wrapping_key::decode_payload(decoder)?,
         storage_permit_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
+        authentication_root_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
     })
 }
 
