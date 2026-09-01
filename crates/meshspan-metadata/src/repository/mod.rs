@@ -669,6 +669,39 @@ impl AuthoritativeRepository {
         access_evaluation::evaluate(&self.database, request)
     }
 
+    /// Evaluates one filesystem-verified local descendant which has no replicated object row yet.
+    ///
+    /// The caller must first resolve the object from a verified local namespace. Existing,
+    /// retired or foreign replicated object identities never fall back to volume authority; only
+    /// an identity wholly absent from the authoritative object catalogue may inherit the active
+    /// volume-root grant.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for a known object identity, absent volume root, malformed authority or
+    /// inconsistent capability projection.
+    pub fn evaluate_unrecorded_descendant_access(
+        &self,
+        request: AccessRequest,
+    ) -> Result<AccessDecision, RepositoryError> {
+        let known: i64 = self.database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM namespace_objects WHERE object_id = ?1)",
+            [request.object_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        if known != 0 {
+            return Ok(AccessDecision::Denied(AccessDenial::ObjectUnavailable));
+        }
+        let volume = volume_inventory::volume_inventory_record(&self.database, request.volume_id)?
+            .ok_or(RepositoryError::CorruptState)?;
+        let root_request = AccessRequest {
+            object_id: volume.root_object_id,
+            ..request
+        };
+        let decision = access_evaluation::evaluate(&self.database, root_request)?;
+        access_evaluation::retarget_unrecorded_descendant(decision, request)
+    }
+
     /// Authenticates one session and gateway for a non-filesystem administration read.
     ///
     /// The returned capability binds the current identity and system-role projection. It grants

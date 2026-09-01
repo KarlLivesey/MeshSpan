@@ -79,8 +79,11 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert_session_created(fixture.address, &client, &session_body).await?;
     assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
-    create_volume(fixture.address, &client, api_key, &administrator_id).await?;
+    let volume_id = create_volume(fixture.address, &client, api_key, &administrator_id).await?;
     assert_volume_visible(fixture.address, &client, api_key).await?;
+    let content = b"headless native file bytes";
+    upload_file(fixture.address, &client, api_key, &volume_id, content).await?;
+    assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
 
     process.kill()?;
     process.wait()?;
@@ -95,6 +98,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert_session_created(fixture.address, &client, &session_body).await?;
     assert_volume_visible(fixture.address, &client, api_key).await?;
     assert_user_visible(fixture.address, &client, api_key).await?;
+    assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
     process.kill()?;
     process.wait()?;
     Ok(())
@@ -215,7 +219,7 @@ async fn create_volume(
     client: &ClientConfig,
     api_key: &str,
     owner_principal_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<String, Box<dyn Error>> {
     let body = serde_json::to_vec(&serde_json::json!({
         "operation_id": "00000000-0000-4000-8000-000000000004",
         "name": "Process files",
@@ -231,15 +235,185 @@ async fn create_volume(
         &[("Authorization", authorization.as_str())],
     )
     .await?;
-    if response.starts_with("HTTP/1.1 201 Created\r\n")
-        && response.contains("\"name\":\"Process files\"")
+    if !response.starts_with("HTTP/1.1 201 Created\r\n")
+        || !response.contains("\"name\":\"Process files\"")
     {
-        Ok(())
-    } else {
         Err(format!(
             "headless process volume creation returned {}: {}",
             response.lines().next().unwrap_or("an invalid response"),
             response_body(&response).unwrap_or("invalid response")
+        )
+        .into())
+    } else {
+        let created: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
+        created["volume_id"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "headless volume creation omitted its identity".into())
+    }
+}
+
+async fn upload_file(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    content: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let begin_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000006",
+        "path": "process-proof.bin",
+        "disposition": { "mode": "create_new" },
+        "maximum_bytes": 1024
+    }))?;
+    let begin_response = request_with_headers(
+        address,
+        client,
+        "POST",
+        &format!("/api/latest/volumes/{volume_id}/uploads"),
+        Some(&begin_body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&begin_response, "201 Created", "begin native upload")?;
+    let begin_payload: serde_json::Value = serde_json::from_str(response_body(&begin_response)?)?;
+    let upload_id = begin_payload["upload_id"]
+        .as_str()
+        .ok_or("native upload begin omitted its identity")?;
+    let stage_fence = begin_payload["stage_fence"]
+        .as_u64()
+        .ok_or("native upload begin omitted its fence")?;
+    let digest = blake3::hash(content).to_hex().to_string();
+    let stage_fence = stage_fence.to_string();
+    let write = request_with_content_type(
+        address,
+        client,
+        "PUT",
+        &format!("/api/latest/uploads/{upload_id}/ranges/0"),
+        Some(content),
+        "application/octet-stream",
+        &[
+            ("Authorization", authorization.as_str()),
+            (
+                "MeshSpan-Operation-Id",
+                "00000000-0000-4000-8000-000000000007",
+            ),
+            ("MeshSpan-Stage-Fence", stage_fence.as_str()),
+            ("MeshSpan-Content-BLAKE3", digest.as_str()),
+        ],
+    )
+    .await?;
+    require_status(&write, "200 OK", "write native upload range")?;
+    let written: serde_json::Value = serde_json::from_str(response_body(&write)?)?;
+    let checkpoint = written["checkpoint_sequence"]
+        .as_u64()
+        .ok_or("native range write omitted its checkpoint")?;
+    let stage_fence = written["stage_fence"]
+        .as_u64()
+        .ok_or("native range write omitted its fence")?;
+    let commit_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000008",
+        "stage_fence": stage_fence,
+        "expected_sequence": checkpoint,
+        "final_length": content.len(),
+        "sparse": false,
+        "expected_blake3": digest
+    }))?;
+    let commit = request_with_headers(
+        address,
+        client,
+        "POST",
+        &format!("/api/latest/uploads/{upload_id}/commits"),
+        Some(&commit_body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&commit, "200 OK", "commit native upload")?;
+    if !response_body(&commit)?.contains("\"state\":\"committed\"") {
+        return Err("native upload did not return a committed file".into());
+    }
+    Ok(())
+}
+
+async fn assert_file_surfaces(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    content: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let headers = [("Authorization", authorization.as_str())];
+    let listing = request_with_headers(
+        address,
+        client,
+        "GET",
+        &format!("/api/latest/volumes/{volume_id}/directory-entries?limit=100"),
+        None,
+        &headers,
+    )
+    .await?;
+    require_status(&listing, "200 OK", "list native directory")?;
+    if !response_body(&listing)?.contains("\"name\":\"process-proof.bin\"") {
+        return Err("native directory listing omitted the uploaded file".into());
+    }
+    let stat = request_with_headers(
+        address,
+        client,
+        "GET",
+        &format!("/api/latest/volumes/{volume_id}/objects?path=process-proof.bin"),
+        None,
+        &headers,
+    )
+    .await?;
+    require_status(&stat, "200 OK", "stat native object")?;
+    let expected_length = format!("\"logical_length\":{}", content.len());
+    if !response_body(&stat)?.contains(&expected_length) {
+        return Err("native object stat returned the wrong logical length".into());
+    }
+    let read = request_with_headers(
+        address,
+        client,
+        "GET",
+        &format!(
+            "/api/latest/volumes/{volume_id}/file-content?path=process-proof.bin&offset=5&length=12"
+        ),
+        None,
+        &headers,
+    )
+    .await?;
+    require_status(&read, "200 OK", "read native file range")?;
+    if response_body(&read)?.as_bytes() != &content[5..17] {
+        return Err("native file range returned different bytes".into());
+    }
+    let download = request_with_headers(
+        address,
+        client,
+        "GET",
+        &format!(
+            "/api/latest/volumes/{volume_id}/file-content?path=process-proof.bin&offset=0&length={}",
+            content.len()
+        ),
+        None,
+        &headers,
+    )
+    .await?;
+    require_status(&download, "200 OK", "download native file")?;
+    if response_body(&download)?.as_bytes() != content {
+        return Err("native full-file download returned different bytes".into());
+    }
+    Ok(())
+}
+
+fn require_status(response: &str, expected: &str, operation: &str) -> Result<(), Box<dyn Error>> {
+    if response.starts_with(&format!("HTTP/1.1 {expected}\r\n")) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{operation} returned {}: {}",
+            response.lines().next().unwrap_or("an invalid response"),
+            response_body(response).unwrap_or("invalid response")
         )
         .into())
     }
@@ -546,13 +720,34 @@ async fn request_with_headers(
     body: Option<&[u8]>,
     additional_headers: &[(&str, &str)],
 ) -> Result<String, Box<dyn Error>> {
+    request_with_content_type(
+        address,
+        client,
+        method,
+        target,
+        body,
+        "application/json",
+        additional_headers,
+    )
+    .await
+}
+
+async fn request_with_content_type(
+    address: SocketAddr,
+    client: &ClientConfig,
+    method: &str,
+    target: &str,
+    body: Option<&[u8]>,
+    content_type: &str,
+    additional_headers: &[(&str, &str)],
+) -> Result<String, Box<dyn Error>> {
     let stream = TcpStream::connect(address).await?;
     let connector = TlsConnector::from(Arc::new(client.clone()));
     let name = ServerName::try_from(CERTIFICATE_NAME)?.to_owned();
     let mut stream = connector.connect(name, stream).await?;
     let body = body.unwrap_or_default();
     let mut headers = format!(
-        "{method} {target} HTTP/1.1\r\nHost: {CERTIFICATE_NAME}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "{method} {target} HTTP/1.1\r\nHost: {CERTIFICATE_NAME}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let insertion = headers

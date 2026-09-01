@@ -1,0 +1,286 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! One restart-safe production filesystem shared by every native HTTPS route.
+
+mod adapter;
+mod classification;
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use meshspan_cluster::{MetadataAuthorityHandle, MetadataFilesystemAuthorityError};
+use meshspan_domain::{BranchId, InitialBootstrapMaterial, PartitionId, UnixMicros};
+use meshspan_filesystem::{
+    AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter,
+    ContentChunkLimits, ContentPublicationError, FilesystemAdapterConfigurationError,
+    FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
+    UnprotectedContentAccess, UnprotectedContentPublisher,
+};
+use meshspan_metadata::{
+    AuthoritativeRepository, MetadataStoreError, PartitionDatabase, StorageTargetProviderContext,
+};
+use thiserror::Error;
+
+use crate::{
+    ConsensusAuthenticationAuthority, LocalFolderStorageProvider, LocalWrappingKey,
+    LocalWrappingKeyError, OperatingSystemRandom, StoragePermitLoadingError,
+    StoragePermitLoadingService, VolumeKeyLoadingService,
+};
+
+pub(crate) use classification::classify_native_filesystem_error;
+
+const CONTENT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+
+type ProductionPublisher = UnprotectedContentPublisher<
+    LocalFolderStorageProvider,
+    OperatingSystemRandom,
+    VolumeKeyLoadingService<ConsensusAuthenticationAuthority, LocalWrappingKey>,
+>;
+type ProductionFilesystem =
+    BoundFilesystemAdapter<ProductionPublisher, ConsensusAuthenticationAuthority>;
+pub(super) type ProductionFilesystemError =
+    AuthorisedFilesystemError<MetadataFilesystemAuthorityError>;
+
+/// One currently active provider target admitted to the initial single-target content layout.
+#[derive(Clone)]
+pub(crate) struct NativeStorageTarget {
+    context: StorageTargetProviderContext,
+    provider: LocalFolderStorageProvider,
+}
+
+impl NativeStorageTarget {
+    /// Keeps the replicated target identity beside the cloneable live provider.
+    #[must_use]
+    pub(crate) const fn new(
+        context: StorageTargetProviderContext,
+        provider: LocalFolderStorageProvider,
+    ) -> Self {
+        Self { context, provider }
+    }
+
+    /// Returns the stable target identity used for deterministic initial placement.
+    #[must_use]
+    pub(crate) const fn target_id(&self) -> meshspan_domain::TargetId {
+        self.context.target_id
+    }
+}
+
+/// Immutable paths and authority handles needed to open the production filesystem after setup.
+pub(crate) struct NativeFilesystemRuntimeConfiguration {
+    authority_database: PathBuf,
+    filesystem_state_directory: PathBuf,
+    wrapping_key_path: PathBuf,
+    partition_id: PartitionId,
+    branch_id: BranchId,
+    authority: MetadataAuthorityHandle,
+    runtime: tokio::runtime::Handle,
+    policy: FilesystemAdapterPolicy,
+    chunk_limits: ContentChunkLimits,
+}
+
+impl NativeFilesystemRuntimeConfiguration {
+    /// Builds one restart-stable node-local branch configuration.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid derived identities or compiled publication policy.
+    pub(crate) fn new(
+        daemon_state_directory: &Path,
+        wrapping_key_path: PathBuf,
+        node_id: meshspan_domain::NodeId,
+        authority: MetadataAuthorityHandle,
+        runtime: tokio::runtime::Handle,
+    ) -> Result<Self, NativeFilesystemRuntimeConfigurationError> {
+        Ok(Self {
+            authority_database: daemon_state_directory.join("root-authority.sqlite3"),
+            filesystem_state_directory: daemon_state_directory.join("filesystem"),
+            wrapping_key_path,
+            partition_id: InitialBootstrapMaterial::root_partition_id(node_id)?,
+            branch_id: InitialBootstrapMaterial::local_branch_id(node_id)?,
+            authority,
+            runtime,
+            policy: FilesystemAdapterPolicy::new(true, 1, 1)?,
+            chunk_limits: ContentChunkLimits::new(CONTENT_CHUNK_BYTES)
+                .map_err(|_| NativeFilesystemRuntimeConfigurationError::ChunkSize)?,
+        })
+    }
+
+    fn authority(
+        &self,
+        now: UnixMicros,
+    ) -> Result<ConsensusAuthenticationAuthority, NativeFilesystemOpeningError> {
+        let database = PartitionDatabase::open(&self.authority_database, self.partition_id, now)?;
+        Ok(ConsensusAuthenticationAuthority::new(
+            AuthoritativeRepository::new(database),
+            self.authority.clone(),
+            self.runtime.clone(),
+        ))
+    }
+
+    fn wrapping_key(&self) -> Result<LocalWrappingKey, NativeFilesystemOpeningError> {
+        LocalWrappingKey::open(&self.wrapping_key_path).map_err(Into::into)
+    }
+
+    fn open(
+        &self,
+        target: &NativeStorageTarget,
+        now: UnixMicros,
+    ) -> Result<ProductionFilesystem, NativeFilesystemOpeningError> {
+        let permit_key =
+            StoragePermitLoadingService::new(self.authority(now)?, self.wrapping_key()?)
+                .load_latest(target.context.mesh_id)?;
+        let content_access = UnprotectedContentAccess::new(
+            target.context.mesh_id,
+            target.context.target_id,
+            target.context.generation,
+            permit_key,
+        )?;
+        let key_service = VolumeKeyLoadingService::new(self.authority(now)?, self.wrapping_key()?);
+        let publisher = UnprotectedContentPublisher::open(
+            &self.filesystem_state_directory,
+            now,
+            target.provider.clone(),
+            OperatingSystemRandom,
+            key_service,
+            self.chunk_limits,
+            content_access,
+        )?;
+        let filesystem =
+            FilesystemCommitService::open(&self.filesystem_state_directory, now, publisher)?;
+        Ok(BoundFilesystemAdapter::new(
+            AuthorisedFilesystemService::new(filesystem, self.authority(now)?),
+            self.branch_id,
+            self.policy,
+        ))
+    }
+}
+
+struct NativeFilesystemRuntimeState {
+    configuration: NativeFilesystemRuntimeConfiguration,
+    filesystem: Option<ProductionFilesystem>,
+}
+
+/// Cloneable connector boundary backed by exactly one production filesystem state machine.
+#[derive(Clone)]
+pub(crate) struct NativeFilesystemRuntime {
+    inner: Arc<Mutex<NativeFilesystemRuntimeState>>,
+}
+
+impl NativeFilesystemRuntime {
+    /// Creates a closed runtime which becomes callable only after [`Self::ensure_open`].
+    #[must_use]
+    pub(crate) fn new(configuration: NativeFilesystemRuntimeConfiguration) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(NativeFilesystemRuntimeState {
+                configuration,
+                filesystem: None,
+            })),
+        }
+    }
+
+    /// Opens the durable namespace, content catalogue and publisher once a provider is live.
+    ///
+    /// Exact retries are no-ops after success. Failed attempts leave the runtime closed so the
+    /// storage reconciler can retry without exposing a partly composed service.
+    pub(crate) fn ensure_open(
+        &self,
+        target: &NativeStorageTarget,
+        now: UnixMicros,
+    ) -> Result<(), NativeFilesystemOpeningError> {
+        let mut state = self.lock_opening()?;
+        if state.filesystem.is_some() {
+            return Ok(());
+        }
+        let filesystem = state.configuration.open(target, now)?;
+        state.filesystem = Some(filesystem);
+        Ok(())
+    }
+
+    fn lock_opening(
+        &self,
+    ) -> Result<MutexGuard<'_, NativeFilesystemRuntimeState>, NativeFilesystemOpeningError> {
+        self.inner
+            .lock()
+            .map_err(|_| NativeFilesystemOpeningError::Unavailable)
+    }
+
+    fn lock(
+        &self,
+    ) -> Result<MutexGuard<'_, NativeFilesystemRuntimeState>, NativeFilesystemRuntimeError> {
+        self.inner
+            .lock()
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)
+    }
+
+    fn with_mut<T>(
+        &self,
+        operation: impl FnOnce(&mut ProductionFilesystem) -> Result<T, ProductionFilesystemError>,
+    ) -> Result<T, NativeFilesystemRuntimeError> {
+        let mut state = self.lock()?;
+        let filesystem = state
+            .filesystem
+            .as_mut()
+            .ok_or(NativeFilesystemRuntimeError::Unavailable)?;
+        operation(filesystem).map_err(Into::into)
+    }
+
+    fn with_ref<T>(
+        &self,
+        operation: impl FnOnce(&ProductionFilesystem) -> Result<T, ProductionFilesystemError>,
+    ) -> Result<T, NativeFilesystemRuntimeError> {
+        let state = self.lock()?;
+        let filesystem = state
+            .filesystem
+            .as_ref()
+            .ok_or(NativeFilesystemRuntimeError::Unavailable)?;
+        operation(filesystem).map_err(Into::into)
+    }
+}
+
+/// Closed runtime operation failures exposed only to native service classifiers.
+#[derive(Debug, Error)]
+pub(crate) enum NativeFilesystemRuntimeError {
+    /// Setup, storage or the shared runtime lock is not currently available.
+    #[error("native filesystem runtime is unavailable")]
+    Unavailable,
+    /// The composed authority or filesystem rejected the operation.
+    #[error("native filesystem operation failed")]
+    Operation(#[from] ProductionFilesystemError),
+}
+
+/// Failures while atomically composing the production filesystem after provider activation.
+#[derive(Debug, Error)]
+pub(crate) enum NativeFilesystemOpeningError {
+    /// The runtime lock or another required local capability is unavailable.
+    #[error("native filesystem opening is unavailable")]
+    Unavailable,
+    /// Root metadata could not be opened safely.
+    #[error("native filesystem metadata failed")]
+    Metadata(#[from] MetadataStoreError),
+    /// The protected node wrapping key could not be reopened safely.
+    #[error("native filesystem wrapping key failed")]
+    WrappingKey(#[from] LocalWrappingKeyError),
+    /// The protected storage-permit generation could not be loaded safely.
+    #[error("native filesystem storage permit failed")]
+    StoragePermit(#[from] StoragePermitLoadingError),
+    /// The content publisher or catalogue could not be opened safely.
+    #[error("native filesystem content publisher failed")]
+    Content(#[from] ContentPublicationError),
+    /// Namespace, stage, upload or handle state could not be opened safely.
+    #[error("native filesystem state failed")]
+    Filesystem(#[from] FilesystemCommitError),
+}
+
+/// Invalid compiled production filesystem configuration.
+#[derive(Debug, Error)]
+pub(crate) enum NativeFilesystemRuntimeConfigurationError {
+    /// The local branch or partition identity could not be derived.
+    #[error("native filesystem identity is invalid")]
+    Identity(#[from] meshspan_domain::InitialBootstrapMaterialError),
+    /// The publication policy is invalid.
+    #[error("native filesystem publication policy is invalid")]
+    Policy(#[from] FilesystemAdapterConfigurationError),
+    /// The compiled content chunk ceiling is invalid.
+    #[error("native filesystem content chunk size is invalid")]
+    ChunkSize,
+}

@@ -32,7 +32,7 @@ impl FilesystemAccessAuthority for MetadataFilesystemAuthority<'_> {
         &self,
         request: FilesystemAuthorityRequest,
     ) -> Result<FilesystemAuthorityGrant, Self::Error> {
-        let decision = self.repository.evaluate_access(AccessRequest {
+        let access_request = AccessRequest {
             authentication_service: request.context.authentication_service,
             credential_digest: request.context.credential_digest,
             required_assurance: request.context.required_assurance,
@@ -42,7 +42,13 @@ impl FilesystemAccessAuthority for MetadataFilesystemAuthority<'_> {
             object_id: request.object_id,
             requested_rights: request.requested_rights,
             now: request.context.now,
-        })?;
+        };
+        let decision = match self.repository.evaluate_access(access_request)? {
+            AccessDecision::Denied(AccessDenial::ObjectUnavailable) => self
+                .repository
+                .evaluate_unrecorded_descendant_access(access_request)?,
+            decision => decision,
+        };
         match decision {
             AccessDecision::Granted(capability) => Ok(FilesystemAuthorityGrant {
                 principal_id: capability.principal_id,

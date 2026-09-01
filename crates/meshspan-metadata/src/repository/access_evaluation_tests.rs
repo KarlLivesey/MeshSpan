@@ -375,6 +375,61 @@ fn sessions_are_fenced_by_identity_assurance_gateway_and_object()
 }
 
 #[test]
+fn unrecorded_local_descendants_inherit_only_the_volume_root_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = build_fixture(false)?;
+    let owner = fixture.second_user;
+    issue_session(
+        &mut fixture,
+        owner,
+        SessionId::from_bytes([75; 16])?,
+        [76; 32],
+    )?;
+    let unrecorded = ObjectId::from_bytes([99; 16])?;
+    let mut access = request(&fixture, [76; 32], Rights::READ_DATA, 200);
+    access.object_id = unrecorded;
+    assert_eq!(
+        fixture.repository.evaluate_access(access)?,
+        AccessDecision::Denied(AccessDenial::ObjectUnavailable)
+    );
+    let AccessDecision::Granted(inherited) = fixture
+        .repository
+        .evaluate_unrecorded_descendant_access(access)?
+    else {
+        return Err("volume owner could not access an unrecorded local descendant".into());
+    };
+    assert_eq!(inherited.object_id, unrecorded);
+    assert_eq!(inherited.object_revision, inherited.namespace_revision);
+    assert_ne!(inherited.capability_digest, [0; 32]);
+
+    let mut known_foreign = access;
+    known_foreign.object_id = fixture.file;
+    known_foreign.volume_id = VolumeId::from_bytes([98; 16])?;
+    assert_eq!(
+        fixture
+            .repository
+            .evaluate_unrecorded_descendant_access(known_foreign)?,
+        AccessDecision::Denied(AccessDenial::ObjectUnavailable)
+    );
+
+    let user = fixture.user;
+    issue_session(
+        &mut fixture,
+        user,
+        SessionId::from_bytes([77; 16])?,
+        [78; 32],
+    )?;
+    access.credential_digest = [78; 32];
+    assert_eq!(
+        fixture
+            .repository
+            .evaluate_unrecorded_descendant_access(access)?,
+        AccessDecision::Denied(AccessDenial::MissingRights)
+    );
+    Ok(())
+}
+
+#[test]
 fn folder_boundary_stops_higher_grants_but_keeps_grants_scoped_at_the_folder()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = build_fixture(false)?;

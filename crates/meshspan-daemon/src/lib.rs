@@ -80,6 +80,7 @@ mod namespace_mutation_api;
 mod native_api_authentication;
 #[cfg(test)]
 mod native_api_authentication_tests;
+mod native_filesystem_runtime;
 mod native_query;
 mod native_upload_api;
 #[cfg(test)]
@@ -273,6 +274,10 @@ pub use namespace_mutation_api::{
 pub use native_api_authentication::{
     FileApiAuthenticationError, NativeApiAuthenticator, NativeApiKeyAuthenticator,
     NativeApiKeyAuthority, NativeApiKeyAuthorityError,
+};
+pub(crate) use native_filesystem_runtime::{
+    NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeStorageTarget,
+    classify_native_filesystem_error,
 };
 pub use native_upload_api::{
     NativeUploadApiError, NativeUploadController, NativeUploadError, NativeUploadService,
