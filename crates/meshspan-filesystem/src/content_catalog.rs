@@ -289,8 +289,14 @@ impl DurableContentCatalog {
         receipt: ShardReceipt,
         recorded_at: UnixMicros,
     ) -> Result<(), ContentCatalogError> {
-        let manifest = load_prepared_manifest(&self.connection, request)?
-            .ok_or(ContentCatalogError::InvalidInput)?;
+        let manifest = match load_prepared_manifest(&self.connection, request)? {
+            Some(manifest) => manifest,
+            None => {
+                transfer::load_import_header(&self.connection, request.operation_id)?
+                    .ok_or(ContentCatalogError::InvalidInput)?
+                    .manifest
+            }
+        };
         let chunk = load_chunk(&self.connection, request.operation_id, chunk_index)?;
         if receipt.operation_id != chunk.provider_operation_id
             || receipt.shard.manifest_digest != manifest.root_digest

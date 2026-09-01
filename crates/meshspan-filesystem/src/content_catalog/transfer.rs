@@ -256,7 +256,7 @@ fn validate_stored_import(
     }
 }
 
-fn load_import_header(
+pub(super) fn load_import_header(
     connection: &Connection,
     operation_id: OperationId,
 ) -> Result<Option<ContentLayoutTransferHeader>, ContentCatalogError> {
