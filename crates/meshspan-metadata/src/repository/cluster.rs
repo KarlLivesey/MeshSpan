@@ -397,17 +397,6 @@ pub(super) fn activate_node(
     {
         return Err(RepositoryError::InvalidCommand);
     }
-    super::node_wrapping_key::register(
-        transaction,
-        context,
-        RegisterNodeWrappingKey {
-            node_id: command.node_id,
-            generation: 1,
-            public_key,
-            key_fingerprint,
-        },
-        revision,
-    )?;
     let changed = transaction.execute(
         "UPDATE nodes SET state = 2, activated_at = ?1, revision = ?2
          WHERE node_id = ?3 AND state = 1 AND current_incarnation = ?4",
@@ -421,6 +410,17 @@ pub(super) fn activate_node(
     if changed != 1 {
         return Err(RepositoryError::InvalidCommand);
     }
+    super::node_wrapping_key::register(
+        transaction,
+        context,
+        RegisterNodeWrappingKey {
+            node_id: command.node_id,
+            generation: 1,
+            public_key,
+            key_fingerprint,
+        },
+        revision,
+    )?;
     transaction.execute(
         "INSERT INTO node_activations(
             node_id, incarnation, private_endpoint, capability_digest, activated_at, revision

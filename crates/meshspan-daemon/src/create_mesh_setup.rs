@@ -35,7 +35,6 @@ use crate::{
 const ALL_INITIAL_SERVICE_SCOPES: u8 = 1 | 2 | 4;
 const ALL_INITIAL_LOGIN_SCOPES: u64 = 1 | 2 | 4;
 const NODE_CERTIFICATE_LIFETIME_MICROS: u64 = 30 * 24 * 60 * 60 * 1_000_000;
-const NODE_CERTIFICATE_DNS_NAME: &str = "meshspan.local";
 
 /// Minimal committed result needed to bridge consensus into the local setup journal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -259,7 +258,10 @@ impl ValidatedSetupInput {
             return Err(CreateMeshSetupError::Certificate);
         }
         let node_certificate_der = online_authority
-            .sign_node_public_identity(&node_public_identity, NODE_CERTIFICATE_DNS_NAME)
+            .sign_node_public_identity(
+                &node_public_identity,
+                &private_node_certificate_name(material.node_id),
+            )
             .map_err(|_| CreateMeshSetupError::Certificate)?;
         let certificate_valid_until = occurred_at
             .checked_add(meshspan_domain::DurationMicros::new(
@@ -353,6 +355,11 @@ impl ValidatedSetupInput {
                 .expose_for_verification(),
         })
     }
+}
+
+fn private_node_certificate_name(node_id: meshspan_domain::NodeId) -> String {
+    let compact = node_id.to_string().replace('-', "");
+    format!("node-{compact}.meshspan.internal")
 }
 
 struct InitialAuthorityGenerations {
