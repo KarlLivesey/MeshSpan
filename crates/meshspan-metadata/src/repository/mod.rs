@@ -1153,6 +1153,21 @@ impl AuthoritativeRepository {
         storage_target::provider_context(&self.database, node_id, target_id)
     }
 
+    /// Returns the current active replicated configuration for one globally unique target.
+    ///
+    /// This lookup is used by a gateway routing an already-authorised immutable shard read. A
+    /// draining, retired or inactive target returns `None` rather than a stale node route.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed target, topology, policy or revision state.
+    pub fn storage_target_provider_context_by_target(
+        &self,
+        target_id: meshspan_domain::TargetId,
+    ) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
+        storage_target::provider_context_by_target(&self.database, target_id)
+    }
+
     /// Returns the current public secret-wrapping-key generation for one node.
     ///
     /// # Errors

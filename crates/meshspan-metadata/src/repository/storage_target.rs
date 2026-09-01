@@ -51,6 +51,14 @@ pub(super) fn provider_context(
     node_id: NodeId,
     target_id: TargetId,
 ) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
+    let context = provider_context_by_target(database, target_id)?;
+    Ok(context.filter(|context| context.node_id == node_id))
+}
+
+pub(super) fn provider_context_by_target(
+    database: &crate::PartitionDatabase,
+    target_id: TargetId,
+) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
     let stored = database
         .connection()
         .query_row(
@@ -63,15 +71,14 @@ pub(super) fn provider_context(
              JOIN hosts h ON h.host_id = st.host_id
              CROSS JOIN meshes m
              CROSS JOIN applied_state a
-             WHERE st.target_id = ?1 AND st.node_id = ?2
-               AND st.state = ?3 AND st.draining_at IS NULL AND st.retired_at IS NULL
-               AND tg.state = ?4 AND tg.retired_at IS NULL
+             WHERE st.target_id = ?1
+               AND st.state = ?2 AND st.draining_at IS NULL AND st.retired_at IS NULL
+               AND tg.state = ?3 AND tg.retired_at IS NULL
                AND n.state = 2 AND n.retired_at IS NULL
                AND h.state = 1 AND h.retired_at IS NULL
                AND (SELECT COUNT(*) FROM meshes) = 1",
             params![
                 target_id.as_bytes().as_slice(),
-                node_id.as_bytes().as_slice(),
                 i64::from(ACTIVE_TARGET_STATE),
                 i64::from(ACTIVE_GENERATION_STATE),
             ],
@@ -105,7 +112,7 @@ pub(super) fn provider_context(
         policy_revision: revision(policy)?,
         catalogue_revision: revision(catalogue)?,
     };
-    if context.node_id != node_id || context.target_id != target_id {
+    if context.target_id != target_id {
         Err(RepositoryError::CorruptState)
     } else {
         Ok(Some(context))
