@@ -21,6 +21,8 @@ use meshspan_metadata::{
 };
 use thiserror::Error;
 
+use crate::cluster_storage_provider::ClusterStorageProvider;
+use crate::private_consensus_runtime::PrivateConsensusRuntime;
 use crate::{
     ConsensusAuthenticationAuthority, LocalFolderStorageProvider, LocalWrappingKey,
     LocalWrappingKeyError, OperatingSystemRandom, StoragePermitLoadingError,
@@ -33,7 +35,7 @@ const CONTENT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAXIMUM_NATIVE_SHARD_BYTES: usize = CONTENT_CHUNK_BYTES + 16;
 
 type ProductionPublisher = UnprotectedContentPublisher<
-    LocalFolderStorageProvider,
+    ClusterStorageProvider,
     OperatingSystemRandom,
     VolumeKeyLoadingService<ConsensusAuthenticationAuthority, LocalWrappingKey>,
 >;
@@ -86,6 +88,7 @@ pub(crate) struct NativeFilesystemRuntimeConfiguration {
     partition_id: PartitionId,
     branch_id: BranchId,
     authority: MetadataAuthorityHandle,
+    network: Arc<PrivateConsensusRuntime>,
     runtime: tokio::runtime::Handle,
     policy: FilesystemAdapterPolicy,
     chunk_limits: ContentChunkLimits,
@@ -103,6 +106,7 @@ impl NativeFilesystemRuntimeConfiguration {
         node_id: meshspan_domain::NodeId,
         partition_id: PartitionId,
         authority: MetadataAuthorityHandle,
+        network: Arc<PrivateConsensusRuntime>,
         runtime: tokio::runtime::Handle,
     ) -> Result<Self, NativeFilesystemRuntimeConfigurationError> {
         Ok(Self {
@@ -112,6 +116,7 @@ impl NativeFilesystemRuntimeConfiguration {
             partition_id,
             branch_id: InitialBootstrapMaterial::local_branch_id(node_id)?,
             authority,
+            network,
             runtime,
             policy: FilesystemAdapterPolicy::new(true, 1, 1)?,
             chunk_limits: ContentChunkLimits::new(CONTENT_CHUNK_BYTES)
@@ -123,12 +128,19 @@ impl NativeFilesystemRuntimeConfiguration {
         &self,
         now: UnixMicros,
     ) -> Result<ConsensusAuthenticationAuthority, NativeFilesystemOpeningError> {
-        let database = PartitionDatabase::open(&self.authority_database, self.partition_id, now)?;
         Ok(ConsensusAuthenticationAuthority::new(
-            AuthoritativeRepository::new(database),
+            self.repository(now)?,
             self.authority.clone(),
             self.runtime.clone(),
         ))
+    }
+
+    fn repository(
+        &self,
+        now: UnixMicros,
+    ) -> Result<AuthoritativeRepository, NativeFilesystemOpeningError> {
+        let database = PartitionDatabase::open(&self.authority_database, self.partition_id, now)?;
+        Ok(AuthoritativeRepository::new(database))
     }
 
     fn wrapping_key(&self) -> Result<LocalWrappingKey, NativeFilesystemOpeningError> {
@@ -150,10 +162,18 @@ impl NativeFilesystemRuntimeConfiguration {
             permit_key,
         )?;
         let key_service = VolumeKeyLoadingService::new(self.authority(now)?, self.wrapping_key()?);
+        let provider = ClusterStorageProvider::new(
+            target.provider(),
+            target.context.target_id,
+            target.context.generation,
+            self.repository(now)?,
+            Arc::clone(&self.network),
+            self.runtime.clone(),
+        );
         let publisher = UnprotectedContentPublisher::open(
             &self.filesystem_state_directory,
             now,
-            target.provider.clone(),
+            provider,
             OperatingSystemRandom,
             key_service,
             self.chunk_limits,

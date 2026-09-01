@@ -344,6 +344,7 @@ where
     } = compose_storage_runtime(
         &local_state,
         &authority,
+        Arc::clone(&private_network),
         removal_authority_epoch,
         config.storage().storage_paths().to_vec(),
         started_at,
@@ -425,6 +426,7 @@ where
 fn compose_storage_runtime(
     local_state: &DaemonLocalState,
     authority: &MetadataAuthorityHandle,
+    private_network: Arc<PrivateConsensusRuntime>,
     removal_authority_epoch: u64,
     configured_paths: Vec<PathBuf>,
     now: UnixMicros,
@@ -446,6 +448,7 @@ fn compose_storage_runtime(
             local_state.node_id(),
             root_partition_id,
             authority.clone(),
+            private_network,
             runtime.clone(),
         )
         .map_err(|_| DaemonProcessError::NativeFilesystemConfiguration)?,

@@ -503,6 +503,10 @@ impl<P: StorageProvider, R, K> UnprotectedContentPublisher<P, R, K> {
         chunk: PreparedContentChunk,
     ) -> Result<EncryptedContentChunk, ContentReadError> {
         let operation_id = read_operation_id(read.operation_id, chunk.chunk_index)?;
+        let receipt = self
+            .catalog
+            .shard_receipt(read.content.publication_operation_id, chunk.chunk_index)
+            .map_err(map_catalog_read)?;
         let context = RequestContext {
             contract_version: ContractVersion::V1_0,
             operation_id,
@@ -512,8 +516,8 @@ impl<P: StorageProvider, R, K> UnprotectedContentPublisher<P, R, K> {
         let mut permit = ShardReadPermit {
             operation_id,
             mesh_id: self.access.mesh_id,
-            target_id: self.access.target_id,
-            target_generation: self.access.target_generation,
+            target_id: receipt.target_id,
+            target_generation: receipt.target_generation,
             shard: ShardIdentity {
                 manifest_digest: layout.manifest.root_digest,
                 stripe_index: chunk.chunk_index,

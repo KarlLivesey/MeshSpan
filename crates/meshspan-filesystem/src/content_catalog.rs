@@ -323,6 +323,15 @@ impl DurableContentCatalog {
         }
     }
 
+    pub(crate) fn shard_receipt(
+        &self,
+        operation_id: OperationId,
+        chunk_index: u64,
+    ) -> Result<ShardReceipt, ContentCatalogError> {
+        load_receipt(&self.connection, operation_id, chunk_index)?
+            .ok_or(ContentCatalogError::Incomplete)
+    }
+
     /// Returns a bounded page of chunks without provider receipts.
     ///
     /// # Errors
