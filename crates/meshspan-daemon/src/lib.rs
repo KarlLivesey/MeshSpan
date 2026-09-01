@@ -155,6 +155,9 @@ mod step_up_session_tests;
 mod storage_permit_loading;
 #[cfg(test)]
 mod storage_permit_loading_tests;
+mod storage_provider_opening;
+#[cfg(test)]
+mod storage_provider_opening_tests;
 mod storage_target_registration;
 #[cfg(test)]
 mod storage_target_registration_tests;
@@ -356,9 +359,13 @@ pub use step_up_session_api::{
 pub use storage_permit_loading::{
     StoragePermitAuthority, StoragePermitLoadingError, StoragePermitLoadingService,
 };
+pub use storage_provider_opening::{
+    LocalFolderStorageProvider, StorageProviderOpeningError, StorageProviderOpeningService,
+};
 pub use storage_target_registration::{
-    StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
-    StorageTargetRegistrationError, StorageTargetRegistrationService,
+    RegisteredStorageTarget, StorageTargetRegistrationAuthority,
+    StorageTargetRegistrationAuthorityError, StorageTargetRegistrationError,
+    StorageTargetRegistrationService,
 };
 pub use totp_registration::TotpRegistrationService;
 pub use totp_registration_api::{

@@ -13,7 +13,7 @@ use meshspan_domain::{
 use meshspan_metadata::{
     AuthoritativeCommand, CommandReceipt, CreateComponent, EntityKind, LocalDatabase,
     LocalTargetError, LocalTargetState, NewLocalTarget, RecordName, RepositoryError,
-    StorageTargetRegistrationContext, StorageUsageLimit,
+    StorageTargetProviderContext, StorageTargetRegistrationContext, StorageUsageLimit,
 };
 use meshspan_storage::{FolderRegistration, RegisteredFolder, StorageFolderError, UsageLimit};
 use sha2::{Digest, Sha256};
@@ -45,6 +45,50 @@ pub trait StorageTargetRegistrationAuthority {
         context: meshspan_metadata::CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, StorageTargetRegistrationAuthorityError>;
+
+    /// Returns the current active replicated provider configuration after registration.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the target is absent, inactive, foreign or malformed.
+    fn provider_context(
+        &self,
+        node_id: NodeId,
+        target_id: TargetId,
+    ) -> Result<Option<StorageTargetProviderContext>, StorageTargetRegistrationAuthorityError>;
+}
+
+/// One exclusively owned folder joined to its current replicated provider configuration.
+pub struct RegisteredStorageTarget {
+    folder: RegisteredFolder,
+    context: StorageTargetProviderContext,
+}
+
+impl RegisteredStorageTarget {
+    pub(crate) const fn from_validated_parts(
+        folder: RegisteredFolder,
+        context: StorageTargetProviderContext,
+    ) -> Self {
+        Self { folder, context }
+    }
+
+    /// Returns the marker identity proven by both the folder and replicated context.
+    #[must_use]
+    pub const fn marker(&self) -> meshspan_storage::TargetMarker {
+        self.folder.marker()
+    }
+
+    /// Returns the current replicated provider configuration.
+    #[must_use]
+    pub const fn context(&self) -> StorageTargetProviderContext {
+        self.context
+    }
+
+    /// Transfers exclusive folder ownership into a provider-opening boundary.
+    #[must_use]
+    pub fn into_parts(self) -> (RegisteredFolder, StorageTargetProviderContext) {
+        (self.folder, self.context)
+    }
 }
 
 /// Durable node-local target registration joined to one authoritative metadata command.
@@ -85,7 +129,7 @@ where
         &mut self,
         storage_path: &Path,
         now: UnixMicros,
-    ) -> Result<RegisteredFolder, StorageTargetRegistrationError> {
+    ) -> Result<RegisteredStorageTarget, StorageTargetRegistrationError> {
         let canonical_path = fs::canonicalize(storage_path)?;
         let canonical_bytes = canonical_path.as_os_str().as_bytes().to_vec();
         let record = if let Some(record) = self.local.local_target_by_path(&canonical_bytes)? {
@@ -135,7 +179,33 @@ where
             self.local
                 .activate_local_target(current.intent.target_id, now)?;
         }
-        Ok(folder)
+        let provider = self
+            .authority
+            .provider_context(self.local.node_id(), current.intent.target_id)?
+            .ok_or(StorageTargetRegistrationError::Conflict)?;
+        validate_provider_context(&folder, &current, provider)?;
+        Ok(RegisteredStorageTarget::from_validated_parts(
+            folder, provider,
+        ))
+    }
+}
+
+fn validate_provider_context(
+    folder: &RegisteredFolder,
+    record: &meshspan_metadata::LocalTargetRecord,
+    context: StorageTargetProviderContext,
+) -> Result<(), StorageTargetRegistrationError> {
+    let marker = folder.marker();
+    if context.mesh_id != marker.mesh_id()
+        || context.node_id != record.intent.node_id
+        || context.target_id != marker.target_id()
+        || context.generation != marker.generation()
+        || context.policy_revision == meshspan_domain::Revision::ZERO
+        || context.catalogue_revision < context.policy_revision
+    {
+        Err(StorageTargetRegistrationError::Conflict)
+    } else {
+        Ok(())
     }
 }
 

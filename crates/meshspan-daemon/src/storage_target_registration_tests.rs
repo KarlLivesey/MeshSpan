@@ -9,8 +9,8 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     ApplyDisposition, AuthoritativeCommand, CommandContext, CommandReceipt, EntityKind,
-    EntityReference, LocalDatabase, LocalTargetState, LogPosition,
-    StorageTargetRegistrationContext,
+    EntityReference, LocalDatabase, LocalTargetState, LogPosition, StorageTargetProviderContext,
+    StorageTargetRegistrationContext, StorageUsageLimit,
 };
 use tempfile::tempdir;
 
@@ -67,6 +67,25 @@ impl StorageTargetRegistrationAuthority for FakeAuthority {
                 id: target.target_id.as_bytes(),
             },
         })
+    }
+
+    fn provider_context(
+        &self,
+        node_id: NodeId,
+        target_id: meshspan_domain::TargetId,
+    ) -> Result<Option<StorageTargetProviderContext>, StorageTargetRegistrationAuthorityError> {
+        Ok(self
+            .context
+            .filter(|context| context.node_id == node_id)
+            .map(|context| StorageTargetProviderContext {
+                mesh_id: context.mesh_id,
+                node_id,
+                target_id,
+                generation: 1,
+                usage_limit: StorageUsageLimit::Percent(95),
+                policy_revision: Revision::new(2),
+                catalogue_revision: Revision::new(2),
+            }))
     }
 }
 

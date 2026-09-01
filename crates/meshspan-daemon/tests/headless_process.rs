@@ -70,6 +70,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert!(!fixture.claim_path.exists());
     wait_for_status(fixture.address, &client, "configured").await?;
     let target_marker = wait_for_storage_marker(&fixture.storage_path).await?;
+    let provider_journal = wait_for_live_provider(&fixture).await?;
     assert_wrapping_key_committed(&fixture)?;
     assert_eq!(
         fs::read(fixture.storage_path.join("operator-file.txt"))?,
@@ -89,6 +90,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
         wait_for_storage_marker(&fixture.storage_path).await?,
         target_marker
     );
+    assert_eq!(wait_for_live_provider(&fixture).await?, provider_journal);
     assert_wrapping_key_committed(&fixture)?;
     assert_session_created(fixture.address, &client, &session_body).await?;
     assert_volume_visible(fixture.address, &client, api_key).await?;
@@ -441,6 +443,34 @@ async fn wait_for_storage_marker(storage_path: &Path) -> Result<Vec<u8>, Box<dyn
             Err(_) if Instant::now() < deadline => sleep(RETRY_INTERVAL).await,
             Err(error) => return Err(error.into()),
         }
+    }
+}
+
+async fn wait_for_live_provider(fixture: &ProcessFixture) -> Result<PathBuf, Box<dyn Error>> {
+    let pack = fixture
+        .storage_path
+        .join(".meshspan/packs/0000000000000001.sqlite3");
+    let journals = fixture.state_path.join("storage-targets");
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let journal = fs::read_dir(&journals).ok().and_then(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "sqlite3")
+                })
+        });
+        if pack.is_file()
+            && let Some(journal) = journal
+        {
+            return Ok(journal);
+        }
+        if Instant::now() >= deadline {
+            return Err("registered storage folder never became a live provider".into());
+        }
+        sleep(RETRY_INTERVAL).await;
     }
 }
 

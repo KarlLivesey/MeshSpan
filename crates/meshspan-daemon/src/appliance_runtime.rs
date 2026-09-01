@@ -29,7 +29,6 @@ use meshspan_metadata::{
     AuthoritativeRepository, ConsensusStoreError, MetadataStoreError, PartitionDatabase,
     RepositoryError,
 };
-use meshspan_storage::RegisteredFolder;
 use thiserror::Error;
 use tokio::task::JoinHandle;
 
@@ -39,12 +38,13 @@ use crate::{
     CreateMeshSetupService, CreateSessionService, CurrentSessionApiError, DaemonLocalState,
     DaemonLocalStateError, DisabledTotpFactors, GatewaySessionIdentity, HeadlessDaemonConfig,
     HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
-    IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
-    NodeWrappingKeyRegistrationService, OperatingSystemRandom, PublicContractApiError,
-    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
-    RevokeCurrentSessionApiError, RevokeCurrentSessionService, SessionApiError, SetupApiError,
-    SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, StepUpCurrentSessionApiError,
-    StepUpCurrentSessionService, StorageTargetRegistrationService, VolumeAdministrationApiError,
+    IdentityAdministrationService, LocalFolderStorageProvider, NativeApiAuthenticator,
+    NativeApiKeyAuthenticator, NodeWrappingKeyRegistrationService, OperatingSystemRandom,
+    PublicContractApiError, ReadinessSource, RecoveryBundleVerificationApiError,
+    RecoveryBundleVerificationService, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
+    SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
+    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageProviderOpeningError,
+    StorageProviderOpeningService, StorageTargetRegistrationService, VolumeAdministrationApiError,
     VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
     current_session_api_router, identity_administration_api_router, public_contract_api_router,
     recovery_bundle_verification_api_router, revoke_current_session_api_router, session_api_router,
@@ -58,6 +58,7 @@ const INITIAL_MEMBERSHIP_EPOCH: u64 = 1;
 type AuthorityTask = (
     MetadataAuthorityHandle,
     JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
+    u64,
 );
 
 /// Runs one fully headless appliance until the supplied shutdown signal resolves.
@@ -79,7 +80,8 @@ where
     let setup_state = Arc::new(SetupStateSnapshot::new(SetupState::ClaimRequired));
     setup_state.reconcile(local_state.local_database())?;
 
-    let (authority, authority_task) = start_root_authority(&local_state, started_at)?;
+    let (authority, authority_task, removal_authority_epoch) =
+        start_root_authority(&local_state, started_at)?;
     authority.begin_election().await?;
     let readiness = Arc::new(RuntimeReadiness::default());
     let storage_targets = Arc::new(Mutex::new(StorageTargetRuntime::new(
@@ -102,6 +104,17 @@ where
             ),
             OperatingSystemRandom,
         ),
+        StorageProviderOpeningService::new(
+            ConsensusAuthenticationAuthority::new(
+                open_root_repository(&local_state, started_at)?,
+                authority.clone(),
+                tokio::runtime::Handle::current(),
+            ),
+            local_state.open_wrapping_key()?,
+            local_state.state_directory().to_path_buf(),
+            removal_authority_epoch,
+            OperatingSystemRandom,
+        )?,
         config.storage().storage_paths().to_vec(),
         Arc::clone(&readiness),
     )));
@@ -171,6 +184,7 @@ fn start_root_authority(
     let incarnations =
         MemberIncarnations::for_members(BTreeMap::from([(node_id, 1)]), &active_plan.members())?;
     let durable = repository.load_consensus_state(active_plan.membership_epoch())?;
+    let authority_epoch = active_plan.membership_epoch();
     let core = ConsensusCore::restore_active(
         CoreConfig {
             partition_id,
@@ -183,12 +197,13 @@ fn start_root_authority(
         active_plan,
     )?;
     let driver = PartitionConsensusDriver::new(core, repository);
-    spawn_metadata_authority(
+    let (handle, task) = spawn_metadata_authority(
         driver,
         Arc::new(|_, _| {}),
         MetadataAuthorityConfig::default(),
     )
-    .map_err(Into::into)
+    .map_err(DaemonProcessError::from)?;
+    Ok((handle, task, authority_epoch))
 }
 
 fn authentication_session_routes(
@@ -296,8 +311,13 @@ struct StorageTargetRuntime {
         NodeWrappingKeyRegistrationService<ConsensusAuthenticationAuthority, OperatingSystemRandom>,
     registration:
         StorageTargetRegistrationService<ConsensusAuthenticationAuthority, OperatingSystemRandom>,
+    opening: StorageProviderOpeningService<
+        ConsensusAuthenticationAuthority,
+        crate::LocalWrappingKey,
+        OperatingSystemRandom,
+    >,
     configured_paths: Vec<PathBuf>,
-    active: BTreeMap<PathBuf, RegisteredFolder>,
+    active: BTreeMap<PathBuf, LocalFolderStorageProvider>,
     readiness: Arc<RuntimeReadiness>,
 }
 
@@ -311,12 +331,18 @@ impl StorageTargetRuntime {
             ConsensusAuthenticationAuthority,
             OperatingSystemRandom,
         >,
+        opening: StorageProviderOpeningService<
+            ConsensusAuthenticationAuthority,
+            crate::LocalWrappingKey,
+            OperatingSystemRandom,
+        >,
         configured_paths: Vec<PathBuf>,
         readiness: Arc<RuntimeReadiness>,
     ) -> Self {
         Self {
             wrapping_registration,
             registration,
+            opening,
             configured_paths,
             active: BTreeMap::new(),
             readiness,
@@ -337,9 +363,12 @@ impl StorageTargetRuntime {
                 continue;
             }
             match self.registration.register(&canonical_path, now) {
-                Ok(folder) => {
-                    self.active.insert(canonical_path, folder);
-                }
+                Ok(target) => match self.opening.open(target, now) {
+                    Ok(provider) => {
+                        self.active.insert(canonical_path, provider);
+                    }
+                    Err(_) => failures = failures.saturating_add(1),
+                },
                 Err(_) => failures = failures.saturating_add(1),
             }
         }
@@ -452,6 +481,9 @@ pub enum DaemonProcessError {
     /// The blocking storage-target startup task ended without a typed result.
     #[error("daemon storage target task stopped unexpectedly")]
     StorageTargetTaskStopped,
+    /// A registered folder could not be composed into a live provider safely.
+    #[error("daemon storage provider failed")]
+    StorageProvider(#[from] StorageProviderOpeningError),
     /// Gateway identity could not be represented safely.
     #[error("daemon gateway identity failed")]
     GatewayIdentity(#[from] BrowserAuthenticationError),
