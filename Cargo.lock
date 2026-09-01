@@ -1119,6 +1119,7 @@ dependencies = [
  "p256",
  "rustls",
  "serde_json",
+ "sha1",
  "sha2",
  "tempfile",
  "thiserror",

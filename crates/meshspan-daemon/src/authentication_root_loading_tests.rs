@@ -11,8 +11,9 @@ use meshspan_secret_envelope::{
 
 use crate::{
     AuthenticationRootAuthority, AuthenticationRootLoadingError, AuthenticationRootLoadingService,
-    LocalWrappingKey, ProtectedTotpFactorVerifier, SecretGenerationAuthority,
-    SecretGenerationAuthorityError, TotpFactorVerifier, TotpSecretBinding, TotpSecretCipher,
+    LocalWrappingKey, ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector,
+    SecretGenerationAuthority, SecretGenerationAuthorityError, TotpFactorVerifier,
+    TotpRegistrationError, TotpRegistrationSecretProtector, TotpSecretBinding, TotpSecretCipher,
     TotpSessionError,
 };
 
@@ -46,7 +47,8 @@ fn exact_gateway_envelope_expands_stable_distinct_operational_keys()
     };
     let cipher = TotpSecretCipher::new(totp_key);
     let secret = b"12345678901234567890";
-    let envelope = cipher.encrypt(binding, secret, &mut FixedRandom(20))?;
+    let envelope = ProtectedTotpRegistrationSecretProtector::new(authority.clone(), &local)
+        .protect_secret(binding, secret, &mut FixedRandom(20))?;
     assert_eq!(cipher.decrypt(binding, &envelope)?.as_slice(), secret);
     let materials = [meshspan_metadata::TotpVerificationMaterial {
         principal_id,
@@ -116,6 +118,22 @@ fn absent_wrong_duplicate_and_malformed_authority_fail_closed()
         ),
         Err(TotpSessionError::Unavailable)
     );
+    assert!(matches!(
+        ProtectedTotpRegistrationSecretProtector::new(FakeAuthority::unavailable(), &local)
+            .protect_secret(
+                TotpSecretBinding {
+                    method_id: meshspan_domain::AuthenticationMethodId::from_bytes([14; 16])?,
+                    principal_id: PrincipalId::from_bytes([15; 16])?,
+                    algorithm: 1,
+                    digits: 6,
+                    period_seconds: 30,
+                    accepted_step_window: 1,
+                },
+                b"12345678901234567890",
+                &mut FixedRandom(1),
+            ),
+        Err(TotpRegistrationError::Unavailable)
+    ));
     Ok(())
 }
 

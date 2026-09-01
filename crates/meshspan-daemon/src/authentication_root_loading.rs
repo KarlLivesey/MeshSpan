@@ -153,6 +153,43 @@ impl<A, D> ProtectedTotpFactorVerifier<A, D> {
     }
 }
 
+/// Request-time TOTP registration protector which retains no decrypted root between calls.
+pub struct ProtectedTotpRegistrationSecretProtector<A, D> {
+    loader: AuthenticationRootLoadingService<A, D>,
+}
+
+impl<A, D> ProtectedTotpRegistrationSecretProtector<A, D> {
+    /// Composes current replicated root authority with one node-local wrapping key.
+    #[must_use]
+    pub const fn new(authority: A, decryptor: D) -> Self {
+        Self {
+            loader: AuthenticationRootLoadingService::new(authority, decryptor),
+        }
+    }
+}
+
+impl<A, D> crate::TotpRegistrationSecretProtector for ProtectedTotpRegistrationSecretProtector<A, D>
+where
+    A: AuthenticationRootAuthority,
+    D: SecretGenerationDecryptor,
+{
+    fn protect_secret(
+        &self,
+        binding: crate::TotpSecretBinding,
+        secret: &[u8],
+        random: &mut dyn meshspan_domain::RandomSource,
+    ) -> Result<Vec<u8>, crate::TotpRegistrationError> {
+        let envelope_key = self
+            .loader
+            .load_latest()
+            .map(AuthenticationRuntimeKeys::into_totp_envelope_key)
+            .map_err(map_totp_registration_loading_error)?;
+        crate::TotpSecretCipher::new(envelope_key)
+            .encrypt(binding, secret, random)
+            .map_err(Into::into)
+    }
+}
+
 impl<A, D> TotpFactorVerifier for ProtectedTotpFactorVerifier<A, D>
 where
     A: AuthenticationRootAuthority,
@@ -189,6 +226,19 @@ const fn map_totp_loading_error(error: AuthenticationRootLoadingError) -> TotpSe
         | AuthenticationRootLoadingError::Unavailable => TotpSessionError::Unavailable,
         AuthenticationRootLoadingError::InvalidInput | AuthenticationRootLoadingError::Failed => {
             TotpSessionError::InvalidEvidence
+        }
+    }
+}
+
+const fn map_totp_registration_loading_error(
+    error: AuthenticationRootLoadingError,
+) -> crate::TotpRegistrationError {
+    match error {
+        AuthenticationRootLoadingError::NotFound
+        | AuthenticationRootLoadingError::NotRecipient
+        | AuthenticationRootLoadingError::Unavailable => crate::TotpRegistrationError::Unavailable,
+        AuthenticationRootLoadingError::InvalidInput | AuthenticationRootLoadingError::Failed => {
+            crate::TotpRegistrationError::State
         }
     }
 }

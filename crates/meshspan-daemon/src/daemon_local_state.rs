@@ -15,8 +15,8 @@ use thiserror::Error;
 
 use crate::{
     ClaimEnsureOutcome, FirstBootClaimError, FirstBootClaimService, HeadlessDaemonConfig,
-    LocalNodeIdentity, LocalNodeIdentityError, LocalWrappingKey, LocalWrappingKeyError,
-    OperatingSystemRandom,
+    LocalNodeIdentity, LocalNodeIdentityError, LocalTotpCeremonyKey, LocalTotpCeremonyKeyError,
+    LocalWrappingKey, LocalWrappingKeyError, OperatingSystemRandom,
 };
 
 const DIRECTORY_MODE: u32 = 0o700;
@@ -26,6 +26,7 @@ const LOCK_FILE: &str = "daemon.lock";
 const SECRET_DIRECTORY: &str = "secrets";
 const IDENTITY_FILE: &str = "node-identity.pk8";
 const WRAPPING_KEY_FILE: &str = "node-wrapping-key.x25519";
+const TOTP_CEREMONY_KEY_FILE: &str = "totp-ceremony.key";
 const PENDING_RECOVERY_BUNDLE_FILE: &str = "pending-offline-recovery.bundle";
 const DEFAULT_CLAIM_FILE: &str = "first-boot.claim";
 const BOOTSTRAP_DNS_NAME: &str = "meshspan.local";
@@ -74,6 +75,12 @@ impl DaemonLocalState {
         } else {
             LocalWrappingKey::open_or_create(&wrapping_key_path)?
         };
+        let totp_ceremony_key_path = secret_directory.join(TOTP_CEREMONY_KEY_FILE);
+        if database_exists {
+            LocalTotpCeremonyKey::open(&totp_ceremony_key_path)?;
+        } else {
+            LocalTotpCeremonyKey::open_or_create(&totp_ceremony_key_path)?;
+        }
         let expected_node_id =
             InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
         let mut database = if database_exists {
@@ -181,6 +188,22 @@ impl DaemonLocalState {
             .path()
             .join(SECRET_DIRECTORY)
             .join(WRAPPING_KEY_FILE)
+    }
+
+    /// Reopens the protected restart-stable key for one live TOTP registration service.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, replaced, malformed or unsafe protected key state.
+    pub fn open_totp_ceremony_key(&self) -> Result<crate::TotpCeremonyKey, DaemonLocalStateError> {
+        Ok(LocalTotpCeremonyKey::open(&self.totp_ceremony_key_path())?.into_key())
+    }
+
+    fn totp_ceremony_key_path(&self) -> PathBuf {
+        self.directory
+            .path()
+            .join(SECRET_DIRECTORY)
+            .join(TOTP_CEREMONY_KEY_FILE)
     }
 
     /// Returns the protected pending recovery-bundle path retained until save verification.
@@ -342,6 +365,9 @@ pub enum DaemonLocalStateError {
     /// Protected node secret-wrapping key handling failed.
     #[error("daemon node wrapping key failed")]
     WrappingKey(#[from] LocalWrappingKeyError),
+    /// Protected node-local TOTP ceremony key handling failed.
+    #[error("daemon TOTP ceremony key failed")]
+    TotpCeremonyKey(#[from] LocalTotpCeremonyKeyError),
     /// The private key and local database identify different nodes.
     #[error("daemon node identity does not match local metadata")]
     IdentityMismatch,
