@@ -203,11 +203,17 @@ impl RustCryptoKey {
     fn from_pkcs8(private_key: &[u8]) -> Result<Self, CertificateError> {
         let key = p256::ecdsa::SigningKey::from_pkcs8_der(private_key)
             .map_err(|_| CertificateError::KeyDecoding)?;
+        let canonical = key
+            .to_pkcs8_der()
+            .map_err(|_| CertificateError::KeyEncoding)?;
+        if canonical.as_bytes() != private_key {
+            return Err(CertificateError::KeyDecoding);
+        }
         let public_key = key.verifying_key().to_sec1_point(false).as_bytes().to_vec();
         Ok(Self {
             key,
             public_key,
-            private_key: Zeroizing::new(private_key.to_vec()),
+            private_key: Zeroizing::new(canonical.as_bytes().to_vec()),
         })
     }
 

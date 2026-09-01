@@ -18,12 +18,14 @@ getrandom.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 meshspan-api-contract = { path = "../meshspan-api-contract" }
+meshspan-certificates = { path = "../meshspan-certificates" }
 meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-filesystem = { path = "../meshspan-filesystem" }
 meshspan-metadata = { path = "../meshspan-metadata" }
 meshspan-otp = { path = "../meshspan-otp" }
 meshspan-passkey = { path = "../meshspan-passkey" }
+meshspan-rustls-provider = { path = "../meshspan-rustls-provider" }
 meshspan-storage = { path = "../meshspan-storage" }
 rustls.workspace = true
 serde_json.workspace = true
@@ -35,7 +37,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 blake3.workspace = true
-meshspan-rustls-provider = { path = "../meshspan-rustls-provider" }
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 p256.workspace = true
 tempfile = "3.27.0"

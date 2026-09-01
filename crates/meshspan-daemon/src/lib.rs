@@ -60,6 +60,9 @@ mod https_server_tests;
 mod identity_administration;
 #[cfg(test)]
 mod identity_administration_tests;
+mod local_node_identity;
+#[cfg(test)]
+mod local_node_identity_tests;
 mod multi_factor_session;
 mod namespace_mutation_api;
 mod native_api_authentication;
@@ -218,6 +221,7 @@ pub use identity_administration::{
     IdentityAdministrationCommit, IdentityAdministrationController, IdentityAdministrationError,
     IdentityAdministrationService, IdentityAdministrator, identity_administration_api_router,
 };
+pub use local_node_identity::{LocalNodeIdentity, LocalNodeIdentityError};
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,
     NativeNamespaceMutationError, NativeNamespaceMutationService,

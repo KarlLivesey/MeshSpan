@@ -1098,6 +1098,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "meshspan-api-contract",
+ "meshspan-certificates",
  "meshspan-contracts",
  "meshspan-domain",
  "meshspan-filesystem",
