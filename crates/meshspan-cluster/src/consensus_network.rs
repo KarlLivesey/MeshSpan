@@ -108,6 +108,14 @@ pub struct PeerControlRequest {
     pub respond: oneshot::Sender<ControlEnvelope>,
 }
 
+/// One authenticated shard-data stream delivered to daemon-local storage routing.
+pub struct PeerDataStream {
+    /// Certificate-bound sender identity and incarnation.
+    pub peer: meshspan_transport::AuthenticatedPeer,
+    /// Strictly framed data stream whose first message remains unread for the data-plane router.
+    pub stream: meshspan_transport::AcceptedStream,
+}
+
 /// Cloneable non-blocking consensus message network.
 #[derive(Clone)]
 pub struct ConsensusNetwork {
@@ -142,7 +150,7 @@ impl ConsensusNetwork {
         config: ConsensusNetworkConfig,
         incoming_messages: mpsc::Sender<PeerConsensusMessage>,
     ) -> Result<Self, ConsensusNetworkError> {
-        Self::start_inner(config, incoming_messages, None, None)
+        Self::start_inner(config, incoming_messages, None, None, None)
     }
 
     /// Starts the network with an additional authenticated metadata-control ingress.
@@ -155,7 +163,33 @@ impl ConsensusNetwork {
         incoming_messages: mpsc::Sender<PeerConsensusMessage>,
         incoming_control: mpsc::Sender<PeerControlRequest>,
     ) -> Result<Self, ConsensusNetworkError> {
-        Self::start_inner(config, incoming_messages, Some(incoming_control), None)
+        Self::start_inner(
+            config,
+            incoming_messages,
+            Some(incoming_control),
+            None,
+            None,
+        )
+    }
+
+    /// Starts consensus and metadata control with authenticated shard-data ingress.
+    ///
+    /// # Errors
+    ///
+    /// Applies the same fail-closed configuration and transport validation as [`Self::start`].
+    pub fn start_with_control_and_data(
+        config: ConsensusNetworkConfig,
+        incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+        incoming_control: mpsc::Sender<PeerControlRequest>,
+        incoming_data: mpsc::Sender<PeerDataStream>,
+    ) -> Result<Self, ConsensusNetworkError> {
+        Self::start_inner(
+            config,
+            incoming_messages,
+            Some(incoming_control),
+            None,
+            Some(incoming_data),
+        )
     }
 
     /// Starts the network with authenticated snapshot ingress for an admitted learner.
@@ -171,7 +205,13 @@ impl ConsensusNetwork {
         if config.snapshot_staging_path.is_none() {
             return Err(ConsensusNetworkError::InvalidConfiguration);
         }
-        Self::start_inner(config, incoming_messages, None, Some(incoming_snapshots))
+        Self::start_inner(
+            config,
+            incoming_messages,
+            None,
+            Some(incoming_snapshots),
+            None,
+        )
     }
 
     /// Starts the complete authenticated consensus, control and snapshot ingress.
@@ -193,6 +233,31 @@ impl ConsensusNetwork {
             incoming_messages,
             Some(incoming_control),
             Some(incoming_snapshots),
+            None,
+        )
+    }
+
+    /// Starts the complete authenticated consensus, control, snapshot and shard-data ingress.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent staging configuration and applies every normal private-network check.
+    pub fn start_with_control_snapshots_and_data(
+        config: ConsensusNetworkConfig,
+        incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+        incoming_control: mpsc::Sender<PeerControlRequest>,
+        incoming_snapshots: mpsc::Sender<ReceivedConsensusSnapshot>,
+        incoming_data: mpsc::Sender<PeerDataStream>,
+    ) -> Result<Self, ConsensusNetworkError> {
+        if config.snapshot_staging_path.is_none() {
+            return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        Self::start_inner(
+            config,
+            incoming_messages,
+            Some(incoming_control),
+            Some(incoming_snapshots),
+            Some(incoming_data),
         )
     }
 
@@ -201,6 +266,7 @@ impl ConsensusNetwork {
         incoming_messages: mpsc::Sender<PeerConsensusMessage>,
         incoming_control: Option<mpsc::Sender<PeerControlRequest>>,
         incoming_snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
+        incoming_data: Option<mpsc::Sender<PeerDataStream>>,
     ) -> Result<Self, ConsensusNetworkError> {
         validate_config(&config)?;
         let wire_limits = wire_limits()?;
@@ -265,6 +331,7 @@ impl ConsensusNetwork {
             incoming_messages,
             incoming_control,
             incoming_snapshots,
+            incoming_data,
         );
         Ok(network)
     }
@@ -342,6 +409,24 @@ impl ConsensusNetwork {
         Ok(())
     }
 
+    /// Opens one mTLS-authenticated, hello-negotiated connection for shard-data RPCs.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown routes, certificate/identity substitution and negotiation failure.
+    pub async fn connect_data_peer(
+        &self,
+        to: NodeId,
+    ) -> Result<quinn::Connection, ConsensusNetworkError> {
+        self.connect_peer(to).await
+    }
+
+    /// Returns the exact framing bounds negotiated by every private stream on this endpoint.
+    #[must_use]
+    pub const fn wire_limits(&self) -> WireLimits {
+        self.wire_limits
+    }
+
     /// Builds a fresh request/response header for one exact logical control operation.
     ///
     /// # Errors
@@ -410,6 +495,7 @@ impl ConsensusNetwork {
         messages: mpsc::Sender<PeerConsensusMessage>,
         controls: Option<mpsc::Sender<PeerControlRequest>>,
         snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
+        data: Option<mpsc::Sender<PeerDataStream>>,
     ) {
         let network = self.clone();
         self.runtime.spawn(async move {
@@ -430,6 +516,7 @@ impl ConsensusNetwork {
                 let connection_messages = messages.clone();
                 let connection_controls = controls.clone();
                 let connection_snapshots = snapshots.clone();
+                let connection_data = data.clone();
                 connection_network.runtime.clone().spawn(async move {
                     if connection_network
                         .receive_connection(
@@ -438,6 +525,7 @@ impl ConsensusNetwork {
                             connection_messages,
                             connection_controls,
                             connection_snapshots,
+                            connection_data,
                         )
                         .await
                         .is_err()
@@ -456,6 +544,7 @@ impl ConsensusNetwork {
         messages: mpsc::Sender<PeerConsensusMessage>,
         controls: Option<mpsc::Sender<PeerControlRequest>>,
         snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
+        data: Option<mpsc::Sender<PeerDataStream>>,
     ) -> Result<(), ConsensusNetworkError> {
         let mut negotiation = accept_stream(&connection).await?;
         if negotiation.kind != StreamKind::Metadata {
@@ -536,7 +625,17 @@ impl ConsensusNetwork {
                     self.receive_snapshot(peer.node_id(), staging_path, &mut accepted, snapshots)
                         .await?;
                 }
-                StreamKind::Data | StreamKind::Federation => {
+                StreamKind::Data => {
+                    data.as_ref()
+                        .ok_or(ConsensusNetworkError::InvalidTraffic)?
+                        .send(PeerDataStream {
+                            peer: peer.clone(),
+                            stream: accepted,
+                        })
+                        .await
+                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                }
+                StreamKind::Federation => {
                     return Err(ConsensusNetworkError::InvalidTraffic);
                 }
             }
