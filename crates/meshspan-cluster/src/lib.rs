@@ -46,6 +46,7 @@ mod filesystem_authority;
 mod filesystem_convergence;
 mod membership;
 mod metadata_authority;
+mod native_gateway_wire;
 mod node_runtime;
 mod retention;
 mod status;
@@ -238,6 +239,12 @@ pub use metadata_authority::{
     ConsensusMessageTransport, MetadataAuthorityConfig, MetadataAuthorityHandle,
     MetadataAuthorityRequestError, MetadataAuthorityRuntimeError, MetadataAuthorityStartError,
     PeerConsensusMessage, spawn_metadata_authority,
+};
+pub use native_gateway_wire::{
+    NativeGatewayWireError, decode_native_content_layout_chunk,
+    decode_native_content_layout_header, decode_native_shard_receipt,
+    version_native_content_layout_chunk, version_native_content_layout_header,
+    version_native_shard_receipt,
 };
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
 pub use retention::version_retention_selection_policy;
