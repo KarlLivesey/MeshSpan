@@ -502,7 +502,12 @@ pub struct CreateVolume {
     pub owner_set_id: OwnerSetId,
     /// Non-empty user/group owner principals.
     pub owners: BoundedItems<PrincipalId>,
+    /// Initial recoverable volume-content key committed in the same transaction.
+    pub key_generation: Box<CommitSecretGeneration>,
 }
+
+/// Secret-envelope kind reserved for volume-content key-encryption keys.
+pub const VOLUME_CONTENT_KEY_SECRET_KIND: u16 = 1;
 
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2195,6 +2200,7 @@ digest_simple_record!(CreateVolume, b"create-volume", |value, digest| {
     digest.identifier(value.root_object_id.as_bytes());
     digest.identifier(value.owner_set_id.as_bytes());
     digest.principals(&value.owners);
+    value.key_generation.update_digest(digest);
 });
 digest_simple_record!(
     CommitConvergedVolumeHead,

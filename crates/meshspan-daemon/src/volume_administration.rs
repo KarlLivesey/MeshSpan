@@ -7,13 +7,17 @@ use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_api_contract::{CreateVolumeRequest, CreateVolumeResponse};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, ObjectId, OperationId, OwnerSetId, PrincipalId, UnixMicros, VolumeId, uuid_v8,
+    AuditEventId, ObjectId, OperationId, OwnerSetId, PrincipalId, RandomSource, UnixMicros,
+    VolumeId, uuid_v8,
 };
 use meshspan_metadata::{
-    AuthoritativeCommand, CommandContext, CreateVolume, RecordName, VolumeInventoryRecord,
+    AuthoritativeCommand, CommandContext, CommitSecretGeneration, CreateVolume, RecordName,
+    VOLUME_CONTENT_KEY_SECRET_KIND, VolumeInventoryRecord,
 };
+use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::create_mesh_setup::parse_uuid;
 use crate::{
@@ -26,6 +30,8 @@ const VOLUME_ID_DOMAIN: &[u8] = b"meshspan.volume-administration.volume-id.v1\0"
 const ROOT_ID_DOMAIN: &[u8] = b"meshspan.volume-administration.root-id.v1\0";
 const OWNER_SET_ID_DOMAIN: &[u8] = b"meshspan.volume-administration.owner-set-id.v1\0";
 const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.volume-administration.audit-id.v1\0";
+const INITIAL_KEY_GENERATION: u64 = 1;
+const VOLUME_CONTENT_KEY_BYTES: usize = 32;
 
 /// Exact durable evidence returned for one volume creation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +42,8 @@ pub struct VolumeAdministrationCommit {
     pub result_digest: [u8; 32],
     /// Created logical volume.
     pub record: VolumeInventoryRecord,
+    /// Exact canonical initial owner set retained with the created root object.
+    pub owners: Vec<PrincipalId>,
 }
 
 /// Replicated reads and consensus mutation needed by volume administration.
@@ -60,6 +68,15 @@ pub trait VolumeAdministrationAuthority: BrowserSessionAuthority + NativeApiKeyA
         &self,
         operation_id: OperationId,
     ) -> Result<Option<VolumeAdministrationCommit>, VolumeAdministrationAuthorityError>;
+
+    /// Returns current gateway wrapping keys plus the verified offline recovery key.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the complete recoverable recipient set cannot be trusted.
+    fn volume_key_recipients(
+        &self,
+    ) -> Result<Vec<WrappingPublicKey>, VolumeAdministrationAuthorityError>;
 
     /// Commits or exactly resolves one volume creation through consensus.
     ///
@@ -99,22 +116,28 @@ pub trait VolumeAdministrationController: Send + 'static {
 }
 
 /// Complete volume-administration application service.
-pub struct VolumeAdministrationService<A> {
+pub struct VolumeAdministrationService<A, R> {
     authority: A,
     gateway: GatewaySessionIdentity,
+    random: R,
 }
 
-impl<A> VolumeAdministrationService<A> {
+impl<A, R> VolumeAdministrationService<A, R> {
     /// Binds manager authentication and replicated volume authority to one gateway.
     #[must_use]
-    pub const fn new(authority: A, gateway: GatewaySessionIdentity) -> Self {
-        Self { authority, gateway }
+    pub const fn new(authority: A, gateway: GatewaySessionIdentity, random: R) -> Self {
+        Self {
+            authority,
+            gateway,
+            random,
+        }
     }
 }
 
-impl<A> VolumeAdministrationController for VolumeAdministrationService<A>
+impl<A, R> VolumeAdministrationController for VolumeAdministrationService<A, R>
 where
     A: VolumeAdministrationAuthority + Send + 'static,
+    R: RandomSource + Send + 'static,
 {
     fn authenticate(
         &self,
@@ -170,57 +193,152 @@ where
         let volume_id = derived_id::<VolumeId>(VOLUME_ID_DOMAIN, operation_id)?;
         let root_object_id = derived_id::<ObjectId>(ROOT_ID_DOMAIN, operation_id)?;
         let owner_set_id = derived_id::<OwnerSetId>(OWNER_SET_ID_DOMAIN, operation_id)?;
-        let owners = request
+        let name = RecordName::new(request.name.as_str())
+            .map_err(|_| VolumeAdministrationError::InvalidInput)?;
+        let mut owners = request
             .owner_principal_ids
             .iter()
             .map(domain_principal)
             .collect::<Result<Vec<_>, _>>()?;
-        let command = AuthoritativeCommand::CreateVolume(CreateVolume {
-            volume_id,
-            name: RecordName::new(request.name.as_str())
-                .map_err(|_| VolumeAdministrationError::InvalidInput)?,
-            root_object_id,
-            owner_set_id,
-            owners: BoundedItems::new(owners, 1_024)
-                .map_err(|_| VolumeAdministrationError::InvalidInput)?,
-        });
+        owners.sort_unstable();
+        if owners.is_empty() || owners.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(VolumeAdministrationError::InvalidInput);
+        }
         let existing = self
             .authority
             .resolve_volume_creation(operation_id)
             .map_err(map_authority_error)?;
-        let occurred_at = existing
-            .as_ref()
-            .map_or(administrator.now, |commit| commit.record.created_at);
-        let context = command_context(operation_id, administrator, occurred_at)?;
-        let expected_digest = command.request_digest(context);
-        let commit = match existing {
-            Some(value) => value,
-            None => self
-                .authority
-                .commit_or_resolve_volume_creation(context, &command)
-                .map_err(map_authority_error)?,
-        };
-        if commit.request_digest != expected_digest
-            || commit.result_digest == [0; 32]
-            || commit.record.volume_id != volume_id
-            || commit.record.root_object_id != root_object_id
-        {
-            return Err(VolumeAdministrationError::Conflict);
+        if let Some(commit) = existing {
+            validate_commit(&commit, volume_id, root_object_id, &name, &owners, None)?;
+            return create_response(request.operation_id, commit);
         }
-        Ok(CreateVolumeResponse {
-            operation_id: request.operation_id,
-            volume_id: meshspan_api_contract::VolumeId::from_uuid_bytes(volume_id.as_bytes())
-                .ok_or(VolumeAdministrationError::Failed)?,
-            root_object_id: meshspan_api_contract::ObjectId::from_uuid_bytes(
-                root_object_id.as_bytes(),
-            )
-            .ok_or(VolumeAdministrationError::Failed)?,
-            name: commit.record.display_name,
-            owner_principal_ids: request.owner_principal_ids,
-            created_at_epoch_micros: commit.record.created_at.get(),
-            revision: commit.record.revision.get(),
-        })
+        let recipients = self
+            .authority
+            .volume_key_recipients()
+            .map_err(map_authority_error)?;
+        let key_generation = Box::new(initial_key_generation(
+            volume_id,
+            &recipients,
+            &mut self.random,
+        )?);
+        let command = AuthoritativeCommand::CreateVolume(CreateVolume {
+            volume_id,
+            name,
+            root_object_id,
+            owner_set_id,
+            owners: BoundedItems::new(owners.clone(), 1_024)
+                .map_err(|_| VolumeAdministrationError::InvalidInput)?,
+            key_generation,
+        });
+        let context = command_context(operation_id, administrator, administrator.now)?;
+        let expected_digest = command.request_digest(context);
+        let (commit, exact_request_digest) = match self
+            .authority
+            .commit_or_resolve_volume_creation(context, &command)
+        {
+            Ok(commit) => (commit, Some(expected_digest)),
+            Err(commit_error) => {
+                let resolved = self
+                    .authority
+                    .resolve_volume_creation(operation_id)
+                    .map_err(map_authority_error)?;
+                match resolved {
+                    Some(commit) => (commit, None),
+                    None => return Err(map_authority_error(commit_error)),
+                }
+            }
+        };
+        validate_commit(
+            &commit,
+            volume_id,
+            root_object_id,
+            match &command {
+                AuthoritativeCommand::CreateVolume(value) => &value.name,
+                _ => return Err(VolumeAdministrationError::Failed),
+            },
+            &owners,
+            exact_request_digest,
+        )?;
+        create_response(request.operation_id, commit)
     }
+}
+
+fn initial_key_generation(
+    volume_id: VolumeId,
+    recipients: &[WrappingPublicKey],
+    random: &mut impl RandomSource,
+) -> Result<CommitSecretGeneration, VolumeAdministrationError> {
+    let mut key = Zeroizing::new([0_u8; VOLUME_CONTENT_KEY_BYTES]);
+    random
+        .fill_bytes(key.as_mut())
+        .map_err(|_| VolumeAdministrationError::Unavailable)?;
+    let context = SecretContext::new(
+        VOLUME_CONTENT_KEY_SECRET_KIND,
+        volume_id.as_bytes(),
+        INITIAL_KEY_GENERATION,
+    )
+    .map_err(|_| VolumeAdministrationError::Failed)?;
+    let (secret, envelopes) = encrypt_secret(context, key.as_ref(), recipients, random)
+        .map_err(|_| VolumeAdministrationError::Unavailable)?;
+    Ok(CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: envelopes
+            .into_iter()
+            .map(|envelope| envelope.parts())
+            .collect(),
+    })
+}
+
+fn validate_commit(
+    commit: &VolumeAdministrationCommit,
+    volume_id: VolumeId,
+    root_object_id: ObjectId,
+    name: &RecordName,
+    owners: &[PrincipalId],
+    expected_digest: Option<[u8; 32]>,
+) -> Result<(), VolumeAdministrationError> {
+    if expected_digest.is_some_and(|digest| commit.request_digest != digest)
+        || commit.request_digest == [0; 32]
+        || commit.result_digest == [0; 32]
+        || commit.record.volume_id != volume_id
+        || commit.record.root_object_id != root_object_id
+        || commit.record.display_name != name.display()
+        || commit.record.canonical_name != name.canonical()
+        || commit.owners != owners
+    {
+        Err(VolumeAdministrationError::Conflict)
+    } else {
+        Ok(())
+    }
+}
+
+fn create_response(
+    operation_id: meshspan_api_contract::OperationId,
+    commit: VolumeAdministrationCommit,
+) -> Result<CreateVolumeResponse, VolumeAdministrationError> {
+    let owner_principal_ids = commit
+        .owners
+        .into_iter()
+        .map(|owner| {
+            meshspan_api_contract::PrincipalId::from_uuid_bytes(owner.as_bytes())
+                .ok_or(VolumeAdministrationError::Failed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CreateVolumeResponse {
+        operation_id,
+        volume_id: meshspan_api_contract::VolumeId::from_uuid_bytes(
+            commit.record.volume_id.as_bytes(),
+        )
+        .ok_or(VolumeAdministrationError::Failed)?,
+        root_object_id: meshspan_api_contract::ObjectId::from_uuid_bytes(
+            commit.record.root_object_id.as_bytes(),
+        )
+        .ok_or(VolumeAdministrationError::Failed)?,
+        name: commit.record.display_name,
+        owner_principal_ids,
+        created_at_epoch_micros: commit.record.created_at.get(),
+        revision: commit.record.revision.get(),
+    })
 }
 
 trait DerivedIdentifier: Sized {

@@ -60,7 +60,7 @@ pub use command::{
     RouteAttestation, RunSnapshotSchedule, SealVersionCleanupInventory,
     SessionAuthenticationFactor, SessionClientLabel, SetObjectGrantInheritance,
     SnapshotExpiryReason, StepUpAuthenticationSession, StorageUsageLimit, TagTarget, TotpAlgorithm,
-    VersionCleanupAttestation, VersionCleanupItemPlacement,
+    VOLUME_CONTENT_KEY_SECRET_KIND, VersionCleanupAttestation, VersionCleanupItemPlacement,
 };
 pub use command_codec::{
     DecodedAuthoritativeCommand, METADATA_COMMAND_VERSION, MetadataCommandCodecError,

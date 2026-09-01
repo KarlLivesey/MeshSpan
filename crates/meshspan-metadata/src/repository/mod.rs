@@ -1046,6 +1046,20 @@ impl AuthoritativeRepository {
         secret_generation::load(&self.database, context)
     }
 
+    /// Returns every current gateway and the exact verified offline recovery recipient.
+    ///
+    /// Storage-only nodes are deliberately excluded because they retain encrypted shards without
+    /// receiving volume-content keys.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for absent recovery evidence, excessive recipients or malformed key state.
+    pub fn volume_key_recipients(
+        &self,
+    ) -> Result<Vec<meshspan_secret_envelope::WrappingPublicKey>, RepositoryError> {
+        secret_generation::volume_key_recipients(&self.database)
+    }
+
     /// Returns the public offline authority and recovery-bundle verification state for one mesh.
     ///
     /// # Errors
@@ -1612,5 +1626,7 @@ mod tests;
 mod version_cleanup_finalisation_tests;
 #[cfg(test)]
 mod version_cleanup_tests;
+#[cfg(test)]
+mod volume_creation_tests;
 #[cfg(test)]
 mod volume_head_tests;

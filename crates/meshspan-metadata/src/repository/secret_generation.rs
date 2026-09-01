@@ -2,16 +2,27 @@
 
 //! Atomic encrypted secret generations and complete recipient envelopes.
 
-use meshspan_domain::Revision;
+use meshspan_domain::{Revision, VolumeId};
 use meshspan_secret_envelope::{
     EncryptedSecret, EncryptedSecretParts, MAXIMUM_SECRET_RECIPIENTS, RecipientEnvelopeParts,
-    RecipientKeyEnvelope, SecretContext,
+    RecipientKeyEnvelope, SecretContext, WrappingPublicKey,
 };
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, recovery_authority};
-use crate::{CommandContext, CommitSecretGeneration, PartitionDatabase};
+use crate::{
+    CommandContext, CommitSecretGeneration, PartitionDatabase, VOLUME_CONTENT_KEY_SECRET_KIND,
+};
+
+const VOLUME_CONTENT_KEY_BYTES: usize = 32;
+const AUTHENTICATION_TAG_BYTES: usize = 16;
+const RECIPIENT_KIND_NODE: i64 = 1;
+const RECIPIENT_KIND_OFFLINE_RECOVERY: i64 = 2;
+const CURRENT_STATE: i64 = 1;
+const ACTIVE_NODE_STATE: i64 = 2;
+const GATEWAY_ROLE_CODE: i64 = 2;
+const VERIFIED_RECOVERY_STATE: i64 = 2;
 
 /// One validated persisted encrypted secret and every exact recipient envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,6 +86,133 @@ pub(super) fn commit(
         kind: EntityKind::SecretGeneration,
         id: secret_context.id(),
     })
+}
+
+pub(super) fn commit_initial_volume_key(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    volume_id: VolumeId,
+    command: &CommitSecretGeneration,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let secret_context = command.secret.context;
+    if secret_context.kind() != VOLUME_CONTENT_KEY_SECRET_KIND
+        || secret_context.id() != volume_id.as_bytes()
+        || secret_context.generation() != 1
+        || command.secret.ciphertext.len()
+            != VOLUME_CONTENT_KEY_BYTES.saturating_add(AUTHENTICATION_TAG_BYTES)
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let (_, supplied_recipients) = validate(command)?;
+    let expected_recipients = current_volume_key_recipients(transaction)?;
+    let supplied_recipients = supplied_recipients
+        .iter()
+        .map(RecipientKeyEnvelope::recipient_public_key)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    if supplied_recipients != expected_recipients {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    commit(transaction, context, command, revision).map(|_| ())
+}
+
+pub(super) fn volume_key_recipients(
+    database: &PartitionDatabase,
+) -> Result<Vec<WrappingPublicKey>, RepositoryError> {
+    current_volume_key_recipients(database.connection())
+}
+
+fn current_volume_key_recipients(
+    connection: &Connection,
+) -> Result<Vec<WrappingPublicKey>, RepositoryError> {
+    let active_gateway_count = connection.query_row(
+        "SELECT count(*)
+         FROM nodes AS node
+         JOIN node_roles AS role
+           ON role.node_id = node.node_id AND role.role_code = ?1
+         WHERE node.state = ?2 AND node.retired_at IS NULL",
+        params![GATEWAY_ROLE_CODE, ACTIVE_NODE_STATE],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let active_gateway_count =
+        usize::try_from(active_gateway_count).map_err(|_| RepositoryError::CorruptState)?;
+    if active_gateway_count == 0
+        || active_gateway_count.saturating_add(1) > MAXIMUM_SECRET_RECIPIENTS
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    let mut statement = connection.prepare(
+        "SELECT recipient.public_key, recipient.key_fingerprint, recipient.recipient_kind
+         FROM secret_wrapping_recipients AS recipient
+         LEFT JOIN nodes AS node
+           ON recipient.recipient_kind = ?1 AND node.node_id = recipient.owner_id
+         LEFT JOIN node_roles AS role
+           ON role.node_id = node.node_id AND role.role_code = ?2
+         LEFT JOIN node_wrapping_keys AS node_key
+           ON recipient.recipient_kind = ?1
+          AND node_key.node_id = recipient.owner_id
+          AND node_key.generation = recipient.generation
+          AND node_key.public_key = recipient.public_key
+          AND node_key.key_fingerprint = recipient.key_fingerprint
+         LEFT JOIN mesh_recovery_authorities AS recovery
+           ON recipient.recipient_kind = ?3
+          AND recovery.mesh_id = recipient.owner_id
+          AND recovery.recovery_key_fingerprint = recipient.key_fingerprint
+         WHERE recipient.state = ?4 AND recipient.retired_at IS NULL
+           AND ((recipient.recipient_kind = ?1
+                 AND node.state = ?5 AND node.retired_at IS NULL
+                 AND role.role_code = ?2
+                 AND node_key.state = ?4 AND node_key.retired_at IS NULL)
+             OR (recipient.recipient_kind = ?3 AND recovery.state = ?6))
+         ORDER BY recipient.key_fingerprint
+         LIMIT ?7",
+    )?;
+    let rows = statement.query_map(
+        params![
+            RECIPIENT_KIND_NODE,
+            GATEWAY_ROLE_CODE,
+            RECIPIENT_KIND_OFFLINE_RECOVERY,
+            CURRENT_STATE,
+            ACTIVE_NODE_STATE,
+            VERIFIED_RECOVERY_STATE,
+            i64::try_from(MAXIMUM_SECRET_RECIPIENTS.saturating_add(1))
+                .map_err(|_| RepositoryError::CorruptState)?,
+        ],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        },
+    )?;
+    let mut recipients = Vec::new();
+    let mut node_count = 0_usize;
+    let mut recovery_count = 0_usize;
+    for row in rows {
+        let (public_key, fingerprint, kind) = row?;
+        let public_key = WrappingPublicKey::from_bytes(exact_array(public_key)?)
+            .map_err(|_| RepositoryError::CorruptState)?;
+        if public_key.fingerprint() != exact_array(fingerprint)? {
+            return Err(RepositoryError::CorruptState);
+        }
+        if kind == RECIPIENT_KIND_OFFLINE_RECOVERY {
+            recovery_count = recovery_count.saturating_add(1);
+        } else if kind == RECIPIENT_KIND_NODE {
+            node_count = node_count.saturating_add(1);
+        } else {
+            return Err(RepositoryError::CorruptState);
+        }
+        recipients.push(public_key);
+    }
+    if recipients.len() > MAXIMUM_SECRET_RECIPIENTS
+        || node_count != active_gateway_count
+        || recovery_count != 1
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(recipients)
 }
 
 pub(super) fn load(

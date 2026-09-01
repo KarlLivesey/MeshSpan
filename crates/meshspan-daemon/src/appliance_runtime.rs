@@ -225,7 +225,11 @@ fn authentication_session_routes(
             IdentityAdministrationService::new(authentication_authority()?, gateway),
         )?)
         .merge(volume_administration_api_router(
-            VolumeAdministrationService::new(authentication_authority()?, gateway),
+            VolumeAdministrationService::new(
+                authentication_authority()?,
+                gateway,
+                OperatingSystemRandom,
+            ),
         )?)
         .merge(recovery_bundle_verification_api_router(
             RecoveryBundleVerificationService::new(

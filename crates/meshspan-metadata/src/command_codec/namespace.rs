@@ -6,6 +6,7 @@ use meshspan_domain::{ObjectId, OwnerSetId, PrincipalId, VolumeId};
 use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
+use super::secret_generation;
 use crate::{CreateVolume, RecordName};
 
 pub(super) const CREATE_VOLUME: u16 = 11;
@@ -30,7 +31,7 @@ pub(super) fn encode_volume(
     for owner in value.owners.as_slice() {
         encoder.identifier(owner.as_bytes())?;
     }
-    Ok(())
+    secret_generation::encode_payload(encoder, &value.key_generation)
 }
 
 pub(super) fn decode_volume(
@@ -48,11 +49,13 @@ pub(super) fn decode_volume(
     for _ in 0..owner_count {
         owners.push(PrincipalId::from_bytes(decoder.identifier()?)?);
     }
+    let key_generation = Box::new(secret_generation::decode_payload(decoder)?);
     Ok(CreateVolume {
         volume_id,
         name,
         root_object_id,
         owner_set_id,
         owners: BoundedItems::new(owners, MAXIMUM_OWNERS)?,
+        key_generation,
     })
 }

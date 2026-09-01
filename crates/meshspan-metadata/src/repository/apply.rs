@@ -493,7 +493,15 @@ fn execute(
             bootstrap::bootstrap_appliance(transaction, partition_id, context, value, revision)
         }
         AuthoritativeCommand::CreateVolume(value) => {
-            namespace::create_volume(transaction, context, value, revision)
+            let entity = namespace::create_volume(transaction, context, value, revision)?;
+            secret_generation::commit_initial_volume_key(
+                transaction,
+                context,
+                value.volume_id,
+                &value.key_generation,
+                revision,
+            )?;
+            Ok(entity)
         }
         AuthoritativeCommand::CommitConvergedVolumeHead(value) => {
             volume_head::commit(transaction, context, value, revision)

@@ -87,6 +87,15 @@ impl VolumeAdministrationAuthority for ConsensusAuthenticationAuthority {
             .transpose()
     }
 
+    fn volume_key_recipients(
+        &self,
+    ) -> Result<Vec<meshspan_secret_envelope::WrappingPublicKey>, VolumeAdministrationAuthorityError>
+    {
+        self.reader()
+            .volume_key_recipients()
+            .map_err(|error| map_volume_repository_error(&error))
+    }
+
     fn commit_or_resolve_volume_creation(
         &mut self,
         context: CommandContext,
@@ -230,11 +239,40 @@ fn volume_commit(
     if record.revision != receipt.committed_revision {
         return Err(VolumeAdministrationAuthorityError::Failed);
     }
+    let owners = volume_owners(repository, record.root_object_id)?;
     Ok(VolumeAdministrationCommit {
         request_digest: receipt.request_digest,
         result_digest: receipt.result_digest,
         record,
+        owners,
     })
+}
+
+fn volume_owners(
+    repository: &meshspan_metadata::AuthoritativeRepository,
+    root_object_id: meshspan_domain::ObjectId,
+) -> Result<Vec<meshspan_domain::PrincipalId>, VolumeAdministrationAuthorityError> {
+    let limit = PageLimit::new(1_000).map_err(|_| VolumeAdministrationAuthorityError::Failed)?;
+    let mut cursor = None;
+    let mut owners = Vec::new();
+    loop {
+        let page = repository
+            .object_owners(root_object_id, cursor, limit)
+            .map_err(|error| map_volume_repository_error(&error))?
+            .ok_or(VolumeAdministrationAuthorityError::Failed)?;
+        owners.extend(page.items.into_iter().map(|owner| owner.owner_principal_id));
+        if owners.len() > 1_024 {
+            return Err(VolumeAdministrationAuthorityError::Failed);
+        }
+        let Some(next) = page.next else {
+            break;
+        };
+        cursor = Some(next);
+    }
+    if owners.is_empty() || owners.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(VolumeAdministrationAuthorityError::Failed);
+    }
+    Ok(owners)
 }
 
 fn recovery_verification_commit(
