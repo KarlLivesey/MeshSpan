@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 
 use meshspan_consensus::{
     ActiveQuorumPlan, CatchUpEvidence, CompiledQuorumPlan, LogEntry, MemberIncarnations,
-    MembershipChangeError, MembershipCommandError, MembershipTransitionCommand,
+    MembershipChangeError, MembershipCommandError, MembershipTransitionCommand, ProposalId,
     plan_next_flat_learner_admission, plan_next_flat_promotion, recommended_voter_count,
 };
-use meshspan_domain::{NodeId, QuorumPlanId};
+use meshspan_domain::{NodeId, OperationId, QuorumPlanId};
 use thiserror::Error;
 
 pub(crate) fn plan_next_transition(
@@ -293,6 +293,56 @@ fn next_plan_id(
         *target ^= source;
     }
     QuorumPlanId::from_bytes(bytes).map_err(|_| MembershipCoordinatorError::InvalidTransition)
+}
+
+pub(crate) fn membership_proposal_id(
+    command: &MembershipTransitionCommand,
+) -> Result<ProposalId, MembershipCoordinatorError> {
+    let value = transition_epoch(command)
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(u64::from(transition_kind(command))))
+        .map(|value| value | (1_u64 << 63))
+        .ok_or(MembershipCoordinatorError::InvalidTransition)?;
+    Ok(ProposalId(value))
+}
+
+pub(crate) fn membership_operation_id(
+    command: &MembershipTransitionCommand,
+) -> Result<OperationId, MembershipCoordinatorError> {
+    let digest = transition_digest(command);
+    let mut bytes: [u8; 16] = digest[..16]
+        .try_into()
+        .map_err(|_| MembershipCoordinatorError::InvalidTransition)?;
+    bytes[0] ^= transition_kind(command);
+    OperationId::from_bytes(bytes).map_err(|_| MembershipCoordinatorError::InvalidTransition)
+}
+
+const fn transition_kind(command: &MembershipTransitionCommand) -> u8 {
+    match command {
+        MembershipTransitionCommand::AdmitLearner { .. } => 1,
+        MembershipTransitionCommand::PromoteLearner { .. } => 2,
+        MembershipTransitionCommand::FinaliseStable { .. } => 3,
+    }
+}
+
+fn transition_epoch(command: &MembershipTransitionCommand) -> u64 {
+    match command {
+        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
+        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+            joint_plan.membership_epoch()
+        }
+        MembershipTransitionCommand::FinaliseStable { plan } => plan.spec().membership_epoch,
+    }
+}
+
+fn transition_digest(command: &MembershipTransitionCommand) -> [u8; 32] {
+    match command {
+        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
+        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+            joint_plan.proof_digest()
+        }
+        MembershipTransitionCommand::FinaliseStable { plan } => plan.proof_digest(),
+    }
 }
 
 /// Closed membership orchestration failures without topology or identity disclosure.
