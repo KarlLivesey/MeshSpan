@@ -2,7 +2,11 @@
 
 /** Renders permission-filtered logical-volume client operations. */
 export function renderVolumeClientInterface() {
-  return `listVolumes(
+  return `createVolume(
+    request: CreateVolumeRequest,
+    csrfToken?: string,
+  ): Promise<CreateVolumeResponse>;
+  listVolumes(
     request?: ListVolumesRequest,
   ): Promise<ListVolumesResponse>;
   listNextVolumes(nextPageUrl: string): Promise<ListVolumesResponse>;`;
@@ -10,7 +14,20 @@ export function renderVolumeClientInterface() {
 
 /** Renders permission-filtered logical-volume client implementations. */
 export function renderVolumeClientMethods(routes) {
-  return `async listVolumes(request = {}): Promise<ListVolumesResponse> {
+  return `async createVolume(request, csrfToken): Promise<CreateVolumeResponse> {
+      const body = zCreateVolumeBody.parse(request);
+      return requestJson(
+        context,
+        ${JSON.stringify(routes.createVolume.route)},
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: ${JSON.stringify(routes.createVolume.method)},
+        },
+        zCreateVolumeResponse2,
+      );
+    },
+    async listVolumes(request = {}): Promise<ListVolumesResponse> {
       const query = zListVolumesQuery.parse(request);
       return validateVolumePage(
         await requestJson(

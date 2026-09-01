@@ -1450,6 +1450,14 @@ export type EnrolNodeResponse = {
    * Offline mesh root certificate DER as lowercase hex.
    */
   root_certificate_der_hex: string;
+  /**
+   * Root metadata partition the joining learner must restore and follow.
+   */
+  root_partition_id: string;
+  /**
+   * Current non-zero route epoch for the root metadata partition.
+   */
+  routing_epoch: number;
 };
 
 /**

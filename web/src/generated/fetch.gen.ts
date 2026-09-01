@@ -34,6 +34,8 @@ import type {
   CreateTotpRegistrationResponse,
   CreatePrincipalResponse,
   CreateUserRequest,
+  CreateVolumeRequest,
+  CreateVolumeResponse,
   CurrentSessionResponse,
   DeleteObjectRequest,
   DeleteObjectResponse,
@@ -97,6 +99,8 @@ import {
   zCreateSessionResponse2,
   zCreateUserBody,
   zCreateUserResponse,
+  zCreateVolumeBody,
+  zCreateVolumeResponse2,
   zDeleteObjectBody,
   zDeleteObjectPath,
   zDeleteObjectResponse2,
@@ -348,6 +352,10 @@ export interface MeshSpanFetchClient {
     request: WriteUploadRangeRequest,
     csrfToken?: string,
   ): Promise<WriteUploadRangeResponse>;
+  createVolume(
+    request: CreateVolumeRequest,
+    csrfToken?: string,
+  ): Promise<CreateVolumeResponse>;
   listVolumes(request?: ListVolumesRequest): Promise<ListVolumesResponse>;
   listNextVolumes(nextPageUrl: string): Promise<ListVolumesResponse>;
   listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
@@ -934,6 +942,19 @@ export function createMeshSpanFetchClient(
           method: "PUT",
         },
         zWriteUploadRangeResponse2,
+      );
+    },
+    async createVolume(request, csrfToken): Promise<CreateVolumeResponse> {
+      const body = zCreateVolumeBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/volumes",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateVolumeResponse2,
       );
     },
     async listVolumes(request = {}): Promise<ListVolumesResponse> {

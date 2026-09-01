@@ -68,6 +68,7 @@ export function readRequiredRoutes(document) {
     ),
     createSession,
     createUser: requireOperation(operations, "createUser"),
+    createVolume: requireOperation(operations, "createVolume"),
     deleteObject: requireOperation(operations, "deleteObject"),
     getHealth: requireOperation(operations, "getHealth"),
     getCurrentSession: requireOperation(operations, "getCurrentSession"),

@@ -3106,12 +3106,27 @@
             "minLength": 2,
             "pattern": "^[0-9a-f]+$",
             "type": "string"
+          },
+          "root_partition_id": {
+            "description": "Root metadata partition the joining learner must restore and follow.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "routing_epoch": {
+            "description": "Current non-zero route epoch for the root metadata partition.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [
           "operation_id",
           "mesh_id",
           "node_id",
+          "root_partition_id",
+          "routing_epoch",
           "node_certificate_der_hex",
           "online_authority_certificate_der_hex",
           "root_certificate_der_hex",

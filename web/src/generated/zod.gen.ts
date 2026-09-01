@@ -1674,6 +1674,18 @@ export const zEnrolNodeResponse = z
       .min(2)
       .max(16384)
       .regex(/^[0-9a-f]+$/),
+    root_partition_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    routing_epoch: z.coerce
+      .bigint()
+      .gte(BigInt(1))
+      .max(BigInt("18446744073709551615"), {
+        error: "Invalid value: Expected uint64 to be <= 18446744073709551615",
+      }),
   })
   .strict();
 
