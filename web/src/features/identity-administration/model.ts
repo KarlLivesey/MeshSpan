@@ -48,6 +48,11 @@ export interface IdentityAdministrationClient {
   ): Promise<RemoveGroupMemberResponse>;
 }
 
+export type PrincipalDirectoryClient = Pick<
+  IdentityAdministrationClient,
+  "listGroups" | "listNextPrincipals" | "listUsers"
+>;
+
 export type PrincipalDirectory = Readonly<{
   error: Accessor<string | undefined>;
   items: Accessor<readonly PrincipalSummary[]>;
@@ -59,7 +64,7 @@ export type PrincipalDirectory = Readonly<{
 }>;
 
 export function createPrincipalDirectory(
-  client: Accessor<IdentityAdministrationClient>,
+  client: Accessor<PrincipalDirectoryClient>,
   kind: PrincipalKind,
 ): PrincipalDirectory {
   const [items, setItems] = createSignal<readonly PrincipalSummary[]>([], {

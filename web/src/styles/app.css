@@ -522,11 +522,208 @@ select:hover {
   container-type: inline-size;
 }
 
+.volume-administration {
+  container-type: inline-size;
+}
+
+.administration-nav {
+  display: flex;
+  gap: var(--space-lg);
+  overflow-x: auto;
+  margin-bottom: var(--space-xl);
+  border-bottom: 1px solid var(--line);
+}
+
+.administration-nav a {
+  min-height: 2.75rem;
+  padding-block: 0.625rem;
+  color: var(--ink-soft);
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.administration-nav a[aria-current="page"] {
+  color: var(--ink);
+  box-shadow: inset 0 -0.2rem var(--signal);
+}
+
 .principal-create {
   display: grid;
   gap: var(--space-xl);
   padding-block: var(--space-xl);
   border-block: 1px solid var(--line);
+}
+
+.volume-create {
+  display: grid;
+  gap: var(--space-xl);
+  padding-block: var(--space-xl);
+  border-bottom: 1px solid var(--line);
+}
+
+.volume-name-field {
+  max-width: 36rem;
+}
+
+.owner-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: var(--space-sm) var(--space-xl);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-lg);
+  border: 1px solid var(--line);
+}
+
+.owner-fields legend {
+  padding-inline: var(--space-sm);
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+  font-weight: 750;
+}
+
+.owner-fields small {
+  color: var(--ink-soft);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.volume-list {
+  padding-top: var(--space-3xl);
+}
+
+.permission-administration {
+  display: grid;
+  gap: var(--space-xl);
+  margin-top: var(--space-3xl);
+  padding-top: var(--space-3xl);
+  border-top: 1px solid var(--line);
+}
+
+.first-start-page,
+.setup-status {
+  width: min(100% - 2rem, 62rem);
+  margin: 0 auto;
+  padding: clamp(3rem, 9vw, 8rem) 0;
+}
+
+.setup-status,
+.first-start-card {
+  display: grid;
+  gap: var(--space-xl);
+}
+
+.first-start-card {
+  padding: clamp(var(--space-xl), 5vw, var(--space-3xl));
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.first-start-card > div:first-child,
+.first-start-card form,
+.setup-name-grid,
+.recovery-material {
+  display: grid;
+  gap: var(--space-lg);
+}
+
+.setup-name-grid {
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.claim-field {
+  max-width: 42rem;
+}
+
+.setup-secret {
+  display: grid;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.setup-secret code {
+  overflow-wrap: anywhere;
+  padding: var(--space-md);
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.permission-grant-form {
+  display: grid;
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.permission-grant-fields {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.activation-check {
+  width: fit-content;
+}
+
+.activation-duration {
+  max-width: 22rem;
+}
+
+.permission-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.permission-grant-list {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.permission-grant-card {
+  display: grid;
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+  border-left: 0.25rem solid var(--signal);
+  background: var(--paper-raised);
+}
+
+.permission-grant-card > div:first-child {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.permission-grant-card > div:first-child p,
+.permission-grant-card dt {
+  color: var(--ink-soft);
+}
+
+.permission-grant-card dl {
+  display: grid;
+  gap: var(--space-sm);
+  margin: 0;
+}
+
+.permission-grant-card dl > div {
+  display: grid;
+  grid-template-columns: minmax(6rem, 0.4fr) minmax(0, 1fr);
+  gap: var(--space-md);
+}
+
+.permission-grant-card dd {
+  margin: 0;
+}
+
+.grant-revocation {
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  background: var(--danger-surface);
+}
+
+.state-committed::before {
+  background: var(--success);
 }
 
 .section-heading,
@@ -946,6 +1143,10 @@ tbody th {
   .membership-heading {
     grid-template-columns: minmax(16rem, 0.8fr) minmax(20rem, 1.2fr);
     align-items: end;
+  }
+
+  .permission-grant-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .method-grid,

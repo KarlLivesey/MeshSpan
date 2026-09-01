@@ -78,6 +78,7 @@ mod namespace;
 mod node_wrapping_key;
 #[cfg(test)]
 mod node_wrapping_key_tests;
+mod operation_status;
 mod passkey_registration;
 #[cfg(test)]
 mod passkey_registration_tests;
@@ -123,7 +124,7 @@ pub use access_evaluation::{
 };
 pub use access_query::{
     AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
-    PermissionGrantRecord, ScopedGrantCursor, SubjectGrantCursor,
+    PermissionGrantRecord, PermissionGrantRevocationRecord, ScopedGrantCursor, SubjectGrantCursor,
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
@@ -177,6 +178,7 @@ pub use kernel::{
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
 pub use node_wrapping_key::NodeWrappingKeyRecord;
+pub use operation_status::{AuthoritativeOperationState, AuthoritativeOperationStatus};
 pub use passkey_registration::{
     AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
@@ -646,6 +648,18 @@ impl AuthoritativeRepository {
         receipt::resolve_operation(&self.database, operation_id)
     }
 
+    /// Returns validated current status for one authoritative operation, if present.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when lifecycle, actor, result or timestamp evidence is inconsistent.
+    pub fn operation_status(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<AuthoritativeOperationStatus>, RepositoryError> {
+        operation_status::read(&self.database, operation_id)
+    }
+
     /// Resolves the durable delivery facts for one prior API-key session operation.
     ///
     /// # Errors
@@ -1051,6 +1065,30 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<PermissionGrantRecord, ScopedGrantCursor>, RepositoryError> {
         access_query::permission_grants_for_scope(&self.database, scope, after, limit)
+    }
+
+    /// Returns one exact active permission grant.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed persisted authority or database failure.
+    pub fn permission_grant(
+        &self,
+        grant_id: meshspan_domain::GrantId,
+    ) -> Result<Option<PermissionGrantRecord>, RepositoryError> {
+        access_query::permission_grant(&self.database, grant_id)
+    }
+
+    /// Returns durable revocation evidence for one exact grant.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed persisted authority or database failure.
+    pub fn permission_grant_revocation(
+        &self,
+        grant_id: meshspan_domain::GrantId,
+    ) -> Result<Option<PermissionGrantRevocationRecord>, RepositoryError> {
+        access_query::permission_grant_revocation(&self.database, grant_id)
     }
 
     /// Returns one stable bounded page of current grants assigned to one user or group.

@@ -3,6 +3,7 @@
 import { render } from "@solidjs/web";
 
 import { AppLayout } from "./app/AppLayout";
+import { ApplianceGate } from "./app/ApplianceGate";
 import { AppRouter } from "./app/router";
 import { SessionProvider } from "./app/session";
 import { createMeshSpanFetchClient } from "./generated/fetch.gen";
@@ -19,11 +20,13 @@ const client = createMeshSpanFetchClient({
 
 render(
   () => (
-    <SessionProvider client={client}>
-      <AppRouter>
-        {(route) => <AppLayout>{route.children}</AppLayout>}
-      </AppRouter>
-    </SessionProvider>
+    <ApplianceGate client={client}>
+      <SessionProvider client={client}>
+        <AppRouter>
+          {(route) => <AppLayout>{route.children}</AppLayout>}
+        </AppRouter>
+      </SessionProvider>
+    </ApplianceGate>
   ),
   mount,
 );

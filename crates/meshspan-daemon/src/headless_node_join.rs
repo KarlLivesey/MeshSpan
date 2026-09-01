@@ -2,6 +2,8 @@
 
 //! Restart-safe headless admission into an existing mesh.
 
+use std::net::SocketAddr;
+
 use meshspan_api_contract::{
     EnrolNodeRequest, EnrolNodeResponse, MAX_ENROL_NODE_BYTES, NodeJoinHost, NodeJoinRole,
     OperationId as ApiOperationId, SetupName, decode_enrol_node_response,
@@ -13,8 +15,8 @@ use meshspan_cluster::{
 };
 use meshspan_consensus::ActiveQuorumPlan;
 use meshspan_domain::{
-    BackupId, InitialBootstrapMaterial, OperationId, PartitionId, Revision, SnapshotId, UnixMicros,
-    uuid_v8,
+    BackupId, InitialBootstrapMaterial, JoinGrantBundle, OperationId, PartitionId, Revision,
+    SnapshotId, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
     JoinRoles, LocalSetupKind, LocalSetupState, LogPosition as MetadataLogPosition, NewLocalSetup,
@@ -63,14 +65,40 @@ pub(crate) async fn admit_headless_node(
         return Ok(None);
     };
     let node_id = local_state.node_id();
+    let host_name = setup_name("host", node_id)?;
+    let node_name = setup_name("node", node_id)?;
+    admit_node(
+        local_state,
+        invitation,
+        host_name,
+        node_name,
+        private_endpoint,
+        now,
+    )
+    .await
+    .map(Some)
+}
+
+/// Admits one locally claimed daemon using names supplied by either headless configuration or UI.
+///
+/// This is the single enrolment implementation for every first-start presentation. The caller
+/// controls only bounded display names and the advertised private endpoint; the invitation pins
+/// the remote HTTPS origin, certificate and authoritative mesh identity.
+pub(crate) async fn admit_node(
+    local_state: &mut DaemonLocalState,
+    invitation: &JoinGrantBundle,
+    host_name: SetupName,
+    node_name: SetupName,
+    private_endpoint: &str,
+    now: UnixMicros,
+) -> Result<EnrolNodeResponse, HeadlessNodeJoinError> {
+    let node_id = local_state.node_id();
     let operation_bytes =
         derived_operation_id(invitation.join_grant_id().as_bytes(), node_id.as_bytes());
     let operation_id = OperationId::from_bytes(operation_bytes)
         .map_err(|_| HeadlessNodeJoinError::InvalidLocalState)?;
     let api_operation_id = ApiOperationId::from_uuid_bytes(operation_bytes)
         .ok_or(HeadlessNodeJoinError::InvalidLocalState)?;
-    let host_name = setup_name("host", node_id)?;
-    let node_name = setup_name("node", node_id)?;
     let host_record_name = RecordName::new(host_name.as_str())
         .map_err(|_| HeadlessNodeJoinError::InvalidLocalState)?;
     let node_record_name = RecordName::new(node_name.as_str())
@@ -154,12 +182,15 @@ pub(crate) async fn admit_headless_node(
     } else if setup.authority_result_digest != Some(result_digest) {
         return Err(HeadlessNodeJoinError::InvalidLocalState);
     }
-    Ok(Some(response))
+    Ok(response)
 }
 
-pub(crate) async fn activate_and_install_headless_node(
+/// Activates an admitted node, installs the authoritative snapshot and consumes its local claim.
+///
+/// The public setup UI and headless startup both enter through this exact implementation.
+pub(crate) async fn activate_and_install_node(
     local_state: &mut DaemonLocalState,
-    config: &HeadlessDaemonConfig,
+    private_listen: SocketAddr,
     admission: &EnrolNodeResponse,
     data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
     now: UnixMicros,
@@ -186,7 +217,7 @@ pub(crate) async fn activate_and_install_headless_node(
             certificate_name: certificate_name(node_id),
         });
     }
-    let client_address = if config.private_listen().is_ipv4() {
+    let client_address = if private_listen.is_ipv4() {
         std::net::SocketAddr::from(([0, 0, 0, 0], 0))
     } else {
         std::net::SocketAddr::from(([0_u16; 8], 0))
@@ -206,7 +237,7 @@ pub(crate) async fn activate_and_install_headless_node(
                 NodeRole::Gateway,
                 NodeRole::MetadataLearner,
             ],
-            listen_address: config.private_listen(),
+            listen_address: private_listen,
             client_address,
             certificate_chain_der: vec![
                 decode_hex_vec(&admission.node_certificate_der_hex)?,

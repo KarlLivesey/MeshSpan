@@ -1210,6 +1210,144 @@ export type CreateUserRequest = {
 };
 
 /**
+ * CreateVolumePermissionGrantRequest
+ *
+ * Idempotent administrator request to grant volume authority to one user or group.
+ */
+export type CreateVolumePermissionGrantRequest = {
+  /**
+   * Omitted applies policy defaults, null needs no activation, and a value defines activation.
+   */
+  activation?: {
+    /**
+     * Longest activation the user may request.
+     */
+    maximum_duration_micros: number;
+    /**
+     * Authentication assurance required when activating.
+     */
+    minimum_assurance: "single_factor" | "multi_factor" | "recent_step_up";
+    /**
+     * Whether every activation must contain a non-blank reason.
+     */
+    reason_required: boolean;
+  } | null;
+  /**
+   * Whether authority applies to the root, descendants or both.
+   */
+  inheritance: "object" | "descendants" | "object_and_descendants";
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Protocol-neutral namespace authority currently available to this caller.
+   */
+  rights: Array<
+    | "traverse"
+    | "list"
+    | "read_data"
+    | "create_child"
+    | "write_data"
+    | "append_data"
+    | "rename"
+    | "delete"
+    | "read_attributes"
+    | "write_attributes"
+    | "read_permissions"
+    | "change_permissions"
+    | "change_owner"
+  >;
+  /**
+   * User or group receiving the rights.
+   */
+  subject_principal_id: string;
+  /**
+   * Omitted applies policy defaults, null is unbounded, and a value is exact.
+   */
+  valid_from_epoch_micros?: number | null;
+  /**
+   * Omitted applies policy defaults, null is unbounded, and a value is exact.
+   */
+  valid_until_epoch_micros?: number | null;
+};
+
+/**
+ * CreateVolumePermissionGrantResponse
+ *
+ * Durable result of creating or exactly replaying one permission grant.
+ */
+export type CreateVolumePermissionGrantResponse = {
+  /**
+   * Newly active or exactly replayed grant.
+   */
+  grant: {
+    /**
+     * Policy that must be activated, or null when authority is immediately usable.
+     */
+    activation_policy_id: string | null;
+    /**
+     * Original authoritative creation instant.
+     */
+    created_at_epoch_micros: number;
+    /**
+     * Principal that created this grant.
+     */
+    created_by: string;
+    /**
+     * Stable grant identity.
+     */
+    grant_id: string;
+    /**
+     * Explicit descendant behaviour.
+     */
+    inheritance: "object" | "descendants" | "object_and_descendants";
+    /**
+     * Current authoritative grant revision.
+     */
+    revision: number;
+    /**
+     * Protocol-neutral namespace authority currently available to this caller.
+     */
+    rights: Array<
+      | "traverse"
+      | "list"
+      | "read_data"
+      | "create_child"
+      | "write_data"
+      | "append_data"
+      | "rename"
+      | "delete"
+      | "read_attributes"
+      | "write_attributes"
+      | "read_permissions"
+      | "change_permissions"
+      | "change_owner"
+    >;
+    /**
+     * User or group receiving the rights.
+     */
+    subject_principal_id: string;
+    /**
+     * Inclusive validity start, or null when unbounded below.
+     */
+    valid_from_epoch_micros: number | null;
+    /**
+     * Exclusive validity end, or null when unbounded above.
+     */
+    valid_until_epoch_micros: number | null;
+    /**
+     * Volume whose root defines this grant's scope.
+     */
+    volume_id: string;
+  };
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreateVolumeRequest
  *
  * Idempotent administrator request to create one logical volume.
@@ -1450,6 +1588,14 @@ export type EnrolNodeResponse = {
    * Offline mesh root certificate DER as lowercase hex.
    */
   root_certificate_der_hex: string;
+  /**
+   * Root metadata partition the joining learner must restore and follow.
+   */
+  root_partition_id: string;
+  /**
+   * Current non-zero route epoch for the root metadata partition.
+   */
+  routing_epoch: number;
 };
 
 /**
@@ -1832,6 +1978,85 @@ export type ListUploadRangesResponse = {
 };
 
 /**
+ * ListVolumePermissionGrantsResponse
+ *
+ * One bounded stable page of active volume grants.
+ */
+export type ListVolumePermissionGrantsResponse = {
+  /**
+   * Stable grant records ordered by grant identity.
+   */
+  grants: Array<{
+    /**
+     * Policy that must be activated, or null when authority is immediately usable.
+     */
+    activation_policy_id: string | null;
+    /**
+     * Original authoritative creation instant.
+     */
+    created_at_epoch_micros: number;
+    /**
+     * Principal that created this grant.
+     */
+    created_by: string;
+    /**
+     * Stable grant identity.
+     */
+    grant_id: string;
+    /**
+     * Explicit descendant behaviour.
+     */
+    inheritance: "object" | "descendants" | "object_and_descendants";
+    /**
+     * Current authoritative grant revision.
+     */
+    revision: number;
+    /**
+     * Protocol-neutral namespace authority currently available to this caller.
+     */
+    rights: Array<
+      | "traverse"
+      | "list"
+      | "read_data"
+      | "create_child"
+      | "write_data"
+      | "append_data"
+      | "rename"
+      | "delete"
+      | "read_attributes"
+      | "write_attributes"
+      | "read_permissions"
+      | "change_permissions"
+      | "change_owner"
+    >;
+    /**
+     * User or group receiving the rights.
+     */
+    subject_principal_id: string;
+    /**
+     * Inclusive validity start, or null when unbounded below.
+     */
+    valid_from_epoch_micros: number | null;
+    /**
+     * Exclusive validity end, or null when unbounded above.
+     */
+    valid_until_epoch_micros: number | null;
+    /**
+     * Volume whose root defines this grant's scope.
+     */
+    volume_id: string;
+  }>;
+  /**
+   * Ready-to-follow relative URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Exact volume represented by the page.
+   */
+  volume_id: string;
+};
+
+/**
  * ListVolumesResponse
  *
  * One bounded current-user volume page.
@@ -1884,6 +2109,104 @@ export type ListVolumesResponse = {
      */
     volume_id: string;
   }>;
+};
+
+/**
+ * OperationStatusResponse
+ *
+ * Current durable state of one exact operation visible to the caller.
+ */
+export type OperationStatusResponse = {
+  /**
+   * Whether a cancellation request is currently safe and supported.
+   */
+  cancellation_available: boolean;
+  /**
+   * Terminal instant, or null while work remains non-terminal.
+   */
+  completed_at_epoch_micros: number | null;
+  /**
+   * Typed terminal failure, or null for non-failed states.
+   */
+  failure: {
+    /**
+     * Stable machine-readable failure category.
+     */
+    code: string;
+    /**
+     * Bounded plain-language explanation.
+     */
+    message: string;
+    /**
+     * Safe retry classification independent of the prose.
+     */
+    retry: "never" | "automatic" | "same_operation" | "action_required";
+  } | null;
+  /**
+   * Stable work family.
+   */
+  kind:
+    | "metadata_mutation"
+    | "setup_join"
+    | "placement"
+    | "repair"
+    | "scrub"
+    | "drain"
+    | "reconciliation"
+    | "certificate"
+    | "backup"
+    | "update";
+  /**
+   * Exact operation being resolved.
+   */
+  operation_id: string;
+  /**
+   * Advisory bounded progress, or null when the work is not meaningfully countable.
+   */
+  progress: {
+    /**
+     * Completed work in the declared unit.
+     */
+    completed: number;
+    /**
+     * Current known total, which may increase as bounded discovery proceeds.
+     */
+    total: number;
+    /**
+     * Meaning of both counters.
+     */
+    unit: "steps" | "bytes" | "items" | "nodes" | "targets";
+  } | null;
+  /**
+   * Ready-to-follow committed result URL when the result has an addressable resource.
+   */
+  result_url: string | null;
+  /**
+   * Authoritative operation revision used by conditional clients and event projections.
+   */
+  revision: number;
+  /**
+   * Original accepted instant.
+   */
+  started_at_epoch_micros: number;
+  /**
+   * Authoritative lifecycle state.
+   */
+  state:
+    | "queued"
+    | "running"
+    | "awaiting_action"
+    | "succeeded"
+    | "failed"
+    | "cancelled";
+  /**
+   * Ready-to-follow current status URL.
+   */
+  status_url: string;
+  /**
+   * Most recent authoritative lifecycle change.
+   */
+  updated_at_epoch_micros: number;
 };
 
 /**
@@ -2056,6 +2379,46 @@ export type RevokeCurrentSessionResponse = {
    * Session which is now authoritatively unusable.
    */
   session_id: string;
+};
+
+/**
+ * RevokePermissionGrantRequest
+ *
+ * Idempotent administrator request to revoke one exact active grant.
+ */
+export type RevokePermissionGrantRequest = {
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Human-readable audit reason retained with revocation evidence.
+   */
+  reason: string;
+};
+
+/**
+ * RevokePermissionGrantResponse
+ *
+ * Durable result of revoking or exactly replaying one permission grant.
+ */
+export type RevokePermissionGrantResponse = {
+  /**
+   * Exact grant that was revoked.
+   */
+  grant_id: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Authoritative revocation revision.
+   */
+  revision: number;
+  /**
+   * Original authoritative revocation instant used by exact retries.
+   */
+  revoked_at_epoch_micros: number;
 };
 
 /**
@@ -3132,6 +3495,194 @@ export type CreateVolumeResponses = {
 export type CreateVolumeResponse2 =
   CreateVolumeResponses[keyof CreateVolumeResponses];
 
+export type ListVolumePermissionGrantsData = {
+  body?: never;
+  path: {
+    volume_id: string;
+  };
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/volumes/{volume_id}/permission-grants";
+};
+
+export type ListVolumePermissionGrantsErrors = {
+  /**
+   * Invalid volume or query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Volume not found
+   */
+  404: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Permission authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListVolumePermissionGrantsError =
+  ListVolumePermissionGrantsErrors[keyof ListVolumePermissionGrantsErrors];
+
+export type ListVolumePermissionGrantsResponses = {
+  /**
+   * One current volume permission-grant page
+   */
+  200: ListVolumePermissionGrantsResponse;
+};
+
+export type ListVolumePermissionGrantsResponse2 =
+  ListVolumePermissionGrantsResponses[keyof ListVolumePermissionGrantsResponses];
+
+export type CreateVolumePermissionGrantData = {
+  /**
+   * Volume permission grant
+   */
+  body: CreateVolumePermissionGrantRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+  };
+  query?: never;
+  url: "/admin/volumes/{volume_id}/permission-grants";
+};
+
+export type CreateVolumePermissionGrantErrors = {
+  /**
+   * Invalid grant request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Volume or principal not found
+   */
+  404: ApiError;
+  /**
+   * Grant or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Permission authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateVolumePermissionGrantError =
+  CreateVolumePermissionGrantErrors[keyof CreateVolumePermissionGrantErrors];
+
+export type CreateVolumePermissionGrantResponses = {
+  /**
+   * Grant durably created or exactly replayed
+   */
+  201: CreateVolumePermissionGrantResponse;
+};
+
+export type CreateVolumePermissionGrantResponse2 =
+  CreateVolumePermissionGrantResponses[keyof CreateVolumePermissionGrantResponses];
+
+export type RevokePermissionGrantData = {
+  /**
+   * Audited permission revocation
+   */
+  body: RevokePermissionGrantRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+    /**
+     * Exact active permission-grant identity
+     */
+    grant_id: string;
+  };
+  query?: never;
+  url: "/admin/volumes/{volume_id}/permission-grants/{grant_id}/revocations";
+};
+
+export type RevokePermissionGrantErrors = {
+  /**
+   * Invalid revocation request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Active grant not found
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Permission authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type RevokePermissionGrantError =
+  RevokePermissionGrantErrors[keyof RevokePermissionGrantErrors];
+
+export type RevokePermissionGrantResponses = {
+  /**
+   * Grant durably revoked or exactly replayed
+   */
+  200: RevokePermissionGrantResponse;
+};
+
+export type RevokePermissionGrantResponse2 =
+  RevokePermissionGrantResponses[keyof RevokePermissionGrantResponses];
+
 export type GetHealthData = {
   body?: never;
   path?: never;
@@ -3174,6 +3725,51 @@ export type GetOpenApiResponses = {
 };
 
 export type GetOpenApiResponse = GetOpenApiResponses[keyof GetOpenApiResponses];
+
+export type GetOperationStatusData = {
+  body?: never;
+  path: {
+    operation_id: string;
+  };
+  query?: never;
+  url: "/operations/{operation_id}";
+};
+
+export type GetOperationStatusErrors = {
+  /**
+   * Invalid operation identity
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Operation not found or not visible
+   */
+  404: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Operation authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetOperationStatusError =
+  GetOperationStatusErrors[keyof GetOperationStatusErrors];
+
+export type GetOperationStatusResponses = {
+  /**
+   * Current durable operation state
+   */
+  200: OperationStatusResponse;
+};
+
+export type GetOperationStatusResponse =
+  GetOperationStatusResponses[keyof GetOperationStatusResponses];
 
 export type CreateSessionData = {
   body: CreateSessionRequestWritable;

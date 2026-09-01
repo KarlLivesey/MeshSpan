@@ -109,6 +109,15 @@ fn encode_command(
         AuthoritativeCommand::RemoveGroupMember(value) => {
             identity::encode_remove_member(encoder, value)
         }
+        AuthoritativeCommand::GrantPermission(value) => {
+            identity::encode_grant_permission(encoder, value)
+        }
+        AuthoritativeCommand::GrantPermissionWithActivation(value) => {
+            identity::encode_grant_permission_with_activation(encoder, value)
+        }
+        AuthoritativeCommand::RevokePermissionGrant(value) => {
+            identity::encode_revoke_permission(encoder, value)
+        }
         AuthoritativeCommand::CreateAuthenticationMethod(value) => {
             authentication::encode_create(encoder, value)
         }
@@ -155,6 +164,15 @@ fn decode_command(
         3 => identity::decode_group(decoder).map(AuthoritativeCommand::CreateGroup),
         4 => identity::decode_add_member(decoder).map(AuthoritativeCommand::AddGroupMember),
         5 => identity::decode_remove_member(decoder).map(AuthoritativeCommand::RemoveGroupMember),
+        identity::GRANT_PERMISSION => {
+            identity::decode_grant_permission(decoder).map(AuthoritativeCommand::GrantPermission)
+        }
+        identity::GRANT_PERMISSION_WITH_ACTIVATION => {
+            identity::decode_grant_permission_with_activation(decoder)
+                .map(AuthoritativeCommand::GrantPermissionWithActivation)
+        }
+        identity::REVOKE_PERMISSION => identity::decode_revoke_permission(decoder)
+            .map(AuthoritativeCommand::RevokePermissionGrant),
         6 => authentication::decode_create(decoder)
             .map(AuthoritativeCommand::CreateAuthenticationMethod),
         7 => session::decode_issue(decoder).map(AuthoritativeCommand::IssueAuthenticationSession),

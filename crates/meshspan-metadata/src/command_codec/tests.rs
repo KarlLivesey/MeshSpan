@@ -2,10 +2,10 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationMethodId, AuthenticationService,
-    ComponentInstanceId, EntropyError, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId,
-    OwnerSetId, PrincipalId, RandomSource, RecoveryCodeId, Revision, RoleId, SessionId, TargetId,
-    UnixMicros, VolumeId,
+    ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId,
+    AuthenticationService, ComponentInstanceId, DurationMicros, EntropyError, GrantId, GroupId,
+    HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PrincipalId, RandomSource,
+    RecoveryCodeId, Revision, Rights, RoleId, SessionId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -15,11 +15,13 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::{
     AddGroupMember, BootstrapMesh, BootstrapRecoveryIdentity, CommitSecretGeneration,
-    CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateUser, CreateVolume,
-    IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode, RecordName,
-    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
-    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
-    StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateUser,
+    CreateVolume, GrantInheritance, GrantPermission, GrantPermissionWithActivation,
+    IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
+    RecordName, RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember,
+    RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAuthenticationFactor,
+    SessionClientLabel, StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 #[test]
@@ -102,6 +104,37 @@ fn identity_commands_round_trip_without_losing_optional_intent()
     ] {
         assert_round_trip(context, command)?;
     }
+    Ok(())
+}
+
+#[test]
+fn activation_policy_and_grant_round_trip_as_one_atomic_command()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let policy_id = ActivationPolicyId::from_bytes([44; 16])?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::GrantPermissionWithActivation(GrantPermissionWithActivation {
+            policy: CreateActivationPolicy {
+                policy_id,
+                maximum_duration: DurationMicros::new(3_600_000_000),
+                reason_required: true,
+                minimum_assurance: AssuranceLevel::SingleFactor,
+                valid_from: None,
+                valid_until: Some(UnixMicros::new(900)),
+            },
+            grant: GrantPermission {
+                grant_id: GrantId::from_bytes([45; 16])?,
+                subject_principal_id: PrincipalId::from_bytes([46; 16])?,
+                scope: PermissionScope::Volume(VolumeId::from_bytes([47; 16])?),
+                rights: Rights::READ_DATA.union(Rights::WRITE_DATA),
+                inheritance: GrantInheritance::ObjectAndDescendants,
+                valid_from: Some(UnixMicros::new(100)),
+                valid_until: Some(UnixMicros::new(800)),
+                activation_policy_id: Some(policy_id),
+            },
+        }),
+    )?;
     Ok(())
 }
 

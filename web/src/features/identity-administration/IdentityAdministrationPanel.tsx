@@ -64,6 +64,12 @@ export function IdentityAdministrationPanel(
           it belongs.
         </p>
       </header>
+      <nav class="administration-nav" aria-label="Administration sections">
+        <a aria-current="page" href="/admin/identities">
+          People and groups
+        </a>
+        <a href="/admin/volumes">Volumes</a>
+      </nav>
       <CreatePrincipalForm create={create} />
       <div class="principal-columns">
         <PrincipalList directory={users} kind="user" />

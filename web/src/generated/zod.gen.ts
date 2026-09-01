@@ -1375,6 +1375,155 @@ export const zCreateUserRequest = z
   .strict();
 
 /**
+ * CreateVolumePermissionGrantRequest
+ *
+ * Idempotent administrator request to grant volume authority to one user or group.
+ */
+export const zCreateVolumePermissionGrantRequest = z
+  .strictObject({
+    activation: z
+      .strictObject({
+        maximum_duration_micros: z.int().gte(1).lte(9007199254740991),
+        minimum_assurance: z.union([
+          z.literal("single_factor"),
+          z.literal("multi_factor"),
+          z.literal("recent_step_up"),
+        ]),
+        reason_required: z.boolean(),
+      })
+      .strict()
+      .nullish(),
+    inheritance: z.union([
+      z.literal("object"),
+      z.literal("descendants"),
+      z.literal("object_and_descendants"),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    rights: z
+      .array(
+        z.union([
+          z.literal("traverse"),
+          z.literal("list"),
+          z.literal("read_data"),
+          z.literal("create_child"),
+          z.literal("write_data"),
+          z.literal("append_data"),
+          z.literal("rename"),
+          z.literal("delete"),
+          z.literal("read_attributes"),
+          z.literal("write_attributes"),
+          z.literal("read_permissions"),
+          z.literal("change_permissions"),
+          z.literal("change_owner"),
+        ]),
+      )
+      .min(1)
+      .max(13),
+    subject_principal_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    valid_from_epoch_micros: z.int().gte(0).lte(9007199254740991).nullish(),
+    valid_until_epoch_micros: z.int().gte(0).lte(9007199254740991).nullish(),
+  })
+  .strict();
+
+/**
+ * CreateVolumePermissionGrantResponse
+ *
+ * Durable result of creating or exactly replaying one permission grant.
+ */
+export const zCreateVolumePermissionGrantResponse = z
+  .strictObject({
+    grant: z
+      .strictObject({
+        activation_policy_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          )
+          .nullable(),
+        created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+        created_by: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        grant_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        inheritance: z.union([
+          z.literal("object"),
+          z.literal("descendants"),
+          z.literal("object_and_descendants"),
+        ]),
+        revision: z.int().gte(1).lte(9007199254740991),
+        rights: z
+          .array(
+            z.union([
+              z.literal("traverse"),
+              z.literal("list"),
+              z.literal("read_data"),
+              z.literal("create_child"),
+              z.literal("write_data"),
+              z.literal("append_data"),
+              z.literal("rename"),
+              z.literal("delete"),
+              z.literal("read_attributes"),
+              z.literal("write_attributes"),
+              z.literal("read_permissions"),
+              z.literal("change_permissions"),
+              z.literal("change_owner"),
+            ]),
+          )
+          .min(1)
+          .max(13),
+        subject_principal_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        valid_from_epoch_micros: z
+          .int()
+          .gte(0)
+          .lte(9007199254740991)
+          .nullable(),
+        valid_until_epoch_micros: z
+          .int()
+          .gte(0)
+          .lte(9007199254740991)
+          .nullable(),
+        volume_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      })
+      .strict(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreateVolumeRequest
  *
  * Idempotent administrator request to create one logical volume.
@@ -1674,6 +1823,18 @@ export const zEnrolNodeResponse = z
       .min(2)
       .max(16384)
       .regex(/^[0-9a-f]+$/),
+    root_partition_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    routing_epoch: z.coerce
+      .bigint()
+      .gte(BigInt(1))
+      .max(BigInt("18446744073709551615"), {
+        error: "Invalid value: Expected uint64 to be <= 18446744073709551615",
+      }),
   })
   .strict();
 
@@ -2081,6 +2242,104 @@ export const zListUploadRangesResponse = z
   .strict();
 
 /**
+ * ListVolumePermissionGrantsResponse
+ *
+ * One bounded stable page of active volume grants.
+ */
+export const zListVolumePermissionGrantsResponse = z
+  .strictObject({
+    grants: z
+      .array(
+        z
+          .strictObject({
+            activation_policy_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              )
+              .nullable(),
+            created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+            created_by: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            grant_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            inheritance: z.union([
+              z.literal("object"),
+              z.literal("descendants"),
+              z.literal("object_and_descendants"),
+            ]),
+            revision: z.int().gte(1).lte(9007199254740991),
+            rights: z
+              .array(
+                z.union([
+                  z.literal("traverse"),
+                  z.literal("list"),
+                  z.literal("read_data"),
+                  z.literal("create_child"),
+                  z.literal("write_data"),
+                  z.literal("append_data"),
+                  z.literal("rename"),
+                  z.literal("delete"),
+                  z.literal("read_attributes"),
+                  z.literal("write_attributes"),
+                  z.literal("read_permissions"),
+                  z.literal("change_permissions"),
+                  z.literal("change_owner"),
+                ]),
+              )
+              .min(1)
+              .max(13),
+            subject_principal_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            valid_from_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
+              .nullable(),
+            valid_until_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
+              .nullable(),
+            volume_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+          })
+          .strict(),
+      )
+      .max(256),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/volumes\//)
+      .nullable(),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * ListVolumesResponse
  *
  * One bounded current-user volume page.
@@ -2140,6 +2399,89 @@ export const zListVolumesResponse = z
           .strict(),
       )
       .max(256),
+  })
+  .strict();
+
+/**
+ * OperationStatusResponse
+ *
+ * Current durable state of one exact operation visible to the caller.
+ */
+export const zOperationStatusResponse = z
+  .strictObject({
+    cancellation_available: z.boolean(),
+    completed_at_epoch_micros: z.int().gte(0).lte(9007199254740991).nullable(),
+    failure: z
+      .strictObject({
+        code: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[a-z][a-z0-9_]*$/),
+        message: z.string().min(1).max(512),
+        retry: z.union([
+          z.literal("never"),
+          z.literal("automatic"),
+          z.literal("same_operation"),
+          z.literal("action_required"),
+        ]),
+      })
+      .strict()
+      .nullable(),
+    kind: z.union([
+      z.literal("metadata_mutation"),
+      z.literal("setup_join"),
+      z.literal("placement"),
+      z.literal("repair"),
+      z.literal("scrub"),
+      z.literal("drain"),
+      z.literal("reconciliation"),
+      z.literal("certificate"),
+      z.literal("backup"),
+      z.literal("update"),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    progress: z
+      .strictObject({
+        completed: z.int().gte(0).lte(9007199254740991),
+        total: z.int().gte(1).lte(9007199254740991),
+        unit: z.union([
+          z.literal("steps"),
+          z.literal("bytes"),
+          z.literal("items"),
+          z.literal("nodes"),
+          z.literal("targets"),
+        ]),
+      })
+      .strict()
+      .nullable(),
+    result_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\//)
+      .nullable(),
+    revision: z.int().gte(1).lte(9007199254740991),
+    started_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    state: z.union([
+      z.literal("queued"),
+      z.literal("running"),
+      z.literal("awaiting_action"),
+      z.literal("succeeded"),
+      z.literal("failed"),
+      z.literal("cancelled"),
+    ]),
+    status_url: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^\/api\/latest\/operations\//),
+    updated_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
   })
   .strict();
 
@@ -2351,6 +2693,51 @@ export const zRevokeCurrentSessionResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * RevokePermissionGrantRequest
+ *
+ * Idempotent administrator request to revoke one exact active grant.
+ */
+export const zRevokePermissionGrantRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    reason: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^\S(?:[\s\S]*\S)?$/),
+  })
+  .strict();
+
+/**
+ * RevokePermissionGrantResponse
+ *
+ * Durable result of revoking or exactly replaying one permission grant.
+ */
+export const zRevokePermissionGrantResponse = z
+  .strictObject({
+    grant_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revision: z.int().gte(1).lte(9007199254740991),
+    revoked_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
   })
   .strict();
 
@@ -3108,6 +3495,103 @@ export const zCreateVolumeHeaders = z
  */
 export const zCreateVolumeResponse2 = zCreateVolumeResponse;
 
+export const zListVolumePermissionGrantsPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+export const zListVolumePermissionGrantsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One current volume permission-grant page
+ */
+export const zListVolumePermissionGrantsResponse2 =
+  zListVolumePermissionGrantsResponse;
+
+/**
+ * Volume permission grant
+ */
+export const zCreateVolumePermissionGrantBody =
+  zCreateVolumePermissionGrantRequest;
+
+export const zCreateVolumePermissionGrantHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zCreateVolumePermissionGrantPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Grant durably created or exactly replayed
+ */
+export const zCreateVolumePermissionGrantResponse2 =
+  zCreateVolumePermissionGrantResponse;
+
+/**
+ * Audited permission revocation
+ */
+export const zRevokePermissionGrantBody = zRevokePermissionGrantRequest;
+
+export const zRevokePermissionGrantHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zRevokePermissionGrantPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    grant_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Grant durably revoked or exactly replayed
+ */
+export const zRevokePermissionGrantResponse2 = zRevokePermissionGrantResponse;
+
 /**
  * Process readiness
  */
@@ -3117,6 +3601,22 @@ export const zGetHealthResponse = zHealthResponse;
  * This exact OpenAPI 3.1 document
  */
 export const zGetOpenApiResponse = z.record(z.string(), z.unknown());
+
+export const zGetOperationStatusPath = z
+  .object({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Current durable operation state
+ */
+export const zGetOperationStatusResponse = zOperationStatusResponse;
 
 export const zCreateSessionBody = zCreateSessionRequestWritable;
 

@@ -24,8 +24,12 @@ mod node_enrolment_validation;
 mod object_stat;
 mod object_stat_validation;
 mod openapi;
+mod operation_status;
+mod operation_status_validation;
 mod passkey_registration;
 mod passkey_validation;
+mod permission_administration;
+mod permission_administration_validation;
 mod recovery_bundle_verification;
 mod recovery_bundle_verification_validation;
 mod recovery_code_management;
@@ -149,6 +153,11 @@ pub use object_stat_validation::{
     validate_get_object_response_value,
 };
 pub use openapi::{OPENAPI_PATH, OpenApiDocument, generate_openapi};
+pub use operation_status::{
+    OperationFailure, OperationKind, OperationProgress, OperationProgressUnit, OperationRetryClass,
+    OperationState, OperationStatusResponse,
+};
+pub use operation_status_validation::encode_operation_status_response;
 pub use passkey_registration::{
     AuthenticationMethodId, AuthenticationMethodLabel, CreatePasskeyRegistrationChallengeRequest,
     CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
@@ -167,6 +176,20 @@ pub use passkey_validation::{
     validate_create_passkey_registration_challenge_response_value,
     validate_create_passkey_registration_request_value,
     validate_create_passkey_registration_response_value,
+};
+pub use permission_administration::{
+    CreateVolumePermissionGrantRequest, CreateVolumePermissionGrantResponse,
+    ListVolumePermissionGrantsQuery, ListVolumePermissionGrantsResponse,
+    PermissionActivationPolicyId, PermissionActivationRequirement, PermissionGrantCursor,
+    PermissionGrantId, PermissionGrantInheritance, PermissionGrantInstant,
+    PermissionGrantRevocationReason, RevokePermissionGrantRequest, RevokePermissionGrantResponse,
+    VolumePermissionGrantSummary,
+};
+pub use permission_administration_validation::{
+    MAX_PERMISSION_GRANT_MUTATION_BYTES, decode_create_volume_permission_grant_request,
+    decode_revoke_permission_grant_request, encode_create_volume_permission_grant_response,
+    encode_list_volume_permission_grants_response, encode_revoke_permission_grant_response,
+    validate_list_volume_permission_grants_query,
 };
 pub use recovery_bundle_verification::{
     ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse,

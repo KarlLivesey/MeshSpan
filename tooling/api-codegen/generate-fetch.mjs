@@ -40,6 +40,16 @@ import {
   renderDirectoryClientRuntime,
   renderDirectoryRequestTypes,
 } from "./render-directory-client.mjs";
+import {
+  renderPermissionAdministrationClientInterface,
+  renderPermissionAdministrationClientMethods,
+  renderPermissionAdministrationRequestTypes,
+  renderPermissionAdministrationRuntime,
+} from "./render-permission-administration-client.mjs";
+import {
+  renderOperationStatusClientInterface,
+  renderOperationStatusClientMethods,
+} from "./render-operation-status-client.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -90,6 +100,10 @@ import type {
   CreateTotpRegistrationResponse,
   CreatePrincipalResponse,
   CreateUserRequest,
+  CreateVolumePermissionGrantRequest,
+  CreateVolumePermissionGrantResponse,
+  CreateVolumeRequest,
+  CreateVolumeResponse,
   CurrentSessionResponse,
   DeleteObjectRequest,
   DeleteObjectResponse,
@@ -100,11 +114,15 @@ import type {
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
+  ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
+  OperationStatusResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
   RevokeCurrentSessionResponse,
+  RevokePermissionGrantRequest,
+  RevokePermissionGrantResponse,
   RenameObjectRequest,
   RenameObjectResponse,
   RemoveGroupMemberRequest,
@@ -153,6 +171,11 @@ import {
   zCreateSessionResponse2,
   zCreateUserBody,
   zCreateUserResponse,
+  zCreateVolumePermissionGrantBody,
+  zCreateVolumePermissionGrantPath,
+  zCreateVolumePermissionGrantResponse2,
+  zCreateVolumeBody,
+  zCreateVolumeResponse2,
   zDeleteObjectBody,
   zDeleteObjectPath,
   zDeleteObjectResponse2,
@@ -161,6 +184,8 @@ import {
   zGetObjectPath,
   zGetObjectQuery,
   zGetObjectResponse2,
+  zGetOperationStatusPath,
+  zGetOperationStatusResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
   zGetUploadPath,
@@ -181,6 +206,9 @@ import {
   zListUploadRangesResponse2,
   zListUsersQuery,
   zListUsersResponse,
+  zListVolumePermissionGrantsPath,
+  zListVolumePermissionGrantsQuery,
+  zListVolumePermissionGrantsResponse2,
   zListVolumesQuery,
   zListVolumesResponse2,
   zReadFilePath,
@@ -190,6 +218,9 @@ import {
   zRevokeCurrentUserAuthenticationMethodResponse,
   zRevokeCurrentSessionBody,
   zRevokeCurrentSessionResponse2,
+  zRevokePermissionGrantBody,
+  zRevokePermissionGrantPath,
+  zRevokePermissionGrantResponse2,
   zRenameObjectBody,
   zRenameObjectPath,
   zRenameObjectResponse2,
@@ -269,6 +300,8 @@ export type ListVolumesRequest = Readonly<{
   limit?: number;
 }>;
 
+${renderPermissionAdministrationRequestTypes()}
+
 ${renderUploadRequestTypes()}
 
 export type CreateSessionResult = Readonly<{
@@ -282,6 +315,8 @@ export interface MeshSpanFetchClient {
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
   ${renderVolumeClientInterface()}
+  ${renderPermissionAdministrationClientInterface()}
+  ${renderOperationStatusClientInterface()}
   ${renderDirectoryClientInterface()}
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
@@ -338,6 +373,8 @@ export function createMeshSpanFetchClient(
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
     ${renderVolumeClientMethods(routes)}
+    ${renderPermissionAdministrationClientMethods(routes)}
+    ${renderOperationStatusClientMethods(routes)}
     ${renderDirectoryClientMethods(routes)}
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
@@ -475,6 +512,8 @@ ${renderIdentityAdministrationRuntime(routes)}
 ${renderAuthenticationClientRuntime(routes)}
 
 ${renderVolumeClientRuntime(routes)}
+
+${renderPermissionAdministrationRuntime()}
 
 `;
 

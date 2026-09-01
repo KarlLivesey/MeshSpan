@@ -61,11 +61,16 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
         wait_for_status(third.address, &third_client, "configured").await?;
         wait_for_live_provider(&third).await?;
         wait_for_three_voters([&root, &second, &third], &root.identity_path).await?;
+        let group_id = create_group(second.address, &second_client, api_key).await?;
+        wait_for_group_visibility(third.address, &third_client, api_key).await?;
 
         processes[0].kill()?;
         processes[0].wait()?;
-        wait_for_user_creation(second.address, &second_client, api_key).await?;
+        let user_id = wait_for_user_creation(second.address, &second_client, api_key).await?;
         wait_for_user_visibility(third.address, &third_client, api_key).await?;
+        add_group_member(third.address, &third_client, api_key, &group_id, &user_id).await?;
+        wait_for_group_membership(second.address, &second_client, api_key, &group_id, &user_id)
+            .await?;
         let volume_id =
             create_volume(second.address, &second_client, api_key, &administrator_id).await?;
         let content = b"survivor gateway exact native bytes";
@@ -172,11 +177,11 @@ async fn wait_for_user_creation(
     address: SocketAddr,
     client: &ClientConfig,
     api_key: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<String, Box<dyn Error>> {
     let deadline = Instant::now() + WAIT_LIMIT;
     loop {
         let error = match create_user(address, client, api_key).await {
-            Ok(()) => return Ok(()),
+            Ok(principal_id) => return Ok(principal_id),
             Err(error) => error,
         };
         if Instant::now() >= deadline {
@@ -202,6 +207,45 @@ async fn wait_for_user_visibility(
         }
         if Instant::now() >= deadline {
             return Err("committed survivor write never became visible on the other node".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_group_visibility(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if assert_group_visible(address, client, api_key).await.is_ok() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("committed follower-created group never became visible".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_group_membership(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    group_id: &str,
+    user_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if assert_group_membership(address, client, api_key, group_id, user_id)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("committed cross-gateway group membership never became visible".into());
         }
         sleep(RETRY_INTERVAL).await;
     }
@@ -1157,7 +1201,7 @@ async fn create_user(
     address: SocketAddr,
     client: &ClientConfig,
     api_key: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<String, Box<dyn Error>> {
     let body = serde_json::to_vec(&serde_json::json!({
         "operation_id": "00000000-0000-4000-8000-000000000003",
         "display_name": "Managed user"
@@ -1172,15 +1216,64 @@ async fn create_user(
         &[("Authorization", authorization.as_str())],
     )
     .await?;
-    if response.starts_with("HTTP/1.1 201 Created\r\n") {
-        Ok(())
-    } else {
-        Err(format!(
-            "headless process user creation returned {}",
-            response.lines().next().unwrap_or("an invalid response")
-        )
-        .into())
-    }
+    require_status(&response, "201 Created", "create managed user")?;
+    principal_id(&response)
+}
+
+async fn create_group(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<String, Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000030",
+        "display_name": "Managed group"
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/admin/groups",
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "201 Created", "create managed group")?;
+    principal_id(&response)
+}
+
+fn principal_id(response: &str) -> Result<String, Box<dyn Error>> {
+    let body: serde_json::Value = serde_json::from_str(response_body(response)?)?;
+    body["principal"]["principal_id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "principal creation response omitted its identity".into())
+}
+
+async fn add_group_member(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    group_id: &str,
+    user_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000031",
+        "member_principal_id": user_id,
+        "activation_required": false
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        &format!("/api/latest/admin/groups/{group_id}/members"),
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "201 Created", "add managed group member")
 }
 
 fn bootstrap_administrator_id(
@@ -1239,6 +1332,54 @@ async fn assert_user_visible(
         Ok(())
     } else {
         Err("restarted process did not return the committed user".into())
+    }
+}
+
+async fn assert_group_visible(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/admin/groups?limit=100",
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "200 OK", "list managed groups")?;
+    if response_body(&response)?.contains("Managed group") {
+        Ok(())
+    } else {
+        Err("group inventory omitted the committed group".into())
+    }
+}
+
+async fn assert_group_membership(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    group_id: &str,
+    user_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        &format!("/api/latest/admin/groups/{group_id}/members?limit=100"),
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "200 OK", "list managed group members")?;
+    if response_body(&response)?.contains(user_id) {
+        Ok(())
+    } else {
+        Err("group-membership inventory omitted the committed user".into())
     }
 }
 

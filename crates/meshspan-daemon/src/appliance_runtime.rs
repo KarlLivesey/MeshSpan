@@ -46,7 +46,7 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
-use crate::headless_node_join::{activate_and_install_headless_node, admit_headless_node};
+use crate::headless_node_join::{activate_and_install_node, admit_headless_node};
 use crate::private_consensus_runtime::{
     NetworkRegisteringEnrolment, PrivateConsensusRuntime, certificate_name,
 };
@@ -66,10 +66,11 @@ use crate::{
     NativeUploadServicePolicy, NodeActivationError, NodeActivationRequest, NodeActivationService,
     NodeEnrolmentApiError, NodeEnrolmentService, NodeJoinGrantIssuanceApiError,
     NodeJoinGrantIssuanceService, NodeWrappingKeyRegistrationService, ObjectStatApiError,
-    ObjectStatService, OperatingSystemRandom, PasskeyChallengeApiError,
-    PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError, PasskeyChallengeService,
-    PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
+    ObjectStatService, OperatingSystemRandom, OperationStatusApiError, OperationStatusService,
+    PasskeyChallengeApiError, PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
+    PasskeyChallengeService, PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
     PasskeyRegistrationConfigurationError, PasskeyRegistrationService, PasskeySessionService,
+    PermissionAdministrationApiError, PermissionAdministrationService,
     ProtectedApiKeyIssuanceController, ProtectedRecoveryCodeIssuanceController,
     ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector, PublicContractApiError,
     ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
@@ -84,7 +85,8 @@ use crate::{
     classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
     file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
-    object_stat_api_router, passkey_challenge_api_router, passkey_registration_api_router,
+    object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
+    passkey_registration_api_router, permission_administration_api_router,
     public_contract_api_router, recovery_bundle_verification_api_router,
     recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
     setup_api_router_with_creation, step_up_current_session_api_router,
@@ -280,9 +282,9 @@ where
                 .await
                 .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?
         {
-            let joined = activate_and_install_headless_node(
+            let joined = activate_and_install_node(
                 &mut local_state,
-                &config,
+                config.private_listen(),
                 &admission,
                 data_streams.clone(),
                 current_time()?,
@@ -372,18 +374,33 @@ where
     let gateway = GatewaySessionIdentity::new(local_state.node_id(), 1)?;
     let enrolment = NetworkRegisteringEnrolment::new(
         NodeEnrolmentService::new(
-            open_authentication_authority(&local_state, &authority, started_at)?,
-            open_authentication_authority(&local_state, &authority, started_at)?,
+            open_authentication_authority(
+                &local_state,
+                &authority,
+                Arc::clone(&private_network),
+                started_at,
+            )?,
+            open_authentication_authority(
+                &local_state,
+                &authority,
+                Arc::clone(&private_network),
+                started_at,
+            )?,
             local_state.open_wrapping_key()?,
             CurrentNodeBootstrapPeerSource::new(
-                open_authentication_authority(&local_state, &authority, started_at)?,
+                open_authentication_authority(
+                    &local_state,
+                    &authority,
+                    Arc::clone(&private_network),
+                    started_at,
+                )?,
                 local_state.node_id(),
                 open_root_repository(&local_state, started_at)?.partition_id(),
                 1,
                 private_endpoint,
             ),
         ),
-        private_network,
+        Arc::clone(&private_network),
     );
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
@@ -395,6 +412,7 @@ where
             gateway,
             started_at,
             config.https_listen(),
+            private_network,
         )?)
         .merge(native_file_routes(
             &local_state,
@@ -531,6 +549,7 @@ fn authentication_session_routes(
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
     https_listen: SocketAddr,
+    private_network: Arc<PrivateConsensusRuntime>,
 ) -> Result<Router, DaemonProcessError> {
     let passkey_origin = passkey_origin(https_listen);
     Ok(Router::new()
@@ -540,6 +559,7 @@ fn authentication_session_routes(
             gateway,
             now,
             &passkey_origin,
+            &private_network,
         )?)
         .merge(authentication_method_routes(
             local_state,
@@ -547,12 +567,14 @@ fn authentication_session_routes(
             gateway,
             now,
             passkey_origin,
+            &private_network,
         )?)
         .merge(authenticated_administration_routes(
             local_state,
             authority,
             gateway,
             now,
+            &private_network,
         )?))
 }
 
@@ -562,16 +584,27 @@ fn session_lifecycle_routes(
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
     passkey_origin: &str,
+    private_network: &Arc<PrivateConsensusRuntime>,
 ) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
         .merge(session_api_router(CreateSessionService::with_factors(
-            open_authentication_authority(local_state, authority, now)?,
+            open_authentication_authority(
+                local_state,
+                authority,
+                Arc::clone(private_network),
+                now,
+            )?,
             PasskeySessionService::new(
                 local_state.open_local_database(now)?,
                 local_state.open_passkey_ceremony_key()?,
             ),
             ProtectedTotpFactorVerifier::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 local_state.open_wrapping_key()?,
             ),
         ))?)
@@ -587,22 +620,42 @@ fn session_lifecycle_routes(
         ))?)
         .merge(current_session_api_router(
             BrowserSessionAuthenticator::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
             ),
         )?)
         .merge(revoke_current_session_api_router(
             RevokeCurrentSessionService::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
             ),
         )?)
         .merge(step_up_current_session_api_router(
             StepUpCurrentSessionService::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
                 ProtectedTotpFactorVerifier::new(
-                    open_authentication_authority(local_state, authority, now)?,
+                    open_authentication_authority(
+                        local_state,
+                        authority,
+                        Arc::clone(private_network),
+                        now,
+                    )?,
                     local_state.open_wrapping_key()?,
                 ),
             ),
@@ -615,36 +668,67 @@ fn authentication_method_routes(
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
     passkey_origin: String,
+    private_network: &Arc<PrivateConsensusRuntime>,
 ) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
         .merge(api_key_issuance_api_router(
             ProtectedApiKeyIssuanceController::new(
-                open_authentication_authority(local_state, authority, now)?,
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 local_state.open_wrapping_key()?,
                 gateway,
             ),
         )?)
         .merge(authentication_method_listing_api_router(
             AuthenticationMethodListingService::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
             ),
         )?)
         .merge(authentication_method_revocation_api_router(
             AuthenticationMethodRevocationService::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
             ),
         )?)
         .merge(totp_registration_api_router(
             TotpRegistrationService::with_secret_protector(
                 local_state.open_local_database(now)?,
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 OperatingSystemRandom,
                 local_state.open_totp_ceremony_key()?,
                 ProtectedTotpRegistrationSecretProtector::new(
-                    open_authentication_authority(local_state, authority, now)?,
+                    open_authentication_authority(
+                        local_state,
+                        authority,
+                        Arc::clone(private_network),
+                        now,
+                    )?,
                     local_state.open_wrapping_key()?,
                 ),
                 TotpRegistrationConfiguration::new(
@@ -657,7 +741,12 @@ fn authentication_method_routes(
         .merge(passkey_registration_api_router(
             PasskeyRegistrationService::new(
                 local_state.open_local_database(now)?,
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 OperatingSystemRandom,
                 local_state.open_passkey_ceremony_key()?,
                 PasskeyRegistrationConfiguration::new(
@@ -671,8 +760,18 @@ fn authentication_method_routes(
         )?)
         .merge(recovery_code_issuance_api_router(
             ProtectedRecoveryCodeIssuanceController::new(
-                open_authentication_authority(local_state, authority, now)?,
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 local_state.open_wrapping_key()?,
                 gateway,
             ),
@@ -684,18 +783,34 @@ fn authenticated_administration_routes(
     authority: &MetadataAuthorityHandle,
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
+    private_network: &Arc<PrivateConsensusRuntime>,
 ) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
         .merge(identity_administration_api_router(
             IdentityAdministrationService::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
             ),
         )?)
         .merge(node_join_grant_api_router(
             NodeJoinGrantIssuanceService::new(
-                open_authentication_authority(local_state, authority, now)?,
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 local_state.open_wrapping_key()?,
                 gateway,
                 local_state.https_certificate_fingerprint(),
@@ -703,14 +818,44 @@ fn authenticated_administration_routes(
         )?)
         .merge(volume_administration_api_router(
             VolumeAdministrationService::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
                 OperatingSystemRandom,
             ),
         )?)
+        .merge(permission_administration_api_router(
+            PermissionAdministrationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+            ),
+        )?)
+        .merge(operation_status_api_router(OperationStatusService::new(
+            open_authentication_authority(
+                local_state,
+                authority,
+                Arc::clone(private_network),
+                now,
+            )?,
+            gateway,
+        ))?)
         .merge(recovery_bundle_verification_api_router(
             RecoveryBundleVerificationService::new(
-                open_authentication_authority(local_state, authority, now)?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
                 local_state.pending_recovery_bundle_path(),
             ),
@@ -720,12 +865,14 @@ fn authenticated_administration_routes(
 fn open_authentication_authority(
     local_state: &DaemonLocalState,
     authority: &MetadataAuthorityHandle,
+    private_network: Arc<PrivateConsensusRuntime>,
     now: UnixMicros,
 ) -> Result<ConsensusAuthenticationAuthority, DaemonProcessError> {
-    Ok(ConsensusAuthenticationAuthority::new(
+    Ok(ConsensusAuthenticationAuthority::new_routable(
         open_root_repository(local_state, now)?,
         authority.clone(),
         tokio::runtime::Handle::current(),
+        private_network,
     ))
 }
 
@@ -1656,6 +1803,12 @@ pub enum DaemonProcessError {
     /// Manager-only volume-administration API construction failed.
     #[error("daemon volume-administration API failed")]
     VolumeAdministrationApi(#[from] VolumeAdministrationApiError),
+    /// Manager-only permission-administration API construction failed.
+    #[error("daemon permission-administration API failed")]
+    PermissionAdministrationApi(#[from] PermissionAdministrationApiError),
+    /// Authenticated durable-operation status API construction failed.
+    #[error("daemon operation-status API failed")]
+    OperationStatusApi(#[from] OperationStatusApiError),
     /// Manager-only recovery-bundle verification API construction failed.
     #[error("daemon recovery-bundle verification API failed")]
     RecoveryBundleVerificationApi(#[from] RecoveryBundleVerificationApiError),

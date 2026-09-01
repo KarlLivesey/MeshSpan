@@ -50,6 +50,8 @@ mod consensus_bootstrap_authority;
 mod consensus_filesystem_authority;
 mod consensus_identity_administration;
 mod consensus_node_enrolment;
+mod consensus_operation_status;
+mod consensus_permission_administration;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;
@@ -111,6 +113,8 @@ mod object_stat_api;
 #[cfg(test)]
 mod object_stat_api_tests;
 mod online_authority_loading;
+mod operation_status;
+mod operation_status_api;
 mod passkey_challenge;
 mod passkey_challenge_api;
 #[cfg(test)]
@@ -141,6 +145,7 @@ mod passkey_test_support;
 mod pending_recovery_bundle;
 #[cfg(test)]
 mod pending_recovery_bundle_tests;
+mod permission_administration;
 mod pinned_https_client;
 mod private_consensus_runtime;
 mod protected_api_key_issuance;
@@ -341,6 +346,11 @@ pub use object_stat_api::{
 pub use online_authority_loading::{
     OnlineAuthorityLoadingAuthority, OnlineAuthorityLoadingError, OnlineAuthorityLoadingService,
 };
+pub use operation_status::{
+    OperationStatusAuthority, OperationStatusAuthorityError, OperationStatusController,
+    OperationStatusError, OperationStatusService, OperationStatusViewer,
+};
+pub use operation_status_api::{OperationStatusApiError, operation_status_api_router};
 pub use passkey_challenge::{
     PasskeyCeremonyStore, PasskeyCeremonyStoreError, PasskeyChallengeError, PasskeyChallengeService,
 };
@@ -372,6 +382,12 @@ pub use passkey_session_contract::{
 };
 pub use pending_recovery_bundle::{
     PendingRecoveryBundle, PendingRecoveryBundleError, PendingRecoveryBundleRemoval,
+};
+pub use permission_administration::{
+    PermissionAdministrationApiError, PermissionAdministrationAuthority,
+    PermissionAdministrationAuthorityError, PermissionAdministrationController,
+    PermissionAdministrationError, PermissionAdministrationService,
+    permission_administration_api_router,
 };
 pub use protected_api_key_issuance::ProtectedApiKeyIssuanceController;
 pub use protected_recovery_code_issuance::ProtectedRecoveryCodeIssuanceController;

@@ -34,6 +34,10 @@ import type {
   CreateTotpRegistrationResponse,
   CreatePrincipalResponse,
   CreateUserRequest,
+  CreateVolumePermissionGrantRequest,
+  CreateVolumePermissionGrantResponse,
+  CreateVolumeRequest,
+  CreateVolumeResponse,
   CurrentSessionResponse,
   DeleteObjectRequest,
   DeleteObjectResponse,
@@ -44,11 +48,15 @@ import type {
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
+  ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
+  OperationStatusResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
   RevokeCurrentSessionResponse,
+  RevokePermissionGrantRequest,
+  RevokePermissionGrantResponse,
   RenameObjectRequest,
   RenameObjectResponse,
   RemoveGroupMemberRequest,
@@ -97,6 +105,11 @@ import {
   zCreateSessionResponse2,
   zCreateUserBody,
   zCreateUserResponse,
+  zCreateVolumePermissionGrantBody,
+  zCreateVolumePermissionGrantPath,
+  zCreateVolumePermissionGrantResponse2,
+  zCreateVolumeBody,
+  zCreateVolumeResponse2,
   zDeleteObjectBody,
   zDeleteObjectPath,
   zDeleteObjectResponse2,
@@ -105,6 +118,8 @@ import {
   zGetObjectPath,
   zGetObjectQuery,
   zGetObjectResponse2,
+  zGetOperationStatusPath,
+  zGetOperationStatusResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
   zGetUploadPath,
@@ -125,6 +140,9 @@ import {
   zListUploadRangesResponse2,
   zListUsersQuery,
   zListUsersResponse,
+  zListVolumePermissionGrantsPath,
+  zListVolumePermissionGrantsQuery,
+  zListVolumePermissionGrantsResponse2,
   zListVolumesQuery,
   zListVolumesResponse2,
   zReadFilePath,
@@ -134,6 +152,9 @@ import {
   zRevokeCurrentUserAuthenticationMethodResponse,
   zRevokeCurrentSessionBody,
   zRevokeCurrentSessionResponse2,
+  zRevokePermissionGrantBody,
+  zRevokePermissionGrantPath,
+  zRevokePermissionGrantResponse2,
   zRenameObjectBody,
   zRenameObjectPath,
   zRenameObjectResponse2,
@@ -215,6 +236,12 @@ export type ListAuthenticationMethodsRequest = Readonly<{
 }>;
 
 export type ListVolumesRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type ListVolumePermissionGrantsRequest = Readonly<{
+  volumeId: string;
   cursor?: string;
   limit?: number;
 }>;
@@ -348,8 +375,30 @@ export interface MeshSpanFetchClient {
     request: WriteUploadRangeRequest,
     csrfToken?: string,
   ): Promise<WriteUploadRangeResponse>;
+  createVolume(
+    request: CreateVolumeRequest,
+    csrfToken?: string,
+  ): Promise<CreateVolumeResponse>;
   listVolumes(request?: ListVolumesRequest): Promise<ListVolumesResponse>;
   listNextVolumes(nextPageUrl: string): Promise<ListVolumesResponse>;
+  createVolumePermissionGrant(
+    volumeId: string,
+    request: CreateVolumePermissionGrantRequest,
+    csrfToken?: string,
+  ): Promise<CreateVolumePermissionGrantResponse>;
+  listVolumePermissionGrants(
+    request: ListVolumePermissionGrantsRequest,
+  ): Promise<ListVolumePermissionGrantsResponse>;
+  listNextVolumePermissionGrants(
+    nextPageUrl: string,
+  ): Promise<ListVolumePermissionGrantsResponse>;
+  revokePermissionGrant(
+    volumeId: string,
+    grantId: string,
+    request: RevokePermissionGrantRequest,
+    csrfToken?: string,
+  ): Promise<RevokePermissionGrantResponse>;
+  getOperationStatus(operationId: string): Promise<OperationStatusResponse>;
   listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   listNextDirectory(nextPageUrl: string): Promise<ListDirectoryResponse>;
   createMeshSetup(
@@ -936,6 +985,19 @@ export function createMeshSpanFetchClient(
         zWriteUploadRangeResponse2,
       );
     },
+    async createVolume(request, csrfToken): Promise<CreateVolumeResponse> {
+      const body = zCreateVolumeBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/volumes",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateVolumeResponse2,
+      );
+    },
     async listVolumes(request = {}): Promise<ListVolumesResponse> {
       const query = zListVolumesQuery.parse(request);
       return validateVolumePage(
@@ -955,6 +1017,107 @@ export function createMeshSpanFetchClient(
           { method: "GET" },
           zListVolumesResponse2,
         ),
+      );
+    },
+    async createVolumePermissionGrant(
+      volumeId,
+      request,
+      csrfToken,
+    ): Promise<CreateVolumePermissionGrantResponse> {
+      const path = zCreateVolumePermissionGrantPath.parse({
+        volume_id: volumeId,
+      });
+      const body = zCreateVolumePermissionGrantBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/admin/volumes/{volume_id}/permission-grants",
+          "volume_id",
+          path.volume_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateVolumePermissionGrantResponse2,
+      );
+    },
+    async listVolumePermissionGrants(
+      request,
+    ): Promise<ListVolumePermissionGrantsResponse> {
+      const path = zListVolumePermissionGrantsPath.parse({
+        volume_id: request.volumeId,
+      });
+      const query = zListVolumePermissionGrantsQuery.parse({
+        cursor: request.cursor,
+        limit: request.limit,
+      });
+      return requestJson(
+        context,
+        appendQuery(
+          substitutePathParameter(
+            "/admin/volumes/{volume_id}/permission-grants",
+            "volume_id",
+            path.volume_id,
+          ),
+          query,
+        ),
+        { method: "GET" },
+        zListVolumePermissionGrantsResponse2,
+      );
+    },
+    async listNextVolumePermissionGrants(
+      nextPageUrl,
+    ): Promise<ListVolumePermissionGrantsResponse> {
+      return requestJson(
+        context,
+        validatePermissionGrantPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListVolumePermissionGrantsResponse2,
+      );
+    },
+    async revokePermissionGrant(
+      volumeId,
+      grantId,
+      request,
+      csrfToken,
+    ): Promise<RevokePermissionGrantResponse> {
+      const path = zRevokePermissionGrantPath.parse({
+        grant_id: grantId,
+        volume_id: volumeId,
+      });
+      const body = zRevokePermissionGrantBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          substitutePathParameter(
+            "/admin/volumes/{volume_id}/permission-grants/{grant_id}/revocations",
+            "volume_id",
+            path.volume_id,
+          ),
+          "grant_id",
+          path.grant_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zRevokePermissionGrantResponse2,
+      );
+    },
+    async getOperationStatus(operationId): Promise<OperationStatusResponse> {
+      const path = zGetOperationStatusPath.parse({ operation_id: operationId });
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/operations/{operation_id}",
+          "operation_id",
+          path.operation_id,
+        ),
+        { method: "GET" },
+        zGetOperationStatusResponse,
       );
     },
     async listDirectory(request): Promise<ListDirectoryResponse> {
@@ -1512,4 +1675,40 @@ function validateVolumePageQuery(route: URL): void {
     cursor: route.searchParams.get("cursor") ?? undefined,
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
   });
+}
+
+function validatePermissionGrantPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("permission-grant page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  const prefix = "/api/latest/admin/volumes/";
+  const suffix = "/permission-grants";
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    !route.pathname.startsWith(prefix) ||
+    !route.pathname.endsWith(suffix)
+  ) {
+    throw new TypeError(
+      "permission-grant page URL is outside the administration API",
+    );
+  }
+  const volumeId = route.pathname.slice(prefix.length, -suffix.length);
+  zListVolumePermissionGrantsPath.parse({ volume_id: volumeId });
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("permission-grant page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListVolumePermissionGrantsQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+  return route.pathname + route.search;
 }
