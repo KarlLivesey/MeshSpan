@@ -221,6 +221,62 @@ impl DurableContentCatalog {
         persist_imported_manifest(&self.connection, request, header)?;
         Ok(header.manifest)
     }
+
+    /// Commits a sealed imported layout after every chunk has an authenticated remote route.
+    ///
+    /// Remote routes deliberately do not masquerade as receiver-local durability receipts. This
+    /// separate transition makes the imported manifest readable without reporting its shards as
+    /// locally stored.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsealed or non-imported layouts, missing remote routes and conflicting state.
+    pub fn finish_remote_layout_import(
+        &mut self,
+        request: ContentPublicationRequest,
+        committed_at: meshspan_domain::UnixMicros,
+    ) -> Result<ManifestPublication, ContentCatalogError> {
+        validate_live_request(request)?;
+        validate_exact_request(&self.connection, request)?;
+        load_import_header(&self.connection, request.operation_id)?
+            .ok_or(ContentCatalogError::Conflict)?;
+        let manifest = load_prepared_manifest(&self.connection, request)?
+            .ok_or(ContentCatalogError::Incomplete)?;
+        let missing: u64 = self.connection.query_row(
+            "SELECT COUNT(*)
+             FROM content_chunks AS chunks
+             LEFT JOIN content_remote_shard_routes AS routes
+               ON routes.operation_id = chunks.operation_id
+              AND routes.chunk_index = chunks.chunk_index
+             WHERE chunks.operation_id = ?1 AND routes.chunk_index IS NULL",
+            [request.operation_id.as_bytes().as_slice()],
+            |row| from_sql(row.get(0)?),
+        )?;
+        if missing != 0 {
+            return Err(ContentCatalogError::Incomplete);
+        }
+        let state: u8 = self.connection.query_row(
+            "SELECT state FROM content_publications WHERE operation_id = ?1",
+            [request.operation_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        if state == 2 {
+            return Ok(manifest);
+        }
+        let updated = self.connection.execute(
+            "UPDATE content_publications SET state = 2, committed_at = ?1
+             WHERE operation_id = ?2 AND state = 1",
+            params![
+                committed_at.get(),
+                request.operation_id.as_bytes().as_slice()
+            ],
+        )?;
+        if updated == 1 {
+            Ok(manifest)
+        } else {
+            Err(ContentCatalogError::Conflict)
+        }
+    }
 }
 
 fn validate_import_request(

@@ -367,7 +367,12 @@ async fn receive_content_layout(
     open_catalog(state_directory, now)?
         .seal_layout_import(contract, header)
         .map_err(|_| NativeGatewaySyncError::Invalid)?;
-    import_remote_routes(network, state_directory, source, contract, route).await
+    import_remote_routes(network, state_directory, source, contract, route).await?;
+    let now = current_time()?;
+    open_catalog(state_directory, now)?
+        .finish_remote_layout_import(contract, now)
+        .map_err(|_| NativeGatewaySyncError::Invalid)?;
+    Ok(())
 }
 
 async fn import_layout_pages(

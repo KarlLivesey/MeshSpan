@@ -57,7 +57,6 @@ type StoredBaseContent = (
     i64,
     Vec<u8>,
     Vec<u8>,
-    Vec<u8>,
 );
 
 struct ProgressAdvance {
@@ -160,7 +159,7 @@ pub(crate) fn base_content(
     let content: StoredBaseContent = connection.query_row(
         "SELECT v.publication_operation_id, m.manifest_id, m.format_version,
                 m.logical_length, m.content_digest, m.root_digest,
-                v.logical_length, v.content_digest, v.branch_id, v.volume_id
+                v.logical_length, v.content_digest, v.volume_id
          FROM file_versions v
          JOIN content_manifests m USING(manifest_id)
          WHERE v.version_id = ?1 AND v.object_id = ?2",
@@ -176,15 +175,10 @@ pub(crate) fn base_content(
                 row.get(6)?,
                 row.get(7)?,
                 row.get(8)?,
-                row.get(9)?,
             ))
         },
     )?;
-    if content.3 != content.6
-        || content.4 != content.7
-        || content.8 != stored.2
-        || content.9 != stored.3
-    {
+    if content.3 != content.6 || content.4 != content.7 || content.8 != stored.3 {
         return Err(HandleError::Corrupt);
     }
     let format_version = u16::try_from(content.2).map_err(|_| HandleError::Corrupt)?;

@@ -1011,10 +1011,12 @@ fn validate_open_lineage(
 ) -> Result<(), HandleError> {
     let valid: i64 = connection.query_row(
         "SELECT EXISTS(
-            SELECT 1 FROM namespace_commits c
+            SELECT 1 FROM branch_namespace_heads h
+            JOIN namespace_commits c USING(namespace_commit_id)
             JOIN object_revisions r ON r.object_revision_id = ?4
             JOIN file_versions v ON v.version_id = ?5
-            WHERE c.namespace_commit_id = ?1 AND c.branch_id = ?2 AND c.volume_id = ?3
+            WHERE h.namespace_commit_id = ?1 AND h.branch_id = ?2 AND h.volume_id = ?3
+              AND c.volume_id = ?3
               AND r.volume_id = ?3 AND r.object_id = ?6 AND r.object_kind = 2
               AND r.file_version_id = ?5 AND v.volume_id = ?3 AND v.object_id = ?6
          )",
