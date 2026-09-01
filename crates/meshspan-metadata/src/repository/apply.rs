@@ -38,6 +38,7 @@ struct StoredOperation {
     committed_index: i64,
 }
 
+#[derive(Clone, Copy)]
 struct TransactionCommand<'a> {
     position: LogPosition,
     context: CommandContext,

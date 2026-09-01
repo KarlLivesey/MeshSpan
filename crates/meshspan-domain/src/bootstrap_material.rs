@@ -59,6 +59,39 @@ impl InitialBootstrapMaterial {
         NodeId::from_bytes(uuid_identifier(digest.finalize().into())).map_err(Into::into)
     }
 
+    /// Derives the first root-partition identity from the stable first node.
+    ///
+    /// This identity must exist before a create-mesh request arrives and remain discoverable after
+    /// the one-time claim has been consumed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the cryptographically negligible nil derivation.
+    pub fn root_partition_id(
+        node_id: NodeId,
+    ) -> Result<PartitionId, InitialBootstrapMaterialError> {
+        PartitionId::from_bytes(node_bound_identifier(
+            b"meshspan.setup.partition-id.v2",
+            node_id,
+        ))
+        .map_err(Into::into)
+    }
+
+    /// Derives the first single-voter plan identity from the stable first node.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the cryptographically negligible nil derivation.
+    pub fn initial_quorum_plan_id(
+        node_id: NodeId,
+    ) -> Result<QuorumPlanId, InitialBootstrapMaterialError> {
+        QuorumPlanId::from_bytes(node_bound_identifier(
+            b"meshspan.setup.quorum-plan-id.v2",
+            node_id,
+        ))
+        .map_err(Into::into)
+    }
+
     /// Derives the same independent values for every exact retry of one claimed operation.
     ///
     /// # Errors
@@ -91,16 +124,8 @@ impl InitialBootstrapMaterial {
                 operation_id,
             ))?,
             node_id,
-            partition_id: PartitionId::from_bytes(identifier(
-                b"meshspan.setup.partition-id.v1",
-                claim,
-                operation_id,
-            ))?,
-            quorum_plan_id: QuorumPlanId::from_bytes(identifier(
-                b"meshspan.setup.quorum-plan-id.v1",
-                claim,
-                operation_id,
-            ))?,
+            partition_id: Self::root_partition_id(node_id)?,
+            quorum_plan_id: Self::initial_quorum_plan_id(node_id)?,
             authentication_method_id: AuthenticationMethodId::from_bytes(identifier(
                 b"meshspan.setup.authentication-method-id.v1",
                 claim,
@@ -144,6 +169,13 @@ fn identifier(domain: &[u8], claim: &ClaimBundle, operation_id: OperationId) -> 
     uuid_identifier(digest)
 }
 
+fn node_bound_identifier(domain: &[u8], node_id: NodeId) -> [u8; 16] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(node_id.as_bytes());
+    uuid_identifier(digest.finalize().into())
+}
+
 fn uuid_identifier(digest: [u8; 32]) -> [u8; 16] {
     let mut identifier = [0_u8; 16];
     identifier.copy_from_slice(&digest[..16]);
@@ -170,6 +202,8 @@ mod tests {
         let another_operation =
             InitialBootstrapMaterial::derive(&claim, OperationId::from_bytes([100; 16])?, node_id)?;
         assert_eq!(first.node_id, another_operation.node_id);
+        assert_eq!(first.partition_id, another_operation.partition_id);
+        assert_eq!(first.quorum_plan_id, another_operation.quorum_plan_id);
         assert_ne!(first.mesh_id, another_operation.mesh_id);
         assert_ne!(InitialBootstrapMaterial::node_id([78; 32])?, node_id);
         assert!(InitialBootstrapMaterial::node_id([0; 32]).is_err());
