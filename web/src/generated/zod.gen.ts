@@ -764,6 +764,73 @@ export const zCreateMeshSetupResponse = z
   .strict();
 
 /**
+ * CreateNodeJoinGrantRequest
+ *
+ * Administrator request for one bounded node join invitation.
+ */
+export const zCreateNodeJoinGrantRequest = z
+  .strictObject({
+    allowed_roles: z
+      .array(
+        z.union([
+          z.literal("storage"),
+          z.literal("gateway"),
+          z.literal("metadata_eligible"),
+        ]),
+      )
+      .min(1)
+      .max(3),
+    enrolment_endpoint: z
+      .string()
+      .min(12)
+      .max(512)
+      .regex(/^https:\/\/[a-z0-9.\-\[\]:]+$/),
+    maximum_uses: z.int().gte(1).lte(1000),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    valid_for_seconds: z.int().gte(60).lte(604800),
+  })
+  .strict();
+
+/**
+ * CreateNodeJoinGrantResponse
+ *
+ * One exactly replayable join-grant issuance result.
+ */
+export const zCreateNodeJoinGrantResponse = z
+  .strictObject({
+    allowed_roles: z
+      .array(
+        z.union([
+          z.literal("storage"),
+          z.literal("gateway"),
+          z.literal("metadata_eligible"),
+        ]),
+      )
+      .min(1)
+      .max(3),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    join_code: z
+      .string()
+      .min(250)
+      .max(1250)
+      .regex(/^meshspan-join-v2\.[0-9a-f]+(?:\.[0-9a-f]+){4}$/)
+      .readonly(),
+    maximum_uses: z.int().gte(1).lte(1000),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreatePasskeyChallengeRequest
  *
  * Input for creating one short-lived passkey authentication challenge.
@@ -1471,6 +1538,142 @@ export const zDeleteObjectResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * EnrolNodeRequest
+ *
+ * One node-owned identity presentation for pre-authorised enrolment.
+ */
+export const zEnrolNodeRequest = z
+  .strictObject({
+    host: z.union([
+      z
+        .strictObject({
+          kind: z.literal("new"),
+          name: z
+            .string()
+            .min(1)
+            .max(128)
+            .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+        })
+        .strict(),
+      z
+        .strictObject({
+          host_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          kind: z.literal("existing"),
+        })
+        .strict(),
+    ]),
+    identity_proof_signature_hex: z
+      .string()
+      .min(128)
+      .max(144)
+      .regex(/^[0-9a-f]+$/),
+    node_identity_public_key_hex: z
+      .string()
+      .length(130)
+      .regex(/^04[0-9a-f]{128}$/),
+    node_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    private_endpoint: z
+      .string()
+      .min(3)
+      .max(512)
+      .regex(/^[a-z0-9.\-\[\]:]+$/),
+    requested_roles: z
+      .array(
+        z.union([
+          z.literal("storage"),
+          z.literal("gateway"),
+          z.literal("metadata_eligible"),
+        ]),
+      )
+      .min(1)
+      .max(3),
+    wrapping_public_key_hex: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+/**
+ * EnrolNodeResponse
+ *
+ * Exact replayable result of consuming one join-grant use.
+ */
+export const zEnrolNodeResponse = z
+  .strictObject({
+    bootstrap_peers: z
+      .array(
+        z
+          .strictObject({
+            certificate_der_hex: z
+              .string()
+              .min(2)
+              .max(131072)
+              .regex(/^[0-9a-f]+$/),
+            node_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            private_endpoint: z.string().min(3).max(512),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(1024),
+    mesh_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    node_certificate_der_hex: z
+      .string()
+      .min(2)
+      .max(131072)
+      .regex(/^[0-9a-f]+$/),
+    node_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    online_authority_certificate_der_hex: z
+      .string()
+      .min(2)
+      .max(16384)
+      .regex(/^[0-9a-f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    root_certificate_der_hex: z
+      .string()
+      .min(2)
+      .max(16384)
+      .regex(/^[0-9a-f]+$/),
   })
   .strict();
 
@@ -2390,6 +2593,34 @@ export const zCreateMeshSetupRequestWritable = z
   .strict();
 
 /**
+ * CreateNodeJoinGrantResponse
+ *
+ * One exactly replayable join-grant issuance result.
+ */
+export const zCreateNodeJoinGrantResponseWritable = z
+  .strictObject({
+    allowed_roles: z
+      .array(
+        z.union([
+          z.literal("storage"),
+          z.literal("gateway"),
+          z.literal("metadata_eligible"),
+        ]),
+      )
+      .min(1)
+      .max(3),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    maximum_uses: z.int().gte(1).lte(1000),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CreatePasskeyRegistrationRequest
  *
  * One exact registration response bound to a gateway-issued challenge.
@@ -2583,6 +2814,83 @@ export const zCreateTotpRegistrationRequestWritable = z
   .strict();
 
 /**
+ * EnrolNodeRequest
+ *
+ * One node-owned identity presentation for pre-authorised enrolment.
+ */
+export const zEnrolNodeRequestWritable = z
+  .strictObject({
+    host: z.union([
+      z
+        .strictObject({
+          kind: z.literal("new"),
+          name: z
+            .string()
+            .min(1)
+            .max(128)
+            .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+        })
+        .strict(),
+      z
+        .strictObject({
+          host_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          kind: z.literal("existing"),
+        })
+        .strict(),
+    ]),
+    identity_proof_signature_hex: z
+      .string()
+      .min(128)
+      .max(144)
+      .regex(/^[0-9a-f]+$/),
+    join_code: z
+      .string()
+      .min(250)
+      .max(1250)
+      .regex(/^meshspan-join-v2\.[0-9a-f]+(?:\.[0-9a-f]+){4}$/),
+    node_identity_public_key_hex: z
+      .string()
+      .length(130)
+      .regex(/^04[0-9a-f]{128}$/),
+    node_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    private_endpoint: z
+      .string()
+      .min(3)
+      .max(512)
+      .regex(/^[a-z0-9.\-\[\]:]+$/),
+    requested_roles: z
+      .array(
+        z.union([
+          z.literal("storage"),
+          z.literal("gateway"),
+          z.literal("metadata_eligible"),
+        ]),
+      )
+      .min(1)
+      .max(3),
+    wrapping_public_key_hex: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+/**
  * StepUpCurrentSessionRequest
  *
  * Input for atomically rotating the current browser session after a fresh factor.
@@ -2734,6 +3042,16 @@ export const zRemoveGroupMemberPath = z
 export const zRemoveGroupMemberResponse2 = zRemoveGroupMemberResponse;
 
 /**
+ * Join invitation policy
+ */
+export const zCreateNodeJoinGrantBody = zCreateNodeJoinGrantRequest;
+
+/**
+ * Committed join invitation
+ */
+export const zCreateNodeJoinGrantResponse2 = zCreateNodeJoinGrantResponse;
+
+/**
  * Offline recovery save proof
  */
 export const zConfirmRecoveryBundleSavedBody = zConfirmRecoveryBundleRequest;
@@ -2841,6 +3159,16 @@ export const zCreatePasskeyChallengeBody = zCreatePasskeyChallengeRequest;
  * Browser-ready passkey request options
  */
 export const zCreatePasskeyChallengeResponse2 = zCreatePasskeyChallengeResponse;
+
+/**
+ * Node identity presentation
+ */
+export const zEnrolNodeBody = zEnrolNodeRequestWritable;
+
+/**
+ * Admitted node and bootstrap trust
+ */
+export const zEnrolNodeResponse2 = zEnrolNodeResponse;
 
 /**
  * First-mesh setup

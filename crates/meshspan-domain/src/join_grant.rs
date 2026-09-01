@@ -2,17 +2,20 @@
 
 //! Canonical self-contained node join invitations.
 
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::secret_text::SECRET_BYTES;
-use crate::{JoinGrantId, MeshId, RandomSource};
+use crate::{JoinGrantId, MeshId, OperationId, PrincipalId, RandomSource};
 
 const PREFIX: &str = "meshspan-join-v2.";
 const MAXIMUM_ENDPOINT_BYTES: usize = 512;
 const CERTIFICATE_FINGERPRINT_BYTES: usize = 32;
 const SECRET_DIGEST_DOMAIN: &[u8] = b"meshspan.join-grant-secret.v2\0";
+const ISSUED_GRANT_ID_DOMAIN: &[u8] = b"meshspan.enrolment.issued-join-grant-id.v2\0";
+const ISSUED_SECRET_DOMAIN: &[u8] = b"meshspan.enrolment.issued-join-grant-secret.v2\0";
 
 /// Maximum byte length of one canonical encoded join invitation.
 pub const MAXIMUM_ENCODED_JOIN_GRANT_LENGTH: usize = PREFIX.len()
@@ -63,6 +66,40 @@ impl JoinGrantBundle {
         Self::from_parts(
             mesh_id.as_bytes(),
             join_grant_id,
+            secret,
+            enrolment_endpoint,
+            gateway_certificate_fingerprint,
+        )
+    }
+
+    /// Derives one exact lost-response-replayable invitation without persisting its plaintext.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid derived identity, secret, mesh, endpoint or certificate-pin material.
+    pub fn derive_issued(
+        issuance_key: &JoinGrantIssuanceKey,
+        mesh_id: MeshId,
+        principal_id: PrincipalId,
+        operation_id: OperationId,
+        enrolment_endpoint: &str,
+        gateway_certificate_fingerprint: [u8; CERTIFICATE_FINGERPRINT_BYTES],
+    ) -> Result<Self, JoinGrantBundleError> {
+        let mut join_grant_id =
+            issuance_key.derive(ISSUED_GRANT_ID_DOMAIN, mesh_id, principal_id, operation_id)?;
+        join_grant_id[6] = (join_grant_id[6] & 0x0f) | 0x40;
+        join_grant_id[8] = (join_grant_id[8] & 0x3f) | 0x80;
+        let secret = Zeroizing::new(issuance_key.derive(
+            ISSUED_SECRET_DOMAIN,
+            mesh_id,
+            principal_id,
+            operation_id,
+        )?);
+        Self::from_parts(
+            mesh_id.as_bytes(),
+            join_grant_id[..16]
+                .try_into()
+                .map_err(|_| JoinGrantBundleError::InvalidEncoding)?,
             secret,
             enrolment_endpoint,
             gateway_certificate_fingerprint,
@@ -178,6 +215,52 @@ impl JoinGrantBundle {
         })
     }
 }
+
+/// Mesh-wide non-exportable key for exactly replayable join-grant issuance.
+///
+/// It implements neither `Clone`, `Copy`, `Debug` nor `Display` and clears its bytes on drop.
+pub struct JoinGrantIssuanceKey(Zeroizing<[u8; 32]>);
+
+impl JoinGrantIssuanceKey {
+    /// Takes ownership of one loaded non-zero issuance key.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the reserved all-zero value.
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, JoinGrantIssuanceKeyError> {
+        if bytes == [0; 32] {
+            Err(JoinGrantIssuanceKeyError)
+        } else {
+            Ok(Self(Zeroizing::new(bytes)))
+        }
+    }
+
+    fn derive(
+        &self,
+        domain: &[u8],
+        mesh_id: MeshId,
+        principal_id: PrincipalId,
+        operation_id: OperationId,
+    ) -> Result<[u8; 32], JoinGrantBundleError> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_ref())
+            .map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+        mac.update(domain);
+        mac.update(&mesh_id.as_bytes());
+        mac.update(&principal_id.as_bytes());
+        mac.update(&operation_id.as_bytes());
+        let output: [u8; 32] = mac.finalize().into_bytes().into();
+        if output == [0; 32] {
+            Err(JoinGrantBundleError::InvalidEncoding)
+        } else {
+            Ok(output)
+        }
+    }
+}
+
+/// Invalid non-exportable join-grant issuance key.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("join-grant issuance key is invalid")]
+pub struct JoinGrantIssuanceKeyError;
 
 fn next_field<'a>(
     fields: &mut impl Iterator<Item = &'a str>,
@@ -296,8 +379,61 @@ pub enum JoinGrantBundleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{JoinGrantBundle, JoinGrantBundleError, MAXIMUM_ENCODED_JOIN_GRANT_LENGTH};
-    use crate::{EntropyError, MeshId, RandomSource};
+    use super::{
+        JoinGrantBundle, JoinGrantBundleError, JoinGrantIssuanceKey,
+        MAXIMUM_ENCODED_JOIN_GRANT_LENGTH,
+    };
+    use crate::{EntropyError, MeshId, OperationId, PrincipalId, RandomSource};
+
+    #[test]
+    fn derived_invitation_replays_exactly_and_separates_operations()
+    -> Result<(), JoinGrantBundleError> {
+        let issuance_key = JoinGrantIssuanceKey::from_bytes([7; 32])
+            .map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+        let mesh_id =
+            MeshId::from_bytes([9; 16]).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+        let principal_id =
+            PrincipalId::from_bytes([11; 16]).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+        let first_operation =
+            OperationId::from_bytes([13; 16]).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+        let second_operation =
+            OperationId::from_bytes([14; 16]).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+
+        let first = JoinGrantBundle::derive_issued(
+            &issuance_key,
+            mesh_id,
+            principal_id,
+            first_operation,
+            "https://node-1.meshspan.local:8443",
+            [10; 32],
+        )?;
+        let replay = JoinGrantBundle::derive_issued(
+            &issuance_key,
+            mesh_id,
+            principal_id,
+            first_operation,
+            "https://node-1.meshspan.local:8443",
+            [10; 32],
+        )?;
+        let second = JoinGrantBundle::derive_issued(
+            &issuance_key,
+            mesh_id,
+            principal_id,
+            second_operation,
+            "https://node-1.meshspan.local:8443",
+            [10; 32],
+        )?;
+
+        assert_eq!(
+            first.expose_encoded().as_str(),
+            replay.expose_encoded().as_str()
+        );
+        assert_ne!(
+            first.expose_encoded().as_str(),
+            second.expose_encoded().as_str()
+        );
+        Ok(())
+    }
 
     #[test]
     fn invitation_round_trips_every_mesh_endpoint_pin_and_secret_field()

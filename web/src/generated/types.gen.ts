@@ -701,6 +701,62 @@ export type CreateMeshSetupResponse = {
 };
 
 /**
+ * CreateNodeJoinGrantRequest
+ *
+ * Administrator request for one bounded node join invitation.
+ */
+export type CreateNodeJoinGrantRequest = {
+  /**
+   * One role pre-authorised for a joining daemon.
+   */
+  allowed_roles: Array<"storage" | "gateway" | "metadata_eligible">;
+  /**
+   * HTTPS origin the joining daemon contacts; the UI normally supplies its current origin.
+   */
+  enrolment_endpoint: string;
+  /**
+   * Maximum successful node admissions.
+   */
+  maximum_uses: number;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Requested lifetime in whole seconds.
+   */
+  valid_for_seconds: number;
+};
+
+/**
+ * CreateNodeJoinGrantResponse
+ *
+ * One exactly replayable join-grant issuance result.
+ */
+export type CreateNodeJoinGrantResponse = {
+  /**
+   * One role pre-authorised for a joining daemon.
+   */
+  allowed_roles: Array<"storage" | "gateway" | "metadata_eligible">;
+  /**
+   * Exclusive authoritative expiry as epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Self-contained secret invitation returned only by this operation.
+   */
+  readonly join_code: string;
+  /**
+   * Exact committed use ceiling.
+   */
+  maximum_uses: number;
+  /**
+   * Exact operation whose committed result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreatePasskeyChallengeRequest
  *
  * Input for creating one short-lived passkey authentication challenge.
@@ -1291,6 +1347,109 @@ export type DeleteObjectResponse = {
    * Selected logical volume.
    */
   volume_id: string;
+};
+
+/**
+ * EnrolNodeRequest
+ *
+ * One node-owned identity presentation for pre-authorised enrolment.
+ */
+export type EnrolNodeRequest = {
+  /**
+   * New or existing physical host binding.
+   */
+  host:
+    | {
+        kind: "new";
+        /**
+         * Human-facing host name.
+         */
+        name: string;
+      }
+    | {
+        /**
+         * Existing host identity.
+         */
+        host_id: string;
+        kind: "existing";
+      };
+  /**
+   * P-256 signature over the exact canonical enrolment transcript as lowercase DER hex.
+   */
+  identity_proof_signature_hex: string;
+  /**
+   * Canonical uncompressed P-256 SEC1 public identity bytes as lowercase hex.
+   */
+  node_identity_public_key_hex: string;
+  /**
+   * Human-facing daemon name.
+   */
+  node_name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Private QUIC endpoint advertised after certificate installation.
+   */
+  private_endpoint: string;
+  /**
+   * One role pre-authorised for a joining daemon.
+   */
+  requested_roles: Array<"storage" | "gateway" | "metadata_eligible">;
+  /**
+   * Canonical X25519 public secret-wrapping key as lowercase hex.
+   */
+  wrapping_public_key_hex: string;
+};
+
+/**
+ * EnrolNodeResponse
+ *
+ * Exact replayable result of consuming one join-grant use.
+ */
+export type EnrolNodeResponse = {
+  /**
+   * Current enrolled bootstrap peers, never including the joining node.
+   */
+  bootstrap_peers: Array<{
+    /**
+     * Current leaf certificate DER as lowercase hex.
+     */
+    certificate_der_hex: string;
+    /**
+     * Permanent peer node identity.
+     */
+    node_id: string;
+    /**
+     * Current private QUIC endpoint.
+     */
+    private_endpoint: string;
+  }>;
+  /**
+   * Target mesh proven by the invitation and response chain.
+   */
+  mesh_id: string;
+  /**
+   * Issued node leaf certificate DER as lowercase hex.
+   */
+  node_certificate_der_hex: string;
+  /**
+   * Permanent identity derived from the submitted public key.
+   */
+  node_id: string;
+  /**
+   * Root-signed online authority certificate DER as lowercase hex.
+   */
+  online_authority_certificate_der_hex: string;
+  /**
+   * Exact operation whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Offline mesh root certificate DER as lowercase hex.
+   */
+  root_certificate_der_hex: string;
 };
 
 /**
@@ -2114,6 +2273,30 @@ export type CreateMeshSetupRequestWritable = {
 };
 
 /**
+ * CreateNodeJoinGrantResponse
+ *
+ * One exactly replayable join-grant issuance result.
+ */
+export type CreateNodeJoinGrantResponseWritable = {
+  /**
+   * One role pre-authorised for a joining daemon.
+   */
+  allowed_roles: Array<"storage" | "gateway" | "metadata_eligible">;
+  /**
+   * Exclusive authoritative expiry as epoch microseconds.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Exact committed use ceiling.
+   */
+  maximum_uses: number;
+  /**
+   * Exact operation whose committed result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * CreatePasskeyRegistrationRequest
  *
  * One exact registration response bound to a gateway-issued challenge.
@@ -2302,6 +2485,64 @@ export type CreateTotpRegistrationRequestWritable = {
    * Client-generated identity binding exact confirmation retries.
    */
   operation_id: string;
+};
+
+/**
+ * EnrolNodeRequest
+ *
+ * One node-owned identity presentation for pre-authorised enrolment.
+ */
+export type EnrolNodeRequestWritable = {
+  /**
+   * New or existing physical host binding.
+   */
+  host:
+    | {
+        kind: "new";
+        /**
+         * Human-facing host name.
+         */
+        name: string;
+      }
+    | {
+        /**
+         * Existing host identity.
+         */
+        host_id: string;
+        kind: "existing";
+      };
+  /**
+   * P-256 signature over the exact canonical enrolment transcript as lowercase DER hex.
+   */
+  identity_proof_signature_hex: string;
+  /**
+   * Self-contained administrator-issued invitation.
+   */
+  join_code: string;
+  /**
+   * Canonical uncompressed P-256 SEC1 public identity bytes as lowercase hex.
+   */
+  node_identity_public_key_hex: string;
+  /**
+   * Human-facing daemon name.
+   */
+  node_name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Private QUIC endpoint advertised after certificate installation.
+   */
+  private_endpoint: string;
+  /**
+   * One role pre-authorised for a joining daemon.
+   */
+  requested_roles: Array<"storage" | "gateway" | "metadata_eligible">;
+  /**
+   * Canonical X25519 public secret-wrapping key as lowercase hex.
+   */
+  wrapping_public_key_hex: string;
 };
 
 /**
@@ -2627,6 +2868,60 @@ export type RemoveGroupMemberResponses = {
 
 export type RemoveGroupMemberResponse2 =
   RemoveGroupMemberResponses[keyof RemoveGroupMemberResponses];
+
+export type CreateNodeJoinGrantData = {
+  /**
+   * Join invitation policy
+   */
+  body: CreateNodeJoinGrantRequest;
+  path?: never;
+  query?: never;
+  url: "/admin/node-join-grants";
+};
+
+export type CreateNodeJoinGrantErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Changed retry or grant conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Internal contract failure
+   */
+  500: ApiError;
+  /**
+   * Authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateNodeJoinGrantError =
+  CreateNodeJoinGrantErrors[keyof CreateNodeJoinGrantErrors];
+
+export type CreateNodeJoinGrantResponses = {
+  /**
+   * Committed join invitation
+   */
+  201: CreateNodeJoinGrantResponse;
+};
+
+export type CreateNodeJoinGrantResponse2 =
+  CreateNodeJoinGrantResponses[keyof CreateNodeJoinGrantResponses];
 
 export type ConfirmRecoveryBundleSavedData = {
   /**
@@ -3118,6 +3413,54 @@ export type CreatePasskeyChallengeResponses = {
 
 export type CreatePasskeyChallengeResponse2 =
   CreatePasskeyChallengeResponses[keyof CreatePasskeyChallengeResponses];
+
+export type EnrolNodeData = {
+  /**
+   * Node identity presentation
+   */
+  body: EnrolNodeRequestWritable;
+  path?: never;
+  query?: never;
+  url: "/setup/enrolments";
+};
+
+export type EnrolNodeErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Join invitation rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or node conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Internal contract failure
+   */
+  500: ApiError;
+  /**
+   * Authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type EnrolNodeError = EnrolNodeErrors[keyof EnrolNodeErrors];
+
+export type EnrolNodeResponses = {
+  /**
+   * Admitted node and bootstrap trust
+   */
+  201: EnrolNodeResponse;
+};
+
+export type EnrolNodeResponse2 = EnrolNodeResponses[keyof EnrolNodeResponses];
 
 export type CreateMeshSetupData = {
   /**

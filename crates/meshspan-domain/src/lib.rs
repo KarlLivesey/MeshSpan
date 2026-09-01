@@ -59,7 +59,10 @@ pub use federation_storage::{
     FederationStorageAction, FederationStorageActionError, FederationStorageAllocation,
     FederationStorageAllocationError,
 };
-pub use join_grant::{JoinGrantBundle, JoinGrantBundleError, MAXIMUM_ENCODED_JOIN_GRANT_LENGTH};
+pub use join_grant::{
+    JoinGrantBundle, JoinGrantBundleError, JoinGrantIssuanceKey, JoinGrantIssuanceKeyError,
+    MAXIMUM_ENCODED_JOIN_GRANT_LENGTH,
+};
 pub use lifecycle::{LifecycleEvent, LifecycleState, LifecycleTransitionError};
 pub use operation::{
     CommitOutcome, DurabilityScope, OperationDecision, OperationReceipt, classify_operation,

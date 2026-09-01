@@ -19,6 +19,8 @@ mod identity_administration_validation;
 mod model;
 mod namespace_mutation;
 mod namespace_mutation_validation;
+mod node_enrolment;
+mod node_enrolment_validation;
 mod object_stat;
 mod object_stat_validation;
 mod openapi;
@@ -131,6 +133,14 @@ pub use namespace_mutation_validation::{
     MAX_NAMESPACE_MUTATION_BYTES, decode_create_directory_request, decode_delete_object_request,
     decode_rename_object_request, encode_create_directory_response, encode_delete_object_response,
     encode_rename_object_response,
+};
+pub use node_enrolment::{
+    CreateNodeJoinGrantRequest, CreateNodeJoinGrantResponse, EnrolNodeRequest, EnrolNodeResponse,
+    EnrolmentBootstrapPeer, NodeJoinHost, NodeJoinRole,
+};
+pub use node_enrolment_validation::{
+    MAX_CREATE_NODE_JOIN_GRANT_BYTES, MAX_ENROL_NODE_BYTES, decode_create_node_join_grant_request,
+    decode_enrol_node_request, encode_create_node_join_grant_response, encode_enrol_node_response,
 };
 pub use object_stat::{GetObjectQuery, GetObjectResponse};
 pub use object_stat_validation::{
