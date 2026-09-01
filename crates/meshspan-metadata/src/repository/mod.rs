@@ -272,6 +272,12 @@ impl AuthoritativeMetadataKernel for AuthoritativeRepository {
 }
 
 impl AuthoritativeRepository {
+    /// Returns the immutable partition identity fixed by the opened database.
+    #[must_use]
+    pub const fn partition_id(&self) -> meshspan_domain::PartitionId {
+        self.database.partition_id()
+    }
+
     /// Returns the root partition's one intrinsic local mesh identity.
     ///
     /// # Errors

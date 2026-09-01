@@ -615,12 +615,16 @@ fn open_root_repository(
     local_state: &DaemonLocalState,
     now: UnixMicros,
 ) -> Result<AuthoritativeRepository, DaemonProcessError> {
-    let partition_id = InitialBootstrapMaterial::root_partition_id(local_state.node_id())?;
-    let database = PartitionDatabase::open(
-        &local_state.state_directory().join(ROOT_AUTHORITY_DATABASE),
-        partition_id,
-        now,
-    )?;
+    let database_path = local_state.state_directory().join(ROOT_AUTHORITY_DATABASE);
+    let database = if database_path.try_exists()? {
+        PartitionDatabase::open_existing(&database_path, now)?
+    } else {
+        PartitionDatabase::open(
+            &database_path,
+            InitialBootstrapMaterial::root_partition_id(local_state.node_id())?,
+            now,
+        )?
+    };
     Ok(AuthoritativeRepository::new(database))
 }
 
@@ -774,6 +778,9 @@ pub enum DaemonProcessError {
     /// Daemon-local state could not be opened safely.
     #[error("daemon local state failed")]
     LocalState(#[from] DaemonLocalStateError),
+    /// The daemon state directory could not be inspected safely.
+    #[error("daemon state path inspection failed")]
+    StatePath(#[from] std::io::Error),
     /// Stable root identities could not be derived.
     #[error("daemon root identity failed")]
     BootstrapIdentity(#[from] InitialBootstrapMaterialError),

@@ -54,6 +54,37 @@ impl PartitionDatabase {
         Ok(database)
     }
 
+    /// Opens an existing partition database using its durably bound partition identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a missing database, SQLite failure, migration drift/newer schema, malformed or
+    /// absent stored identity and failed integrity checks.
+    pub fn open_existing(
+        file_path: &Path,
+        migration_time: UnixMicros,
+    ) -> Result<Self, MetadataStoreError> {
+        let mut connection = open_existing_connection(file_path)?;
+        migrate_partition(&mut connection, migration_time.get())?;
+        let stored: Vec<u8> = connection.query_row(
+            "SELECT partition_id FROM applied_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let partition_bytes: [u8; 16] = stored
+            .try_into()
+            .map_err(|_| MetadataStoreError::IntegrityFailed)?;
+        let partition_id = PartitionId::from_bytes(partition_bytes)
+            .map_err(|_| MetadataStoreError::IntegrityFailed)?;
+        bind_partition_identity(&mut connection, partition_id)?;
+        let database = Self {
+            connection,
+            partition_id,
+        };
+        database.check_integrity()?;
+        Ok(database)
+    }
+
     /// Returns the immutable partition identity verified at open.
     #[must_use]
     pub const fn partition_id(&self) -> PartitionId {

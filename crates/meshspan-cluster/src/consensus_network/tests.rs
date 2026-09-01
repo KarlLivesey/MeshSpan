@@ -89,10 +89,10 @@ fn config(
         mesh_id,
         partition_id,
         routing_epoch: 1,
+        roles: vec![meshspan_protocol::v1::NodeRole::MetadataVoter],
         listen_address,
         client_address: SocketAddr::from(([127, 0, 0, 1], 0)),
-        certificate_name: "meshspan.internal".to_owned(),
-        certificate_der: identity.certificate_der().to_vec(),
+        certificate_chain_der: vec![identity.certificate_der().to_vec()],
         private_key_pkcs8: Zeroizing::new(identity.private_key().to_vec()),
         trust_anchors: vec![trust_anchor],
         peers: vec![peer],
@@ -105,6 +105,7 @@ fn peer(node_id: NodeId, address: SocketAddr, certificate_der: &[u8]) -> Consens
         incarnation: 1,
         address,
         certificate_der: certificate_der.to_vec(),
+        certificate_name: "meshspan.internal".to_owned(),
     }
 }
 

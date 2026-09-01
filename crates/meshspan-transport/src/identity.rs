@@ -113,6 +113,12 @@ impl AuthenticatedPeer {
         self.0.incarnation
     }
 
+    /// Returns the exact leaf-certificate fingerprint resolved by the registry.
+    #[must_use]
+    pub const fn certificate_fingerprint(self) -> [u8; 32] {
+        self.0.certificate_fingerprint
+    }
+
     /// Verifies that one already wire-validated hello claims this peer and expected mesh.
     ///
     /// # Errors
