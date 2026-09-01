@@ -168,19 +168,19 @@ pub(super) fn load_directory_operation_raw(
     }
 }
 
-pub(super) struct StoredCommit {
+pub(in crate::publication) struct StoredCommit {
     pub(super) commit_id: NamespaceCommitId,
     pub(super) branch_id: BranchId,
-    pub(super) volume_id: VolumeId,
+    pub(in crate::publication) volume_id: VolumeId,
     pub(super) root_object_id: ObjectId,
-    pub(super) root_object_revision_id: ObjectRevisionId,
+    pub(in crate::publication) root_object_revision_id: ObjectRevisionId,
     pub(super) parent_id: Option<NamespaceCommitId>,
     pub(super) created_by: meshspan_domain::PrincipalId,
     pub(super) operation_id: OperationId,
     pub(super) created_at: meshspan_domain::UnixMicros,
 }
 
-pub(super) fn load_commit(
+pub(in crate::publication) fn load_commit(
     connection: &Connection,
     commit_id: NamespaceCommitId,
 ) -> Result<StoredCommit, PublicationError> {
