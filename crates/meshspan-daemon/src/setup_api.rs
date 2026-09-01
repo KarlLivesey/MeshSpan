@@ -13,8 +13,10 @@ use axum::http::{HeaderValue, Response, StatusCode};
 use axum::routing::{get, post};
 use meshspan_api_contract::{
     ApiErrorCode, BoundaryError, CreateMeshSetupRequest, CreateMeshSetupResponse,
-    MAX_CREATE_MESH_SETUP_BYTES, OperationId as ApiOperationId, SetupState, SetupStatusResponse,
-    decode_create_mesh_setup_request, encode_create_mesh_setup_response,
+    JoinMeshSetupRequest, JoinMeshSetupResponse, MAX_CREATE_MESH_SETUP_BYTES,
+    MAX_JOIN_MESH_SETUP_BYTES, OperationId as ApiOperationId, SetupState, SetupStatusResponse,
+    decode_create_mesh_setup_request, decode_join_mesh_setup_request,
+    encode_create_mesh_setup_response, encode_join_mesh_setup_response,
     encode_setup_status_response, generate_openapi,
 };
 use meshspan_domain::UnixMicros;
@@ -30,6 +32,7 @@ use crate::api_http::{
 };
 use crate::{
     BootstrapAuthority, BootstrapAuthorityError, CreateMeshSetupError, CreateMeshSetupService,
+    JoinMeshSetupError, JoinMeshSetupService,
 };
 
 const CLAIM_REQUIRED: u8 = 1;
@@ -148,6 +151,28 @@ pub trait CreateMeshSetupController: Send + 'static {
     ) -> Result<CreateMeshSetupResponse, CreateMeshSetupError>;
 }
 
+/// Synchronous restart-handoff boundary kept off the async network worker.
+pub trait JoinMeshSetupController: Send + 'static {
+    /// Persists one exact join intent before requesting a graceful internal restart.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid claims, invitations, changed retries or unsafe local persistence.
+    fn join_mesh(
+        &mut self,
+        request: &JoinMeshSetupRequest,
+    ) -> Result<JoinMeshSetupResponse, JoinMeshSetupError>;
+}
+
+impl JoinMeshSetupController for JoinMeshSetupService {
+    fn join_mesh(
+        &mut self,
+        request: &JoinMeshSetupRequest,
+    ) -> Result<JoinMeshSetupResponse, JoinMeshSetupError> {
+        self.accept(request)
+    }
+}
+
 impl<A, R> CreateMeshSetupController for CreateMeshSetupService<A, R>
 where
     A: BootstrapAuthority + Send + 'static,
@@ -202,6 +227,170 @@ where
         .route("/api/latest/setup/meshes", post(post_create_mesh::<C>))
         .with_state(mutation_state);
     Ok(status_router.merge(mutation_router))
+}
+
+/// Builds first-start status, creation and restart-safe join mutations.
+///
+/// # Errors
+///
+/// Fails if the Rust-authored `OpenAPI` document or its digest header is invalid.
+pub fn setup_api_router_with_mutations<S, C, J>(
+    source: Arc<S>,
+    create_controller: C,
+    join_controller: J,
+) -> Result<Router, SetupApiError>
+where
+    S: SetupStatusSource,
+    C: CreateMeshSetupController,
+    J: JoinMeshSetupController,
+{
+    let router = setup_api_router_with_creation(source, create_controller)?;
+    let document = generate_openapi()?;
+    let join_state = JoinMutationApiState {
+        controller: Arc::new(Mutex::new(join_controller)),
+        schema_digest: HeaderValue::from_str(document.digest())?,
+    };
+    Ok(router.merge(
+        Router::new()
+            .route("/api/latest/setup/joins", post(post_join_mesh::<J>))
+            .with_state(join_state),
+    ))
+}
+
+struct JoinMutationApiState<J> {
+    controller: Arc<Mutex<J>>,
+    schema_digest: HeaderValue,
+}
+
+impl<J> Clone for JoinMutationApiState<J> {
+    fn clone(&self) -> Self {
+        Self {
+            controller: Arc::clone(&self.controller),
+            schema_digest: self.schema_digest.clone(),
+        }
+    }
+}
+
+async fn post_join_mesh<J>(
+    State(state): State<JoinMutationApiState<J>>,
+    request: Request,
+) -> Response<Body>
+where
+    J: JoinMeshSetupController,
+{
+    let request_id = request_identifier();
+    if !has_json_content_type(request.headers()) {
+        return error_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ApiErrorCode::InvalidRequest,
+            "content type must be application/json",
+            request_id,
+            None,
+            vec![issue("", "content_type")],
+            state.schema_digest,
+        );
+    }
+    let Ok(bytes) = to_bytes(request.into_body(), MAX_JOIN_MESH_SETUP_BYTES).await else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidRequest,
+            "request body exceeds its byte limit",
+            request_id,
+            None,
+            vec![issue("", "max_bytes")],
+            state.schema_digest,
+        );
+    };
+    let request = match decode_join_mesh_setup_request(&bytes) {
+        Ok(request) => request,
+        Err(
+            BoundaryError::InvalidSchema(_)
+            | BoundaryError::DecodeMismatch
+            | BoundaryError::EncodeMismatch,
+        ) => {
+            return internal_error_response(request_id, None, state.schema_digest);
+        }
+        Err(error) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                ApiErrorCode::InvalidRequest,
+                "request does not satisfy the public contract",
+                request_id,
+                None,
+                boundary_issues(error),
+                state.schema_digest,
+            );
+        }
+    };
+    let operation_id = Some(request.operation_id.clone());
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| JoinExecutionError::Unavailable)?
+            .join_mesh(&request)
+            .map_err(JoinExecutionError::Service)
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_join_mesh_setup_response(&response) {
+            Ok(body) => json_response(StatusCode::ACCEPTED, body, state.schema_digest),
+            Err(_) => internal_error_response(request_id, operation_id, state.schema_digest),
+        },
+        Ok(Err(JoinExecutionError::Service(error))) => {
+            join_error_response(&error, request_id, operation_id, state.schema_digest)
+        }
+        Ok(Err(JoinExecutionError::Unavailable)) | Err(_) => {
+            internal_error_response(request_id, operation_id, state.schema_digest)
+        }
+    }
+}
+
+fn join_error_response(
+    error: &JoinMeshSetupError,
+    request_id: String,
+    operation_id: Option<ApiOperationId>,
+    schema_digest: HeaderValue,
+) -> Response<Body> {
+    let (status, code, message) = match error {
+        JoinMeshSetupError::InvalidRequest => (
+            StatusCode::BAD_REQUEST,
+            ApiErrorCode::InvalidRequest,
+            "request contains an invalid domain value",
+        ),
+        JoinMeshSetupError::ClaimRejected | JoinMeshSetupError::InvitationRejected => (
+            StatusCode::UNAUTHORIZED,
+            ApiErrorCode::Unauthenticated,
+            "first-start claim or join invitation was rejected",
+        ),
+        JoinMeshSetupError::Conflict => (
+            StatusCode::CONFLICT,
+            ApiErrorCode::OperationConflict,
+            "setup operation conflicts with durable state",
+        ),
+        JoinMeshSetupError::InvalidProtectedState
+        | JoinMeshSetupError::RestartUnavailable
+        | JoinMeshSetupError::ClaimFile(_)
+        | JoinMeshSetupError::ProtectedFile => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalContract,
+            "join setup failed closed",
+        ),
+    };
+    error_response(
+        status,
+        code,
+        message,
+        request_id,
+        operation_id,
+        Vec::new(),
+        schema_digest,
+    )
+}
+
+enum JoinExecutionError {
+    Service(JoinMeshSetupError),
+    Unavailable,
 }
 
 async fn post_create_mesh<C>(

@@ -3,7 +3,9 @@
 import {
   Match,
   Switch,
+  createEffect,
   createSignal,
+  onCleanup,
   untrack,
   type ParentProps,
 } from "solid-js";
@@ -37,10 +39,12 @@ export function ApplianceGate(
         <FirstStartPage
           client={props.client}
           onComplete={() => setState("configured")}
+          onJoinAccepted={() => setState("configuring")}
         />
       </Match>
       <Match when={state() === "configuring"}>
         <SetupStatus
+          automatic
           description="MeshSpan is resuming its durable create or join operation."
           heading="Finishing first start"
           refresh={refresh}
@@ -65,11 +69,26 @@ export function ApplianceGate(
 
 function SetupStatus(
   props: Readonly<{
+    automatic?: boolean;
     description: string;
     heading: string;
     refresh: () => Promise<void>;
   }>,
 ): JSX.Element {
+  createEffect(
+    () => props.automatic === true,
+    (automatic) => {
+      if (!automatic) {
+        return;
+      }
+      const timer = window.setInterval(() => {
+        void props.refresh();
+      }, 2_000);
+      onCleanup(() => {
+        window.clearInterval(timer);
+      });
+    },
+  );
   return (
     <section class="setup-status" aria-live="polite">
       <p class="eyebrow">First start</p>

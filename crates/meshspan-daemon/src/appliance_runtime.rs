@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,8 +30,8 @@ use meshspan_consensus::{
 };
 use meshspan_data_plane::{RemoteShardRouter, RemoteShardService};
 use meshspan_domain::{
-    DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, NodeId, OperationId,
-    PrincipalId, SnapshotId, UnixMicros,
+    DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, JoinGrantBundle,
+    NodeId, OperationId, PrincipalId, SnapshotId, UnixMicros,
 };
 use meshspan_metadata::{
     AuthoritativeRepository, ConsensusStoreError, JoinRoles, MetadataStoreError, PartitionDatabase,
@@ -46,7 +47,8 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
-use crate::headless_node_join::{activate_and_install_node, admit_headless_node};
+use crate::headless_node_join::{activate_and_install_node, admit_headless_node, admit_node};
+use crate::join_mesh_setup::{load_pending_join, remove_pending_join};
 use crate::private_consensus_runtime::{
     NetworkRegisteringEnrolment, PrivateConsensusRuntime, certificate_name,
 };
@@ -60,13 +62,14 @@ use crate::{
     DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService, FileApiRoutes,
     FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
     HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
-    IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
-    NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
-    NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
-    NativeUploadServicePolicy, NodeActivationError, NodeActivationRequest, NodeActivationService,
-    NodeEnrolmentApiError, NodeEnrolmentService, NodeJoinGrantIssuanceApiError,
-    NodeJoinGrantIssuanceService, NodeWrappingKeyRegistrationService, ObjectStatApiError,
-    ObjectStatService, OperatingSystemRandom, OperationStatusApiError, OperationStatusService,
+    IdentityAdministrationService, JoinMeshSetupService, NativeApiAuthenticator,
+    NativeApiKeyAuthenticator, NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration,
+    NativeNamespaceMutationApiError, NativeNamespaceMutationService, NativeStorageTarget,
+    NativeUploadApiError, NativeUploadService, NativeUploadServicePolicy, NodeActivationError,
+    NodeActivationRequest, NodeActivationService, NodeEnrolmentApiError, NodeEnrolmentService,
+    NodeJoinGrantIssuanceApiError, NodeJoinGrantIssuanceService,
+    NodeWrappingKeyRegistrationService, ObjectStatApiError, ObjectStatService,
+    OperatingSystemRandom, OperationStatusApiError, OperationStatusService,
     PasskeyChallengeApiError, PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
     PasskeyChallengeService, PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
     PasskeyRegistrationConfigurationError, PasskeyRegistrationService, PasskeySessionService,
@@ -89,7 +92,7 @@ use crate::{
     passkey_registration_api_router, permission_administration_api_router,
     public_contract_api_router, recovery_bundle_verification_api_router,
     recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
-    setup_api_router_with_creation, step_up_current_session_api_router,
+    setup_api_router_with_mutations, step_up_current_session_api_router,
     totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
 };
 
@@ -267,21 +270,69 @@ where
     F: Future<Output = ()> + Send,
 {
     let config = HeadlessDaemonConfig::parse(arguments)?;
+    tokio::pin!(shutdown);
+    loop {
+        match run_daemon_cycle(&config, shutdown.as_mut()).await? {
+            DaemonCycleExit::Shutdown => return Ok(()),
+            DaemonCycleExit::RestartForJoin => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DaemonCycleExit {
+    Shutdown,
+    RestartForJoin,
+}
+
+async fn run_daemon_cycle<F>(
+    config: &HeadlessDaemonConfig,
+    shutdown: Pin<&mut F>,
+) -> Result<DaemonCycleExit, DaemonProcessError>
+where
+    F: Future<Output = ()> + Send,
+{
     let started_at = current_time()?;
     let mut local_state = DaemonLocalState::open(&config, started_at)?;
     let setup_state = Arc::new(SetupStateSnapshot::new(SetupState::ClaimRequired));
-    setup_state.reconcile(local_state.local_database())?;
+    let setup_lifecycle = setup_state.reconcile(local_state.local_database())?;
     let private_endpoint = advertised_private_endpoint(&config)?;
     let private_network = Arc::new(PrivateConsensusRuntime::default());
     let (data_streams, received_data_streams) = tokio::sync::mpsc::channel(128);
+    let (restart, mut restart_requests) = tokio::sync::mpsc::unbounded_channel();
     let mut joining_peer_messages = None;
     let mut joining_control_requests = None;
-    if setup_state.setup_state() != SetupState::Configured {
-        if let Some(admission) =
-            admit_headless_node(&mut local_state, &config, &private_endpoint, started_at)
+    if setup_lifecycle == SetupState::Configured {
+        remove_pending_join(&local_state.pending_interactive_join_path())
+            .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
+    } else {
+        let pending_join = load_pending_join(
+            &local_state.pending_interactive_join_path(),
+            local_state.claim_output_path(),
+        )
+        .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
+        let admission = if let Some(request) = pending_join.as_ref() {
+            let invitation = JoinGrantBundle::parse(&request.join_code)
+                .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
+            Some(
+                admit_node(
+                    &mut local_state,
+                    &invitation,
+                    request.operation_id.clone(),
+                    request.host_name.clone(),
+                    request.node_name.clone(),
+                    &private_endpoint,
+                    started_at,
+                )
+                .await
+                .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?,
+            )
+        } else {
+            admit_headless_node(&mut local_state, config, &private_endpoint, started_at)
                 .await
                 .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?
-        {
+        };
+        if let Some(admission) = admission {
             let joined = activate_and_install_node(
                 &mut local_state,
                 config.private_listen(),
@@ -297,6 +348,10 @@ where
             joining_peer_messages = Some(joined.peer_messages);
             joining_control_requests = Some(joined.control_requests);
             setup_state.reconcile(local_state.local_database())?;
+            if pending_join.is_some() {
+                remove_pending_join(&local_state.pending_interactive_join_path())
+                    .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
+            }
         }
     }
 
@@ -404,7 +459,16 @@ where
     );
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
-        .merge(setup_api_router_with_creation(setup_state, setup)?)
+        .merge(setup_api_router_with_mutations(
+            Arc::clone(&setup_state),
+            setup,
+            JoinMeshSetupService::new(
+                local_state.claim_output_path().to_path_buf(),
+                local_state.pending_interactive_join_path(),
+                setup_state,
+                restart,
+            ),
+        )?)
         .merge(node_enrolment_api_router(enrolment)?)
         .merge(authentication_session_routes(
             &local_state,
@@ -427,13 +491,28 @@ where
         router,
     )
     .await?;
-    let server_result = server.run_until(shutdown).await;
+    let restart_requested = Arc::new(AtomicBool::new(false));
+    let restart_observer = Arc::clone(&restart_requested);
+    let lifecycle = async move {
+        tokio::select! {
+            biased;
+            () = shutdown => {}
+            request = restart_requests.recv() => {
+                restart_observer.store(request.is_some(), Ordering::Release);
+            }
+        }
+    };
+    let server_result = server.run_until(lifecycle).await;
     let shutdown_result = authority.shutdown().await;
     let authority_result = authority_task.await;
     server_result?;
     shutdown_result?;
     authority_result.map_err(|_| DaemonProcessError::AuthorityTaskStopped)??;
-    Ok(())
+    if restart_requested.load(Ordering::Acquire) {
+        Ok(DaemonCycleExit::RestartForJoin)
+    } else {
+        Ok(DaemonCycleExit::Shutdown)
+    }
 }
 
 fn compose_storage_runtime(
@@ -1770,6 +1849,9 @@ pub enum DaemonProcessError {
     /// Headless admission into an existing mesh failed.
     #[error("daemon headless node join failed")]
     HeadlessNodeJoin,
+    /// Interactive admission or its protected restart hand-off failed closed.
+    #[error("daemon interactive node join failed")]
+    InteractiveNodeJoin,
     /// HTTPS admission is durable but private activation and catch-up remain incomplete.
     #[error("daemon node admission is durable but private activation is pending")]
     NodeActivationPending,

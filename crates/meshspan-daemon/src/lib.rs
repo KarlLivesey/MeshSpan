@@ -81,6 +81,9 @@ mod https_server_tests;
 mod identity_administration;
 #[cfg(test)]
 mod identity_administration_tests;
+mod join_mesh_setup;
+#[cfg(test)]
+mod join_mesh_setup_tests;
 mod local_node_identity;
 #[cfg(test)]
 mod local_node_identity_tests;
@@ -297,6 +300,7 @@ pub use identity_administration::{
     IdentityAdministrationCommit, IdentityAdministrationController, IdentityAdministrationError,
     IdentityAdministrationService, IdentityAdministrator, identity_administration_api_router,
 };
+pub use join_mesh_setup::{JoinMeshSetupError, JoinMeshSetupService};
 pub use local_node_identity::{LocalNodeIdentity, LocalNodeIdentityError};
 pub use local_passkey_ceremony_key::{LocalPasskeyCeremonyKey, LocalPasskeyCeremonyKeyError};
 pub use local_totp_ceremony_key::{LocalTotpCeremonyKey, LocalTotpCeremonyKeyError};
@@ -418,8 +422,9 @@ pub use revoke_session_api::{
     RevokeCurrentSessionApiError, RevokeCurrentSessionController, revoke_current_session_api_router,
 };
 pub use setup_api::{
-    CreateMeshSetupController, SetupApiError, SetupLifecycleError, SetupStateSnapshot,
-    SetupStatusSource, setup_api_router, setup_api_router_with_creation,
+    CreateMeshSetupController, JoinMeshSetupController, SetupApiError, SetupLifecycleError,
+    SetupStateSnapshot, SetupStatusSource, setup_api_router, setup_api_router_with_creation,
+    setup_api_router_with_mutations,
 };
 pub use step_up_session::{
     StepUpCurrentSessionError, StepUpCurrentSessionService, StepUpSessionAuthority,

@@ -136,6 +136,7 @@ function readFileRoutes(operations) {
 function readLifecycleRoutes(operations) {
   return {
     createMeshSetup: requireOperation(operations, "createMeshSetup"),
+    joinMeshSetup: requireOperation(operations, "joinMeshSetup"),
     getHealth: requireOperation(operations, "getHealth"),
     getOpenApi: requireOperation(operations, "getOpenApi"),
     getOperationStatus: requireOperation(operations, "getOperationStatus"),

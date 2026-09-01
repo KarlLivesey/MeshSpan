@@ -566,6 +566,42 @@ pub struct CreateMeshSetupResponse {
     pub recovery_challenge: String,
 }
 
+/// One exact request to join an existing mesh from an unclaimed daemon.
+#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JoinMeshSetupRequest {
+    /// Client-generated idempotency identity retained across the internal restart.
+    pub operation_id: OperationId,
+    /// High-entropy single-use claim printed or written by this daemon.
+    pub claim: SetupClaim,
+    /// Self-contained administrator-issued invitation for the destination mesh.
+    #[schemars(
+        length(min = 250, max = 1_250),
+        pattern(r"^meshspan-join-v2\.[0-9a-f]+(?:\.[0-9a-f]+){4}$"),
+        extend("writeOnly" = true),
+        extend("x-meshspan-sensitive" = true)
+    )]
+    pub join_code: String,
+    /// Human-readable physical host name created by the destination mesh.
+    pub host_name: SetupName,
+    /// Human-readable daemon-node name created by the destination mesh.
+    pub node_name: SetupName,
+}
+
+/// Accepted restart-safe join intent.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JoinMeshSetupResponse {
+    /// Exact idempotency identity whose join will resume after the internal restart.
+    pub operation_id: OperationId,
+    /// Same-origin operation resource which becomes authoritative after enrolment.
+    #[schemars(
+        length(min = 59, max = 59),
+        pattern(r"^/api/latest/operations/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    pub status_url: String,
+}
+
 /// Stable public error category.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

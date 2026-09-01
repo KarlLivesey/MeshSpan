@@ -31,6 +31,7 @@ const TOTP_CEREMONY_KEY_FILE: &str = "totp-ceremony.key";
 const PASSKEY_CEREMONY_KEY_FILE: &str = "passkey-ceremony.key";
 const PENDING_RECOVERY_BUNDLE_FILE: &str = "pending-offline-recovery.bundle";
 const PENDING_NODE_ENROLMENT_FILE: &str = "pending-node-enrolment.json";
+const PENDING_INTERACTIVE_JOIN_FILE: &str = "pending-interactive-join.json";
 const DEFAULT_CLAIM_FILE: &str = "first-boot.claim";
 const BOOTSTRAP_DNS_NAME: &str = "meshspan.local";
 
@@ -279,6 +280,15 @@ impl DaemonLocalState {
             .path()
             .join(SECRET_DIRECTORY)
             .join(PENDING_NODE_ENROLMENT_FILE)
+    }
+
+    /// Returns the protected interactive join intent retained across the internal restart.
+    #[must_use]
+    pub(crate) fn pending_interactive_join_path(&self) -> PathBuf {
+        self.directory
+            .path()
+            .join(SECRET_DIRECTORY)
+            .join(PENDING_INTERACTIVE_JOIN_FILE)
     }
 
     /// Builds the first-start TLS 1.3 public HTTPS configuration.

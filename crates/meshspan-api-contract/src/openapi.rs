@@ -20,15 +20,15 @@ use crate::{
     CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumePermissionGrantRequest,
     CreateVolumePermissionGrantResponse, CreateVolumeRequest, CreateVolumeResponse,
     CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
-    EnrolNodeResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
-    ListDirectoryResponse, ListGroupMembershipsResponse, ListOperationsResponse,
-    ListPrincipalsResponse, ListUploadRangesResponse, ListVolumePermissionGrantsResponse,
-    ListVolumesResponse, OperationStatusResponse, RemoveGroupMemberRequest,
-    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
-    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
-    RevokePermissionGrantResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
-    UploadStatusResponse, WriteUploadRangeResponse, schema,
+    EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
+    JoinMeshSetupResponse, ListAuthenticationMethodsResponse, ListDirectoryResponse,
+    ListGroupMembershipsResponse, ListOperationsResponse, ListPrincipalsResponse,
+    ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
+    OperationStatusResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
+    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
+    RevokePermissionGrantRequest, RevokePermissionGrantResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -149,6 +149,8 @@ fn components() -> Value {
         schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
         schema_response::<GetObjectResponse>("GetObjectResponse"),
         schema_response::<HealthResponse>("HealthResponse"),
+        schema_request::<JoinMeshSetupRequest>("JoinMeshSetupRequest"),
+        schema_response::<JoinMeshSetupResponse>("JoinMeshSetupResponse"),
         schema_response::<ListAuthenticationMethodsResponse>("ListAuthenticationMethodsResponse"),
         schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
         schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
@@ -201,6 +203,7 @@ fn paths() -> Value {
                 ),
                 ("/setup/status".to_owned(), setup_status_path()),
                 ("/setup/meshes".to_owned(), create_mesh_path()),
+                ("/setup/joins".to_owned(), join_mesh_path()),
                 ("/setup/enrolments".to_owned(), enrol_node_path()),
                 (
                     "/admin/node-join-grants".to_owned(),
@@ -1497,6 +1500,26 @@ fn create_mesh_path() -> Value {
                 "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
                 "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "503": json_response("Bootstrap authority temporarily unavailable", "#/components/schemas/ApiError"),
+                "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn join_mesh_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "joinMeshSetup",
+            "summary": "Persist a claimed join intent and restart into the destination mesh",
+            "x-meshspan-access": "claim-and-join-grant",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request("Existing-mesh setup", "#/components/schemas/JoinMeshSetupRequest"),
+            "responses": {
+                "202": json_response("Durable join intent accepted", "#/components/schemas/JoinMeshSetupResponse"),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("First-boot claim or join invitation rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
             }
         }
