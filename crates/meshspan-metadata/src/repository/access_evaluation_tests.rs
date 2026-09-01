@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use super::tests::{initial_test_volume_key, mark_test_recovery_verified, protected_bootstrap};
 use super::{
     AccessAuthentication, AccessDecision, AccessDenial, AccessRequest, AuthoritativeRepository,
     BrowserSessionAccessRequest, BrowserSessionProtection, LogPosition, SessionAccessDecision,
@@ -512,7 +513,7 @@ fn bootstrap(
         fixture,
         fixture.administrator,
         100,
-        AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+        protected_bootstrap(BootstrapMesh {
             mesh_id: MeshId::from_bytes([5; 16])?,
             mesh_name: RecordName::new("Access proof")?,
             administrator_id: fixture.administrator,
@@ -523,7 +524,12 @@ fn bootstrap(
             node_id: fixture.gateway,
             node_name: RecordName::new("Gateway")?,
             partition_name: RecordName::new(&partition.to_string())?,
-        }),
+        })?,
+    )?;
+    mark_test_recovery_verified(
+        &mut fixture.repository,
+        MeshId::from_bytes([5; 16])?,
+        fixture.administrator,
     )
 }
 
@@ -605,6 +611,7 @@ fn create_namespace(fixture: &mut Fixture) -> Result<(), Box<dyn std::error::Err
             root_object_id: root,
             owner_set_id: OwnerSetId::from_bytes([30; 16])?,
             owners: owners(fixture.second_user)?,
+            key_generation: initial_test_volume_key(fixture.volume)?,
         }),
     )?;
     apply(

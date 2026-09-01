@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
+use super::tests::{initial_test_volume_key, mark_test_recovery_verified};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
     AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
@@ -305,6 +306,11 @@ pub(super) fn open_and_prepare(
         context(10, fixture.administrator, 11, 100, Some(0))?,
         &head_bootstrap(fixture)?,
     )?;
+    mark_test_recovery_verified(
+        &mut repository,
+        MeshId::from_bytes([12; 16])?,
+        fixture.administrator,
+    )?;
     repository.apply_committed(
         LogPosition { index: 2, term: 1 },
         context(16, fixture.administrator, 17, 101, Some(1))?,
@@ -314,6 +320,7 @@ pub(super) fn open_and_prepare(
             root_object_id: ObjectId::from_bytes([18; 16])?,
             owner_set_id: OwnerSetId::from_bytes([19; 16])?,
             owners: BoundedItems::new(vec![fixture.administrator], 1_024)?,
+            key_generation: initial_test_volume_key(fixture.volume)?,
         }),
     )?;
     Ok(repository)
@@ -322,7 +329,7 @@ pub(super) fn open_and_prepare(
 fn head_bootstrap(
     fixture: &HeadFixture,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
-    let recovery_key = WrappingPublicKey::from_bytes([220; 32])?;
+    let recovery_key = WrappingPublicKey::from_bytes([146; 32])?;
     let certificate = vec![221; 64];
     Ok(AuthoritativeCommand::BootstrapAppliance(
         BootstrapAppliance {

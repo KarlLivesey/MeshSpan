@@ -173,6 +173,8 @@ mod totp_session_creation;
 mod totp_session_creation_tests;
 mod volume_administration;
 mod volume_administration_api;
+#[cfg(test)]
+mod volume_administration_tests;
 mod volume_inventory;
 #[cfg(test)]
 mod volume_inventory_api_tests;

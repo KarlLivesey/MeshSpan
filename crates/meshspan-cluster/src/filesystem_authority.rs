@@ -112,64 +112,32 @@ mod tests {
     };
 
     use super::*;
+    use crate::protected_volume_test_support::{
+        confirm_recovery, initial_volume_key, protected_bootstrap, register_gateway_key,
+    };
+
+    struct AuthorityFixture {
+        repository: AuthoritativeRepository,
+        user_id: PrincipalId,
+        gateway_node_id: NodeId,
+        volume_id: VolumeId,
+        root_object_id: ObjectId,
+        session_id: SessionId,
+        token_digest: [u8; 32],
+    }
 
     #[test]
     fn adapter_revalidates_browser_sessions_and_direct_native_api_keys()
     -> Result<(), Box<dyn std::error::Error>> {
-        let partition_id = PartitionId::from_bytes([1; 16])?;
-        let administrator_id = PrincipalId::from_bytes([2; 16])?;
-        let user_id = PrincipalId::from_bytes([3; 16])?;
-        let gateway_node_id = NodeId::from_bytes([4; 16])?;
-        let volume_id = VolumeId::from_bytes([5; 16])?;
-        let root_object_id = ObjectId::from_bytes([6; 16])?;
-        let session_id = SessionId::from_bytes([7; 16])?;
-        let token_digest = [8; 32];
-        let database = PartitionDatabase::open(
-            std::path::Path::new(":memory:"),
-            partition_id,
-            UnixMicros::new(1),
-        )?;
-        let mut repository = AuthoritativeRepository::new(database);
-        apply(
-            &mut repository,
-            1,
-            administrator_id,
-            &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
-                mesh_id: MeshId::from_bytes([9; 16])?,
-                mesh_name: RecordName::new("Authority proof")?,
-                administrator_id,
-                administrator_name: RecordName::new("Administrator")?,
-                administrator_role_id: RoleId::from_bytes([10; 16])?,
-                host_id: HostId::from_bytes([11; 16])?,
-                host_name: RecordName::new("Host")?,
-                node_id: gateway_node_id,
-                node_name: RecordName::new("Gateway")?,
-                partition_name: RecordName::new(&partition_id.to_string())?,
-            }),
-        )?;
-        apply(
-            &mut repository,
-            2,
-            administrator_id,
-            &AuthoritativeCommand::CreateUser(CreateUser {
-                principal_id: user_id,
-                name: RecordName::new("User")?,
-            }),
-        )?;
-        apply(
-            &mut repository,
-            3,
-            administrator_id,
-            &AuthoritativeCommand::CreateVolume(CreateVolume {
-                volume_id,
-                name: RecordName::new("Volume")?,
-                root_object_id,
-                owner_set_id: OwnerSetId::from_bytes([12; 16])?,
-                owners: BoundedItems::new(vec![user_id], 1_024)?,
-            }),
-        )?;
-        issue_test_session(&mut repository, user_id, session_id, token_digest)?;
-
+        let AuthorityFixture {
+            mut repository,
+            user_id,
+            gateway_node_id,
+            volume_id,
+            root_object_id,
+            session_id,
+            token_digest,
+        } = prepare_authority_fixture()?;
         let request = FilesystemAuthorityRequest {
             context: FilesystemAccessContext {
                 authentication_service: AuthenticationService::Https,
@@ -192,7 +160,7 @@ mod tests {
 
         apply(
             &mut repository,
-            7,
+            9,
             user_id,
             &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
                 session_id,
@@ -214,6 +182,84 @@ mod tests {
             root_object_id,
         )?;
         Ok(())
+    }
+
+    fn prepare_authority_fixture() -> Result<AuthorityFixture, Box<dyn std::error::Error>> {
+        let partition_id = PartitionId::from_bytes([1; 16])?;
+        let administrator_id = PrincipalId::from_bytes([2; 16])?;
+        let user_id = PrincipalId::from_bytes([3; 16])?;
+        let gateway_node_id = NodeId::from_bytes([4; 16])?;
+        let volume_id = VolumeId::from_bytes([5; 16])?;
+        let root_object_id = ObjectId::from_bytes([6; 16])?;
+        let session_id = SessionId::from_bytes([7; 16])?;
+        let token_digest = [8; 32];
+        let database = PartitionDatabase::open(
+            std::path::Path::new(":memory:"),
+            partition_id,
+            UnixMicros::new(1),
+        )?;
+        let mut repository = AuthoritativeRepository::new(database);
+        apply(
+            &mut repository,
+            1,
+            administrator_id,
+            &protected_bootstrap(BootstrapMesh {
+                mesh_id: MeshId::from_bytes([9; 16])?,
+                mesh_name: RecordName::new("Authority proof")?,
+                administrator_id,
+                administrator_name: RecordName::new("Administrator")?,
+                administrator_role_id: RoleId::from_bytes([10; 16])?,
+                host_id: HostId::from_bytes([11; 16])?,
+                host_name: RecordName::new("Host")?,
+                node_id: gateway_node_id,
+                node_name: RecordName::new("Gateway")?,
+                partition_name: RecordName::new(&partition_id.to_string())?,
+            })?,
+        )?;
+        apply(
+            &mut repository,
+            2,
+            administrator_id,
+            &confirm_recovery(MeshId::from_bytes([9; 16])?),
+        )?;
+        apply(
+            &mut repository,
+            3,
+            administrator_id,
+            &register_gateway_key(gateway_node_id)?,
+        )?;
+        apply(
+            &mut repository,
+            4,
+            administrator_id,
+            &AuthoritativeCommand::CreateUser(CreateUser {
+                principal_id: user_id,
+                name: RecordName::new("User")?,
+            }),
+        )?;
+        apply(
+            &mut repository,
+            5,
+            administrator_id,
+            &AuthoritativeCommand::CreateVolume(CreateVolume {
+                volume_id,
+                name: RecordName::new("Volume")?,
+                root_object_id,
+                owner_set_id: OwnerSetId::from_bytes([12; 16])?,
+                owners: BoundedItems::new(vec![user_id], 1_024)?,
+                key_generation: initial_volume_key(volume_id)?,
+            }),
+        )?;
+        issue_test_session(&mut repository, user_id, session_id, token_digest)?;
+        Ok(AuthorityFixture {
+            repository,
+            user_id,
+            gateway_node_id,
+            volume_id,
+            root_object_id,
+            session_id,
+            token_digest,
+        })
     }
 
     fn assert_volume_root_authority(
@@ -243,7 +289,7 @@ mod tests {
         let direct_digest = [20; 32];
         apply(
             repository,
-            8,
+            10,
             user_id,
             &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
                 method_id: direct_method_id,
@@ -279,7 +325,7 @@ mod tests {
         );
         apply(
             repository,
-            9,
+            11,
             user_id,
             &AuthoritativeCommand::RevokeAuthenticationMethod(RevokeAuthenticationMethod {
                 method_id: direct_method_id,
@@ -304,7 +350,7 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         apply(
             repository,
-            4,
+            6,
             user_id,
             &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([13; 16])?,
@@ -322,7 +368,7 @@ mod tests {
         )?;
         apply(
             repository,
-            5,
+            7,
             user_id,
             &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([16; 16])?,
@@ -341,7 +387,7 @@ mod tests {
         )?;
         apply(
             repository,
-            6,
+            8,
             user_id,
             &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
                 session_id,
@@ -356,13 +402,13 @@ mod tests {
                         SessionAuthenticationFactor::ApiKey {
                             method_id: AuthenticationMethodId::from_bytes([13; 16])?,
                             credential_generation: 1,
-                            method_revision: Revision::new(4),
+                            method_revision: Revision::new(6),
                             key_id: ApiKeyId::from_bytes([14; 16])?,
                         },
                         SessionAuthenticationFactor::Totp {
                             method_id: AuthenticationMethodId::from_bytes([16; 16])?,
                             credential_generation: 1,
-                            method_revision: Revision::new(5),
+                            method_revision: Revision::new(7),
                             accepted_step: 0,
                         },
                     ],

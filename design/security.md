@@ -42,6 +42,9 @@ operation relies on.
   metadata.
 - Cluster secrets use generation-numbered envelope encryption. Each authorised
   node receives ciphertext for its current public wrapping key only.
+- Logical-volume creation commits its first content-key generation and every
+  recipient envelope in the same consensus transaction. Current gateways and
+  the verified offline recovery key receive envelopes; storage-only nodes do not.
 - CA and recovery design must avoid one plaintext key copied to every node.
 - Public-service certificate keys may be shared only through per-node encrypted
   envelopes and only with eligible gateway nodes.

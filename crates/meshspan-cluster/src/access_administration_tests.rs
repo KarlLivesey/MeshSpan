@@ -15,6 +15,9 @@ use meshspan_metadata::{
     SessionAuthenticationFactor, TotpAlgorithm,
 };
 
+use crate::protected_volume_test_support::{
+    confirm_recovery, initial_volume_key, protected_bootstrap, register_gateway_key,
+};
 use crate::{
     AccessAdministrationAuthority, AccessAdministrationError, MetadataAccessAdministration,
 };
@@ -45,7 +48,7 @@ fn administration_pages_recheck_object_self_and_system_authority_before_disclosu
     assert_authentication_precedes_projection_validation(&fixture)?;
     apply(
         &mut fixture.repository,
-        11,
+        13,
         fixture.ids.administrator,
         &AuthoritativeCommand::RevokePermissionGrant(RevokePermissionGrant {
             grant_id: fixture.ids.grant,
@@ -87,7 +90,7 @@ fn create_identity_and_permissions(
         repository,
         1,
         ids.administrator,
-        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+        &protected_bootstrap(BootstrapMesh {
             mesh_id: MeshId::from_bytes([10; 16])?,
             mesh_name: RecordName::new("Administration proof")?,
             administrator_id: ids.administrator,
@@ -98,11 +101,23 @@ fn create_identity_and_permissions(
             node_id: ids.gateway,
             node_name: RecordName::new("Gateway")?,
             partition_name: RecordName::new(&ids.partition.to_string())?,
-        }),
+        })?,
     )?;
     apply(
         repository,
         2,
+        ids.administrator,
+        &confirm_recovery(MeshId::from_bytes([10; 16])?),
+    )?;
+    apply(
+        repository,
+        3,
+        ids.administrator,
+        &register_gateway_key(ids.gateway)?,
+    )?;
+    apply(
+        repository,
+        4,
         ids.administrator,
         &AuthoritativeCommand::CreateUser(CreateUser {
             principal_id: ids.user,
@@ -111,7 +126,7 @@ fn create_identity_and_permissions(
     )?;
     apply(
         repository,
-        3,
+        5,
         ids.administrator,
         &AuthoritativeCommand::CreateVolume(CreateVolume {
             volume_id: ids.volume,
@@ -119,11 +134,12 @@ fn create_identity_and_permissions(
             root_object_id: ids.root,
             owner_set_id: OwnerSetId::from_bytes([13; 16])?,
             owners: BoundedItems::new(vec![ids.administrator], 1_024)?,
+            key_generation: initial_volume_key(ids.volume)?,
         }),
     )?;
     apply(
         repository,
-        4,
+        6,
         ids.administrator,
         &AuthoritativeCommand::GrantPermission(GrantPermission {
             grant_id: ids.grant,
@@ -142,11 +158,11 @@ fn issue_sessions(
     repository: &mut AuthoritativeRepository,
     ids: TestIds,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let administrator_factors = create_factors(repository, 5, ids.administrator, 40, true)?;
-    let user_factors = create_factors(repository, 7, ids.user, 50, false)?;
+    let administrator_factors = create_factors(repository, 7, ids.administrator, 40, true)?;
+    let user_factors = create_factors(repository, 9, ids.user, 50, false)?;
     apply(
         repository,
-        9,
+        11,
         ids.administrator,
         &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
             session_id: SessionId::from_bytes([14; 16])?,
@@ -162,7 +178,7 @@ fn issue_sessions(
     )?;
     apply(
         repository,
-        10,
+        12,
         ids.user,
         &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
             session_id: SessionId::from_bytes([15; 16])?,
@@ -403,7 +419,7 @@ fn assert_revocation_rechecks_current_rights(
     assert!(matches!(
         current.authority,
         AccessAdministrationAuthority::Session(capability)
-            if capability.identity_revision.get() == 11
+            if capability.identity_revision.get() == 13
     ));
     Ok(())
 }

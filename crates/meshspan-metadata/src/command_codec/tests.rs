@@ -20,6 +20,7 @@ use crate::{
     RecordName, RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember,
     RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAuthenticationFactor,
     SessionClientLabel, StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 #[test]
@@ -123,6 +124,7 @@ fn volume_creation_round_trips_every_identity_and_owner() -> Result<(), Box<dyn 
                 ],
                 1_024,
             )?,
+            key_generation: codec_volume_key(VolumeId::from_bytes([61; 16])?)?,
         }),
     )?;
     Ok(())
@@ -497,6 +499,25 @@ fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::
         bundle_digest: [14; 32],
         save_challenge_commitment: [15; 32],
     })
+}
+
+fn codec_volume_key(
+    volume_id: VolumeId,
+) -> Result<Box<CommitSecretGeneration>, Box<dyn std::error::Error>> {
+    let recipient = WrappingPublicKey::from_bytes([12; 32])?;
+    let (secret, recipients) = encrypt_secret(
+        SecretContext::new(VOLUME_CONTENT_KEY_SECRET_KIND, volume_id.as_bytes(), 1)?,
+        &[16; 32],
+        &[recipient],
+        &mut SecretRandom(17),
+    )?;
+    Ok(Box::new(CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: recipients
+            .into_iter()
+            .map(|recipient| recipient.parts())
+            .collect(),
+    }))
 }
 
 struct SecretRandom(u8);

@@ -61,6 +61,8 @@ mod federation_mutation_relay_tests;
 mod filesystem_convergence_tests;
 #[cfg(test)]
 mod handoff_tests;
+#[cfg(test)]
+mod protected_volume_test_support;
 
 pub use access_administration::{
     AccessAdministrationAuthority, AccessAdministrationError, AuthorisedAccessPage,

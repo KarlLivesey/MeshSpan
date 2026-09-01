@@ -1,0 +1,108 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+use meshspan_domain::{
+    ApiKeyId, AuthenticationMethodId, EntropyError, MeshId, RandomSource, UnixMicros, VolumeId,
+};
+use meshspan_metadata::{
+    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommitSecretGeneration, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
+    NewAuthenticationCredential, RegisterNodeWrappingKey, VOLUME_CONTENT_KEY_SECRET_KIND,
+};
+use meshspan_secret_envelope::{
+    SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
+};
+use sha2::{Digest, Sha256};
+
+const RECOVERY_PUBLIC_KEY: [u8; 32] = [201; 32];
+const BUNDLE_DIGEST: [u8; 32] = [202; 32];
+const SAVE_CHALLENGE_COMMITMENT: [u8; 32] = [203; 32];
+const GATEWAY_PRIVATE_KEY: [u8; 32] = [210; 32];
+
+pub(crate) fn protected_bootstrap(
+    mesh: BootstrapMesh,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let recovery_key = WrappingPublicKey::from_bytes(RECOVERY_PUBLIC_KEY)?;
+    let certificate = vec![204; 64];
+    Ok(AuthoritativeCommand::BootstrapAppliance(
+        BootstrapAppliance {
+            authentication: CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([205; 16])?,
+                principal_id: mesh.administrator_id,
+                label: "Test bootstrap key".to_owned(),
+                service_scope: 7,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([206; 16])?,
+                    key_digest: [207; 32],
+                    scopes: 1,
+                    valid_from: UnixMicros::new(100),
+                },
+            },
+            recovery: Box::new(BootstrapRecoveryIdentity {
+                public_wrapping_key: recovery_key.as_bytes(),
+                key_fingerprint: recovery_key.fingerprint(),
+                root_certificate_digest: Sha256::digest(&certificate).into(),
+                root_certificate_der: certificate,
+                bundle_digest: BUNDLE_DIGEST,
+                save_challenge_commitment: SAVE_CHALLENGE_COMMITMENT,
+            }),
+            mesh,
+        },
+    ))
+}
+
+pub(crate) fn confirm_recovery(mesh_id: MeshId) -> AuthoritativeCommand {
+    AuthoritativeCommand::ConfirmRecoveryBundleSaved(ConfirmRecoveryBundleSaved {
+        mesh_id,
+        bundle_digest: BUNDLE_DIGEST,
+        save_challenge_commitment: SAVE_CHALLENGE_COMMITMENT,
+    })
+}
+
+pub(crate) fn register_gateway_key(
+    node_id: meshspan_domain::NodeId,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let public_key = WrappingPrivateKey::from_bytes(GATEWAY_PRIVATE_KEY)?.public_key();
+    Ok(AuthoritativeCommand::RegisterNodeWrappingKey(
+        RegisterNodeWrappingKey {
+            node_id,
+            generation: 1,
+            public_key: public_key.as_bytes(),
+            key_fingerprint: public_key.fingerprint(),
+        },
+    ))
+}
+
+pub(crate) fn initial_volume_key(
+    volume_id: VolumeId,
+) -> Result<Box<CommitSecretGeneration>, Box<dyn std::error::Error>> {
+    let recipients = [
+        WrappingPublicKey::from_bytes(RECOVERY_PUBLIC_KEY)?,
+        WrappingPrivateKey::from_bytes(GATEWAY_PRIVATE_KEY)?.public_key(),
+    ];
+    let (secret, recipients) = encrypt_secret(
+        SecretContext::new(VOLUME_CONTENT_KEY_SECRET_KIND, volume_id.as_bytes(), 1)?,
+        &[208; 32],
+        &recipients,
+        &mut TestRandom(209),
+    )?;
+    Ok(Box::new(CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: recipients
+            .into_iter()
+            .map(|recipient| recipient.parts())
+            .collect(),
+    }))
+}
+
+struct TestRandom(u8);
+
+impl RandomSource for TestRandom {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        for byte in destination {
+            *byte = self.0;
+            self.0 = self.0.wrapping_add(1).max(1);
+        }
+        Ok(())
+    }
+}

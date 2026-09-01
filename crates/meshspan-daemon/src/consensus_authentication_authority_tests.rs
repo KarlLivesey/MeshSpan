@@ -19,19 +19,22 @@ use meshspan_metadata::{
     BootstrapRecoveryIdentity, BrowserSessionAccessRequest, BrowserSessionProtection,
     CommandContext, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
     IssueAuthenticationSession, NewAuthenticationCredential, PageLimit, PartitionDatabase,
-    PrincipalKind, RecordName, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SessionAccessDecision, SessionAccessRequest, SessionAuthenticationFactor, SessionClientLabel,
+    PrincipalKind, RecordName, RegisterNodeWrappingKey, RevokeAuthenticationMethod,
+    RevokeAuthenticationSession, SessionAccessDecision, SessionAccessRequest,
+    SessionAuthenticationFactor, SessionClientLabel, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
-use meshspan_secret_envelope::WrappingPublicKey;
+use meshspan_secret_envelope::{
+    SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
     ApiKeyIssuanceAuthority, AuthenticationMethodListingAuthority,
     AuthenticationMethodRevocationAuthority, BrowserSessionAuthority,
     ConsensusAuthenticationAuthority, IdentityAdministrationAuthority,
-    IdentityAdministrationAuthorityError, RecoveryBundleVerificationAuthority,
-    RecoveryBundleVerificationAuthorityError, SessionAuthority, SessionRevocationAuthority,
-    VolumeAdministrationAuthority,
+    IdentityAdministrationAuthorityError, NodeWrappingKeyRegistrationAuthority,
+    RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
+    SessionAuthority, SessionRevocationAuthority, VolumeAdministrationAuthority,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -85,7 +88,7 @@ async fn volume_creation_returns_exact_committed_projection()
     let mut fixture = RunningAuthority::start().await?;
     let commit = fixture.volume_lifecycle()?;
     assert_eq!(commit.record.display_name, "Shared files");
-    assert_eq!(commit.record.revision.get(), 2);
+    assert_eq!(commit.record.revision.get(), 4);
     fixture.shutdown().await
 }
 
@@ -387,22 +390,60 @@ impl RunningAuthority {
             .ok_or("test read connection was already consumed")?;
         let authority_handle = self.handle.clone();
         let administrator_id = self.administrator_id;
+        let node_id = self.node_id;
         tokio::task::block_in_place(move || {
             let mut authority = ConsensusAuthenticationAuthority::new(
                 reader,
                 authority_handle,
                 tokio::runtime::Handle::current(),
             );
+            let recovery =
+                AuthoritativeCommand::ConfirmRecoveryBundleSaved(ConfirmRecoveryBundleSaved {
+                    mesh_id: MeshId::from_bytes([9; 16])?,
+                    bundle_digest: [92; 32],
+                    save_challenge_commitment: [93; 32],
+                });
+            authority.commit_or_resolve_recovery_bundle_verification(
+                command_context(administrator_id, 45, 46, 39, None)?,
+                &recovery,
+            )?;
+            let wrapping_key = WrappingPrivateKey::from_bytes([95; 32])?.public_key();
+            let registration =
+                AuthoritativeCommand::RegisterNodeWrappingKey(RegisterNodeWrappingKey {
+                    node_id,
+                    generation: 1,
+                    public_key: wrapping_key.as_bytes(),
+                    key_fingerprint: wrapping_key.fingerprint(),
+                });
+            authority.commit_or_resolve_registration(
+                command_context(administrator_id, 47, 48, 40, None)?,
+                &registration,
+            )?;
+            let volume_id = meshspan_domain::VolumeId::from_bytes([50; 16])?;
+            let recipients = authority.volume_key_recipients()?;
+            let (secret, envelopes) = encrypt_secret(
+                SecretContext::new(VOLUME_CONTENT_KEY_SECRET_KIND, volume_id.as_bytes(), 1)?,
+                &[49; 32],
+                &recipients,
+                &mut SequentialRandom(94),
+            )?;
             let command = AuthoritativeCommand::CreateVolume(meshspan_metadata::CreateVolume {
-                volume_id: meshspan_domain::VolumeId::from_bytes([50; 16])?,
+                volume_id,
                 name: RecordName::new("Shared files")?,
                 root_object_id: meshspan_domain::ObjectId::from_bytes([51; 16])?,
                 owner_set_id: meshspan_domain::OwnerSetId::from_bytes([52; 16])?,
                 owners: BoundedItems::new(vec![administrator_id], 1_024)?,
+                key_generation: Box::new(meshspan_metadata::CommitSecretGeneration {
+                    secret: secret.parts(),
+                    recipients: envelopes
+                        .into_iter()
+                        .map(|envelope| envelope.parts())
+                        .collect(),
+                }),
             });
             authority
                 .commit_or_resolve_volume_creation(
-                    command_context(administrator_id, 50, 51, 40, None)?,
+                    command_context(administrator_id, 50, 51, 41, None)?,
                     &command,
                 )
                 .map_err(Into::into)

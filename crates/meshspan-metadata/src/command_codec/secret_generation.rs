@@ -18,8 +18,15 @@ pub(super) fn encode(
     encoder: &mut Encoder,
     value: &CommitSecretGeneration,
 ) -> Result<(), MetadataCommandCodecError> {
-    validate(value)?;
     encoder.u16(COMMIT_SECRET_GENERATION)?;
+    encode_payload(encoder, value)
+}
+
+pub(super) fn encode_payload(
+    encoder: &mut Encoder,
+    value: &CommitSecretGeneration,
+) -> Result<(), MetadataCommandCodecError> {
+    validate(value)?;
     encode_secret(encoder, &value.secret)?;
     encoder.u64(
         u64::try_from(value.recipients.len())
@@ -32,6 +39,12 @@ pub(super) fn encode(
 }
 
 pub(super) fn decode(
+    decoder: &mut Decoder<'_>,
+) -> Result<CommitSecretGeneration, MetadataCommandCodecError> {
+    decode_payload(decoder)
+}
+
+pub(super) fn decode_payload(
     decoder: &mut Decoder<'_>,
 ) -> Result<CommitSecretGeneration, MetadataCommandCodecError> {
     let secret = decode_secret(decoder)?;

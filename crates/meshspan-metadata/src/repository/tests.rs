@@ -10,12 +10,13 @@ use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
     AuthenticationMethodId, AuthenticationService, BackupId, ComponentInstanceId,
-    DelegatedMetadataScope, DelegationAdmission, DurationMicros, GrantId, GroupId, HandoffEvidence,
-    HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NodeId, ObjectId,
-    OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId, Revision, Rights, RoleId,
-    RootDelegatedRoute, ScopeId, SessionId, SnapshotId, TagId, UnixMicros, VolumeId,
+    DelegatedMetadataScope, DelegationAdmission, DurationMicros, EntropyError, GrantId, GroupId,
+    HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily,
+    NodeId, ObjectId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuorumPlanId,
+    RandomSource, Revision, Rights, RoleId, RootDelegatedRoute, ScopeId, SessionId, SnapshotId,
+    TagId, UnixMicros, VolumeId,
 };
-use meshspan_secret_envelope::WrappingPublicKey;
+use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
@@ -29,15 +30,15 @@ use super::{
 use crate::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
     AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapAppliance,
-    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, ConfigureComponent,
-    ConfirmRecoveryBundleSaved, ConsumeJoinGrant, CreateActivationPolicy,
+    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration,
+    ConfigureComponent, ConfirmRecoveryBundleSaved, ConsumeJoinGrant, CreateActivationPolicy,
     CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateMetadataPartition,
     CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume, DetachTag,
     FreezeScopeHandoff, GrantInheritance, GrantPermission, InstallScopeRouteProjection,
     IssueAuthenticationSession, IssueJoinGrant, JoinRoles, NamespaceObjectKind,
     NewAuthenticationCredential, PartitionDatabase, PermissionScope, RecordName,
     RegisterRoutingSigner, ReplaceObjectOwners, RevokeAuthenticationSession, RouteAttestation,
-    SessionAuthenticationFactor, TagTarget, TotpAlgorithm,
+    SessionAuthenticationFactor, TagTarget, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 struct FixtureIds {
@@ -47,6 +48,121 @@ struct FixtureIds {
     inner_group: GroupId,
     outer_group: GroupId,
     partition: PartitionId,
+}
+
+const TEST_RECOVERY_KEY_BYTES: [u8; 32] = [146; 32];
+const TEST_GATEWAY_KEY_BYTES: [u8; 32] = [145; 32];
+
+pub(super) fn protected_bootstrap(
+    mesh: BootstrapMesh,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let public_key = WrappingPublicKey::from_bytes(TEST_RECOVERY_KEY_BYTES)?;
+    let certificate = vec![147; 64];
+    Ok(AuthoritativeCommand::BootstrapAppliance(
+        BootstrapAppliance {
+            authentication: CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([148; 16])?,
+                principal_id: mesh.administrator_id,
+                label: "Test bootstrap key".to_owned(),
+                service_scope: 7,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([149; 16])?,
+                    key_digest: [150; 32],
+                    scopes: 1,
+                    valid_from: UnixMicros::new(1),
+                },
+            },
+            recovery: Box::new(BootstrapRecoveryIdentity {
+                public_wrapping_key: public_key.as_bytes(),
+                key_fingerprint: public_key.fingerprint(),
+                root_certificate_digest: Sha256::digest(&certificate).into(),
+                root_certificate_der: certificate,
+                bundle_digest: [151; 32],
+                save_challenge_commitment: [152; 32],
+            }),
+            mesh,
+        },
+    ))
+}
+
+pub(super) fn mark_test_recovery_verified(
+    repository: &mut AuthoritativeRepository,
+    mesh_id: MeshId,
+    administrator: PrincipalId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let updated = repository.database.connection_mut().execute(
+        "UPDATE mesh_recovery_authorities
+         SET state = 2, verified_by = ?1, verified_at = 1
+         WHERE mesh_id = ?2 AND state = 1",
+        rusqlite::params![
+            administrator.as_bytes().as_slice(),
+            mesh_id.as_bytes().as_slice(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err("test recovery authority was not pending".into());
+    }
+    let node_id = repository.database.connection().query_row(
+        "SELECT node_id FROM nodes WHERE state = 2 LIMIT 1",
+        [],
+        |row| row.get::<_, Vec<u8>>(0),
+    )?;
+    let gateway_key = WrappingPublicKey::from_bytes(TEST_GATEWAY_KEY_BYTES)?;
+    repository.database.connection_mut().execute(
+        "INSERT INTO node_wrapping_keys(
+            node_id, generation, public_key, key_fingerprint, state, registered_at,
+            retired_at, revision
+         ) VALUES (?1, 1, ?2, ?3, 1, 1, NULL, 1)",
+        rusqlite::params![
+            node_id.as_slice(),
+            gateway_key.as_bytes().as_slice(),
+            gateway_key.fingerprint().as_slice(),
+        ],
+    )?;
+    repository.database.connection_mut().execute(
+        "INSERT INTO secret_wrapping_recipients(
+            key_fingerprint, recipient_kind, owner_id, generation, public_key, state,
+            registered_at, retired_at, revision
+         ) VALUES (?1, 1, ?2, 1, ?3, 1, 1, NULL, 1)",
+        rusqlite::params![
+            gateway_key.fingerprint().as_slice(),
+            node_id.as_slice(),
+            gateway_key.as_bytes().as_slice(),
+        ],
+    )?;
+    Ok(())
+}
+
+pub(super) fn initial_test_volume_key(
+    volume_id: VolumeId,
+) -> Result<Box<CommitSecretGeneration>, Box<dyn std::error::Error>> {
+    let context = SecretContext::new(VOLUME_CONTENT_KEY_SECRET_KIND, volume_id.as_bytes(), 1)?;
+    let recipients = [
+        WrappingPublicKey::from_bytes(TEST_RECOVERY_KEY_BYTES)?,
+        WrappingPublicKey::from_bytes(TEST_GATEWAY_KEY_BYTES)?,
+    ];
+    let (secret, recipients) =
+        encrypt_secret(context, &[153; 32], &recipients, &mut VolumeKeyRandom(154))?;
+    Ok(Box::new(CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: recipients
+            .into_iter()
+            .map(|recipient| recipient.parts())
+            .collect(),
+    }))
+}
+
+struct VolumeKeyRandom(u8);
+
+impl RandomSource for VolumeKeyRandom {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        for byte in destination {
+            *byte = self.0;
+            self.0 = self.0.wrapping_add(1).max(1);
+        }
+        Ok(())
+    }
 }
 
 #[test]
@@ -120,7 +236,7 @@ fn prepare_owner_replacement_fixture(
         repository,
         1,
         context(190, ids.administrator, 191, 100, Some(0))?,
-        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+        &protected_bootstrap(BootstrapMesh {
             mesh_id: MeshId::from_bytes([192; 16])?,
             mesh_name: RecordName::new("Owner replacement proof")?,
             administrator_id: ids.administrator,
@@ -131,7 +247,12 @@ fn prepare_owner_replacement_fixture(
             node_id: NodeId::from_bytes([195; 16])?,
             node_name: RecordName::new("Owner node")?,
             partition_name: RecordName::new("Owner authority")?,
-        }),
+        })?,
+    )?;
+    mark_test_recovery_verified(
+        repository,
+        MeshId::from_bytes([192; 16])?,
+        ids.administrator,
     )?;
     for (index, operation, audit, principal, name) in [
         (2, 196, 197, ids.user, "First owner"),
@@ -174,6 +295,7 @@ fn prepare_owner_replacement_fixture(
             root_object_id: object_id,
             owner_set_id: OwnerSetId::from_bytes([206; 16])?,
             owners: BoundedItems::new(vec![ids.administrator], 1_024)?,
+            key_generation: initial_test_volume_key(VolumeId::from_bytes([205; 16])?)?,
         }),
     )?;
     Ok(object_id)
@@ -328,7 +450,7 @@ fn descriptive_tags_are_audited_idempotent_and_never_grant_authority()
         &mut repository,
         1,
         context(150, ids.administrator, 151, 100, Some(0))?,
-        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+        &protected_bootstrap(BootstrapMesh {
             mesh_id: MeshId::from_bytes([152; 16])?,
             mesh_name: RecordName::new("Tag proof")?,
             administrator_id: ids.administrator,
@@ -339,7 +461,12 @@ fn descriptive_tags_are_audited_idempotent_and_never_grant_authority()
             node_id: NodeId::from_bytes([155; 16])?,
             node_name: RecordName::new("Tag node")?,
             partition_name: RecordName::new("Tag authority")?,
-        }),
+        })?,
+    )?;
+    mark_test_recovery_verified(
+        &mut repository,
+        MeshId::from_bytes([152; 16])?,
+        ids.administrator,
     )?;
     apply(
         &mut repository,
@@ -361,6 +488,7 @@ fn descriptive_tags_are_audited_idempotent_and_never_grant_authority()
             root_object_id: root_id,
             owner_set_id: OwnerSetId::from_bytes([162; 16])?,
             owners: BoundedItems::new(vec![ids.administrator], 1_024)?,
+            key_generation: initial_test_volume_key(VolumeId::from_bytes([161; 16])?)?,
         }),
     )?;
     let tag_id = TagId::from_bytes([163; 16])?;
@@ -559,7 +687,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
         &mut repository,
         1,
         bootstrap_context,
-        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+        &protected_bootstrap(BootstrapMesh {
             mesh_id: MeshId::from_bytes([7; 16])?,
             mesh_name: RecordName::new("Proof mesh")?,
             administrator_id: ids.administrator,
@@ -570,7 +698,12 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
             node_id: NodeId::from_bytes([10; 16])?,
             node_name: RecordName::new("Proof node")?,
             partition_name: RecordName::new("Authority")?,
-        }),
+        })?,
+    )?;
+    mark_test_recovery_verified(
+        &mut repository,
+        MeshId::from_bytes([7; 16])?,
+        ids.administrator,
     )?;
     apply(
         &mut repository,
@@ -2658,6 +2791,7 @@ fn create_namespace(
             root_object_id: root_id,
             owner_set_id: OwnerSetId::from_bytes([30; 16])?,
             owners,
+            key_generation: initial_test_volume_key(volume_id)?,
         }),
     )?;
     let folder_id = ObjectId::from_bytes([31; 16])?;
