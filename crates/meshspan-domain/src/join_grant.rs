@@ -1,34 +1,57 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Canonical high-entropy node join-grant material.
+//! Canonical self-contained node join invitations.
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use crate::secret_text::{SECRET_BYTES, decode, encode};
-use crate::{JoinGrantId, RandomSource};
+use crate::secret_text::SECRET_BYTES;
+use crate::{JoinGrantId, MeshId, RandomSource};
 
-const PREFIX: &str = "meshspan-join-v1.";
-/// Exact byte length of one canonical encoded join grant.
-pub const ENCODED_JOIN_GRANT_LENGTH: usize = PREFIX.len() + 97;
+const PREFIX: &str = "meshspan-join-v2.";
+const MAXIMUM_ENDPOINT_BYTES: usize = 512;
+const CERTIFICATE_FINGERPRINT_BYTES: usize = 32;
+const SECRET_DIGEST_DOMAIN: &[u8] = b"meshspan.join-grant-secret.v2\0";
 
-/// Secret-bearing administrator-issued node join grant.
+/// Maximum byte length of one canonical encoded join invitation.
+pub const MAXIMUM_ENCODED_JOIN_GRANT_LENGTH: usize = PREFIX.len()
+    + (16 * 2)
+    + 1
+    + (16 * 2)
+    + 1
+    + (SECRET_BYTES * 2)
+    + 1
+    + (CERTIFICATE_FINGERPRINT_BYTES * 2)
+    + 1
+    + (MAXIMUM_ENDPOINT_BYTES * 2);
+
+/// Secret-bearing administrator-issued node join invitation.
 ///
-/// The type deliberately implements neither `Debug` nor `Display`. Callers must explicitly
-/// request a zeroising encoded value at the one-time presentation boundary.
+/// The invitation carries the target mesh, one HTTPS origin and the exact issuing gateway leaf
+/// fingerprint so a headless daemon needs no separate discovery or unsafe TLS override. It
+/// deliberately implements neither `Debug` nor `Display`.
 pub struct JoinGrantBundle {
+    mesh_id: MeshId,
     join_grant_id: JoinGrantId,
     secret: Zeroizing<[u8; SECRET_BYTES]>,
+    enrolment_endpoint: String,
+    gateway_certificate_fingerprint: [u8; CERTIFICATE_FINGERPRINT_BYTES],
 }
 
 impl JoinGrantBundle {
-    /// Generates an independent join grant from cryptographic entropy.
+    /// Generates an independent mesh-bound join invitation from cryptographic entropy.
     ///
     /// # Errors
     ///
-    /// Rejects unavailable entropy, a nil identifier or an all-zero secret.
-    pub fn generate(random: &mut impl RandomSource) -> Result<Self, JoinGrantBundleError> {
+    /// Rejects unavailable entropy, invalid endpoint/pin input, a nil identifier or an all-zero
+    /// secret.
+    pub fn generate(
+        mesh_id: MeshId,
+        enrolment_endpoint: &str,
+        gateway_certificate_fingerprint: [u8; CERTIFICATE_FINGERPRINT_BYTES],
+        random: &mut impl RandomSource,
+    ) -> Result<Self, JoinGrantBundleError> {
         let mut join_grant_id = [0_u8; 16];
         let mut secret = Zeroizing::new([0_u8; SECRET_BYTES]);
         random
@@ -37,19 +60,46 @@ impl JoinGrantBundle {
         random
             .fill_bytes(secret.as_mut())
             .map_err(|_| JoinGrantBundleError::EntropyUnavailable)?;
-        Self::from_parts(join_grant_id, secret)
+        Self::from_parts(
+            mesh_id.as_bytes(),
+            join_grant_id,
+            secret,
+            enrolment_endpoint,
+            gateway_certificate_fingerprint,
+        )
     }
 
-    /// Parses one exact lowercase canonical join grant.
+    /// Parses one exact lowercase canonical join invitation.
     ///
     /// # Errors
     ///
-    /// Rejects another version, whitespace, uppercase/non-hex bytes, zero values, extra fields
-    /// and an incorrect exact length.
+    /// Rejects another version, non-canonical hex, zero values, an invalid HTTPS origin, extra
+    /// fields and input beyond the compiled bound.
     pub fn parse(value: &str) -> Result<Self, JoinGrantBundleError> {
-        let (join_grant_id, secret) =
-            decode(value, PREFIX).ok_or(JoinGrantBundleError::InvalidEncoding)?;
-        Self::from_parts(join_grant_id, Zeroizing::new(secret))
+        if value.len() > MAXIMUM_ENCODED_JOIN_GRANT_LENGTH {
+            return Err(JoinGrantBundleError::InvalidEncoding);
+        }
+        let payload = value
+            .strip_prefix(PREFIX)
+            .ok_or(JoinGrantBundleError::InvalidEncoding)?;
+        let mut fields = payload.split('.');
+        let mesh_id = decode_fixed::<16>(next_field(&mut fields)?)?;
+        let join_grant_id = decode_fixed::<16>(next_field(&mut fields)?)?;
+        let secret = Zeroizing::new(decode_fixed::<SECRET_BYTES>(next_field(&mut fields)?)?);
+        let certificate = decode_fixed::<CERTIFICATE_FINGERPRINT_BYTES>(next_field(&mut fields)?)?;
+        let endpoint = decode_variable(next_field(&mut fields)?, MAXIMUM_ENDPOINT_BYTES)?;
+        if fields.next().is_some() {
+            return Err(JoinGrantBundleError::InvalidEncoding);
+        }
+        let endpoint =
+            String::from_utf8(endpoint).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+        Self::from_parts(mesh_id, join_grant_id, secret, &endpoint, certificate)
+    }
+
+    /// Returns the exact target mesh identity.
+    #[must_use]
+    pub const fn mesh_id(&self) -> MeshId {
+        self.mesh_id
     }
 
     /// Returns the stable public grant identity included in the encoded value.
@@ -58,102 +108,281 @@ impl JoinGrantBundle {
         self.join_grant_id
     }
 
-    /// Returns the verifier persisted in replicated join-grant metadata.
+    /// Returns the canonical HTTPS origin contacted for initial enrolment.
+    #[must_use]
+    pub fn enrolment_endpoint(&self) -> &str {
+        &self.enrolment_endpoint
+    }
+
+    /// Returns the exact issuing gateway leaf-certificate fingerprint.
+    #[must_use]
+    pub const fn gateway_certificate_fingerprint(&self) -> [u8; 32] {
+        self.gateway_certificate_fingerprint
+    }
+
+    /// Returns the mesh- and grant-bound verifier persisted in replicated metadata.
     #[must_use]
     pub fn secret_digest(&self) -> [u8; 32] {
-        Sha256::digest(self.secret.as_ref()).into()
+        let mut digest = Sha256::new();
+        digest.update(SECRET_DIGEST_DOMAIN);
+        digest.update(self.mesh_id.as_bytes());
+        digest.update(self.join_grant_id.as_bytes());
+        digest.update(self.secret.as_ref());
+        digest.finalize().into()
     }
 
     /// Explicitly exposes the secret-bearing text for its one-time output or enrolment boundary.
-    ///
-    /// The returned allocation is zeroed on drop. It must never be logged or persisted in
-    /// replicated metadata.
     #[must_use]
     pub fn expose_encoded(&self) -> Zeroizing<String> {
-        encode(PREFIX, &self.join_grant_id.as_bytes(), &self.secret)
+        let endpoint = self.enrolment_endpoint.as_bytes();
+        let capacity = PREFIX.len()
+            + 4
+            + ((16 + 16 + SECRET_BYTES + CERTIFICATE_FINGERPRINT_BYTES + endpoint.len()) * 2);
+        let mut encoded = Zeroizing::new(String::with_capacity(capacity));
+        encoded.push_str(PREFIX);
+        append_hex(&mut encoded, &self.mesh_id.as_bytes());
+        encoded.push('.');
+        append_hex(&mut encoded, &self.join_grant_id.as_bytes());
+        encoded.push('.');
+        append_hex(&mut encoded, self.secret.as_ref());
+        encoded.push('.');
+        append_hex(&mut encoded, &self.gateway_certificate_fingerprint);
+        encoded.push('.');
+        append_hex(&mut encoded, endpoint);
+        encoded
     }
 
     fn from_parts(
+        mesh_id: [u8; 16],
         join_grant_id: [u8; 16],
         secret: Zeroizing<[u8; SECRET_BYTES]>,
+        enrolment_endpoint: &str,
+        gateway_certificate_fingerprint: [u8; CERTIFICATE_FINGERPRINT_BYTES],
     ) -> Result<Self, JoinGrantBundleError> {
+        let mesh_id =
+            MeshId::from_bytes(mesh_id).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
         let join_grant_id = JoinGrantId::from_bytes(join_grant_id)
             .map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
-        if secret.as_ref() == [0; SECRET_BYTES] {
+        if secret.as_ref() == [0; SECRET_BYTES]
+            || gateway_certificate_fingerprint == [0; CERTIFICATE_FINGERPRINT_BYTES]
+            || !valid_https_origin(enrolment_endpoint)
+        {
             return Err(JoinGrantBundleError::InvalidEncoding);
         }
         Ok(Self {
+            mesh_id,
             join_grant_id,
             secret,
+            enrolment_endpoint: enrolment_endpoint.to_owned(),
+            gateway_certificate_fingerprint,
         })
     }
 }
 
-/// Failure to generate or parse node join-grant material.
+fn next_field<'a>(
+    fields: &mut impl Iterator<Item = &'a str>,
+) -> Result<&'a str, JoinGrantBundleError> {
+    fields.next().ok_or(JoinGrantBundleError::InvalidEncoding)
+}
+
+fn decode_fixed<const N: usize>(value: &str) -> Result<[u8; N], JoinGrantBundleError> {
+    let decoded = decode_variable(value, N)?;
+    decoded
+        .try_into()
+        .map_err(|_| JoinGrantBundleError::InvalidEncoding)
+}
+
+fn decode_variable(value: &str, maximum: usize) -> Result<Vec<u8>, JoinGrantBundleError> {
+    if value.is_empty() || !value.len().is_multiple_of(2) || value.len() > maximum.saturating_mul(2)
+    {
+        return Err(JoinGrantBundleError::InvalidEncoding);
+    }
+    value
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            let high = decode_nibble(pair[0]).ok_or(JoinGrantBundleError::InvalidEncoding)?;
+            let low = decode_nibble(pair[1]).ok_or(JoinGrantBundleError::InvalidEncoding)?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+const fn decode_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn append_hex(destination: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes {
+        destination.push(char::from(HEX[usize::from(byte >> 4)]));
+        destination.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+}
+
+fn valid_https_origin(value: &str) -> bool {
+    if value.len() > MAXIMUM_ENDPOINT_BYTES
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b' ')
+    {
+        return false;
+    }
+    let Some(authority) = value.strip_prefix("https://") else {
+        return false;
+    };
+    if authority.is_empty()
+        || authority
+            .bytes()
+            .any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'@'))
+    {
+        return false;
+    }
+    if authority.starts_with('[') {
+        return valid_bracketed_address(authority);
+    }
+    let (host, port) = authority
+        .rsplit_once(':')
+        .map_or((authority, None), |(host, port)| (host, Some(port)));
+    valid_host(host) && port.is_none_or(valid_port)
+}
+
+fn valid_bracketed_address(authority: &str) -> bool {
+    let Some(close) = authority.find(']') else {
+        return false;
+    };
+    let host = &authority[1..close];
+    let suffix = &authority[close + 1..];
+    !host.is_empty()
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || matches!(byte, b':' | b'.'))
+        && (suffix.is_empty() || suffix.strip_prefix(':').is_some_and(valid_port))
+}
+
+fn valid_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && host.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+        })
+}
+
+fn valid_port(port: &str) -> bool {
+    !port.is_empty()
+        && port.bytes().all(|byte| byte.is_ascii_digit())
+        && port.parse::<u16>().is_ok_and(|value| value != 0)
+}
+
+/// Failure to construct or parse node join material.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum JoinGrantBundleError {
-    /// The configured cryptographic entropy source failed.
+    /// Cryptographic entropy was unavailable.
     #[error("join-grant entropy is unavailable")]
     EntropyUnavailable,
-    /// The supplied value is not the exact supported canonical encoding.
+    /// The invitation encoding, mesh, endpoint or pin is invalid.
     #[error("join-grant encoding is invalid")]
     InvalidEncoding,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ENCODED_JOIN_GRANT_LENGTH, JoinGrantBundle, JoinGrantBundleError};
-    use crate::{EntropyError, RandomSource};
-
-    const EXPECTED: &str = concat!(
-        "meshspan-join-v1.",
-        "0102030405060708090a0b0c0d0e0f10.",
-        "1112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30"
-    );
+    use super::{JoinGrantBundle, JoinGrantBundleError, MAXIMUM_ENCODED_JOIN_GRANT_LENGTH};
+    use crate::{EntropyError, MeshId, RandomSource};
 
     #[test]
-    fn generation_parsing_and_verifier_are_canonical() -> Result<(), JoinGrantBundleError> {
-        let generated = JoinGrantBundle::generate(&mut SequentialRandom(1))?;
+    fn invitation_round_trips_every_mesh_endpoint_pin_and_secret_field()
+    -> Result<(), JoinGrantBundleError> {
+        let mesh_id =
+            MeshId::from_bytes([9; 16]).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+        let generated = JoinGrantBundle::generate(
+            mesh_id,
+            "https://node-1.meshspan.local:8443",
+            [10; 32],
+            &mut SequentialRandom(1),
+        )?;
         let encoded = generated.expose_encoded();
-        assert_eq!(encoded.len(), ENCODED_JOIN_GRANT_LENGTH);
-        assert_eq!(encoded.as_str(), EXPECTED);
-
+        assert!(encoded.len() <= MAXIMUM_ENCODED_JOIN_GRANT_LENGTH);
         let parsed = JoinGrantBundle::parse(&encoded)?;
+        assert_eq!(parsed.mesh_id(), mesh_id);
         assert_eq!(parsed.join_grant_id(), generated.join_grant_id());
         assert_eq!(parsed.secret_digest(), generated.secret_digest());
-        assert_eq!(parsed.expose_encoded().as_str(), EXPECTED);
+        assert_eq!(
+            parsed.enrolment_endpoint(),
+            "https://node-1.meshspan.local:8443"
+        );
+        assert_eq!(parsed.gateway_certificate_fingerprint(), [10; 32]);
+        assert_eq!(parsed.expose_encoded().as_str(), encoded.as_str());
         Ok(())
     }
 
     #[test]
-    fn parser_rejects_noncanonical_or_zero_material() {
-        for value in [
+    fn parser_rejects_changed_fields_and_unsafe_origins() -> Result<(), JoinGrantBundleError> {
+        let mesh_id =
+            MeshId::from_bytes([9; 16]).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
+        for endpoint in [
             "",
-            "meshspan-join-v2.0102030405060708090a0b0c0d0e0f10.1112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30",
-            "meshspan-join-v1.0102030405060708090A0b0c0d0e0f10.1112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30",
-            "meshspan-join-v1.0102030405060708090a0b0c0d0e0f10.1112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3z",
-            "meshspan-join-v1.0102030405060708090a0b0c0d0e0f10.1112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30\n",
-            "meshspan-join-v1.00000000000000000000000000000000.1112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30",
-            "meshspan-join-v1.0102030405060708090a0b0c0d0e0f10.0000000000000000000000000000000000000000000000000000000000000000",
+            "http://node-1.meshspan.local",
+            "https://NODE-1.meshspan.local",
+            "https://user@node-1.meshspan.local",
+            "https://node-1.meshspan.local/path",
+            "https://node-1.meshspan.local:0",
         ] {
             assert_eq!(
-                JoinGrantBundle::parse(value).err(),
-                Some(JoinGrantBundleError::InvalidEncoding),
-                "unexpected parse result for {value:?}"
+                JoinGrantBundle::generate(mesh_id, endpoint, [10; 32], &mut SequentialRandom(1))
+                    .err(),
+                Some(JoinGrantBundleError::InvalidEncoding)
             );
         }
+        let valid = JoinGrantBundle::generate(
+            mesh_id,
+            "https://127.0.0.1:8443",
+            [10; 32],
+            &mut SequentialRandom(1),
+        )?;
+        for changed in [
+            String::new(),
+            valid.expose_encoded().to_uppercase(),
+            format!("{}.", valid.expose_encoded().as_str()),
+            valid
+                .expose_encoded()
+                .replace("meshspan-join-v2", "meshspan-join-v1"),
+        ] {
+            assert_eq!(
+                JoinGrantBundle::parse(&changed).err(),
+                Some(JoinGrantBundleError::InvalidEncoding)
+            );
+        }
+        Ok(())
     }
 
     #[test]
-    fn generation_rejects_failed_or_zero_entropy() {
+    fn generation_rejects_failed_zero_or_unpinned_material() -> Result<(), JoinGrantBundleError> {
+        let mesh_id =
+            MeshId::from_bytes([9; 16]).map_err(|_| JoinGrantBundleError::InvalidEncoding)?;
         assert_eq!(
-            JoinGrantBundle::generate(&mut FailingRandom).err(),
+            JoinGrantBundle::generate(mesh_id, "https://node", [10; 32], &mut FailingRandom).err(),
             Some(JoinGrantBundleError::EntropyUnavailable)
         );
         assert_eq!(
-            JoinGrantBundle::generate(&mut ZeroRandom).err(),
+            JoinGrantBundle::generate(mesh_id, "https://node", [10; 32], &mut ZeroRandom).err(),
             Some(JoinGrantBundleError::InvalidEncoding)
         );
+        assert_eq!(
+            JoinGrantBundle::generate(mesh_id, "https://node", [0; 32], &mut SequentialRandom(1))
+                .err(),
+            Some(JoinGrantBundleError::InvalidEncoding)
+        );
+        Ok(())
     }
 
     struct SequentialRandom(u8);

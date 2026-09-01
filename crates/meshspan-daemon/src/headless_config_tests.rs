@@ -4,14 +4,19 @@ use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
-use meshspan_domain::{EntropyError, JoinGrantBundle, RandomSource};
+use meshspan_domain::{EntropyError, JoinGrantBundle, MeshId, RandomSource};
 
 use crate::{HeadlessDaemonConfig, HeadlessDaemonConfigError};
 
 #[test]
 fn complete_configuration_preserves_native_paths_and_typed_join_secret()
 -> Result<(), Box<dyn std::error::Error>> {
-    let grant = JoinGrantBundle::generate(&mut SequentialRandom(1))?;
+    let grant = JoinGrantBundle::generate(
+        MeshId::from_bytes([9; 16])?,
+        "https://node.meshspan.local:8443",
+        [10; 32],
+        &mut SequentialRandom(1),
+    )?;
     let encoded = grant.expose_encoded();
     let config = HeadlessDaemonConfig::parse([
         OsString::from("--storage-path"),
@@ -46,6 +51,11 @@ fn complete_configuration_preserves_native_paths_and_typed_join_secret()
         .ok_or(HeadlessDaemonConfigError::InvalidJoinGrant)?;
     assert_eq!(parsed_grant.join_grant_id(), grant.join_grant_id());
     assert_eq!(parsed_grant.secret_digest(), grant.secret_digest());
+    assert_eq!(parsed_grant.mesh_id(), grant.mesh_id());
+    assert_eq!(
+        parsed_grant.enrolment_endpoint(),
+        grant.enrolment_endpoint()
+    );
     Ok(())
 }
 
