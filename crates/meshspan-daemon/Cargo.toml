@@ -38,6 +38,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 blake3.workspace = true
+meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 p256.workspace = true
 tempfile = "3.27.0"
