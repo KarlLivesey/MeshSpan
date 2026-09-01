@@ -4,7 +4,9 @@
 
 use std::error::Error;
 use std::fs;
+use std::fs::OpenOptions;
 use std::net::{SocketAddr, TcpListener as StandardTcpListener};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -58,6 +60,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     let api_key = created["api_key"]
         .as_str()
         .ok_or("setup response omitted the API key")?;
+    save_and_verify_recovery_bundle(&fixture, &client, api_key, &created).await?;
     let session_body = serde_json::to_vec(&serde_json::json!({
         "operation_id": "00000000-0000-4000-8000-000000000002",
         "authentication": { "method": "api_key", "secret": api_key },
@@ -105,11 +108,15 @@ fn assert_wrapping_key_committed(fixture: &ProcessFixture) -> Result<(), Box<dyn
         InitialBootstrapMaterial::root_partition_id(node_id)?,
         UnixMicros::new(1),
     )?;
-    let stored = AuthoritativeRepository::new(database)
+    let repository = AuthoritativeRepository::new(database);
+    let stored = repository
         .node_wrapping_key(node_id)?
         .ok_or("authoritative node wrapping key missing")?;
     assert_eq!(stored.public_key, local_key.public_key());
     assert_eq!(stored.generation, 1);
+    let recipients = repository.volume_key_recipients()?;
+    assert_eq!(recipients.len(), 2);
+    assert!(recipients.contains(&local_key.public_key()));
     Ok(())
 }
 
@@ -133,6 +140,72 @@ async fn assert_volume_inventory_empty(
     } else {
         Err("headless process did not return its authorised volume inventory".into())
     }
+}
+
+async fn save_and_verify_recovery_bundle(
+    fixture: &ProcessFixture,
+    client: &ClientConfig,
+    api_key: &str,
+    setup: &serde_json::Value,
+) -> Result<(), Box<dyn Error>> {
+    let recovery_bundle = setup["recovery_bundle"]
+        .as_str()
+        .ok_or("setup response omitted the recovery bundle")?;
+    let recovery_code = setup["recovery_code"]
+        .as_str()
+        .ok_or("setup response omitted the recovery code")?;
+    let recovery_challenge = setup["recovery_challenge"]
+        .as_str()
+        .ok_or("setup response omitted the recovery challenge")?;
+    let mesh_id = setup["mesh_id"]
+        .as_str()
+        .ok_or("setup response omitted the mesh identity")?;
+    write_private(
+        &fixture.saved_recovery_bundle_path,
+        recovery_bundle.as_bytes(),
+    )?;
+    write_private(&fixture.saved_recovery_code_path, recovery_code.as_bytes())?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000005",
+        "mesh_id": mesh_id,
+        "recovery_challenge": recovery_challenge
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        fixture.address,
+        client,
+        "POST",
+        "/api/latest/admin/recovery-bundle-verifications",
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    if !response.starts_with("HTTP/1.1 200 OK\r\n") {
+        return Err(format!(
+            "headless recovery verification returned {}: {}",
+            response.lines().next().unwrap_or("an invalid response"),
+            response_body(&response).unwrap_or("invalid response")
+        )
+        .into());
+    }
+    if fixture.pending_recovery_bundle_path.exists()
+        || fs::read_to_string(&fixture.saved_recovery_bundle_path)? != recovery_bundle
+        || fs::read_to_string(&fixture.saved_recovery_code_path)? != recovery_code
+    {
+        return Err("headless recovery save verification did not preserve the offline copy".into());
+    }
+    Ok(())
+}
+
+fn write_private(file_path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(file_path)?;
+    std::io::Write::write_all(&mut file, bytes)?;
+    file.sync_all()?;
+    Ok(())
 }
 
 async fn create_volume(
@@ -317,6 +390,9 @@ struct ProcessFixture {
     identity_path: PathBuf,
     state_path: PathBuf,
     storage_path: PathBuf,
+    pending_recovery_bundle_path: PathBuf,
+    saved_recovery_bundle_path: PathBuf,
+    saved_recovery_code_path: PathBuf,
 }
 
 impl ProcessFixture {
@@ -332,6 +408,11 @@ impl ProcessFixture {
             identity_path: state_path.join("secrets/node-identity.pk8"),
             state_path,
             storage_path,
+            pending_recovery_bundle_path: temporary
+                .path()
+                .join("state/secrets/pending-offline-recovery.bundle"),
+            saved_recovery_bundle_path: temporary.path().join("offline-recovery.bundle"),
+            saved_recovery_code_path: temporary.path().join("offline-recovery.code"),
             _temporary: temporary,
         })
     }
