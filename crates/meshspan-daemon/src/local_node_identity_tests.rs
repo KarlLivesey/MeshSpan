@@ -14,7 +14,7 @@ fn identity_is_owner_only_restart_stable_and_never_overwritten()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let identity_path = directory.path().join("node-identity.pk8");
-    let created = LocalNodeIdentity::create(&identity_path, DNS_NAME)?;
+    let created = LocalNodeIdentity::open_or_create(&identity_path, DNS_NAME)?;
     let fingerprint = created.public_key_fingerprint();
     assert_ne!(fingerprint, [0; 32]);
     assert_eq!(

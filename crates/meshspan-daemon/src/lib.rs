@@ -45,6 +45,9 @@ mod create_session_tests;
 mod current_session_api;
 #[cfg(test)]
 mod current_session_api_tests;
+mod daemon_local_state;
+#[cfg(test)]
+mod daemon_local_state_tests;
 mod directory_listing_api;
 #[cfg(test)]
 mod directory_listing_api_tests;
@@ -204,6 +207,7 @@ pub use current_session_api::{
     CurrentSessionApiError, CurrentSessionController, CurrentSessionError,
     current_session_api_router,
 };
+pub use daemon_local_state::{DaemonLocalState, DaemonLocalStateError};
 pub use directory_listing_api::{
     DirectoryLister, DirectoryListingApiError, DirectoryListingController, DirectoryListingError,
     DirectoryListingService, FileApiFailure, NativeFileApiAuthenticator,

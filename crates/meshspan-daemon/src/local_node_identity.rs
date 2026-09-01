@@ -26,6 +26,20 @@ pub struct LocalNodeIdentity {
 }
 
 impl LocalNodeIdentity {
+    /// Opens an existing identity or atomically creates one when the destination is absent.
+    ///
+    /// # Errors
+    ///
+    /// Rejects every existing unsafe or malformed value; only an exact missing-file result may
+    /// enter creation.
+    pub fn open_or_create(path: &Path, dns_name: &str) -> Result<Self, LocalNodeIdentityError> {
+        match protected_file::read_bounded(path, MINIMUM_PKCS8_BYTES, MAXIMUM_PKCS8_BYTES) {
+            Ok(private_key) => Self::from_private_key(&private_key, dns_name),
+            Err(ProtectedFileError::Missing) => Self::create(path, dns_name),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Creates one identity without overwriting any existing destination.
     ///
     /// # Errors
@@ -51,12 +65,7 @@ impl LocalNodeIdentity {
     pub fn open(path: &Path, dns_name: &str) -> Result<Self, LocalNodeIdentityError> {
         let private_key =
             protected_file::read_bounded(path, MINIMUM_PKCS8_BYTES, MAXIMUM_PKCS8_BYTES)?;
-        let key = NodeIdentityKey::from_pkcs8(&private_key)?;
-        let bootstrap_certificate = key.self_signed(dns_name)?;
-        Ok(Self {
-            key,
-            bootstrap_certificate,
-        })
+        Self::from_private_key(&private_key, dns_name)
     }
 
     /// Returns the non-secret public identity fingerprint bound to claim and enrolment state.
@@ -83,6 +92,18 @@ impl LocalNodeIdentity {
                 PrivatePkcs8KeyDer::from(self.key.private_key_pkcs8().to_vec()).into(),
             )?;
         Ok(Arc::new(config))
+    }
+
+    fn from_private_key(
+        private_key: &[u8],
+        dns_name: &str,
+    ) -> Result<Self, LocalNodeIdentityError> {
+        let key = NodeIdentityKey::from_pkcs8(private_key)?;
+        let bootstrap_certificate = key.self_signed(dns_name)?;
+        Ok(Self {
+            key,
+            bootstrap_certificate,
+        })
     }
 }
 
