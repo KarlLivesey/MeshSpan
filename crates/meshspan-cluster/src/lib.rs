@@ -44,6 +44,7 @@ mod federation_storage_inventory_wire;
 mod filesystem_authority;
 mod filesystem_convergence;
 mod membership;
+mod metadata_authority;
 mod node_runtime;
 mod retention;
 mod status;
@@ -225,6 +226,11 @@ pub use filesystem_convergence::{
     FilesystemConvergenceError, FilesystemConvergenceService, PreparedHistoryReconciliation,
 };
 pub use meshspan_metadata::FederationRemoteAuthoritySnapshot;
+pub use metadata_authority::{
+    ConsensusMessageTransport, MetadataAuthorityConfig, MetadataAuthorityHandle,
+    MetadataAuthorityRequestError, MetadataAuthorityRuntimeError, MetadataAuthorityStartError,
+    PeerConsensusMessage, spawn_metadata_authority,
+};
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
 pub use retention::version_retention_selection_policy;
 pub use status::{
