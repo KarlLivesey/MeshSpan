@@ -1061,6 +1061,22 @@ impl AuthoritativeRepository {
         secret_generation::latest_volume_generation(&self.database, volume_id)
     }
 
+    /// Returns the newest committed mesh storage-permit key generation.
+    ///
+    /// Providers verify permits with this append-only head while in-flight permits retain their
+    /// exact generation during rotation. A missing key returns `None` rather than inventing an
+    /// initial generation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed generation state or database failure.
+    pub fn latest_storage_permit_generation(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<u64>, RepositoryError> {
+        secret_generation::latest_storage_permit_generation(&self.database, mesh_id)
+    }
+
     /// Returns every current gateway and the exact verified offline recovery recipient.
     ///
     /// Storage-only nodes are deliberately excluded because they retain encrypted shards without

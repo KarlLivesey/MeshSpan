@@ -1086,6 +1086,7 @@ dependencies = [
  "blake3",
  "meshspan-domain",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

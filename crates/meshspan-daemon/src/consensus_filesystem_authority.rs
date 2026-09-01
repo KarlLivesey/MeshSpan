@@ -17,10 +17,10 @@ use crate::{
     ConsensusAuthenticationAuthority, NodeWrappingKeyRegistrationAuthority,
     NodeWrappingKeyRegistrationAuthorityError, RecoveryBundleVerificationAuthority,
     RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
+    SecretGenerationAuthority, SecretGenerationAuthorityError, StoragePermitAuthority,
     StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
     VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
     VolumeInventoryAuthority, VolumeInventoryAuthorityError, VolumeKeyAuthority,
-    VolumeKeyAuthorityError,
 };
 
 impl FilesystemAccessAuthority for ConsensusAuthenticationAuthority {
@@ -117,28 +117,42 @@ impl VolumeKeyAuthority for ConsensusAuthenticationAuthority {
     fn latest_generation(
         &self,
         volume_id: meshspan_domain::VolumeId,
-    ) -> Result<Option<u64>, VolumeKeyAuthorityError> {
+    ) -> Result<Option<u64>, SecretGenerationAuthorityError> {
         self.reader()
             .latest_volume_key_generation(volume_id)
             .map_err(|error| map_volume_key_repository_error(&error))
     }
+}
 
+impl SecretGenerationAuthority for ConsensusAuthenticationAuthority {
     fn secret_generation(
         &self,
         context: meshspan_secret_envelope::SecretContext,
-    ) -> Result<Option<meshspan_metadata::SecretGenerationRecord>, VolumeKeyAuthorityError> {
+    ) -> Result<Option<meshspan_metadata::SecretGenerationRecord>, SecretGenerationAuthorityError>
+    {
         self.reader()
             .secret_generation(context)
             .map_err(|error| map_volume_key_repository_error(&error))
     }
 }
 
-fn map_volume_key_repository_error(error: &RepositoryError) -> VolumeKeyAuthorityError {
+impl StoragePermitAuthority for ConsensusAuthenticationAuthority {
+    fn latest_generation(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<u64>, SecretGenerationAuthorityError> {
+        self.reader()
+            .latest_storage_permit_generation(mesh_id)
+            .map_err(|error| map_volume_key_repository_error(&error))
+    }
+}
+
+fn map_volume_key_repository_error(error: &RepositoryError) -> SecretGenerationAuthorityError {
     match error {
         RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
-            VolumeKeyAuthorityError::Unavailable
+            SecretGenerationAuthorityError::Unavailable
         }
-        _ => VolumeKeyAuthorityError::Failed,
+        _ => SecretGenerationAuthorityError::Failed,
     }
 }
 
