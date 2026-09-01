@@ -23,6 +23,7 @@ const KEY_IDENTIFIER_BYTES: usize = 20;
 /// An ECDSA P-256 certificate authority and its provider-neutral signing key.
 pub struct CertificateAuthority {
     certificate_der: Vec<u8>,
+    private_key: Zeroizing<Vec<u8>>,
     issuer: Issuer<'static, RustCryptoKey>,
 }
 
@@ -89,16 +90,25 @@ impl CertificateAuthority {
     /// Fails when entropy, key generation or X.509 construction fails.
     pub fn new() -> Result<Self, CertificateError> {
         let key = RustCryptoKey::generate()?;
-        let mut parameters = CertificateParams::new(Vec::<String>::new())?;
-        parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        parameters
-            .key_usages
-            .extend([KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign]);
-        parameters.serial_number = Some(key.serial_number());
-        parameters.key_identifier_method = key.identifier();
+        Self::from_key(key)
+    }
+
+    /// Loads one exact canonical PKCS#8 P-256 authority identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, non-canonical or wrong-algorithm private key bytes.
+    pub fn from_pkcs8(private_key: &[u8]) -> Result<Self, CertificateError> {
+        Self::from_key(RustCryptoKey::from_pkcs8(private_key)?)
+    }
+
+    fn from_key(key: RustCryptoKey) -> Result<Self, CertificateError> {
+        let parameters = authority_parameters(&key)?;
         let certificate_der = parameters.self_signed(&key)?.der().to_vec();
+        let private_key = key.private_key.clone();
         Ok(Self {
             certificate_der,
+            private_key,
             issuer: Issuer::new(parameters, key),
         })
     }
@@ -107,6 +117,12 @@ impl CertificateAuthority {
     #[must_use]
     pub fn certificate_der(&self) -> &[u8] {
         &self.certificate_der
+    }
+
+    /// Borrows the canonical PKCS#8 authority key for immediate protected persistence.
+    #[must_use]
+    pub fn private_key_pkcs8(&self) -> &[u8] {
+        &self.private_key
     }
 
     /// Issues a dual client/server-authentication leaf for one DNS name.
@@ -122,6 +138,23 @@ impl CertificateAuthority {
             certificate_der,
             private_key: key.private_key,
         })
+    }
+
+    /// Signs an existing node-owned public identity without moving its private key.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid DNS name or X.509 construction failure.
+    pub fn sign_node_identity(
+        &self,
+        identity: &NodeIdentityKey,
+        dns_name: &str,
+    ) -> Result<Vec<u8>, CertificateError> {
+        let parameters = node_parameters(&identity.key, dns_name)?;
+        Ok(parameters
+            .signed_by(&identity.key, &self.issuer)?
+            .der()
+            .to_vec())
     }
 }
 
@@ -245,6 +278,17 @@ fn node_parameters(
     Ok(parameters)
 }
 
+fn authority_parameters(key: &RustCryptoKey) -> Result<CertificateParams, CertificateError> {
+    let mut parameters = CertificateParams::new(Vec::<String>::new())?;
+    parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    parameters
+        .key_usages
+        .extend([KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign]);
+    parameters.serial_number = Some(key.serial_number());
+    parameters.key_identifier_method = key.identifier();
+    Ok(parameters)
+}
+
 impl PublicKeyData for RustCryptoKey {
     fn der_bytes(&self) -> &[u8] {
         &self.public_key
@@ -294,6 +338,23 @@ mod tests {
             "the deterministic certificate parameters must reproduce the same leaf"
         );
         assert!(NodeIdentityKey::from_pkcs8(&[0; 32]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn authority_reloads_and_signs_the_same_node_owned_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authority = CertificateAuthority::new()?;
+        let identity = NodeIdentityKey::generate()?;
+        let authority_certificate = authority.certificate_der().to_vec();
+        let node_certificate = authority.sign_node_identity(&identity, "meshspan.internal")?;
+        let reopened = CertificateAuthority::from_pkcs8(authority.private_key_pkcs8())?;
+        assert_eq!(reopened.certificate_der(), authority_certificate);
+        assert_eq!(
+            reopened.sign_node_identity(&identity, "meshspan.internal")?,
+            node_certificate
+        );
+        assert_ne!(node_certificate, identity.self_signed("meshspan.internal")?);
         Ok(())
     }
 }
