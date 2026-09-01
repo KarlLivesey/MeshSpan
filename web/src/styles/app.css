@@ -601,6 +601,54 @@ select:hover {
   border-top: 1px solid var(--line);
 }
 
+.first-start-page,
+.setup-status {
+  width: min(100% - 2rem, 62rem);
+  margin: 0 auto;
+  padding: clamp(3rem, 9vw, 8rem) 0;
+}
+
+.setup-status,
+.first-start-card {
+  display: grid;
+  gap: var(--space-xl);
+}
+
+.first-start-card {
+  padding: clamp(var(--space-xl), 5vw, var(--space-3xl));
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.first-start-card > div:first-child,
+.first-start-card form,
+.setup-name-grid,
+.recovery-material {
+  display: grid;
+  gap: var(--space-lg);
+}
+
+.setup-name-grid {
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.claim-field {
+  max-width: 42rem;
+}
+
+.setup-secret {
+  display: grid;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.setup-secret code {
+  overflow-wrap: anywhere;
+  padding: var(--space-md);
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
 .permission-grant-form {
   display: grid;
   gap: var(--space-lg);
