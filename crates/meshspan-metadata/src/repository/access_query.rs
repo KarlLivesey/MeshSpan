@@ -45,6 +45,26 @@ pub struct ScopedGrantCursor {
     grant_id: GrantId,
 }
 
+impl ScopedGrantCursor {
+    /// Constructs a cursor after a trusted boundary has decoded and bound both fields.
+    #[must_use]
+    pub const fn new(scope: PermissionScope, grant_id: GrantId) -> Self {
+        Self { scope, grant_id }
+    }
+
+    /// Returns the scope to which this continuation is bound.
+    #[must_use]
+    pub const fn scope(self) -> PermissionScope {
+        self.scope
+    }
+
+    /// Returns the last grant identity represented by this continuation.
+    #[must_use]
+    pub const fn grant_id(self) -> GrantId {
+        self.grant_id
+    }
+}
+
 /// Seek cursor bound to one exact permission subject.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SubjectGrantCursor {
@@ -76,6 +96,17 @@ pub struct PermissionGrantRecord {
     /// Authoritative creation instant.
     pub created_at: UnixMicros,
     /// Current authoritative grant revision.
+    pub revision: Revision,
+}
+
+/// Durable evidence for one revoked permission grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PermissionGrantRevocationRecord {
+    /// Exact revoked grant.
+    pub grant_id: GrantId,
+    /// Authoritative revocation instant.
+    pub revoked_at: UnixMicros,
+    /// Revision at which revocation committed.
     pub revision: Revision,
 }
 
@@ -210,6 +241,49 @@ pub(super) fn permission_grants_for_scope(
     Ok(Page { items, next })
 }
 
+pub(super) fn permission_grant(
+    database: &PartitionDatabase,
+    grant_id: GrantId,
+) -> Result<Option<PermissionGrantRecord>, RepositoryError> {
+    let grant = grant_id.as_bytes();
+    let row = database
+        .connection()
+        .query_row(
+            "SELECT grant_id, subject_principal_id, scope_kind, volume_id, object_id, rights,
+                    inheritance, valid_from, valid_until, activation_policy_id, created_by,
+                    created_at, revision
+             FROM permission_grants WHERE state = 1 AND grant_id = ?1",
+            params![grant.as_slice()],
+            read_grant_row,
+        )
+        .optional()?;
+    row.map(grant_from_row).transpose()
+}
+
+pub(super) fn permission_grant_revocation(
+    database: &PartitionDatabase,
+    grant_id: GrantId,
+) -> Result<Option<PermissionGrantRevocationRecord>, RepositoryError> {
+    let grant = grant_id.as_bytes();
+    let row = database
+        .connection()
+        .query_row(
+            "SELECT revoked_at, revision FROM permission_grants
+             WHERE state = 2 AND grant_id = ?1",
+            params![grant.as_slice()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    row.map(|(revoked_at, revision_value)| {
+        Ok(PermissionGrantRevocationRecord {
+            grant_id,
+            revoked_at: UnixMicros::new(revoked_at),
+            revision: revision(revision_value)?,
+        })
+    })
+    .transpose()
+}
+
 pub(super) fn permission_grants_for_subject(
     database: &PartitionDatabase,
     subject_principal_id: PrincipalId,
@@ -337,22 +411,25 @@ fn collect_grants(
 ) -> Result<Vec<PermissionGrantRecord>, RepositoryError> {
     let mut items = Vec::with_capacity(limit.get().saturating_add(1));
     for row in rows {
-        let row = row?;
-        items.push(PermissionGrantRecord {
-            grant_id: grant_id(&row.0)?,
-            subject_principal_id: principal_id(&row.1)?,
-            scope: permission_scope(row.2, row.3.as_deref(), row.4.as_deref())?,
-            rights: rights(row.5)?,
-            inheritance: inheritance(row.6)?,
-            valid_from: row.7.map(UnixMicros::new),
-            valid_until: row.8.map(UnixMicros::new),
-            activation_policy_id: row.9.as_deref().map(activation_policy_id).transpose()?,
-            created_by: principal_id(&row.10)?,
-            created_at: UnixMicros::new(row.11),
-            revision: revision(row.12)?,
-        });
+        items.push(grant_from_row(row?)?);
     }
     Ok(items)
+}
+
+fn grant_from_row(row: GrantRow) -> Result<PermissionGrantRecord, RepositoryError> {
+    Ok(PermissionGrantRecord {
+        grant_id: grant_id(&row.0)?,
+        subject_principal_id: principal_id(&row.1)?,
+        scope: permission_scope(row.2, row.3.as_deref(), row.4.as_deref())?,
+        rights: rights(row.5)?,
+        inheritance: inheritance(row.6)?,
+        valid_from: row.7.map(UnixMicros::new),
+        valid_until: row.8.map(UnixMicros::new),
+        activation_policy_id: row.9.as_deref().map(activation_policy_id).transpose()?,
+        created_by: principal_id(&row.10)?,
+        created_at: UnixMicros::new(row.11),
+        revision: revision(row.12)?,
+    })
 }
 
 fn page_next<T>(items: &mut Vec<T>, limit: PageLimit) -> Option<&T> {

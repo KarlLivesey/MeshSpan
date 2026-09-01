@@ -70,6 +70,7 @@ use crate::{
     PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError, PasskeyChallengeService,
     PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
     PasskeyRegistrationConfigurationError, PasskeyRegistrationService, PasskeySessionService,
+    PermissionAdministrationApiError, PermissionAdministrationService,
     ProtectedApiKeyIssuanceController, ProtectedRecoveryCodeIssuanceController,
     ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector, PublicContractApiError,
     ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
@@ -85,10 +86,11 @@ use crate::{
     file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
     object_stat_api_router, passkey_challenge_api_router, passkey_registration_api_router,
-    public_contract_api_router, recovery_bundle_verification_api_router,
-    recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
-    setup_api_router_with_creation, step_up_current_session_api_router,
-    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
+    permission_administration_api_router, public_contract_api_router,
+    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
+    revoke_current_session_api_router, session_api_router, setup_api_router_with_creation,
+    step_up_current_session_api_router, totp_registration_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
@@ -824,6 +826,17 @@ fn authenticated_administration_routes(
                 )?,
                 gateway,
                 OperatingSystemRandom,
+            ),
+        )?)
+        .merge(permission_administration_api_router(
+            PermissionAdministrationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
             ),
         )?)
         .merge(recovery_bundle_verification_api_router(
@@ -1781,6 +1794,9 @@ pub enum DaemonProcessError {
     /// Manager-only volume-administration API construction failed.
     #[error("daemon volume-administration API failed")]
     VolumeAdministrationApi(#[from] VolumeAdministrationApiError),
+    /// Manager-only permission-administration API construction failed.
+    #[error("daemon permission-administration API failed")]
+    PermissionAdministrationApi(#[from] PermissionAdministrationApiError),
     /// Manager-only recovery-bundle verification API construction failed.
     #[error("daemon recovery-bundle verification API failed")]
     RecoveryBundleVerificationApi(#[from] RecoveryBundleVerificationApiError),

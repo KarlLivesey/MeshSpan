@@ -691,6 +691,7 @@ fn is_identity_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::RemoveGroupMember(_)
             | AuthoritativeCommand::CreateActivationPolicy(_)
             | AuthoritativeCommand::GrantPermission(_)
+            | AuthoritativeCommand::GrantPermissionWithActivation(_)
             | AuthoritativeCommand::RevokePermissionGrant(_)
             | AuthoritativeCommand::ActivateGrant(_)
             | AuthoritativeCommand::ActivateGroup(_)
@@ -731,6 +732,13 @@ fn execute_identity_command(
         }
         AuthoritativeCommand::GrantPermission(value) => {
             identity::grant_permission(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::GrantPermissionWithActivation(value) => {
+            if value.grant.activation_policy_id != Some(value.policy.policy_id) {
+                return Err(RepositoryError::InvalidCommand);
+            }
+            identity::create_activation_policy(transaction, &value.policy, revision)?;
+            identity::grant_permission(transaction, context, value.grant, revision)
         }
         AuthoritativeCommand::RevokePermissionGrant(value) => {
             identity::revoke_permission_grant(transaction, context, value, revision)
@@ -1007,6 +1015,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CreateVolume(_) => 6,
         AuthoritativeCommand::CreateObject(_) => 7,
         AuthoritativeCommand::GrantPermission(_) => 8,
+        AuthoritativeCommand::GrantPermissionWithActivation(_) => 87,
         AuthoritativeCommand::ActivateGrant(_) => 9,
         AuthoritativeCommand::ActivateGroup(_) => 10,
         AuthoritativeCommand::CreateComponent(_) => 11,

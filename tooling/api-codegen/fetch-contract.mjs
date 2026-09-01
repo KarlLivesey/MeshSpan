@@ -69,6 +69,10 @@ export function readRequiredRoutes(document) {
     createSession,
     createUser: requireOperation(operations, "createUser"),
     createVolume: requireOperation(operations, "createVolume"),
+    createVolumePermissionGrant: requireOperation(
+      operations,
+      "createVolumePermissionGrant",
+    ),
     deleteObject: requireOperation(operations, "deleteObject"),
     getHealth: requireOperation(operations, "getHealth"),
     getCurrentSession: requireOperation(operations, "getCurrentSession"),
@@ -84,12 +88,17 @@ export function readRequiredRoutes(document) {
       "listCurrentUserAuthenticationMethods",
     ),
     listUploadRanges: requireOperation(operations, "listUploadRanges"),
+    listVolumePermissionGrants: requireOperation(
+      operations,
+      "listVolumePermissionGrants",
+    ),
     listUsers: requireOperation(operations, "listUsers"),
     listVolumes: requireOperation(operations, "listVolumes"),
     readFile: requireOperation(operations, "readFile"),
     renameObject: requireOperation(operations, "renameObject"),
     removeGroupMember: requireOperation(operations, "removeGroupMember"),
     revokeCurrentSession: requireOperation(operations, "revokeCurrentSession"),
+    revokePermissionGrant: requireOperation(operations, "revokePermissionGrant"),
     revokeCurrentUserAuthenticationMethod: requireOperation(
       operations,
       "revokeCurrentUserAuthenticationMethod",

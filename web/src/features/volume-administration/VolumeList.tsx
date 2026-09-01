@@ -4,10 +4,14 @@ import { For, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
 import { instantFromEpochMicroseconds } from "../../domain/instant";
-import type { VolumeDirectory } from "./model";
+import type { AdminVolume, VolumeDirectory } from "./model";
 
 export function VolumeList(
-  props: Readonly<{ directory: VolumeDirectory }>,
+  props: Readonly<{
+    directory: VolumeDirectory;
+    onSelect: (volume: AdminVolume) => void;
+    selectedVolumeId: string | undefined;
+  }>,
 ): JSX.Element {
   return (
     <section class="volume-list" aria-labelledby="volume-list-heading">
@@ -36,6 +40,7 @@ export function VolumeList(
                   <th scope="col">State</th>
                   <th scope="col">Revision</th>
                   <th scope="col">Created</th>
+                  <th scope="col">Access</th>
                 </tr>
               </thead>
               <tbody>
@@ -58,6 +63,22 @@ export function VolumeList(
                           dateStyle: "medium",
                           timeStyle: "short",
                         })}
+                      </td>
+                      <td data-label="Access">
+                        <button
+                          aria-pressed={
+                            props.selectedVolumeId === volume.volumeId
+                              ? "true"
+                              : "false"
+                          }
+                          class="quiet-action table-action"
+                          onClick={() => props.onSelect(volume)}
+                          type="button"
+                        >
+                          {props.selectedVolumeId === volume.volumeId
+                            ? "Managing"
+                            : "Manage access"}
+                        </button>
                       </td>
                     </tr>
                   )}

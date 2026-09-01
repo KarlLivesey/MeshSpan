@@ -17,15 +17,17 @@ use crate::{
     CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
     CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumeRequest, CreateVolumeResponse,
+    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumePermissionGrantRequest,
+    CreateVolumePermissionGrantResponse, CreateVolumeRequest, CreateVolumeResponse,
     CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
     EnrolNodeResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
     ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
-    ListUploadRangesResponse, ListVolumesResponse, RemoveGroupMemberRequest,
-    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
+    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
-    StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
+    RevokePermissionGrantResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
+    UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -133,6 +135,10 @@ fn components() -> Value {
         schema_request::<CreateTotpRegistrationRequest>("CreateTotpRegistrationRequest"),
         schema_response::<CreateTotpRegistrationResponse>("CreateTotpRegistrationResponse"),
         schema_request::<CreateUserRequest>("CreateUserRequest"),
+        schema_request::<CreateVolumePermissionGrantRequest>("CreateVolumePermissionGrantRequest"),
+        schema_response::<CreateVolumePermissionGrantResponse>(
+            "CreateVolumePermissionGrantResponse",
+        ),
         schema_request::<CreateVolumeRequest>("CreateVolumeRequest"),
         schema_response::<CreateVolumeResponse>("CreateVolumeResponse"),
         schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
@@ -147,9 +153,12 @@ fn components() -> Value {
         schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
         schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
+        schema_response::<ListVolumePermissionGrantsResponse>("ListVolumePermissionGrantsResponse"),
         schema_response::<ListVolumesResponse>("ListVolumesResponse"),
         schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
         schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
+        schema_request::<RevokePermissionGrantRequest>("RevokePermissionGrantRequest"),
+        schema_response::<RevokePermissionGrantResponse>("RevokePermissionGrantResponse"),
         schema_request::<RemoveGroupMemberRequest>("RemoveGroupMemberRequest"),
         schema_response::<RemoveGroupMemberResponse>("RemoveGroupMemberResponse"),
         schema_request::<RenameObjectRequest>("RenameObjectRequest"),
@@ -329,7 +338,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 5] {
+fn administration_paths() -> [(String, Value); 7] {
     [
         (
             "/admin/users".to_owned(),
@@ -348,7 +357,78 @@ fn administration_paths() -> [(String, Value); 5] {
             group_membership_removal_path(),
         ),
         ("/admin/volumes".to_owned(), create_volume_path()),
+        (
+            "/admin/volumes/{volume_id}/permission-grants".to_owned(),
+            volume_permission_grants_path(),
+        ),
+        (
+            "/admin/volumes/{volume_id}/permission-grants/{grant_id}/revocations".to_owned(),
+            permission_grant_revocation_path(),
+        ),
     ]
+}
+
+fn volume_permission_grants_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listVolumePermissionGrants",
+            "summary": "List one bounded page of active volume permission grants",
+            "x-meshspan-access": "system-manager",
+            "parameters": [volume_parameter(), cursor_parameter(), limit_parameter()],
+            "responses": {
+                "200": json_response("One current volume permission-grant page", "#/components/schemas/ListVolumePermissionGrantsResponse"),
+                "400": json_response("Invalid volume or query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Volume not found", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Permission authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        },
+        "post": {
+            "operationId": "createVolumePermissionGrant",
+            "summary": "Grant allow-only authority over one volume",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [volume_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request("Volume permission grant", "#/components/schemas/CreateVolumePermissionGrantRequest"),
+            "responses": {
+                "201": json_response("Grant durably created or exactly replayed", "#/components/schemas/CreateVolumePermissionGrantResponse"),
+                "400": json_response("Invalid grant request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Volume or principal not found", "#/components/schemas/ApiError"),
+                "409": json_response("Grant or operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Permission authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn permission_grant_revocation_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "revokePermissionGrant",
+            "summary": "Revoke one exact active volume permission grant",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [volume_parameter(), grant_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request("Audited permission revocation", "#/components/schemas/RevokePermissionGrantRequest"),
+            "responses": {
+                "200": json_response("Grant durably revoked or exactly replayed", "#/components/schemas/RevokePermissionGrantResponse"),
+                "400": json_response("Invalid revocation request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Active grant not found", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Permission authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn create_volume_path() -> Value {
@@ -477,6 +557,21 @@ fn principal_parameter(name: &str, description: &str) -> Value {
         "in": "path",
         "required": true,
         "description": description,
+        "schema": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        }
+    })
+}
+
+fn grant_parameter() -> Value {
+    json!({
+        "name": "grant_id",
+        "in": "path",
+        "required": true,
+        "description": "Exact active permission-grant identity",
         "schema": {
             "type": "string",
             "minLength": 36,

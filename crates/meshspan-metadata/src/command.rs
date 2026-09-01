@@ -128,6 +128,8 @@ pub enum AuthoritativeCommand {
     DetachTag(DetachTag),
     /// Creates an allow-only global, volume or object permission grant.
     GrantPermission(GrantPermission),
+    /// Atomically creates an activation policy and its allow-only permission grant.
+    GrantPermissionWithActivation(GrantPermissionWithActivation),
     /// Revokes one exact permission grant immediately.
     RevokePermissionGrant(RevokePermissionGrant),
     /// Activates one pre-authorised grant for the requesting user.
@@ -285,6 +287,7 @@ impl AuthoritativeCommand {
             Self::AttachTag(value) => value.update_digest(digest),
             Self::DetachTag(value) => value.update_digest(digest),
             Self::GrantPermission(value) => value.update_digest(digest),
+            Self::GrantPermissionWithActivation(value) => value.update_digest(digest),
             Self::RevokePermissionGrant(value) => value.update_digest(digest),
             Self::ActivateGrant(value) => value.update_digest(digest),
             Self::ActivateGroup(value) => value.update_digest(digest),
@@ -1085,6 +1088,15 @@ pub struct GrantPermission {
     pub valid_until: Option<UnixMicros>,
     /// Optional self-activation requirement.
     pub activation_policy_id: Option<ActivationPolicyId>,
+}
+
+/// Atomic activation policy plus the only grant that initially references it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GrantPermissionWithActivation {
+    /// New bounded activation policy.
+    pub policy: CreateActivationPolicy,
+    /// New grant whose activation policy must equal `policy.policy_id`.
+    pub grant: GrantPermission,
 }
 
 /// Audited revocation of one exact active allow grant.
@@ -2337,6 +2349,14 @@ digest_simple_record!(GrantPermission, b"grant-permission", |value, digest| {
     digest.optional_instant(value.valid_until);
     digest.optional_identifier(value.activation_policy_id.map(ActivationPolicyId::as_bytes));
 });
+digest_simple_record!(
+    GrantPermissionWithActivation,
+    b"grant-permission-with-activation",
+    |value, digest| {
+        value.policy.update_digest(digest);
+        value.grant.update_digest(digest);
+    }
+);
 digest_simple_record!(
     RevokePermissionGrant,
     b"revoke-permission-grant",

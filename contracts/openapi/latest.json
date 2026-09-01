@@ -2615,6 +2615,396 @@
         "title": "CreateUserRequest",
         "type": "object"
       },
+      "CreateVolumePermissionGrantRequest": {
+        "additionalProperties": false,
+        "description": "Idempotent administrator request to grant volume authority to one user or group.",
+        "properties": {
+          "activation": {
+            "additionalProperties": false,
+            "description": "Omitted applies policy defaults, null needs no activation, and a value defines activation.",
+            "properties": {
+              "maximum_duration_micros": {
+                "description": "Longest activation the user may request.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "minimum_assurance": {
+                "description": "Authentication assurance required when activating.",
+                "oneOf": [
+                  {
+                    "const": "single_factor",
+                    "description": "One accepted authentication factor.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "multi_factor",
+                    "description": "Multiple independent accepted factors.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "recent_step_up",
+                    "description": "A recent privileged step-up ceremony.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "reason_required": {
+                "description": "Whether every activation must contain a non-blank reason.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "maximum_duration_micros",
+              "reason_required",
+              "minimum_assurance"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "inheritance": {
+            "description": "Whether authority applies to the root, descendants or both.",
+            "oneOf": [
+              {
+                "const": "object",
+                "description": "The volume root only.",
+                "type": "string"
+              },
+              {
+                "const": "descendants",
+                "description": "Descendants only.",
+                "type": "string"
+              },
+              {
+                "const": "object_and_descendants",
+                "description": "The volume root and every descendant.",
+                "type": "string"
+              }
+            ]
+          },
+          "operation_id": {
+            "description": "Client-generated exact-retry identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "rights": {
+            "description": "Non-empty ordered protocol-neutral allow rights.",
+            "items": {
+              "description": "Protocol-neutral namespace authority currently available to this caller.",
+              "oneOf": [
+                {
+                  "const": "traverse",
+                  "description": "Traverse ancestor directories.",
+                  "type": "string"
+                },
+                {
+                  "const": "list",
+                  "description": "Enumerate directory entries.",
+                  "type": "string"
+                },
+                {
+                  "const": "read_data",
+                  "description": "Read file bytes.",
+                  "type": "string"
+                },
+                {
+                  "const": "create_child",
+                  "description": "Create a child object.",
+                  "type": "string"
+                },
+                {
+                  "const": "write_data",
+                  "description": "Replace or modify file bytes.",
+                  "type": "string"
+                },
+                {
+                  "const": "append_data",
+                  "description": "Append file bytes.",
+                  "type": "string"
+                },
+                {
+                  "const": "rename",
+                  "description": "Rename or move an object.",
+                  "type": "string"
+                },
+                {
+                  "const": "delete",
+                  "description": "Delete an object or empty directory.",
+                  "type": "string"
+                },
+                {
+                  "const": "read_attributes",
+                  "description": "Read object attributes.",
+                  "type": "string"
+                },
+                {
+                  "const": "write_attributes",
+                  "description": "Change object attributes.",
+                  "type": "string"
+                },
+                {
+                  "const": "read_permissions",
+                  "description": "Read owners and permission grants.",
+                  "type": "string"
+                },
+                {
+                  "const": "change_permissions",
+                  "description": "Change permission grants.",
+                  "type": "string"
+                },
+                {
+                  "const": "change_owner",
+                  "description": "Change the owner set.",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 13,
+            "minItems": 1,
+            "type": "array"
+          },
+          "subject_principal_id": {
+            "description": "User or group receiving the rights.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "valid_from_epoch_micros": {
+            "description": "Omitted applies policy defaults, null is unbounded, and a value is exact.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "valid_until_epoch_micros": {
+            "description": "Omitted applies policy defaults, null is unbounded, and a value is exact.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "subject_principal_id",
+          "rights",
+          "inheritance"
+        ],
+        "title": "CreateVolumePermissionGrantRequest",
+        "type": "object"
+      },
+      "CreateVolumePermissionGrantResponse": {
+        "additionalProperties": false,
+        "description": "Durable result of creating or exactly replaying one permission grant.",
+        "properties": {
+          "grant": {
+            "additionalProperties": false,
+            "description": "Newly active or exactly replayed grant.",
+            "properties": {
+              "activation_policy_id": {
+                "description": "Policy that must be activated, or null when authority is immediately usable.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "created_at_epoch_micros": {
+                "description": "Original authoritative creation instant.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "created_by": {
+                "description": "Principal that created this grant.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "grant_id": {
+                "description": "Stable grant identity.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "inheritance": {
+                "description": "Explicit descendant behaviour.",
+                "oneOf": [
+                  {
+                    "const": "object",
+                    "description": "The volume root only.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "descendants",
+                    "description": "Descendants only.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "object_and_descendants",
+                    "description": "The volume root and every descendant.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "revision": {
+                "description": "Current authoritative grant revision.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "rights": {
+                "description": "Complete ordered non-empty right set.",
+                "items": {
+                  "description": "Protocol-neutral namespace authority currently available to this caller.",
+                  "oneOf": [
+                    {
+                      "const": "traverse",
+                      "description": "Traverse ancestor directories.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "list",
+                      "description": "Enumerate directory entries.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "read_data",
+                      "description": "Read file bytes.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "create_child",
+                      "description": "Create a child object.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "write_data",
+                      "description": "Replace or modify file bytes.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "append_data",
+                      "description": "Append file bytes.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "rename",
+                      "description": "Rename or move an object.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "delete",
+                      "description": "Delete an object or empty directory.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "read_attributes",
+                      "description": "Read object attributes.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "write_attributes",
+                      "description": "Change object attributes.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "read_permissions",
+                      "description": "Read owners and permission grants.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "change_permissions",
+                      "description": "Change permission grants.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "change_owner",
+                      "description": "Change the owner set.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "maxItems": 13,
+                "minItems": 1,
+                "type": "array"
+              },
+              "subject_principal_id": {
+                "description": "User or group receiving the rights.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "valid_from_epoch_micros": {
+                "description": "Inclusive validity start, or null when unbounded below.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "valid_until_epoch_micros": {
+                "description": "Exclusive validity end, or null when unbounded above.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "volume_id": {
+                "description": "Volume whose root defines this grant's scope.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "grant_id",
+              "subject_principal_id",
+              "volume_id",
+              "rights",
+              "inheritance",
+              "valid_from_epoch_micros",
+              "valid_until_epoch_micros",
+              "activation_policy_id",
+              "created_by",
+              "created_at_epoch_micros",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "operation_id": {
+            "description": "Exact idempotency identity whose committed result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "grant"
+        ],
+        "title": "CreateVolumePermissionGrantResponse",
+        "type": "object"
+      },
       "CreateVolumeRequest": {
         "additionalProperties": false,
         "description": "Idempotent administrator request to create one logical volume.",
@@ -4020,6 +4410,225 @@
         "title": "ListUploadRangesResponse",
         "type": "object"
       },
+      "ListVolumePermissionGrantsResponse": {
+        "additionalProperties": false,
+        "description": "One bounded stable page of active volume grants.",
+        "properties": {
+          "grants": {
+            "description": "Stable grant records ordered by grant identity.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One active allow-only volume permission grant.",
+              "properties": {
+                "activation_policy_id": {
+                  "description": "Policy that must be activated, or null when authority is immediately usable.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "created_at_epoch_micros": {
+                  "description": "Original authoritative creation instant.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "created_by": {
+                  "description": "Principal that created this grant.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "grant_id": {
+                  "description": "Stable grant identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "inheritance": {
+                  "description": "Explicit descendant behaviour.",
+                  "oneOf": [
+                    {
+                      "const": "object",
+                      "description": "The volume root only.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "descendants",
+                      "description": "Descendants only.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "object_and_descendants",
+                      "description": "The volume root and every descendant.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "revision": {
+                  "description": "Current authoritative grant revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "rights": {
+                  "description": "Complete ordered non-empty right set.",
+                  "items": {
+                    "description": "Protocol-neutral namespace authority currently available to this caller.",
+                    "oneOf": [
+                      {
+                        "const": "traverse",
+                        "description": "Traverse ancestor directories.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "list",
+                        "description": "Enumerate directory entries.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "read_data",
+                        "description": "Read file bytes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "create_child",
+                        "description": "Create a child object.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "write_data",
+                        "description": "Replace or modify file bytes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "append_data",
+                        "description": "Append file bytes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "rename",
+                        "description": "Rename or move an object.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "delete",
+                        "description": "Delete an object or empty directory.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "read_attributes",
+                        "description": "Read object attributes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "write_attributes",
+                        "description": "Change object attributes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "read_permissions",
+                        "description": "Read owners and permission grants.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "change_permissions",
+                        "description": "Change permission grants.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "change_owner",
+                        "description": "Change the owner set.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "maxItems": 13,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "subject_principal_id": {
+                  "description": "User or group receiving the rights.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "valid_from_epoch_micros": {
+                  "description": "Inclusive validity start, or null when unbounded below.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "valid_until_epoch_micros": {
+                  "description": "Exclusive validity end, or null when unbounded above.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "volume_id": {
+                  "description": "Volume whose root defines this grant's scope.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "grant_id",
+                "subject_principal_id",
+                "volume_id",
+                "rights",
+                "inheritance",
+                "valid_from_epoch_micros",
+                "valid_until_epoch_micros",
+                "activation_policy_id",
+                "created_by",
+                "created_at_epoch_micros",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "next_page_url": {
+            "description": "Ready-to-follow relative URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/admin/volumes/",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "volume_id": {
+            "description": "Exact volume represented by the page.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "volume_id",
+          "grants",
+          "next_page_url"
+        ],
+        "title": "ListVolumePermissionGrantsResponse",
+        "type": "object"
+      },
       "ListVolumesResponse": {
         "additionalProperties": false,
         "description": "One bounded current-user volume page.",
@@ -4478,6 +5087,72 @@
           "revoked_at_epoch_micros"
         ],
         "title": "RevokeCurrentSessionResponse",
+        "type": "object"
+      },
+      "RevokePermissionGrantRequest": {
+        "additionalProperties": false,
+        "description": "Idempotent administrator request to revoke one exact active grant.",
+        "properties": {
+          "operation_id": {
+            "description": "Client-generated exact-retry identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Human-readable audit reason retained with revocation evidence.",
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^\\S(?:[\\s\\S]*\\S)?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "reason"
+        ],
+        "title": "RevokePermissionGrantRequest",
+        "type": "object"
+      },
+      "RevokePermissionGrantResponse": {
+        "additionalProperties": false,
+        "description": "Durable result of revoking or exactly replaying one permission grant.",
+        "properties": {
+          "grant_id": {
+            "description": "Exact grant that was revoked.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact idempotency identity whose committed result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Authoritative revocation revision.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revoked_at_epoch_micros": {
+            "description": "Original authoritative revocation instant used by exact retries.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operation_id",
+          "grant_id",
+          "revoked_at_epoch_micros",
+          "revision"
+        ],
+        "title": "RevokePermissionGrantResponse",
         "type": "object"
       },
       "SetupStatusResponse": {
@@ -7163,6 +7838,799 @@
           }
         },
         "summary": "Create one logical volume with an explicit owner set",
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/volumes/{volume_id}/permission-grants": {
+      "get": {
+        "operationId": "listVolumePermissionGrants",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "volume_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListVolumePermissionGrantsResponse"
+                }
+              }
+            },
+            "description": "One current volume permission-grant page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid volume or query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Volume not found",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Permission authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List one bounded page of active volume permission grants",
+        "x-meshspan-access": "system-manager"
+      },
+      "post": {
+        "operationId": "createVolumePermissionGrant",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "volume_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVolumePermissionGrantRequest"
+              }
+            }
+          },
+          "description": "Volume permission grant",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateVolumePermissionGrantResponse"
+                }
+              }
+            },
+            "description": "Grant durably created or exactly replayed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid grant request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Volume or principal not found",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Grant or operation conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Permission authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Grant allow-only authority over one volume",
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/volumes/{volume_id}/permission-grants/{grant_id}/revocations": {
+      "post": {
+        "operationId": "revokePermissionGrant",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "volume_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact active permission-grant identity",
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokePermissionGrantRequest"
+              }
+            }
+          },
+          "description": "Audited permission revocation",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokePermissionGrantResponse"
+                }
+              }
+            },
+            "description": "Grant durably revoked or exactly replayed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid revocation request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Active grant not found",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Operation conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Permission authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Revoke one exact active volume permission grant",
         "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }

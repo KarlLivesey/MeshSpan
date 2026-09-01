@@ -593,6 +593,87 @@ select:hover {
   padding-top: var(--space-3xl);
 }
 
+.permission-administration {
+  display: grid;
+  gap: var(--space-xl);
+  margin-top: var(--space-3xl);
+  padding-top: var(--space-3xl);
+  border-top: 1px solid var(--line);
+}
+
+.permission-grant-form {
+  display: grid;
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.permission-grant-fields {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.activation-check {
+  width: fit-content;
+}
+
+.activation-duration {
+  max-width: 22rem;
+}
+
+.permission-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.permission-grant-list {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.permission-grant-card {
+  display: grid;
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+  border-left: 0.25rem solid var(--signal);
+  background: var(--paper-raised);
+}
+
+.permission-grant-card > div:first-child {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.permission-grant-card > div:first-child p,
+.permission-grant-card dt {
+  color: var(--ink-soft);
+}
+
+.permission-grant-card dl {
+  display: grid;
+  gap: var(--space-sm);
+  margin: 0;
+}
+
+.permission-grant-card dl > div {
+  display: grid;
+  grid-template-columns: minmax(6rem, 0.4fr) minmax(0, 1fr);
+  gap: var(--space-md);
+}
+
+.permission-grant-card dd {
+  margin: 0;
+}
+
+.grant-revocation {
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  background: var(--danger-surface);
+}
+
 .state-committed::before {
   background: var(--success);
 }
@@ -1014,6 +1095,10 @@ tbody th {
   .membership-heading {
     grid-template-columns: minmax(16rem, 0.8fr) minmax(20rem, 1.2fr);
     align-items: end;
+  }
+
+  .permission-grant-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .method-grid,

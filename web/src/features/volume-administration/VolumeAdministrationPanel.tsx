@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+import { Show, createSignal } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
 import { createPrincipalDirectory } from "../identity-administration/model";
 import { CreateVolumeForm } from "./CreateVolumeForm";
 import { createVolumeDirectory } from "./model";
-import type { VolumeAdministrationClient } from "./model";
+import type { AdminVolume, VolumeAdministrationClient } from "./model";
+import { PermissionGrantPanel } from "./PermissionGrantPanel";
 import { VolumeList } from "./VolumeList";
 
 type VolumeAdministrationPanelProps = Readonly<{
@@ -19,6 +21,7 @@ export function VolumeAdministrationPanel(
   const volumes = createVolumeDirectory(() => props.client);
   const users = createPrincipalDirectory(() => props.client, "user");
   const groups = createPrincipalDirectory(() => props.client, "group");
+  const [selectedVolume, setSelectedVolume] = createSignal<AdminVolume>();
 
   void Promise.all([
     volumes.loadInitial(),
@@ -44,6 +47,14 @@ export function VolumeAdministrationPanel(
   const owners = () => [...users.items(), ...groups.items()];
   const ownersLoading = () =>
     users.phase() === "loading" || groups.phase() === "loading";
+  const ownersHaveMore = () =>
+    users.nextPageUrl() !== null || groups.nextPageUrl() !== null;
+  const loadMoreOwners = async (): Promise<void> => {
+    await Promise.all([
+      users.nextPageUrl() === null ? Promise.resolve() : users.loadNext(),
+      groups.nextPageUrl() === null ? Promise.resolve() : groups.loadNext(),
+    ]);
+  };
 
   return (
     <div class="volume-administration">
@@ -66,7 +77,23 @@ export function VolumeAdministrationPanel(
         owners={owners()}
         ownersLoading={ownersLoading()}
       />
-      <VolumeList directory={volumes} />
+      <VolumeList
+        directory={volumes}
+        onSelect={setSelectedVolume}
+        selectedVolumeId={selectedVolume()?.volumeId}
+      />
+      <Show when={selectedVolume()}>
+        {(volume) => (
+          <PermissionGrantPanel
+            client={props.client}
+            csrfToken={props.csrfToken}
+            loadMoreOwners={loadMoreOwners}
+            owners={owners()}
+            ownersHaveMore={ownersHaveMore()}
+            volume={volume()}
+          />
+        )}
+      </Show>
     </div>
   );
 }

@@ -11,11 +11,15 @@ import type {
 export type VolumeAdministrationClient = Pick<
   MeshSpanFetchClient,
   | "createVolume"
+  | "createVolumePermissionGrant"
   | "listGroups"
   | "listNextPrincipals"
   | "listNextVolumes"
+  | "listNextVolumePermissionGrants"
   | "listUsers"
   | "listVolumes"
+  | "listVolumePermissionGrants"
+  | "revokePermissionGrant"
 >;
 
 export type AdminVolume = Readonly<{

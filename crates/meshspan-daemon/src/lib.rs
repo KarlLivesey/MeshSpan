@@ -50,6 +50,7 @@ mod consensus_bootstrap_authority;
 mod consensus_filesystem_authority;
 mod consensus_identity_administration;
 mod consensus_node_enrolment;
+mod consensus_permission_administration;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;
@@ -141,6 +142,7 @@ mod passkey_test_support;
 mod pending_recovery_bundle;
 #[cfg(test)]
 mod pending_recovery_bundle_tests;
+mod permission_administration;
 mod pinned_https_client;
 mod private_consensus_runtime;
 mod protected_api_key_issuance;
@@ -372,6 +374,12 @@ pub use passkey_session_contract::{
 };
 pub use pending_recovery_bundle::{
     PendingRecoveryBundle, PendingRecoveryBundleError, PendingRecoveryBundleRemoval,
+};
+pub use permission_administration::{
+    PermissionAdministrationApiError, PermissionAdministrationAuthority,
+    PermissionAdministrationAuthorityError, PermissionAdministrationController,
+    PermissionAdministrationError, PermissionAdministrationService,
+    permission_administration_api_router,
 };
 pub use protected_api_key_issuance::ProtectedApiKeyIssuanceController;
 pub use protected_recovery_code_issuance::ProtectedRecoveryCodeIssuanceController;
