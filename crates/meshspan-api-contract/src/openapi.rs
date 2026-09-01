@@ -23,11 +23,11 @@ use crate::{
     EnrolNodeResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
     ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
     ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
-    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
-    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
-    RevokePermissionGrantResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
-    UploadStatusResponse, WriteUploadRangeResponse, schema,
+    OperationStatusResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
+    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
+    RevokePermissionGrantRequest, RevokePermissionGrantResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -155,6 +155,7 @@ fn components() -> Value {
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
         schema_response::<ListVolumePermissionGrantsResponse>("ListVolumePermissionGrantsResponse"),
         schema_response::<ListVolumesResponse>("ListVolumesResponse"),
+        schema_response::<OperationStatusResponse>("OperationStatusResponse"),
         schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
         schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
         schema_request::<RevokePermissionGrantRequest>("RevokePermissionGrantRequest"),
@@ -192,6 +193,10 @@ fn paths() -> Value {
             .chain([
                 ("/health".to_owned(), health_path()),
                 ("/openapi.json".to_owned(), openapi_path()),
+                (
+                    "/operations/{operation_id}".to_owned(),
+                    operation_status_path(),
+                ),
                 ("/setup/status".to_owned(), setup_status_path()),
                 ("/setup/meshes".to_owned(), create_mesh_path()),
                 ("/setup/enrolments".to_owned(), enrol_node_path()),
@@ -252,6 +257,30 @@ fn paths() -> Value {
                 ),
             ]),
     ))
+}
+
+fn operation_status_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getOperationStatus",
+            "summary": "Resolve one durable operation under current caller authority",
+            "x-meshspan-access": "authenticated",
+            "parameters": [{
+                "name": "operation_id",
+                "in": "path",
+                "required": true,
+                "schema": uuid_parameter_schema()
+            }],
+            "responses": {
+                "200": json_response("Current durable operation state", "#/components/schemas/OperationStatusResponse"),
+                "400": json_response("Invalid operation identity", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "404": json_response("Operation not found or not visible", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Operation authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn file_api_paths() -> [(String, Value); 13] {

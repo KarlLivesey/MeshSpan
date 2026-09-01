@@ -77,6 +77,7 @@ export function readRequiredRoutes(document) {
     getHealth: requireOperation(operations, "getHealth"),
     getCurrentSession: requireOperation(operations, "getCurrentSession"),
     getObject: requireOperation(operations, "getObject"),
+    getOperationStatus: requireOperation(operations, "getOperationStatus"),
     getOpenApi: requireOperation(operations, "getOpenApi"),
     getSetupStatus: requireOperation(operations, "getSetupStatus"),
     getUpload: requireOperation(operations, "getUpload"),

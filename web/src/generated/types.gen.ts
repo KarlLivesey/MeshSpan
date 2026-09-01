@@ -2112,6 +2112,104 @@ export type ListVolumesResponse = {
 };
 
 /**
+ * OperationStatusResponse
+ *
+ * Current durable state of one exact operation visible to the caller.
+ */
+export type OperationStatusResponse = {
+  /**
+   * Whether a cancellation request is currently safe and supported.
+   */
+  cancellation_available: boolean;
+  /**
+   * Terminal instant, or null while work remains non-terminal.
+   */
+  completed_at_epoch_micros: number | null;
+  /**
+   * Typed terminal failure, or null for non-failed states.
+   */
+  failure: {
+    /**
+     * Stable machine-readable failure category.
+     */
+    code: string;
+    /**
+     * Bounded plain-language explanation.
+     */
+    message: string;
+    /**
+     * Safe retry classification independent of the prose.
+     */
+    retry: "never" | "automatic" | "same_operation" | "action_required";
+  } | null;
+  /**
+   * Stable work family.
+   */
+  kind:
+    | "metadata_mutation"
+    | "setup_join"
+    | "placement"
+    | "repair"
+    | "scrub"
+    | "drain"
+    | "reconciliation"
+    | "certificate"
+    | "backup"
+    | "update";
+  /**
+   * Exact operation being resolved.
+   */
+  operation_id: string;
+  /**
+   * Advisory bounded progress, or null when the work is not meaningfully countable.
+   */
+  progress: {
+    /**
+     * Completed work in the declared unit.
+     */
+    completed: number;
+    /**
+     * Current known total, which may increase as bounded discovery proceeds.
+     */
+    total: number;
+    /**
+     * Meaning of both counters.
+     */
+    unit: "steps" | "bytes" | "items" | "nodes" | "targets";
+  } | null;
+  /**
+   * Ready-to-follow committed result URL when the result has an addressable resource.
+   */
+  result_url: string | null;
+  /**
+   * Authoritative operation revision used by conditional clients and event projections.
+   */
+  revision: number;
+  /**
+   * Original accepted instant.
+   */
+  started_at_epoch_micros: number;
+  /**
+   * Authoritative lifecycle state.
+   */
+  state:
+    | "queued"
+    | "running"
+    | "awaiting_action"
+    | "succeeded"
+    | "failed"
+    | "cancelled";
+  /**
+   * Ready-to-follow current status URL.
+   */
+  status_url: string;
+  /**
+   * Most recent authoritative lifecycle change.
+   */
+  updated_at_epoch_micros: number;
+};
+
+/**
  * RemoveGroupMemberRequest
  *
  * Idempotent administrator request to remove one exact active direct membership.
@@ -3627,6 +3725,51 @@ export type GetOpenApiResponses = {
 };
 
 export type GetOpenApiResponse = GetOpenApiResponses[keyof GetOpenApiResponses];
+
+export type GetOperationStatusData = {
+  body?: never;
+  path: {
+    operation_id: string;
+  };
+  query?: never;
+  url: "/operations/{operation_id}";
+};
+
+export type GetOperationStatusErrors = {
+  /**
+   * Invalid operation identity
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * Operation not found or not visible
+   */
+  404: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Operation authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetOperationStatusError =
+  GetOperationStatusErrors[keyof GetOperationStatusErrors];
+
+export type GetOperationStatusResponses = {
+  /**
+   * Current durable operation state
+   */
+  200: OperationStatusResponse;
+};
+
+export type GetOperationStatusResponse =
+  GetOperationStatusResponses[keyof GetOperationStatusResponses];
 
 export type CreateSessionData = {
   body: CreateSessionRequestWritable;

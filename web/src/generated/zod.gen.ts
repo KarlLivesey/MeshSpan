@@ -2403,6 +2403,89 @@ export const zListVolumesResponse = z
   .strict();
 
 /**
+ * OperationStatusResponse
+ *
+ * Current durable state of one exact operation visible to the caller.
+ */
+export const zOperationStatusResponse = z
+  .strictObject({
+    cancellation_available: z.boolean(),
+    completed_at_epoch_micros: z.int().gte(0).lte(9007199254740991).nullable(),
+    failure: z
+      .strictObject({
+        code: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[a-z][a-z0-9_]*$/),
+        message: z.string().min(1).max(512),
+        retry: z.union([
+          z.literal("never"),
+          z.literal("automatic"),
+          z.literal("same_operation"),
+          z.literal("action_required"),
+        ]),
+      })
+      .strict()
+      .nullable(),
+    kind: z.union([
+      z.literal("metadata_mutation"),
+      z.literal("setup_join"),
+      z.literal("placement"),
+      z.literal("repair"),
+      z.literal("scrub"),
+      z.literal("drain"),
+      z.literal("reconciliation"),
+      z.literal("certificate"),
+      z.literal("backup"),
+      z.literal("update"),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    progress: z
+      .strictObject({
+        completed: z.int().gte(0).lte(9007199254740991),
+        total: z.int().gte(1).lte(9007199254740991),
+        unit: z.union([
+          z.literal("steps"),
+          z.literal("bytes"),
+          z.literal("items"),
+          z.literal("nodes"),
+          z.literal("targets"),
+        ]),
+      })
+      .strict()
+      .nullable(),
+    result_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\//)
+      .nullable(),
+    revision: z.int().gte(1).lte(9007199254740991),
+    started_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    state: z.union([
+      z.literal("queued"),
+      z.literal("running"),
+      z.literal("awaiting_action"),
+      z.literal("succeeded"),
+      z.literal("failed"),
+      z.literal("cancelled"),
+    ]),
+    status_url: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^\/api\/latest\/operations\//),
+    updated_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+  })
+  .strict();
+
+/**
  * RemoveGroupMemberRequest
  *
  * Idempotent administrator request to remove one exact active direct membership.
@@ -3518,6 +3601,22 @@ export const zGetHealthResponse = zHealthResponse;
  * This exact OpenAPI 3.1 document
  */
 export const zGetOpenApiResponse = z.record(z.string(), z.unknown());
+
+export const zGetOperationStatusPath = z
+  .object({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Current durable operation state
+ */
+export const zGetOperationStatusResponse = zOperationStatusResponse;
 
 export const zCreateSessionBody = zCreateSessionRequestWritable;
 

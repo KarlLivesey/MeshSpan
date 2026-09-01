@@ -24,6 +24,8 @@ mod node_enrolment_validation;
 mod object_stat;
 mod object_stat_validation;
 mod openapi;
+mod operation_status;
+mod operation_status_validation;
 mod passkey_registration;
 mod passkey_validation;
 mod permission_administration;
@@ -151,6 +153,11 @@ pub use object_stat_validation::{
     validate_get_object_response_value,
 };
 pub use openapi::{OPENAPI_PATH, OpenApiDocument, generate_openapi};
+pub use operation_status::{
+    OperationFailure, OperationKind, OperationProgress, OperationProgressUnit, OperationRetryClass,
+    OperationState, OperationStatusResponse,
+};
+pub use operation_status_validation::encode_operation_status_response;
 pub use passkey_registration::{
     AuthenticationMethodId, AuthenticationMethodLabel, CreatePasskeyRegistrationChallengeRequest,
     CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,

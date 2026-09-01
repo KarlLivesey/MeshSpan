@@ -50,6 +50,7 @@ import type {
   ListUploadRangesResponse,
   ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
+  OperationStatusResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -117,6 +118,8 @@ import {
   zGetObjectPath,
   zGetObjectQuery,
   zGetObjectResponse2,
+  zGetOperationStatusPath,
+  zGetOperationStatusResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
   zGetUploadPath,
@@ -395,6 +398,7 @@ export interface MeshSpanFetchClient {
     request: RevokePermissionGrantRequest,
     csrfToken?: string,
   ): Promise<RevokePermissionGrantResponse>;
+  getOperationStatus(operationId: string): Promise<OperationStatusResponse>;
   listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   listNextDirectory(nextPageUrl: string): Promise<ListDirectoryResponse>;
   createMeshSetup(
@@ -1101,6 +1105,19 @@ export function createMeshSpanFetchClient(
           method: "POST",
         },
         zRevokePermissionGrantResponse2,
+      );
+    },
+    async getOperationStatus(operationId): Promise<OperationStatusResponse> {
+      const path = zGetOperationStatusPath.parse({ operation_id: operationId });
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/operations/{operation_id}",
+          "operation_id",
+          path.operation_id,
+        ),
+        { method: "GET" },
+        zGetOperationStatusResponse,
       );
     },
     async listDirectory(request): Promise<ListDirectoryResponse> {

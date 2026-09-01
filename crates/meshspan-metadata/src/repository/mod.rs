@@ -78,6 +78,7 @@ mod namespace;
 mod node_wrapping_key;
 #[cfg(test)]
 mod node_wrapping_key_tests;
+mod operation_status;
 mod passkey_registration;
 #[cfg(test)]
 mod passkey_registration_tests;
@@ -177,6 +178,7 @@ pub use kernel::{
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
 pub use node_wrapping_key::NodeWrappingKeyRecord;
+pub use operation_status::{AuthoritativeOperationState, AuthoritativeOperationStatus};
 pub use passkey_registration::{
     AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
@@ -644,6 +646,18 @@ impl AuthoritativeRepository {
         operation_id: OperationId,
     ) -> Result<Option<CommandReceipt>, RepositoryError> {
         receipt::resolve_operation(&self.database, operation_id)
+    }
+
+    /// Returns validated current status for one authoritative operation, if present.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when lifecycle, actor, result or timestamp evidence is inconsistent.
+    pub fn operation_status(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<AuthoritativeOperationStatus>, RepositoryError> {
+        operation_status::read(&self.database, operation_id)
     }
 
     /// Resolves the durable delivery facts for one prior API-key session operation.

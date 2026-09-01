@@ -46,6 +46,10 @@ import {
   renderPermissionAdministrationRequestTypes,
   renderPermissionAdministrationRuntime,
 } from "./render-permission-administration-client.mjs";
+import {
+  renderOperationStatusClientInterface,
+  renderOperationStatusClientMethods,
+} from "./render-operation-status-client.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -112,6 +116,7 @@ import type {
   ListUploadRangesResponse,
   ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
+  OperationStatusResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -179,6 +184,8 @@ import {
   zGetObjectPath,
   zGetObjectQuery,
   zGetObjectResponse2,
+  zGetOperationStatusPath,
+  zGetOperationStatusResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
   zGetUploadPath,
@@ -309,6 +316,7 @@ export interface MeshSpanFetchClient {
   ${renderUploadClientInterface()}
   ${renderVolumeClientInterface()}
   ${renderPermissionAdministrationClientInterface()}
+  ${renderOperationStatusClientInterface()}
   ${renderDirectoryClientInterface()}
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
@@ -366,6 +374,7 @@ export function createMeshSpanFetchClient(
     ${renderUploadClientMethods(routes)}
     ${renderVolumeClientMethods(routes)}
     ${renderPermissionAdministrationClientMethods(routes)}
+    ${renderOperationStatusClientMethods(routes)}
     ${renderDirectoryClientMethods(routes)}
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
