@@ -194,6 +194,8 @@ fn fixture(verify_recovery: bool) -> Result<Fixture, Box<dyn std::error::Error>>
                 Box::new(BootstrapRecoveryIdentity {
                     public_wrapping_key: recovery_public_key.as_bytes(),
                     key_fingerprint: recovery_public_key.fingerprint(),
+                    online_authority_certificate_digest: Sha256::digest(&certificate).into(),
+                    online_authority_certificate_der: certificate.clone(),
                     root_certificate_digest: Sha256::digest(&certificate).into(),
                     root_certificate_der: certificate,
                     bundle_digest: [14; 32],

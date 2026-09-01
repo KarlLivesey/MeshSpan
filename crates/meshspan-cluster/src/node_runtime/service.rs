@@ -21,12 +21,14 @@ use super::NodeRuntimeError;
 use super::config::NodeConfig;
 use super::membership_runtime::{
     SnapshotDispatch, dispatch_learner_snapshots, install_admission_snapshot,
-    maybe_plan_membership_transition, restore_incarnations,
+    maybe_plan_membership_transition,
 };
 use super::network::{PeerMessage, PeerNetwork, ReceivedSnapshot};
 use super::proof_metadata::ProofMetadata;
 use super::test_plan_exit::TestPlanExit;
-use crate::membership::{MembershipCoordinatorError, validate_transition};
+use crate::membership::{
+    MembershipCoordinatorError, restore_member_incarnations, validate_transition,
+};
 use crate::{ClusterDriverError, DriverEffect, PartitionConsensusDriver};
 
 const MEMBERSHIP_EPOCH: u64 = 1;
@@ -132,7 +134,8 @@ fn restore_core(
         None => repository.initialise_consensus_quorum_plan(&bootstrap_plan, now())?,
     };
     let recovery_plan = active_plan.recovery_configuration_plan().clone();
-    let incarnations = restore_incarnations(repository, &active_plan)?;
+    let incarnations = restore_member_incarnations(repository, &active_plan)
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
     let durable = repository.load_consensus_state(active_plan.membership_epoch())?;
     ConsensusCore::restore_active(
         CoreConfig {

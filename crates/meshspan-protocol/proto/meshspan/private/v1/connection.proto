@@ -69,3 +69,32 @@ message ProtocolError {
   bytes offending_request_id = 2;
   uint32 diagnostic_code = 3;
 }
+
+// First authenticated continuation after HTTPS admission. The request header supplies the exact
+// mesh, node, incarnation and idempotent operation identities; mTLS supplies the staged leaf.
+message NodeActivationRequest {
+  repeated NodeRole roles = 1;
+  bytes capability_digest = 2;
+}
+
+message NodeActivationResult {
+  OperationResult result = 1;
+  optional uint64 active_revision = 2;
+}
+
+message NodeRoute {
+  bytes node_id = 1;
+  uint64 incarnation = 2;
+  string private_endpoint = 3;
+  bytes certificate_der = 4;
+}
+
+message NodeTopologyUpdate {
+  uint64 topology_revision = 1;
+  repeated NodeRoute routes = 2;
+}
+
+message NodeTopologyResult {
+  OperationResult result = 1;
+  uint64 applied_revision = 2;
+}

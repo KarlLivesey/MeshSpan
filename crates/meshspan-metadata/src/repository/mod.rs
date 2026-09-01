@@ -145,6 +145,10 @@ pub use cleanup_permit::{
     VersionCleanupPermitAuthority,
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
+pub use cluster::{
+    ActiveNodeCertificate, JoinGrantRecord, NodeActivationCandidate, NodeActivationRecord,
+    NodeEnrolmentRecord,
+};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use federation_actor_attestation::FederatedActorAttestationRecord;
 pub use federation_assignment::FederationGrantAssignmentAuthority;
@@ -187,7 +191,9 @@ pub use reachability::{
     RetainedNamespaceRootSource,
 };
 pub use receipt::{ApplyDisposition, CommandReceipt, EntityKind, EntityReference, LogPosition};
-pub use recovery_authority::{MeshRecoveryAuthority, RecoveryBundleState};
+pub use recovery_authority::{
+    MeshRecoveryAuthority, OnlineCertificateAuthorityRecord, RecoveryBundleState,
+};
 pub use retention::VersionRetentionPolicy;
 pub use secret_generation::SecretGenerationRecord;
 pub use session::{
@@ -266,6 +272,12 @@ impl AuthoritativeMetadataKernel for AuthoritativeRepository {
 }
 
 impl AuthoritativeRepository {
+    /// Returns the immutable partition identity fixed by the opened database.
+    #[must_use]
+    pub const fn partition_id(&self) -> meshspan_domain::PartitionId {
+        self.database.partition_id()
+    }
+
     /// Returns the root partition's one intrinsic local mesh identity.
     ///
     /// # Errors
@@ -273,6 +285,66 @@ impl AuthoritativeRepository {
     /// Fails closed if a root partition contains multiple meshes or malformed identity bytes.
     pub fn local_mesh_id(&self) -> Result<Option<meshspan_domain::MeshId>, RepositoryError> {
         mesh_identity::local_mesh_id(&self.database)
+    }
+
+    /// Returns immutable issuance facts for one current node join grant.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored grant identity, roles, time or revision state is malformed.
+    pub fn join_grant(
+        &self,
+        join_grant_id: meshspan_domain::JoinGrantId,
+    ) -> Result<Option<JoinGrantRecord>, RepositoryError> {
+        cluster::join_grant(&self.database, join_grant_id)
+    }
+
+    /// Returns exact durable admission facts for one pending node activation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when node, certificate or staged endpoint state is malformed.
+    pub fn node_enrolment(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<NodeEnrolmentRecord>, RepositoryError> {
+        cluster::node_enrolment(&self.database, node_id)
+    }
+
+    /// Returns one admitted node's exact pending private-activation facts.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when admission, certificate, role, endpoint or issuer state is malformed.
+    pub fn node_activation_candidate(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<NodeActivationCandidate>, RepositoryError> {
+        cluster::node_activation_candidate(&self.database, node_id)
+    }
+
+    /// Returns exact durable evidence for one active node.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when activation evidence is malformed.
+    pub fn node_activation(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<NodeActivationRecord>, RepositoryError> {
+        cluster::node_activation(&self.database, node_id)
+    }
+
+    /// Returns the newest active mesh-signed leaf certificate for one active node.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when certificate identity, digest, validity or revision state is malformed.
+    pub fn active_node_certificate(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<ActiveNodeCertificate>, RepositoryError> {
+        cluster::active_node_certificate(&self.database, node_id)
     }
 
     /// Wraps one already migrated and identity-verified partition database.
@@ -1148,6 +1220,18 @@ impl AuthoritativeRepository {
         secret_generation::latest_authentication_root_generation(&self.database, mesh_id)
     }
 
+    /// Returns the newest committed online node-certificate authority key generation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed generation state or database failure.
+    pub fn latest_online_authority_generation(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<u64>, RepositoryError> {
+        secret_generation::latest_online_authority_generation(&self.database, mesh_id)
+    }
+
     /// Returns every current gateway and the exact verified offline recovery recipient.
     ///
     /// Storage-only nodes are deliberately excluded because they retain encrypted shards without
@@ -1172,6 +1256,18 @@ impl AuthoritativeRepository {
         mesh_id: meshspan_domain::MeshId,
     ) -> Result<Option<MeshRecoveryAuthority>, RepositoryError> {
         recovery_authority::current(&self.database, mesh_id)
+    }
+
+    /// Returns the current root-signed online node-certificate authority certificate.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed certificate, generation or digest state.
+    pub fn online_certificate_authority(
+        &self,
+        mesh_id: meshspan_domain::MeshId,
+    ) -> Result<Option<OnlineCertificateAuthorityRecord>, RepositoryError> {
+        recovery_authority::current_online_authority(&self.database, mesh_id)
     }
 
     /// Returns one stable, bounded page of principals in a selected family.

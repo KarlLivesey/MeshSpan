@@ -3,7 +3,7 @@
 //! Gateway-only loading and domain-separated expansion of the mesh authentication root.
 
 use hmac::{Hmac, KeyInit, Mac};
-use meshspan_domain::{ApiKeyIssuanceKey, MeshId, RecoveryCodeIssuanceKey};
+use meshspan_domain::{ApiKeyIssuanceKey, JoinGrantIssuanceKey, MeshId, RecoveryCodeIssuanceKey};
 use meshspan_metadata::AUTHENTICATION_ROOT_KEY_SECRET_KIND;
 use meshspan_secret_envelope::{SecretContext, SecretPlaintext};
 use sha2::Sha256;
@@ -19,6 +19,7 @@ use crate::{
 
 const AUTHENTICATION_ROOT_BYTES: usize = 32;
 const API_KEY_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.api-key-issuance.v1";
+const JOIN_GRANT_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.join-grant-issuance.v1";
 const RECOVERY_CODE_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.recovery-code-issuance.v1";
 const TOTP_ENVELOPE_DOMAIN: &[u8] = b"meshspan.authentication.totp-envelope.v1";
 
@@ -47,6 +48,7 @@ pub trait AuthenticationRootAuthority: SecretGenerationAuthority {
 /// Independently typed operational keys derived from one protected authentication root.
 pub struct AuthenticationRuntimeKeys {
     api_key_issuance: ApiKeyIssuanceKey,
+    join_grant_issuance: JoinGrantIssuanceKey,
     recovery_code_issuance: RecoveryCodeIssuanceKey,
     totp_envelope: TotpEnvelopeKey,
 }
@@ -66,6 +68,12 @@ impl AuthenticationRuntimeKeys {
     #[must_use]
     pub fn into_api_key_issuance_key(self) -> ApiKeyIssuanceKey {
         self.api_key_issuance
+    }
+
+    /// Transfers only the node join-grant issuance capability into an issuance service.
+    #[must_use]
+    pub fn into_join_grant_issuance_key(self) -> JoinGrantIssuanceKey {
+        self.join_grant_issuance
     }
 
     /// Transfers only the recovery-code issuance capability into an issuance service.
@@ -263,6 +271,9 @@ fn derive_runtime_keys(
     let api_key_issuance =
         ApiKeyIssuanceKey::from_bytes(derive(&root, context, API_KEY_ISSUANCE_DOMAIN)?)
             .map_err(|_| AuthenticationRootLoadingError::Failed)?;
+    let join_grant_issuance =
+        JoinGrantIssuanceKey::from_bytes(derive(&root, context, JOIN_GRANT_ISSUANCE_DOMAIN)?)
+            .map_err(|_| AuthenticationRootLoadingError::Failed)?;
     let recovery_code_issuance =
         RecoveryCodeIssuanceKey::from_bytes(derive(&root, context, RECOVERY_CODE_ISSUANCE_DOMAIN)?)
             .map_err(|_| AuthenticationRootLoadingError::Failed)?;
@@ -270,6 +281,7 @@ fn derive_runtime_keys(
         .map_err(|_| AuthenticationRootLoadingError::Failed)?;
     Ok(AuthenticationRuntimeKeys {
         api_key_issuance,
+        join_grant_issuance,
         recovery_code_issuance,
         totp_envelope,
     })

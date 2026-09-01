@@ -4,6 +4,7 @@
 
 mod federation_signing;
 mod framing;
+mod node_capability;
 mod validation;
 
 pub use federation_signing::{
@@ -30,6 +31,7 @@ pub use framing::{
     encode_data_control_frame, encode_data_frame, encode_federation_frame,
 };
 pub use meshspan_protobuf::EncodeError as ProtocolEncodeError;
+pub use node_capability::node_capability_digest;
 
 /// Generated version-one private wire messages.
 #[allow(

@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use meshspan_consensus::{CoreError, CoreInput, CoreMessage, ProposalId, Role};
+use meshspan_consensus::{
+    CoreError, CoreInput, CoreMessage, MEMBERSHIP_COMMAND_VERSION, MembershipTransitionCommand,
+    ProposalId, Role,
+};
 use meshspan_domain::{NodeId, OperationId, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, CommandContext, CommandReceipt,
@@ -16,6 +19,9 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::membership::{
+    membership_operation_id, membership_proposal_id, plan_next_transition, validate_transition,
+};
 use crate::{ClusterDriverError, DriverEffect, PartitionConsensusDriver};
 
 const DEFAULT_EVENT_CAPACITY: usize = 256;
@@ -485,6 +491,12 @@ impl MetadataAuthorityRuntime {
                 if !self.pending.is_empty() {
                     break;
                 }
+                let membership_effects = self.plan_membership_transition()?;
+                if !membership_effects.is_empty() {
+                    pending_effects
+                        .extend(membership_effects.into_iter().map(|effect| (effect, None)));
+                    continue;
+                }
                 let Some((effects, operation_id)) = self.admit_next()? else {
                     break;
                 };
@@ -499,13 +511,19 @@ impl MetadataAuthorityRuntime {
                 DriverEffect::Send { to, message } => self.transport.send(to, message),
                 DriverEffect::ApplyCommitted { entries } => {
                     for entry in entries {
-                        if entry.command_version != METADATA_COMMAND_VERSION {
+                        if entry.command_version == METADATA_COMMAND_VERSION {
+                            let applied =
+                                self.driver.apply_authoritative_committed(&entry, now())?;
+                            self.finish_pending(applied.receipt.operation_id, Ok(applied.receipt));
+                            pending_effects
+                                .extend(applied.effects.into_iter().map(|effect| (effect, None)));
+                            continue;
+                        }
+                        if entry.command_version != MEMBERSHIP_COMMAND_VERSION {
                             return Err(MetadataAuthorityRuntimeError::UnsupportedCommittedEntry);
                         }
-                        let applied = self.driver.apply_authoritative_committed(&entry, now())?;
-                        self.finish_pending(applied.receipt.operation_id, Ok(applied.receipt));
-                        pending_effects
-                            .extend(applied.effects.into_iter().map(|effect| (effect, None)));
+                        let effects = self.apply_membership_transition(&entry)?;
+                        pending_effects.extend(effects.into_iter().map(|effect| (effect, None)));
                     }
                 }
                 DriverEffect::Rejected { .. } => {
@@ -522,6 +540,104 @@ impl MetadataAuthorityRuntime {
             }
         }
         Ok(())
+    }
+
+    fn plan_membership_transition(
+        &mut self,
+    ) -> Result<Vec<DriverEffect>, MetadataAuthorityRuntimeError> {
+        if self.driver.role() != Role::Leader
+            || self
+                .driver
+                .last_log_entry()
+                .is_some_and(|entry| entry.position.index > self.driver.commit_index())
+        {
+            return Ok(Vec::new());
+        }
+        let Some(membership) = self.driver.persistence().partition_membership()? else {
+            return Ok(Vec::new());
+        };
+        let committed = self.driver.committed_entry().cloned();
+        let command = plan_next_transition(
+            self.driver.active_plan(),
+            self.driver.member_incarnations(),
+            membership.active_voters(),
+            membership.admitted_learners(),
+            committed.as_ref(),
+            |node| self.driver.peer_matched_index(node),
+        )
+        .map_err(|_| MetadataAuthorityRuntimeError::Membership)?;
+        let Some(command) = command else {
+            return Ok(Vec::new());
+        };
+        let proposal_id = membership_proposal_id(&command)
+            .map_err(|_| MetadataAuthorityRuntimeError::Membership)?;
+        let operation_id = membership_operation_id(&command)
+            .map_err(|_| MetadataAuthorityRuntimeError::Membership)?;
+        let command = command
+            .encode()
+            .map_err(|_| MetadataAuthorityRuntimeError::Membership)?;
+        Ok(self.driver.step(
+            CoreInput::Propose {
+                proposal_id,
+                operation_id,
+                command_version: MEMBERSHIP_COMMAND_VERSION,
+                command,
+            },
+            now(),
+        )?)
+    }
+
+    fn apply_membership_transition(
+        &mut self,
+        entry: &meshspan_consensus::LogEntry,
+    ) -> Result<Vec<DriverEffect>, MetadataAuthorityRuntimeError> {
+        let command = MembershipTransitionCommand::decode(&entry.command)
+            .map_err(|_| MetadataAuthorityRuntimeError::Membership)?;
+        let evidence_entry = match &command {
+            MembershipTransitionCommand::PromoteLearner { evidence, .. } => self
+                .driver
+                .log_entry(evidence.committed_position.index)
+                .cloned(),
+            MembershipTransitionCommand::AdmitLearner { .. }
+            | MembershipTransitionCommand::FinaliseStable { .. } => None,
+        };
+        let membership = self
+            .driver
+            .persistence()
+            .partition_membership()?
+            .ok_or(MetadataAuthorityRuntimeError::Membership)?;
+        let incarnations = validate_transition(
+            self.driver.active_plan(),
+            self.driver.member_incarnations(),
+            membership.active_voters(),
+            membership.admitted_learners(),
+            &command,
+            evidence_entry.as_ref(),
+        )
+        .map_err(|_| MetadataAuthorityRuntimeError::Membership)?;
+        let mut effects = self
+            .driver
+            .step(CoreInput::AppliedThrough(entry.position.index), now())?;
+        if self.driver.role() == Role::Leader {
+            effects.extend(self.driver.step(CoreInput::Heartbeat, now())?);
+        }
+        let activation = match command {
+            MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
+            | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+                CoreInput::ActivateJointPlan {
+                    joint_plan,
+                    member_incarnations: incarnations,
+                    committed_position: entry.position,
+                }
+            }
+            MembershipTransitionCommand::FinaliseStable { plan } => CoreInput::ActivateStablePlan {
+                plan,
+                member_incarnations: incarnations,
+                committed_position: entry.position,
+            },
+        };
+        effects.extend(self.driver.step(activation, now())?);
+        Ok(effects)
     }
 
     fn finish_pending(
@@ -644,6 +760,9 @@ pub enum MetadataAuthorityRuntimeError {
     /// A membership or future command entered a runtime not yet configured to apply it.
     #[error("metadata authority received an unsupported committed entry")]
     UnsupportedCommittedEntry,
+    /// Authoritative learner/voter state could not advance safely.
+    #[error("metadata authority membership transition failed")]
+    Membership,
 }
 
 #[cfg(test)]

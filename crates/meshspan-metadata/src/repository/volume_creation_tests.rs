@@ -69,7 +69,7 @@ fn wrong_key_context_rolls_back_every_volume_row() -> Result<(), Box<dyn std::er
     ));
     assert_eq!(repository.current_revision()?, Revision::new(1));
     assert!(repository.volume_inventory_record(volume_id)?.is_none());
-    assert_table_counts(&repository, (0, 0, 2, 4))
+    assert_table_counts(&repository, (0, 0, 3, 6))
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn rejected_duplicate_name_cannot_leave_an_orphan_key() -> Result<(), Box<dyn st
     ));
     assert_eq!(repository.current_revision()?, Revision::new(2));
     assert!(repository.volume_inventory_record(second)?.is_none());
-    assert_table_counts(&repository, (1, 1, 3, 6))
+    assert_table_counts(&repository, (1, 1, 4, 8))
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn omitted_eligible_gateway_recipient_rolls_back_the_volume()
     ));
     assert_eq!(repository.current_revision()?, Revision::new(1));
     assert!(repository.volume_inventory_record(volume_id)?.is_none());
-    assert_table_counts(&repository, (0, 0, 2, 4))
+    assert_table_counts(&repository, (0, 0, 3, 6))
 }
 
 #[test]

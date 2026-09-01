@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use meshspan_domain::{EntropyError, RandomSource};
+use meshspan_domain::{EntropyError, RandomSource, UnixMicros};
 use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, BootstrapAppliance, BootstrapMesh,
-    BootstrapRecoveryIdentity, CommitSecretGeneration, CreateAuthenticationMethod,
-    RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
+    BootstrapNodeCertificate, BootstrapRecoveryIdentity, CommitSecretGeneration,
+    CreateAuthenticationMethod, ONLINE_AUTHORITY_KEY_SECRET_KIND, RegisterNodeWrappingKey,
+    STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{
     SecretContext, SecretEnvelopeError, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
 };
+use sha2::{Digest, Sha256};
 
 pub(crate) fn bootstrap_appliance(
     mesh: BootstrapMesh,
@@ -42,12 +44,23 @@ pub(crate) fn bootstrap_appliance_with_node_key(
         &[node_key, recovery_key],
         &mut TestRandom(96),
     )?;
+    let (online_authority_secret, online_authority_recipients) = encrypt_secret(
+        SecretContext::new(ONLINE_AUTHORITY_KEY_SECRET_KIND, mesh.mesh_id.as_bytes(), 1)?,
+        &[97; 96],
+        &[node_key, recovery_key],
+        &mut TestRandom(98),
+    )?;
     Ok(BootstrapAppliance {
         node_wrapping_key: RegisterNodeWrappingKey {
             node_id: mesh.node_id,
             generation: 1,
             public_key: node_key.as_bytes(),
             key_fingerprint: node_key.fingerprint(),
+        },
+        node_certificate: BootstrapNodeCertificate {
+            certificate_der: vec![99; 64],
+            certificate_fingerprint: Sha256::digest([99; 64]).into(),
+            certificate_valid_until: UnixMicros::new(i64::MAX),
         },
         storage_permit_key_generation: Box::new(CommitSecretGeneration {
             secret: secret.parts(),
@@ -59,6 +72,13 @@ pub(crate) fn bootstrap_appliance_with_node_key(
         authentication_root_key_generation: Box::new(CommitSecretGeneration {
             secret: authentication_secret.parts(),
             recipients: authentication_recipients
+                .iter()
+                .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                .collect(),
+        }),
+        online_authority_key_generation: Box::new(CommitSecretGeneration {
+            secret: online_authority_secret.parts(),
+            recipients: online_authority_recipients
                 .iter()
                 .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
                 .collect(),

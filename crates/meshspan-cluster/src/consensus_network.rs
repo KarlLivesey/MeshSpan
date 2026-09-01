@@ -2,19 +2,22 @@
 
 //! Production-configurable authenticated QUIC transport for consensus messages.
 
+mod snapshot;
+
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use meshspan_consensus::CoreMessage;
 use meshspan_domain::{MeshId, NodeId, OperationId, PartitionId};
-use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::{
     ComponentSupport, ControlEnvelope, NodeHello, NodeRole, Pong, ProtocolVersion, RequestHeader,
 };
+use meshspan_protocol::{WireLimits, node_capability_digest};
 use meshspan_transport::{
     NegotiationConfig, NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportLimits,
     accept_stream, certificate_fingerprint, client_endpoint, connect, open_stream, receive_control,
@@ -23,13 +26,14 @@ use meshspan_transport::{
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
 use crate::{
     ConsensusMessageTransport, PeerConsensusMessage, decode_consensus_message,
     encode_consensus_message,
 };
+pub use snapshot::{OutboundConsensusSnapshot, ReceivedConsensusSnapshot};
 
 const MAXIMUM_CONTROL_BYTES: usize = 64 * 1_024;
 const MAXIMUM_DATA_BYTES: usize = 64 * 1_024;
@@ -54,6 +58,8 @@ pub struct ConsensusPeerConfig {
     pub address: SocketAddr,
     /// Current enrolled leaf certificate in DER form.
     pub certificate_der: Vec<u8>,
+    /// Exact DNS identity present in this peer's current leaf certificate.
+    pub certificate_name: String,
 }
 
 /// Complete private-network input consumed when starting one node transport.
@@ -68,37 +74,61 @@ pub struct ConsensusNetworkConfig {
     pub partition_id: PartitionId,
     /// Current exact route epoch.
     pub routing_epoch: u64,
+    /// Exact local roles presented during private connection negotiation.
+    pub roles: Vec<NodeRole>,
     /// Server socket for authenticated peer connections.
     pub listen_address: SocketAddr,
     /// Client socket, normally an ephemeral local address.
     pub client_address: SocketAddr,
-    /// DNS name present in every enrolled peer leaf.
-    pub certificate_name: String,
-    /// Local enrolled leaf certificate DER.
-    pub certificate_der: Vec<u8>,
+    /// Local enrolled leaf followed by any required intermediate certificate DER.
+    pub certificate_chain_der: Vec<Vec<u8>>,
     /// Local canonical PKCS#8 identity key, cleared when construction completes.
     pub private_key_pkcs8: Zeroizing<Vec<u8>>,
     /// Current CA roots accepted for both peer client and server certificates.
     pub trust_anchors: Vec<Vec<u8>>,
     /// Exact enrolled peers, excluding the local node.
     pub peers: Vec<ConsensusPeerConfig>,
+    /// Database path used only to derive owned temporary snapshot staging files.
+    pub snapshot_staging_path: Option<PathBuf>,
+}
+
+/// One authenticated non-consensus control request delivered to the appliance authority.
+pub struct PeerControlRequest {
+    /// Certificate-bound sender identity.
+    pub from: NodeId,
+    /// Certificate-bound sender incarnation.
+    pub sender_incarnation: u64,
+    /// Exact staged leaf-certificate fingerprint established by mTLS routing.
+    pub certificate_fingerprint: [u8; 32],
+    /// Digest of the validated `NodeHello` on this exact connection.
+    pub capability_digest: [u8; 32],
+    /// Strictly framed and semantically validated request.
+    pub envelope: meshspan_protocol::ValidatedControlEnvelope,
+    /// Single bounded response returned on the same QUIC stream.
+    pub respond: oneshot::Sender<ControlEnvelope>,
 }
 
 /// Cloneable non-blocking consensus message network.
 #[derive(Clone)]
 pub struct ConsensusNetwork {
+    runtime: tokio::runtime::Handle,
     client: quinn::Endpoint,
-    registry: Arc<PeerRegistry>,
-    peers: Arc<BTreeMap<NodeId, ConsensusPeerConfig>>,
+    peers: Arc<RwLock<ConsensusPeers>>,
     local_node_id: NodeId,
     local_incarnation: u64,
     mesh_id: MeshId,
     partition_id: PartitionId,
     routing_epoch: u64,
-    certificate_name: Arc<str>,
+    roles: Arc<[i32]>,
     wire_limits: WireLimits,
-    outbound: Arc<BTreeMap<NodeId, mpsc::Sender<CoreMessage>>>,
     next_request: Arc<AtomicU64>,
+    snapshot_staging_path: Option<Arc<PathBuf>>,
+}
+
+struct ConsensusPeers {
+    routes: BTreeMap<NodeId, ConsensusPeerConfig>,
+    registry: PeerRegistry,
+    outbound: BTreeMap<NodeId, mpsc::Sender<CoreMessage>>,
 }
 
 impl ConsensusNetwork {
@@ -111,6 +141,66 @@ impl ConsensusNetwork {
     pub fn start(
         config: ConsensusNetworkConfig,
         incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+    ) -> Result<Self, ConsensusNetworkError> {
+        Self::start_inner(config, incoming_messages, None, None)
+    }
+
+    /// Starts the network with an additional authenticated metadata-control ingress.
+    ///
+    /// # Errors
+    ///
+    /// Applies the same fail-closed configuration and transport validation as [`Self::start`].
+    pub fn start_with_control(
+        config: ConsensusNetworkConfig,
+        incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+        incoming_control: mpsc::Sender<PeerControlRequest>,
+    ) -> Result<Self, ConsensusNetworkError> {
+        Self::start_inner(config, incoming_messages, Some(incoming_control), None)
+    }
+
+    /// Starts the network with authenticated snapshot ingress for an admitted learner.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent staging configuration and applies every normal private-network check.
+    pub fn start_with_snapshots(
+        config: ConsensusNetworkConfig,
+        incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+        incoming_snapshots: mpsc::Sender<ReceivedConsensusSnapshot>,
+    ) -> Result<Self, ConsensusNetworkError> {
+        if config.snapshot_staging_path.is_none() {
+            return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        Self::start_inner(config, incoming_messages, None, Some(incoming_snapshots))
+    }
+
+    /// Starts the complete authenticated consensus, control and snapshot ingress.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent staging configuration and applies every normal private-network check.
+    pub fn start_with_control_and_snapshots(
+        config: ConsensusNetworkConfig,
+        incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+        incoming_control: mpsc::Sender<PeerControlRequest>,
+        incoming_snapshots: mpsc::Sender<ReceivedConsensusSnapshot>,
+    ) -> Result<Self, ConsensusNetworkError> {
+        if config.snapshot_staging_path.is_none() {
+            return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        Self::start_inner(
+            config,
+            incoming_messages,
+            Some(incoming_control),
+            Some(incoming_snapshots),
+        )
+    }
+
+    fn start_inner(
+        config: ConsensusNetworkConfig,
+        incoming_messages: mpsc::Sender<PeerConsensusMessage>,
+        incoming_control: Option<mpsc::Sender<PeerControlRequest>>,
+        incoming_snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
     ) -> Result<Self, ConsensusNetworkError> {
         validate_config(&config)?;
         let wire_limits = wire_limits()?;
@@ -129,35 +219,176 @@ impl ConsensusNetwork {
         )?;
         let client = client_endpoint(config.client_address, credentials(&config)?, roots, limits)?;
         let peers = peer_map(config.peers)?;
-        let registry = Arc::new(peer_registry(&peers)?);
-        let mut network = Self {
+        let registry = peer_registry(&peers)?;
+        let network = Self {
+            runtime: tokio::runtime::Handle::current(),
             client,
-            registry,
-            peers: Arc::new(peers),
+            peers: Arc::new(RwLock::new(ConsensusPeers {
+                routes: peers,
+                registry,
+                outbound: BTreeMap::new(),
+            })),
             local_node_id: config.local_node_id,
             local_incarnation: config.local_incarnation,
             mesh_id: config.mesh_id,
             partition_id: config.partition_id,
             routing_epoch: config.routing_epoch,
-            certificate_name: Arc::from(config.certificate_name),
+            roles: Arc::from(config.roles.into_iter().map(i32::from).collect::<Vec<_>>()),
             wire_limits,
-            outbound: Arc::new(BTreeMap::new()),
             next_request: Arc::new(AtomicU64::new(1)),
+            snapshot_staging_path: config.snapshot_staging_path.map(Arc::new),
         };
-        let mut outbound = BTreeMap::new();
-        for peer in network.peers.keys().copied() {
+        let peer_ids = network
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .routes
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut workers = Vec::with_capacity(peer_ids.len());
+        for peer in peer_ids {
             let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
-            network.spawn_outbound_worker(peer, receiver);
-            outbound.insert(peer, sender);
+            workers.push((peer, receiver));
+            network
+                .peers
+                .write()
+                .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+                .outbound
+                .insert(peer, sender);
         }
-        network.outbound = Arc::new(outbound);
-        network.spawn_accept_loop(server, incoming_messages);
+        for (peer, receiver) in workers {
+            network.spawn_outbound_worker(peer, receiver);
+        }
+        network.spawn_accept_loop(
+            server,
+            incoming_messages,
+            incoming_control,
+            incoming_snapshots,
+        );
         Ok(network)
+    }
+
+    /// Adds or atomically replaces one current enrolled peer route and certificate binding.
+    ///
+    /// Existing queued traffic is retained for an unchanged identity and replaced for a new
+    /// incarnation or certificate. The authoritative caller remains responsible for fencing.
+    pub fn upsert_peer(&self, peer: ConsensusPeerConfig) -> Result<(), ConsensusNetworkError> {
+        if peer.node_id == self.local_node_id
+            || peer.incarnation == 0
+            || peer.certificate_der.is_empty()
+            || peer.certificate_name.is_empty()
+            || peer.certificate_name.len() > 253
+        {
+            return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        let mut peers = self
+            .peers
+            .write()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?;
+        let mut routes = peers.routes.clone();
+        routes.insert(peer.node_id, peer.clone());
+        let registry = peer_registry(&routes)?;
+        let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        peers.routes = routes;
+        peers.registry = registry;
+        peers.outbound.insert(peer.node_id, sender);
+        drop(peers);
+        self.spawn_outbound_worker(peer.node_id, receiver);
+        Ok(())
+    }
+
+    /// Sends one validated metadata-control request to an exact enrolled peer.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown route, failed mTLS/hello binding, invalid local request, timeout or a
+    /// response whose header does not identify the configured peer and incarnation.
+    pub async fn request_control(
+        &self,
+        to: NodeId,
+        request: &ControlEnvelope,
+    ) -> Result<meshspan_protocol::ValidatedControlEnvelope, ConsensusNetworkError> {
+        let connection = tokio::time::timeout(PEER_OPERATION_TIMEOUT, self.connect_peer(to))
+            .await
+            .map_err(|_| ConsensusNetworkError::AuthorityStopped)??;
+        let (mut send, mut receive) = open_stream(&connection, StreamKind::Metadata).await?;
+        send_control(&mut send, request, self.wire_limits).await?;
+        send.finish()?;
+        let response = tokio::time::timeout(
+            PEER_OPERATION_TIMEOUT,
+            receive_control(&mut receive, self.wire_limits),
+        )
+        .await
+        .map_err(|_| ConsensusNetworkError::AuthorityStopped)??;
+        let incarnation = self
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .routes
+            .get(&to)
+            .map(|peer| peer.incarnation)
+            .ok_or(ConsensusNetworkError::InvalidConfiguration)?;
+        self.verify_header(&response, to, incarnation)?;
+        Ok(response)
+    }
+
+    /// Proves that one configured peer accepts an mTLS connection and exact hello negotiation.
+    pub async fn probe_peer(&self, to: NodeId) -> Result<(), ConsensusNetworkError> {
+        let connection = tokio::time::timeout(PEER_OPERATION_TIMEOUT, self.connect_peer(to))
+            .await
+            .map_err(|_| ConsensusNetworkError::AuthorityStopped)??;
+        connection.close(0_u32.into(), b"probe complete");
+        Ok(())
+    }
+
+    /// Builds a fresh request/response header for one exact logical control operation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-positive deadline or exhausted request identity space.
+    pub fn control_header(
+        &self,
+        operation_id: OperationId,
+        deadline_unix_micros: i64,
+    ) -> Result<RequestHeader, ConsensusNetworkError> {
+        if deadline_unix_micros <= 0 {
+            return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        self.request_header(operation_id, deadline_unix_micros)
+    }
+
+    /// Returns the exact digest of this network's negotiated role/component presentation.
+    #[must_use]
+    pub fn local_capability_digest(&self) -> [u8; 32] {
+        node_capability_digest(&self.hello())
+    }
+
+    /// Returns this transport's permanent local node identity.
+    #[must_use]
+    pub const fn local_node_id(&self) -> NodeId {
+        self.local_node_id
+    }
+
+    /// Returns a consistent snapshot of every currently enrolled peer route.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if another thread poisoned the route registry lock.
+    pub fn peer_routes(&self) -> Result<Vec<ConsensusPeerConfig>, ConsensusNetworkError> {
+        Ok(self
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .routes
+            .values()
+            .cloned()
+            .collect())
     }
 
     fn spawn_outbound_worker(&self, peer: NodeId, mut messages: mpsc::Receiver<CoreMessage>) {
         let network = self.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let mut connection = None;
             while let Some(message) = messages.recv().await {
                 let result = tokio::time::timeout(
@@ -177,22 +408,37 @@ impl ConsensusNetwork {
         &self,
         server: quinn::Endpoint,
         messages: mpsc::Sender<PeerConsensusMessage>,
+        controls: Option<mpsc::Sender<PeerControlRequest>>,
+        snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
     ) {
         let network = self.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             while let Some(incoming) = server.accept().await {
                 let Ok(connection) = incoming.await else {
                     continue;
                 };
-                let Ok(peer) = network.registry.authenticate_connection(&connection) else {
+                let peer = network
+                    .peers
+                    .read()
+                    .ok()
+                    .and_then(|peers| peers.registry.authenticate_connection(&connection).ok());
+                let Some(peer) = peer else {
                     connection.close(1_u32.into(), b"unknown peer");
                     continue;
                 };
                 let connection_network = network.clone();
                 let connection_messages = messages.clone();
-                tokio::spawn(async move {
+                let connection_controls = controls.clone();
+                let connection_snapshots = snapshots.clone();
+                connection_network.runtime.clone().spawn(async move {
                     if connection_network
-                        .receive_connection(connection.clone(), peer, connection_messages)
+                        .receive_connection(
+                            connection.clone(),
+                            peer,
+                            connection_messages,
+                            connection_controls,
+                            connection_snapshots,
+                        )
                         .await
                         .is_err()
                     {
@@ -208,6 +454,8 @@ impl ConsensusNetwork {
         connection: quinn::Connection,
         peer: meshspan_transport::AuthenticatedPeer,
         messages: mpsc::Sender<PeerConsensusMessage>,
+        controls: Option<mpsc::Sender<PeerControlRequest>>,
+        snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
     ) -> Result<(), ConsensusNetworkError> {
         let mut negotiation = accept_stream(&connection).await?;
         if negotiation.kind != StreamKind::Metadata {
@@ -223,6 +471,7 @@ impl ConsensusNetwork {
             return Err(ConsensusNetworkError::InvalidTraffic);
         };
         let welcome = peer.negotiate(self.mesh_id, hello, &self.negotiation_config())?;
+        let capability_digest = node_capability_digest(hello);
         send_control(
             &mut negotiation.send,
             &ControlEnvelope {
@@ -236,21 +485,61 @@ impl ConsensusNetwork {
 
         loop {
             let mut accepted = accept_stream(&connection).await?;
-            if accepted.kind != StreamKind::Consensus {
-                return Err(ConsensusNetworkError::InvalidTraffic);
+            match accepted.kind {
+                StreamKind::Consensus => {
+                    let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
+                    self.verify_header(&envelope, peer.node_id(), peer.incarnation())?;
+                    let message = decode_consensus_message(&envelope)?;
+                    messages
+                        .send(PeerConsensusMessage {
+                            from: peer.node_id(),
+                            sender_incarnation: peer.incarnation(),
+                            message,
+                        })
+                        .await
+                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                    send_receipt(&mut accepted.send, self.wire_limits).await?;
+                }
+                StreamKind::Metadata => {
+                    let controls = controls
+                        .as_ref()
+                        .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+                    let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
+                    self.verify_header(&envelope, peer.node_id(), peer.incarnation())?;
+                    let (respond, response) = oneshot::channel();
+                    controls
+                        .send(PeerControlRequest {
+                            from: peer.node_id(),
+                            sender_incarnation: peer.incarnation(),
+                            envelope,
+                            certificate_fingerprint: peer.certificate_fingerprint(),
+                            capability_digest,
+                            respond,
+                        })
+                        .await
+                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                    let response = tokio::time::timeout(PEER_OPERATION_TIMEOUT, response)
+                        .await
+                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?
+                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                    send_control(&mut accepted.send, &response, self.wire_limits).await?;
+                    accepted.send.finish()?;
+                }
+                StreamKind::Snapshot => {
+                    let snapshots = snapshots
+                        .as_ref()
+                        .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+                    let staging_path = self
+                        .snapshot_staging_path
+                        .as_ref()
+                        .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+                    self.receive_snapshot(peer.node_id(), staging_path, &mut accepted, snapshots)
+                        .await?;
+                }
+                StreamKind::Data | StreamKind::Federation => {
+                    return Err(ConsensusNetworkError::InvalidTraffic);
+                }
             }
-            let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
-            self.verify_header(&envelope, peer.node_id(), peer.incarnation())?;
-            let message = decode_consensus_message(&envelope)?;
-            messages
-                .send(PeerConsensusMessage {
-                    from: peer.node_id(),
-                    sender_incarnation: peer.incarnation(),
-                    message,
-                })
-                .await
-                .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
-            send_receipt(&mut accepted.send, self.wire_limits).await?;
         }
     }
 
@@ -268,7 +557,12 @@ impl ConsensusNetwork {
             .ok_or(ConsensusNetworkError::InvalidConfiguration)?;
         let (mut send, mut receive) = open_stream(active, StreamKind::Consensus).await?;
         let envelope = ControlEnvelope {
-            header: Some(self.request_header()?),
+            header: Some(self.request_header(
+                OperationId::from_bytes(request_identifier(
+                    self.next_request.fetch_add(1, Ordering::Relaxed).max(1),
+                ))?,
+                i64::MAX,
+            )?),
             message: Some(encode_consensus_message(&message)),
         };
         send_control(&mut send, &envelope, self.wire_limits).await?;
@@ -279,10 +573,19 @@ impl ConsensusNetwork {
     async fn connect_peer(&self, to: NodeId) -> Result<quinn::Connection, ConsensusNetworkError> {
         let peer = self
             .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .routes
             .get(&to)
+            .cloned()
             .ok_or(ConsensusNetworkError::InvalidConfiguration)?;
-        let connection = connect(&self.client, peer.address, &self.certificate_name).await?;
-        let authenticated = self.registry.authenticate_connection(&connection)?;
+        let connection = connect(&self.client, peer.address, &peer.certificate_name).await?;
+        let authenticated = self
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .registry
+            .authenticate_connection(&connection)?;
         if authenticated.node_id() != to || authenticated.incarnation() != peer.incarnation {
             return Err(ConsensusNetworkError::InvalidTraffic);
         }
@@ -322,7 +625,11 @@ impl ConsensusNetwork {
         Ok(())
     }
 
-    fn request_header(&self) -> Result<RequestHeader, ConsensusNetworkError> {
+    fn request_header(
+        &self,
+        operation_id: OperationId,
+        deadline_unix_micros: i64,
+    ) -> Result<RequestHeader, ConsensusNetworkError> {
         let request_number = self.next_request.fetch_add(1, Ordering::Relaxed).max(1);
         let identifier = request_identifier(request_number);
         Ok(RequestHeader {
@@ -333,8 +640,8 @@ impl ConsensusNetwork {
             sender_node_id: self.local_node_id.as_bytes().to_vec(),
             sender_incarnation: self.local_incarnation,
             request_id: identifier.to_vec(),
-            operation_id: OperationId::from_bytes(identifier)?.as_bytes().to_vec(),
-            deadline_unix_micros: i64::MAX,
+            operation_id: operation_id.as_bytes().to_vec(),
+            deadline_unix_micros,
             trace_id: identifier.to_vec(),
         })
     }
@@ -368,7 +675,7 @@ impl ConsensusNetwork {
             mesh_id: self.mesh_id.as_bytes().to_vec(),
             node_id: self.local_node_id.as_bytes().to_vec(),
             incarnation: self.local_incarnation,
-            roles: vec![NodeRole::MetadataVoter.into()],
+            roles: self.roles.to_vec(),
             components: vec![ComponentSupport {
                 contract_kind: 1,
                 implementation_id: "meshspan-consensus".to_owned(),
@@ -399,7 +706,12 @@ impl ConsensusNetwork {
 
 impl ConsensusMessageTransport for ConsensusNetwork {
     fn send(&self, to: NodeId, message: CoreMessage) {
-        if let Some(sender) = self.outbound.get(&to) {
+        let sender = self
+            .peers
+            .read()
+            .ok()
+            .and_then(|peers| peers.outbound.get(&to).cloned());
+        if let Some(sender) = sender {
             let _full_or_closed = sender.try_send(message);
         }
     }
@@ -408,16 +720,23 @@ impl ConsensusMessageTransport for ConsensusNetwork {
 fn validate_config(config: &ConsensusNetworkConfig) -> Result<(), ConsensusNetworkError> {
     if config.local_incarnation == 0
         || config.routing_epoch == 0
-        || config.certificate_name.is_empty()
-        || config.certificate_name.len() > 253
-        || config.certificate_der.is_empty()
+        || config.roles.is_empty()
+        || config.roles.len() > 4
+        || config
+            .roles
+            .iter()
+            .any(|role| *role == NodeRole::Unspecified)
+        || config.certificate_chain_der.is_empty()
+        || config.certificate_chain_der.len() > 8
+        || config.certificate_chain_der.iter().any(Vec::is_empty)
         || config.private_key_pkcs8.is_empty()
         || config.trust_anchors.is_empty()
-        || config.peers.is_empty()
-        || config
-            .peers
-            .iter()
-            .any(|peer| peer.node_id == config.local_node_id || peer.incarnation == 0)
+        || config.peers.iter().any(|peer| {
+            peer.node_id == config.local_node_id
+                || peer.incarnation == 0
+                || peer.certificate_name.is_empty()
+                || peer.certificate_name.len() > 253
+        })
     {
         return Err(ConsensusNetworkError::InvalidConfiguration);
     }
@@ -437,7 +756,12 @@ fn peer_map(
 
 fn credentials(config: &ConsensusNetworkConfig) -> Result<NodeCredentials, ConsensusNetworkError> {
     NodeCredentials::new(
-        vec![CertificateDer::from(config.certificate_der.clone())],
+        config
+            .certificate_chain_der
+            .iter()
+            .cloned()
+            .map(CertificateDer::from)
+            .collect(),
         PrivatePkcs8KeyDer::from(config.private_key_pkcs8.to_vec()).into(),
     )
     .map_err(Into::into)
@@ -456,6 +780,9 @@ fn roots(certificates: &[Vec<u8>]) -> Result<RootCertStore, ConsensusNetworkErro
 fn peer_registry(
     peers: &BTreeMap<NodeId, ConsensusPeerConfig>,
 ) -> Result<PeerRegistry, ConsensusNetworkError> {
+    if peers.is_empty() {
+        return Ok(PeerRegistry::empty());
+    }
     PeerRegistry::new(peers.values().map(|peer| PeerBinding {
         node_id: peer.node_id,
         incarnation: peer.incarnation,
@@ -546,6 +873,9 @@ pub enum ConsensusNetworkError {
     /// Quinn rejected a finished stream.
     #[error("consensus QUIC stream failed")]
     Quinn(#[from] quinn::ClosedStream),
+    /// Snapshot staging or streaming filesystem IO failed.
+    #[error("consensus snapshot IO failed")]
+    Io(#[from] std::io::Error),
 }
 
 #[cfg(test)]

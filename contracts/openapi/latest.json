@@ -1457,6 +1457,145 @@
         "title": "CreateMeshSetupResponse",
         "type": "object"
       },
+      "CreateNodeJoinGrantRequest": {
+        "additionalProperties": false,
+        "description": "Administrator request for one bounded node join invitation.",
+        "properties": {
+          "allowed_roles": {
+            "description": "Non-empty deduplicated role set.",
+            "items": {
+              "description": "One role pre-authorised for a joining daemon.",
+              "oneOf": [
+                {
+                  "const": "storage",
+                  "description": "May register storage folders and retain encrypted shards.",
+                  "type": "string"
+                },
+                {
+                  "const": "gateway",
+                  "description": "May expose user-facing access connectors.",
+                  "type": "string"
+                },
+                {
+                  "const": "metadata_eligible",
+                  "description": "May catch up as a metadata learner and later become voter-eligible.",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          },
+          "enrolment_endpoint": {
+            "description": "HTTPS origin the joining daemon contacts; the UI normally supplies its current origin.",
+            "maxLength": 512,
+            "minLength": 12,
+            "pattern": "^https://[a-z0-9.\\-\\[\\]:]+$",
+            "type": "string"
+          },
+          "maximum_uses": {
+            "description": "Maximum successful node admissions.",
+            "format": "uint16",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Client-generated exact-retry identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "valid_for_seconds": {
+            "description": "Requested lifetime in whole seconds.",
+            "format": "uint32",
+            "maximum": 604800,
+            "minimum": 60,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operation_id",
+          "enrolment_endpoint",
+          "allowed_roles",
+          "maximum_uses",
+          "valid_for_seconds"
+        ],
+        "title": "CreateNodeJoinGrantRequest",
+        "type": "object"
+      },
+      "CreateNodeJoinGrantResponse": {
+        "additionalProperties": false,
+        "description": "One exactly replayable join-grant issuance result.",
+        "properties": {
+          "allowed_roles": {
+            "description": "Exact committed role set.",
+            "items": {
+              "description": "One role pre-authorised for a joining daemon.",
+              "oneOf": [
+                {
+                  "const": "storage",
+                  "description": "May register storage folders and retain encrypted shards.",
+                  "type": "string"
+                },
+                {
+                  "const": "gateway",
+                  "description": "May expose user-facing access connectors.",
+                  "type": "string"
+                },
+                {
+                  "const": "metadata_eligible",
+                  "description": "May catch up as a metadata learner and later become voter-eligible.",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          },
+          "expires_at_epoch_micros": {
+            "description": "Exclusive authoritative expiry as epoch microseconds.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "join_code": {
+            "description": "Self-contained secret invitation returned only by this operation.",
+            "maxLength": 1250,
+            "minLength": 250,
+            "pattern": "^meshspan-join-v2\\.[0-9a-f]+(?:\\.[0-9a-f]+){4}$",
+            "readOnly": true,
+            "type": "string",
+            "x-meshspan-sensitive": true
+          },
+          "maximum_uses": {
+            "description": "Exact committed use ceiling.",
+            "format": "uint16",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Exact operation whose committed result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "join_code",
+          "expires_at_epoch_micros",
+          "allowed_roles",
+          "maximum_uses"
+        ],
+        "title": "CreateNodeJoinGrantResponse",
+        "type": "object"
+      },
       "CreatePasskeyChallengeRequest": {
         "additionalProperties": false,
         "description": "Input for creating one short-lived passkey authentication challenge.",
@@ -2737,6 +2876,248 @@
           "scope"
         ],
         "title": "DeleteObjectResponse",
+        "type": "object"
+      },
+      "EnrolNodeRequest": {
+        "additionalProperties": false,
+        "description": "One node-owned identity presentation for pre-authorised enrolment.",
+        "properties": {
+          "host": {
+            "description": "New or existing physical host binding.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Create one physical host failure-domain record atomically with admission.",
+                "properties": {
+                  "kind": {
+                    "const": "new",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Human-facing host name.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Add another daemon process to an already enrolled physical host.",
+                "properties": {
+                  "host_id": {
+                    "description": "Existing host identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "existing",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "host_id"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "identity_proof_signature_hex": {
+            "description": "P-256 signature over the exact canonical enrolment transcript as lowercase DER hex.",
+            "maxLength": 144,
+            "minLength": 128,
+            "pattern": "^[0-9a-f]+$",
+            "type": "string"
+          },
+          "join_code": {
+            "description": "Self-contained administrator-issued invitation.",
+            "maxLength": 1250,
+            "minLength": 250,
+            "pattern": "^meshspan-join-v2\\.[0-9a-f]+(?:\\.[0-9a-f]+){4}$",
+            "type": "string",
+            "writeOnly": true,
+            "x-meshspan-sensitive": true
+          },
+          "node_identity_public_key_hex": {
+            "description": "Canonical uncompressed P-256 SEC1 public identity bytes as lowercase hex.",
+            "maxLength": 130,
+            "minLength": 130,
+            "pattern": "^04[0-9a-f]{128}$",
+            "type": "string"
+          },
+          "node_name": {
+            "description": "Human-facing daemon name.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Client-generated exact-retry identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "private_endpoint": {
+            "description": "Private QUIC endpoint advertised after certificate installation.",
+            "maxLength": 512,
+            "minLength": 3,
+            "pattern": "^[a-z0-9.\\-\\[\\]:]+$",
+            "type": "string"
+          },
+          "requested_roles": {
+            "description": "Requested role subset.",
+            "items": {
+              "description": "One role pre-authorised for a joining daemon.",
+              "oneOf": [
+                {
+                  "const": "storage",
+                  "description": "May register storage folders and retain encrypted shards.",
+                  "type": "string"
+                },
+                {
+                  "const": "gateway",
+                  "description": "May expose user-facing access connectors.",
+                  "type": "string"
+                },
+                {
+                  "const": "metadata_eligible",
+                  "description": "May catch up as a metadata learner and later become voter-eligible.",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          },
+          "wrapping_public_key_hex": {
+            "description": "Canonical X25519 public secret-wrapping key as lowercase hex.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "join_code",
+          "host",
+          "node_name",
+          "requested_roles",
+          "node_identity_public_key_hex",
+          "identity_proof_signature_hex",
+          "wrapping_public_key_hex",
+          "private_endpoint"
+        ],
+        "title": "EnrolNodeRequest",
+        "type": "object"
+      },
+      "EnrolNodeResponse": {
+        "additionalProperties": false,
+        "description": "Exact replayable result of consuming one join-grant use.",
+        "properties": {
+          "bootstrap_peers": {
+            "description": "Current enrolled bootstrap peers, never including the joining node.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One enrolled peer returned to a joining daemon for authenticated bootstrap.",
+              "properties": {
+                "certificate_der_hex": {
+                  "description": "Current leaf certificate DER as lowercase hex.",
+                  "maxLength": 131072,
+                  "minLength": 2,
+                  "pattern": "^[0-9a-f]+$",
+                  "type": "string"
+                },
+                "node_id": {
+                  "description": "Permanent peer node identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "private_endpoint": {
+                  "description": "Current private QUIC endpoint.",
+                  "maxLength": 512,
+                  "minLength": 3,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "node_id",
+                "private_endpoint",
+                "certificate_der_hex"
+              ],
+              "type": "object"
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "type": "array"
+          },
+          "mesh_id": {
+            "description": "Target mesh proven by the invitation and response chain.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "node_certificate_der_hex": {
+            "description": "Issued node leaf certificate DER as lowercase hex.",
+            "maxLength": 131072,
+            "minLength": 2,
+            "pattern": "^[0-9a-f]+$",
+            "type": "string"
+          },
+          "node_id": {
+            "description": "Permanent identity derived from the submitted public key.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "online_authority_certificate_der_hex": {
+            "description": "Root-signed online authority certificate DER as lowercase hex.",
+            "maxLength": 16384,
+            "minLength": 2,
+            "pattern": "^[0-9a-f]+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact operation whose committed result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "root_certificate_der_hex": {
+            "description": "Offline mesh root certificate DER as lowercase hex.",
+            "maxLength": 16384,
+            "minLength": 2,
+            "pattern": "^[0-9a-f]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "mesh_id",
+          "node_id",
+          "node_certificate_der_hex",
+          "online_authority_certificate_der_hex",
+          "root_certificate_der_hex",
+          "bootstrap_peers"
+        ],
+        "title": "EnrolNodeResponse",
         "type": "object"
       },
       "GetObjectResponse": {
@@ -5656,6 +6037,235 @@
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
     },
+    "/admin/node-join-grants": {
+      "post": {
+        "operationId": "createNodeJoinGrant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNodeJoinGrantRequest"
+              }
+            }
+          },
+          "description": "Join invitation policy",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeJoinGrantResponse"
+                }
+              }
+            },
+            "description": "Committed join invitation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or grant conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Issue one self-contained bounded node join invitation",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
     "/admin/recovery-bundle-verifications": {
       "post": {
         "operationId": "confirmRecoveryBundleSaved",
@@ -7646,6 +8256,209 @@
         "summary": "Create one bounded passkey authentication challenge",
         "x-meshspan-access": "anonymous",
         "x-meshspan-idempotency": "operation-id-and-gateway-local-ceremony"
+      }
+    },
+    "/setup/enrolments": {
+      "post": {
+        "operationId": "enrolNode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrolNodeRequest"
+              }
+            }
+          },
+          "description": "Node identity presentation",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrolNodeResponse"
+                }
+              }
+            },
+            "description": "Admitted node and bootstrap trust",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Join invitation rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or node conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Consume a pre-authorised join invitation for one node-owned identity",
+        "x-meshspan-access": "join-grant",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
     },
     "/setup/meshes": {

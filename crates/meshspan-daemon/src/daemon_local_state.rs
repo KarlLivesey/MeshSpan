@@ -30,6 +30,7 @@ const WRAPPING_KEY_FILE: &str = "node-wrapping-key.x25519";
 const TOTP_CEREMONY_KEY_FILE: &str = "totp-ceremony.key";
 const PASSKEY_CEREMONY_KEY_FILE: &str = "passkey-ceremony.key";
 const PENDING_RECOVERY_BUNDLE_FILE: &str = "pending-offline-recovery.bundle";
+const PENDING_NODE_ENROLMENT_FILE: &str = "pending-node-enrolment.json";
 const DEFAULT_CLAIM_FILE: &str = "first-boot.claim";
 const BOOTSTRAP_DNS_NAME: &str = "meshspan.local";
 
@@ -174,6 +175,36 @@ impl DaemonLocalState {
         self.identity.public_key_fingerprint()
     }
 
+    /// Returns the canonical public identity safe to submit for mesh certificate issuance.
+    #[must_use]
+    pub fn node_identity_public_key(&self) -> &[u8] {
+        self.identity.public_key_sec1()
+    }
+
+    /// Signs a canonical node-enrolment transcript using the restart-stable identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the identity provider cannot produce a canonical signature.
+    pub fn sign_node_enrolment_transcript(
+        &self,
+        transcript: &[u8],
+    ) -> Result<Vec<u8>, DaemonLocalStateError> {
+        self.identity
+            .sign_enrolment_transcript(transcript)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn node_identity_private_key_pkcs8(&self) -> &[u8] {
+        self.identity.private_key_pkcs8()
+    }
+
+    /// Returns the exact public HTTPS certificate pin used by first-start and enrolment routes.
+    #[must_use]
+    pub fn https_certificate_fingerprint(&self) -> [u8; 32] {
+        self.identity.bootstrap_certificate_fingerprint()
+    }
+
     /// Returns the node's public secret-wrapping key safe for authoritative metadata.
     #[must_use]
     pub fn wrapping_public_key(&self) -> meshspan_secret_envelope::WrappingPublicKey {
@@ -239,6 +270,15 @@ impl DaemonLocalState {
             .path()
             .join(SECRET_DIRECTORY)
             .join(PENDING_RECOVERY_BUNDLE_FILE)
+    }
+
+    /// Returns the protected admission receipt retained until private activation completes.
+    #[must_use]
+    pub(crate) fn pending_node_enrolment_path(&self) -> PathBuf {
+        self.directory
+            .path()
+            .join(SECRET_DIRECTORY)
+            .join(PENDING_NODE_ENROLMENT_FILE)
     }
 
     /// Builds the first-start TLS 1.3 public HTTPS configuration.

@@ -83,16 +83,23 @@ keys, paths, topology or record existence.
 
 ## 4. Connection messages
 
-| Message         | Essential fields                                                                        | Result                         |
-| --------------- | --------------------------------------------------------------------------------------- | ------------------------------ |
-| `NodeHello`     | versions, mesh/node/incarnation, roles, component implementations, feature bits, limits | Authenticates and negotiates   |
-| `NodeWelcome`   | selected version, peer identity, partition route/leader hints, limits                   | Opens normal streams           |
-| `Ping` / `Pong` | nonce, monotonic timings                                                                | Liveness and latency sample    |
-| `GoAway`        | reason, retry hint                                                                      | Graceful connection retirement |
-| `ProtocolError` | stable code, offending request                                                          | Closes invalid traffic safely  |
+| Message                                        | Essential fields                                                                        | Result                               |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------ |
+| `NodeHello`                                    | versions, mesh/node/incarnation, roles, component implementations, feature bits, limits | Authenticates and negotiates         |
+| `NodeWelcome`                                  | selected version, peer identity, partition route/leader hints, limits                   | Opens normal streams                 |
+| `NodeActivationRequest` / `NodeActivationResult` | header identity, exact roles, capability digest, operation result and active revision   | Continues one HTTPS-admitted identity |
+| `Ping` / `Pong`                                | nonce, monotonic timings                                                                | Liveness and latency sample          |
+| `GoAway`                                       | reason, retry hint                                                                      | Graceful connection retirement       |
+| `ProtocolError`                                | stable code, offending request                                                          | Closes invalid traffic safely        |
 
 Certificate identity and `NodeHello` must agree exactly. Limits are the lower of
 both peers' advertised safe bounds.
+
+Activation is available only to a leaf certificate already staged by a committed
+join-grant consumption. The request header must identify that same node and
+incarnation; the role set must equal the staged grant result, and the server must
+authenticate a reverse connection to the staged private endpoint before committing
+activation. Activation does not itself promote a metadata learner or claim catch-up.
 
 ## 5. Consensus messages
 

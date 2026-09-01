@@ -6,6 +6,7 @@ mod authentication;
 mod bootstrap;
 mod decoder;
 mod encoder;
+mod enrolment;
 mod identity;
 mod namespace;
 mod node_wrapping_key;
@@ -22,9 +23,9 @@ use self::encoder::Encoder;
 use crate::{AuthoritativeCommand, CommandContext};
 
 /// Current closed metadata-command wire format.
-pub const METADATA_COMMAND_VERSION: u16 = 2;
+pub const METADATA_COMMAND_VERSION: u16 = 4;
 
-const MAGIC: [u8; 4] = *b"MSC\x02";
+const MAGIC: [u8; 4] = *b"MSC\x04";
 const MAXIMUM_COMMAND_BYTES: usize = 1024 * 1024;
 
 /// One completely decoded replicated state-machine input.
@@ -133,6 +134,9 @@ fn encode_command(
         AuthoritativeCommand::CommitSecretGeneration(value) => {
             secret_generation::encode(encoder, value)
         }
+        AuthoritativeCommand::IssueJoinGrant(value) => enrolment::encode_issue(encoder, value),
+        AuthoritativeCommand::ConsumeJoinGrant(value) => enrolment::encode_consume(encoder, value),
+        AuthoritativeCommand::ActivateNode(value) => enrolment::encode_activate(encoder, value),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -172,6 +176,15 @@ fn decode_command(
         }
         secret_generation::COMMIT_SECRET_GENERATION => {
             secret_generation::decode(decoder).map(AuthoritativeCommand::CommitSecretGeneration)
+        }
+        enrolment::ISSUE_JOIN_GRANT => {
+            enrolment::decode_issue(decoder).map(AuthoritativeCommand::IssueJoinGrant)
+        }
+        enrolment::CONSUME_JOIN_GRANT => {
+            enrolment::decode_consume(decoder).map(AuthoritativeCommand::ConsumeJoinGrant)
+        }
+        enrolment::ACTIVATE_NODE => {
+            enrolment::decode_activate(decoder).map(AuthoritativeCommand::ActivateNode)
         }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }

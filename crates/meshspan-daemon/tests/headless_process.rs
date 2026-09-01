@@ -8,7 +8,7 @@ mod passkey_support;
 use std::error::Error;
 use std::fs;
 use std::fs::OpenOptions;
-use std::net::{SocketAddr, TcpListener as StandardTcpListener};
+use std::net::{SocketAddr, TcpListener as StandardTcpListener, UdpSocket as StandardUdpSocket};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -16,8 +16,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
+use meshspan_consensus::ActiveQuorumPlan;
 use meshspan_daemon::{ClaimFile, LocalNodeIdentity, LocalWrappingKey};
-use meshspan_domain::{InitialBootstrapMaterial, OperationId, UnixMicros};
+use meshspan_domain::{InitialBootstrapMaterial, OperationId, PartitionId, UnixMicros};
 use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
@@ -31,6 +32,174 @@ use tokio_rustls::TlsConnector;
 const CERTIFICATE_NAME: &str = "meshspan.local";
 const WAIT_LIMIT: Duration = Duration::from_secs(15);
 const RETRY_INTERVAL: Duration = Duration::from_millis(50);
+
+#[tokio::test]
+async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), Box<dyn Error>> {
+    let root = ProcessFixture::new()?;
+    let second = ProcessFixture::new()?;
+    let third = ProcessFixture::new()?;
+    let mut processes = Vec::new();
+    let proof = async {
+        processes.push(root.start()?);
+        let claim = wait_for_claim(&root.claim_path).await?;
+        let root_client = wait_for_client(&root.identity_path).await?;
+        wait_for_status(root.address, &root_client, "claim_required").await?;
+        let created = create_process_mesh(&root, &root_client, &claim).await?;
+        let api_key = created["api_key"]
+            .as_str()
+            .ok_or("setup response omitted the API key")?;
+        save_and_verify_recovery_bundle(&root, &root_client, api_key, &created).await?;
+        let join_code = issue_join_code(&root, &root_client, api_key).await?;
+
+        processes.push(second.start_join(&join_code)?);
+        processes.push(third.start_join(&join_code)?);
+        let second_client = wait_for_client(&second.identity_path).await?;
+        let third_client = wait_for_client(&third.identity_path).await?;
+        wait_for_status(second.address, &second_client, "configured").await?;
+        wait_for_status(third.address, &third_client, "configured").await?;
+        wait_for_three_voters([&root, &second, &third], &root.identity_path).await?;
+
+        processes[0].kill()?;
+        processes[0].wait()?;
+        wait_for_user_creation(second.address, &second_client, api_key).await?;
+        wait_for_user_visibility(third.address, &third_client, api_key).await
+    }
+    .await;
+    stop_processes(&mut processes);
+    proof
+}
+
+async fn create_process_mesh(
+    fixture: &ProcessFixture,
+    client: &ClientConfig,
+    claim: &meshspan_domain::ClaimBundle,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    let encoded_claim = claim.expose_encoded();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000001",
+        "claim": encoded_claim.as_str(),
+        "mesh_name": "Three node process mesh",
+        "administrator_name": "Administrator",
+        "host_name": "Root host",
+        "node_name": "Root node"
+    }))?;
+    let response = request(
+        fixture.address,
+        client,
+        "POST",
+        "/api/latest/setup/meshes",
+        Some(&body),
+    )
+    .await?;
+    require_status(&response, "201 Created", "create three-node mesh")?;
+    Ok(serde_json::from_str(response_body(&response)?)?)
+}
+
+async fn issue_join_code(
+    fixture: &ProcessFixture,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<String, Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000020",
+        "enrolment_endpoint": format!("https://{}", fixture.address),
+        "allowed_roles": ["storage", "gateway", "metadata_eligible"],
+        "maximum_uses": 2,
+        "valid_for_seconds": 3600
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        fixture.address,
+        client,
+        "POST",
+        "/api/latest/admin/node-join-grants",
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "201 Created", "issue two-use node join code")?;
+    let response: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
+    response["join_code"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "join-grant response omitted the join code".into())
+}
+
+async fn wait_for_three_voters(
+    fixtures: [&ProcessFixture; 3],
+    root_identity_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let root_identity = LocalNodeIdentity::open(root_identity_path, CERTIFICATE_NAME)?;
+    let root_node = InitialBootstrapMaterial::node_id(root_identity.public_key_fingerprint())?;
+    let partition_id = InitialBootstrapMaterial::root_partition_id(root_node)?;
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let all_ready = fixtures
+            .iter()
+            .all(|fixture| has_three_voters(&fixture.state_path, partition_id).unwrap_or(false));
+        if all_ready {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("three-daemon mesh did not converge to three metadata voters".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+fn has_three_voters(state_path: &Path, partition_id: PartitionId) -> Result<bool, Box<dyn Error>> {
+    let database = PartitionDatabase::open(
+        &state_path.join("root-authority.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let active = AuthoritativeRepository::new(database).load_active_consensus_quorum_plan()?;
+    Ok(matches!(
+        active,
+        Some(ActiveQuorumPlan::Stable(plan)) if plan.spec().voters.len() == 3
+    ))
+}
+
+async fn wait_for_user_creation(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if create_user(address, client, api_key).await.is_ok() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("surviving daemon never accepted a committed metadata write".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_user_visibility(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if assert_user_visible(address, client, api_key).await.is_ok() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("committed survivor write never became visible on the other node".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+fn stop_processes(processes: &mut [Child]) {
+    for process in processes {
+        let _killed = process.kill();
+        let _waited = process.wait();
+    }
+}
 
 #[tokio::test]
 async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<(), Box<dyn Error>>
@@ -1101,6 +1270,7 @@ fn response_body(response: &str) -> Result<&str, Box<dyn Error>> {
 struct ProcessFixture {
     _temporary: TempDir,
     address: SocketAddr,
+    private_address: SocketAddr,
     claim_path: PathBuf,
     identity_path: PathBuf,
     state_path: PathBuf,
@@ -1119,6 +1289,7 @@ impl ProcessFixture {
         fs::write(storage_path.join("operator-file.txt"), b"untouched")?;
         Ok(Self {
             address: unused_address()?,
+            private_address: unused_udp_address()?,
             claim_path: state_path.join("first-boot.claim"),
             identity_path: state_path.join("secrets/node-identity.pk8"),
             state_path,
@@ -1133,17 +1304,32 @@ impl ProcessFixture {
     }
 
     fn start(&self) -> Result<Child, Box<dyn Error>> {
-        Ok(Command::new(env!("CARGO_BIN_EXE_meshspan-daemon"))
+        self.command().spawn().map_err(Into::into)
+    }
+
+    fn start_join(&self, join_code: &str) -> Result<Child, Box<dyn Error>> {
+        let mut command = self.command();
+        command.arg("--join-code").arg(join_code);
+        command.spawn().map_err(Into::into)
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_meshspan-daemon"));
+        command
             .arg("--daemon-state-dir")
             .arg(&self.state_path)
             .arg("--storage-path")
             .arg(&self.storage_path)
             .arg("--https-listen")
             .arg(self.address.to_string())
+            .arg("--private-listen")
+            .arg(self.private_address.to_string())
+            .arg("--private-endpoint")
+            .arg(self.private_address.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?)
+            .stderr(Stdio::null());
+        command
     }
 }
 
@@ -1305,4 +1491,8 @@ async fn request_with_content_type(
 
 fn unused_address() -> Result<SocketAddr, std::io::Error> {
     StandardTcpListener::bind("127.0.0.1:0")?.local_addr()
+}
+
+fn unused_udp_address() -> Result<SocketAddr, std::io::Error> {
+    StandardUdpSocket::bind("127.0.0.1:0")?.local_addr()
 }

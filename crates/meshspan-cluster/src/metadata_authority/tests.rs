@@ -570,6 +570,7 @@ fn network_config(
             incarnation: 1,
             address: addresses[index],
             certificate_der: identities[index].certificate_der().to_vec(),
+            certificate_name: "meshspan.internal".to_owned(),
         })
         .collect();
     ConsensusNetworkConfig {
@@ -578,13 +579,14 @@ fn network_config(
         mesh_id,
         partition_id,
         routing_epoch: 1,
+        roles: vec![meshspan_protocol::v1::NodeRole::MetadataVoter],
         listen_address: addresses[local_index],
         client_address: SocketAddr::from(([127, 0, 0, 1], 0)),
-        certificate_name: "meshspan.internal".to_owned(),
-        certificate_der: identities[local_index].certificate_der().to_vec(),
+        certificate_chain_der: vec![identities[local_index].certificate_der().to_vec()],
         private_key_pkcs8: Zeroizing::new(identities[local_index].private_key().to_vec()),
         trust_anchors: vec![trust_anchor.to_vec()],
         peers,
+        snapshot_staging_path: None,
     }
 }
 

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use meshspan_api_contract::{CreateMeshSetupRequest, decode_create_mesh_setup_request};
+use meshspan_certificates::NodeIdentityKey;
 use meshspan_domain::{
     ClaimBundle, EntropyError, InitialBootstrapMaterial, OperationId, RandomSource, UnixMicros,
 };
@@ -119,7 +120,9 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
     operation_bytes[8] = 0x80;
     operation_bytes[15] = 1;
     let operation_id = OperationId::from_bytes(operation_bytes)?;
-    let node_id = InitialBootstrapMaterial::node_id([99; 32])?;
+    let node_identity = NodeIdentityKey::generate()?;
+    let node_fingerprint = node_identity.public_key_fingerprint();
+    let node_id = InitialBootstrapMaterial::node_id(node_fingerprint)?;
     let material = InitialBootstrapMaterial::derive(&claim, operation_id, node_id)?;
     let local_path = directory.join("local.sqlite3");
     let claim_path = directory.join("first-boot.claim");
@@ -129,7 +132,7 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
         LocalDatabase::open(&local_path, material.node_id, UnixMicros::new(1))?;
     local_database.create_local_claim(NewLocalClaim {
         claim_id,
-        node_public_key_fingerprint: [99; 32],
+        node_public_key_fingerprint: node_fingerprint,
         secret_digest: claim.secret_digest(),
         created_at: UnixMicros::new(10),
     })?;
@@ -151,6 +154,7 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
         recovery_path,
         Arc::clone(&setup_state),
         WrappingPrivateKey::from_bytes([61; 32])?.public_key(),
+        node_identity.public_key_sec1().to_vec(),
         SequentialRandom(101),
     );
     let request = request(&claim, "First mesh")?;

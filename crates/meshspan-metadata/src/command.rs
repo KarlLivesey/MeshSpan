@@ -164,6 +164,8 @@ pub enum AuthoritativeCommand {
     IssueJoinGrant(IssueJoinGrant),
     /// Consumes a join grant to admit one certificate-bound learner node.
     ConsumeJoinGrant(ConsumeJoinGrant),
+    /// Activates one admitted node after certificate-bound private-protocol negotiation.
+    ActivateNode(ActivateNode),
     /// Registers an Ed25519 public key permitted to attest catalogue routes.
     RegisterRoutingSigner(RegisterRoutingSigner),
     /// Creates another metadata partition in the catalogue.
@@ -301,6 +303,7 @@ impl AuthoritativeCommand {
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
             Self::ConsumeJoinGrant(value) => value.update_digest(digest),
+            Self::ActivateNode(value) => value.update_digest(digest),
             Self::RegisterRoutingSigner(value) => value.update_digest(digest),
             Self::CreateMetadataPartition(value) => value.update_digest(digest),
             Self::CreateScopeRoute(value) => value.update_digest(digest),
@@ -374,10 +377,25 @@ pub struct BootstrapAppliance {
     pub recovery: Box<BootstrapRecoveryIdentity>,
     /// Initial node public wrapping key whose private half remains in daemon state.
     pub node_wrapping_key: RegisterNodeWrappingKey,
+    /// Mesh-signed certificate for the already active initial node identity.
+    pub node_certificate: BootstrapNodeCertificate,
     /// Initial recoverable mesh-wide storage-permit authority.
     pub storage_permit_key_generation: Box<CommitSecretGeneration>,
     /// Initial recoverable gateway-only authentication-root authority.
     pub authentication_root_key_generation: Box<CommitSecretGeneration>,
+    /// Initial recoverable online node-certificate authority private-key generation.
+    pub online_authority_key_generation: Box<CommitSecretGeneration>,
+}
+
+/// Mesh-signed certificate material committed for the active initial node.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BootstrapNodeCertificate {
+    /// Signed public leaf certificate; the node private key remains in daemon state.
+    pub certificate_der: Vec<u8>,
+    /// Independently checked SHA-256 fingerprint of `certificate_der`.
+    pub certificate_fingerprint: [u8; 32],
+    /// Conservative metadata fence no later than the X.509 certificate lifetime.
+    pub certificate_valid_until: UnixMicros,
 }
 
 /// Public offline authority committed atomically with the first mesh.
@@ -391,6 +409,10 @@ pub struct BootstrapRecoveryIdentity {
     pub root_certificate_der: Vec<u8>,
     /// SHA-256 digest of the exact root certificate bytes.
     pub root_certificate_digest: [u8; 32],
+    /// Root-signed online node-certificate authority certificate in DER form.
+    pub online_authority_certificate_der: Vec<u8>,
+    /// SHA-256 digest of the exact online-authority certificate bytes.
+    pub online_authority_certificate_digest: [u8; 32],
     /// Digest of the exact encrypted portable recovery-bundle file.
     pub bundle_digest: [u8; 32],
     /// Non-reversible commitment to the short save-verification challenge.
@@ -520,6 +542,9 @@ pub const STORAGE_PERMIT_KEY_SECRET_KIND: u16 = 2;
 
 /// Secret-envelope kind reserved for the gateway-only mesh authentication root.
 pub const AUTHENTICATION_ROOT_KEY_SECRET_KIND: u16 = 3;
+
+/// Secret-envelope kind reserved for the rotatable online node-certificate authority key.
+pub const ONLINE_AUTHORITY_KEY_SECRET_KIND: u16 = 4;
 
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1717,12 +1742,29 @@ pub struct ConsumeJoinGrant {
     pub incarnation: u64,
     /// Requested subset of roles no broader than the grant.
     pub requested_roles: JoinRoles,
+    /// Node-owned public secret-wrapping key staged until authenticated activation.
+    pub wrapping_public_key: [u8; 32],
+    /// Private QUIC endpoint staged until authenticated activation.
+    pub private_endpoint: String,
     /// Signed public leaf certificate; the node private key never enters this command.
     pub certificate_der: Vec<u8>,
     /// Independently checked SHA-256 fingerprint of `certificate_der`.
     pub certificate_fingerprint: [u8; 32],
     /// Absolute certificate expiry.
     pub certificate_valid_until: UnixMicros,
+}
+
+/// Certificate-bound completion of one staged node admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivateNode {
+    /// Exact admitted node proven by the mTLS leaf and `NodeHello`.
+    pub node_id: NodeId,
+    /// Positive process incarnation proven during private negotiation.
+    pub incarnation: u64,
+    /// Exact staged endpoint proven reachable by the accepting gateway.
+    pub private_endpoint: String,
+    /// Digest of the validated roles, protocol versions, features and component support.
+    pub capability_digest: [u8; 32],
 }
 
 /// Ed25519 signature and committed key identity for one resulting route state.
@@ -1871,13 +1913,19 @@ digest_simple_record!(
         digest.bytes(&value.recovery.key_fingerprint);
         digest.bytes(&value.recovery.root_certificate_der);
         digest.bytes(&value.recovery.root_certificate_digest);
+        digest.bytes(&value.recovery.online_authority_certificate_der);
+        digest.bytes(&value.recovery.online_authority_certificate_digest);
         digest.bytes(&value.recovery.bundle_digest);
         digest.bytes(&value.recovery.save_challenge_commitment);
         value.node_wrapping_key.update_digest(digest);
+        digest.bytes(&value.node_certificate.certificate_der);
+        digest.bytes(&value.node_certificate.certificate_fingerprint);
+        digest.signed(value.node_certificate.certificate_valid_until.get());
         value.storage_permit_key_generation.update_digest(digest);
         value
             .authentication_root_key_generation
             .update_digest(digest);
+        value.online_authority_key_generation.update_digest(digest);
     }
 );
 digest_simple_record!(
@@ -2621,9 +2669,17 @@ digest_simple_record!(ConsumeJoinGrant, b"consume-join-grant", |value, digest| {
     digest.name(&value.node_name);
     digest.unsigned(value.incarnation);
     digest.byte(value.requested_roles.bits());
+    digest.bytes(&value.wrapping_public_key);
+    digest.bytes(value.private_endpoint.as_bytes());
     digest.bytes(&value.certificate_der);
     digest.bytes(&value.certificate_fingerprint);
     digest.signed(value.certificate_valid_until.get());
+});
+digest_simple_record!(ActivateNode, b"activate-node", |value, digest| {
+    digest.identifier(value.node_id.as_bytes());
+    digest.unsigned(value.incarnation);
+    digest.bytes(value.private_endpoint.as_bytes());
+    digest.bytes(&value.capability_digest);
 });
 digest_simple_record!(
     RegisterRoutingSigner,

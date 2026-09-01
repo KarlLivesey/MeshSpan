@@ -6,10 +6,11 @@ use std::collections::BTreeMap;
 
 use meshspan_consensus::{
     ActiveQuorumPlan, CatchUpEvidence, CompiledQuorumPlan, LogEntry, MemberIncarnations,
-    MembershipChangeError, MembershipCommandError, MembershipTransitionCommand,
+    MembershipChangeError, MembershipCommandError, MembershipTransitionCommand, ProposalId,
     plan_next_flat_learner_admission, plan_next_flat_promotion, recommended_voter_count,
 };
-use meshspan_domain::{NodeId, QuorumPlanId};
+use meshspan_domain::{NodeId, OperationId, QuorumPlanId};
+use meshspan_metadata::AuthoritativeRepository;
 use thiserror::Error;
 
 pub(crate) fn plan_next_transition(
@@ -110,6 +111,40 @@ pub(crate) fn validate_transition(
         }
         _ => Err(MembershipCoordinatorError::InvalidTransition),
     }
+}
+
+/// Rebuilds exact accepted incarnations from the authoritative membership projection.
+///
+/// # Errors
+///
+/// Rejects unreadable metadata or any disagreement between the plan and projected members.
+pub fn restore_member_incarnations(
+    repository: &AuthoritativeRepository,
+    active_plan: &ActiveQuorumPlan,
+) -> Result<MemberIncarnations, MembershipRestoreError> {
+    let values = if let Some(membership) = repository.partition_membership()? {
+        let mut values = membership.active_voters().clone();
+        values.extend(membership.admitted_learners());
+        active_plan
+            .members()
+            .into_iter()
+            .map(|node| {
+                values
+                    .get(&node)
+                    .copied()
+                    .map(|incarnation| (node, incarnation))
+                    .ok_or(MembershipRestoreError::InvalidAuthority)
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?
+    } else {
+        active_plan
+            .members()
+            .into_iter()
+            .map(|node| (node, 1))
+            .collect()
+    };
+    MemberIncarnations::for_members(values, &active_plan.members())
+        .map_err(|_| MembershipRestoreError::InvalidAuthority)
 }
 
 fn plan_promotion(
@@ -295,6 +330,56 @@ fn next_plan_id(
     QuorumPlanId::from_bytes(bytes).map_err(|_| MembershipCoordinatorError::InvalidTransition)
 }
 
+pub(crate) fn membership_proposal_id(
+    command: &MembershipTransitionCommand,
+) -> Result<ProposalId, MembershipCoordinatorError> {
+    let value = transition_epoch(command)
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(u64::from(transition_kind(command))))
+        .map(|value| value | (1_u64 << 63))
+        .ok_or(MembershipCoordinatorError::InvalidTransition)?;
+    Ok(ProposalId(value))
+}
+
+pub(crate) fn membership_operation_id(
+    command: &MembershipTransitionCommand,
+) -> Result<OperationId, MembershipCoordinatorError> {
+    let digest = transition_digest(command);
+    let mut bytes: [u8; 16] = digest[..16]
+        .try_into()
+        .map_err(|_| MembershipCoordinatorError::InvalidTransition)?;
+    bytes[0] ^= transition_kind(command);
+    OperationId::from_bytes(bytes).map_err(|_| MembershipCoordinatorError::InvalidTransition)
+}
+
+const fn transition_kind(command: &MembershipTransitionCommand) -> u8 {
+    match command {
+        MembershipTransitionCommand::AdmitLearner { .. } => 1,
+        MembershipTransitionCommand::PromoteLearner { .. } => 2,
+        MembershipTransitionCommand::FinaliseStable { .. } => 3,
+    }
+}
+
+fn transition_epoch(command: &MembershipTransitionCommand) -> u64 {
+    match command {
+        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
+        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+            joint_plan.membership_epoch()
+        }
+        MembershipTransitionCommand::FinaliseStable { plan } => plan.spec().membership_epoch,
+    }
+}
+
+fn transition_digest(command: &MembershipTransitionCommand) -> [u8; 32] {
+    match command {
+        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
+        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+            joint_plan.proof_digest()
+        }
+        MembershipTransitionCommand::FinaliseStable { plan } => plan.proof_digest(),
+    }
+}
+
 /// Closed membership orchestration failures without topology or identity disclosure.
 #[derive(Debug, Error)]
 pub(crate) enum MembershipCoordinatorError {
@@ -310,4 +395,15 @@ pub(crate) enum MembershipCoordinatorError {
     /// Canonical log command validation failed.
     #[error("membership command validation failed")]
     Command(#[from] MembershipCommandError),
+}
+
+/// Closed restoration failure for persisted member incarnations.
+#[derive(Debug, Error)]
+pub enum MembershipRestoreError {
+    /// The persisted membership projection could not be read safely.
+    #[error("membership repository failed")]
+    Repository(#[from] meshspan_metadata::RepositoryError),
+    /// The active quorum plan and authoritative projection disagree.
+    #[error("membership authority is invalid")]
+    InvalidAuthority,
 }

@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use meshspan_certificates::OnlineCertificateAuthority;
 use meshspan_domain::{MeshId, RandomSource};
 use meshspan_recovery_bundle::{
     MAXIMUM_RECOVERY_BUNDLE_BYTES, OfflineRecoveryIdentity, RecoveryBundle, RecoveryBundleCode,
@@ -70,6 +71,22 @@ impl PendingRecoveryBundle {
         code: &RecoveryBundleCode,
     ) -> meshspan_recovery_bundle::RecoveryChallenge {
         self.bundle.challenge(code)
+    }
+
+    /// Recreates the exact root-signed online authority needed by the pending bootstrap command.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an incorrect recovery code or invalid deterministic certificate seed.
+    pub fn online_authority(
+        &self,
+        code: &RecoveryBundleCode,
+        seed: [u8; 32],
+    ) -> Result<OnlineCertificateAuthority, PendingRecoveryBundleError> {
+        Ok(self
+            .bundle
+            .open(code)?
+            .issue_online_authority_from_seed(seed)?)
     }
 
     /// Encodes a canonical text file safe for JSON delivery and direct offline saving.

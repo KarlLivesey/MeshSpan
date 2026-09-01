@@ -2,14 +2,11 @@
 
 //! Learner admission, catch-up snapshots and automatic voter promotion.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use meshspan_consensus::{
-    ActiveQuorumPlan, CoreInput, MEMBERSHIP_COMMAND_VERSION, MemberIncarnations,
-    MembershipTransitionCommand, ProposalId, Role,
-};
-use meshspan_domain::{BackupId, NodeId, OperationId, Revision, SnapshotId};
+use meshspan_consensus::{ActiveQuorumPlan, CoreInput, MEMBERSHIP_COMMAND_VERSION, Role};
+use meshspan_domain::{BackupId, NodeId, Revision, SnapshotId};
 use meshspan_metadata::{
     AuthoritativeRepository, LogPosition as MetadataLogPosition, PartitionBackupManifest,
     PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot,
@@ -19,7 +16,10 @@ use super::NodeRuntimeError;
 use super::config::NodeConfig;
 use super::network::{OutboundSnapshot, PeerNetwork, ReceivedSnapshot};
 use super::service::{node_number, now, partition_id};
-use crate::membership::{MembershipCoordinatorError, plan_next_transition};
+use crate::membership::{
+    MembershipCoordinatorError, membership_operation_id, membership_proposal_id,
+    plan_next_transition,
+};
 use crate::{DriverEffect, PartitionConsensusDriver};
 
 pub(super) struct SnapshotDispatch {
@@ -181,34 +181,6 @@ pub(super) fn maybe_plan_membership_transition(
         .map_err(Into::into)
 }
 
-pub(super) fn restore_incarnations(
-    repository: &AuthoritativeRepository,
-    active_plan: &ActiveQuorumPlan,
-) -> Result<MemberIncarnations, NodeRuntimeError> {
-    let values = if let Some(membership) = repository.partition_membership()? {
-        let mut values = membership.active_voters().clone();
-        values.extend(membership.admitted_learners());
-        active_plan
-            .members()
-            .into_iter()
-            .map(|node| {
-                values
-                    .get(&node)
-                    .copied()
-                    .map(|incarnation| (node, incarnation))
-                    .ok_or(NodeRuntimeError::InvalidConfiguration)
-            })
-            .collect::<Result<BTreeMap<_, _>, _>>()?
-    } else {
-        active_plan
-            .members()
-            .into_iter()
-            .map(|node| (node, 1))
-            .collect()
-    };
-    MemberIncarnations::for_members(values, &active_plan.members()).map_err(Into::into)
-}
-
 fn learner_snapshot_id(
     plan: &meshspan_consensus::CompiledQuorumPlan,
     learner: NodeId,
@@ -230,56 +202,5 @@ fn remove_owned_snapshot(file_path: &Path) -> Result<(), NodeRuntimeError> {
         Ok(_) => Err(NodeRuntimeError::InvalidConfiguration),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
-    }
-}
-
-fn membership_proposal_id(
-    command: &MembershipTransitionCommand,
-) -> Result<ProposalId, NodeRuntimeError> {
-    let epoch = transition_epoch(command);
-    let value = epoch
-        .checked_mul(4)
-        .and_then(|value| value.checked_add(u64::from(transition_kind(command))))
-        .map(|value| value | (1_u64 << 63))
-        .ok_or(NodeRuntimeError::InvalidConfiguration)?;
-    Ok(ProposalId(value))
-}
-
-fn membership_operation_id(
-    command: &MembershipTransitionCommand,
-) -> Result<OperationId, NodeRuntimeError> {
-    let digest = transition_digest(command);
-    let mut bytes: [u8; 16] = digest[..16]
-        .try_into()
-        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-    bytes[0] ^= transition_kind(command);
-    OperationId::from_bytes(bytes).map_err(Into::into)
-}
-
-const fn transition_kind(command: &MembershipTransitionCommand) -> u8 {
-    match command {
-        MembershipTransitionCommand::AdmitLearner { .. } => 1,
-        MembershipTransitionCommand::PromoteLearner { .. } => 2,
-        MembershipTransitionCommand::FinaliseStable { .. } => 3,
-    }
-}
-
-fn transition_epoch(command: &MembershipTransitionCommand) -> u64 {
-    match command {
-        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
-        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
-            joint_plan.membership_epoch()
-        }
-        MembershipTransitionCommand::FinaliseStable { plan } => plan.spec().membership_epoch,
-    }
-}
-
-fn transition_digest(command: &MembershipTransitionCommand) -> [u8; 32] {
-    match command {
-        MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
-        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
-            joint_plan.proof_digest()
-        }
-        MembershipTransitionCommand::FinaliseStable { plan } => plan.proof_digest(),
     }
 }

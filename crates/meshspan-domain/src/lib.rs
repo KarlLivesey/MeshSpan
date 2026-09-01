@@ -38,7 +38,7 @@ pub use api_key::{
 };
 pub use bootstrap_material::{
     InitialAuthenticationRootMaterial, InitialBootstrapMaterial, InitialBootstrapMaterialError,
-    InitialStoragePermitMaterial,
+    InitialOnlineAuthorityMaterial, InitialStoragePermitMaterial,
 };
 pub use claim::{ClaimBundle, ClaimBundleError, ENCODED_CLAIM_BUNDLE_LENGTH};
 pub use federation::{
@@ -59,7 +59,10 @@ pub use federation_storage::{
     FederationStorageAction, FederationStorageActionError, FederationStorageAllocation,
     FederationStorageAllocationError,
 };
-pub use join_grant::{ENCODED_JOIN_GRANT_LENGTH, JoinGrantBundle, JoinGrantBundleError};
+pub use join_grant::{
+    JoinGrantBundle, JoinGrantBundleError, JoinGrantIssuanceKey, JoinGrantIssuanceKeyError,
+    MAXIMUM_ENCODED_JOIN_GRANT_LENGTH,
+};
 pub use lifecycle::{LifecycleEvent, LifecycleState, LifecycleTransitionError};
 pub use operation::{
     CommitOutcome, DurabilityScope, OperationDecision, OperationReceipt, classify_operation,

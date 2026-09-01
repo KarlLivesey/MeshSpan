@@ -13,6 +13,7 @@ use crate::v1::{
     ComponentLifecycleState, FetchBranchCommits, FetchCertificateEnvelope, FetchIdentityProjection,
     FetchImmutableObjects, IdentityProjection, InventoryBatch, InventoryBegin, InventoryFinish,
     MetadataChangeBatch, MetadataCommand, MetadataPage, MetadataQuery, MetadataWatch,
+    NodeActivationRequest, NodeActivationResult, NodeTopologyResult, NodeTopologyUpdate,
     ProposeBranchInclusion, PublishCertificateBundle, PublishComponentObservation,
     PublishComponentSupport, PublishConvergenceReceipt, PublishIsolationDelegation,
     PublishPresence, PublishTargetStatus, QueryConsistency, RenewWork, ReportWorkProgress,
@@ -28,6 +29,10 @@ use super::{
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
         Message::MetadataCommand(value) => metadata_command(value, limits),
+        Message::NodeActivationRequest(value) => node_activation_request(value),
+        Message::NodeActivationResult(value) => node_activation_result(value, limits),
+        Message::NodeTopologyUpdate(value) => node_topology_update(value, limits),
+        Message::NodeTopologyResult(value) => node_topology_result(value, limits),
         Message::MetadataQuery(value) => metadata_query(value, limits),
         Message::MetadataPage(value) => metadata_page(value, limits),
         Message::OperationStatusRequest(value) => valid_identifier(&value.operation_id),
@@ -102,6 +107,64 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         Message::AcknowledgeCertificateInstall(value) => acknowledge_certificate(value),
         Message::RevokeCertificateEnvelope(value) => revoke_certificate(value),
         _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn node_topology_update(
+    value: &NodeTopologyUpdate,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    nonzero(value.topology_revision)?;
+    valid_count(value.routes.len(), limits, false)?;
+    let mut node_ids = std::collections::BTreeSet::new();
+    for route in &value.routes {
+        valid_identifier(&route.node_id)?;
+        nonzero(route.incarnation)?;
+        valid_text(&route.private_endpoint, limits)?;
+        valid_nonempty_bytes(&route.certificate_der, limits.maximum_control_bytes())?;
+        if !node_ids.insert(route.node_id.as_slice()) {
+            return Err(WireContractError::InvalidMessage);
+        }
+    }
+    Ok(())
+}
+
+fn node_topology_result(
+    value: &NodeTopologyResult,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_operation_result(value.result.as_ref(), limits)?;
+    nonzero(value.applied_revision)
+}
+
+fn node_activation_request(value: &NodeActivationRequest) -> Result<(), WireContractError> {
+    if value.roles.is_empty() || value.roles.len() > 4 {
+        return Err(WireContractError::InvalidMessage);
+    }
+    let mut seen = [false; 5];
+    for encoded in &value.roles {
+        let role = crate::v1::NodeRole::try_from(*encoded)
+            .map_err(|_| WireContractError::InvalidMessage)?;
+        let index = usize::try_from(*encoded).map_err(|_| WireContractError::InvalidMessage)?;
+        if role == crate::v1::NodeRole::Unspecified
+            || index >= seen.len()
+            || std::mem::replace(&mut seen[index], true)
+        {
+            return Err(WireContractError::InvalidMessage);
+        }
+    }
+    valid_digest(&value.capability_digest)
+}
+
+fn node_activation_result(
+    value: &NodeActivationResult,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_operation_result(value.result.as_ref(), limits)?;
+    if value.active_revision == Some(0) {
+        Err(WireContractError::InvalidMessage)
+    } else {
+        Ok(())
     }
 }
 

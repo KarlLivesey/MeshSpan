@@ -1111,6 +1111,7 @@ dependencies = [
  "meshspan-metadata",
  "meshspan-otp",
  "meshspan-passkey",
+ "meshspan-protocol",
  "meshspan-recovery-bundle",
  "meshspan-rustls-provider",
  "meshspan-secret-envelope",
@@ -1225,6 +1226,7 @@ dependencies = [
  "meshspan-protobuf",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

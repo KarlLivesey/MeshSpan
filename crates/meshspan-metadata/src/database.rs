@@ -54,6 +54,37 @@ impl PartitionDatabase {
         Ok(database)
     }
 
+    /// Opens an existing partition database using its durably bound partition identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a missing database, SQLite failure, migration drift/newer schema, malformed or
+    /// absent stored identity and failed integrity checks.
+    pub fn open_existing(
+        file_path: &Path,
+        migration_time: UnixMicros,
+    ) -> Result<Self, MetadataStoreError> {
+        let mut connection = open_existing_connection(file_path)?;
+        migrate_partition(&mut connection, migration_time.get())?;
+        let stored: Vec<u8> = connection.query_row(
+            "SELECT partition_id FROM applied_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let partition_bytes: [u8; 16] = stored
+            .try_into()
+            .map_err(|_| MetadataStoreError::IntegrityFailed)?;
+        let partition_id = PartitionId::from_bytes(partition_bytes)
+            .map_err(|_| MetadataStoreError::IntegrityFailed)?;
+        bind_partition_identity(&mut connection, partition_id)?;
+        let database = Self {
+            connection,
+            partition_id,
+        };
+        database.check_integrity()?;
+        Ok(database)
+    }
+
     /// Returns the immutable partition identity verified at open.
     #[must_use]
     pub const fn partition_id(&self) -> PartitionId {
@@ -322,7 +353,9 @@ mod tests {
         partition_federation_relationship_history_migration_digest,
         partition_federation_storage_allocation_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
-        partition_node_wrapping_keys_migration_digest,
+        partition_node_activations_migration_digest, partition_node_wrapping_keys_migration_digest,
+        partition_online_certificate_authority_migration_digest,
+        partition_pending_node_activations_migration_digest,
         partition_principal_inactive_quarantine_migration_digest,
         partition_principal_lifecycle_migration_digest,
         partition_recovery_authority_migration_digest, partition_roles_migration_digest,
@@ -356,7 +389,7 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 54);
+        assert_eq!(database.check_integrity()?.schema_version, 55);
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -406,7 +439,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            54
+            55
         );
         Ok(())
     }
@@ -1508,6 +1541,42 @@ mod tests {
     }
 
     #[test]
+    fn online_certificate_authority_migration_digest_is_committed() {
+        assert_eq!(
+            partition_online_certificate_authority_migration_digest(),
+            [
+                0xf6, 0x6e, 0x98, 0xc4, 0xc2, 0x18, 0xac, 0xc2, 0xd7, 0x8e, 0xc6, 0xe5, 0x27, 0x22,
+                0x1d, 0x7f, 0x08, 0x05, 0x9e, 0xf5, 0x06, 0xbc, 0xcd, 0x11, 0x51, 0xcb, 0xdf, 0xad,
+                0x9d, 0x53, 0x84, 0xfa,
+            ]
+        );
+    }
+
+    #[test]
+    fn pending_node_activations_migration_digest_is_committed() {
+        assert_eq!(
+            partition_pending_node_activations_migration_digest(),
+            [
+                0x02, 0x7a, 0x6b, 0xbf, 0x07, 0xb2, 0x43, 0x9a, 0xa3, 0x91, 0x0d, 0x60, 0x06, 0x92,
+                0xb2, 0x6c, 0x63, 0x7d, 0xc7, 0x7c, 0xdf, 0x95, 0x13, 0xb5, 0xc4, 0x77, 0x84, 0x01,
+                0x33, 0xf2, 0x0a, 0x52,
+            ]
+        );
+    }
+
+    #[test]
+    fn node_activations_migration_digest_is_committed() {
+        assert_eq!(
+            partition_node_activations_migration_digest(),
+            [
+                0xff, 0x45, 0x62, 0x90, 0xb5, 0xf6, 0x67, 0xdb, 0xc4, 0x73, 0x62, 0x0e, 0xc9, 0x1d,
+                0xc8, 0x63, 0x6c, 0x5a, 0x66, 0x21, 0x16, 0x8f, 0x5e, 0x13, 0x5d, 0x87, 0xb5, 0xa6,
+                0x45, 0x01, 0xcc, 0x00,
+            ]
+        );
+    }
+
+    #[test]
     fn authentication_policy_migration_seeds_complete_existing_mesh_defaults()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;
@@ -1571,7 +1640,7 @@ mod tests {
         assert_eq!(policy_id, expected);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            54
+            55
         );
         Ok(())
     }
@@ -1615,7 +1684,7 @@ mod tests {
         assert_eq!(sessions, 0);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            54
+            55
         );
         Ok(())
     }

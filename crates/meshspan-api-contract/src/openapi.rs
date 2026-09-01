@@ -10,15 +10,16 @@ use crate::{
     ApiError, BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
     ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse, CreateApiKeyRequest,
     CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse, CreateGroupRequest,
-    CreateMeshSetupRequest, CreateMeshSetupResponse, CreatePasskeyChallengeRequest,
-    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
-    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
-    CreatePasskeyRegistrationResponse, CreatePrincipalResponse, CreateRecoveryCodesRequest,
-    CreateRecoveryCodesResponse, CreateSessionRequest, CreateSessionResponse,
-    CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
-    CreateTotpRegistrationRequest, CreateTotpRegistrationResponse, CreateUserRequest,
-    CreateVolumeRequest, CreateVolumeResponse, CurrentSessionResponse, DeleteObjectRequest,
-    DeleteObjectResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
+    CreateMeshSetupRequest, CreateMeshSetupResponse, CreateNodeJoinGrantRequest,
+    CreateNodeJoinGrantResponse, CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
+    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
+    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreatePrincipalResponse,
+    CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
+    CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
+    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
+    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumeRequest, CreateVolumeResponse,
+    CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
+    EnrolNodeResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
     ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
     ListUploadRangesResponse, ListVolumesResponse, RemoveGroupMemberRequest,
     RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
@@ -106,6 +107,8 @@ fn components() -> Value {
         schema_request::<CreateGroupRequest>("CreateGroupRequest"),
         schema_request::<CreateMeshSetupRequest>("CreateMeshSetupRequest"),
         schema_response::<CreateMeshSetupResponse>("CreateMeshSetupResponse"),
+        schema_request::<CreateNodeJoinGrantRequest>("CreateNodeJoinGrantRequest"),
+        schema_response::<CreateNodeJoinGrantResponse>("CreateNodeJoinGrantResponse"),
         schema_request::<CreatePasskeyChallengeRequest>("CreatePasskeyChallengeRequest"),
         schema_response::<CreatePasskeyChallengeResponse>("CreatePasskeyChallengeResponse"),
         schema_request::<CreatePasskeyRegistrationChallengeRequest>(
@@ -133,6 +136,8 @@ fn components() -> Value {
         schema_request::<CreateVolumeRequest>("CreateVolumeRequest"),
         schema_response::<CreateVolumeResponse>("CreateVolumeResponse"),
         schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
+        schema_request::<EnrolNodeRequest>("EnrolNodeRequest"),
+        schema_response::<EnrolNodeResponse>("EnrolNodeResponse"),
         schema_request::<DeleteObjectRequest>("DeleteObjectRequest"),
         schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
         schema_response::<GetObjectResponse>("GetObjectResponse"),
@@ -171,8 +176,77 @@ fn schema_response<T: schemars::JsonSchema>(name: &str) -> (String, Value) {
 }
 
 fn paths() -> Value {
-    Value::Object(Map::from_iter(administration_paths().into_iter().chain([
-        ("/health".to_owned(), health_path()),
+    Value::Object(Map::from_iter(
+        administration_paths()
+            .into_iter()
+            .chain(file_api_paths())
+            .chain([
+                ("/health".to_owned(), health_path()),
+                ("/openapi.json".to_owned(), openapi_path()),
+                ("/setup/status".to_owned(), setup_status_path()),
+                ("/setup/meshes".to_owned(), create_mesh_path()),
+                ("/setup/enrolments".to_owned(), enrol_node_path()),
+                (
+                    "/admin/node-join-grants".to_owned(),
+                    create_node_join_grant_path(),
+                ),
+                (
+                    "/admin/recovery-bundle-verifications".to_owned(),
+                    confirm_recovery_bundle_path(),
+                ),
+                ("/sessions".to_owned(), create_session_path()),
+                (
+                    "/sessions/passkey/challenges".to_owned(),
+                    create_passkey_challenge_path(),
+                ),
+                (
+                    "/users/current/authentication-methods".to_owned(),
+                    list_authentication_methods_path(),
+                ),
+                (
+                    "/users/current/authentication-methods/passkeys/registration-challenges"
+                        .to_owned(),
+                    create_passkey_registration_challenge_path(),
+                ),
+                (
+                    "/users/current/authentication-methods/passkeys".to_owned(),
+                    create_passkey_registration_path(),
+                ),
+                (
+                    "/users/current/authentication-methods/totp/registration-challenges".to_owned(),
+                    create_totp_registration_challenge_path(),
+                ),
+                (
+                    "/users/current/authentication-methods/totp".to_owned(),
+                    create_totp_registration_path(),
+                ),
+                (
+                    "/users/current/authentication-methods/api-keys".to_owned(),
+                    create_api_key_path(),
+                ),
+                (
+                    "/users/current/authentication-methods/recovery-codes".to_owned(),
+                    create_recovery_codes_path(),
+                ),
+                (
+                    "/users/current/authentication-methods/{method_id}/revocations".to_owned(),
+                    revoke_authentication_method_path(),
+                ),
+                ("/sessions/current".to_owned(), current_session_path()),
+                (
+                    "/sessions/current/step-ups".to_owned(),
+                    step_up_current_session_path(),
+                ),
+                (
+                    "/sessions/current/revocations".to_owned(),
+                    revoke_current_session_path(),
+                ),
+            ]),
+    ))
+}
+
+fn file_api_paths() -> [(String, Value); 13] {
+    [
         ("/volumes".to_owned(), list_volumes_path()),
         (
             "/volumes/{volume_id}/directory-entries".to_owned(),
@@ -216,60 +290,7 @@ fn paths() -> Value {
             "/uploads/{upload_id}/aborts".to_owned(),
             abort_upload_path(),
         ),
-        ("/openapi.json".to_owned(), openapi_path()),
-        ("/setup/status".to_owned(), setup_status_path()),
-        ("/setup/meshes".to_owned(), create_mesh_path()),
-        (
-            "/admin/recovery-bundle-verifications".to_owned(),
-            confirm_recovery_bundle_path(),
-        ),
-        ("/sessions".to_owned(), create_session_path()),
-        (
-            "/sessions/passkey/challenges".to_owned(),
-            create_passkey_challenge_path(),
-        ),
-        (
-            "/users/current/authentication-methods".to_owned(),
-            list_authentication_methods_path(),
-        ),
-        (
-            "/users/current/authentication-methods/passkeys/registration-challenges".to_owned(),
-            create_passkey_registration_challenge_path(),
-        ),
-        (
-            "/users/current/authentication-methods/passkeys".to_owned(),
-            create_passkey_registration_path(),
-        ),
-        (
-            "/users/current/authentication-methods/totp/registration-challenges".to_owned(),
-            create_totp_registration_challenge_path(),
-        ),
-        (
-            "/users/current/authentication-methods/totp".to_owned(),
-            create_totp_registration_path(),
-        ),
-        (
-            "/users/current/authentication-methods/api-keys".to_owned(),
-            create_api_key_path(),
-        ),
-        (
-            "/users/current/authentication-methods/recovery-codes".to_owned(),
-            create_recovery_codes_path(),
-        ),
-        (
-            "/users/current/authentication-methods/{method_id}/revocations".to_owned(),
-            revoke_authentication_method_path(),
-        ),
-        ("/sessions/current".to_owned(), current_session_path()),
-        (
-            "/sessions/current/step-ups".to_owned(),
-            step_up_current_session_path(),
-        ),
-        (
-            "/sessions/current/revocations".to_owned(),
-            revoke_current_session_path(),
-        ),
-    ])))
+    ]
 }
 
 fn list_authentication_methods_path() -> Value {
@@ -1321,6 +1342,52 @@ fn create_mesh_path() -> Value {
                 "409": json_response("Changed retry or setup conflict", "#/components/schemas/ApiError"),
                 "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "503": json_response("Bootstrap authority temporarily unavailable", "#/components/schemas/ApiError"),
+                "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn create_node_join_grant_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createNodeJoinGrant",
+            "summary": "Issue one self-contained bounded node join invitation",
+            "x-meshspan-access": "system-manager",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request(
+                "Join invitation policy",
+                "#/components/schemas/CreateNodeJoinGrantRequest"
+            ),
+            "responses": {
+                "201": json_response("Committed join invitation", "#/components/schemas/CreateNodeJoinGrantResponse"),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication required", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or grant conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "503": json_response("Authority temporarily unavailable", "#/components/schemas/ApiError"),
+                "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn enrol_node_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "enrolNode",
+            "summary": "Consume a pre-authorised join invitation for one node-owned identity",
+            "x-meshspan-access": "join-grant",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "requestBody": json_request("Node identity presentation", "#/components/schemas/EnrolNodeRequest"),
+            "responses": {
+                "201": json_response("Admitted node and bootstrap trust", "#/components/schemas/EnrolNodeResponse"),
+                "400": json_response("Invalid request", "#/components/schemas/ApiError"),
+                "401": json_response("Join invitation rejected", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or node conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "503": json_response("Authority temporarily unavailable", "#/components/schemas/ApiError"),
                 "500": json_response("Internal contract failure", "#/components/schemas/ApiError")
             }
         }

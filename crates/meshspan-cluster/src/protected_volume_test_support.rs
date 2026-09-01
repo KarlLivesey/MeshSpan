@@ -5,9 +5,10 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, BootstrapAppliance, BootstrapMesh,
-    BootstrapRecoveryIdentity, CommitSecretGeneration, ConfirmRecoveryBundleSaved,
-    CreateAuthenticationMethod, NewAuthenticationCredential, RegisterNodeWrappingKey,
-    STORAGE_PERMIT_KEY_SECRET_KIND, VOLUME_CONTENT_KEY_SECRET_KIND,
+    BootstrapNodeCertificate, BootstrapRecoveryIdentity, CommitSecretGeneration,
+    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, NewAuthenticationCredential,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -41,6 +42,13 @@ pub(crate) fn protected_bootstrap(
         &[gateway_key, recovery_key],
         &mut TestRandom(214),
     )?;
+    let (online_authority_secret, online_authority_recipients) = encrypt_secret(
+        SecretContext::new(ONLINE_AUTHORITY_KEY_SECRET_KIND, mesh.mesh_id.as_bytes(), 1)?,
+        &[215; 96],
+        &[gateway_key, recovery_key],
+        &mut TestRandom(216),
+    )?;
+    let online_certificate = vec![217; 64];
     let administrator_id = mesh.administrator_id;
     let node_id = mesh.node_id;
     Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
@@ -63,6 +71,8 @@ pub(crate) fn protected_bootstrap(
                 key_fingerprint: recovery_key.fingerprint(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
                 root_certificate_der: certificate,
+                online_authority_certificate_digest: Sha256::digest(&online_certificate).into(),
+                online_authority_certificate_der: online_certificate,
                 bundle_digest: BUNDLE_DIGEST,
                 save_challenge_commitment: SAVE_CHALLENGE_COMMITMENT,
             }),
@@ -71,6 +81,11 @@ pub(crate) fn protected_bootstrap(
                 generation: 1,
                 public_key: gateway_key.as_bytes(),
                 key_fingerprint: gateway_key.fingerprint(),
+            },
+            node_certificate: BootstrapNodeCertificate {
+                certificate_der: vec![218; 64],
+                certificate_fingerprint: Sha256::digest([218; 64]).into(),
+                certificate_valid_until: UnixMicros::new(10_000_000),
             },
             storage_permit_key_generation: Box::new(CommitSecretGeneration {
                 secret: permit_secret.parts(),
@@ -82,6 +97,13 @@ pub(crate) fn protected_bootstrap(
             authentication_root_key_generation: Box::new(CommitSecretGeneration {
                 secret: authentication_secret.parts(),
                 recipients: authentication_recipients
+                    .iter()
+                    .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                    .collect(),
+            }),
+            online_authority_key_generation: Box::new(CommitSecretGeneration {
+                secret: online_authority_secret.parts(),
+                recipients: online_authority_recipients
                     .iter()
                     .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
                     .collect(),

@@ -56,6 +56,19 @@ pub struct MeshRecoveryAuthority {
     pub revision: Revision,
 }
 
+/// Current root-signed public online node-certificate authority generation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineCertificateAuthorityRecord {
+    /// Owning mesh.
+    pub mesh_id: MeshId,
+    /// Monotonic certificate/key generation.
+    pub generation: u64,
+    /// Root-signed online authority certificate in DER form.
+    pub certificate_der: Vec<u8>,
+    /// Revision which committed this exact generation.
+    pub revision: Revision,
+}
+
 pub(super) fn insert_bootstrap(
     transaction: &Transaction<'_>,
     context: CommandContext,
@@ -93,6 +106,19 @@ pub(super) fn insert_bootstrap(
             recovery.bundle_digest.as_slice(),
             recovery.save_challenge_commitment.as_slice(),
             RECOVERY_STATE_PENDING,
+            context.occurred_at.get(),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO online_certificate_authorities(
+            mesh_id, generation, certificate_der, certificate_digest, state,
+            created_at, retired_at, revision
+         ) VALUES (?1, 1, ?2, ?3, 1, ?4, NULL, ?5)",
+        params![
+            mesh_id.as_bytes().as_slice(),
+            recovery.online_authority_certificate_der,
+            recovery.online_authority_certificate_digest.as_slice(),
             context.occurred_at.get(),
             to_i64(revision.get())?,
         ],
@@ -165,6 +191,48 @@ pub(super) fn current(
     stored.map_or(Ok(None), |stored| {
         decode_authority(mesh_id, stored).map(Some)
     })
+}
+
+pub(super) fn current_online_authority(
+    database: &PartitionDatabase,
+    mesh_id: MeshId,
+) -> Result<Option<OnlineCertificateAuthorityRecord>, RepositoryError> {
+    let stored = database
+        .connection()
+        .query_row(
+            "SELECT generation, certificate_der, certificate_digest, revision
+             FROM online_certificate_authorities
+             WHERE mesh_id = ?1 AND state = 1 AND retired_at IS NULL",
+            [mesh_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((generation, certificate_der, certificate_digest, revision)) = stored else {
+        return Ok(None);
+    };
+    if !(1..=MAXIMUM_ROOT_CERTIFICATE_BYTES).contains(&certificate_der.len())
+        || Sha256::digest(&certificate_der).as_slice() != certificate_digest
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(Some(OnlineCertificateAuthorityRecord {
+        mesh_id,
+        generation: u64::try_from(generation)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or(RepositoryError::CorruptState)?,
+        certificate_der,
+        revision: Revision::new(
+            u64::try_from(revision).map_err(|_| RepositoryError::CorruptState)?,
+        ),
+    }))
 }
 
 pub(super) fn require_verified(transaction: &Transaction<'_>) -> Result<(), RepositoryError> {
@@ -275,8 +343,13 @@ fn validate_identity(
         .contains(&recovery.root_certificate_der.len())
         && Sha256::digest(&recovery.root_certificate_der).as_slice()
             == recovery.root_certificate_digest;
+    let valid_online_certificate = (1..=MAXIMUM_ROOT_CERTIFICATE_BYTES)
+        .contains(&recovery.online_authority_certificate_der.len())
+        && Sha256::digest(&recovery.online_authority_certificate_der).as_slice()
+            == recovery.online_authority_certificate_digest;
     if public_key.fingerprint() != recovery.key_fingerprint
         || !valid_certificate
+        || !valid_online_certificate
         || recovery.bundle_digest == [0; 32]
         || recovery.save_challenge_commitment == [0; 32]
     {

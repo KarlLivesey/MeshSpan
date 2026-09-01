@@ -11,8 +11,9 @@ use meshspan_storage::{HeadlessStorageConfig, StorageConfigError};
 use thiserror::Error;
 
 const DEFAULT_HTTPS_PORT: u16 = 8_443;
+const DEFAULT_PRIVATE_PORT: u16 = 7_443;
 const MAXIMUM_STORAGE_PATHS: usize = 1_024;
-const SINGLETON_FLAGS: usize = 4;
+const SINGLETON_FLAGS: usize = 6;
 const MAXIMUM_ARGUMENTS: usize = (MAXIMUM_STORAGE_PATHS + SINGLETON_FLAGS) * 2;
 
 /// Validated local process settings which never include replicated mesh configuration.
@@ -21,6 +22,8 @@ const MAXIMUM_ARGUMENTS: usize = (MAXIMUM_STORAGE_PATHS + SINGLETON_FLAGS) * 2;
 pub struct HeadlessDaemonConfig {
     storage: HeadlessStorageConfig,
     https_listen: SocketAddr,
+    private_listen: SocketAddr,
+    private_endpoint: Option<String>,
     claim_output: Option<PathBuf>,
     join_grant: Option<JoinGrantBundle>,
 }
@@ -46,6 +49,8 @@ impl HeadlessDaemonConfig {
         let mut state_directory = None;
         let mut storage_paths = Vec::new();
         let mut https_listen = None;
+        let mut private_listen = None;
+        let mut private_endpoint = None;
         let mut claim_output = None;
         let mut join_grant = None;
         for pair in values.as_chunks::<2>().0 {
@@ -64,6 +69,12 @@ impl HeadlessDaemonConfig {
                 value if value == OsStr::new("--https-listen") => {
                     set_once(&mut https_listen, parse_address(&pair[1])?)?;
                 }
+                value if value == OsStr::new("--private-listen") => {
+                    set_once(&mut private_listen, parse_private_address(&pair[1])?)?;
+                }
+                value if value == OsStr::new("--private-endpoint") => {
+                    set_once(&mut private_endpoint, parse_private_endpoint(&pair[1])?)?;
+                }
                 value if value == OsStr::new("--claim-output") => {
                     set_once(&mut claim_output, PathBuf::from(&pair[1]))?;
                 }
@@ -80,6 +91,8 @@ impl HeadlessDaemonConfig {
         Ok(Self {
             storage,
             https_listen: https_listen.unwrap_or_else(default_https_address),
+            private_listen: private_listen.unwrap_or_else(default_private_address),
+            private_endpoint,
             claim_output,
             join_grant,
         })
@@ -95,6 +108,18 @@ impl HeadlessDaemonConfig {
     #[must_use]
     pub const fn https_listen(&self) -> SocketAddr {
         self.https_listen
+    }
+
+    /// Returns the private Quinn/mTLS listener address.
+    #[must_use]
+    pub const fn private_listen(&self) -> SocketAddr {
+        self.private_listen
+    }
+
+    /// Returns the explicitly advertised private endpoint, if supplied.
+    #[must_use]
+    pub fn private_endpoint(&self) -> Option<&str> {
+        self.private_endpoint.as_deref()
     }
 
     /// Returns the optional owner-only claim automation destination.
@@ -114,11 +139,37 @@ fn default_https_address() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_HTTPS_PORT)
 }
 
+fn default_private_address() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_PRIVATE_PORT)
+}
+
 fn parse_address(value: &OsStr) -> Result<SocketAddr, HeadlessDaemonConfigError> {
     value
         .to_str()
         .and_then(|text| text.parse().ok())
         .ok_or(HeadlessDaemonConfigError::InvalidHttpsAddress)
+}
+
+fn parse_private_address(value: &OsStr) -> Result<SocketAddr, HeadlessDaemonConfigError> {
+    value
+        .to_str()
+        .and_then(|text| text.parse().ok())
+        .ok_or(HeadlessDaemonConfigError::InvalidPrivateAddress)
+}
+
+fn parse_private_endpoint(value: &OsStr) -> Result<String, HeadlessDaemonConfigError> {
+    let value = value
+        .to_str()
+        .filter(|value| {
+            (3..=512).contains(&value.len())
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b':' | b'[' | b']' | b'-')
+                })
+        })
+        .ok_or(HeadlessDaemonConfigError::InvalidPrivateEndpoint)?;
+    Ok(value.to_owned())
 }
 
 fn parse_join_grant(value: &OsStr) -> Result<JoinGrantBundle, HeadlessDaemonConfigError> {
@@ -148,6 +199,12 @@ pub enum HeadlessDaemonConfigError {
     /// The HTTPS listen address is not one exact socket address.
     #[error("HTTPS listen address is invalid")]
     InvalidHttpsAddress,
+    /// The private Quinn listener is not one exact socket address.
+    #[error("private listener address is invalid")]
+    InvalidPrivateAddress,
+    /// The advertised private endpoint is not a bounded DNS name or IP socket address.
+    #[error("advertised private endpoint is invalid")]
+    InvalidPrivateEndpoint,
     /// The join grant is not the exact supported canonical encoding.
     #[error("join grant is invalid")]
     InvalidJoinGrant,

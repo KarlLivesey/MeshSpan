@@ -22,6 +22,16 @@ pub struct OperationId(
 );
 
 impl OperationId {
+    /// Constructs canonical UUID text from already validated versioned UUID bytes.
+    #[must_use]
+    pub fn from_uuid_bytes(value: [u8; 16]) -> Option<Self> {
+        let version = value[6] >> 4;
+        if !(1..=8).contains(&version) || value[8] >> 6 != 2 {
+            return None;
+        }
+        Some(Self(format_uuid(value)))
+    }
+
     /// Parses exact canonical versioned UUID text.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
@@ -469,6 +479,20 @@ pub struct SetupName(
 );
 
 impl SetupName {
+    /// Parses one bounded display name accepted by the public setup contract.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        if value.is_empty()
+            || value.len() > 128
+            || value
+                .chars()
+                .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+        {
+            return None;
+        }
+        Some(Self(value.to_owned()))
+    }
+
     /// Returns the untrusted display-name candidate for domain validation.
     #[must_use]
     pub fn as_str(&self) -> &str {

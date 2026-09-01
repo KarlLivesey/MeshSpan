@@ -8,6 +8,7 @@ use std::sync::Arc;
 use meshspan_certificates::{CertificateError, NodeIdentityKey};
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::protected_file::{self, ProtectedFileError, PublishMode};
@@ -74,10 +75,40 @@ impl LocalNodeIdentity {
         self.key.public_key_fingerprint()
     }
 
+    /// Returns the canonical public identity used for mesh certificate issuance.
+    #[must_use]
+    pub fn public_key_sec1(&self) -> &[u8] {
+        self.key.public_key_sec1()
+    }
+
+    /// Signs the exact canonical enrolment transcript without exposing the private identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the provider cannot produce a canonical signature.
+    pub fn sign_enrolment_transcript(
+        &self,
+        transcript: &[u8],
+    ) -> Result<Vec<u8>, LocalNodeIdentityError> {
+        self.key
+            .sign_enrolment_transcript(transcript)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn private_key_pkcs8(&self) -> &[u8] {
+        self.key.private_key_pkcs8()
+    }
+
     /// Returns the temporary public certificate used only by first-start HTTPS clients.
     #[must_use]
     pub fn bootstrap_certificate_der(&self) -> &[u8] {
         &self.bootstrap_certificate
+    }
+
+    /// Returns the exact SHA-256 pin for the currently served first-start certificate.
+    #[must_use]
+    pub fn bootstrap_certificate_fingerprint(&self) -> [u8; 32] {
+        Sha256::digest(&self.bootstrap_certificate).into()
     }
 
     /// Builds the TLS 1.3-only first-start public HTTPS server configuration.

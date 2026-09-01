@@ -50,6 +50,10 @@ pub struct InitialBootstrapMaterial {
     authentication_root_key: Zeroizing<[u8; 32]>,
     /// Domain-separated exact-retry entropy for the initial authentication-root envelope.
     authentication_root_envelope_seed: Zeroizing<[u8; 32]>,
+    /// Domain-separated P-256 seed for the initial online node-certificate authority.
+    online_authority_key_seed: Zeroizing<[u8; 32]>,
+    /// Domain-separated exact-retry entropy for the online-authority key envelope.
+    online_authority_envelope_seed: Zeroizing<[u8; 32]>,
 }
 
 /// Restart-stable secret and cryptographic stream for the initial storage-permit envelope.
@@ -69,6 +73,16 @@ pub struct InitialStoragePermitMaterial {
 /// credential-derivation material. This value deliberately implements neither `Clone` nor `Debug`.
 pub struct InitialAuthenticationRootMaterial {
     key: Zeroizing<[u8; 32]>,
+    entropy_key: Zeroizing<[u8; 32]>,
+    counter: u64,
+}
+
+/// Restart-stable online-authority seed and envelope stream for first-mesh bootstrap.
+///
+/// The seed recreates the exact root-signed online CA generation while the independent stream
+/// encrypts its private key to the initial voter and offline recovery identity.
+pub struct InitialOnlineAuthorityMaterial {
+    key_seed: Zeroizing<[u8; 32]>,
     entropy_key: Zeroizing<[u8; 32]>,
     counter: u64,
 }
@@ -189,6 +203,19 @@ impl InitialBootstrapMaterial {
         if authentication_root_key == [0; 32] || authentication_root_envelope_seed == [0; 32] {
             return Err(InitialBootstrapMaterialError::AuthenticationRoot);
         }
+        let online_authority_key_seed = derive(
+            b"meshspan.setup.online-authority-key.v1",
+            claim.secret_bytes(),
+            operation_id,
+        );
+        let online_authority_envelope_seed = derive(
+            b"meshspan.setup.online-authority-envelope.v1",
+            claim.secret_bytes(),
+            operation_id,
+        );
+        if online_authority_key_seed == [0; 32] || online_authority_envelope_seed == [0; 32] {
+            return Err(InitialBootstrapMaterialError::OnlineAuthority);
+        }
         Ok(Self {
             mesh_id: MeshId::from_bytes(identifier(
                 b"meshspan.setup.mesh-id.v1",
@@ -229,6 +256,8 @@ impl InitialBootstrapMaterial {
             storage_permit_envelope_seed: Zeroizing::new(storage_permit_envelope_seed),
             authentication_root_key: Zeroizing::new(authentication_root_key),
             authentication_root_envelope_seed: Zeroizing::new(authentication_root_envelope_seed),
+            online_authority_key_seed: Zeroizing::new(online_authority_key_seed),
+            online_authority_envelope_seed: Zeroizing::new(online_authority_envelope_seed),
         })
     }
 
@@ -254,6 +283,16 @@ impl InitialBootstrapMaterial {
         InitialAuthenticationRootMaterial {
             key: Zeroizing::new(*self.authentication_root_key),
             entropy_key: Zeroizing::new(*self.authentication_root_envelope_seed),
+            counter: 0,
+        }
+    }
+
+    /// Returns a fresh exact-retry seed and stream for the initial online node authority.
+    #[must_use]
+    pub fn online_authority_material(&self) -> InitialOnlineAuthorityMaterial {
+        InitialOnlineAuthorityMaterial {
+            key_seed: Zeroizing::new(*self.online_authority_key_seed),
+            entropy_key: Zeroizing::new(*self.online_authority_envelope_seed),
             counter: 0,
         }
     }
@@ -297,6 +336,25 @@ impl RandomSource for InitialAuthenticationRootMaterial {
     }
 }
 
+impl InitialOnlineAuthorityMaterial {
+    /// Copies the deterministic P-256 key seed into the certificate composer.
+    #[must_use]
+    pub fn key_seed(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.key_seed)
+    }
+}
+
+impl RandomSource for InitialOnlineAuthorityMaterial {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        fill_deterministic_stream(
+            &self.entropy_key,
+            &mut self.counter,
+            b"meshspan.setup.online-authority-envelope-block.v1",
+            destination,
+        )
+    }
+}
+
 fn fill_deterministic_stream(
     entropy_key: &[u8; 32],
     counter: &mut u64,
@@ -332,6 +390,9 @@ pub enum InitialBootstrapMaterialError {
     /// The derived authentication root or envelope stream was invalid.
     #[error("derived bootstrap authentication-root material is invalid")]
     AuthenticationRoot,
+    /// The derived online-authority key seed or envelope stream was invalid.
+    #[error("derived bootstrap online-authority material is invalid")]
+    OnlineAuthority,
 }
 
 impl From<crate::IdentifierError> for InitialBootstrapMaterialError {
@@ -372,7 +433,7 @@ mod tests {
     use crate::{ClaimBundle, EntropyError, OperationId, RandomSource};
 
     #[test]
-    fn exact_retry_is_stable_and_every_identity_is_distinct()
+    fn exact_retry_preserves_identifiers_and_separates_new_meshes()
     -> Result<(), Box<dyn std::error::Error>> {
         let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
         let operation = OperationId::from_bytes([99; 16])?;
@@ -403,6 +464,34 @@ mod tests {
             first.api_key.expose_encoded(),
             replay.api_key.expose_encoded()
         );
+        let identities = [
+            first.mesh_id.as_bytes(),
+            first.administrator_id.as_bytes(),
+            first.administrator_role_id.as_bytes(),
+            first.host_id.as_bytes(),
+            first.node_id.as_bytes(),
+            first.partition_id.as_bytes(),
+            first.quorum_plan_id.as_bytes(),
+            first.authentication_method_id.as_bytes(),
+            first.audit_event_id.as_bytes(),
+            first.api_key.key_id().as_bytes(),
+        ];
+        for (index, identity) in identities.iter().enumerate() {
+            assert!(!identities[..index].contains(identity));
+            assert_eq!(identity[6] >> 4, 4);
+            assert_eq!(identity[8] >> 6, 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn exact_retry_preserves_and_separates_each_secret_stream()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let claim = ClaimBundle::generate(&mut SequentialRandom(1))?;
+        let operation = OperationId::from_bytes([99; 16])?;
+        let node_id = InitialBootstrapMaterial::node_id([77; 32])?;
+        let first = InitialBootstrapMaterial::derive(&claim, operation, node_id)?;
+        let replay = InitialBootstrapMaterial::derive(&claim, operation, node_id)?;
         let mut first_permit = first.storage_permit_material();
         let mut replay_permit = replay.storage_permit_material();
         assert_eq!(first_permit.key().as_ref(), replay_permit.key().as_ref());
@@ -428,23 +517,16 @@ mod tests {
         replay_authentication.fill_bytes(&mut replay_authentication_entropy)?;
         assert_eq!(first_authentication_entropy, replay_authentication_entropy);
         assert_ne!(first_authentication_entropy, first_entropy);
-        let identities = [
-            first.mesh_id.as_bytes(),
-            first.administrator_id.as_bytes(),
-            first.administrator_role_id.as_bytes(),
-            first.host_id.as_bytes(),
-            first.node_id.as_bytes(),
-            first.partition_id.as_bytes(),
-            first.quorum_plan_id.as_bytes(),
-            first.authentication_method_id.as_bytes(),
-            first.audit_event_id.as_bytes(),
-            first.api_key.key_id().as_bytes(),
-        ];
-        for (index, identity) in identities.iter().enumerate() {
-            assert!(!identities[..index].contains(identity));
-            assert_eq!(identity[6] >> 4, 4);
-            assert_eq!(identity[8] >> 6, 2);
-        }
+        let mut first_online = first.online_authority_material();
+        let mut replay_online = replay.online_authority_material();
+        assert_eq!(first_online.key_seed(), replay_online.key_seed());
+        assert_ne!(first_online.key_seed(), first_authentication.key());
+        let mut first_online_entropy = [0_u8; 97];
+        let mut replay_online_entropy = [0_u8; 97];
+        first_online.fill_bytes(&mut first_online_entropy)?;
+        replay_online.fill_bytes(&mut replay_online_entropy)?;
+        assert_eq!(first_online_entropy, replay_online_entropy);
+        assert_ne!(first_online_entropy, first_authentication_entropy);
         Ok(())
     }
 

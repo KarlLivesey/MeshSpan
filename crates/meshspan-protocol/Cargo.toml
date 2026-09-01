@@ -12,6 +12,7 @@ version.workspace = true
 
 [dependencies]
 meshspan-protobuf.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [build-dependencies]

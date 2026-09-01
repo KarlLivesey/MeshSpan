@@ -6,11 +6,11 @@
 //! current `RustCrypto` P-256, so enabling an `rcgen` crypto provider cannot silently change the
 //! dependency graph or choose a different cryptographic backend.
 
-use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _};
+use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _, Verifier as _};
 use p256::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _};
 use rcgen::{
-    BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyIdMethod,
-    KeyUsagePurpose, PublicKeyData, SerialNumber, SigningKey,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    Issuer, KeyIdMethod, KeyUsagePurpose, PublicKeyData, SerialNumber, SigningKey,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -27,6 +27,16 @@ pub struct CertificateAuthority {
     issuer: Issuer<'static, RustCryptoKey>,
 }
 
+/// Rotatable online node-certificate authority signed by the offline mesh root.
+///
+/// Its encrypted private key may be distributed to authorised voters. The offline root private
+/// key remains only in the recovery bundle and is not required for routine node enrolment.
+pub struct OnlineCertificateAuthority {
+    certificate_der: Vec<u8>,
+    private_key: Zeroizing<Vec<u8>>,
+    issuer: Issuer<'static, RustCryptoKey>,
+}
+
 /// Locally generated node identity key which never leaves its owning daemon.
 ///
 /// The type implements neither `Clone`, `Debug` nor `Display`, and clears its encoded private-key
@@ -34,6 +44,15 @@ pub struct CertificateAuthority {
 /// enrolled mesh CA later signs the same public key rather than replacing the private identity.
 pub struct NodeIdentityKey {
     key: RustCryptoKey,
+}
+
+/// Validated public half of one node-owned P-256 identity.
+///
+/// The joining node retains its private key and proves possession by signing the exact enrolment
+/// transcript. The admitting swarm uses this value only after that proof has been verified.
+pub struct NodePublicIdentity {
+    key: p256::ecdsa::VerifyingKey,
+    public_key: Vec<u8>,
 }
 
 impl NodeIdentityKey {
@@ -65,6 +84,26 @@ impl NodeIdentityKey {
         Sha256::digest(self.key.subject_public_key_info()).into()
     }
 
+    /// Borrows the canonical uncompressed SEC1 public identity for enrolment.
+    #[must_use]
+    pub fn public_key_sec1(&self) -> &[u8] {
+        &self.key.public_key
+    }
+
+    /// Signs an exact caller-defined enrolment transcript with the node-owned private key.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if the cryptographic provider cannot produce a canonical DER signature.
+    pub fn sign_enrolment_transcript(
+        &self,
+        transcript: &[u8],
+    ) -> Result<Vec<u8>, CertificateError> {
+        self.key
+            .sign(transcript)
+            .map_err(CertificateError::Certificate)
+    }
+
     /// Borrows the PKCS#8 private key for immediate protected local persistence.
     #[must_use]
     pub fn private_key_pkcs8(&self) -> &[u8] {
@@ -79,6 +118,49 @@ impl NodeIdentityKey {
     pub fn self_signed(&self, dns_name: &str) -> Result<Vec<u8>, CertificateError> {
         let parameters = node_parameters(&self.key, dns_name)?;
         Ok(parameters.self_signed(&self.key)?.der().to_vec())
+    }
+}
+
+impl NodePublicIdentity {
+    /// Parses one exact canonical uncompressed P-256 public identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, compressed, off-curve and non-canonical values.
+    pub fn from_sec1(public_key: &[u8]) -> Result<Self, CertificateError> {
+        let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key)
+            .map_err(|_| CertificateError::PublicKeyDecoding)?;
+        let canonical = key.to_sec1_point(false);
+        if canonical.as_bytes() != public_key {
+            return Err(CertificateError::PublicKeyDecoding);
+        }
+        Ok(Self {
+            key,
+            public_key: canonical.as_bytes().to_vec(),
+        })
+    }
+
+    /// Returns a SHA-256 fingerprint of the canonical subject public-key information.
+    #[must_use]
+    pub fn public_key_fingerprint(&self) -> [u8; 32] {
+        Sha256::digest(self.subject_public_key_info()).into()
+    }
+
+    /// Verifies the joining node's signature over the exact enrolment transcript.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, non-canonical or invalid DER-encoded P-256 signatures.
+    pub fn verify_enrolment_transcript(
+        &self,
+        transcript: &[u8],
+        signature: &[u8],
+    ) -> Result<(), CertificateError> {
+        let signature = p256::ecdsa::DerSignature::from_bytes(signature)
+            .map_err(|_| CertificateError::InvalidIdentityProof)?;
+        self.key
+            .verify(transcript, &signature)
+            .map_err(|_| CertificateError::InvalidIdentityProof)
     }
 }
 
@@ -140,6 +222,38 @@ impl CertificateAuthority {
         })
     }
 
+    /// Creates a rotatable online authority signed by this offline root.
+    ///
+    /// # Errors
+    ///
+    /// Fails when entropy, key generation or X.509 construction is unavailable.
+    pub fn issue_online_authority(&self) -> Result<OnlineCertificateAuthority, CertificateError> {
+        let key = RustCryptoKey::generate()?;
+        self.issue_online_authority_for_key(key)
+    }
+
+    /// Deterministically recreates one exact online-authority generation for a restart-safe
+    /// first-mesh transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero seed or a seed whose bounded derivation cannot produce a P-256 scalar.
+    pub fn issue_online_authority_from_seed(
+        &self,
+        seed: [u8; KEY_BYTES],
+    ) -> Result<OnlineCertificateAuthority, CertificateError> {
+        self.issue_online_authority_for_key(RustCryptoKey::from_seed(seed)?)
+    }
+
+    fn issue_online_authority_for_key(
+        &self,
+        key: RustCryptoKey,
+    ) -> Result<OnlineCertificateAuthority, CertificateError> {
+        let parameters = online_authority_parameters(&key)?;
+        let certificate_der = parameters.signed_by(&key, &self.issuer)?.der().to_vec();
+        OnlineCertificateAuthority::from_parts(key, certificate_der)
+    }
+
     /// Signs an existing node-owned public identity without moving its private key.
     ///
     /// # Errors
@@ -155,6 +269,79 @@ impl CertificateAuthority {
             .signed_by(&identity.key, &self.issuer)?
             .der()
             .to_vec())
+    }
+
+    /// Signs an already verified node-owned public identity without receiving its private key.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid DNS name or X.509 construction failure.
+    pub fn sign_node_public_identity(
+        &self,
+        identity: &NodePublicIdentity,
+        dns_name: &str,
+    ) -> Result<Vec<u8>, CertificateError> {
+        let parameters = node_parameters(identity, dns_name)?;
+        Ok(parameters.signed_by(identity, &self.issuer)?.der().to_vec())
+    }
+}
+
+impl OnlineCertificateAuthority {
+    /// Reopens an encrypted-at-rest online authority generation.
+    ///
+    /// The exact certificate is carried separately from the private key because it was signed by
+    /// the offline root. TLS composition subsequently proves their match before service starts.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty certificate or malformed, non-canonical P-256 private key.
+    pub fn from_pkcs8_and_certificate(
+        private_key: &[u8],
+        certificate_der: &[u8],
+    ) -> Result<Self, CertificateError> {
+        if certificate_der.is_empty() {
+            return Err(CertificateError::CertificateMaterial);
+        }
+        Self::from_parts(
+            RustCryptoKey::from_pkcs8(private_key)?,
+            certificate_der.to_vec(),
+        )
+    }
+
+    fn from_parts(key: RustCryptoKey, certificate_der: Vec<u8>) -> Result<Self, CertificateError> {
+        let parameters = online_authority_parameters(&key)?;
+        let private_key = key.private_key.clone();
+        Ok(Self {
+            certificate_der,
+            private_key,
+            issuer: Issuer::new(parameters, key),
+        })
+    }
+
+    /// Borrows the root-signed online authority certificate.
+    #[must_use]
+    pub fn certificate_der(&self) -> &[u8] {
+        &self.certificate_der
+    }
+
+    /// Borrows the private key only for immediate envelope encryption or protected loading.
+    #[must_use]
+    pub fn private_key_pkcs8(&self) -> &[u8] {
+        &self.private_key
+    }
+
+    /// Signs an already verified node-owned public identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid DNS name or X.509 construction failure.
+    pub fn sign_node_public_identity(
+        &self,
+        identity: &NodePublicIdentity,
+        dns_name: &str,
+    ) -> Result<Vec<u8>, CertificateError> {
+        let parameters = node_parameters(identity, dns_name)?;
+        Ok(parameters.signed_by(identity, &self.issuer)?.der().to_vec())
     }
 }
 
@@ -199,6 +386,15 @@ pub enum CertificateError {
     /// PKCS#8 input was malformed or used a different algorithm or curve.
     #[error("P-256 certificate private key is invalid")]
     KeyDecoding,
+    /// Public identity input was malformed or not canonical uncompressed P-256 SEC1.
+    #[error("P-256 certificate public key is invalid")]
+    PublicKeyDecoding,
+    /// The node did not prove possession of the private key for its submitted public identity.
+    #[error("node identity possession proof is invalid")]
+    InvalidIdentityProof,
+    /// A persisted certificate/key pair was absent or internally inconsistent.
+    #[error("certificate authority material is invalid")]
+    CertificateMaterial,
     /// X.509 parameter validation or DER construction failed.
     #[error("certificate construction failed")]
     Certificate(#[from] rcgen::Error),
@@ -250,6 +446,43 @@ impl RustCryptoKey {
         })
     }
 
+    fn from_seed(seed: [u8; KEY_BYTES]) -> Result<Self, CertificateError> {
+        if seed == [0; KEY_BYTES] {
+            return Err(CertificateError::KeyGeneration);
+        }
+        let mut candidate = Zeroizing::new(seed);
+        for attempt in 0..KEY_GENERATION_ATTEMPTS {
+            if let Ok(key) = p256::ecdsa::SigningKey::from_slice(candidate.as_ref()) {
+                return Self::from_signing_key(key);
+            }
+            let mut digest = Sha256::new();
+            digest.update(b"meshspan.online-certificate-authority-key.v1");
+            digest.update(seed);
+            digest.update(
+                u64::try_from(attempt)
+                    .map_err(|_| CertificateError::KeyGeneration)?
+                    .to_be_bytes(),
+            );
+            candidate.copy_from_slice(&digest.finalize());
+        }
+        Err(CertificateError::KeyGeneration)
+    }
+
+    fn from_signing_key(key: p256::ecdsa::SigningKey) -> Result<Self, CertificateError> {
+        let public_key = key.verifying_key().to_sec1_point(false).as_bytes().to_vec();
+        let private_key = Zeroizing::new(
+            key.to_pkcs8_der()
+                .map_err(|_| CertificateError::KeyEncoding)?
+                .as_bytes()
+                .to_vec(),
+        );
+        Ok(Self {
+            key,
+            public_key,
+            private_key,
+        })
+    }
+
     fn identifier(&self) -> KeyIdMethod {
         let digest = Sha256::digest(self.subject_public_key_info());
         KeyIdMethod::PreSpecified(digest[..KEY_IDENTIFIER_BYTES].to_vec())
@@ -262,7 +495,7 @@ impl RustCryptoKey {
 }
 
 fn node_parameters(
-    key: &RustCryptoKey,
+    key: &impl PublicKeyData,
     dns_name: &str,
 ) -> Result<CertificateParams, CertificateError> {
     let mut parameters = CertificateParams::new(vec![dns_name.to_owned()])?;
@@ -273,13 +506,24 @@ fn node_parameters(
         ExtendedKeyUsagePurpose::ServerAuth,
         ExtendedKeyUsagePurpose::ClientAuth,
     ]);
-    parameters.serial_number = Some(key.serial_number());
-    parameters.key_identifier_method = key.identifier();
+    parameters.serial_number = Some(serial_number(key));
+    parameters.key_identifier_method = identifier(key);
     Ok(parameters)
+}
+
+fn identifier(key: &impl PublicKeyData) -> KeyIdMethod {
+    let digest = Sha256::digest(key.subject_public_key_info());
+    KeyIdMethod::PreSpecified(digest[..KEY_IDENTIFIER_BYTES].to_vec())
+}
+
+fn serial_number(key: &impl PublicKeyData) -> SerialNumber {
+    let digest = Sha256::digest(key.subject_public_key_info());
+    SerialNumber::from_slice(&digest[..KEY_IDENTIFIER_BYTES])
 }
 
 fn authority_parameters(key: &RustCryptoKey) -> Result<CertificateParams, CertificateError> {
     let mut parameters = CertificateParams::new(Vec::<String>::new())?;
+    parameters.distinguished_name = distinguished_name("MeshSpan Offline Root");
     parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     parameters
         .key_usages
@@ -289,7 +533,35 @@ fn authority_parameters(key: &RustCryptoKey) -> Result<CertificateParams, Certif
     Ok(parameters)
 }
 
+fn online_authority_parameters(key: &RustCryptoKey) -> Result<CertificateParams, CertificateError> {
+    let mut parameters = CertificateParams::new(Vec::<String>::new())?;
+    parameters.distinguished_name = distinguished_name("MeshSpan Online Node CA");
+    parameters.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+    parameters
+        .key_usages
+        .extend([KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign]);
+    parameters.serial_number = Some(key.serial_number());
+    parameters.key_identifier_method = key.identifier();
+    Ok(parameters)
+}
+
+fn distinguished_name(common_name: &str) -> DistinguishedName {
+    let mut name = DistinguishedName::new();
+    name.push(DnType::CommonName, common_name);
+    name
+}
+
 impl PublicKeyData for RustCryptoKey {
+    fn der_bytes(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
+        &rcgen::PKCS_ECDSA_P256_SHA256
+    }
+}
+
+impl PublicKeyData for NodePublicIdentity {
     fn der_bytes(&self) -> &[u8] {
         &self.public_key
     }
@@ -311,7 +583,9 @@ impl SigningKey for RustCryptoKey {
 
 #[cfg(test)]
 mod tests {
-    use super::{CertificateAuthority, NodeIdentityKey};
+    use super::{
+        CertificateAuthority, NodeIdentityKey, NodePublicIdentity, OnlineCertificateAuthority,
+    };
 
     #[test]
     fn independently_issued_nodes_have_distinct_keys_and_certificates()
@@ -355,6 +629,66 @@ mod tests {
             node_certificate
         );
         assert_ne!(node_certificate, identity.self_signed("meshspan.internal")?);
+        Ok(())
+    }
+
+    #[test]
+    fn node_proves_its_public_identity_before_the_authority_signs_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authority = CertificateAuthority::new()?;
+        let identity = NodeIdentityKey::generate()?;
+        let public_identity = NodePublicIdentity::from_sec1(identity.public_key_sec1())?;
+        let transcript = b"meshspan enrolment transcript";
+        let signature = identity.sign_enrolment_transcript(transcript)?;
+
+        public_identity.verify_enrolment_transcript(transcript, &signature)?;
+        assert_eq!(
+            public_identity.public_key_fingerprint(),
+            identity.public_key_fingerprint()
+        );
+        assert_eq!(
+            authority.sign_node_public_identity(&public_identity, "meshspan.internal")?,
+            authority.sign_node_identity(&identity, "meshspan.internal")?
+        );
+        assert!(
+            public_identity
+                .verify_enrolment_transcript(b"substituted transcript", &signature)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn online_authority_reopens_without_the_offline_root() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = CertificateAuthority::new()?;
+        let online = root.issue_online_authority()?;
+        let online_certificate = online.certificate_der().to_vec();
+        let online_key = online.private_key_pkcs8().to_vec();
+        let node = NodeIdentityKey::generate()?;
+        let public_node = NodePublicIdentity::from_sec1(node.public_key_sec1())?;
+        let expected = online.sign_node_public_identity(&public_node, "meshspan.internal")?;
+
+        let reopened = OnlineCertificateAuthority::from_pkcs8_and_certificate(
+            &online_key,
+            &online_certificate,
+        )?;
+        assert_eq!(reopened.certificate_der(), online_certificate);
+        assert_eq!(
+            reopened.sign_node_public_identity(&public_node, "meshspan.internal")?,
+            expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn online_authority_seed_is_exact_retry_stable() -> Result<(), Box<dyn std::error::Error>> {
+        let root = CertificateAuthority::new()?;
+        let first = root.issue_online_authority_from_seed([41; 32])?;
+        let replay = root.issue_online_authority_from_seed([41; 32])?;
+        assert_eq!(first.certificate_der(), replay.certificate_der());
+        assert_eq!(first.private_key_pkcs8(), replay.private_key_pkcs8());
+        assert!(root.issue_online_authority_from_seed([0; 32]).is_err());
         Ok(())
     }
 }

@@ -77,6 +77,8 @@ pub(super) fn protected_bootstrap(
             Box::new(BootstrapRecoveryIdentity {
                 public_wrapping_key: public_key.as_bytes(),
                 key_fingerprint: public_key.fingerprint(),
+                online_authority_certificate_digest: Sha256::digest(&certificate).into(),
+                online_authority_certificate_der: certificate.clone(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
                 root_certificate_der: certificate,
                 bundle_digest: [151; 32],
@@ -737,7 +739,7 @@ fn vertical_repository_proof_survives_restart_and_exact_replay()
     assert_eq!(resolved.applied_position.index, 17);
     assert_eq!(
         repository.into_database().check_integrity()?.schema_version,
-        54
+        55
     );
     Ok(())
 }
@@ -795,6 +797,8 @@ fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
         node_name: RecordName::new("Second node")?,
         incarnation: 1,
         requested_roles: roles,
+        wrapping_public_key: [144; 32],
+        private_endpoint: "second-node.meshspan.local:7443".to_owned(),
         certificate_der,
         certificate_fingerprint,
         certificate_valid_until: UnixMicros::new(10_000),
@@ -894,6 +898,8 @@ fn join_bootstrap(
             Box::new(BootstrapRecoveryIdentity {
                 public_wrapping_key: recovery_key.as_bytes(),
                 key_fingerprint: recovery_key.fingerprint(),
+                online_authority_certificate_digest: Sha256::digest(&certificate).into(),
+                online_authority_certificate_der: certificate.clone(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
                 root_certificate_der: certificate,
                 bundle_digest: [148; 32],
