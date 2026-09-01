@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 
 use crate::secret_text::derive;
 use crate::{
-    ApiKeyBundle, ApiKeyBundleError, AuditEventId, AuthenticationMethodId, ClaimBundle,
+    ApiKeyBundle, ApiKeyBundleError, AuditEventId, AuthenticationMethodId, BranchId, ClaimBundle,
     EntropyError, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId, QuorumPlanId,
     RandomSource, RoleId,
 };
@@ -109,6 +109,23 @@ impl InitialBootstrapMaterial {
     ) -> Result<QuorumPlanId, InitialBootstrapMaterialError> {
         QuorumPlanId::from_bytes(node_bound_identifier(
             b"meshspan.setup.quorum-plan-id.v2",
+            node_id,
+        ))
+        .map_err(Into::into)
+    }
+
+    /// Derives the restart-stable local namespace branch owned by one daemon node.
+    ///
+    /// Every daemon process serialises its own disconnected-write branch. Binding that branch to
+    /// the node identity keeps it stable across restart while preventing two nodes from silently
+    /// publishing through the same branch.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the cryptographically negligible nil derivation.
+    pub fn local_branch_id(node_id: NodeId) -> Result<BranchId, InitialBootstrapMaterialError> {
+        BranchId::from_bytes(node_bound_identifier(
+            b"meshspan.setup.local-branch-id.v1",
             node_id,
         ))
         .map_err(Into::into)
@@ -295,6 +312,16 @@ mod tests {
         assert_eq!(first.node_id, another_operation.node_id);
         assert_eq!(first.partition_id, another_operation.partition_id);
         assert_eq!(first.quorum_plan_id, another_operation.quorum_plan_id);
+        assert_eq!(
+            InitialBootstrapMaterial::local_branch_id(first.node_id)?,
+            InitialBootstrapMaterial::local_branch_id(another_operation.node_id)?
+        );
+        assert_ne!(
+            InitialBootstrapMaterial::local_branch_id(first.node_id)?,
+            InitialBootstrapMaterial::local_branch_id(InitialBootstrapMaterial::node_id(
+                [78; 32]
+            )?)?
+        );
         assert_ne!(first.mesh_id, another_operation.mesh_id);
         assert_ne!(InitialBootstrapMaterial::node_id([78; 32])?, node_id);
         assert!(InitialBootstrapMaterial::node_id([0; 32]).is_err());

@@ -24,7 +24,9 @@ use meshspan_consensus::{
     ConsensusCore, CoreConfig, CoreError, MemberIncarnations, QuorumPlanError, compile_plan,
     flat_plan,
 };
-use meshspan_domain::{InitialBootstrapMaterial, InitialBootstrapMaterialError, UnixMicros};
+use meshspan_domain::{
+    DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, UnixMicros,
+};
 use meshspan_metadata::{
     AuthoritativeRepository, ConsensusStoreError, MetadataStoreError, PartitionDatabase,
     RepositoryError,
@@ -36,17 +38,23 @@ use crate::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, ConsensusAuthenticationAuthority,
     ConsensusBootstrapAuthority, CreateMeshSetupController, CreateMeshSetupError,
     CreateMeshSetupService, CreateSessionService, CurrentSessionApiError, DaemonLocalState,
-    DaemonLocalStateError, DisabledTotpFactors, GatewaySessionIdentity, HeadlessDaemonConfig,
+    DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService, DisabledTotpFactors,
+    FileApiRoutes, FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
     HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
-    IdentityAdministrationService, LocalFolderStorageProvider, NativeApiAuthenticator,
-    NativeApiKeyAuthenticator, NodeWrappingKeyRegistrationService, OperatingSystemRandom,
-    PublicContractApiError, ReadinessSource, RecoveryBundleVerificationApiError,
-    RecoveryBundleVerificationService, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
-    SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
-    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageProviderOpeningError,
-    StorageProviderOpeningService, StorageTargetRegistrationService, VolumeAdministrationApiError,
-    VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
-    current_session_api_router, identity_administration_api_router, public_contract_api_router,
+    IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
+    NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
+    NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
+    NativeUploadServicePolicy, NodeWrappingKeyRegistrationService, ObjectStatApiError,
+    ObjectStatService, OperatingSystemRandom, PublicContractApiError, ReadinessSource,
+    RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
+    RevokeCurrentSessionApiError, RevokeCurrentSessionService, SessionApiError, SetupApiError,
+    SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, StepUpCurrentSessionApiError,
+    StepUpCurrentSessionService, StorageProviderOpeningError, StorageProviderOpeningService,
+    StorageTargetRegistrationService, VolumeAdministrationApiError, VolumeAdministrationService,
+    VolumeInventoryApiError, VolumeInventoryService, classify_native_filesystem_error,
+    current_session_api_router, directory_listing_api_router, file_read_api_router,
+    identity_administration_api_router, native_namespace_mutation_api_router,
+    native_upload_api_router, object_stat_api_router, public_contract_api_router,
     recovery_bundle_verification_api_router, revoke_current_session_api_router, session_api_router,
     setup_api_router_with_creation, step_up_current_session_api_router,
     volume_administration_api_router, volume_inventory_api_router,
@@ -54,12 +62,20 @@ use crate::{
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
 const INITIAL_MEMBERSHIP_EPOCH: u64 = 1;
+const UPLOAD_LIFETIME_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
+const CONTENT_OPERATION_DEADLINE_MICROS: u64 = 60 * 1_000_000;
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
     JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
     u64,
 );
+
+struct StorageRuntimeComposition {
+    readiness: Arc<RuntimeReadiness>,
+    targets: Arc<Mutex<StorageTargetRuntime>>,
+    native_filesystem: NativeFilesystemRuntime,
+}
 
 /// Runs one fully headless appliance until the supplied shutdown signal resolves.
 ///
@@ -83,41 +99,17 @@ where
     let (authority, authority_task, removal_authority_epoch) =
         start_root_authority(&local_state, started_at)?;
     authority.begin_election().await?;
-    let readiness = Arc::new(RuntimeReadiness::default());
-    let storage_targets = Arc::new(Mutex::new(StorageTargetRuntime::new(
-        NodeWrappingKeyRegistrationService::new(
-            local_state.node_id(),
-            local_state.wrapping_public_key(),
-            ConsensusAuthenticationAuthority::new(
-                open_root_repository(&local_state, started_at)?,
-                authority.clone(),
-                tokio::runtime::Handle::current(),
-            ),
-            OperatingSystemRandom,
-        ),
-        StorageTargetRegistrationService::new(
-            local_state.open_local_database(started_at)?,
-            ConsensusAuthenticationAuthority::new(
-                open_root_repository(&local_state, started_at)?,
-                authority.clone(),
-                tokio::runtime::Handle::current(),
-            ),
-            OperatingSystemRandom,
-        ),
-        StorageProviderOpeningService::new(
-            ConsensusAuthenticationAuthority::new(
-                open_root_repository(&local_state, started_at)?,
-                authority.clone(),
-                tokio::runtime::Handle::current(),
-            ),
-            local_state.open_wrapping_key()?,
-            local_state.state_directory().to_path_buf(),
-            removal_authority_epoch,
-            OperatingSystemRandom,
-        )?,
+    let StorageRuntimeComposition {
+        readiness,
+        targets: storage_targets,
+        native_filesystem,
+    } = compose_storage_runtime(
+        &local_state,
+        &authority,
+        removal_authority_epoch,
         config.storage().storage_paths().to_vec(),
-        Arc::clone(&readiness),
-    )));
+        started_at,
+    )?;
     if setup_state.setup_state() == SetupState::Configured {
         let targets = Arc::clone(&storage_targets);
         tokio::task::spawn_blocking(move || reconcile_storage_targets(&targets, started_at))
@@ -147,6 +139,13 @@ where
             &authority,
             gateway,
             started_at,
+        )?)
+        .merge(native_file_routes(
+            &local_state,
+            &authority,
+            gateway,
+            started_at,
+            native_filesystem,
         )?);
     let server = HttpsServer::bind(
         config.https_listen(),
@@ -161,6 +160,62 @@ where
     shutdown_result?;
     authority_result.map_err(|_| DaemonProcessError::AuthorityTaskStopped)??;
     Ok(())
+}
+
+fn compose_storage_runtime(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    removal_authority_epoch: u64,
+    configured_paths: Vec<PathBuf>,
+    now: UnixMicros,
+) -> Result<StorageRuntimeComposition, DaemonProcessError> {
+    let runtime = tokio::runtime::Handle::current();
+    let authentication_authority = || {
+        Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new(
+            open_root_repository(local_state, now)?,
+            authority.clone(),
+            runtime.clone(),
+        ))
+    };
+    let readiness = Arc::new(RuntimeReadiness::default());
+    let native_filesystem = NativeFilesystemRuntime::new(
+        NativeFilesystemRuntimeConfiguration::new(
+            local_state.state_directory(),
+            local_state.wrapping_key_path(),
+            local_state.node_id(),
+            authority.clone(),
+            runtime.clone(),
+        )
+        .map_err(|_| DaemonProcessError::NativeFilesystemConfiguration)?,
+    );
+    let targets = StorageTargetRuntime::new(
+        NodeWrappingKeyRegistrationService::new(
+            local_state.node_id(),
+            local_state.wrapping_public_key(),
+            authentication_authority()?,
+            OperatingSystemRandom,
+        ),
+        StorageTargetRegistrationService::new(
+            local_state.open_local_database(now)?,
+            authentication_authority()?,
+            OperatingSystemRandom,
+        ),
+        StorageProviderOpeningService::new(
+            authentication_authority()?,
+            local_state.open_wrapping_key()?,
+            local_state.state_directory().to_path_buf(),
+            removal_authority_epoch,
+            OperatingSystemRandom,
+        )?,
+        native_filesystem.clone(),
+        configured_paths,
+        Arc::clone(&readiness),
+    );
+    Ok(StorageRuntimeComposition {
+        readiness,
+        targets: Arc::new(Mutex::new(targets)),
+        native_filesystem,
+    })
 }
 
 fn start_root_authority(
@@ -253,14 +308,69 @@ fn authentication_session_routes(
                 gateway,
                 local_state.pending_recovery_bundle_path(),
             ),
-        )?)
-        .merge(volume_inventory_api_router(VolumeInventoryService::new(
-            NativeApiAuthenticator::new(
-                BrowserSessionAuthenticator::new(authentication_authority()?, gateway),
-                NativeApiKeyAuthenticator::new(authentication_authority()?, gateway),
-            ),
+        )?))
+}
+
+fn native_file_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    filesystem: NativeFilesystemRuntime,
+) -> Result<Router, DaemonProcessError> {
+    let runtime = tokio::runtime::Handle::current();
+    let authentication_authority = || {
+        Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new(
+            open_root_repository(local_state, now)?,
+            authority.clone(),
+            runtime.clone(),
+        ))
+    };
+    let authenticator = || {
+        Ok::<_, DaemonProcessError>(NativeApiAuthenticator::new(
+            BrowserSessionAuthenticator::new(authentication_authority()?, gateway),
+            NativeApiKeyAuthenticator::new(authentication_authority()?, gateway),
+        ))
+    };
+    let upload_policy = NativeUploadServicePolicy::new(
+        DurationMicros::new(UPLOAD_LIFETIME_MICROS),
+        DurationMicros::new(CONTENT_OPERATION_DEADLINE_MICROS),
+    )
+    .ok_or(DaemonProcessError::NativeUploadPolicy)?;
+    Ok(FileApiRoutes::new(
+        directory_listing_api_router(DirectoryListingService::new(
+            authenticator()?,
+            filesystem.clone(),
+            classify_native_filesystem_error,
+        ))?,
+        object_stat_api_router(ObjectStatService::new(
+            authenticator()?,
+            filesystem.clone(),
+            classify_native_filesystem_error,
+        ))?,
+        file_read_api_router(FileReadService::new(
+            authenticator()?,
+            filesystem.clone(),
+            classify_native_filesystem_error,
+            OperatingSystemRandom,
+        ))?,
+        native_namespace_mutation_api_router(NativeNamespaceMutationService::new(
+            authenticator()?,
+            filesystem.clone(),
+            classify_native_filesystem_error,
+        ))?,
+        native_upload_api_router(NativeUploadService::new(
+            authenticator()?,
+            filesystem,
+            classify_native_filesystem_error,
+            upload_policy,
+        ))?,
+        volume_inventory_api_router(VolumeInventoryService::new(
+            authenticator()?,
             authentication_authority()?,
-        ))?))
+        ))?,
+    )
+    .into_router())
 }
 
 fn open_root_repository(
@@ -316,8 +426,9 @@ struct StorageTargetRuntime {
         crate::LocalWrappingKey,
         OperatingSystemRandom,
     >,
+    native_filesystem: NativeFilesystemRuntime,
     configured_paths: Vec<PathBuf>,
-    active: BTreeMap<PathBuf, LocalFolderStorageProvider>,
+    active: BTreeMap<PathBuf, NativeStorageTarget>,
     readiness: Arc<RuntimeReadiness>,
 }
 
@@ -336,6 +447,7 @@ impl StorageTargetRuntime {
             crate::LocalWrappingKey,
             OperatingSystemRandom,
         >,
+        native_filesystem: NativeFilesystemRuntime,
         configured_paths: Vec<PathBuf>,
         readiness: Arc<RuntimeReadiness>,
     ) -> Self {
@@ -343,6 +455,7 @@ impl StorageTargetRuntime {
             wrapping_registration,
             registration,
             opening,
+            native_filesystem,
             configured_paths,
             active: BTreeMap::new(),
             readiness,
@@ -363,14 +476,25 @@ impl StorageTargetRuntime {
                 continue;
             }
             match self.registration.register(&canonical_path, now) {
-                Ok(target) => match self.opening.open(target, now) {
-                    Ok(provider) => {
-                        self.active.insert(canonical_path, provider);
+                Ok(target) => {
+                    let context = target.context();
+                    match self.opening.open(target, now) {
+                        Ok(provider) => {
+                            self.active.insert(
+                                canonical_path,
+                                NativeStorageTarget::new(context, provider),
+                            );
+                        }
+                        Err(_) => failures = failures.saturating_add(1),
                     }
-                    Err(_) => failures = failures.saturating_add(1),
-                },
+                }
                 Err(_) => failures = failures.saturating_add(1),
             }
+        }
+        if let Some(target) = self.active.values().min_by_key(|target| target.target_id())
+            && self.native_filesystem.ensure_open(target, now).is_err()
+        {
+            failures = failures.saturating_add(1);
         }
         self.readiness.store_degraded(failures > 0);
     }
@@ -466,6 +590,27 @@ pub enum DaemonProcessError {
     /// Permission-filtered volume inventory API construction failed.
     #[error("daemon volume-inventory API failed")]
     VolumeInventoryApi(#[from] VolumeInventoryApiError),
+    /// Native directory-listing API construction failed.
+    #[error("daemon native directory API failed")]
+    DirectoryListingApi(#[from] DirectoryListingApiError),
+    /// Native object-stat API construction failed.
+    #[error("daemon native object API failed")]
+    ObjectStatApi(#[from] ObjectStatApiError),
+    /// Native file-read API construction failed.
+    #[error("daemon native file-read API failed")]
+    FileReadApi(#[from] FileReadApiError),
+    /// Native namespace-mutation API construction failed.
+    #[error("daemon native namespace API failed")]
+    NamespaceMutationApi(#[from] NativeNamespaceMutationApiError),
+    /// Native upload API construction failed.
+    #[error("daemon native upload API failed")]
+    NativeUploadApi(#[from] NativeUploadApiError),
+    /// The production native filesystem configuration is invalid.
+    #[error("daemon native filesystem configuration failed")]
+    NativeFilesystemConfiguration,
+    /// The compiled native upload lifetime or deadline is invalid.
+    #[error("daemon native upload policy is invalid")]
+    NativeUploadPolicy,
     /// Manager-only volume-administration API construction failed.
     #[error("daemon volume-administration API failed")]
     VolumeAdministrationApi(#[from] VolumeAdministrationApiError),

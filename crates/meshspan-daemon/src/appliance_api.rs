@@ -74,7 +74,7 @@ impl FileApiRoutes {
         ])
     }
 
-    fn into_router(self) -> Router {
+    pub(crate) fn into_router(self) -> Router {
         merge_all(self.0)
     }
 }

@@ -171,14 +171,16 @@ impl DaemonLocalState {
     ///
     /// Rejects missing, replaced, malformed or unsafe protected key state.
     pub fn open_wrapping_key(&self) -> Result<LocalWrappingKey, DaemonLocalStateError> {
-        LocalWrappingKey::open(
-            &self
-                .directory
-                .path()
-                .join(SECRET_DIRECTORY)
-                .join(WRAPPING_KEY_FILE),
-        )
-        .map_err(Into::into)
+        LocalWrappingKey::open(&self.wrapping_key_path()).map_err(Into::into)
+    }
+
+    /// Returns the fixed protected key path for independently opened runtime capabilities.
+    #[must_use]
+    pub(crate) fn wrapping_key_path(&self) -> PathBuf {
+        self.directory
+            .path()
+            .join(SECRET_DIRECTORY)
+            .join(WRAPPING_KEY_FILE)
     }
 
     /// Returns the protected pending recovery-bundle path retained until save verification.

@@ -212,6 +212,26 @@ pub(super) fn evaluate(
     build_decision(request, authentication, target, revisions, &rights)
 }
 
+pub(super) fn retarget_unrecorded_descendant(
+    decision: AccessDecision,
+    request: AccessRequest,
+) -> Result<AccessDecision, RepositoryError> {
+    let AccessDecision::Granted(mut capability) = decision else {
+        return Ok(decision);
+    };
+    if capability.volume_id != request.volume_id
+        || capability.requested_rights != request.requested_rights
+        || capability.object_id == request.object_id
+        || capability.namespace_revision == Revision::ZERO
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    capability.object_id = request.object_id;
+    capability.object_revision = capability.namespace_revision;
+    capability.capability_digest = capability_digest(capability);
+    Ok(AccessDecision::Granted(capability))
+}
+
 fn build_decision(
     request: AccessRequest,
     authentication: AuthenticatedPrincipal,
