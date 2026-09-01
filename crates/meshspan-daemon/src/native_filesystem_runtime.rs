@@ -132,10 +132,11 @@ impl NativeFilesystemRuntimeConfiguration {
         &self,
         now: UnixMicros,
     ) -> Result<ConsensusAuthenticationAuthority, NativeFilesystemOpeningError> {
-        Ok(ConsensusAuthenticationAuthority::new(
+        Ok(ConsensusAuthenticationAuthority::new_routable(
             self.repository(now)?,
             self.authority.clone(),
             self.runtime.clone(),
+            Arc::clone(&self.network),
         ))
     }
 

@@ -40,6 +40,7 @@ mod claim_file;
 mod claim_service;
 #[cfg(test)]
 mod claim_service_tests;
+mod cluster_secret_redistribution;
 mod cluster_storage_provider;
 mod consensus_authentication_authority;
 #[cfg(test)]
@@ -84,6 +85,7 @@ mod local_node_identity_tests;
 mod local_passkey_ceremony_key;
 mod local_totp_ceremony_key;
 mod local_wrapping_key;
+mod metadata_forwarding;
 mod multi_factor_session;
 mod namespace_mutation_api;
 mod native_api_authentication;

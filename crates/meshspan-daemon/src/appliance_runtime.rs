@@ -30,7 +30,7 @@ use meshspan_consensus::{
 use meshspan_data_plane::{RemoteShardRouter, RemoteShardService};
 use meshspan_domain::{
     DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, NodeId, OperationId,
-    SnapshotId, UnixMicros,
+    PrincipalId, SnapshotId, UnixMicros,
 };
 use meshspan_metadata::{
     AuthoritativeRepository, ConsensusStoreError, JoinRoles, MetadataStoreError, PartitionDatabase,
@@ -350,12 +350,7 @@ where
         started_at,
     )?;
     spawn_data_plane_runtime(Arc::clone(&storage_targets), received_data_streams);
-    if setup_state.setup_state() == SetupState::Configured {
-        let targets = Arc::clone(&storage_targets);
-        tokio::task::spawn_blocking(move || reconcile_storage_targets(&targets, started_at))
-            .await
-            .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?;
-    }
+    spawn_storage_target_reconciler(Arc::clone(&storage_targets));
     let bootstrap =
         ConsensusBootstrapAuthority::new(authority.clone(), tokio::runtime::Handle::current());
     let setup = SetupWithStorageTargets {
@@ -434,10 +429,11 @@ fn compose_storage_runtime(
     let runtime = tokio::runtime::Handle::current();
     let root_partition_id = open_root_repository(local_state, now)?.partition_id();
     let authentication_authority = || {
-        Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new(
+        Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new_routable(
             open_root_repository(local_state, now)?,
             authority.clone(),
             runtime.clone(),
+            Arc::clone(&private_network),
         ))
     };
     let readiness = Arc::new(RuntimeReadiness::default());
@@ -448,7 +444,7 @@ fn compose_storage_runtime(
             local_state.node_id(),
             root_partition_id,
             authority.clone(),
-            private_network,
+            Arc::clone(&private_network),
             runtime.clone(),
         )
         .map_err(|_| DaemonProcessError::NativeFilesystemConfiguration)?,
@@ -753,6 +749,17 @@ async fn handle_private_control(
             .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
     )
     .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
+    if let Some(Message::MetadataCommand(command)) = envelope.message.as_ref() {
+        return crate::metadata_forwarding::handle(
+            network,
+            authority,
+            operation_id,
+            header.deadline_unix_micros,
+            command,
+        )
+        .await
+        .map_err(|_| DaemonProcessError::PrivateNetworkState);
+    }
     if let Some(response) = crate::native_gateway_sync::handle(
         network,
         state_directory,
@@ -781,6 +788,22 @@ async fn handle_private_control(
                 activation,
             )
             .await;
+            let outcome = match outcome {
+                Ok((commit, actor_principal_id)) => {
+                    match redistribute_activated_gateway_secrets(
+                        authority,
+                        state_directory,
+                        runtime,
+                        actor_principal_id,
+                    )
+                    .await
+                    {
+                        Ok(()) => Ok(commit),
+                        Err(error) => Err(error.activation_error()),
+                    }
+                }
+                Err(error) => Err(error),
+            };
             if let Ok(commit) = &outcome {
                 spawn_learner_snapshot(
                     network.clone(),
@@ -986,7 +1009,7 @@ async fn activate_private_node(
     peer: &PeerControlRequest,
     operation_id: OperationId,
     request: &meshspan_protocol::v1::NodeActivationRequest,
-) -> Result<crate::NodeActivationCommit, NodeActivationError> {
+) -> Result<(crate::NodeActivationCommit, PrincipalId), NodeActivationError> {
     let capability_digest: [u8; 32] = request
         .capability_digest
         .as_slice()
@@ -1003,6 +1026,11 @@ async fn activate_private_node(
     let now = current_time().map_err(|_| NodeActivationError::Unavailable)?;
     let repository = open_root_repository_at(state_directory, now)
         .map_err(|_| NodeActivationError::Unavailable)?;
+    let actor_principal_id = repository
+        .node_activation_candidate(peer.from)
+        .map_err(|_| NodeActivationError::Failed)?
+        .ok_or(NodeActivationError::Rejected)?
+        .authorised_by;
     let mut service = NodeActivationService::new(ConsensusAuthenticationAuthority::new(
         repository,
         authority.clone(),
@@ -1018,9 +1046,48 @@ async fn activate_private_node(
         endpoint_probe_passed: true,
         occurred_at: now,
     };
-    tokio::task::spawn_blocking(move || service.activate(activation))
+    let commit = tokio::task::spawn_blocking(move || service.activate(activation))
         .await
-        .map_err(|_| NodeActivationError::Unavailable)?
+        .map_err(|_| NodeActivationError::Unavailable)??;
+    Ok((commit, actor_principal_id))
+}
+
+async fn redistribute_activated_gateway_secrets(
+    authority: &MetadataAuthorityHandle,
+    state_directory: &std::path::Path,
+    runtime: &tokio::runtime::Handle,
+    actor_principal_id: PrincipalId,
+) -> Result<(), crate::cluster_secret_redistribution::ClusterSecretRedistributionError> {
+    let now = current_time().map_err(|_| {
+        crate::cluster_secret_redistribution::ClusterSecretRedistributionError::MissingState
+    })?;
+    let repository =
+        open_root_repository_at(state_directory, now).map_err(|error| match error {
+            DaemonProcessError::Repository(error) => {
+                crate::cluster_secret_redistribution::ClusterSecretRedistributionError::Repository(
+                    error,
+                )
+            }
+            _ => {
+                crate::cluster_secret_redistribution::ClusterSecretRedistributionError::MissingState
+            }
+        })?;
+    let wrapping_key =
+        crate::LocalWrappingKey::open(&state_directory.join("secrets/node-wrapping-key.x25519"))?;
+    let authority =
+        ConsensusAuthenticationAuthority::new(repository, authority.clone(), runtime.clone());
+    tokio::task::spawn_blocking(move || {
+        crate::cluster_secret_redistribution::redistribute_cluster_secrets(
+            &authority,
+            &wrapping_key,
+            actor_principal_id,
+            now,
+        )
+    })
+    .await
+    .map_err(|_| {
+        crate::cluster_secret_redistribution::ClusterSecretRedistributionError::MissingState
+    })?
 }
 
 fn activation_roles(encoded: &[i32]) -> Result<JoinRoles, NodeActivationError> {
@@ -1395,6 +1462,29 @@ fn reconcile_storage_targets(storage_targets: &Arc<Mutex<StorageTargetRuntime>>,
         Ok(mut targets) => targets.reconcile(now),
         Err(poisoned) => poisoned.into_inner().readiness.store_degraded(true),
     }
+}
+
+fn spawn_storage_target_reconciler(storage_targets: Arc<Mutex<StorageTargetRuntime>>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let Ok(now) = current_time() else {
+                if let Ok(targets) = storage_targets.lock() {
+                    targets.readiness.store_degraded(true);
+                }
+                continue;
+            };
+            let targets = Arc::clone(&storage_targets);
+            if tokio::task::spawn_blocking(move || reconcile_storage_targets(&targets, now))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 }
 
 fn spawn_data_plane_runtime(
