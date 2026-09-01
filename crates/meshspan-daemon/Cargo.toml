@@ -23,6 +23,7 @@ meshspan-certificates = { path = "../meshspan-certificates" }
 meshspan-cluster = { path = "../meshspan-cluster" }
 meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-contracts = { path = "../meshspan-contracts" }
+meshspan-data-plane = { path = "../meshspan-data-plane" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-filesystem = { path = "../meshspan-filesystem" }
 meshspan-metadata = { path = "../meshspan-metadata" }

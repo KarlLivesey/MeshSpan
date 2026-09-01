@@ -20,13 +20,14 @@ use meshspan_cluster::{
     ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
     MetadataAuthorityConfig, MetadataAuthorityHandle, MetadataAuthorityRequestError,
     MetadataAuthorityRuntimeError, MetadataAuthorityStartError, OutboundConsensusSnapshot,
-    PartitionConsensusDriver, PeerControlRequest, restore_member_incarnations,
+    PartitionConsensusDriver, PeerControlRequest, PeerDataStream, restore_member_incarnations,
     spawn_metadata_authority,
 };
 use meshspan_consensus::{
     ActiveQuorumPlan, ConsensusCore, CoreConfig, CoreError, QuorumPlanError, compile_plan,
     flat_plan,
 };
+use meshspan_data_plane::{RemoteShardRouter, RemoteShardService};
 use meshspan_domain::{
     DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, NodeId, OperationId,
     SnapshotId, UnixMicros,
@@ -74,14 +75,14 @@ use crate::{
     ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
-    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageProviderOpeningError,
-    StorageProviderOpeningService, StorageTargetRegistrationService, TotpRegistrationApiError,
-    TotpRegistrationConfiguration, TotpRegistrationConfigurationError, TotpRegistrationService,
-    VolumeAdministrationApiError, VolumeAdministrationService, VolumeInventoryApiError,
-    VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
-    authentication_method_revocation_api_router, classify_native_filesystem_error,
-    current_session_api_router, directory_listing_api_router, file_read_api_router,
-    identity_administration_api_router, native_namespace_mutation_api_router,
+    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StoragePermitLoadingService,
+    StorageProviderOpeningError, StorageProviderOpeningService, StorageTargetRegistrationService,
+    TotpRegistrationApiError, TotpRegistrationConfiguration, TotpRegistrationConfigurationError,
+    TotpRegistrationService, VolumeAdministrationApiError, VolumeAdministrationService,
+    VolumeInventoryApiError, VolumeInventoryService, api_key_issuance_api_router,
+    authentication_method_listing_api_router, authentication_method_revocation_api_router,
+    classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
+    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
     object_stat_api_router, passkey_challenge_api_router, passkey_registration_api_router,
     public_contract_api_router, recovery_bundle_verification_api_router,
@@ -121,6 +122,7 @@ struct PrivateNetworkStarter {
     local_node_id: NodeId,
     local_private_key_pkcs8: Arc<Zeroizing<Vec<u8>>>,
     listen_address: SocketAddr,
+    data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
 }
 
 impl PrivateNetworkStarter {
@@ -173,7 +175,12 @@ impl PrivateNetworkStarter {
         };
         let network = {
             let _entered = self.runtime.enter();
-            ConsensusNetwork::start_with_control(config, peer_messages, control_requests)?
+            ConsensusNetwork::start_with_control_and_data(
+                config,
+                peer_messages,
+                control_requests,
+                self.data_streams.clone(),
+            )?
         };
         self.network
             .install(network.clone())
@@ -264,6 +271,7 @@ where
     setup_state.reconcile(local_state.local_database())?;
     let private_endpoint = advertised_private_endpoint(&config)?;
     let private_network = Arc::new(PrivateConsensusRuntime::default());
+    let (data_streams, received_data_streams) = tokio::sync::mpsc::channel(128);
     let mut joining_peer_messages = None;
     let mut joining_control_requests = None;
     if setup_state.setup_state() != SetupState::Configured {
@@ -276,6 +284,7 @@ where
                 &mut local_state,
                 &config,
                 &admission,
+                data_streams.clone(),
                 current_time()?,
             )
             .await
@@ -315,6 +324,7 @@ where
             local_state.node_identity_private_key_pkcs8().to_vec(),
         )),
         listen_address: config.private_listen(),
+        data_streams,
     };
     if let Some(control_requests) = joining_control_requests {
         private_network_starter.spawn_control_runtime(
@@ -338,6 +348,7 @@ where
         config.storage().storage_paths().to_vec(),
         started_at,
     )?;
+    spawn_data_plane_runtime(Arc::clone(&storage_targets), received_data_streams);
     if setup_state.setup_state() == SetupState::Configured {
         let targets = Arc::clone(&storage_targets);
         tokio::task::spawn_blocking(move || reconcile_storage_targets(&targets, started_at))
@@ -458,6 +469,11 @@ fn compose_storage_runtime(
             removal_authority_epoch,
             OperatingSystemRandom,
         )?,
+        StoragePermitLoadingService::new(
+            authentication_authority()?,
+            local_state.open_wrapping_key()?,
+        ),
+        local_state.node_id(),
         native_filesystem.clone(),
         configured_paths,
         Arc::clone(&readiness),
@@ -1224,6 +1240,9 @@ struct StorageTargetRuntime {
         crate::LocalWrappingKey,
         OperatingSystemRandom,
     >,
+    data_permits:
+        StoragePermitLoadingService<ConsensusAuthenticationAuthority, crate::LocalWrappingKey>,
+    local_node_id: NodeId,
     native_filesystem: NativeFilesystemRuntime,
     configured_paths: Vec<PathBuf>,
     active: BTreeMap<PathBuf, NativeStorageTarget>,
@@ -1245,6 +1264,11 @@ impl StorageTargetRuntime {
             crate::LocalWrappingKey,
             OperatingSystemRandom,
         >,
+        data_permits: StoragePermitLoadingService<
+            ConsensusAuthenticationAuthority,
+            crate::LocalWrappingKey,
+        >,
+        local_node_id: NodeId,
         native_filesystem: NativeFilesystemRuntime,
         configured_paths: Vec<PathBuf>,
         readiness: Arc<RuntimeReadiness>,
@@ -1253,11 +1277,40 @@ impl StorageTargetRuntime {
             wrapping_registration,
             registration,
             opening,
+            data_permits,
+            local_node_id,
             native_filesystem,
             configured_paths,
             active: BTreeMap::new(),
             readiness,
         }
+    }
+
+    fn data_router(&self) -> Result<RemoteShardRouter<crate::LocalFolderStorageProvider>, ()> {
+        if self.active.is_empty() {
+            return Err(());
+        }
+        let mut services = Vec::with_capacity(self.active.len());
+        for target in self.active.values() {
+            let context = target.context();
+            let permit_key = self
+                .data_permits
+                .load_latest(context.mesh_id)
+                .map_err(|_| ())?;
+            services.push(
+                RemoteShardService::new(
+                    target.provider(),
+                    permit_key,
+                    context.mesh_id,
+                    self.local_node_id,
+                    context.target_id,
+                    context.generation,
+                    crate::native_filesystem_runtime::MAXIMUM_NATIVE_SHARD_BYTES,
+                )
+                .map_err(|_| ())?,
+            );
+        }
+        RemoteShardRouter::new(services, self.active.len()).map_err(|_| ())
     }
 
     fn reconcile(&mut self, now: UnixMicros) {
@@ -1323,6 +1376,34 @@ fn reconcile_storage_targets(storage_targets: &Arc<Mutex<StorageTargetRuntime>>,
         Ok(mut targets) => targets.reconcile(now),
         Err(poisoned) => poisoned.into_inner().readiness.store_degraded(true),
     }
+}
+
+fn spawn_data_plane_runtime(
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+    mut streams: tokio::sync::mpsc::Receiver<PeerDataStream>,
+) {
+    tokio::spawn(async move {
+        while let Some(stream) = streams.recv().await {
+            let router = match storage_targets.lock() {
+                Ok(targets) => targets.data_router(),
+                Err(poisoned) => {
+                    poisoned.into_inner().readiness.store_degraded(true);
+                    Err(())
+                }
+            };
+            let Ok(mut router) = router else {
+                continue;
+            };
+            let Ok(observed_at) = current_time() else {
+                continue;
+            };
+            tokio::spawn(async move {
+                let _result = router
+                    .serve_stream(stream.stream, stream.peer, stream.limits, observed_at)
+                    .await;
+            });
+        }
+    });
 }
 
 /// Closed headless-process failures which never expose claim, key or request material.

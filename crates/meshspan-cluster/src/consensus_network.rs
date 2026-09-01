@@ -114,6 +114,8 @@ pub struct PeerDataStream {
     pub peer: meshspan_transport::AuthenticatedPeer,
     /// Strictly framed data stream whose first message remains unread for the data-plane router.
     pub stream: meshspan_transport::AcceptedStream,
+    /// Exact framing bounds negotiated for this private endpoint.
+    pub limits: WireLimits,
 }
 
 /// Cloneable non-blocking consensus message network.
@@ -631,6 +633,7 @@ impl ConsensusNetwork {
                         .send(PeerDataStream {
                             peer: peer.clone(),
                             stream: accepted,
+                            limits: self.wire_limits,
                         })
                         .await
                         .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;

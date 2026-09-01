@@ -30,6 +30,7 @@ use crate::{
 pub(crate) use classification::classify_native_filesystem_error;
 
 const CONTENT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAXIMUM_NATIVE_SHARD_BYTES: usize = CONTENT_CHUNK_BYTES + 16;
 
 type ProductionPublisher = UnprotectedContentPublisher<
     LocalFolderStorageProvider,
@@ -62,6 +63,18 @@ impl NativeStorageTarget {
     #[must_use]
     pub(crate) const fn target_id(&self) -> meshspan_domain::TargetId {
         self.context.target_id
+    }
+
+    /// Returns the committed storage route bound to this live provider incarnation.
+    #[must_use]
+    pub(crate) const fn context(&self) -> StorageTargetProviderContext {
+        self.context
+    }
+
+    /// Shares this target's ordered provider owner with the private data-plane service.
+    #[must_use]
+    pub(crate) fn provider(&self) -> LocalFolderStorageProvider {
+        self.provider.clone()
     }
 }
 

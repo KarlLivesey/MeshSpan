@@ -9,7 +9,7 @@ use meshspan_api_contract::{
 };
 use meshspan_cluster::{
     ConsensusNetwork, ConsensusNetworkConfig, ConsensusPeerConfig, PeerConsensusMessage,
-    PeerControlRequest,
+    PeerControlRequest, PeerDataStream,
 };
 use meshspan_consensus::ActiveQuorumPlan;
 use meshspan_domain::{
@@ -161,6 +161,7 @@ pub(crate) async fn activate_and_install_headless_node(
     local_state: &mut DaemonLocalState,
     config: &HeadlessDaemonConfig,
     admission: &EnrolNodeResponse,
+    data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
     now: UnixMicros,
 ) -> Result<HeadlessJoinNetwork, HeadlessNodeJoinError> {
     let mesh_id = meshspan_domain::MeshId::from_bytes(parse_uuid(&admission.mesh_id)?)
@@ -193,7 +194,7 @@ pub(crate) async fn activate_and_install_headless_node(
     let (peer_messages, received_peer_messages) = tokio::sync::mpsc::channel(256);
     let (control_requests, received_control_requests) = tokio::sync::mpsc::channel(64);
     let (snapshots, mut received_snapshots) = tokio::sync::mpsc::channel(1);
-    let network = ConsensusNetwork::start_with_control_and_snapshots(
+    let network = ConsensusNetwork::start_with_control_snapshots_and_data(
         ConsensusNetworkConfig {
             local_node_id,
             local_incarnation: 1,
@@ -223,6 +224,7 @@ pub(crate) async fn activate_and_install_headless_node(
         peer_messages,
         control_requests,
         snapshots,
+        data_streams,
     )?;
     let activation_operation = activation_operation_id(local_node_id)?;
     let deadline = now

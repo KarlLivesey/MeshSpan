@@ -90,7 +90,7 @@ pub use cleanup_worker::{
 mod cleanup_worker_tests;
 pub use consensus_network::{
     ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
-    OutboundConsensusSnapshot, PeerControlRequest, ReceivedConsensusSnapshot,
+    OutboundConsensusSnapshot, PeerControlRequest, PeerDataStream, ReceivedConsensusSnapshot,
 };
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
 pub use driver::{
