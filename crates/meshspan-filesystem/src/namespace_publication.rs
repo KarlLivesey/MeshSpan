@@ -122,6 +122,22 @@ pub(super) fn complete_namespace_history_receive(
     history_import::complete(connection, session_id, now, None)
 }
 
+pub(super) fn adopt_imported_namespace_head(
+    connection: &mut Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    namespace_commit_id: NamespaceCommitId,
+    root_object_revision_id: ObjectRevisionId,
+) -> Result<BranchNamespaceHead, PublicationError> {
+    history_import::adopt_head(
+        connection,
+        branch_id,
+        volume_id,
+        namespace_commit_id,
+        root_object_revision_id,
+    )
+}
+
 pub(super) fn prepare_namespace_history_receive(
     connection: &Connection,
     session_id: [u8; 32],

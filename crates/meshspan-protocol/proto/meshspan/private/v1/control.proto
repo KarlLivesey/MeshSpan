@@ -326,6 +326,63 @@ message FetchIsolationDelegation {
   uint64 generation = 2;
 }
 
+message NativeContentRoute {
+  bytes publication_operation_id = 1;
+  bytes manifest_id = 2;
+  bytes target_id = 3;
+  uint64 target_generation = 4;
+}
+
+message PublishNamespaceHead {
+  bytes volume_id = 1;
+  bytes namespace_commit_id = 2;
+  bytes root_object_revision_id = 3;
+  repeated NativeContentRoute content_routes = 4;
+}
+
+message NamespaceHeadAccepted {
+  OperationResult result = 1;
+}
+
+message FetchNamespaceHistoryPage {
+  bytes volume_id = 1;
+  repeated bytes requested_heads = 2;
+  repeated bytes known_commits = 3;
+  bytes cursor = 4;
+  uint32 limit = 5;
+}
+
+message NamespaceHistoryPageResult {
+  bytes export_token = 1;
+  repeated VersionedPayload commits = 2;
+  repeated bytes immutable_object_digests = 3;
+  bytes next_cursor = 4;
+}
+
+message FetchNamespaceHistoryObject {
+  bytes export_token = 1;
+  bytes object_digest = 2;
+  bytes volume_id = 3;
+}
+
+message NamespaceHistoryObjectResult {
+  VersionedPayload object = 1;
+}
+
+message FetchNativeContentLayout {
+  bytes publication_operation_id = 1;
+  bytes manifest_id = 2;
+  optional uint64 after_index = 3;
+  uint32 limit = 4;
+}
+
+message NativeContentLayoutPage {
+  VersionedPayload header = 1;
+  repeated VersionedPayload chunks = 2;
+  repeated VersionedPayload receipts = 3;
+  optional uint64 next_index = 4;
+}
+
 message ClaimWork {
   uint32 work_kind = 1;
   repeated bytes eligible_target_ids = 2;
@@ -452,5 +509,13 @@ message ControlEnvelope {
     FetchCertificateEnvelope fetch_certificate_envelope = 101;
     AcknowledgeCertificateInstall acknowledge_certificate_install = 102;
     RevokeCertificateEnvelope revoke_certificate_envelope = 103;
+    PublishNamespaceHead publish_namespace_head = 110;
+    NamespaceHeadAccepted namespace_head_accepted = 111;
+    FetchNamespaceHistoryPage fetch_namespace_history_page = 112;
+    NamespaceHistoryPageResult namespace_history_page_result = 113;
+    FetchNamespaceHistoryObject fetch_namespace_history_object = 114;
+    NamespaceHistoryObjectResult namespace_history_object_result = 115;
+    FetchNativeContentLayout fetch_native_content_layout = 116;
+    NativeContentLayoutPage native_content_layout_page = 117;
   }
 }

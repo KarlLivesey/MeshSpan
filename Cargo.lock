@@ -1106,6 +1106,7 @@ dependencies = [
  "meshspan-cluster",
  "meshspan-consensus",
  "meshspan-contracts",
+ "meshspan-data-plane",
  "meshspan-domain",
  "meshspan-filesystem",
  "meshspan-metadata",

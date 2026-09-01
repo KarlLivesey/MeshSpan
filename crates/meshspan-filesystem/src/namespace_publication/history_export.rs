@@ -57,6 +57,39 @@ pub struct NamespaceHistoryPage {
     pub next_cursor: Vec<u8>,
 }
 
+impl NamespaceHistoryPage {
+    /// Reconstructs one untrusted wire page after each canonical record decoded independently.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty identities, excessive records, duplicate digests or excessive cursors.
+    pub fn from_untrusted(
+        export_token: [u8; 32],
+        commits: Vec<NamespaceHistoryCommitRecord>,
+        immutable_object_digests: Vec<[u8; 32]>,
+        next_cursor: Vec<u8>,
+    ) -> Result<Self, PublicationError> {
+        if export_token == [0; 32]
+            || commits.len().saturating_add(immutable_object_digests.len()) > MAXIMUM_PAGE_RECORDS
+            || next_cursor.len() > 256
+            || immutable_object_digests
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != immutable_object_digests.len()
+        {
+            return Err(PublicationError::InvalidInput);
+        }
+        Ok(Self {
+            export_token,
+            commits,
+            immutable_object_digests,
+            next_cursor,
+        })
+    }
+}
+
 /// Exact active export and advertised immutable body selected for a bounded fetch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NamespaceHistoryObjectRequest {

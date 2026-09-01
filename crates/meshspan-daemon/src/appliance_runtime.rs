@@ -20,16 +20,17 @@ use meshspan_cluster::{
     ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
     MetadataAuthorityConfig, MetadataAuthorityHandle, MetadataAuthorityRequestError,
     MetadataAuthorityRuntimeError, MetadataAuthorityStartError, OutboundConsensusSnapshot,
-    PartitionConsensusDriver, PeerControlRequest, restore_member_incarnations,
+    PartitionConsensusDriver, PeerControlRequest, PeerDataStream, restore_member_incarnations,
     spawn_metadata_authority,
 };
 use meshspan_consensus::{
     ActiveQuorumPlan, ConsensusCore, CoreConfig, CoreError, QuorumPlanError, compile_plan,
     flat_plan,
 };
+use meshspan_data_plane::{RemoteShardRouter, RemoteShardService};
 use meshspan_domain::{
     DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, NodeId, OperationId,
-    SnapshotId, UnixMicros,
+    PrincipalId, SnapshotId, UnixMicros,
 };
 use meshspan_metadata::{
     AuthoritativeRepository, ConsensusStoreError, JoinRoles, MetadataStoreError, PartitionDatabase,
@@ -74,14 +75,14 @@ use crate::{
     ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
-    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageProviderOpeningError,
-    StorageProviderOpeningService, StorageTargetRegistrationService, TotpRegistrationApiError,
-    TotpRegistrationConfiguration, TotpRegistrationConfigurationError, TotpRegistrationService,
-    VolumeAdministrationApiError, VolumeAdministrationService, VolumeInventoryApiError,
-    VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
-    authentication_method_revocation_api_router, classify_native_filesystem_error,
-    current_session_api_router, directory_listing_api_router, file_read_api_router,
-    identity_administration_api_router, native_namespace_mutation_api_router,
+    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StoragePermitLoadingService,
+    StorageProviderOpeningError, StorageProviderOpeningService, StorageTargetRegistrationService,
+    TotpRegistrationApiError, TotpRegistrationConfiguration, TotpRegistrationConfigurationError,
+    TotpRegistrationService, VolumeAdministrationApiError, VolumeAdministrationService,
+    VolumeInventoryApiError, VolumeInventoryService, api_key_issuance_api_router,
+    authentication_method_listing_api_router, authentication_method_revocation_api_router,
+    classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
+    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
     object_stat_api_router, passkey_challenge_api_router, passkey_registration_api_router,
     public_contract_api_router, recovery_bundle_verification_api_router,
@@ -121,6 +122,7 @@ struct PrivateNetworkStarter {
     local_node_id: NodeId,
     local_private_key_pkcs8: Arc<Zeroizing<Vec<u8>>>,
     listen_address: SocketAddr,
+    data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
 }
 
 impl PrivateNetworkStarter {
@@ -173,7 +175,12 @@ impl PrivateNetworkStarter {
         };
         let network = {
             let _entered = self.runtime.enter();
-            ConsensusNetwork::start_with_control(config, peer_messages, control_requests)?
+            ConsensusNetwork::start_with_control_and_data(
+                config,
+                peer_messages,
+                control_requests,
+                self.data_streams.clone(),
+            )?
         };
         self.network
             .install(network.clone())
@@ -264,6 +271,7 @@ where
     setup_state.reconcile(local_state.local_database())?;
     let private_endpoint = advertised_private_endpoint(&config)?;
     let private_network = Arc::new(PrivateConsensusRuntime::default());
+    let (data_streams, received_data_streams) = tokio::sync::mpsc::channel(128);
     let mut joining_peer_messages = None;
     let mut joining_control_requests = None;
     if setup_state.setup_state() != SetupState::Configured {
@@ -276,6 +284,7 @@ where
                 &mut local_state,
                 &config,
                 &admission,
+                data_streams.clone(),
                 current_time()?,
             )
             .await
@@ -315,6 +324,7 @@ where
             local_state.node_identity_private_key_pkcs8().to_vec(),
         )),
         listen_address: config.private_listen(),
+        data_streams,
     };
     if let Some(control_requests) = joining_control_requests {
         private_network_starter.spawn_control_runtime(
@@ -334,16 +344,13 @@ where
     } = compose_storage_runtime(
         &local_state,
         &authority,
+        Arc::clone(&private_network),
         removal_authority_epoch,
         config.storage().storage_paths().to_vec(),
         started_at,
     )?;
-    if setup_state.setup_state() == SetupState::Configured {
-        let targets = Arc::clone(&storage_targets);
-        tokio::task::spawn_blocking(move || reconcile_storage_targets(&targets, started_at))
-            .await
-            .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?;
-    }
+    spawn_data_plane_runtime(Arc::clone(&storage_targets), received_data_streams);
+    spawn_storage_target_reconciler(Arc::clone(&storage_targets));
     let bootstrap =
         ConsensusBootstrapAuthority::new(authority.clone(), tokio::runtime::Handle::current());
     let setup = SetupWithStorageTargets {
@@ -414,16 +421,19 @@ where
 fn compose_storage_runtime(
     local_state: &DaemonLocalState,
     authority: &MetadataAuthorityHandle,
+    private_network: Arc<PrivateConsensusRuntime>,
     removal_authority_epoch: u64,
     configured_paths: Vec<PathBuf>,
     now: UnixMicros,
 ) -> Result<StorageRuntimeComposition, DaemonProcessError> {
     let runtime = tokio::runtime::Handle::current();
+    let root_partition_id = open_root_repository(local_state, now)?.partition_id();
     let authentication_authority = || {
-        Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new(
+        Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new_routable(
             open_root_repository(local_state, now)?,
             authority.clone(),
             runtime.clone(),
+            Arc::clone(&private_network),
         ))
     };
     let readiness = Arc::new(RuntimeReadiness::default());
@@ -432,7 +442,9 @@ fn compose_storage_runtime(
             local_state.state_directory(),
             local_state.wrapping_key_path(),
             local_state.node_id(),
+            root_partition_id,
             authority.clone(),
+            Arc::clone(&private_network),
             runtime.clone(),
         )
         .map_err(|_| DaemonProcessError::NativeFilesystemConfiguration)?,
@@ -456,6 +468,11 @@ fn compose_storage_runtime(
             removal_authority_epoch,
             OperatingSystemRandom,
         )?,
+        StoragePermitLoadingService::new(
+            authentication_authority()?,
+            local_state.open_wrapping_key()?,
+        ),
+        local_state.node_id(),
         native_filesystem.clone(),
         configured_paths,
         Arc::clone(&readiness),
@@ -732,6 +749,33 @@ async fn handle_private_control(
             .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
     )
     .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
+    if let Some(Message::MetadataCommand(command)) = envelope.message.as_ref() {
+        return crate::metadata_forwarding::handle(
+            network,
+            authority,
+            operation_id,
+            header.deadline_unix_micros,
+            command,
+        )
+        .await
+        .map_err(|_| DaemonProcessError::PrivateNetworkState);
+    }
+    if let Some(response) = crate::native_gateway_sync::handle(
+        network,
+        state_directory,
+        request,
+        operation_id,
+        header,
+        envelope
+            .message
+            .as_ref()
+            .ok_or(DaemonProcessError::PrivateNetworkState)?,
+    )
+    .await
+    .map_err(|_| DaemonProcessError::PrivateNetworkState)?
+    {
+        return Ok(response);
+    }
     match envelope.message.as_ref() {
         Some(Message::NodeActivationRequest(activation)) => {
             let outcome = activate_private_node(
@@ -744,6 +788,22 @@ async fn handle_private_control(
                 activation,
             )
             .await;
+            let outcome = match outcome {
+                Ok((commit, actor_principal_id)) => {
+                    match redistribute_activated_gateway_secrets(
+                        authority,
+                        state_directory,
+                        runtime,
+                        actor_principal_id,
+                    )
+                    .await
+                    {
+                        Ok(()) => Ok(commit),
+                        Err(error) => Err(error.activation_error()),
+                    }
+                }
+                Err(error) => Err(error),
+            };
             if let Ok(commit) = &outcome {
                 spawn_learner_snapshot(
                     network.clone(),
@@ -949,7 +1009,7 @@ async fn activate_private_node(
     peer: &PeerControlRequest,
     operation_id: OperationId,
     request: &meshspan_protocol::v1::NodeActivationRequest,
-) -> Result<crate::NodeActivationCommit, NodeActivationError> {
+) -> Result<(crate::NodeActivationCommit, PrincipalId), NodeActivationError> {
     let capability_digest: [u8; 32] = request
         .capability_digest
         .as_slice()
@@ -966,6 +1026,11 @@ async fn activate_private_node(
     let now = current_time().map_err(|_| NodeActivationError::Unavailable)?;
     let repository = open_root_repository_at(state_directory, now)
         .map_err(|_| NodeActivationError::Unavailable)?;
+    let actor_principal_id = repository
+        .node_activation_candidate(peer.from)
+        .map_err(|_| NodeActivationError::Failed)?
+        .ok_or(NodeActivationError::Rejected)?
+        .authorised_by;
     let mut service = NodeActivationService::new(ConsensusAuthenticationAuthority::new(
         repository,
         authority.clone(),
@@ -981,9 +1046,48 @@ async fn activate_private_node(
         endpoint_probe_passed: true,
         occurred_at: now,
     };
-    tokio::task::spawn_blocking(move || service.activate(activation))
+    let commit = tokio::task::spawn_blocking(move || service.activate(activation))
         .await
-        .map_err(|_| NodeActivationError::Unavailable)?
+        .map_err(|_| NodeActivationError::Unavailable)??;
+    Ok((commit, actor_principal_id))
+}
+
+async fn redistribute_activated_gateway_secrets(
+    authority: &MetadataAuthorityHandle,
+    state_directory: &std::path::Path,
+    runtime: &tokio::runtime::Handle,
+    actor_principal_id: PrincipalId,
+) -> Result<(), crate::cluster_secret_redistribution::ClusterSecretRedistributionError> {
+    let now = current_time().map_err(|_| {
+        crate::cluster_secret_redistribution::ClusterSecretRedistributionError::MissingState
+    })?;
+    let repository =
+        open_root_repository_at(state_directory, now).map_err(|error| match error {
+            DaemonProcessError::Repository(error) => {
+                crate::cluster_secret_redistribution::ClusterSecretRedistributionError::Repository(
+                    error,
+                )
+            }
+            _ => {
+                crate::cluster_secret_redistribution::ClusterSecretRedistributionError::MissingState
+            }
+        })?;
+    let wrapping_key =
+        crate::LocalWrappingKey::open(&state_directory.join("secrets/node-wrapping-key.x25519"))?;
+    let authority =
+        ConsensusAuthenticationAuthority::new(repository, authority.clone(), runtime.clone());
+    tokio::task::spawn_blocking(move || {
+        crate::cluster_secret_redistribution::redistribute_cluster_secrets(
+            &authority,
+            &wrapping_key,
+            actor_principal_id,
+            now,
+        )
+    })
+    .await
+    .map_err(|_| {
+        crate::cluster_secret_redistribution::ClusterSecretRedistributionError::MissingState
+    })?
 }
 
 fn activation_roles(encoded: &[i32]) -> Result<JoinRoles, NodeActivationError> {
@@ -1222,6 +1326,9 @@ struct StorageTargetRuntime {
         crate::LocalWrappingKey,
         OperatingSystemRandom,
     >,
+    data_permits:
+        StoragePermitLoadingService<ConsensusAuthenticationAuthority, crate::LocalWrappingKey>,
+    local_node_id: NodeId,
     native_filesystem: NativeFilesystemRuntime,
     configured_paths: Vec<PathBuf>,
     active: BTreeMap<PathBuf, NativeStorageTarget>,
@@ -1243,6 +1350,11 @@ impl StorageTargetRuntime {
             crate::LocalWrappingKey,
             OperatingSystemRandom,
         >,
+        data_permits: StoragePermitLoadingService<
+            ConsensusAuthenticationAuthority,
+            crate::LocalWrappingKey,
+        >,
+        local_node_id: NodeId,
         native_filesystem: NativeFilesystemRuntime,
         configured_paths: Vec<PathBuf>,
         readiness: Arc<RuntimeReadiness>,
@@ -1251,11 +1363,40 @@ impl StorageTargetRuntime {
             wrapping_registration,
             registration,
             opening,
+            data_permits,
+            local_node_id,
             native_filesystem,
             configured_paths,
             active: BTreeMap::new(),
             readiness,
         }
+    }
+
+    fn data_router(&self) -> Result<RemoteShardRouter<crate::LocalFolderStorageProvider>, ()> {
+        if self.active.is_empty() {
+            return Err(());
+        }
+        let mut services = Vec::with_capacity(self.active.len());
+        for target in self.active.values() {
+            let context = target.context();
+            let permit_key = self
+                .data_permits
+                .load_latest(context.mesh_id)
+                .map_err(|_| ())?;
+            services.push(
+                RemoteShardService::new(
+                    target.provider(),
+                    permit_key,
+                    context.mesh_id,
+                    self.local_node_id,
+                    context.target_id,
+                    context.generation,
+                    crate::native_filesystem_runtime::MAXIMUM_NATIVE_SHARD_BYTES,
+                )
+                .map_err(|_| ())?,
+            );
+        }
+        RemoteShardRouter::new(services, self.active.len()).map_err(|_| ())
     }
 
     fn reconcile(&mut self, now: UnixMicros) {
@@ -1321,6 +1462,57 @@ fn reconcile_storage_targets(storage_targets: &Arc<Mutex<StorageTargetRuntime>>,
         Ok(mut targets) => targets.reconcile(now),
         Err(poisoned) => poisoned.into_inner().readiness.store_degraded(true),
     }
+}
+
+fn spawn_storage_target_reconciler(storage_targets: Arc<Mutex<StorageTargetRuntime>>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let Ok(now) = current_time() else {
+                if let Ok(targets) = storage_targets.lock() {
+                    targets.readiness.store_degraded(true);
+                }
+                continue;
+            };
+            let targets = Arc::clone(&storage_targets);
+            if tokio::task::spawn_blocking(move || reconcile_storage_targets(&targets, now))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+}
+
+fn spawn_data_plane_runtime(
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+    mut streams: tokio::sync::mpsc::Receiver<PeerDataStream>,
+) {
+    tokio::spawn(async move {
+        while let Some(stream) = streams.recv().await {
+            let router = match storage_targets.lock() {
+                Ok(targets) => targets.data_router(),
+                Err(poisoned) => {
+                    poisoned.into_inner().readiness.store_degraded(true);
+                    Err(())
+                }
+            };
+            let Ok(mut router) = router else {
+                continue;
+            };
+            let Ok(observed_at) = current_time() else {
+                continue;
+            };
+            tokio::spawn(async move {
+                let _result = router
+                    .serve_stream(stream.stream, stream.peer, stream.limits, observed_at)
+                    .await;
+            });
+        }
+    });
 }
 
 /// Closed headless-process failures which never expose claim, key or request material.

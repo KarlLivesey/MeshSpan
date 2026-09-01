@@ -44,6 +44,7 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
         let claim = wait_for_claim(&root.claim_path).await?;
         let root_client = wait_for_client(&root.identity_path).await?;
         wait_for_status(root.address, &root_client, "claim_required").await?;
+        let administrator_id = bootstrap_administrator_id(&claim, &root.identity_path)?;
         let created = create_process_mesh(&root, &root_client, &claim).await?;
         let api_key = created["api_key"]
             .as_str()
@@ -52,17 +53,24 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
         let join_code = issue_join_code(&root, &root_client, api_key).await?;
 
         processes.push(second.start_join(&join_code)?);
-        processes.push(third.start_join(&join_code)?);
         let second_client = wait_for_client(&second.identity_path).await?;
-        let third_client = wait_for_client(&third.identity_path).await?;
         wait_for_status(second.address, &second_client, "configured").await?;
+        wait_for_live_provider(&second).await?;
+        processes.push(third.start_join(&join_code)?);
+        let third_client = wait_for_client(&third.identity_path).await?;
         wait_for_status(third.address, &third_client, "configured").await?;
+        wait_for_live_provider(&third).await?;
         wait_for_three_voters([&root, &second, &third], &root.identity_path).await?;
 
         processes[0].kill()?;
         processes[0].wait()?;
         wait_for_user_creation(second.address, &second_client, api_key).await?;
-        wait_for_user_visibility(third.address, &third_client, api_key).await
+        wait_for_user_visibility(third.address, &third_client, api_key).await?;
+        let volume_id =
+            create_volume(second.address, &second_client, api_key, &administrator_id).await?;
+        let content = b"survivor gateway exact native bytes";
+        upload_file(second.address, &second_client, api_key, &volume_id, content).await?;
+        wait_for_file_surfaces(third.address, &third_client, api_key, &volume_id, content).await
     }
     .await;
     stop_processes(&mut processes);
@@ -167,11 +175,16 @@ async fn wait_for_user_creation(
 ) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + WAIT_LIMIT;
     loop {
-        if create_user(address, client, api_key).await.is_ok() {
-            return Ok(());
-        }
+        let error = match create_user(address, client, api_key).await {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
         if Instant::now() >= deadline {
-            return Err("surviving daemon never accepted a committed metadata write".into());
+            return Err(format!(
+                "surviving daemon never accepted a committed metadata write: {}",
+                error
+            )
+            .into());
         }
         sleep(RETRY_INTERVAL).await;
     }
@@ -189,6 +202,30 @@ async fn wait_for_user_visibility(
         }
         if Instant::now() >= deadline {
             return Err("committed survivor write never became visible on the other node".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_file_surfaces(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    content: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let error = match assert_file_surfaces(address, client, api_key, volume_id, content).await {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "native survivor bytes never became readable through the peer gateway: {}",
+                error
+            )
+            .into());
         }
         sleep(RETRY_INTERVAL).await;
     }

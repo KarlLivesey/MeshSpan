@@ -2,6 +2,8 @@
 
 //! Consensus-backed authentication authority for public gateway services.
 
+use std::sync::Arc;
+
 use meshspan_cluster::{MetadataAuthorityHandle, MetadataAuthorityRequestError};
 use meshspan_domain::{
     ApiKeyId, AssuranceLevel, AuthenticationOperationClass, AuthenticationService, OperationId,
@@ -32,6 +34,7 @@ pub struct ConsensusAuthenticationAuthority {
     reader: AuthoritativeRepository,
     authority: MetadataAuthorityHandle,
     runtime: tokio::runtime::Handle,
+    network: Option<Arc<crate::private_consensus_runtime::PrivateConsensusRuntime>>,
 }
 
 impl ConsensusAuthenticationAuthority {
@@ -46,6 +49,23 @@ impl ConsensusAuthenticationAuthority {
             reader,
             authority,
             runtime,
+            network: None,
+        }
+    }
+
+    /// Binds the authority with authenticated leader forwarding for non-leader gateways.
+    #[must_use]
+    pub(crate) const fn new_routable(
+        reader: AuthoritativeRepository,
+        authority: MetadataAuthorityHandle,
+        runtime: tokio::runtime::Handle,
+        network: Arc<crate::private_consensus_runtime::PrivateConsensusRuntime>,
+    ) -> Self {
+        Self {
+            reader,
+            authority,
+            runtime,
+            network: Some(network),
         }
     }
 
@@ -58,8 +78,26 @@ impl ConsensusAuthenticationAuthority {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
-        self.runtime
+        match self
+            .runtime
             .block_on(self.authority.commit_or_resolve(context, command.clone()))
+        {
+            Err(MetadataAuthorityRequestError::NotLeader {
+                leader_id: Some(leader_id),
+            }) => match self.network.as_ref() {
+                Some(network) => self.runtime.block_on(crate::metadata_forwarding::forward(
+                    network,
+                    &self.reader,
+                    leader_id,
+                    context,
+                    command,
+                )),
+                None => Err(MetadataAuthorityRequestError::NotLeader {
+                    leader_id: Some(leader_id),
+                }),
+            },
+            outcome => outcome,
+        }
     }
 }
 

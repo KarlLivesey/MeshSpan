@@ -97,6 +97,64 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             valid_identifier(&value.delegation_id)?;
             nonzero(value.generation)
         }
+        Message::PublishNamespaceHead(value) => {
+            valid_identifier(&value.volume_id)?;
+            valid_identifier(&value.namespace_commit_id)?;
+            valid_identifier(&value.root_object_revision_id)?;
+            valid_count(value.content_routes.len(), limits, true)?;
+            let mut publications = std::collections::BTreeSet::new();
+            for route in &value.content_routes {
+                valid_identifier(&route.publication_operation_id)?;
+                valid_identifier(&route.manifest_id)?;
+                valid_identifier(&route.target_id)?;
+                nonzero(route.target_generation)?;
+                if !publications.insert(route.publication_operation_id.as_slice()) {
+                    return Err(WireContractError::InvalidMessage);
+                }
+            }
+            Ok(())
+        }
+        Message::NamespaceHeadAccepted(value) => {
+            validate_operation_result(value.result.as_ref(), limits)
+        }
+        Message::FetchNamespaceHistoryPage(value) => {
+            valid_identifier(&value.volume_id)?;
+            valid_identifiers(&value.requested_heads, limits, false)?;
+            valid_identifiers(&value.known_commits, limits, true)?;
+            valid_optional_bytes(&value.cursor, limits.maximum_control_bytes())?;
+            valid_page_limit(value.limit, limits)
+        }
+        Message::NamespaceHistoryPageResult(value) => {
+            valid_digest(&value.export_token)?;
+            validate_payloads(&value.commits, limits, true)?;
+            valid_digests(&value.immutable_object_digests, limits, true)?;
+            valid_optional_bytes(&value.next_cursor, limits.maximum_control_bytes())
+        }
+        Message::FetchNamespaceHistoryObject(value) => {
+            valid_digest(&value.export_token)?;
+            valid_digest(&value.object_digest)?;
+            valid_identifier(&value.volume_id)
+        }
+        Message::NamespaceHistoryObjectResult(value) => {
+            validate_payload(value.object.as_ref(), limits)
+        }
+        Message::FetchNativeContentLayout(value) => {
+            valid_identifier(&value.publication_operation_id)?;
+            valid_identifier(&value.manifest_id)?;
+            valid_page_limit(value.limit, limits)
+        }
+        Message::NativeContentLayoutPage(value) => {
+            validate_payload(value.header.as_ref(), limits)?;
+            validate_payloads(&value.chunks, limits, true)?;
+            validate_payloads(&value.receipts, limits, true)?;
+            if value.chunks.len() != value.receipts.len()
+                || (value.chunks.is_empty() && value.next_index.is_some())
+            {
+                Err(WireContractError::InvalidMessage)
+            } else {
+                Ok(())
+            }
+        }
         Message::ClaimWork(value) => claim_work(value, limits),
         Message::WorkLease(value) => work_lease(value, limits),
         Message::RenewWork(value) => renew_work(value),

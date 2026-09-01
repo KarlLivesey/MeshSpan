@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use meshspan_contracts::{BoundedItems, ShardReceipt};
-use meshspan_domain::{OperationId, UnixMicros};
-use rusqlite::{Connection, TransactionBehavior, params};
+use meshspan_domain::{NodeId, OperationId, TargetId, UnixMicros};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
 use crate::{
@@ -43,6 +43,12 @@ pub struct PreparedContentChunk {
     pub ciphertext_digest: [u8; 32],
     /// Stable provider mutation identity derived for this chunk.
     pub provider_operation_id: OperationId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ContentShardRoute {
+    pub(crate) target_id: TargetId,
+    pub(crate) target_generation: u64,
 }
 
 /// One bounded page of chunks that still need a provider receipt.
@@ -283,8 +289,14 @@ impl DurableContentCatalog {
         receipt: ShardReceipt,
         recorded_at: UnixMicros,
     ) -> Result<(), ContentCatalogError> {
-        let manifest = load_prepared_manifest(&self.connection, request)?
-            .ok_or(ContentCatalogError::InvalidInput)?;
+        let manifest = match load_prepared_manifest(&self.connection, request)? {
+            Some(manifest) => manifest,
+            None => {
+                transfer::load_import_header(&self.connection, request.operation_id)?
+                    .ok_or(ContentCatalogError::InvalidInput)?
+                    .manifest
+            }
+        };
         let chunk = load_chunk(&self.connection, request.operation_id, chunk_index)?;
         if receipt.operation_id != chunk.provider_operation_id
             || receipt.shard.manifest_digest != manifest.root_digest
@@ -321,6 +333,117 @@ impl DurableContentCatalog {
         } else {
             Err(ContentCatalogError::Conflict)
         }
+    }
+
+    /// Records one authenticated peer's exact durable source receipt for an imported layout.
+    ///
+    /// The route is distinct from a receiver-local provider receipt: it permits verified remote
+    /// reads but is never reported as local durability or local inventory.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown/unsealed layout, wrong shard evidence or conflicting route replay.
+    pub fn record_remote_shard_route(
+        &mut self,
+        request: ContentPublicationRequest,
+        chunk_index: u64,
+        source_node_id: NodeId,
+        receipt: ShardReceipt,
+        recorded_at: UnixMicros,
+    ) -> Result<(), ContentCatalogError> {
+        validate_exact_request(&self.connection, request)?;
+        let manifest = load_prepared_manifest(&self.connection, request)?
+            .ok_or(ContentCatalogError::InvalidInput)?;
+        let chunk = load_chunk(&self.connection, request.operation_id, chunk_index)?;
+        if receipt.shard.manifest_digest != manifest.root_digest
+            || receipt.shard.stripe_index != chunk_index
+            || receipt.shard.shard_index != 0
+            || receipt.shard.generation != 1
+            || receipt.length != chunk.ciphertext_length
+            || receipt.digest != chunk.ciphertext_digest
+            || receipt.target_generation == 0
+        {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        let existing = self
+            .connection
+            .query_row(
+                "SELECT source_node_id, source_provider_operation_id, target_id,
+                        target_generation, recorded_at
+                 FROM content_remote_shard_routes
+                 WHERE operation_id = ?1 AND chunk_index = ?2",
+                params![
+                    request.operation_id.as_bytes().as_slice(),
+                    to_i64(chunk_index)?
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let expected = (
+            source_node_id.as_bytes().to_vec(),
+            receipt.operation_id.as_bytes().to_vec(),
+            receipt.target_id.as_bytes().to_vec(),
+            to_i64(receipt.target_generation)?,
+            recorded_at.get(),
+        );
+        if let Some(existing) = existing {
+            return if existing == expected {
+                Ok(())
+            } else {
+                Err(ContentCatalogError::Conflict)
+            };
+        }
+        self.connection.execute(
+            "INSERT INTO content_remote_shard_routes(
+                operation_id, chunk_index, source_node_id, source_provider_operation_id,
+                target_id, target_generation, recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                request.operation_id.as_bytes().as_slice(),
+                to_i64(chunk_index)?,
+                source_node_id.as_bytes().as_slice(),
+                receipt.operation_id.as_bytes().as_slice(),
+                receipt.target_id.as_bytes().as_slice(),
+                to_i64(receipt.target_generation)?,
+                recorded_at.get(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn shard_route(
+        &self,
+        operation_id: OperationId,
+        chunk_index: u64,
+    ) -> Result<ContentShardRoute, ContentCatalogError> {
+        if let Some(receipt) = load_receipt(&self.connection, operation_id, chunk_index)? {
+            return Ok(ContentShardRoute {
+                target_id: receipt.target_id,
+                target_generation: receipt.target_generation,
+            });
+        }
+        self.connection
+            .query_row(
+                "SELECT target_id, target_generation FROM content_remote_shard_routes
+                 WHERE operation_id = ?1 AND chunk_index = ?2",
+                params![operation_id.as_bytes().as_slice(), to_i64(chunk_index)?],
+                |row| {
+                    Ok(ContentShardRoute {
+                        target_id: repository::decode_target(&row.get::<_, Vec<u8>>(0)?)?,
+                        target_generation: repository::from_sql(row.get(1)?)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(ContentCatalogError::Incomplete)
     }
 
     /// Returns a bounded page of chunks without provider receipts.

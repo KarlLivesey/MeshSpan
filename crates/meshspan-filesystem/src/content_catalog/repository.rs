@@ -21,6 +21,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../schema/content/001_initial.sql"),
     include_str!("../../schema/content/002_layout_import.sql"),
     include_str!("../../schema/content/003_publication_volume.sql"),
+    include_str!("../../schema/content/004_remote_shard_routes.sql"),
 ];
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 
@@ -515,6 +516,6 @@ fn decode_operation(bytes: &[u8]) -> Result<OperationId, rusqlite::Error> {
     OperationId::from_bytes(copy_array(bytes)?).map_err(|_| rusqlite::Error::InvalidQuery)
 }
 
-fn decode_target(bytes: &[u8]) -> Result<TargetId, rusqlite::Error> {
+pub(super) fn decode_target(bytes: &[u8]) -> Result<TargetId, rusqlite::Error> {
     TargetId::from_bytes(copy_array(bytes)?).map_err(|_| rusqlite::Error::InvalidQuery)
 }

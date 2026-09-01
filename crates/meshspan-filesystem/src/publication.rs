@@ -999,6 +999,32 @@ impl VersionPublicationStore {
         namespace::complete_namespace_history_receive(&mut self.connection, session_id, now)
     }
 
+    /// Fast-forwards one local connector branch to an already imported immutable head.
+    ///
+    /// This operation never rewrites or merges history. The advertised head must select the exact
+    /// root supplied by the caller and descend from the current local head. Exact retries return
+    /// the existing head without advancing its sequence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown or mismatched history, divergent heads, stale concurrent updates and
+    /// persistence failure.
+    pub fn adopt_imported_namespace_head(
+        &mut self,
+        branch_id: BranchId,
+        volume_id: VolumeId,
+        namespace_commit_id: NamespaceCommitId,
+        root_object_revision_id: ObjectRevisionId,
+    ) -> Result<BranchNamespaceHead, PublicationError> {
+        namespace::adopt_imported_namespace_head(
+            &mut self.connection,
+            branch_id,
+            volume_id,
+            namespace_commit_id,
+            root_object_revision_id,
+        )
+    }
+
     /// Loads every complete staged mutation for authoritative federation admission.
     ///
     /// # Errors
@@ -1487,6 +1513,107 @@ impl VersionPublicationStore {
         volume_id: VolumeId,
     ) -> Result<Option<BranchNamespaceHead>, PublicationError> {
         namespace::load_head(&self.connection, branch_id, volume_id)
+    }
+
+    /// Loads and verifies the immutable root selected by one exact namespace commit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown commit, wrong volume, corrupt lineage or malformed stored identity.
+    pub fn namespace_commit_root(
+        &self,
+        volume_id: VolumeId,
+        namespace_commit_id: NamespaceCommitId,
+    ) -> Result<ObjectRevisionId, PublicationError> {
+        let commit = namespace::repository::load_commit(&self.connection, namespace_commit_id)?;
+        if commit.volume_id == volume_id {
+            Ok(commit.root_object_revision_id)
+        } else {
+            Err(PublicationError::InvalidInput)
+        }
+    }
+
+    /// Resolves the volume and root revision selected by one exact immutable namespace commit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown commit, corrupt lineage or malformed stored identity.
+    pub fn namespace_commit_coordinates(
+        &self,
+        namespace_commit_id: NamespaceCommitId,
+    ) -> Result<(VolumeId, ObjectRevisionId), PublicationError> {
+        let commit = namespace::repository::load_commit(&self.connection, namespace_commit_id)?;
+        Ok((commit.volume_id, commit.root_object_revision_id))
+    }
+
+    /// Resolves one immutable file version to its content-publication operation and manifest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or contradictory version/manifest state. An unknown version returns
+    /// `None` without exposing a partial record.
+    pub fn published_content_for_version(
+        &self,
+        version_id: FileVersionId,
+    ) -> Result<Option<crate::PublishedContentReference>, PublicationError> {
+        type Stored = (
+            Vec<u8>,
+            Vec<u8>,
+            i64,
+            Vec<u8>,
+            Vec<u8>,
+            i64,
+            Vec<u8>,
+            Vec<u8>,
+        );
+        let stored: Option<Stored> = self
+            .connection
+            .query_row(
+                "SELECT f.publication_operation_id, f.manifest_id, f.logical_length,
+                        f.content_digest, m.manifest_id, m.format_version,
+                        m.content_digest, m.root_digest
+                 FROM file_versions f
+                 JOIN content_manifests m ON m.manifest_id = f.manifest_id
+                 WHERE f.version_id = ?1 AND m.state = 1",
+                [version_id.as_bytes().as_slice()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some(stored) = stored else {
+            return Ok(None);
+        };
+        let publication_operation_id = decode_identifier(&stored.0, OperationId::from_bytes)?;
+        let manifest_id = decode_identifier(&stored.1, ContentManifestId::from_bytes)?;
+        let manifest_copy = decode_identifier(&stored.4, ContentManifestId::from_bytes)?;
+        let logical_length = from_i64(stored.2)?;
+        let format_version = u16::try_from(stored.5).map_err(|_| PublicationError::Corrupt)?;
+        let content_digest = copy_array(&stored.3)?;
+        let manifest_digest = copy_array(&stored.6)?;
+        if manifest_id != manifest_copy || content_digest != manifest_digest || format_version == 0
+        {
+            return Err(PublicationError::Corrupt);
+        }
+        Ok(Some(crate::PublishedContentReference {
+            publication_operation_id,
+            manifest: crate::ManifestPublication {
+                manifest_id,
+                format_version,
+                logical_length,
+                content_digest,
+                root_digest: copy_array(&stored.7)?,
+            },
+        }))
     }
 
     /// Resolves immutable attributes for one exact current logical path.

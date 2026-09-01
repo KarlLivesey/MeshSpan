@@ -2,15 +2,21 @@
 
 //! Durable receiver staging for hostile, incrementally fetched namespace history.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use meshspan_domain::{FederatedMutationAdmission, NamespaceCommitId, UnixMicros, VolumeId};
+use meshspan_domain::{
+    BranchId, FederatedMutationAdmission, FileVersionId, NamespaceCommitId, ObjectId,
+    ObjectRevisionId, UnixMicros, VolumeId,
+};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::history_export::NamespaceHistoryPage;
 use super::history_records::{NamespaceHistoryImmutableRecord, NamespaceHistoryRecordError};
+use crate::directory::DirectoryReachabilityReference;
+use crate::publication::decode_identifier;
 use crate::{
-    NamespaceHistoryImport, NamespaceHistoryLimits, PublicationDisposition, PublicationError,
+    BranchNamespaceHead, NamespaceHistoryImport, NamespaceHistoryLimits, PublicationDisposition,
+    PublicationError,
 };
 
 #[path = "history_import/complete.rs"]
@@ -123,6 +129,281 @@ impl NamespaceHistoryMutationDecision {
 pub struct NamespaceHistoryReceivePreparation {
     admission_at: UnixMicros,
     commits: Vec<super::history_records::NamespaceHistoryCommitRecord>,
+}
+
+pub(super) fn adopt_head(
+    connection: &mut Connection,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    namespace_commit_id: NamespaceCommitId,
+    root_object_revision_id: ObjectRevisionId,
+) -> Result<BranchNamespaceHead, PublicationError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let selected = super::repository::load_commit(&transaction, namespace_commit_id)?;
+    if selected.volume_id != volume_id
+        || selected.root_object_revision_id != root_object_revision_id
+    {
+        return Err(PublicationError::InvalidInput);
+    }
+    let existing = super::repository::load_head(&transaction, branch_id, volume_id)?;
+    let sequence = match existing {
+        Some(head) if head.namespace_commit_id == namespace_commit_id => {
+            project_file_heads(&transaction, branch_id, volume_id, root_object_revision_id)?;
+            transaction.commit()?;
+            return Ok(head);
+        }
+        Some(head) => {
+            if !is_ancestor(&transaction, head.namespace_commit_id, namespace_commit_id)? {
+                return Err(PublicationError::StaleHead);
+            }
+            let next = head
+                .sequence
+                .checked_add(1)
+                .ok_or(PublicationError::InvalidInput)?;
+            let changed = transaction.execute(
+                "UPDATE branch_namespace_heads SET namespace_commit_id = ?1, head_sequence = ?2
+                 WHERE branch_id = ?3 AND volume_id = ?4
+                   AND namespace_commit_id = ?5 AND head_sequence = ?6",
+                params![
+                    namespace_commit_id.as_bytes().as_slice(),
+                    i64::try_from(next).map_err(|_| PublicationError::InvalidInput)?,
+                    branch_id.as_bytes().as_slice(),
+                    volume_id.as_bytes().as_slice(),
+                    head.namespace_commit_id.as_bytes().as_slice(),
+                    i64::try_from(head.sequence).map_err(|_| PublicationError::InvalidInput)?,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(PublicationError::StaleHead);
+            }
+            next
+        }
+        None => {
+            transaction.execute(
+                "INSERT INTO branch_namespace_heads(
+                    branch_id, volume_id, namespace_commit_id, head_sequence
+                 ) VALUES (?1, ?2, ?3, 1)",
+                params![
+                    branch_id.as_bytes().as_slice(),
+                    volume_id.as_bytes().as_slice(),
+                    namespace_commit_id.as_bytes().as_slice(),
+                ],
+            )?;
+            1
+        }
+    };
+    project_file_heads(&transaction, branch_id, volume_id, root_object_revision_id)?;
+    transaction.commit()?;
+    Ok(BranchNamespaceHead {
+        branch_id,
+        volume_id,
+        namespace_commit_id,
+        sequence,
+    })
+}
+
+fn project_file_heads(
+    transaction: &Transaction<'_>,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    root_object_revision_id: ObjectRevisionId,
+) -> Result<(), PublicationError> {
+    let mut pending_revisions = BTreeSet::from([root_object_revision_id]);
+    let mut pending_nodes = BTreeSet::new();
+    let mut visited_revisions = BTreeSet::new();
+    let mut visited_nodes = BTreeSet::new();
+    let mut files = BTreeMap::<ObjectId, FileVersionId>::new();
+
+    while !(pending_revisions.is_empty() && pending_nodes.is_empty()) {
+        if let Some(revision_id) = pending_revisions.pop_first() {
+            if !visited_revisions.insert(revision_id) {
+                continue;
+            }
+            let revision = super::repository::load_object_revision(transaction, revision_id)?;
+            if revision.volume_id != volume_id {
+                return Err(PublicationError::Corrupt);
+            }
+            match (
+                revision.kind,
+                revision.directory_root,
+                revision.file_version_id,
+            ) {
+                (1, Some(root), None) => {
+                    pending_nodes.insert(root);
+                }
+                (2, None, Some(version_id)) => {
+                    if files
+                        .insert(revision.object_id, version_id)
+                        .is_some_and(|existing| existing != version_id)
+                    {
+                        return Err(PublicationError::Corrupt);
+                    }
+                }
+                _ => return Err(PublicationError::Corrupt),
+            }
+        } else if let Some(node_digest) = pending_nodes.pop_first() {
+            if !visited_nodes.insert(node_digest) {
+                continue;
+            }
+            let record = crate::publication::load_directory_node(transaction, node_digest)?
+                .ok_or(PublicationError::Corrupt)?;
+            for reference in record.reachability_references() {
+                match reference {
+                    DirectoryReachabilityReference::Node(child) => {
+                        pending_nodes.insert(child);
+                    }
+                    DirectoryReachabilityReference::ObjectRevision(revision) => {
+                        pending_revisions.insert(revision);
+                    }
+                }
+            }
+        }
+    }
+
+    for (object_id, version_id) in &files {
+        require_file_version(transaction, volume_id, *object_id, *version_id)?;
+        advance_projected_file_head(
+            transaction,
+            branch_id,
+            volume_id,
+            *object_id,
+            Some(*version_id),
+        )?;
+    }
+    let mut statement = transaction.prepare(
+        "SELECT object_id FROM branch_files
+         WHERE branch_id = ?1 AND volume_id = ?2 AND current_version_id IS NOT NULL",
+    )?;
+    let rows = statement.query_map(
+        params![
+            branch_id.as_bytes().as_slice(),
+            volume_id.as_bytes().as_slice()
+        ],
+        |row| row.get::<_, Vec<u8>>(0),
+    )?;
+    let mut removed = Vec::new();
+    for row in rows {
+        let object_id = decode_identifier(&row?, ObjectId::from_bytes)?;
+        if !files.contains_key(&object_id) {
+            removed.push(object_id);
+        }
+    }
+    drop(statement);
+    for object_id in removed {
+        advance_projected_file_head(transaction, branch_id, volume_id, object_id, None)?;
+    }
+    Ok(())
+}
+
+fn require_file_version(
+    connection: &Connection,
+    volume_id: VolumeId,
+    object_id: ObjectId,
+    version_id: FileVersionId,
+) -> Result<(), PublicationError> {
+    let exists = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM file_versions
+            WHERE version_id = ?1 AND volume_id = ?2 AND object_id = ?3
+         )",
+        params![
+            version_id.as_bytes().as_slice(),
+            volume_id.as_bytes().as_slice(),
+            object_id.as_bytes().as_slice()
+        ],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if exists == 1 {
+        Ok(())
+    } else {
+        Err(PublicationError::Corrupt)
+    }
+}
+
+fn advance_projected_file_head(
+    transaction: &Transaction<'_>,
+    branch_id: BranchId,
+    volume_id: VolumeId,
+    object_id: ObjectId,
+    version_id: Option<FileVersionId>,
+) -> Result<(), PublicationError> {
+    let stored = transaction
+        .query_row(
+            "SELECT volume_id, current_version_id, head_sequence
+             FROM branch_files WHERE branch_id = ?1 AND object_id = ?2",
+            params![
+                branch_id.as_bytes().as_slice(),
+                object_id.as_bytes().as_slice()
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let version_bytes = version_id.map(FileVersionId::as_bytes);
+    match stored {
+        None => {
+            transaction.execute(
+                "INSERT INTO branch_files(
+                    branch_id, object_id, volume_id, current_version_id, head_sequence
+                 ) VALUES (?1, ?2, ?3, ?4, 1)",
+                params![
+                    branch_id.as_bytes().as_slice(),
+                    object_id.as_bytes().as_slice(),
+                    volume_id.as_bytes().as_slice(),
+                    version_bytes.as_ref().map(<[u8; 16]>::as_slice),
+                ],
+            )?;
+        }
+        Some((stored_volume, current, sequence)) => {
+            if stored_volume.as_slice() != volume_id.as_bytes() {
+                return Err(PublicationError::Corrupt);
+            }
+            if current.as_deref() == version_bytes.as_ref().map(<[u8; 16]>::as_slice) {
+                return Ok(());
+            }
+            let next = sequence
+                .checked_add(1)
+                .ok_or(PublicationError::InvalidInput)?;
+            transaction.execute(
+                "UPDATE branch_files SET current_version_id = ?1, head_sequence = ?2
+                 WHERE branch_id = ?3 AND object_id = ?4",
+                params![
+                    version_bytes.as_ref().map(<[u8; 16]>::as_slice),
+                    next,
+                    branch_id.as_bytes().as_slice(),
+                    object_id.as_bytes().as_slice(),
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn is_ancestor(
+    connection: &Connection,
+    ancestor: NamespaceCommitId,
+    descendant: NamespaceCommitId,
+) -> Result<bool, PublicationError> {
+    Ok(connection.query_row(
+        "WITH RECURSIVE lineage(namespace_commit_id) AS (
+            SELECT ?1
+            UNION
+            SELECT parent.parent_commit_id
+            FROM namespace_commit_parents AS parent
+            JOIN lineage ON parent.namespace_commit_id = lineage.namespace_commit_id
+         )
+         SELECT EXISTS(SELECT 1 FROM lineage WHERE namespace_commit_id = ?2)",
+        params![
+            descendant.as_bytes().as_slice(),
+            ancestor.as_bytes().as_slice(),
+        ],
+        |row| row.get::<_, i64>(0),
+    )? != 0)
 }
 
 impl NamespaceHistoryReceivePreparation {
