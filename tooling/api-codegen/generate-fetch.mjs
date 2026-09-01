@@ -9,53 +9,39 @@ import {
   regexLiteral,
   writeAtomically,
 } from "./fetch-contract.mjs";
-import {
-  renderUploadClientInterface,
-  renderUploadClientMethods,
-  renderUploadRequestTypes,
-} from "./render-upload-client.mjs";
-import {
-  renderNamespaceMutationClientInterface,
-  renderNamespaceMutationClientMethods,
-} from "./render-namespace-mutation-client.mjs";
+import { renderUploadClientMethods } from "./render-upload-client.mjs";
+import { renderNamespaceMutationClientMethods } from "./render-namespace-mutation-client.mjs";
 import { renderFetchRuntime } from "./render-fetch-runtime.mjs";
 import {
-  renderIdentityAdministrationClientInterface,
   renderIdentityAdministrationClientMethods,
   renderIdentityAdministrationRuntime,
 } from "./render-identity-administration-client.mjs";
 import {
-  renderAuthenticationClientInterface,
   renderAuthenticationClientMethods,
   renderAuthenticationClientRuntime,
 } from "./render-authentication-client.mjs";
 import {
-  renderVolumeClientInterface,
   renderVolumeClientMethods,
   renderVolumeClientRuntime,
 } from "./render-volume-client.mjs";
 import {
-  renderDirectoryClientInterface,
   renderDirectoryClientMethods,
   renderDirectoryClientRuntime,
-  renderDirectoryRequestTypes,
 } from "./render-directory-client.mjs";
 import {
-  renderPermissionAdministrationClientInterface,
   renderPermissionAdministrationClientMethods,
-  renderPermissionAdministrationRequestTypes,
   renderPermissionAdministrationRuntime,
 } from "./render-permission-administration-client.mjs";
 import {
-  renderOperationStatusClientInterface,
   renderOperationStatusClientMethods,
-  renderOperationStatusRequestTypes,
   renderOperationStatusRuntime,
 } from "./render-operation-status-client.mjs";
+import { renderSetupClientMethods } from "./render-setup-client.mjs";
 import {
-  renderSetupClientInterface,
-  renderSetupClientMethods,
-} from "./render-setup-client.mjs";
+  renderStorageFolderClientMethods,
+  renderStorageFolderRuntime,
+} from "./render-storage-folder-client.mjs";
+import { renderClientContract } from "./render-client-contract.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -122,6 +108,7 @@ import type {
   ListOperationsResponse,
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
+  ListStorageFoldersResponse,
   ListUploadRangesResponse,
   ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
@@ -136,6 +123,8 @@ import type {
   RenameObjectResponse,
   RemoveGroupMemberRequest,
   RemoveGroupMemberResponse,
+  RegisterStorageFolderRequest,
+  RegisterStorageFolderResponse,
   SetupStatusResponse,
   StepUpCurrentSessionRequestWritable,
   UploadStatusResponse,
@@ -208,6 +197,8 @@ import {
   zListGroupsResponse,
   zListOperationsQuery,
   zListOperationsResponse,
+  zListStorageFoldersQuery,
+  zListStorageFoldersResponse2,
   zListGroupMembersPath,
   zListGroupMembersQuery,
   zListGroupMembersResponse,
@@ -240,6 +231,8 @@ import {
   zRemoveGroupMemberBody,
   zRemoveGroupMemberPath,
   zRemoveGroupMemberResponse2,
+  zRegisterStorageFolderBody,
+  zRegisterStorageFolderResponse2,
   zStepUpCurrentSessionBody,
   zStepUpCurrentSessionResponse,
   zWriteUploadRangeHeaders,
@@ -266,86 +259,7 @@ const CSRF_TOKEN_PATTERN = ${regexLiteral(routes.createSession.csrfPattern)};
 const API_KEY_PATTERN = /^meshspan-key-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$/u;
 const FILE_VERSION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
-export type MeshSpanFetchClientOptions = Readonly<{
-  baseUrl: string;
-  fetch?: typeof globalThis.fetch;
-  apiKey?: string;
-}>;
-
-${renderDirectoryRequestTypes()}
-
-export type GetObjectRequest = Readonly<{
-  volumeId: string;
-  path: string;
-}>;
-
-export type ReadFileRequest = Readonly<{
-  volumeId: string;
-  path: string;
-  offset?: number;
-  length?: number;
-}>;
-
-export type ReadFileResult = Readonly<{
-  bytes: Uint8Array;
-  fileVersionId: string;
-  offset: number;
-}>;
-
-export type ListPrincipalsRequest = Readonly<{
-  cursor?: string;
-  limit?: number;
-}>;
-
-export type ListGroupMembersRequest = Readonly<{
-  groupId: string;
-  cursor?: string;
-  limit?: number;
-}>;
-
-export type ListAuthenticationMethodsRequest = Readonly<{
-  cursor?: string;
-  limit?: number;
-}>;
-
-export type ListVolumesRequest = Readonly<{
-  cursor?: string;
-  limit?: number;
-}>;
-
-${renderPermissionAdministrationRequestTypes()}
-
-${renderOperationStatusRequestTypes()}
-
-${renderUploadRequestTypes()}
-
-export type CreateSessionResult = Readonly<{
-  csrfToken: string;
-  session: CreateSessionResponse;
-}>;
-
-export interface MeshSpanFetchClient {
-  ${renderAuthenticationClientInterface()}
-  ${renderIdentityAdministrationClientInterface()}
-  ${renderNamespaceMutationClientInterface()}
-  ${renderUploadClientInterface()}
-  ${renderVolumeClientInterface()}
-  ${renderPermissionAdministrationClientInterface()}
-  ${renderOperationStatusClientInterface()}
-  ${renderDirectoryClientInterface()}
-  ${renderSetupClientInterface()}
-  createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
-  getCurrentSession(): Promise<CurrentSessionResponse>;
-  getObject(request: GetObjectRequest): Promise<GetObjectResponse>;
-  getHealth(): Promise<HealthResponse>;
-  getOpenApi(): Promise<Record<string, unknown>>;
-  getSetupStatus(): Promise<SetupStatusResponse>;
-  readFile(request: ReadFileRequest): Promise<ReadFileResult>;
-  revokeCurrentSession(
-    request: RevokeCurrentSessionRequest,
-    csrfToken: string,
-  ): Promise<RevokeCurrentSessionResponse>;
-}
+${renderClientContract()}
 
 export class MeshSpanApiError extends Error {
   public readonly apiError: ApiError | undefined;
@@ -390,6 +304,7 @@ export function createMeshSpanFetchClient(
     ${renderVolumeClientMethods(routes)}
     ${renderPermissionAdministrationClientMethods(routes)}
     ${renderOperationStatusClientMethods(routes)}
+    ${renderStorageFolderClientMethods(routes)}
     ${renderDirectoryClientMethods(routes)}
     ${renderSetupClientMethods(routes)}
     async createSession(request): Promise<CreateSessionResult> {
@@ -519,6 +434,8 @@ ${renderVolumeClientRuntime(routes)}
 ${renderPermissionAdministrationRuntime()}
 
 ${renderOperationStatusRuntime()}
+
+${renderStorageFolderRuntime(routes)}
 
 `;
 

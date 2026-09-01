@@ -183,6 +183,10 @@ mod step_up_session_api;
 mod step_up_session_api_tests;
 #[cfg(test)]
 mod step_up_session_tests;
+mod storage_folder_administration;
+mod storage_folder_administration_api;
+#[cfg(test)]
+mod storage_folder_administration_api_tests;
 mod storage_permit_loading;
 #[cfg(test)]
 mod storage_permit_loading_tests;
@@ -432,6 +436,14 @@ pub use step_up_session::{
 pub use step_up_session_api::{
     StepUpCurrentSessionApiError, StepUpCurrentSessionController,
     step_up_current_session_api_router,
+};
+pub use storage_folder_administration::{
+    StorageFolderAdministrationBackend, StorageFolderAdministrationBackendError,
+    StorageFolderAdministrationController, StorageFolderAdministrationError,
+    StorageFolderAdministrationService,
+};
+pub use storage_folder_administration_api::{
+    StorageFolderAdministrationApiError, storage_folder_administration_api_router,
 };
 pub use storage_permit_loading::{
     StoragePermitAuthority, StoragePermitLoadingError, StoragePermitLoadingService,

@@ -2358,6 +2358,76 @@ export const zListPrincipalsResponse = z
   .strict();
 
 /**
+ * ListStorageFoldersResponse
+ *
+ * Current manager-only page of local storage folders.
+ */
+export const zListStorageFoldersResponse = z
+  .strictObject({
+    folders: z
+      .array(
+        z
+          .strictObject({
+            generation: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^[1-9][0-9]{0,19}$/),
+            node_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            path: z
+              .string()
+              .min(1)
+              .max(16384)
+              .regex(/^\/[^\x00-\x1f\x7f]*$/)
+              .nullable(),
+            state: z.union([
+              z.literal("configuring"),
+              z.literal("active"),
+              z.literal("unavailable"),
+            ]),
+            target_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            usage_limit: z.union([
+              z
+                .strictObject({
+                  kind: z.literal("percent"),
+                  percent: z.int().gte(1).lte(100),
+                })
+                .strict(),
+              z
+                .strictObject({
+                  bytes: z
+                    .string()
+                    .min(1)
+                    .max(20)
+                    .regex(/^[1-9][0-9]{0,19}$/),
+                  kind: z.literal("bytes"),
+                })
+                .strict(),
+            ]),
+          })
+          .strict(),
+      )
+      .max(256),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/storage-folders/)
+      .nullable(),
+  })
+  .strict();
+
+/**
  * ListUploadRangesResponse
  *
  * Bounded exact coverage page pinned to one upload checkpoint.
@@ -2631,6 +2701,111 @@ export const zOperationStatusResponse = z
       .max(512)
       .regex(/^\/api\/latest\/operations\//),
     updated_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+  })
+  .strict();
+
+/**
+ * RegisterStorageFolderRequest
+ *
+ * Exact-retry manager request to register one existing local folder.
+ */
+export const zRegisterStorageFolderRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    path: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/[^\x00-\x1f\x7f]*$/),
+    usage_limit: z.union([
+      z
+        .strictObject({
+          kind: z.literal("percent"),
+          percent: z.int().gte(1).lte(100),
+        })
+        .strict(),
+      z
+        .strictObject({
+          bytes: z
+            .string()
+            .min(1)
+            .max(20)
+            .regex(/^[1-9][0-9]{0,19}$/),
+          kind: z.literal("bytes"),
+        })
+        .strict(),
+    ]),
+  })
+  .strict();
+
+/**
+ * RegisterStorageFolderResponse
+ *
+ * Durable registration result after the target is open locally.
+ */
+export const zRegisterStorageFolderResponse = z
+  .strictObject({
+    folder: z
+      .strictObject({
+        generation: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^[1-9][0-9]{0,19}$/),
+        node_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        path: z
+          .string()
+          .min(1)
+          .max(16384)
+          .regex(/^\/[^\x00-\x1f\x7f]*$/)
+          .nullable(),
+        state: z.union([
+          z.literal("configuring"),
+          z.literal("active"),
+          z.literal("unavailable"),
+        ]),
+        target_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        usage_limit: z.union([
+          z
+            .strictObject({
+              kind: z.literal("percent"),
+              percent: z.int().gte(1).lte(100),
+            })
+            .strict(),
+          z
+            .strictObject({
+              bytes: z
+                .string()
+                .min(1)
+                .max(20)
+                .regex(/^[1-9][0-9]{0,19}$/),
+              kind: z.literal("bytes"),
+            })
+            .strict(),
+        ]),
+      })
+      .strict(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
   })
   .strict();
 
@@ -3649,6 +3824,42 @@ export const zConfirmRecoveryBundleSavedBody = zConfirmRecoveryBundleRequest;
  */
 export const zConfirmRecoveryBundleSavedResponse =
   zConfirmRecoveryBundleResponse;
+
+export const zListStorageFoldersQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One local storage-folder page
+ */
+export const zListStorageFoldersResponse2 = zListStorageFoldersResponse;
+
+/**
+ * Local storage-folder registration
+ */
+export const zRegisterStorageFolderBody = zRegisterStorageFolderRequest;
+
+export const zRegisterStorageFolderHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Storage folder registered and open
+ */
+export const zRegisterStorageFolderResponse2 = zRegisterStorageFolderResponse;
 
 export const zListUsersQuery = z
   .object({

@@ -27,6 +27,7 @@ export function OperationAdministrationPanel(
       <nav class="administration-nav" aria-label="Administration sections">
         <a href="/admin/identities">People and groups</a>
         <a href="/admin/volumes">Volumes</a>
+        <a href="/admin/storage-folders">Storage folders</a>
         <a aria-current="page" href="/admin/operations">
           Operations
         </a>

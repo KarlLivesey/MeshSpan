@@ -71,6 +71,7 @@ export function VolumeAdministrationPanel(
         <a aria-current="page" href="/admin/volumes">
           Volumes
         </a>
+        <a href="/admin/storage-folders">Storage folders</a>
         <a href="/admin/operations">Operations</a>
       </nav>
       <CreateVolumeForm

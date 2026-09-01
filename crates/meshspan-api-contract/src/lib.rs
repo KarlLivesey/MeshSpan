@@ -35,6 +35,8 @@ mod recovery_bundle_verification_validation;
 mod recovery_code_management;
 mod recovery_code_validation;
 mod schema;
+mod storage_folder_administration;
+mod storage_folder_administration_validation;
 mod totp_registration;
 mod totp_validation;
 mod validation;
@@ -209,6 +211,16 @@ pub use recovery_code_validation::{
     MAX_CREATE_RECOVERY_CODES_BYTES, decode_create_recovery_codes_request,
     encode_create_recovery_codes_response, validate_create_recovery_codes_request_value,
     validate_create_recovery_codes_response_value,
+};
+pub use storage_folder_administration::{
+    ListStorageFoldersQuery, ListStorageFoldersResponse, RegisterStorageFolderRequest,
+    RegisterStorageFolderResponse, StorageFolderCursor, StorageFolderPath, StorageFolderState,
+    StorageFolderSummary, StorageFolderUsageLimit,
+};
+pub use storage_folder_administration_validation::{
+    MAX_REGISTER_STORAGE_FOLDER_BYTES, decode_register_storage_folder_request,
+    encode_list_storage_folders_response, encode_register_storage_folder_response,
+    validate_list_storage_folders_query,
 };
 pub use totp_registration::{
     CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
