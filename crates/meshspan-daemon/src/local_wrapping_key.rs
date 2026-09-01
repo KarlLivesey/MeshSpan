@@ -4,7 +4,9 @@
 
 use std::path::Path;
 
-use meshspan_secret_envelope::{WrappingPrivateKey, WrappingPublicKey};
+use meshspan_secret_envelope::{
+    EncryptedSecret, RecipientKeyEnvelope, SecretPlaintext, WrappingPrivateKey, WrappingPublicKey,
+};
 use thiserror::Error;
 
 use crate::OperatingSystemRandom;
@@ -50,6 +52,29 @@ impl LocalWrappingKey {
         self.key.public_key()
     }
 
+    /// Opens one exact recipient envelope and decrypts its bound secret generation.
+    ///
+    /// The private wrapping key and intermediate secret data key remain inside this boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a different recipient, changed context or failed authenticated decryption.
+    pub fn decrypt_secret(
+        &self,
+        secret: &EncryptedSecret,
+        recipient: &RecipientKeyEnvelope,
+    ) -> Result<SecretPlaintext, LocalWrappingKeyError> {
+        if recipient.context() != secret.context() {
+            return Err(LocalWrappingKeyError::Secret);
+        }
+        let key = recipient
+            .open(&self.key)
+            .map_err(|_| LocalWrappingKeyError::Secret)?;
+        secret
+            .decrypt(&key)
+            .map_err(|_| LocalWrappingKeyError::Secret)
+    }
+
     fn create(path: &Path) -> Result<Self, LocalWrappingKeyError> {
         let key = WrappingPrivateKey::generate(&mut OperatingSystemRandom)?;
         let bytes = key.expose_for_protected_persistence();
@@ -79,6 +104,9 @@ pub enum LocalWrappingKeyError {
     /// Protected bytes do not contain one valid X25519 private key.
     #[error("node wrapping key is invalid")]
     Invalid,
+    /// Replicated encrypted secret evidence could not be authenticated for this node.
+    #[error("encrypted secret generation is invalid for this node")]
+    Secret,
 }
 
 impl From<ProtectedFileError> for LocalWrappingKeyError {

@@ -19,7 +19,8 @@ use crate::{
     RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
     StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
     VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
-    VolumeInventoryAuthority, VolumeInventoryAuthorityError,
+    VolumeInventoryAuthority, VolumeInventoryAuthorityError, VolumeKeyAuthority,
+    VolumeKeyAuthorityError,
 };
 
 impl FilesystemAccessAuthority for ConsensusAuthenticationAuthority {
@@ -109,6 +110,22 @@ impl VolumeAdministrationAuthority for ConsensusAuthenticationAuthority {
             return Err(VolumeAdministrationAuthorityError::Conflict);
         }
         volume_commit(self.reader(), receipt)
+    }
+}
+
+impl VolumeKeyAuthority for ConsensusAuthenticationAuthority {
+    fn secret_generation(
+        &self,
+        context: meshspan_secret_envelope::SecretContext,
+    ) -> Result<Option<meshspan_metadata::SecretGenerationRecord>, VolumeKeyAuthorityError> {
+        self.reader()
+            .secret_generation(context)
+            .map_err(|error| match error {
+                RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+                    VolumeKeyAuthorityError::Unavailable
+                }
+                _ => VolumeKeyAuthorityError::Failed,
+            })
     }
 }
 

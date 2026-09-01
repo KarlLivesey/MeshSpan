@@ -23,18 +23,17 @@ use meshspan_metadata::{
     RevokeAuthenticationSession, SessionAccessDecision, SessionAccessRequest,
     SessionAuthenticationFactor, SessionClientLabel, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
-use meshspan_secret_envelope::{
-    SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
-};
+use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
 use sha2::{Digest, Sha256};
 
 use crate::{
     ApiKeyIssuanceAuthority, AuthenticationMethodListingAuthority,
     AuthenticationMethodRevocationAuthority, BrowserSessionAuthority,
     ConsensusAuthenticationAuthority, IdentityAdministrationAuthority,
-    IdentityAdministrationAuthorityError, NodeWrappingKeyRegistrationAuthority,
+    IdentityAdministrationAuthorityError, LocalWrappingKey, NodeWrappingKeyRegistrationAuthority,
     RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
     SessionAuthority, SessionRevocationAuthority, VolumeAdministrationAuthority,
+    VolumeKeyLoadingService,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -132,7 +131,7 @@ struct IdentityLifecycle {
 }
 
 struct RunningAuthority {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     node_id: NodeId,
     administrator_id: PrincipalId,
     api_key: ApiKeyBundle,
@@ -190,7 +189,7 @@ impl RunningAuthority {
             )
             .await?;
         Ok(Self {
-            _directory: directory,
+            directory,
             node_id,
             administrator_id,
             api_key,
@@ -391,6 +390,7 @@ impl RunningAuthority {
         let authority_handle = self.handle.clone();
         let administrator_id = self.administrator_id;
         let node_id = self.node_id;
+        let wrapping_key_path = self.directory.path().join("volume-wrapping.key");
         tokio::task::block_in_place(move || {
             let mut authority = ConsensusAuthenticationAuthority::new(
                 reader,
@@ -407,7 +407,8 @@ impl RunningAuthority {
                 command_context(administrator_id, 45, 46, 39, None)?,
                 &recovery,
             )?;
-            let wrapping_key = WrappingPrivateKey::from_bytes([95; 32])?.public_key();
+            let local_wrapping_key = LocalWrappingKey::open_or_create(&wrapping_key_path)?;
+            let wrapping_key = local_wrapping_key.public_key();
             let registration =
                 AuthoritativeCommand::RegisterNodeWrappingKey(RegisterNodeWrappingKey {
                     node_id,
@@ -441,12 +442,16 @@ impl RunningAuthority {
                         .collect(),
                 }),
             });
-            authority
-                .commit_or_resolve_volume_creation(
-                    command_context(administrator_id, 50, 51, 41, None)?,
-                    &command,
-                )
-                .map_err(Into::into)
+            let commit = authority.commit_or_resolve_volume_creation(
+                command_context(administrator_id, 50, 51, 41, None)?,
+                &command,
+            )?;
+            let loaded =
+                VolumeKeyLoadingService::new(&authority, &local_wrapping_key).load(volume_id, 1)?;
+            if loaded.generation() != 1 {
+                return Err("loaded volume key generation changed".into());
+            }
+            Ok(commit)
         })
     }
 

@@ -33,13 +33,23 @@ impl VolumeKeyEncryptionKey {
     ///
     /// Rejects generation zero and all-zero key material.
     pub fn from_bytes(generation: u64, bytes: [u8; 32]) -> Result<Self, ContentKeyError> {
-        if generation == 0 || bytes == [0; 32] {
+        Self::from_protected_bytes(generation, Zeroizing::new(bytes))
+    }
+
+    /// Takes ownership of already-protected volume key material without creating a second
+    /// long-lived plaintext owner.
+    ///
+    /// # Errors
+    ///
+    /// Rejects generation zero and all-zero key material.
+    pub fn from_protected_bytes(
+        generation: u64,
+        bytes: Zeroizing<[u8; 32]>,
+    ) -> Result<Self, ContentKeyError> {
+        if generation == 0 || *bytes == [0; 32] {
             Err(ContentKeyError::InvalidInput)
         } else {
-            Ok(Self {
-                generation,
-                bytes: Zeroizing::new(bytes),
-            })
+            Ok(Self { generation, bytes })
         }
     }
 

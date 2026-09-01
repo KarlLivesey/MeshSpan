@@ -180,6 +180,9 @@ mod volume_inventory;
 mod volume_inventory_api_tests;
 #[cfg(test)]
 mod volume_inventory_tests;
+mod volume_key_loading;
+#[cfg(test)]
+mod volume_key_loading_tests;
 
 pub use api_key_issuance::ApiKeyIssuanceService;
 pub use api_key_issuance_api::{
@@ -379,6 +382,10 @@ pub use volume_inventory::{
     VolumeInventoryApiError, VolumeInventoryAuthority, VolumeInventoryAuthorityError,
     VolumeInventoryController, VolumeInventoryError, VolumeInventoryService,
     volume_inventory_api_router,
+};
+pub use volume_key_loading::{
+    VolumeKeyAuthority, VolumeKeyAuthorityError, VolumeKeyDecryptor, VolumeKeyDecryptorError,
+    VolumeKeyLoadingError, VolumeKeyLoadingService,
 };
 
 use meshspan_domain::{EntropyError, RandomSource};
