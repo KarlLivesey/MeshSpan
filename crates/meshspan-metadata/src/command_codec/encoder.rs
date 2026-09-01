@@ -31,7 +31,15 @@ impl Encoder {
         self.extend(&[value])
     }
 
+    pub(super) fn bool(&mut self, value: bool) -> Result<(), MetadataCommandCodecError> {
+        self.u8(u8::from(value))
+    }
+
     pub(super) fn u16(&mut self, value: u16) -> Result<(), MetadataCommandCodecError> {
+        self.extend(&value.to_be_bytes())
+    }
+
+    pub(super) fn i32(&mut self, value: i32) -> Result<(), MetadataCommandCodecError> {
         self.extend(&value.to_be_bytes())
     }
 
@@ -64,6 +72,19 @@ impl Encoder {
             Some(value) => {
                 self.u8(1)?;
                 self.i64(value)
+            }
+            None => self.u8(0),
+        }
+    }
+
+    pub(super) fn optional_fixed_16(
+        &mut self,
+        value: Option<[u8; 16]>,
+    ) -> Result<(), MetadataCommandCodecError> {
+        match value {
+            Some(value) => {
+                self.u8(1)?;
+                self.fixed(&value)
             }
             None => self.u8(0),
         }

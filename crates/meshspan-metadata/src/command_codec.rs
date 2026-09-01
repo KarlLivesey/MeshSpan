@@ -2,9 +2,11 @@
 
 //! Bounded canonical bytes for authoritative commands carried by consensus.
 
+mod authentication;
 mod bootstrap;
 mod decoder;
 mod encoder;
+mod identity;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, Revision, UnixMicros};
 use thiserror::Error;
@@ -44,7 +46,7 @@ pub fn encode_authoritative_command(
     encoder.identifier(context.audit_event_id.as_bytes())?;
     encoder.i64(context.occurred_at.get())?;
     encoder.optional_u64(context.expected_revision.map(Revision::get))?;
-    bootstrap::encode(&mut encoder, command)?;
+    encode_command(&mut encoder, command)?;
     Ok(encoder.finish())
 }
 
@@ -68,7 +70,7 @@ pub fn decode_authoritative_command(
     let audit_event_id = AuditEventId::from_bytes(decoder.identifier()?)?;
     let occurred_at = UnixMicros::new(decoder.i64()?);
     let expected_revision = decoder.optional_u64()?.map(Revision::new);
-    let command = bootstrap::decode(&mut decoder)?;
+    let command = decode_command(&mut decoder)?;
     decoder.finish()?;
     Ok(DecodedAuthoritativeCommand {
         context: CommandContext {
@@ -80,6 +82,43 @@ pub fn decode_authoritative_command(
         },
         command,
     })
+}
+
+fn encode_command(
+    encoder: &mut Encoder,
+    command: &AuthoritativeCommand,
+) -> Result<(), MetadataCommandCodecError> {
+    match command {
+        AuthoritativeCommand::BootstrapAppliance(value) => {
+            encoder.u16(1)?;
+            bootstrap::encode(encoder, value)
+        }
+        AuthoritativeCommand::CreateUser(value) => identity::encode_user(encoder, value),
+        AuthoritativeCommand::CreateGroup(value) => identity::encode_group(encoder, value),
+        AuthoritativeCommand::AddGroupMember(value) => identity::encode_add_member(encoder, value),
+        AuthoritativeCommand::RemoveGroupMember(value) => {
+            identity::encode_remove_member(encoder, value)
+        }
+        AuthoritativeCommand::CreateAuthenticationMethod(value) => {
+            authentication::encode_create(encoder, value)
+        }
+        _ => Err(MetadataCommandCodecError::Unsupported),
+    }
+}
+
+fn decode_command(
+    decoder: &mut Decoder<'_>,
+) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
+    match decoder.u16()? {
+        1 => bootstrap::decode(decoder).map(AuthoritativeCommand::BootstrapAppliance),
+        2 => identity::decode_user(decoder).map(AuthoritativeCommand::CreateUser),
+        3 => identity::decode_group(decoder).map(AuthoritativeCommand::CreateGroup),
+        4 => identity::decode_add_member(decoder).map(AuthoritativeCommand::AddGroupMember),
+        5 => identity::decode_remove_member(decoder).map(AuthoritativeCommand::RemoveGroupMember),
+        6 => authentication::decode_create(decoder)
+            .map(AuthoritativeCommand::CreateAuthenticationMethod),
+        _ => Err(MetadataCommandCodecError::Unsupported),
+    }
 }
 
 /// Closed failures for hostile replicated command bytes.
@@ -105,6 +144,12 @@ impl From<meshspan_domain::IdentifierError> for MetadataCommandCodecError {
 impl From<crate::RecordNameError> for MetadataCommandCodecError {
     fn from(_: crate::RecordNameError) -> Self {
         Self::Invalid
+    }
+}
+
+impl From<meshspan_contracts::BoundedItemsError> for MetadataCommandCodecError {
+    fn from(_: meshspan_contracts::BoundedItemsError) -> Self {
+        Self::CapacityExceeded
     }
 }
 

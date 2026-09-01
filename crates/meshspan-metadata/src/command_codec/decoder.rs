@@ -34,8 +34,20 @@ impl<'a> Decoder<'a> {
         Ok(self.fixed::<1>()?[0])
     }
 
+    pub(super) fn bool(&mut self) -> Result<bool, MetadataCommandCodecError> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(MetadataCommandCodecError::Invalid),
+        }
+    }
+
     pub(super) fn u16(&mut self) -> Result<u16, MetadataCommandCodecError> {
         Ok(u16::from_be_bytes(self.fixed()?))
+    }
+
+    pub(super) fn i32(&mut self) -> Result<i32, MetadataCommandCodecError> {
+        Ok(i32::from_be_bytes(self.fixed()?))
     }
 
     pub(super) fn u64(&mut self) -> Result<u64, MetadataCommandCodecError> {
@@ -58,6 +70,16 @@ impl<'a> Decoder<'a> {
         match self.u8()? {
             0 => Ok(None),
             1 => self.i64().map(Some),
+            _ => Err(MetadataCommandCodecError::Invalid),
+        }
+    }
+
+    pub(super) fn optional_fixed_16(
+        &mut self,
+    ) -> Result<Option<[u8; 16]>, MetadataCommandCodecError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => self.fixed().map(Some),
             _ => Err(MetadataCommandCodecError::Invalid),
         }
     }
