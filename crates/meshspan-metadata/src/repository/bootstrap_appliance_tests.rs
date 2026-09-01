@@ -93,6 +93,10 @@ fn first_mesh_and_login_method_commit_and_replay_as_one_operation()
         repository.latest_authentication_root_generation(MeshId::from_bytes([5; 16])?)?,
         Some(1)
     );
+    assert_eq!(
+        repository.local_mesh_id()?,
+        Some(MeshId::from_bytes([5; 16])?)
+    );
 
     let database = repository.into_database();
     assert_eq!(count(database.connection(), "meshes")?, 1);
@@ -106,6 +110,33 @@ fn first_mesh_and_login_method_commit_and_replay_as_one_operation()
         4
     );
     assert_eq!(count(database.connection(), "operations")?, 1);
+    Ok(())
+}
+
+#[test]
+fn local_mesh_identity_is_absent_before_bootstrap_and_rejects_multiple_meshes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let partition_id = PartitionId::from_bytes([23; 16])?;
+    let database = PartitionDatabase::open(
+        std::path::Path::new(":memory:"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    assert_eq!(repository.local_mesh_id()?, None);
+    let (context, command) = fixture(partition_id)?;
+    repository.apply_committed(LogPosition { index: 1, term: 1 }, context, &command)?;
+    repository.database.connection().execute(
+        "INSERT INTO meshes(
+            mesh_id, display_name, canonical_name, created_at, configuration_revision,
+            identity_revision, namespace_revision, revision
+         ) VALUES (?1, 'Second mesh', 'second mesh', 10, 1, 1, 1, 1)",
+        [MeshId::from_bytes([24; 16])?.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        repository.local_mesh_id(),
+        Err(RepositoryError::CorruptState)
+    ));
     Ok(())
 }
 

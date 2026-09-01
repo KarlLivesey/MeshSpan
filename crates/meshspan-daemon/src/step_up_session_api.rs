@@ -219,6 +219,7 @@ fn service_error_response(
             "session step-up conflicts with durable state",
         ),
         StepUpCurrentSessionError::Authority(SessionAuthorityError::Unavailable)
+        | StepUpCurrentSessionError::Totp(crate::TotpSessionError::Unavailable)
         | StepUpCurrentSessionError::Authentication(BrowserAuthenticationError::Authority(
             BrowserSessionAuthorityError::Unavailable,
         )) => (

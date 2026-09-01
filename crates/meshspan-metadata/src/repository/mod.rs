@@ -73,6 +73,7 @@ mod group_closure;
 mod identity;
 mod kernel;
 mod membership;
+mod mesh_identity;
 mod namespace;
 mod node_wrapping_key;
 #[cfg(test)]
@@ -265,6 +266,15 @@ impl AuthoritativeMetadataKernel for AuthoritativeRepository {
 }
 
 impl AuthoritativeRepository {
+    /// Returns the root partition's one intrinsic local mesh identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if a root partition contains multiple meshes or malformed identity bytes.
+    pub fn local_mesh_id(&self) -> Result<Option<meshspan_domain::MeshId>, RepositoryError> {
+        mesh_identity::local_mesh_id(&self.database)
+    }
+
     /// Wraps one already migrated and identity-verified partition database.
     #[must_use]
     pub const fn new(database: PartitionDatabase) -> Self {

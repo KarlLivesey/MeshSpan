@@ -77,6 +77,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
         b"untouched"
     );
     assert_session_created(fixture.address, &client, &session_body).await?;
+    assert_live_totp_verifier_rejects_unknown_factor(fixture.address, &client, api_key).await?;
     assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
     let volume_id = create_volume(fixture.address, &client, api_key, &administrator_id).await?;
@@ -102,6 +103,33 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     process.kill()?;
     process.wait()?;
     Ok(())
+}
+
+async fn assert_live_totp_verifier_rejects_unknown_factor(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000009",
+        "authentication": { "method": "api_key", "secret": api_key },
+        "additional_factor": { "method": "totp", "code": "000000" },
+        "client_label": null,
+        "remember": false
+    }))?;
+    let response = request(address, client, "POST", "/api/latest/sessions", Some(&body)).await?;
+    if response.starts_with("HTTP/1.1 401 Unauthorized\r\n")
+        && response_body(&response)?.contains("authentication was rejected")
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "live protected TOTP verifier returned {}: {}",
+            response.lines().next().unwrap_or("an invalid response"),
+            response_body(&response).unwrap_or("invalid response")
+        )
+        .into())
+    }
 }
 
 fn assert_wrapping_key_committed(fixture: &ProcessFixture) -> Result<(), Box<dyn Error>> {

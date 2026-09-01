@@ -38,15 +38,16 @@ use crate::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, ConsensusAuthenticationAuthority,
     ConsensusBootstrapAuthority, CreateMeshSetupController, CreateMeshSetupError,
     CreateMeshSetupService, CreateSessionService, CurrentSessionApiError, DaemonLocalState,
-    DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService, DisabledTotpFactors,
-    FileApiRoutes, FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
-    HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
-    IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
-    NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
+    DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService,
+    DisabledPasskeySessions, FileApiRoutes, FileReadApiError, FileReadService,
+    GatewaySessionIdentity, HeadlessDaemonConfig, HeadlessDaemonConfigError, HttpsServer,
+    HttpsServerError, IdentityAdministrationApiError, IdentityAdministrationService,
+    NativeApiAuthenticator, NativeApiKeyAuthenticator, NativeFilesystemRuntime,
+    NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
     NativeUploadServicePolicy, NodeWrappingKeyRegistrationService, ObjectStatApiError,
-    ObjectStatService, OperatingSystemRandom, PublicContractApiError, ReadinessSource,
-    RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
+    ObjectStatService, OperatingSystemRandom, ProtectedTotpFactorVerifier, PublicContractApiError,
+    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RevokeCurrentSessionApiError, RevokeCurrentSessionService, SessionApiError, SetupApiError,
     SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, StepUpCurrentSessionApiError,
     StepUpCurrentSessionService, StorageProviderOpeningError, StorageProviderOpeningService,
@@ -276,8 +277,13 @@ fn authentication_session_routes(
         ))
     };
     Ok(Router::new()
-        .merge(session_api_router(CreateSessionService::new(
+        .merge(session_api_router(CreateSessionService::with_factors(
             authentication_authority()?,
+            DisabledPasskeySessions,
+            ProtectedTotpFactorVerifier::new(
+                authentication_authority()?,
+                local_state.open_wrapping_key()?,
+            ),
         ))?)
         .merge(current_session_api_router(
             BrowserSessionAuthenticator::new(authentication_authority()?, gateway),
@@ -289,7 +295,10 @@ fn authentication_session_routes(
             StepUpCurrentSessionService::new(
                 authentication_authority()?,
                 gateway,
-                DisabledTotpFactors,
+                ProtectedTotpFactorVerifier::new(
+                    authentication_authority()?,
+                    local_state.open_wrapping_key()?,
+                ),
             ),
         )?)
         .merge(identity_administration_api_router(

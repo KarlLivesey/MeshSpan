@@ -85,6 +85,9 @@ pub enum TotpSessionError {
     /// No TOTP adapter was explicitly composed.
     #[error("TOTP session factors are not configured")]
     Unsupported,
+    /// Current encrypted mesh key authority cannot serve verification.
+    #[error("TOTP authentication is temporarily unavailable")]
+    Unavailable,
     /// The code did not match current authoritative evidence.
     #[error("TOTP authentication was rejected")]
     Rejected,
