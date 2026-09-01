@@ -23,8 +23,9 @@ use crate::{
     EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
     JoinMeshSetupResponse, ListAuthenticationMethodsResponse, ListDirectoryResponse,
     ListGroupMembershipsResponse, ListOperationsResponse, ListPrincipalsResponse,
-    ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
-    OperationStatusResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+    ListStorageFoldersResponse, ListUploadRangesResponse, ListVolumePermissionGrantsResponse,
+    ListVolumesResponse, OperationStatusResponse, RegisterStorageFolderRequest,
+    RegisterStorageFolderResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
     RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
     RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
     RevokePermissionGrantRequest, RevokePermissionGrantResponse, SetupStatusResponse,
@@ -156,6 +157,7 @@ fn components() -> Value {
         schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
         schema_response::<ListOperationsResponse>("ListOperationsResponse"),
         schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
+        schema_response::<ListStorageFoldersResponse>("ListStorageFoldersResponse"),
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
         schema_response::<ListVolumePermissionGrantsResponse>("ListVolumePermissionGrantsResponse"),
         schema_response::<ListVolumesResponse>("ListVolumesResponse"),
@@ -164,6 +166,8 @@ fn components() -> Value {
         schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
         schema_request::<RevokePermissionGrantRequest>("RevokePermissionGrantRequest"),
         schema_response::<RevokePermissionGrantResponse>("RevokePermissionGrantResponse"),
+        schema_request::<RegisterStorageFolderRequest>("RegisterStorageFolderRequest"),
+        schema_response::<RegisterStorageFolderResponse>("RegisterStorageFolderResponse"),
         schema_request::<RemoveGroupMemberRequest>("RemoveGroupMemberRequest"),
         schema_response::<RemoveGroupMemberResponse>("RemoveGroupMemberResponse"),
         schema_request::<RenameObjectRequest>("RenameObjectRequest"),
@@ -372,7 +376,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 8] {
+fn administration_paths() -> [(String, Value); 9] {
     [
         (
             "/admin/users".to_owned(),
@@ -393,6 +397,10 @@ fn administration_paths() -> [(String, Value); 8] {
         ("/admin/volumes".to_owned(), create_volume_path()),
         ("/admin/operations".to_owned(), list_operations_path()),
         (
+            "/admin/storage-folders".to_owned(),
+            storage_folder_administration_path(),
+        ),
+        (
             "/admin/volumes/{volume_id}/permission-grants".to_owned(),
             volume_permission_grants_path(),
         ),
@@ -401,6 +409,43 @@ fn administration_paths() -> [(String, Value); 8] {
             permission_grant_revocation_path(),
         ),
     ]
+}
+
+fn storage_folder_administration_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listStorageFolders",
+            "summary": "List one bounded page of this daemon's registered storage folders",
+            "x-meshspan-access": "system-manager",
+            "parameters": [cursor_parameter(), limit_parameter()],
+            "responses": {
+                "200": json_response("One local storage-folder page", "#/components/schemas/ListStorageFoldersResponse"),
+                "400": json_response("Invalid query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or local state failure", "#/components/schemas/ApiError"),
+                "503": json_response("Storage authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        },
+        "post": {
+            "operationId": "registerStorageFolder",
+            "summary": "Register one existing local folder without touching sibling content",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [optional_csrf_parameter()],
+            "requestBody": json_request("Local storage-folder registration", "#/components/schemas/RegisterStorageFolderRequest"),
+            "responses": {
+                "201": json_response("Storage folder registered and open", "#/components/schemas/RegisterStorageFolderResponse"),
+                "400": json_response("Invalid local folder request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Path, marker or operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or local state failure", "#/components/schemas/ApiError"),
+                "503": json_response("Storage authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn list_operations_path() -> Value {

@@ -102,6 +102,7 @@ function readAdministrationRoutes(operations) {
     listGroups: requireOperation(operations, "listGroups"),
     listGroupMembers: requireOperation(operations, "listGroupMembers"),
     listOperations: requireOperation(operations, "listOperations"),
+    listStorageFolders: requireOperation(operations, "listStorageFolders"),
     listVolumePermissionGrants: requireOperation(
       operations,
       "listVolumePermissionGrants",
@@ -112,6 +113,10 @@ function readAdministrationRoutes(operations) {
     revokePermissionGrant: requireOperation(
       operations,
       "revokePermissionGrant",
+    ),
+    registerStorageFolder: requireOperation(
+      operations,
+      "registerStorageFolder",
     ),
   };
 }

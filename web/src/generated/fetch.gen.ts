@@ -50,6 +50,7 @@ import type {
   ListOperationsResponse,
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
+  ListStorageFoldersResponse,
   ListUploadRangesResponse,
   ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
@@ -64,6 +65,8 @@ import type {
   RenameObjectResponse,
   RemoveGroupMemberRequest,
   RemoveGroupMemberResponse,
+  RegisterStorageFolderRequest,
+  RegisterStorageFolderResponse,
   SetupStatusResponse,
   StepUpCurrentSessionRequestWritable,
   UploadStatusResponse,
@@ -136,6 +139,8 @@ import {
   zListGroupsResponse,
   zListOperationsQuery,
   zListOperationsResponse,
+  zListStorageFoldersQuery,
+  zListStorageFoldersResponse2,
   zListGroupMembersPath,
   zListGroupMembersQuery,
   zListGroupMembersResponse,
@@ -168,6 +173,8 @@ import {
   zRemoveGroupMemberBody,
   zRemoveGroupMemberPath,
   zRemoveGroupMemberResponse2,
+  zRegisterStorageFolderBody,
+  zRegisterStorageFolderResponse2,
   zStepUpCurrentSessionBody,
   zStepUpCurrentSessionResponse,
   zWriteUploadRangeHeaders,
@@ -254,6 +261,11 @@ export type ListVolumePermissionGrantsRequest = Readonly<{
 }>;
 
 export type ListOperationsRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type ListStorageFoldersRequest = Readonly<{
   cursor?: string;
   limit?: number;
 }>;
@@ -415,6 +427,16 @@ export interface MeshSpanFetchClient {
     request?: ListOperationsRequest,
   ): Promise<ListOperationsResponse>;
   listNextOperations(nextPageUrl: string): Promise<ListOperationsResponse>;
+  listStorageFolders(
+    request?: ListStorageFoldersRequest,
+  ): Promise<ListStorageFoldersResponse>;
+  listNextStorageFolders(
+    nextPageUrl: string,
+  ): Promise<ListStorageFoldersResponse>;
+  registerStorageFolder(
+    request: RegisterStorageFolderRequest,
+    csrfToken?: string,
+  ): Promise<RegisterStorageFolderResponse>;
   listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   listNextDirectory(nextPageUrl: string): Promise<ListDirectoryResponse>;
 
@@ -1157,6 +1179,43 @@ export function createMeshSpanFetchClient(
         zListOperationsResponse,
       );
     },
+    async listStorageFolders(
+      request = {},
+    ): Promise<ListStorageFoldersResponse> {
+      const query = zListStorageFoldersQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/admin/storage-folders", query),
+        { method: "GET" },
+        zListStorageFoldersResponse2,
+      );
+    },
+    async listNextStorageFolders(
+      nextPageUrl,
+    ): Promise<ListStorageFoldersResponse> {
+      return requestJson(
+        context,
+        validateStorageFolderPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListStorageFoldersResponse2,
+      );
+    },
+    async registerStorageFolder(
+      request,
+      csrfToken,
+    ): Promise<RegisterStorageFolderResponse> {
+      const body = zRegisterStorageFolderBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/storage-folders",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zRegisterStorageFolderResponse2,
+      );
+    },
     async listDirectory(request): Promise<ListDirectoryResponse> {
       const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
       const query = zListDirectoryQuery.parse({
@@ -1804,4 +1863,35 @@ function isOperationPageRoute(apiRoot: URL, route: URL): boolean {
     route.hash === "" &&
     route.pathname === "/api/latest/admin/operations"
   );
+}
+
+function validateStorageFolderPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("storage-folder page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    route.pathname !== "/api/latest/admin/storage-folders"
+  ) {
+    throw new TypeError(
+      "storage-folder page URL is outside the administration API",
+    );
+  }
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("storage-folder page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListStorageFoldersQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+  return route.pathname + route.search;
 }

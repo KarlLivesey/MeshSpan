@@ -20,6 +20,7 @@ const AUTHORITY_COMMITTED: i64 = 3;
 const ACTIVE: i64 = 4;
 const MAXIMUM_CANONICAL_PATH_BYTES: usize = 16_384;
 const MAXIMUM_PROVIDER_CONFIGURATION_BYTES: usize = 512 * 1_024;
+const MAXIMUM_LOCAL_TARGETS: usize = 1_024;
 const TARGET_COLUMNS: &str = "target_id, registration_operation_id, mesh_id, node_id, host_id,
     actor_principal_id, audit_event_id, provider_instance_id, target_display_name,
     provider_display_name, canonical_path, generation, usage_limit_kind, usage_limit_value,
@@ -280,6 +281,32 @@ impl LocalDatabase {
             ensure_node(record, self.node_id())?;
         }
         Ok(record)
+    }
+
+    /// Lists every restart-relevant local target ordered by stable identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for excessive, malformed or differently node-bound local evidence.
+    pub fn local_targets(&self) -> Result<Vec<LocalTargetRecord>, LocalTargetError> {
+        let statement =
+            format!("SELECT {TARGET_COLUMNS} FROM local_targets ORDER BY target_id LIMIT ?1");
+        let mut query = self.connection().prepare(&statement)?;
+        let rows = query.query_map(
+            [i64::try_from(MAXIMUM_LOCAL_TARGETS + 1).map_err(|_| LocalTargetError::Invalid)?],
+            raw_target,
+        )?;
+        let mut records = Vec::new();
+        for row in rows {
+            let record = decode_target(&row?)?;
+            ensure_node(&record, self.node_id())?;
+            records.push(record);
+        }
+        if records.len() > MAXIMUM_LOCAL_TARGETS {
+            Err(LocalTargetError::Invalid)
+        } else {
+            Ok(records)
+        }
     }
 }
 

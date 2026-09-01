@@ -4727,6 +4727,148 @@
         "title": "ListPrincipalsResponse",
         "type": "object"
       },
+      "ListStorageFoldersResponse": {
+        "additionalProperties": false,
+        "description": "Current manager-only page of local storage folders.",
+        "properties": {
+          "folders": {
+            "description": "Stable target-identity-ordered folder summaries.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One local storage target safe to show only to a system manager.",
+              "properties": {
+                "generation": {
+                  "description": "Current immutable target generation as lossless positive decimal text.",
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "type": "string"
+                },
+                "node_id": {
+                  "description": "Permanent daemon identity that owns this target generation.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "Exact local UTF-8 path, or null when a headless path cannot be represented safely.",
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "pattern": "^/[^\\x00-\\x1f\\x7f]*$",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "description": "Current local serving state.",
+                  "oneOf": [
+                    {
+                      "const": "configuring",
+                      "description": "Restart-safe registration is still completing.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "active",
+                      "description": "The provider is open and serving authenticated storage work.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "unavailable",
+                      "description": "Registration is durable but the folder is currently unavailable.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "target_id": {
+                  "description": "Stable target identity independent of path spelling.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "usage_limit": {
+                  "description": "Configured physical capacity ceiling.",
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "description": "Percentage of measured backing-filesystem capacity.",
+                      "properties": {
+                        "kind": {
+                          "const": "percent",
+                          "type": "string"
+                        },
+                        "percent": {
+                          "description": "Inclusive percentage from 1 through 100.",
+                          "format": "uint8",
+                          "maximum": 100,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "percent"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "Fixed byte ceiling represented as lossless decimal text.",
+                      "properties": {
+                        "bytes": {
+                          "description": "Positive unsigned 64-bit decimal bytes.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^[1-9][0-9]{0,19}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "bytes",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "bytes"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "target_id",
+                "node_id",
+                "path",
+                "generation",
+                "usage_limit",
+                "state"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "next_page_url": {
+            "description": "Ready-to-follow same-origin URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/admin/storage-folders",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "folders",
+          "next_page_url"
+        ],
+        "title": "ListStorageFoldersResponse",
+        "type": "object"
+      },
       "ListUploadRangesResponse": {
         "additionalProperties": false,
         "description": "Bounded exact coverage page pinned to one upload checkpoint.",
@@ -5455,6 +5597,216 @@
           "revision"
         ],
         "title": "OperationStatusResponse",
+        "type": "object"
+      },
+      "RegisterStorageFolderRequest": {
+        "additionalProperties": false,
+        "description": "Exact-retry manager request to register one existing local folder.",
+        "properties": {
+          "operation_id": {
+            "description": "Client-generated idempotency identity persisted before touching the provider folder.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "path": {
+            "description": "Existing local folder; sibling files are never read, changed or exposed.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/[^\\x00-\\x1f\\x7f]*$",
+            "type": "string"
+          },
+          "usage_limit": {
+            "description": "Maximum capacity `MeshSpan` may own beneath its private subdirectory.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Percentage of measured backing-filesystem capacity.",
+                "properties": {
+                  "kind": {
+                    "const": "percent",
+                    "type": "string"
+                  },
+                  "percent": {
+                    "description": "Inclusive percentage from 1 through 100.",
+                    "format": "uint8",
+                    "maximum": 100,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "percent"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Fixed byte ceiling represented as lossless decimal text.",
+                "properties": {
+                  "bytes": {
+                    "description": "Positive unsigned 64-bit decimal bytes.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^[1-9][0-9]{0,19}$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "bytes",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "bytes"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "path",
+          "usage_limit"
+        ],
+        "title": "RegisterStorageFolderRequest",
+        "type": "object"
+      },
+      "RegisterStorageFolderResponse": {
+        "additionalProperties": false,
+        "description": "Durable registration result after the target is open locally.",
+        "properties": {
+          "folder": {
+            "additionalProperties": false,
+            "description": "Current registered local target.",
+            "properties": {
+              "generation": {
+                "description": "Current immutable target generation as lossless positive decimal text.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^[1-9][0-9]{0,19}$",
+                "type": "string"
+              },
+              "node_id": {
+                "description": "Permanent daemon identity that owns this target generation.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "path": {
+                "description": "Exact local UTF-8 path, or null when a headless path cannot be represented safely.",
+                "maxLength": 16384,
+                "minLength": 1,
+                "pattern": "^/[^\\x00-\\x1f\\x7f]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "description": "Current local serving state.",
+                "oneOf": [
+                  {
+                    "const": "configuring",
+                    "description": "Restart-safe registration is still completing.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "active",
+                    "description": "The provider is open and serving authenticated storage work.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "unavailable",
+                    "description": "Registration is durable but the folder is currently unavailable.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "target_id": {
+                "description": "Stable target identity independent of path spelling.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "usage_limit": {
+                "description": "Configured physical capacity ceiling.",
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "description": "Percentage of measured backing-filesystem capacity.",
+                    "properties": {
+                      "kind": {
+                        "const": "percent",
+                        "type": "string"
+                      },
+                      "percent": {
+                        "description": "Inclusive percentage from 1 through 100.",
+                        "format": "uint8",
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "percent"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "description": "Fixed byte ceiling represented as lossless decimal text.",
+                    "properties": {
+                      "bytes": {
+                        "description": "Positive unsigned 64-bit decimal bytes.",
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "pattern": "^[1-9][0-9]{0,19}$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "bytes",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "bytes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "target_id",
+              "node_id",
+              "path",
+              "generation",
+              "usage_limit",
+              "state"
+            ],
+            "type": "object"
+          },
+          "operation_id": {
+            "description": "Exact idempotency identity whose result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "folder"
+        ],
+        "title": "RegisterStorageFolderResponse",
         "type": "object"
       },
       "RemoveGroupMemberRequest": {
@@ -8029,6 +8381,434 @@
         },
         "summary": "Verify that the exact offline recovery bundle and code were saved",
         "x-meshspan-access": "system-manager",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/storage-folders": {
+      "get": {
+        "operationId": "listStorageFolders",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListStorageFoldersResponse"
+                }
+              }
+            },
+            "description": "One local storage-folder page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or local state failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Storage authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List one bounded page of this daemon's registered storage folders",
+        "x-meshspan-access": "system-manager"
+      },
+      "post": {
+        "operationId": "registerStorageFolder",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterStorageFolderRequest"
+              }
+            }
+          },
+          "description": "Local storage-folder registration",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterStorageFolderResponse"
+                }
+              }
+            },
+            "description": "Storage folder registered and open",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid local folder request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Path, marker or operation conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or local state failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Storage authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Register one existing local folder without touching sibling content",
+        "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
     },

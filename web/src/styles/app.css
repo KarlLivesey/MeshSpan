@@ -598,6 +598,12 @@ select:hover {
   max-width: 36rem;
 }
 
+.capacity-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.35fr);
+  gap: var(--space-md);
+}
+
 .owner-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));

@@ -2088,6 +2088,61 @@ export type ListPrincipalsResponse = {
 };
 
 /**
+ * ListStorageFoldersResponse
+ *
+ * Current manager-only page of local storage folders.
+ */
+export type ListStorageFoldersResponse = {
+  /**
+   * Stable target-identity-ordered folder summaries.
+   */
+  folders: Array<{
+    /**
+     * Current immutable target generation as lossless positive decimal text.
+     */
+    generation: string;
+    /**
+     * Permanent daemon identity that owns this target generation.
+     */
+    node_id: string;
+    /**
+     * Exact local UTF-8 path, or null when a headless path cannot be represented safely.
+     */
+    path: string | null;
+    /**
+     * Current local serving state.
+     */
+    state: "configuring" | "active" | "unavailable";
+    /**
+     * Stable target identity independent of path spelling.
+     */
+    target_id: string;
+    /**
+     * Configured physical capacity ceiling.
+     */
+    usage_limit:
+      | {
+          kind: "percent";
+          /**
+           * Inclusive percentage from 1 through 100.
+           */
+          percent: number;
+        }
+      | {
+          /**
+           * Positive unsigned 64-bit decimal bytes.
+           */
+          bytes: string;
+          kind: "bytes";
+        };
+  }>;
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+};
+
+/**
  * ListUploadRangesResponse
  *
  * Bounded exact coverage page pinned to one upload checkpoint.
@@ -2350,6 +2405,95 @@ export type OperationStatusResponse = {
    * Most recent authoritative lifecycle change.
    */
   updated_at_epoch_micros: number;
+};
+
+/**
+ * RegisterStorageFolderRequest
+ *
+ * Exact-retry manager request to register one existing local folder.
+ */
+export type RegisterStorageFolderRequest = {
+  /**
+   * Client-generated idempotency identity persisted before touching the provider folder.
+   */
+  operation_id: string;
+  /**
+   * Existing local folder; sibling files are never read, changed or exposed.
+   */
+  path: string;
+  /**
+   * Maximum capacity `MeshSpan` may own beneath its private subdirectory.
+   */
+  usage_limit:
+    | {
+        kind: "percent";
+        /**
+         * Inclusive percentage from 1 through 100.
+         */
+        percent: number;
+      }
+    | {
+        /**
+         * Positive unsigned 64-bit decimal bytes.
+         */
+        bytes: string;
+        kind: "bytes";
+      };
+};
+
+/**
+ * RegisterStorageFolderResponse
+ *
+ * Durable registration result after the target is open locally.
+ */
+export type RegisterStorageFolderResponse = {
+  /**
+   * Current registered local target.
+   */
+  folder: {
+    /**
+     * Current immutable target generation as lossless positive decimal text.
+     */
+    generation: string;
+    /**
+     * Permanent daemon identity that owns this target generation.
+     */
+    node_id: string;
+    /**
+     * Exact local UTF-8 path, or null when a headless path cannot be represented safely.
+     */
+    path: string | null;
+    /**
+     * Current local serving state.
+     */
+    state: "configuring" | "active" | "unavailable";
+    /**
+     * Stable target identity independent of path spelling.
+     */
+    target_id: string;
+    /**
+     * Configured physical capacity ceiling.
+     */
+    usage_limit:
+      | {
+          kind: "percent";
+          /**
+           * Inclusive percentage from 1 through 100.
+           */
+          percent: number;
+        }
+      | {
+          /**
+           * Positive unsigned 64-bit decimal bytes.
+           */
+          bytes: string;
+          kind: "bytes";
+        };
+  };
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
 };
 
 /**
@@ -3556,6 +3700,112 @@ export type ConfirmRecoveryBundleSavedResponses = {
 
 export type ConfirmRecoveryBundleSavedResponse =
   ConfirmRecoveryBundleSavedResponses[keyof ConfirmRecoveryBundleSavedResponses];
+
+export type ListStorageFoldersData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/storage-folders";
+};
+
+export type ListStorageFoldersErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or local state failure
+   */
+  500: ApiError;
+  /**
+   * Storage authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListStorageFoldersError =
+  ListStorageFoldersErrors[keyof ListStorageFoldersErrors];
+
+export type ListStorageFoldersResponses = {
+  /**
+   * One local storage-folder page
+   */
+  200: ListStorageFoldersResponse;
+};
+
+export type ListStorageFoldersResponse2 =
+  ListStorageFoldersResponses[keyof ListStorageFoldersResponses];
+
+export type RegisterStorageFolderData = {
+  /**
+   * Local storage-folder registration
+   */
+  body: RegisterStorageFolderRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/storage-folders";
+};
+
+export type RegisterStorageFolderErrors = {
+  /**
+   * Invalid local folder request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Path, marker or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or local state failure
+   */
+  500: ApiError;
+  /**
+   * Storage authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type RegisterStorageFolderError =
+  RegisterStorageFolderErrors[keyof RegisterStorageFolderErrors];
+
+export type RegisterStorageFolderResponses = {
+  /**
+   * Storage folder registered and open
+   */
+  201: RegisterStorageFolderResponse;
+};
+
+export type RegisterStorageFolderResponse2 =
+  RegisterStorageFolderResponses[keyof RegisterStorageFolderResponses];
 
 export type ListUsersData = {
   body?: never;

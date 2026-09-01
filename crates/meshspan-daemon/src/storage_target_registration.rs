@@ -130,16 +130,61 @@ where
         storage_path: &Path,
         now: UnixMicros,
     ) -> Result<RegisteredStorageTarget, StorageTargetRegistrationError> {
+        self.register_internal(storage_path, now, None)
+    }
+
+    /// Registers or exactly replays one API-selected path, operation and capacity ceiling.
+    ///
+    /// # Errors
+    ///
+    /// Rejects changed operation reuse, a differently configured existing path or any ordinary
+    /// registration failure.
+    pub fn register_with_limit(
+        &mut self,
+        storage_path: &Path,
+        operation_id: OperationId,
+        usage_limit: StorageUsageLimit,
+        now: UnixMicros,
+    ) -> Result<RegisteredStorageTarget, StorageTargetRegistrationError> {
+        usage_limit
+            .validate()
+            .map_err(|_| StorageTargetRegistrationError::Conflict)?;
+        self.register_internal(storage_path, now, Some((operation_id, usage_limit)))
+    }
+
+    /// Returns every restart-relevant local registration record.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the local journal cannot be trusted.
+    pub fn local_targets(
+        &self,
+    ) -> Result<Vec<meshspan_metadata::LocalTargetRecord>, StorageTargetRegistrationError> {
+        self.local.local_targets().map_err(Into::into)
+    }
+
+    fn register_internal(
+        &mut self,
+        storage_path: &Path,
+        now: UnixMicros,
+        requested: Option<(OperationId, StorageUsageLimit)>,
+    ) -> Result<RegisteredStorageTarget, StorageTargetRegistrationError> {
         let canonical_path = fs::canonicalize(storage_path)?;
         let canonical_bytes = canonical_path.as_os_str().as_bytes().to_vec();
         let record = if let Some(record) = self.local.local_target_by_path(&canonical_bytes)? {
+            if let Some((operation_id, usage_limit)) = requested
+                && (record.intent.registration_operation_id != operation_id
+                    || record.intent.usage_limit != usage_limit)
+            {
+                return Err(StorageTargetRegistrationError::Conflict);
+            }
             record
         } else {
             let context = self
                 .authority
                 .registration_context(self.local.node_id(), now)?
                 .ok_or(StorageTargetRegistrationError::NotConfigured)?;
-            let intent = new_intent(context, canonical_bytes, now, &mut self.random)?;
+            let intent = new_intent(context, canonical_bytes, requested, now, &mut self.random)?;
             self.local.prepare_local_target(&intent)?;
             self.local
                 .local_target(intent.target_id)?
@@ -212,11 +257,18 @@ fn validate_provider_context(
 fn new_intent(
     context: StorageTargetRegistrationContext,
     canonical_path: Vec<u8>,
+    requested: Option<(OperationId, StorageUsageLimit)>,
     now: UnixMicros,
     random: &mut impl RandomSource,
 ) -> Result<NewLocalTarget, StorageTargetRegistrationError> {
     let target_id = TargetId::from_bytes(random_identifier(random)?)?;
-    let operation_id = OperationId::from_bytes(random_identifier(random)?)?;
+    let (operation_id, usage_limit) = match requested {
+        Some(requested) => requested,
+        None => (
+            OperationId::from_bytes(random_identifier(random)?)?,
+            StorageUsageLimit::Percent(95),
+        ),
+    };
     let audit_event_id = AuditEventId::from_bytes(random_identifier(random)?)?;
     let provider_id = ComponentInstanceId::from_bytes(random_identifier(random)?)?;
     let suffix = target_id.to_string();
@@ -243,7 +295,7 @@ fn new_intent(
         target_name: RecordName::new(&format!("Storage folder {suffix}"))?,
         canonical_path,
         generation: INITIAL_TARGET_GENERATION,
-        usage_limit: StorageUsageLimit::Percent(95),
+        usage_limit,
         prepared_at: now,
     })
 }

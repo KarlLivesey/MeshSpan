@@ -79,22 +79,26 @@ use crate::{
     ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
-    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StoragePermitLoadingService,
-    StorageProviderOpeningError, StorageProviderOpeningService, StorageTargetRegistrationService,
-    TotpRegistrationApiError, TotpRegistrationConfiguration, TotpRegistrationConfigurationError,
-    TotpRegistrationService, VolumeAdministrationApiError, VolumeAdministrationService,
-    VolumeInventoryApiError, VolumeInventoryService, api_key_issuance_api_router,
-    authentication_method_listing_api_router, authentication_method_revocation_api_router,
-    classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
-    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
+    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageFolderAdministrationApiError,
+    StorageFolderAdministrationService, StoragePermitLoadingService, StorageProviderOpeningError,
+    StorageProviderOpeningService, StorageTargetRegistrationService, TotpRegistrationApiError,
+    TotpRegistrationConfiguration, TotpRegistrationConfigurationError, TotpRegistrationService,
+    VolumeAdministrationApiError, VolumeAdministrationService, VolumeInventoryApiError,
+    VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
+    authentication_method_revocation_api_router, classify_native_filesystem_error,
+    current_session_api_router, directory_listing_api_router, file_read_api_router,
+    identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
     object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
     passkey_registration_api_router, permission_administration_api_router,
     public_contract_api_router, recovery_bundle_verification_api_router,
     recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
     setup_api_router_with_mutations, step_up_current_session_api_router,
-    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
+    storage_folder_administration_api_router, totp_registration_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
+
+mod storage_folder_backend;
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
 const INITIAL_MEMBERSHIP_EPOCH: u64 = 1;
@@ -424,7 +428,7 @@ where
             ),
             private_network_starter,
         ),
-        storage_targets,
+        storage_targets: Arc::clone(&storage_targets),
     };
     let gateway = GatewaySessionIdentity::new(local_state.node_id(), 1)?;
     let enrolment = NetworkRegisteringEnrolment::new(
@@ -477,6 +481,7 @@ where
             started_at,
             config.https_listen(),
             private_network,
+            Arc::clone(&storage_targets),
         )?)
         .merge(native_file_routes(
             &local_state,
@@ -629,6 +634,7 @@ fn authentication_session_routes(
     now: UnixMicros,
     https_listen: SocketAddr,
     private_network: Arc<PrivateConsensusRuntime>,
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
 ) -> Result<Router, DaemonProcessError> {
     let passkey_origin = passkey_origin(https_listen);
     Ok(Router::new()
@@ -654,6 +660,7 @@ fn authentication_session_routes(
             gateway,
             now,
             &private_network,
+            storage_targets,
         )?))
 }
 
@@ -863,6 +870,7 @@ fn authenticated_administration_routes(
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
     private_network: &Arc<PrivateConsensusRuntime>,
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
 ) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
         .merge(identity_administration_api_router(
@@ -927,6 +935,18 @@ fn authenticated_administration_routes(
             )?,
             gateway,
         ))?)
+        .merge(storage_folder_administration_api_router(
+            StorageFolderAdministrationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                storage_targets,
+                gateway,
+            ),
+        )?)
         .merge(recovery_bundle_verification_api_router(
             RecoveryBundleVerificationService::new(
                 open_authentication_authority(
@@ -1627,6 +1647,9 @@ impl StorageTargetRuntime {
 
     fn reconcile(&mut self, now: UnixMicros) {
         let mut failures = 0_usize;
+        if self.restore_persisted_paths().is_err() {
+            failures = failures.saturating_add(1);
+        }
         if self.wrapping_registration.ensure(now).is_err() {
             failures = failures.saturating_add(1);
         }
@@ -1891,6 +1914,9 @@ pub enum DaemonProcessError {
     /// Authenticated durable-operation status API construction failed.
     #[error("daemon operation-status API failed")]
     OperationStatusApi(#[from] OperationStatusApiError),
+    /// Manager-only local storage-folder API construction failed.
+    #[error("daemon storage-folder administration API failed")]
+    StorageFolderAdministrationApi(#[from] StorageFolderAdministrationApiError),
     /// Manager-only recovery-bundle verification API construction failed.
     #[error("daemon recovery-bundle verification API failed")]
     RecoveryBundleVerificationApi(#[from] RecoveryBundleVerificationApiError),
