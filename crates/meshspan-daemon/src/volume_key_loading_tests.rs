@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{ContentManifestId, EntropyError, RandomSource, Revision, VolumeId};
-use meshspan_filesystem::{ContentEncryptionKey, ContentKeyEnvelopeCipher, VolumeKeyEncryptionKey};
+use meshspan_filesystem::{
+    ContentEncryptionKey, ContentKeyEnvelopeCipher, VolumeContentKeys, VolumeKeyEncryptionKey,
+};
 use meshspan_metadata::{SecretGenerationRecord, VOLUME_CONTENT_KEY_SECRET_KIND};
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -38,6 +40,47 @@ fn exact_local_envelope_becomes_the_non_exportable_filesystem_key()
 }
 
 #[test]
+fn protected_source_wraps_with_latest_and_reopens_the_recorded_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let local = LocalWrappingKey::open_or_create(&directory.path().join("node.key"))?;
+    let volume_id = VolumeId::from_bytes([21; 16])?;
+    let manifest_id = ContentManifestId::from_bytes([22; 16])?;
+    let record = generation_record(volume_id, &[23; 32], &[local.public_key()], 24)?;
+    let source = VolumeKeyLoadingService::new(FakeAuthority::record(record), local);
+
+    let wrapped = source.wrap_content_key(
+        volume_id,
+        manifest_id,
+        &ContentEncryptionKey::from_bytes([25; 32])?,
+        &mut FixedRandom(26),
+    )?;
+    let expected = ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(1, [23; 32])?)
+        .wrap(
+            manifest_id,
+            &ContentEncryptionKey::from_bytes([25; 32])?,
+            &mut FixedRandom(26),
+        )?;
+    assert_eq!(wrapped, expected);
+
+    let reopened = source.unwrap_content_key(volume_id, manifest_id, wrapped)?;
+    let comparison_key = VolumeKeyEncryptionKey::from_bytes(2, [27; 32])?;
+    let actual = ContentKeyEnvelopeCipher::new(comparison_key).wrap(
+        manifest_id,
+        &reopened,
+        &mut FixedRandom(28),
+    )?;
+    let expected = ContentKeyEnvelopeCipher::new(VolumeKeyEncryptionKey::from_bytes(2, [27; 32])?)
+        .wrap(
+            manifest_id,
+            &ContentEncryptionKey::from_bytes([25; 32])?,
+            &mut FixedRandom(28),
+        )?;
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
 fn absent_wrong_or_duplicate_local_recipient_fails_before_key_construction()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
@@ -47,6 +90,12 @@ fn absent_wrong_or_duplicate_local_recipient_fails_before_key_construction()
     assert_eq!(
         VolumeKeyLoadingService::new(FakeAuthority::missing(), &local)
             .load(volume_id, 1)
+            .err(),
+        Some(VolumeKeyLoadingError::NotFound)
+    );
+    assert_eq!(
+        VolumeKeyLoadingService::new(FakeAuthority::missing(), &local)
+            .load_latest(volume_id)
             .err(),
         Some(VolumeKeyLoadingError::NotFound)
     );
@@ -164,6 +213,17 @@ impl FakeAuthority {
 }
 
 impl VolumeKeyAuthority for FakeAuthority {
+    fn latest_generation(
+        &self,
+        _volume_id: VolumeId,
+    ) -> Result<Option<u64>, VolumeKeyAuthorityError> {
+        match self {
+            Self::Record(record) => Ok(Some(record.secret.context().generation())),
+            Self::Missing => Ok(None),
+            Self::Unavailable => Err(VolumeKeyAuthorityError::Unavailable),
+        }
+    }
+
     fn secret_generation(
         &self,
         _context: SecretContext,

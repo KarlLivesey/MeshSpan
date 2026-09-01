@@ -1046,6 +1046,21 @@ impl AuthoritativeRepository {
         secret_generation::load(&self.database, context)
     }
 
+    /// Returns the newest committed volume content-key generation.
+    ///
+    /// Content envelopes retain their exact generation for reads; only new content uses this
+    /// append-only head. A missing volume key returns `None` rather than inventing generation one.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed generation state or database failure.
+    pub fn latest_volume_key_generation(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<u64>, RepositoryError> {
+        secret_generation::latest_volume_generation(&self.database, volume_id)
+    }
+
     /// Returns every current gateway and the exact verified offline recovery recipient.
     ///
     /// Storage-only nodes are deliberately excluded because they retain encrypted shards without

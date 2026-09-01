@@ -41,6 +41,11 @@ fn volume_and_recoverable_key_commit_as_one_revision() -> Result<(), Box<dyn std
     assert_eq!(secret.revision, receipt.committed_revision);
     assert_eq!(secret.secret.parts().ciphertext.len(), 48);
     assert_eq!(secret.recipients.len(), 2);
+    assert_eq!(repository.latest_volume_key_generation(volume_id)?, Some(1));
+    assert_eq!(
+        repository.latest_volume_key_generation(VolumeId::from_bytes([34; 16])?)?,
+        None
+    );
     Ok(())
 }
 
