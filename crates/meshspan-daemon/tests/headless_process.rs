@@ -64,6 +64,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert!(!fixture.claim_path.exists());
     wait_for_status(fixture.address, &client, "configured").await?;
     assert_session_created(fixture.address, &client, &session_body).await?;
+    assert_volume_inventory_visible(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
 
     process.kill()?;
@@ -71,10 +72,33 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     process = fixture.start()?;
     wait_for_status(fixture.address, &client, "configured").await?;
     assert_session_created(fixture.address, &client, &session_body).await?;
+    assert_volume_inventory_visible(fixture.address, &client, api_key).await?;
     assert_user_visible(fixture.address, &client, api_key).await?;
     process.kill()?;
     process.wait()?;
     Ok(())
+}
+
+async fn assert_volume_inventory_visible(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/volumes?limit=100",
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    if response.starts_with("HTTP/1.1 200 OK\r\n") && response.contains("\"volumes\":[]") {
+        Ok(())
+    } else {
+        Err("headless process did not return its authorised volume inventory".into())
+    }
 }
 
 async fn create_user(

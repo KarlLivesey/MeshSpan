@@ -33,12 +33,13 @@ use crate::{
     CurrentSessionApiError, DaemonLocalState, DaemonLocalStateError, DisabledTotpFactors,
     GatewaySessionIdentity, HeadlessDaemonConfig, HeadlessDaemonConfigError, HttpsServer,
     HttpsServerError, IdentityAdministrationApiError, IdentityAdministrationService,
-    PublicContractApiError, ReadinessSource, RevokeCurrentSessionApiError,
-    RevokeCurrentSessionService, SessionApiError, SetupApiError, SetupLifecycleError,
-    SetupStateSnapshot, StepUpCurrentSessionApiError, StepUpCurrentSessionService,
+    NativeApiAuthenticator, NativeApiKeyAuthenticator, PublicContractApiError, ReadinessSource,
+    RevokeCurrentSessionApiError, RevokeCurrentSessionService, SessionApiError, SetupApiError,
+    SetupLifecycleError, SetupStateSnapshot, StepUpCurrentSessionApiError,
+    StepUpCurrentSessionService, VolumeInventoryApiError, VolumeInventoryService,
     current_session_api_router, identity_administration_api_router, public_contract_api_router,
     revoke_current_session_api_router, session_api_router, setup_api_router_with_creation,
-    step_up_current_session_api_router,
+    step_up_current_session_api_router, volume_inventory_api_router,
 };
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
@@ -177,7 +178,14 @@ fn authentication_session_routes(
         )?)
         .merge(identity_administration_api_router(
             IdentityAdministrationService::new(authentication_authority()?, gateway),
-        )?))
+        )?)
+        .merge(volume_inventory_api_router(VolumeInventoryService::new(
+            NativeApiAuthenticator::new(
+                BrowserSessionAuthenticator::new(authentication_authority()?, gateway),
+                NativeApiKeyAuthenticator::new(authentication_authority()?, gateway),
+            ),
+            authentication_authority()?,
+        ))?))
 }
 
 fn open_root_repository(
@@ -270,6 +278,9 @@ pub enum DaemonProcessError {
     /// Identity-administration API construction failed.
     #[error("daemon identity-administration API failed")]
     IdentityAdministrationApi(#[from] IdentityAdministrationApiError),
+    /// Permission-filtered volume inventory API construction failed.
+    #[error("daemon volume-inventory API failed")]
+    VolumeInventoryApi(#[from] VolumeInventoryApiError),
     /// The HTTPS listener failed.
     #[error("daemon HTTPS listener failed")]
     Https(#[from] HttpsServerError),
