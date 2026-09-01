@@ -4,8 +4,7 @@ use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use axum::Router;
-use axum::routing::get;
+use meshspan_api_contract::HealthStatus;
 use meshspan_test_certificates::CertificateAuthority;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
@@ -15,7 +14,7 @@ use tokio::sync::oneshot;
 use tokio::time::{Duration, timeout};
 use tokio_rustls::TlsConnector;
 
-use super::HttpsServer;
+use super::{HttpsServer, ReadinessSource, public_contract_api_router};
 
 const CERTIFICATE_NAME: &str = "node.meshspan.test";
 
@@ -25,7 +24,7 @@ async fn real_tls13_listener_isolates_plaintext_and_serves_https() -> Result<(),
     let server = HttpsServer::bind(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         Arc::new(certificates.server_config()?),
-        Router::new().route("/api/latest/health", get(|| async { "healthy" })),
+        public_contract_api_router(Arc::new(Ready))?,
     )
     .await?;
     let address = server.local_addr()?;
@@ -37,7 +36,8 @@ async fn real_tls13_listener_isolates_plaintext_and_serves_https() -> Result<(),
     assert_plaintext_is_rejected(address).await?;
     let response = https_request(address, certificates.client_config()?).await?;
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-    assert!(response.ends_with("\r\n\r\nhealthy"));
+    assert!(response.contains("\"status\":\"ready\""));
+    assert!(response.contains("meshspan-api-version: latest"));
 
     assert!(shutdown_tx.send(()).is_ok());
     server_task.await??;
@@ -77,6 +77,14 @@ struct TestCertificates {
     authority: CertificateDer<'static>,
     private_key: Vec<u8>,
     server: CertificateDer<'static>,
+}
+
+struct Ready;
+
+impl ReadinessSource for Ready {
+    fn status(&self) -> HealthStatus {
+        HealthStatus::Ready
+    }
 }
 
 impl TestCertificates {

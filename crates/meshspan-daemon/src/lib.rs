@@ -95,6 +95,9 @@ mod passkey_session_creation_tests;
 mod passkey_session_tests;
 #[cfg(test)]
 mod passkey_test_support;
+mod public_contract_api;
+#[cfg(test)]
+mod public_contract_api_tests;
 mod recovery_code_issuance;
 mod recovery_code_issuance_api;
 #[cfg(test)]
@@ -249,6 +252,9 @@ pub use passkey_session::{
 };
 pub use passkey_session_contract::{
     DisabledPasskeyProof, DisabledPasskeySessions, PasskeySessionCeremony, PreparedPasskeyProof,
+};
+pub use public_contract_api::{
+    PublicContractApiError, ReadinessSource, public_contract_api_router,
 };
 pub use recovery_code_issuance::RecoveryCodeIssuanceService;
 pub use recovery_code_issuance_api::{
