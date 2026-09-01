@@ -68,6 +68,12 @@ impl AuthenticationRuntimeKeys {
         self.api_key_issuance
     }
 
+    /// Transfers only the recovery-code issuance capability into an issuance service.
+    #[must_use]
+    pub fn into_recovery_code_issuance_key(self) -> RecoveryCodeIssuanceKey {
+        self.recovery_code_issuance
+    }
+
     /// Transfers only the TOTP envelope capability into a verifier.
     #[must_use]
     pub fn into_totp_envelope_key(self) -> TotpEnvelopeKey {

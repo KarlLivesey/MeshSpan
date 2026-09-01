@@ -49,22 +49,24 @@ use crate::{
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
     NativeUploadServicePolicy, NodeWrappingKeyRegistrationService, ObjectStatApiError,
     ObjectStatService, OperatingSystemRandom, ProtectedApiKeyIssuanceController,
-    ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector, PublicContractApiError,
-    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
-    RevokeCurrentSessionApiError, RevokeCurrentSessionService, SessionApiError, SetupApiError,
-    SetupLifecycleError, SetupStateSnapshot, SetupStatusSource, StepUpCurrentSessionApiError,
-    StepUpCurrentSessionService, StorageProviderOpeningError, StorageProviderOpeningService,
-    StorageTargetRegistrationService, TotpRegistrationApiError, TotpRegistrationConfiguration,
-    TotpRegistrationConfigurationError, TotpRegistrationService, VolumeAdministrationApiError,
-    VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
-    api_key_issuance_api_router, authentication_method_listing_api_router,
+    ProtectedRecoveryCodeIssuanceController, ProtectedTotpFactorVerifier,
+    ProtectedTotpRegistrationSecretProtector, PublicContractApiError, ReadinessSource,
+    RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
+    RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
+    SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
+    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageProviderOpeningError,
+    StorageProviderOpeningService, StorageTargetRegistrationService, TotpRegistrationApiError,
+    TotpRegistrationConfiguration, TotpRegistrationConfigurationError, TotpRegistrationService,
+    VolumeAdministrationApiError, VolumeAdministrationService, VolumeInventoryApiError,
+    VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
     authentication_method_revocation_api_router, classify_native_filesystem_error,
     current_session_api_router, directory_listing_api_router, file_read_api_router,
     identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, object_stat_api_router, public_contract_api_router,
-    recovery_bundle_verification_api_router, revoke_current_session_api_router, session_api_router,
-    setup_api_router_with_creation, step_up_current_session_api_router,
-    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
+    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
+    revoke_current_session_api_router, session_api_router, setup_api_router_with_creation,
+    step_up_current_session_api_router, totp_registration_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
@@ -337,6 +339,14 @@ fn authentication_session_routes(
                     TOTP_ISSUER.to_owned(),
                     DurationMicros::new(TOTP_REGISTRATION_LIFETIME_MICROS),
                 )?,
+                gateway,
+            ),
+        )?)
+        .merge(recovery_code_issuance_api_router(
+            ProtectedRecoveryCodeIssuanceController::new(
+                authentication_authority()?,
+                authentication_authority()?,
+                local_state.open_wrapping_key()?,
                 gateway,
             ),
         )?)
@@ -647,6 +657,9 @@ pub enum DaemonProcessError {
     /// Current-user TOTP registration policy is invalid.
     #[error("daemon TOTP registration policy failed")]
     TotpRegistrationConfiguration(#[from] TotpRegistrationConfigurationError),
+    /// Current-user recovery-code issuance API construction failed.
+    #[error("daemon recovery-code issuance API failed")]
+    RecoveryCodeIssuanceApi(#[from] RecoveryCodeIssuanceApiError),
     /// Identity-administration API construction failed.
     #[error("daemon identity-administration API failed")]
     IdentityAdministrationApi(#[from] IdentityAdministrationApiError),

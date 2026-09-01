@@ -101,7 +101,10 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert_eq!(wait_for_live_provider(&fixture).await?, provider_journal);
     assert_wrapping_key_committed(&fixture)?;
     create_browser_session(fixture.address, &client, &session_body).await?;
-    assert_totp_session(fixture.address, &client, api_key, &totp_secret).await?;
+    let multi_factor_session =
+        create_totp_browser_session(fixture.address, &client, api_key, &totp_secret).await?;
+    assert_recovery_code_lifecycle(fixture.address, &client, api_key, &multi_factor_session)
+        .await?;
     assert_volume_visible(fixture.address, &client, api_key).await?;
     assert_user_visible(fixture.address, &client, api_key).await?;
     assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
@@ -177,12 +180,12 @@ async fn enrol_totp(
     Ok(secret)
 }
 
-async fn assert_totp_session(
+async fn create_totp_browser_session(
     address: SocketAddr,
     client: &ClientConfig,
     api_key: &str,
     secret: &[u8],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<BrowserSessionHeaders, Box<dyn Error>> {
     let code = current_totp_code(secret)?;
     let body = serde_json::to_vec(&serde_json::json!({
         "operation_id": "00000000-0000-4000-8000-00000000000e",
@@ -196,6 +199,85 @@ async fn assert_totp_session(
         &response,
         "201 Created",
         "authenticate with TOTP after restart",
+    )?;
+    browser_session_headers(&response)
+}
+
+async fn assert_recovery_code_lifecycle(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    session: &BrowserSessionHeaders,
+) -> Result<(), Box<dyn Error>> {
+    let issue_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-00000000000f",
+        "label": "Headless process recovery codes"
+    }))?;
+    let issued = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/users/current/authentication-methods/recovery-codes",
+        Some(&issue_body),
+        &session.mutation_headers(),
+    )
+    .await?;
+    require_status(&issued, "201 Created", "issue protected recovery codes")?;
+    let issued: serde_json::Value = serde_json::from_str(response_body(&issued)?)?;
+    let codes = issued["codes"]
+        .as_array()
+        .ok_or("recovery-code issuance omitted its codes")?;
+    if codes.len() != 10 {
+        return Err("recovery-code issuance did not return exactly ten codes".into());
+    }
+    let code = codes[0]
+        .as_str()
+        .ok_or("recovery-code issuance returned a non-text code")?;
+    let recovery_session_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000010",
+        "authentication": { "method": "api_key", "secret": api_key },
+        "additional_factor": { "method": "recovery_code", "code": code },
+        "client_label": "Recovery code proof",
+        "remember": false
+    }))?;
+    let consumed = request(
+        address,
+        client,
+        "POST",
+        "/api/latest/sessions",
+        Some(&recovery_session_body),
+    )
+    .await?;
+    require_status(&consumed, "201 Created", "consume one recovery code")?;
+    let replay = request(
+        address,
+        client,
+        "POST",
+        "/api/latest/sessions",
+        Some(&recovery_session_body),
+    )
+    .await?;
+    require_status(&replay, "201 Created", "replay exact recovery-code session")?;
+
+    let reuse_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000011",
+        "authentication": { "method": "api_key", "secret": api_key },
+        "additional_factor": { "method": "recovery_code", "code": code },
+        "client_label": "Forbidden recovery-code reuse",
+        "remember": false
+    }))?;
+    let rejected = request(
+        address,
+        client,
+        "POST",
+        "/api/latest/sessions",
+        Some(&reuse_body),
+    )
+    .await?;
+    require_status(
+        &rejected,
+        "401 Unauthorized",
+        "reject recovery-code reuse under another operation",
     )
 }
 
@@ -814,16 +896,20 @@ async fn create_browser_session(
     body: &[u8],
 ) -> Result<BrowserSessionHeaders, Box<dyn Error>> {
     let response = request(address, client, "POST", "/api/latest/sessions", Some(body)).await?;
-    if response.starts_with("HTTP/1.1 201 Created\r\n")
-        && response.contains("set-cookie: meshspan_session=")
+    require_status(&response, "201 Created", "create browser session")?;
+    browser_session_headers(&response)
+}
+
+fn browser_session_headers(response: &str) -> Result<BrowserSessionHeaders, Box<dyn Error>> {
+    if response.contains("set-cookie: meshspan_session=")
         && response.contains("meshspan-csrf-token:")
     {
-        let cookie = response_header(&response, "set-cookie")?
+        let cookie = response_header(response, "set-cookie")?
             .split(';')
             .next()
             .ok_or("session cookie was empty")?
             .to_owned();
-        let csrf = response_header(&response, "meshspan-csrf-token")?.to_owned();
+        let csrf = response_header(response, "meshspan-csrf-token")?.to_owned();
         Ok(BrowserSessionHeaders { cookie, csrf })
     } else {
         Err("headless process did not create the expected HTTPS session".into())
