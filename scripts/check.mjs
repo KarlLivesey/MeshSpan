@@ -175,7 +175,15 @@ if (!generation.passed) {
       steps: [
         [
           "cargo",
-          ["test", "-p", "meshspan-cluster", "--all-targets", "--all-features"],
+          [
+            "test",
+            "-p",
+            "meshspan-cluster",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "--test-threads=2",
+          ],
         ],
       ],
     },
