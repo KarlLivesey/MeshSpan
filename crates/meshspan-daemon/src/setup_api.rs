@@ -322,7 +322,8 @@ fn service_error_response(
             ApiErrorCode::OperationConflict,
             "setup operation conflicts with durable state",
         ),
-        CreateMeshSetupError::Authority(BootstrapAuthorityError::Unavailable) => (
+        CreateMeshSetupError::Authority(BootstrapAuthorityError::Unavailable)
+        | CreateMeshSetupError::PrivateNetwork => (
             StatusCode::SERVICE_UNAVAILABLE,
             ApiErrorCode::Busy,
             "bootstrap authority is temporarily unavailable",

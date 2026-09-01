@@ -104,7 +104,7 @@ where
     pub fn activate(
         &mut self,
         request: NodeActivationRequest,
-    ) -> Result<NodeActivationRecord, NodeActivationError> {
+    ) -> Result<NodeActivationCommit, NodeActivationError> {
         if request.incarnation == 0
             || request.certificate_fingerprint == [0; 32]
             || request.capability_digest == [0; 32]
@@ -148,7 +148,7 @@ where
         {
             return Err(NodeActivationError::Conflict);
         }
-        Ok(commit.record)
+        Ok(commit)
     }
 }
 

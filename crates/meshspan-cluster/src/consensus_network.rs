@@ -105,6 +105,7 @@ pub struct PeerControlRequest {
 /// Cloneable non-blocking consensus message network.
 #[derive(Clone)]
 pub struct ConsensusNetwork {
+    runtime: tokio::runtime::Handle,
     client: quinn::Endpoint,
     peers: Arc<RwLock<ConsensusPeers>>,
     local_node_id: NodeId,
@@ -174,6 +175,7 @@ impl ConsensusNetwork {
         let peers = peer_map(config.peers)?;
         let registry = peer_registry(&peers)?;
         let network = Self {
+            runtime: tokio::runtime::Handle::current(),
             client,
             peers: Arc::new(RwLock::new(ConsensusPeers {
                 routes: peers,
@@ -312,7 +314,7 @@ impl ConsensusNetwork {
 
     fn spawn_outbound_worker(&self, peer: NodeId, mut messages: mpsc::Receiver<CoreMessage>) {
         let network = self.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let mut connection = None;
             while let Some(message) = messages.recv().await {
                 let result = tokio::time::timeout(
@@ -335,7 +337,7 @@ impl ConsensusNetwork {
         controls: Option<mpsc::Sender<PeerControlRequest>>,
     ) {
         let network = self.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             while let Some(incoming) = server.accept().await {
                 let Ok(connection) = incoming.await else {
                     continue;
@@ -352,7 +354,7 @@ impl ConsensusNetwork {
                 let connection_network = network.clone();
                 let connection_messages = messages.clone();
                 let connection_controls = controls.clone();
-                tokio::spawn(async move {
+                connection_network.runtime.clone().spawn(async move {
                     if connection_network
                         .receive_connection(
                             connection.clone(),

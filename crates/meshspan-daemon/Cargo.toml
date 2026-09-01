@@ -28,6 +28,7 @@ meshspan-filesystem = { path = "../meshspan-filesystem" }
 meshspan-metadata = { path = "../meshspan-metadata" }
 meshspan-otp = { path = "../meshspan-otp" }
 meshspan-passkey = { path = "../meshspan-passkey" }
+meshspan-protocol = { path = "../meshspan-protocol" }
 meshspan-recovery-bundle = { path = "../meshspan-recovery-bundle" }
 meshspan-rustls-provider = { path = "../meshspan-rustls-provider" }
 meshspan-secret-envelope = { path = "../meshspan-secret-envelope" }

@@ -510,6 +510,9 @@ pub enum CreateMeshSetupError {
     /// Initial node public identity or mesh certificate construction failed closed.
     #[error("initial node certificate could not be created")]
     Certificate,
+    /// The authenticated private network could not start after the durable mesh commit.
+    #[error("private mesh network could not start")]
+    PrivateNetwork,
     /// Node-local setup state rejected the transition.
     #[error("local setup transition failed")]
     Local(#[from] LocalSetupError),

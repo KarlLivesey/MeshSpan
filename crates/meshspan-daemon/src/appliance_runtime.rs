@@ -17,8 +17,9 @@ use meshspan_api_contract::{
     CreateMeshSetupRequest, CreateMeshSetupResponse, HealthStatus, SetupState,
 };
 use meshspan_cluster::{
-    MetadataAuthorityConfig, MetadataAuthorityHandle, MetadataAuthorityRequestError,
-    MetadataAuthorityRuntimeError, MetadataAuthorityStartError, PartitionConsensusDriver,
+    ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, MetadataAuthorityConfig,
+    MetadataAuthorityHandle, MetadataAuthorityRequestError, MetadataAuthorityRuntimeError,
+    MetadataAuthorityStartError, PartitionConsensusDriver, PeerControlRequest,
     spawn_metadata_authority,
 };
 use meshspan_consensus::{
@@ -26,16 +27,24 @@ use meshspan_consensus::{
     flat_plan,
 };
 use meshspan_domain::{
-    DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, UnixMicros,
+    DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError, NodeId, OperationId,
+    UnixMicros,
 };
 use meshspan_metadata::{
-    AuthoritativeRepository, ConsensusStoreError, MetadataStoreError, PartitionDatabase,
+    AuthoritativeRepository, ConsensusStoreError, JoinRoles, MetadataStoreError, PartitionDatabase,
     RepositoryError,
+};
+use meshspan_protocol::v1::control_envelope::Message;
+use meshspan_protocol::v1::{
+    ControlEnvelope, ErrorCode, NodeActivationResult, NodeRole, OperationOutcome, OperationResult,
+    WireError,
 };
 use thiserror::Error;
 use tokio::task::JoinHandle;
+use zeroize::Zeroizing;
 
 use crate::headless_node_join::admit_headless_node;
+use crate::private_consensus_runtime::{NetworkRegisteringEnrolment, PrivateConsensusRuntime};
 use crate::{
     ApiKeyIssuanceApiError, AuthenticationMethodListingApiError,
     AuthenticationMethodListingService, AuthenticationMethodRevocationApiError,
@@ -49,16 +58,16 @@ use crate::{
     IdentityAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
     NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
-    NativeUploadServicePolicy, NodeEnrolmentApiError, NodeEnrolmentService,
-    NodeJoinGrantIssuanceApiError, NodeJoinGrantIssuanceService,
-    NodeWrappingKeyRegistrationService, ObjectStatApiError, ObjectStatService,
-    OperatingSystemRandom, PasskeyChallengeApiError, PasskeyChallengeConfiguration,
-    PasskeyChallengeConfigurationError, PasskeyChallengeService, PasskeyRegistrationApiError,
-    PasskeyRegistrationConfiguration, PasskeyRegistrationConfigurationError,
-    PasskeyRegistrationService, PasskeySessionService, ProtectedApiKeyIssuanceController,
-    ProtectedRecoveryCodeIssuanceController, ProtectedTotpFactorVerifier,
-    ProtectedTotpRegistrationSecretProtector, PublicContractApiError, ReadinessSource,
-    RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
+    NativeUploadServicePolicy, NodeActivationError, NodeActivationRequest, NodeActivationService,
+    NodeEnrolmentApiError, NodeEnrolmentService, NodeJoinGrantIssuanceApiError,
+    NodeJoinGrantIssuanceService, NodeWrappingKeyRegistrationService, ObjectStatApiError,
+    ObjectStatService, OperatingSystemRandom, PasskeyChallengeApiError,
+    PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError, PasskeyChallengeService,
+    PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
+    PasskeyRegistrationConfigurationError, PasskeyRegistrationService, PasskeySessionService,
+    ProtectedApiKeyIssuanceController, ProtectedRecoveryCodeIssuanceController,
+    ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector, PublicContractApiError,
+    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
     StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageProviderOpeningError,
@@ -99,6 +108,137 @@ struct StorageRuntimeComposition {
     native_filesystem: NativeFilesystemRuntime,
 }
 
+#[derive(Clone)]
+struct PrivateNetworkStarter {
+    runtime: tokio::runtime::Handle,
+    network: Arc<PrivateConsensusRuntime>,
+    authority: MetadataAuthorityHandle,
+    state_directory: PathBuf,
+    local_node_id: NodeId,
+    local_private_key_pkcs8: Arc<Zeroizing<Vec<u8>>>,
+    listen_address: SocketAddr,
+}
+
+impl PrivateNetworkStarter {
+    fn start(&self, now: UnixMicros) -> Result<(), DaemonProcessError> {
+        if self.network.network().is_ok() {
+            return Ok(());
+        }
+        let repository = open_root_repository_at(&self.state_directory, now)?;
+        let mesh_id = repository
+            .local_mesh_id()?
+            .ok_or(DaemonProcessError::PrivateNetworkState)?;
+        let local_certificate = repository
+            .active_node_certificate(self.local_node_id)?
+            .ok_or(DaemonProcessError::PrivateNetworkState)?;
+        let online_authority = repository
+            .online_certificate_authority(mesh_id)?
+            .ok_or(DaemonProcessError::PrivateNetworkState)?;
+        let recovery = repository
+            .mesh_recovery_authority(mesh_id)?
+            .ok_or(DaemonProcessError::PrivateNetworkState)?;
+        let partition_id = repository.partition_id();
+        let client_address = if self.listen_address.is_ipv4() {
+            SocketAddr::from(([0, 0, 0, 0], 0))
+        } else {
+            SocketAddr::from(([0_u16; 8], 0))
+        };
+        let (peer_messages, mut received_peer_messages) = tokio::sync::mpsc::channel(256);
+        let (control_requests, received_control_requests) = tokio::sync::mpsc::channel(64);
+        let config = ConsensusNetworkConfig {
+            local_node_id: self.local_node_id,
+            local_incarnation: 1,
+            mesh_id,
+            partition_id,
+            routing_epoch: 1,
+            roles: vec![
+                NodeRole::Storage,
+                NodeRole::Gateway,
+                NodeRole::MetadataVoter,
+            ],
+            listen_address: self.listen_address,
+            client_address,
+            certificate_chain_der: vec![
+                local_certificate.certificate_der,
+                online_authority.certificate_der,
+            ],
+            private_key_pkcs8: Zeroizing::new(self.local_private_key_pkcs8.to_vec()),
+            trust_anchors: vec![recovery.root_certificate_der],
+            peers: Vec::new(),
+        };
+        let network = {
+            let _entered = self.runtime.enter();
+            ConsensusNetwork::start_with_control(config, peer_messages, control_requests)?
+        };
+        self.network
+            .install(network.clone())
+            .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
+        let authority = self.authority.clone();
+        self.runtime.spawn(async move {
+            while let Some(message) = received_peer_messages.recv().await {
+                if authority.receive_peer(message).await.is_err() {
+                    break;
+                }
+            }
+        });
+        self.spawn_control_runtime(network, received_control_requests);
+        Ok(())
+    }
+
+    fn spawn_control_runtime(
+        &self,
+        network: ConsensusNetwork,
+        mut requests: tokio::sync::mpsc::Receiver<PeerControlRequest>,
+    ) {
+        let authority = self.authority.clone();
+        let state_directory = self.state_directory.clone();
+        let runtime = self.runtime.clone();
+        self.runtime.spawn(async move {
+            while let Some(request) = requests.recv().await {
+                let response = handle_private_control(
+                    &network,
+                    &authority,
+                    &state_directory,
+                    &runtime,
+                    &request,
+                )
+                .await;
+                if let Ok(response) = response {
+                    let _closed = request.respond.send(response);
+                }
+            }
+        });
+    }
+}
+
+struct NetworkStartingSetup<C> {
+    inner: C,
+    network: PrivateNetworkStarter,
+}
+
+impl<C> NetworkStartingSetup<C> {
+    const fn new(inner: C, network: PrivateNetworkStarter) -> Self {
+        Self { inner, network }
+    }
+}
+
+impl<C> CreateMeshSetupController for NetworkStartingSetup<C>
+where
+    C: CreateMeshSetupController,
+{
+    fn create_mesh(
+        &mut self,
+        request: &CreateMeshSetupRequest,
+        now: UnixMicros,
+    ) -> Result<CreateMeshSetupResponse, CreateMeshSetupError> {
+        let response = self.inner.create_mesh(request, now)?;
+        self.network
+            .start(now)
+            .map_err(|_| CreateMeshSetupError::PrivateNetwork)?;
+        Ok(response)
+    }
+}
+
 /// Runs one fully headless appliance until the supplied shutdown signal resolves.
 ///
 /// # Errors
@@ -127,9 +267,26 @@ where
         return Err(DaemonProcessError::NodeActivationPending);
     }
 
+    let private_network = Arc::new(PrivateConsensusRuntime::default());
+    let consensus_transport: Arc<dyn meshspan_cluster::ConsensusMessageTransport> =
+        private_network.clone();
     let (authority, authority_task, removal_authority_epoch) =
-        start_root_authority(&local_state, started_at)?;
+        start_root_authority(&local_state, started_at, consensus_transport)?;
     authority.begin_election().await?;
+    let private_network_starter = PrivateNetworkStarter {
+        runtime: tokio::runtime::Handle::current(),
+        network: Arc::clone(&private_network),
+        authority: authority.clone(),
+        state_directory: local_state.state_directory().to_path_buf(),
+        local_node_id: local_state.node_id(),
+        local_private_key_pkcs8: Arc::new(Zeroizing::new(
+            local_state.node_identity_private_key_pkcs8().to_vec(),
+        )),
+        listen_address: config.private_listen(),
+    };
+    if setup_state.setup_state() == SetupState::Configured {
+        private_network_starter.start(started_at)?;
+    }
     let StorageRuntimeComposition {
         readiness,
         targets: storage_targets,
@@ -150,30 +307,36 @@ where
     let bootstrap =
         ConsensusBootstrapAuthority::new(authority.clone(), tokio::runtime::Handle::current());
     let setup = SetupWithStorageTargets {
-        setup: CreateMeshSetupService::new(
-            local_state.open_local_database(started_at)?,
-            bootstrap,
-            local_state.claim_output_path().to_path_buf(),
-            local_state.pending_recovery_bundle_path(),
-            Arc::clone(&setup_state),
-            local_state.wrapping_public_key(),
-            local_state.node_identity_public_key().to_vec(),
-            OperatingSystemRandom,
+        setup: NetworkStartingSetup::new(
+            CreateMeshSetupService::new(
+                local_state.open_local_database(started_at)?,
+                bootstrap,
+                local_state.claim_output_path().to_path_buf(),
+                local_state.pending_recovery_bundle_path(),
+                Arc::clone(&setup_state),
+                local_state.wrapping_public_key(),
+                local_state.node_identity_public_key().to_vec(),
+                OperatingSystemRandom,
+            ),
+            private_network_starter,
         ),
         storage_targets,
     };
     let gateway = GatewaySessionIdentity::new(local_state.node_id(), 1)?;
-    let enrolment = NodeEnrolmentService::new(
-        open_authentication_authority(&local_state, &authority, started_at)?,
-        open_authentication_authority(&local_state, &authority, started_at)?,
-        local_state.open_wrapping_key()?,
-        CurrentNodeBootstrapPeerSource::new(
+    let enrolment = NetworkRegisteringEnrolment::new(
+        NodeEnrolmentService::new(
             open_authentication_authority(&local_state, &authority, started_at)?,
-            local_state.node_id(),
-            open_root_repository(&local_state, started_at)?.partition_id(),
-            1,
-            private_endpoint,
+            open_authentication_authority(&local_state, &authority, started_at)?,
+            local_state.open_wrapping_key()?,
+            CurrentNodeBootstrapPeerSource::new(
+                open_authentication_authority(&local_state, &authority, started_at)?,
+                local_state.node_id(),
+                open_root_repository(&local_state, started_at)?.partition_id(),
+                1,
+                private_endpoint,
+            ),
         ),
+        private_network,
     );
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
@@ -267,6 +430,7 @@ fn compose_storage_runtime(
 fn start_root_authority(
     local_state: &DaemonLocalState,
     now: UnixMicros,
+    transport: Arc<dyn meshspan_cluster::ConsensusMessageTransport>,
 ) -> Result<AuthorityTask, DaemonProcessError> {
     let node_id = local_state.node_id();
     let partition_id = InitialBootstrapMaterial::root_partition_id(node_id)?;
@@ -298,12 +462,9 @@ fn start_root_authority(
         active_plan,
     )?;
     let driver = PartitionConsensusDriver::new(core, repository);
-    let (handle, task) = spawn_metadata_authority(
-        driver,
-        Arc::new(|_, _| {}),
-        MetadataAuthorityConfig::default(),
-    )
-    .map_err(DaemonProcessError::from)?;
+    let (handle, task) =
+        spawn_metadata_authority(driver, transport, MetadataAuthorityConfig::default())
+            .map_err(DaemonProcessError::from)?;
     Ok((handle, task, authority_epoch))
 }
 
@@ -511,6 +672,161 @@ fn open_authentication_authority(
     ))
 }
 
+async fn handle_private_control(
+    network: &ConsensusNetwork,
+    authority: &MetadataAuthorityHandle,
+    state_directory: &std::path::Path,
+    runtime: &tokio::runtime::Handle,
+    request: &PeerControlRequest,
+) -> Result<ControlEnvelope, DaemonProcessError> {
+    let envelope = request.envelope.as_inner();
+    let header = envelope
+        .header
+        .as_ref()
+        .ok_or(DaemonProcessError::PrivateNetworkState)?;
+    let operation_id = OperationId::from_bytes(
+        header
+            .operation_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
+    )
+    .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
+    let outcome = match envelope.message.as_ref() {
+        Some(Message::NodeActivationRequest(activation)) => {
+            activate_private_node(
+                network,
+                authority,
+                state_directory,
+                runtime,
+                request,
+                operation_id,
+                activation,
+            )
+            .await
+        }
+        _ => Err(NodeActivationError::Rejected),
+    };
+    let (result, active_revision) = activation_result(outcome);
+    Ok(ControlEnvelope {
+        header: Some(network.control_header(operation_id, header.deadline_unix_micros)?),
+        message: Some(Message::NodeActivationResult(NodeActivationResult {
+            result: Some(result),
+            active_revision,
+        })),
+    })
+}
+
+async fn activate_private_node(
+    network: &ConsensusNetwork,
+    authority: &MetadataAuthorityHandle,
+    state_directory: &std::path::Path,
+    runtime: &tokio::runtime::Handle,
+    peer: &PeerControlRequest,
+    operation_id: OperationId,
+    request: &meshspan_protocol::v1::NodeActivationRequest,
+) -> Result<crate::NodeActivationCommit, NodeActivationError> {
+    let capability_digest: [u8; 32] = request
+        .capability_digest
+        .as_slice()
+        .try_into()
+        .map_err(|_| NodeActivationError::Rejected)?;
+    if capability_digest != peer.capability_digest {
+        return Err(NodeActivationError::Rejected);
+    }
+    let roles = activation_roles(&request.roles)?;
+    network
+        .probe_peer(peer.from)
+        .await
+        .map_err(|_| NodeActivationError::Unavailable)?;
+    let now = current_time().map_err(|_| NodeActivationError::Unavailable)?;
+    let repository = open_root_repository_at(state_directory, now)
+        .map_err(|_| NodeActivationError::Unavailable)?;
+    let mut service = NodeActivationService::new(ConsensusAuthenticationAuthority::new(
+        repository,
+        authority.clone(),
+        runtime.clone(),
+    ));
+    let activation = NodeActivationRequest {
+        operation_id,
+        node_id: peer.from,
+        incarnation: peer.sender_incarnation,
+        certificate_fingerprint: peer.certificate_fingerprint,
+        roles,
+        capability_digest,
+        endpoint_probe_passed: true,
+        occurred_at: now,
+    };
+    tokio::task::spawn_blocking(move || service.activate(activation))
+        .await
+        .map_err(|_| NodeActivationError::Unavailable)?
+}
+
+fn activation_roles(encoded: &[i32]) -> Result<JoinRoles, NodeActivationError> {
+    let mut bits = 0_u8;
+    for encoded_role in encoded {
+        match NodeRole::try_from(*encoded_role).map_err(|_| NodeActivationError::Rejected)? {
+            NodeRole::Storage => bits |= JoinRoles::STORAGE,
+            NodeRole::Gateway => bits |= JoinRoles::GATEWAY,
+            NodeRole::MetadataLearner => bits |= JoinRoles::METADATA_ELIGIBLE,
+            NodeRole::Unspecified | NodeRole::MetadataVoter => {
+                return Err(NodeActivationError::Rejected);
+            }
+        }
+    }
+    JoinRoles::new(bits).map_err(|_| NodeActivationError::Rejected)
+}
+
+fn activation_result(
+    outcome: Result<crate::NodeActivationCommit, NodeActivationError>,
+) -> (OperationResult, Option<u64>) {
+    match outcome {
+        Ok(commit) => {
+            let revision = commit.record.revision.get();
+            (
+                OperationResult {
+                    outcome: OperationOutcome::Durable.into(),
+                    committed_revision: Some(revision),
+                    error: None,
+                    result: None,
+                    result_digest: commit.result_digest.to_vec(),
+                },
+                Some(revision),
+            )
+        }
+        Err(error) => {
+            let (outcome, code, diagnostic_code) = match error {
+                NodeActivationError::Rejected => {
+                    (OperationOutcome::Rejected, ErrorCode::Unauthorised, 1)
+                }
+                NodeActivationError::Conflict => {
+                    (OperationOutcome::Rejected, ErrorCode::Conflict, 2)
+                }
+                NodeActivationError::Unavailable => {
+                    (OperationOutcome::Failed, ErrorCode::Unavailable, 3)
+                }
+                NodeActivationError::Failed => {
+                    (OperationOutcome::Failed, ErrorCode::InternalContract, 4)
+                }
+            };
+            (
+                OperationResult {
+                    outcome: outcome.into(),
+                    committed_revision: None,
+                    error: Some(WireError {
+                        code: code.into(),
+                        diagnostic_code,
+                        retry_after_micros: None,
+                    }),
+                    result: None,
+                    result_digest: Vec::new(),
+                },
+                None,
+            )
+        }
+    }
+}
+
 fn passkey_origin(https_listen: SocketAddr) -> String {
     if https_listen.port() == 443 {
         format!("https://{PASSKEY_RELYING_PARTY_ID}")
@@ -618,14 +934,26 @@ fn open_root_repository(
     now: UnixMicros,
 ) -> Result<AuthoritativeRepository, DaemonProcessError> {
     let database_path = local_state.state_directory().join(ROOT_AUTHORITY_DATABASE);
+    if database_path.try_exists()? {
+        return open_root_repository_at(local_state.state_directory(), now);
+    }
+    let database = PartitionDatabase::open(
+        &database_path,
+        InitialBootstrapMaterial::root_partition_id(local_state.node_id())?,
+        now,
+    )?;
+    Ok(AuthoritativeRepository::new(database))
+}
+
+fn open_root_repository_at(
+    state_directory: &std::path::Path,
+    now: UnixMicros,
+) -> Result<AuthoritativeRepository, DaemonProcessError> {
+    let database_path = state_directory.join(ROOT_AUTHORITY_DATABASE);
     let database = if database_path.try_exists()? {
         PartitionDatabase::open_existing(&database_path, now)?
     } else {
-        PartitionDatabase::open(
-            &database_path,
-            InitialBootstrapMaterial::root_partition_id(local_state.node_id())?,
-            now,
-        )?
+        return Err(DaemonProcessError::PrivateNetworkState);
     };
     Ok(AuthoritativeRepository::new(database))
 }
@@ -783,6 +1111,12 @@ pub enum DaemonProcessError {
     /// The daemon state directory could not be inspected safely.
     #[error("daemon state path inspection failed")]
     StatePath(#[from] std::io::Error),
+    /// Authenticated private network construction or framing failed.
+    #[error("daemon private network failed")]
+    PrivateNetwork(#[from] ConsensusNetworkError),
+    /// Required committed private-network material was absent or inconsistent.
+    #[error("daemon private network state is invalid")]
+    PrivateNetworkState,
     /// Stable root identities could not be derived.
     #[error("daemon root identity failed")]
     BootstrapIdentity(#[from] InitialBootstrapMaterialError),
