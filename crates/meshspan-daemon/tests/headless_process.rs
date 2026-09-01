@@ -2,6 +2,9 @@
 
 //! Real-process proof for headless startup, HTTPS setup and durable restart.
 
+#[path = "support/passkey.rs"]
+mod passkey_support;
+
 use std::error::Error;
 use std::fs;
 use std::fs::OpenOptions;
@@ -81,6 +84,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     let browser_session = create_browser_session(fixture.address, &client, &session_body).await?;
     assert_live_totp_verifier_rejects_unknown_factor(fixture.address, &client, api_key).await?;
     let totp_secret = enrol_totp(fixture.address, &client, api_key, &browser_session).await?;
+    let passkey = enrol_passkey(fixture.address, &client, api_key, &browser_session).await?;
     assert_api_key_lifecycle(fixture.address, &client, api_key, &browser_session).await?;
     assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
@@ -101,6 +105,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert_eq!(wait_for_live_provider(&fixture).await?, provider_journal);
     assert_wrapping_key_committed(&fixture)?;
     create_browser_session(fixture.address, &client, &session_body).await?;
+    assert_passkey_session(fixture.address, &client, &passkey).await?;
     let multi_factor_session =
         create_totp_browser_session(fixture.address, &client, api_key, &totp_secret).await?;
     assert_recovery_code_lifecycle(fixture.address, &client, api_key, &multi_factor_session)
@@ -111,6 +116,161 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     process.kill()?;
     process.wait()?;
     Ok(())
+}
+
+struct RegisteredPasskey {
+    user_handle: String,
+}
+
+async fn enrol_passkey(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    session: &BrowserSessionHeaders,
+) -> Result<RegisteredPasskey, Box<dyn Error>> {
+    let challenge_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000012"
+    }))?;
+    let challenge = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/users/current/authentication-methods/passkeys/registration-challenges",
+        Some(&challenge_body),
+        &session.mutation_headers(),
+    )
+    .await?;
+    require_status(
+        &challenge,
+        "201 Created",
+        "create passkey registration challenge",
+    )?;
+    let challenge: serde_json::Value = serde_json::from_str(response_body(&challenge)?)?;
+    let challenge_id = challenge["challenge_id"]
+        .as_str()
+        .ok_or("passkey registration challenge omitted its identity")?;
+    let challenge_value = challenge["challenge"]
+        .as_str()
+        .ok_or("passkey registration challenge omitted its value")?;
+    let relying_party_id = challenge["relying_party_id"]
+        .as_str()
+        .ok_or("passkey registration challenge omitted its relying party")?;
+    let user_handle = challenge["user_id"]
+        .as_str()
+        .ok_or("passkey registration challenge omitted its user handle")?
+        .to_owned();
+    let origin = passkey_origin(address);
+    let evidence = passkey_support::registration(challenge_value, relying_party_id, &origin)?;
+    let registration_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000013",
+        "challenge_id": challenge_id,
+        "label": "Headless process passkey",
+        "credential_id": evidence.credential_id,
+        "client_data_json": evidence.client_data_json,
+        "attestation_object": evidence.attestation_object,
+        "transports": ["internal"]
+    }))?;
+    let registered = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/users/current/authentication-methods/passkeys",
+        Some(&registration_body),
+        &session.mutation_headers(),
+    )
+    .await?;
+    require_status(&registered, "201 Created", "register passkey")?;
+
+    let authorization = format!("Bearer {api_key}");
+    let methods = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/users/current/authentication-methods?limit=100",
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&methods, "200 OK", "list enrolled passkey method")?;
+    if !response_body(&methods)?.contains("Headless process passkey") {
+        return Err("authentication-method inventory omitted the enrolled passkey".into());
+    }
+    Ok(RegisteredPasskey { user_handle })
+}
+
+async fn assert_passkey_session(
+    address: SocketAddr,
+    client: &ClientConfig,
+    passkey: &RegisteredPasskey,
+) -> Result<(), Box<dyn Error>> {
+    let challenge_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000014"
+    }))?;
+    let challenge = request(
+        address,
+        client,
+        "POST",
+        "/api/latest/sessions/passkey/challenges",
+        Some(&challenge_body),
+    )
+    .await?;
+    require_status(
+        &challenge,
+        "201 Created",
+        "create passkey authentication challenge",
+    )?;
+    let challenge: serde_json::Value = serde_json::from_str(response_body(&challenge)?)?;
+    let challenge_id = challenge["challenge_id"]
+        .as_str()
+        .ok_or("passkey authentication challenge omitted its identity")?;
+    let challenge_value = challenge["challenge"]
+        .as_str()
+        .ok_or("passkey authentication challenge omitted its value")?;
+    let relying_party_id = challenge["relying_party_id"]
+        .as_str()
+        .ok_or("passkey authentication challenge omitted its relying party")?;
+    let origin = passkey_origin(address);
+    let evidence = passkey_support::assertion(
+        challenge_value,
+        relying_party_id,
+        &origin,
+        &passkey.user_handle,
+    )?;
+    let session_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000015",
+        "authentication": {
+            "method": "passkey",
+            "challenge_id": challenge_id,
+            "credential_id": evidence.credential_id,
+            "client_data_json": evidence.client_data_json,
+            "authenticator_data": evidence.authenticator_data,
+            "signature": evidence.signature,
+            "user_handle": evidence.user_handle
+        },
+        "client_label": "Restarted passkey proof",
+        "remember": false
+    }))?;
+    let session = request(
+        address,
+        client,
+        "POST",
+        "/api/latest/sessions",
+        Some(&session_body),
+    )
+    .await?;
+    require_status(
+        &session,
+        "201 Created",
+        "authenticate with passkey after restart",
+    )
+}
+
+fn passkey_origin(address: SocketAddr) -> String {
+    if address.port() == 443 {
+        format!("https://{CERTIFICATE_NAME}")
+    } else {
+        format!("https://{CERTIFICATE_NAME}:{}", address.port())
+    }
 }
 
 async fn enrol_totp(
