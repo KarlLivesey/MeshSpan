@@ -73,6 +73,22 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
             .await?;
         let volume_id =
             create_volume(second.address, &second_client, api_key, &administrator_id).await?;
+        create_volume_permission_grant(
+            third.address,
+            &third_client,
+            api_key,
+            &volume_id,
+            &group_id,
+        )
+        .await?;
+        wait_for_permission_visibility(
+            second.address,
+            &second_client,
+            api_key,
+            &volume_id,
+            &group_id,
+        )
+        .await?;
         let content = b"survivor gateway exact native bytes";
         upload_file(second.address, &second_client, api_key, &volume_id, content).await?;
         wait_for_file_surfaces(third.address, &third_client, api_key, &volume_id, content).await
@@ -246,6 +262,28 @@ async fn wait_for_group_membership(
         }
         if Instant::now() >= deadline {
             return Err("committed cross-gateway group membership never became visible".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_permission_visibility(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    group_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if assert_permission_visible(address, client, api_key, volume_id, group_id)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("committed cross-gateway permission never became visible".into());
         }
         sleep(RETRY_INTERVAL).await;
     }
@@ -1000,6 +1038,71 @@ async fn create_volume(
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| "headless volume creation omitted its identity".into())
+    }
+}
+
+async fn create_volume_permission_grant(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    group_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000032",
+        "subject_principal_id": group_id,
+        "rights": [
+            "traverse",
+            "list",
+            "read_data",
+            "create_child",
+            "write_data",
+            "read_attributes"
+        ],
+        "inheritance": "object_and_descendants",
+        "valid_from_epoch_micros": null,
+        "valid_until_epoch_micros": null,
+        "activation": null
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        &format!("/api/latest/admin/volumes/{volume_id}/permission-grants"),
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "201 Created", "grant group volume access")?;
+    if !response_body(&response)?.contains(group_id) {
+        return Err("volume permission creation returned the wrong subject".into());
+    }
+    Ok(())
+}
+
+async fn assert_permission_visible(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    group_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        &format!("/api/latest/admin/volumes/{volume_id}/permission-grants?limit=100"),
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "200 OK", "list committed volume permissions")?;
+    if response_body(&response)?.contains(group_id) {
+        Ok(())
+    } else {
+        Err("volume permission inventory omitted the group grant".into())
     }
 }
 
