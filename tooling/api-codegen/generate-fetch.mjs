@@ -29,6 +29,11 @@ import {
   renderAuthenticationClientMethods,
   renderAuthenticationClientRuntime,
 } from "./render-authentication-client.mjs";
+import {
+  renderVolumeClientInterface,
+  renderVolumeClientMethods,
+  renderVolumeClientRuntime,
+} from "./render-volume-client.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -89,6 +94,7 @@ import type {
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
+  ListVolumesResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -169,6 +175,8 @@ import {
   zListUploadRangesResponse2,
   zListUsersQuery,
   zListUsersResponse,
+  zListVolumesQuery,
+  zListVolumesResponse2,
   zReadFilePath,
   zReadFileQuery,
   zRevokeCurrentUserAuthenticationMethodBody,
@@ -255,6 +263,11 @@ export type ListAuthenticationMethodsRequest = Readonly<{
   limit?: number;
 }>;
 
+export type ListVolumesRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
 ${renderUploadRequestTypes()}
 
 export type CreateSessionResult = Readonly<{
@@ -267,6 +280,7 @@ export interface MeshSpanFetchClient {
   ${renderIdentityAdministrationClientInterface()}
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
+  ${renderVolumeClientInterface()}
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
   getCurrentSession(): Promise<CurrentSessionResponse>;
@@ -322,6 +336,7 @@ export function createMeshSpanFetchClient(
     ${renderIdentityAdministrationClientMethods(routes)}
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
+    ${renderVolumeClientMethods(routes)}
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -478,6 +493,8 @@ ${renderFetchRuntime()}
 ${renderIdentityAdministrationRuntime(routes)}
 
 ${renderAuthenticationClientRuntime(routes)}
+
+${renderVolumeClientRuntime(routes)}
 
 `;
 

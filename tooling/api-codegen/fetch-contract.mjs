@@ -84,6 +84,7 @@ export function readRequiredRoutes(document) {
     ),
     listUploadRanges: requireOperation(operations, "listUploadRanges"),
     listUsers: requireOperation(operations, "listUsers"),
+    listVolumes: requireOperation(operations, "listVolumes"),
     readFile: requireOperation(operations, "readFile"),
     renameObject: requireOperation(operations, "renameObject"),
     removeGroupMember: requireOperation(operations, "removeGroupMember"),
