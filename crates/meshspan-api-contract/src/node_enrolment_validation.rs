@@ -51,6 +51,15 @@ pub fn decode_enrol_node_request(bytes: &[u8]) -> Result<EnrolNodeRequest, Bound
     decode(bytes, MAX_ENROL_NODE_BYTES, enrol_request()?)
 }
 
+/// Encodes one contract-valid anonymous node-enrolment request.
+///
+/// # Errors
+///
+/// Rejects a request that cannot be encoded or violates its published schema.
+pub fn encode_enrol_node_request(request: &EnrolNodeRequest) -> Result<Vec<u8>, BoundaryError> {
+    encode(request, enrol_request()?)
+}
+
 /// Encodes one contract-valid node certificate and bootstrap result.
 ///
 /// # Errors
@@ -58,6 +67,15 @@ pub fn decode_enrol_node_request(bytes: &[u8]) -> Result<EnrolNodeRequest, Bound
 /// Rejects a response that cannot be encoded or violates its published schema.
 pub fn encode_enrol_node_response(response: &EnrolNodeResponse) -> Result<Vec<u8>, BoundaryError> {
     encode(response, enrol_response()?)
+}
+
+/// Decodes one structurally valid bounded node-enrolment response.
+///
+/// # Errors
+///
+/// Rejects oversized, malformed or schema-invalid input.
+pub fn decode_enrol_node_response(bytes: &[u8]) -> Result<EnrolNodeResponse, BoundaryError> {
+    decode(bytes, MAX_ENROL_NODE_BYTES, enrol_response()?)
 }
 
 fn decode<T: serde::de::DeserializeOwned>(

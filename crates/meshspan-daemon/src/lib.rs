@@ -70,6 +70,7 @@ mod file_read_api_tests;
 mod headless_config;
 #[cfg(test)]
 mod headless_config_tests;
+mod headless_node_join;
 mod https_server;
 #[cfg(test)]
 mod https_server_tests;
@@ -136,6 +137,7 @@ mod passkey_test_support;
 mod pending_recovery_bundle;
 #[cfg(test)]
 mod pending_recovery_bundle_tests;
+mod pinned_https_client;
 mod protected_api_key_issuance;
 mod protected_file;
 mod protected_recovery_code_issuance;

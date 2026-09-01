@@ -81,6 +81,24 @@ impl LocalNodeIdentity {
         self.key.public_key_sec1()
     }
 
+    /// Signs the exact canonical enrolment transcript without exposing the private identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the provider cannot produce a canonical signature.
+    pub fn sign_enrolment_transcript(
+        &self,
+        transcript: &[u8],
+    ) -> Result<Vec<u8>, LocalNodeIdentityError> {
+        self.key
+            .sign_enrolment_transcript(transcript)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn private_key_pkcs8(&self) -> &[u8] {
+        self.key.private_key_pkcs8()
+    }
+
     /// Returns the temporary public certificate used only by first-start HTTPS clients.
     #[must_use]
     pub fn bootstrap_certificate_der(&self) -> &[u8] {

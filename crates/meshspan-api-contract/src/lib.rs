@@ -140,7 +140,8 @@ pub use node_enrolment::{
 };
 pub use node_enrolment_validation::{
     MAX_CREATE_NODE_JOIN_GRANT_BYTES, MAX_ENROL_NODE_BYTES, decode_create_node_join_grant_request,
-    decode_enrol_node_request, encode_create_node_join_grant_response, encode_enrol_node_response,
+    decode_enrol_node_request, decode_enrol_node_response, encode_create_node_join_grant_response,
+    encode_enrol_node_request, encode_enrol_node_response,
 };
 pub use object_stat::{GetObjectQuery, GetObjectResponse};
 pub use object_stat_validation::{

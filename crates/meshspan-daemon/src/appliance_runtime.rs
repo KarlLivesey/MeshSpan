@@ -35,6 +35,7 @@ use meshspan_metadata::{
 use thiserror::Error;
 use tokio::task::JoinHandle;
 
+use crate::headless_node_join::admit_headless_node;
 use crate::{
     ApiKeyIssuanceApiError, AuthenticationMethodListingApiError,
     AuthenticationMethodListingService, AuthenticationMethodRevocationApiError,
@@ -113,9 +114,18 @@ where
 {
     let config = HeadlessDaemonConfig::parse(arguments)?;
     let started_at = current_time()?;
-    let local_state = DaemonLocalState::open(&config, started_at)?;
+    let mut local_state = DaemonLocalState::open(&config, started_at)?;
     let setup_state = Arc::new(SetupStateSnapshot::new(SetupState::ClaimRequired));
     setup_state.reconcile(local_state.local_database())?;
+    let private_endpoint = advertised_private_endpoint(&config)?;
+    if setup_state.setup_state() != SetupState::Configured
+        && admit_headless_node(&mut local_state, &config, &private_endpoint, started_at)
+            .await
+            .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?
+            .is_some()
+    {
+        return Err(DaemonProcessError::NodeActivationPending);
+    }
 
     let (authority, authority_task, removal_authority_epoch) =
         start_root_authority(&local_state, started_at)?;
@@ -160,7 +170,7 @@ where
         CurrentNodeBootstrapPeerSource::new(
             open_authentication_authority(&local_state, &authority, started_at)?,
             local_state.node_id(),
-            advertised_private_endpoint(&config)?,
+            private_endpoint,
         ),
     );
     let router = Router::new()
@@ -851,6 +861,12 @@ pub enum DaemonProcessError {
     /// Anonymous pre-authorised node-enrolment API construction failed.
     #[error("daemon node-enrolment API failed")]
     NodeEnrolmentApi(#[from] NodeEnrolmentApiError),
+    /// Headless admission into an existing mesh failed.
+    #[error("daemon headless node join failed")]
+    HeadlessNodeJoin,
+    /// HTTPS admission is durable but private activation and catch-up remain incomplete.
+    #[error("daemon node admission is durable but private activation is pending")]
+    NodeActivationPending,
     /// No reachable private endpoint could be derived or configured.
     #[error("daemon private endpoint is unavailable")]
     PrivateEndpoint,

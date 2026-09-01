@@ -30,6 +30,35 @@ const HOST_ID_DOMAIN: &[u8] = b"meshspan.enrolment.new-host-id.v1\0";
 const TRANSCRIPT_DOMAIN: &[u8] = b"meshspan.enrolment.node-identity-proof.v1\0";
 const NODE_CERTIFICATE_LIFETIME_MICROS: u64 = 30 * 24 * 60 * 60 * 1_000_000;
 
+pub(crate) struct NodeEnrolmentTranscript<'a> {
+    pub mesh_id: MeshId,
+    pub join_grant_id: meshspan_domain::JoinGrantId,
+    pub operation_id: OperationId,
+    pub host_id: HostId,
+    pub new_host_name: Option<&'a RecordName>,
+    pub node_name: &'a RecordName,
+    pub requested_roles: JoinRoles,
+    pub wrapping_public_key: [u8; 32],
+    pub private_endpoint: &'a str,
+}
+
+impl NodeEnrolmentTranscript<'_> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        let mut transcript = Vec::with_capacity(512);
+        transcript.extend_from_slice(TRANSCRIPT_DOMAIN);
+        transcript.extend_from_slice(&self.mesh_id.as_bytes());
+        transcript.extend_from_slice(&self.join_grant_id.as_bytes());
+        transcript.extend_from_slice(&self.operation_id.as_bytes());
+        transcript.extend_from_slice(&self.host_id.as_bytes());
+        append_optional_name(&mut transcript, self.new_host_name);
+        append_name(&mut transcript, self.node_name);
+        transcript.push(self.requested_roles.bits());
+        transcript.extend_from_slice(&self.wrapping_public_key);
+        append_bytes(&mut transcript, self.private_endpoint.as_bytes());
+        transcript
+    }
+}
+
 /// Exact durable evidence returned by one node admission.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NodeEnrolmentCommit {
@@ -263,18 +292,18 @@ impl ValidatedEnrolment {
     }
 
     fn transcript(&self, mesh_id: MeshId, join_grant_id: meshspan_domain::JoinGrantId) -> Vec<u8> {
-        let mut transcript = Vec::with_capacity(512);
-        transcript.extend_from_slice(TRANSCRIPT_DOMAIN);
-        transcript.extend_from_slice(&mesh_id.as_bytes());
-        transcript.extend_from_slice(&join_grant_id.as_bytes());
-        transcript.extend_from_slice(&self.operation_id.as_bytes());
-        transcript.extend_from_slice(&self.host_id.as_bytes());
-        append_optional_name(&mut transcript, self.new_host_name.as_ref());
-        append_name(&mut transcript, &self.node_name);
-        transcript.push(self.requested_roles.bits());
-        transcript.extend_from_slice(&self.wrapping_public_key);
-        append_bytes(&mut transcript, self.private_endpoint.as_bytes());
-        transcript
+        NodeEnrolmentTranscript {
+            mesh_id,
+            join_grant_id,
+            operation_id: self.operation_id,
+            host_id: self.host_id,
+            new_host_name: self.new_host_name.as_ref(),
+            node_name: &self.node_name,
+            requested_roles: self.requested_roles,
+            wrapping_public_key: self.wrapping_public_key,
+            private_endpoint: &self.private_endpoint,
+        }
+        .encode()
     }
 
     fn certificate_dns_name(&self) -> String {
@@ -331,21 +360,29 @@ fn host(
         NodeJoinHost::New { name } => {
             let name =
                 RecordName::new(name.as_str()).map_err(|_| NodeEnrolmentError::InvalidInput)?;
-            let mut digest = Sha256::new();
-            digest.update(HOST_ID_DOMAIN);
-            digest.update(operation_id.as_bytes());
-            digest.update(node_id.as_bytes());
-            digest.update(name.canonical().as_bytes());
-            let bytes: [u8; 16] = digest.finalize()[..16]
-                .try_into()
-                .map(uuid_v8)
-                .map_err(|_| NodeEnrolmentError::Failed)?;
             Ok((
-                HostId::from_bytes(bytes).map_err(|_| NodeEnrolmentError::Failed)?,
+                derived_new_host_id(operation_id, node_id, &name)?,
                 Some(name),
             ))
         }
     }
+}
+
+pub(crate) fn derived_new_host_id(
+    operation_id: OperationId,
+    node_id: NodeId,
+    name: &RecordName,
+) -> Result<HostId, NodeEnrolmentError> {
+    let mut digest = Sha256::new();
+    digest.update(HOST_ID_DOMAIN);
+    digest.update(operation_id.as_bytes());
+    digest.update(node_id.as_bytes());
+    digest.update(name.canonical().as_bytes());
+    let bytes: [u8; 16] = digest.finalize()[..16]
+        .try_into()
+        .map(uuid_v8)
+        .map_err(|_| NodeEnrolmentError::Failed)?;
+    HostId::from_bytes(bytes).map_err(|_| NodeEnrolmentError::Failed)
 }
 
 fn roles(values: &[NodeJoinRole]) -> Result<JoinRoles, NodeEnrolmentError> {
