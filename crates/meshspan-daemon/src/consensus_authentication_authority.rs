@@ -5,18 +5,20 @@
 use meshspan_cluster::{MetadataAuthorityHandle, MetadataAuthorityRequestError};
 use meshspan_domain::{
     ApiKeyId, AssuranceLevel, AuthenticationOperationClass, AuthenticationService, OperationId,
-    PrincipalId, RecoveryCodeId, UnixMicros,
+    PrincipalId, RecoveryCodeId, SessionId, UnixMicros,
 };
 use meshspan_metadata::{
     ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthenticationSessionReplay,
     AuthoritativeCommand, AuthoritativeRepository, BrowserSessionAccessRequest, CommandContext,
     PasskeySessionReplay, PasskeyVerificationMaterial, RecoveryCodeVerificationMaterial,
-    RepositoryError, SessionAccessDecision, TotpVerificationMaterial,
+    RepositoryError, SessionAccessDecision, SessionRevocationReplay, TotpVerificationMaterial,
 };
 
 use crate::{
     BrowserSessionAuthority, BrowserSessionAuthorityError, NativeApiKeyAuthority,
     NativeApiKeyAuthorityError, SessionAuthority, SessionAuthorityError, SessionCommit,
+    SessionRevocationAuthority, SessionRevocationAuthorityError, SessionRevocationCommit,
+    StepUpSessionAuthority,
 };
 
 /// Current authentication reads plus consensus-owned authentication mutations.
@@ -192,6 +194,49 @@ impl NativeApiKeyAuthority for ConsensusAuthenticationAuthority {
     }
 }
 
+impl StepUpSessionAuthority for ConsensusAuthenticationAuthority {
+    fn resolve_step_up_session(
+        &self,
+        operation_id: OperationId,
+        source_session_id: SessionId,
+        source_token_digest: [u8; 32],
+        source_csrf_digest: [u8; 32],
+    ) -> Result<Option<AuthenticationSessionReplay>, SessionAuthorityError> {
+        self.reader
+            .resolve_step_up_session(
+                operation_id,
+                source_session_id,
+                source_token_digest,
+                source_csrf_digest,
+            )
+            .map_err(|error| map_session_repository_error(&error))
+    }
+}
+
+impl SessionRevocationAuthority for ConsensusAuthenticationAuthority {
+    fn resolve_revocation(
+        &self,
+        operation_id: OperationId,
+        session_id: SessionId,
+        token_digest: [u8; 32],
+        csrf_digest: [u8; 32],
+    ) -> Result<Option<SessionRevocationReplay>, SessionRevocationAuthorityError> {
+        self.reader
+            .resolve_session_revocation(operation_id, session_id, token_digest, csrf_digest)
+            .map_err(|error| map_revocation_repository_error(&error))
+    }
+
+    fn commit_or_resolve_revocation(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<SessionRevocationCommit, SessionRevocationAuthorityError> {
+        self.commit(context, command)
+            .map(|result_digest| SessionRevocationCommit { result_digest })
+            .map_err(map_revocation_authority_error)
+    }
+}
+
 fn map_session_repository_error(error: &RepositoryError) -> SessionAuthorityError {
     if repository_is_unavailable(error) {
         SessionAuthorityError::Unavailable
@@ -218,6 +263,16 @@ fn map_native_repository_error(error: &RepositoryError) -> NativeApiKeyAuthority
     }
 }
 
+fn map_revocation_repository_error(error: &RepositoryError) -> SessionRevocationAuthorityError {
+    if repository_is_unavailable(error) {
+        SessionRevocationAuthorityError::Unavailable
+    } else if matches!(error, RepositoryError::OperationConflict) {
+        SessionRevocationAuthorityError::Conflict
+    } else {
+        SessionRevocationAuthorityError::Failed
+    }
+}
+
 fn repository_is_unavailable(error: &RepositoryError) -> bool {
     matches!(
         error,
@@ -232,6 +287,21 @@ fn map_session_authority_error(error: MetadataAuthorityRequestError) -> SessionA
         MetadataAuthorityRequestError::Conflict => SessionAuthorityError::Conflict,
         MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
             SessionAuthorityError::Failed
+        }
+    }
+}
+
+fn map_revocation_authority_error(
+    error: MetadataAuthorityRequestError,
+) -> SessionRevocationAuthorityError {
+    match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => {
+            SessionRevocationAuthorityError::Unavailable
+        }
+        MetadataAuthorityRequestError::Conflict => SessionRevocationAuthorityError::Conflict,
+        MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
+            SessionRevocationAuthorityError::Failed
         }
     }
 }

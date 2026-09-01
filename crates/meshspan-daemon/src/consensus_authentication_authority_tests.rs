@@ -18,23 +18,41 @@ use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, BootstrapAppliance, BootstrapMesh,
     BrowserSessionAccessRequest, BrowserSessionProtection, CommandContext,
     CreateAuthenticationMethod, IssueAuthenticationSession, NewAuthenticationCredential,
-    PartitionDatabase, RecordName, SessionAccessDecision, SessionAccessRequest,
-    SessionAuthenticationFactor, SessionClientLabel,
+    PartitionDatabase, RecordName, RevokeAuthenticationSession, SessionAccessDecision,
+    SessionAccessRequest, SessionAuthenticationFactor, SessionClientLabel,
 };
 
-use crate::{BrowserSessionAuthority, ConsensusAuthenticationAuthority, SessionAuthority};
+use crate::{
+    BrowserSessionAuthority, ConsensusAuthenticationAuthority, SessionAuthority,
+    SessionRevocationAuthority,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authentication_reads_and_session_mutation_share_committed_consensus_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = RunningAuthority::start().await?;
     let committed = fixture.create_session()?;
-    assert_ne!(committed.0.result_digest, [0; 32]);
-    assert!(matches!(committed.1, SessionAccessDecision::Granted(_)));
+    assert_ne!(committed.session.result_digest, [0; 32]);
+    assert!(matches!(
+        committed.before_revocation,
+        SessionAccessDecision::Granted(_)
+    ));
+    assert_ne!(committed.revocation.result_digest, [0; 32]);
+    assert!(matches!(
+        committed.after_revocation,
+        SessionAccessDecision::Denied(_)
+    ));
     fixture.shutdown().await
 }
 
 type AuthorityRuntime = tokio::task::JoinHandle<Result<(), MetadataAuthorityRuntimeError>>;
+
+struct AuthenticationRoundTrip {
+    session: crate::SessionCommit,
+    before_revocation: SessionAccessDecision,
+    revocation: crate::SessionRevocationCommit,
+    after_revocation: SessionAccessDecision,
+}
 
 struct RunningAuthority {
     _directory: tempfile::TempDir,
@@ -105,9 +123,7 @@ impl RunningAuthority {
         })
     }
 
-    fn create_session(
-        &mut self,
-    ) -> Result<(crate::SessionCommit, SessionAccessDecision), Box<dyn std::error::Error>> {
+    fn create_session(&mut self) -> Result<AuthenticationRoundTrip, Box<dyn std::error::Error>> {
         let reader = self
             .reader
             .take()
@@ -138,22 +154,50 @@ impl RunningAuthority {
             let receipt = authority
                 .commit_or_resolve(context, &command)
                 .map_err(|error| std::io::Error::other(format!("session commit: {error:?}")))?;
-            let decision = authority
-                .evaluate_browser_session(BrowserSessionAccessRequest {
-                    expected_session_id: bearer.session_id(),
-                    session: SessionAccessRequest {
-                        token_digest: bearer.token_digest(),
-                        required_assurance: meshspan_domain::AssuranceLevel::SingleFactor,
-                        gateway_node_id: node_id,
-                        gateway_incarnation: 1,
-                        now: UnixMicros::new(21),
-                    },
-                    protection: BrowserSessionProtection::Mutation {
-                        csrf_digest: csrf.token_digest(),
-                    },
-                })
+            let access_request = BrowserSessionAccessRequest {
+                expected_session_id: bearer.session_id(),
+                session: SessionAccessRequest {
+                    token_digest: bearer.token_digest(),
+                    required_assurance: meshspan_domain::AssuranceLevel::SingleFactor,
+                    gateway_node_id: node_id,
+                    gateway_incarnation: 1,
+                    now: UnixMicros::new(21),
+                },
+                protection: BrowserSessionProtection::Mutation {
+                    csrf_digest: csrf.token_digest(),
+                },
+            };
+            let before_revocation = authority
+                .evaluate_browser_session(access_request)
                 .map_err(|error| std::io::Error::other(format!("session read: {error:?}")))?;
-            Ok::<_, Box<dyn std::error::Error>>((receipt, decision))
+            let revocation = authority
+                .commit_or_resolve_revocation(
+                    command_context(administrator_id, 13, 14, 22, None)?,
+                    &AuthoritativeCommand::RevokeAuthenticationSession(
+                        RevokeAuthenticationSession {
+                            session_id: bearer.session_id(),
+                            principal_id: administrator_id,
+                        },
+                    ),
+                )
+                .map_err(|error| std::io::Error::other(format!("revocation commit: {error:?}")))?;
+            let after_revocation = authority
+                .evaluate_browser_session(BrowserSessionAccessRequest {
+                    session: SessionAccessRequest {
+                        now: UnixMicros::new(23),
+                        ..access_request.session
+                    },
+                    ..access_request
+                })
+                .map_err(|error| {
+                    std::io::Error::other(format!("revoked session read: {error:?}"))
+                })?;
+            Ok::<_, Box<dyn std::error::Error>>(AuthenticationRoundTrip {
+                session: receipt,
+                before_revocation,
+                revocation,
+                after_revocation,
+            })
         })
     }
 
