@@ -419,6 +419,7 @@ fn compose_storage_runtime(
     now: UnixMicros,
 ) -> Result<StorageRuntimeComposition, DaemonProcessError> {
     let runtime = tokio::runtime::Handle::current();
+    let root_partition_id = open_root_repository(local_state, now)?.partition_id();
     let authentication_authority = || {
         Ok::<_, DaemonProcessError>(ConsensusAuthenticationAuthority::new(
             open_root_repository(local_state, now)?,
@@ -432,6 +433,7 @@ fn compose_storage_runtime(
             local_state.state_directory(),
             local_state.wrapping_key_path(),
             local_state.node_id(),
+            root_partition_id,
             authority.clone(),
             runtime.clone(),
         )

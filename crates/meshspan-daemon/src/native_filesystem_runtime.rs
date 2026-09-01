@@ -88,6 +88,7 @@ impl NativeFilesystemRuntimeConfiguration {
         daemon_state_directory: &Path,
         wrapping_key_path: PathBuf,
         node_id: meshspan_domain::NodeId,
+        partition_id: PartitionId,
         authority: MetadataAuthorityHandle,
         runtime: tokio::runtime::Handle,
     ) -> Result<Self, NativeFilesystemRuntimeConfigurationError> {
@@ -95,7 +96,7 @@ impl NativeFilesystemRuntimeConfiguration {
             authority_database: daemon_state_directory.join("root-authority.sqlite3"),
             filesystem_state_directory: daemon_state_directory.join("filesystem"),
             wrapping_key_path,
-            partition_id: InitialBootstrapMaterial::root_partition_id(node_id)?,
+            partition_id,
             branch_id: InitialBootstrapMaterial::local_branch_id(node_id)?,
             authority,
             runtime,
