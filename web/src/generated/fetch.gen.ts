@@ -350,6 +350,8 @@ export interface MeshSpanFetchClient {
   ): Promise<WriteUploadRangeResponse>;
   listVolumes(request?: ListVolumesRequest): Promise<ListVolumesResponse>;
   listNextVolumes(nextPageUrl: string): Promise<ListVolumesResponse>;
+  listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
+  listNextDirectory(nextPageUrl: string): Promise<ListDirectoryResponse>;
   createMeshSetup(
     request: CreateMeshSetupRequestWritable,
   ): Promise<CreateMeshSetupResponse>;
@@ -361,7 +363,6 @@ export interface MeshSpanFetchClient {
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
-  listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   readFile(request: ReadFileRequest): Promise<ReadFileResult>;
   revokeCurrentSession(
     request: RevokeCurrentSessionRequest,
@@ -956,6 +957,38 @@ export function createMeshSpanFetchClient(
         ),
       );
     },
+    async listDirectory(request): Promise<ListDirectoryResponse> {
+      const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
+      const query = zListDirectoryQuery.parse({
+        cursor: request.cursor,
+        limit: request.limit,
+        path: request.path,
+      });
+      if (query.path !== undefined) {
+        validateNamespacePath(query.path);
+      }
+      return requestJson(
+        context,
+        appendQuery(
+          substitutePathParameter(
+            "/volumes/{volume_id}/directory-entries",
+            "volume_id",
+            path.volume_id,
+          ),
+          query,
+        ),
+        { method: "GET" },
+        zListDirectoryResponse2,
+      );
+    },
+    async listNextDirectory(nextPageUrl): Promise<ListDirectoryResponse> {
+      return requestJson(
+        context,
+        validateDirectoryPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListDirectoryResponse2,
+      );
+    },
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -1034,30 +1067,6 @@ export function createMeshSpanFetchClient(
         "/setup/status",
         { method: "GET" },
         zGetSetupStatusResponse,
-      );
-    },
-    async listDirectory(request): Promise<ListDirectoryResponse> {
-      const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
-      const query = zListDirectoryQuery.parse({
-        cursor: request.cursor,
-        limit: request.limit,
-        path: request.path,
-      });
-      if (query.path !== undefined) {
-        validateNamespacePath(query.path);
-      }
-      return requestJson(
-        context,
-        appendQuery(
-          substitutePathParameter(
-            "/volumes/{volume_id}/directory-entries",
-            "volume_id",
-            path.volume_id,
-          ),
-          query,
-        ),
-        { method: "GET" },
-        zListDirectoryResponse2,
       );
     },
     async readFile(request): Promise<ReadFileResult> {
@@ -1258,6 +1267,55 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   const bytes = await readBoundedBytes(response.body, MAX_JSON_RESPONSE_BYTES);
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   return JSON.parse(text) as unknown;
+}
+
+function validateDirectoryPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("directory page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  validateDirectoryPageLocation(apiRoot, route);
+  validateDirectoryPageQuery(route);
+  return route.pathname + route.search;
+}
+
+function validateDirectoryPageLocation(apiRoot: URL, route: URL): void {
+  const segments = route.pathname.split("/");
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    segments.length !== 6 ||
+    segments[1] !== "api" ||
+    segments[2] !== "latest" ||
+    segments[3] !== "volumes" ||
+    segments[5] !== "directory-entries"
+  ) {
+    throw new TypeError("directory page URL is outside the native file API");
+  }
+  zListDirectoryPath.parse({ volume_id: segments[4] });
+}
+
+function validateDirectoryPageQuery(route: URL): void {
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some(
+      (name) => name !== "cursor" && name !== "limit" && name !== "path",
+    ) ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("directory page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  const query = zListDirectoryQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+    path: route.searchParams.get("path") ?? undefined,
+  });
+  if (query.path !== undefined) {
+    validateNamespacePath(query.path);
+  }
 }
 
 function validatePrincipalPageUrl(apiRoot: URL, value: string): string {

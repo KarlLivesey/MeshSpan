@@ -34,6 +34,12 @@ import {
   renderVolumeClientMethods,
   renderVolumeClientRuntime,
 } from "./render-volume-client.mjs";
+import {
+  renderDirectoryClientInterface,
+  renderDirectoryClientMethods,
+  renderDirectoryClientRuntime,
+  renderDirectoryRequestTypes,
+} from "./render-directory-client.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -222,12 +228,7 @@ export type MeshSpanFetchClientOptions = Readonly<{
   apiKey?: string;
 }>;
 
-export type ListDirectoryRequest = Readonly<{
-  volumeId: string;
-  path?: string;
-  cursor?: string;
-  limit?: number;
-}>;
+${renderDirectoryRequestTypes()}
 
 export type GetObjectRequest = Readonly<{
   volumeId: string;
@@ -281,6 +282,7 @@ export interface MeshSpanFetchClient {
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
   ${renderVolumeClientInterface()}
+  ${renderDirectoryClientInterface()}
   createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
   getCurrentSession(): Promise<CurrentSessionResponse>;
@@ -288,7 +290,6 @@ export interface MeshSpanFetchClient {
   getHealth(): Promise<HealthResponse>;
   getOpenApi(): Promise<Record<string, unknown>>;
   getSetupStatus(): Promise<SetupStatusResponse>;
-  listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   readFile(request: ReadFileRequest): Promise<ReadFileResult>;
   revokeCurrentSession(
     request: RevokeCurrentSessionRequest,
@@ -337,6 +338,7 @@ export function createMeshSpanFetchClient(
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
     ${renderVolumeClientMethods(routes)}
+    ${renderDirectoryClientMethods(routes)}
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -417,30 +419,6 @@ export function createMeshSpanFetchClient(
         zGetSetupStatusResponse,
       );
     },
-    async listDirectory(request): Promise<ListDirectoryResponse> {
-      const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
-      const query = zListDirectoryQuery.parse({
-        cursor: request.cursor,
-        limit: request.limit,
-        path: request.path,
-      });
-      if (query.path !== undefined) {
-        validateNamespacePath(query.path);
-      }
-      return requestJson(
-        context,
-        appendQuery(
-          substitutePathParameter(
-            ${JSON.stringify(routes.listDirectory.route)},
-            "volume_id",
-            path.volume_id,
-          ),
-          query,
-        ),
-        { method: ${JSON.stringify(routes.listDirectory.method)} },
-        zListDirectoryResponse2,
-      );
-    },
     async readFile(request): Promise<ReadFileResult> {
       const path = zReadFilePath.parse({ volume_id: request.volumeId });
       const query = zReadFileQuery.parse({
@@ -489,6 +467,8 @@ export function createMeshSpanFetchClient(
 }
 
 ${renderFetchRuntime()}
+
+${renderDirectoryClientRuntime()}
 
 ${renderIdentityAdministrationRuntime(routes)}
 
