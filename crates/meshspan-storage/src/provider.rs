@@ -74,7 +74,7 @@ impl StoragePermitVerifier {
     ///
     /// Rejects the reserved zero authority epoch or catalogue revision. Callers must initialise
     /// this only after the node has applied that catalogue revision locally.
-    pub const fn new(
+    pub fn new(
         mesh_id: MeshId,
         current_removal_authority_epoch: u64,
         minimum_catalogue_revision: Revision,

@@ -291,14 +291,34 @@ pub(super) fn latest_volume_generation(
     database: &PartitionDatabase,
     volume_id: VolumeId,
 ) -> Result<Option<u64>, RepositoryError> {
+    latest_generation(
+        database,
+        VOLUME_CONTENT_KEY_SECRET_KIND,
+        &volume_id.as_bytes(),
+    )
+}
+
+pub(super) fn latest_storage_permit_generation(
+    database: &PartitionDatabase,
+    mesh_id: MeshId,
+) -> Result<Option<u64>, RepositoryError> {
+    latest_generation(
+        database,
+        STORAGE_PERMIT_KEY_SECRET_KIND,
+        &mesh_id.as_bytes(),
+    )
+}
+
+fn latest_generation(
+    database: &PartitionDatabase,
+    secret_kind: u16,
+    secret_id: &[u8; 16],
+) -> Result<Option<u64>, RepositoryError> {
     let stored = database.connection().query_row(
         "SELECT MAX(generation)
          FROM secret_generations
          WHERE secret_kind = ?1 AND secret_id = ?2",
-        params![
-            i64::from(VOLUME_CONTENT_KEY_SECRET_KIND),
-            volume_id.as_bytes().as_slice()
-        ],
+        params![i64::from(secret_kind), secret_id.as_slice()],
         |row| row.get::<_, Option<i64>>(0),
     )?;
     stored

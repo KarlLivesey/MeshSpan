@@ -48,7 +48,7 @@ impl UnprotectedContentAccess {
     /// # Errors
     ///
     /// Rejects the reserved zero target generation.
-    pub const fn new(
+    pub fn new(
         mesh_id: MeshId,
         target_id: TargetId,
         target_generation: u64,

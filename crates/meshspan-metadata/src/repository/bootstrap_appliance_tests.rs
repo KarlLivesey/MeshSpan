@@ -59,6 +59,10 @@ fn first_mesh_and_login_method_commit_and_replay_as_one_operation()
         let data_key = envelope.open(&private_key)?;
         assert_eq!(permit.secret.decrypt(&data_key)?.expose(), &[202; 32]);
     }
+    assert_eq!(
+        repository.latest_storage_permit_generation(MeshId::from_bytes([5; 16])?)?,
+        Some(1)
+    );
 
     let database = repository.into_database();
     assert_eq!(count(database.connection(), "meshes")?, 1);

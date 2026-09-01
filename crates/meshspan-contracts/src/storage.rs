@@ -3,6 +3,7 @@
 //! Replaceable storage-provider capability contract.
 
 use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
+use zeroize::Zeroizing;
 
 use crate::{BoundedBytes, BoundedItems, ContractError, ImplementationDescriptor, RequestContext};
 
@@ -16,7 +17,7 @@ const WRITE_PERMIT_DOMAIN: &[u8] = b"meshspan.storage.write-permit.v1";
 ///
 /// This type deliberately omits `Clone`, `Copy` and `Debug`. It is capability material, not a
 /// serialisable contract field or a value that may be logged.
-pub struct StoragePermitMacKey([u8; 32]);
+pub struct StoragePermitMacKey(Zeroizing<[u8; 32]>);
 
 impl StoragePermitMacKey {
     /// Accepts exact key bytes obtained from the mesh secret-distribution boundary.
@@ -25,7 +26,16 @@ impl StoragePermitMacKey {
     ///
     /// Rejects the all-zero sentinel, which is never valid key material.
     pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, ContractError> {
-        if bytes == [0; 32] {
+        Self::from_protected_bytes(Zeroizing::new(bytes))
+    }
+
+    /// Accepts exact key bytes already held by a zeroising secret container.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero sentinel, which is never valid key material.
+    pub fn from_protected_bytes(bytes: Zeroizing<[u8; 32]>) -> Result<Self, ContractError> {
+        if *bytes == [0; 32] {
             Err(ContractError::InvalidInput)
         } else {
             Ok(Self(bytes))

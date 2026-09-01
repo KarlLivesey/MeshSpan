@@ -152,6 +152,9 @@ mod step_up_session_api;
 mod step_up_session_api_tests;
 #[cfg(test)]
 mod step_up_session_tests;
+mod storage_permit_loading;
+#[cfg(test)]
+mod storage_permit_loading_tests;
 mod storage_target_registration;
 #[cfg(test)]
 mod storage_target_registration_tests;
@@ -350,6 +353,9 @@ pub use step_up_session_api::{
     StepUpCurrentSessionApiError, StepUpCurrentSessionController,
     step_up_current_session_api_router,
 };
+pub use storage_permit_loading::{
+    StoragePermitAuthority, StoragePermitLoadingError, StoragePermitLoadingService,
+};
 pub use storage_target_registration::{
     StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
     StorageTargetRegistrationError, StorageTargetRegistrationService,
@@ -384,7 +390,8 @@ pub use volume_inventory::{
     volume_inventory_api_router,
 };
 pub use volume_key_loading::{
-    VolumeKeyAuthority, VolumeKeyAuthorityError, VolumeKeyDecryptor, VolumeKeyDecryptorError,
+    SecretGenerationAuthority, SecretGenerationAuthorityError, SecretGenerationDecryptor,
+    SecretGenerationDecryptorError, SecretGenerationLoadingError, VolumeKeyAuthority,
     VolumeKeyLoadingError, VolumeKeyLoadingService,
 };
 

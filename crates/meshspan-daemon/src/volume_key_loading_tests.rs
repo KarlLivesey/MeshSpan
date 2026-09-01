@@ -10,8 +10,8 @@ use meshspan_secret_envelope::{
 };
 
 use crate::{
-    LocalWrappingKey, VolumeKeyAuthority, VolumeKeyAuthorityError, VolumeKeyLoadingError,
-    VolumeKeyLoadingService,
+    LocalWrappingKey, SecretGenerationAuthority, SecretGenerationAuthorityError,
+    VolumeKeyAuthority, VolumeKeyLoadingError, VolumeKeyLoadingService,
 };
 
 #[test]
@@ -216,22 +216,24 @@ impl VolumeKeyAuthority for FakeAuthority {
     fn latest_generation(
         &self,
         _volume_id: VolumeId,
-    ) -> Result<Option<u64>, VolumeKeyAuthorityError> {
+    ) -> Result<Option<u64>, SecretGenerationAuthorityError> {
         match self {
             Self::Record(record) => Ok(Some(record.secret.context().generation())),
             Self::Missing => Ok(None),
-            Self::Unavailable => Err(VolumeKeyAuthorityError::Unavailable),
+            Self::Unavailable => Err(SecretGenerationAuthorityError::Unavailable),
         }
     }
+}
 
+impl SecretGenerationAuthority for FakeAuthority {
     fn secret_generation(
         &self,
         _context: SecretContext,
-    ) -> Result<Option<SecretGenerationRecord>, VolumeKeyAuthorityError> {
+    ) -> Result<Option<SecretGenerationRecord>, SecretGenerationAuthorityError> {
         match self {
             Self::Record(record) => Ok(Some(record.clone())),
             Self::Missing => Ok(None),
-            Self::Unavailable => Err(VolumeKeyAuthorityError::Unavailable),
+            Self::Unavailable => Err(SecretGenerationAuthorityError::Unavailable),
         }
     }
 }

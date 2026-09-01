@@ -8,7 +8,9 @@ use meshspan_cluster::{
     MetadataAuthorityRuntimeError, PartitionConsensusDriver, spawn_metadata_authority,
 };
 use meshspan_consensus::{ConsensusCore, CoreConfig, MemberIncarnations, compile_plan, flat_plan};
-use meshspan_contracts::BoundedItems;
+use meshspan_contracts::{
+    BoundedItems, ShardIdentity, ShardReadPermit, StoragePermitMacKey, read_permit_mac,
+};
 use meshspan_domain::{
     ApiKeyBundle, AuditEventId, AuthenticationMethodId, AuthenticationService, EntropyError,
     HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId, QuorumPlanId, RandomSource,
@@ -32,7 +34,7 @@ use crate::{
     ConsensusAuthenticationAuthority, IdentityAdministrationAuthority,
     IdentityAdministrationAuthorityError, LocalWrappingKey, RecoveryBundleVerificationAuthority,
     RecoveryBundleVerificationAuthorityError, SessionAuthority, SessionRevocationAuthority,
-    VolumeAdministrationAuthority, VolumeKeyLoadingService,
+    StoragePermitLoadingService, VolumeAdministrationAuthority, VolumeKeyLoadingService,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -413,6 +415,29 @@ impl RunningAuthority {
                 &recovery,
             )?;
             let local_wrapping_key = LocalWrappingKey::open_or_create(&wrapping_key_path)?;
+            let mesh_id = MeshId::from_bytes([9; 16])?;
+            let permit = ShardReadPermit {
+                operation_id: OperationId::from_bytes([47; 16])?,
+                mesh_id,
+                target_id: meshspan_domain::TargetId::from_bytes([48; 16])?,
+                target_generation: 1,
+                shard: ShardIdentity {
+                    manifest_digest: [49; 32],
+                    stripe_index: 1,
+                    shard_index: 2,
+                    generation: 3,
+                },
+                authorization_revision: Revision::new(2),
+                expires_at: UnixMicros::new(100),
+                permit_digest: [0; 32],
+            };
+            let permit_key = StoragePermitLoadingService::new(&authority, &local_wrapping_key)
+                .load_latest(mesh_id)?;
+            if read_permit_mac(&permit_key, permit)
+                != read_permit_mac(&StoragePermitMacKey::from_bytes([93; 32])?, permit)
+            {
+                return Err("loaded storage permit authority changed".into());
+            }
             let volume_id = meshspan_domain::VolumeId::from_bytes([50; 16])?;
             let recipients = authority.volume_key_recipients()?;
             let (secret, envelopes) = encrypt_secret(
