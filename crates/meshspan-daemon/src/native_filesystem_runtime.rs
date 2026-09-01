@@ -9,16 +9,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use meshspan_cluster::{MetadataAuthorityHandle, MetadataFilesystemAuthorityError};
-use meshspan_domain::{BranchId, InitialBootstrapMaterial, PartitionId, UnixMicros};
+use meshspan_domain::{
+    BranchId, FileVersionId, InitialBootstrapMaterial, NamespaceCommitId, OperationId, PartitionId,
+    UnixMicros,
+};
 use meshspan_filesystem::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter,
     ContentChunkLimits, ContentPublicationError, FilesystemAdapterConfigurationError,
     FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
-    UnprotectedContentAccess, UnprotectedContentPublisher,
+    UnprotectedContentAccess, UnprotectedContentPublisher, VersionPublicationStore,
 };
 use meshspan_metadata::{
     AuthoritativeRepository, MetadataStoreError, PartitionDatabase, StorageTargetProviderContext,
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::cluster_storage_provider::ClusterStorageProvider;
@@ -192,6 +196,7 @@ impl NativeFilesystemRuntimeConfiguration {
 struct NativeFilesystemRuntimeState {
     configuration: NativeFilesystemRuntimeConfiguration,
     filesystem: Option<ProductionFilesystem>,
+    active_target: Option<StorageTargetProviderContext>,
 }
 
 /// Cloneable connector boundary backed by exactly one production filesystem state machine.
@@ -208,6 +213,7 @@ impl NativeFilesystemRuntime {
             inner: Arc::new(Mutex::new(NativeFilesystemRuntimeState {
                 configuration,
                 filesystem: None,
+                active_target: None,
             })),
         }
     }
@@ -227,6 +233,7 @@ impl NativeFilesystemRuntime {
         }
         let filesystem = state.configuration.open(target, now)?;
         state.filesystem = Some(filesystem);
+        state.active_target = Some(target.context());
         Ok(())
     }
 
@@ -269,6 +276,118 @@ impl NativeFilesystemRuntime {
             .ok_or(NativeFilesystemRuntimeError::Unavailable)?;
         operation(filesystem).map_err(Into::into)
     }
+
+    fn publish_namespace_head(
+        &self,
+        namespace_commit_id: NamespaceCommitId,
+        file_version_id: Option<FileVersionId>,
+        observed_at: UnixMicros,
+    ) -> Result<(), NativeFilesystemRuntimeError> {
+        let (state_directory, target, network, runtime) = {
+            let state = self.lock()?;
+            (
+                state.configuration.filesystem_state_directory.clone(),
+                state
+                    .active_target
+                    .ok_or(NativeFilesystemRuntimeError::Unavailable)?,
+                Arc::clone(&state.configuration.network),
+                state.configuration.runtime.clone(),
+            )
+        };
+        let store = VersionPublicationStore::open(&state_directory, observed_at)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+        let (volume_id, root_object_revision_id) = store
+            .namespace_commit_coordinates(namespace_commit_id)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+        let content_routes = file_version_id
+            .map(|version_id| {
+                store
+                    .published_content_for_version(version_id)
+                    .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?
+                    .map(|content| meshspan_protocol::v1::NativeContentRoute {
+                        publication_operation_id: content
+                            .publication_operation_id
+                            .as_bytes()
+                            .to_vec(),
+                        manifest_id: content.manifest.manifest_id.as_bytes().to_vec(),
+                        target_id: target.target_id.as_bytes().to_vec(),
+                        target_generation: target.generation,
+                    })
+                    .ok_or(NativeFilesystemRuntimeError::Unavailable)
+            })
+            .transpose()?
+            .into_iter()
+            .collect();
+        let message = meshspan_protocol::v1::PublishNamespaceHead {
+            volume_id: volume_id.as_bytes().to_vec(),
+            namespace_commit_id: namespace_commit_id.as_bytes().to_vec(),
+            root_object_revision_id: root_object_revision_id.as_bytes().to_vec(),
+            content_routes,
+        };
+        let network = network
+            .network()
+            .map_err(|()| NativeFilesystemRuntimeError::Unavailable)?;
+        let peers = network
+            .peer_routes()
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+        for peer in peers {
+            spawn_head_publication(
+                &runtime,
+                network.clone(),
+                peer.node_id,
+                namespace_commit_id,
+                observed_at,
+                message.clone(),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn spawn_head_publication(
+    runtime: &tokio::runtime::Handle,
+    network: meshspan_cluster::ConsensusNetwork,
+    peer: meshspan_domain::NodeId,
+    namespace_commit_id: NamespaceCommitId,
+    observed_at: UnixMicros,
+    message: meshspan_protocol::v1::PublishNamespaceHead,
+) -> Result<(), NativeFilesystemRuntimeError> {
+    let deadline = observed_at
+        .get()
+        .checked_add(60 * 60 * 1_000_000)
+        .ok_or(NativeFilesystemRuntimeError::Unavailable)?;
+    let operation_id = publication_operation_id(namespace_commit_id, peer, observed_at)?;
+    let envelope = meshspan_protocol::v1::ControlEnvelope {
+        header: Some(
+            network
+                .control_header(operation_id, deadline)
+                .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?,
+        ),
+        message: Some(
+            meshspan_protocol::v1::control_envelope::Message::PublishNamespaceHead(message),
+        ),
+    };
+    runtime.spawn(async move {
+        let _response = network.request_control(peer, &envelope).await;
+    });
+    Ok(())
+}
+
+fn publication_operation_id(
+    namespace_commit_id: NamespaceCommitId,
+    peer: meshspan_domain::NodeId,
+    observed_at: UnixMicros,
+) -> Result<OperationId, NativeFilesystemRuntimeError> {
+    let mut digest = Sha256::new();
+    digest.update(b"meshspan.native.publish-head.v1\0");
+    digest.update(namespace_commit_id.as_bytes());
+    digest.update(peer.as_bytes());
+    digest.update(observed_at.get().to_be_bytes());
+    let bytes: [u8; 32] = digest.finalize().into();
+    let mut identity = [0_u8; 16];
+    identity.copy_from_slice(&bytes[..16]);
+    OperationId::from_bytes(meshspan_domain::uuid_v8(identity))
+        .map_err(|_| NativeFilesystemRuntimeError::Unavailable)
 }
 
 /// Closed runtime operation failures exposed only to native service classifiers.

@@ -1533,6 +1533,19 @@ impl VersionPublicationStore {
         }
     }
 
+    /// Resolves the volume and root revision selected by one exact immutable namespace commit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown commit, corrupt lineage or malformed stored identity.
+    pub fn namespace_commit_coordinates(
+        &self,
+        namespace_commit_id: NamespaceCommitId,
+    ) -> Result<(VolumeId, ObjectRevisionId), PublicationError> {
+        let commit = namespace::repository::load_commit(&self.connection, namespace_commit_id)?;
+        Ok((commit.volume_id, commit.root_object_revision_id))
+    }
+
     /// Resolves one immutable file version to its content-publication operation and manifest.
     ///
     /// # Errors
