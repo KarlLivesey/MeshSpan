@@ -6,7 +6,7 @@
 //! current `RustCrypto` P-256, so enabling an `rcgen` crypto provider cannot silently change the
 //! dependency graph or choose a different cryptographic backend.
 
-use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _};
+use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _, Verifier as _};
 use p256::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _};
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyIdMethod,
@@ -34,6 +34,15 @@ pub struct CertificateAuthority {
 /// enrolled mesh CA later signs the same public key rather than replacing the private identity.
 pub struct NodeIdentityKey {
     key: RustCryptoKey,
+}
+
+/// Validated public half of one node-owned P-256 identity.
+///
+/// The joining node retains its private key and proves possession by signing the exact enrolment
+/// transcript. The admitting swarm uses this value only after that proof has been verified.
+pub struct NodePublicIdentity {
+    key: p256::ecdsa::VerifyingKey,
+    public_key: Vec<u8>,
 }
 
 impl NodeIdentityKey {
@@ -65,6 +74,26 @@ impl NodeIdentityKey {
         Sha256::digest(self.key.subject_public_key_info()).into()
     }
 
+    /// Borrows the canonical uncompressed SEC1 public identity for enrolment.
+    #[must_use]
+    pub fn public_key_sec1(&self) -> &[u8] {
+        &self.key.public_key
+    }
+
+    /// Signs an exact caller-defined enrolment transcript with the node-owned private key.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if the cryptographic provider cannot produce a canonical DER signature.
+    pub fn sign_enrolment_transcript(
+        &self,
+        transcript: &[u8],
+    ) -> Result<Vec<u8>, CertificateError> {
+        self.key
+            .sign(transcript)
+            .map_err(CertificateError::Certificate)
+    }
+
     /// Borrows the PKCS#8 private key for immediate protected local persistence.
     #[must_use]
     pub fn private_key_pkcs8(&self) -> &[u8] {
@@ -79,6 +108,49 @@ impl NodeIdentityKey {
     pub fn self_signed(&self, dns_name: &str) -> Result<Vec<u8>, CertificateError> {
         let parameters = node_parameters(&self.key, dns_name)?;
         Ok(parameters.self_signed(&self.key)?.der().to_vec())
+    }
+}
+
+impl NodePublicIdentity {
+    /// Parses one exact canonical uncompressed P-256 public identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, compressed, off-curve and non-canonical values.
+    pub fn from_sec1(public_key: &[u8]) -> Result<Self, CertificateError> {
+        let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key)
+            .map_err(|_| CertificateError::PublicKeyDecoding)?;
+        let canonical = key.to_sec1_point(false);
+        if canonical.as_bytes() != public_key {
+            return Err(CertificateError::PublicKeyDecoding);
+        }
+        Ok(Self {
+            key,
+            public_key: canonical.as_bytes().to_vec(),
+        })
+    }
+
+    /// Returns a SHA-256 fingerprint of the canonical subject public-key information.
+    #[must_use]
+    pub fn public_key_fingerprint(&self) -> [u8; 32] {
+        Sha256::digest(self.subject_public_key_info()).into()
+    }
+
+    /// Verifies the joining node's signature over the exact enrolment transcript.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, non-canonical or invalid DER-encoded P-256 signatures.
+    pub fn verify_enrolment_transcript(
+        &self,
+        transcript: &[u8],
+        signature: &[u8],
+    ) -> Result<(), CertificateError> {
+        let signature = p256::ecdsa::DerSignature::from_bytes(signature)
+            .map_err(|_| CertificateError::InvalidIdentityProof)?;
+        self.key
+            .verify(transcript, &signature)
+            .map_err(|_| CertificateError::InvalidIdentityProof)
     }
 }
 
@@ -156,6 +228,20 @@ impl CertificateAuthority {
             .der()
             .to_vec())
     }
+
+    /// Signs an already verified node-owned public identity without receiving its private key.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid DNS name or X.509 construction failure.
+    pub fn sign_node_public_identity(
+        &self,
+        identity: &NodePublicIdentity,
+        dns_name: &str,
+    ) -> Result<Vec<u8>, CertificateError> {
+        let parameters = node_parameters(identity, dns_name)?;
+        Ok(parameters.signed_by(identity, &self.issuer)?.der().to_vec())
+    }
 }
 
 /// One issued leaf certificate and its PKCS#8 private key.
@@ -199,6 +285,12 @@ pub enum CertificateError {
     /// PKCS#8 input was malformed or used a different algorithm or curve.
     #[error("P-256 certificate private key is invalid")]
     KeyDecoding,
+    /// Public identity input was malformed or not canonical uncompressed P-256 SEC1.
+    #[error("P-256 certificate public key is invalid")]
+    PublicKeyDecoding,
+    /// The node did not prove possession of the private key for its submitted public identity.
+    #[error("node identity possession proof is invalid")]
+    InvalidIdentityProof,
     /// X.509 parameter validation or DER construction failed.
     #[error("certificate construction failed")]
     Certificate(#[from] rcgen::Error),
@@ -262,7 +354,7 @@ impl RustCryptoKey {
 }
 
 fn node_parameters(
-    key: &RustCryptoKey,
+    key: &impl PublicKeyData,
     dns_name: &str,
 ) -> Result<CertificateParams, CertificateError> {
     let mut parameters = CertificateParams::new(vec![dns_name.to_owned()])?;
@@ -273,9 +365,19 @@ fn node_parameters(
         ExtendedKeyUsagePurpose::ServerAuth,
         ExtendedKeyUsagePurpose::ClientAuth,
     ]);
-    parameters.serial_number = Some(key.serial_number());
-    parameters.key_identifier_method = key.identifier();
+    parameters.serial_number = Some(serial_number(key));
+    parameters.key_identifier_method = identifier(key);
     Ok(parameters)
+}
+
+fn identifier(key: &impl PublicKeyData) -> KeyIdMethod {
+    let digest = Sha256::digest(key.subject_public_key_info());
+    KeyIdMethod::PreSpecified(digest[..KEY_IDENTIFIER_BYTES].to_vec())
+}
+
+fn serial_number(key: &impl PublicKeyData) -> SerialNumber {
+    let digest = Sha256::digest(key.subject_public_key_info());
+    SerialNumber::from_slice(&digest[..KEY_IDENTIFIER_BYTES])
 }
 
 fn authority_parameters(key: &RustCryptoKey) -> Result<CertificateParams, CertificateError> {
@@ -299,6 +401,16 @@ impl PublicKeyData for RustCryptoKey {
     }
 }
 
+impl PublicKeyData for NodePublicIdentity {
+    fn der_bytes(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
+        &rcgen::PKCS_ECDSA_P256_SHA256
+    }
+}
+
 impl SigningKey for RustCryptoKey {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
         let signature: p256::ecdsa::DerSignature = self
@@ -311,7 +423,7 @@ impl SigningKey for RustCryptoKey {
 
 #[cfg(test)]
 mod tests {
-    use super::{CertificateAuthority, NodeIdentityKey};
+    use super::{CertificateAuthority, NodeIdentityKey, NodePublicIdentity};
 
     #[test]
     fn independently_issued_nodes_have_distinct_keys_and_certificates()
@@ -355,6 +467,32 @@ mod tests {
             node_certificate
         );
         assert_ne!(node_certificate, identity.self_signed("meshspan.internal")?);
+        Ok(())
+    }
+
+    #[test]
+    fn node_proves_its_public_identity_before_the_authority_signs_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authority = CertificateAuthority::new()?;
+        let identity = NodeIdentityKey::generate()?;
+        let public_identity = NodePublicIdentity::from_sec1(identity.public_key_sec1())?;
+        let transcript = b"meshspan enrolment transcript";
+        let signature = identity.sign_enrolment_transcript(transcript)?;
+
+        public_identity.verify_enrolment_transcript(transcript, &signature)?;
+        assert_eq!(
+            public_identity.public_key_fingerprint(),
+            identity.public_key_fingerprint()
+        );
+        assert_eq!(
+            authority.sign_node_public_identity(&public_identity, "meshspan.internal")?,
+            authority.sign_node_identity(&identity, "meshspan.internal")?
+        );
+        assert!(
+            public_identity
+                .verify_enrolment_transcript(b"substituted transcript", &signature)
+                .is_err()
+        );
         Ok(())
     }
 }
