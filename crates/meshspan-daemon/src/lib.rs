@@ -51,6 +51,9 @@ mod directory_listing_api_tests;
 mod file_read_api;
 #[cfg(test)]
 mod file_read_api_tests;
+mod headless_config;
+#[cfg(test)]
+mod headless_config_tests;
 mod https_server;
 #[cfg(test)]
 mod https_server_tests;
@@ -206,6 +209,7 @@ pub use file_read_api::{
     FileRangeReader, FileReadApiError, FileReadController, FileReadError, FileReadResult,
     FileReadService, file_read_api_router,
 };
+pub use headless_config::{HeadlessDaemonConfig, HeadlessDaemonConfigError};
 pub use https_server::{HttpsServer, HttpsServerError};
 pub use identity_administration::{
     GroupMembershipAdministrationCommit, IdentityAdministrationApiError,

@@ -24,6 +24,7 @@ meshspan-filesystem = { path = "../meshspan-filesystem" }
 meshspan-metadata = { path = "../meshspan-metadata" }
 meshspan-otp = { path = "../meshspan-otp" }
 meshspan-passkey = { path = "../meshspan-passkey" }
+meshspan-storage = { path = "../meshspan-storage" }
 rustls.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

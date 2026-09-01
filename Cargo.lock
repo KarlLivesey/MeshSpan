@@ -1093,6 +1093,7 @@ dependencies = [
  "meshspan-otp",
  "meshspan-passkey",
  "meshspan-rustls-provider",
+ "meshspan-storage",
  "meshspan-test-certificates",
  "p256",
  "rustls",
