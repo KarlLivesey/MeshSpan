@@ -1672,6 +1672,42 @@ export type HealthResponse = {
 };
 
 /**
+ * JoinMeshSetupRequest
+ *
+ * One exact request to join an existing mesh from an unclaimed daemon.
+ */
+export type JoinMeshSetupRequest = {
+  /**
+   * Human-readable physical host name created by the destination mesh.
+   */
+  host_name: string;
+  /**
+   * Human-readable daemon-node name created by the destination mesh.
+   */
+  node_name: string;
+  /**
+   * Client-generated idempotency identity retained across the internal restart.
+   */
+  operation_id: string;
+};
+
+/**
+ * JoinMeshSetupResponse
+ *
+ * Accepted restart-safe join intent.
+ */
+export type JoinMeshSetupResponse = {
+  /**
+   * Exact idempotency identity whose join will resume after the internal restart.
+   */
+  operation_id: string;
+  /**
+   * Same-origin operation resource which becomes authoritative after enrolment.
+   */
+  status_url: string;
+};
+
+/**
  * ListAuthenticationMethodsResponse
  *
  * One bounded current-user authentication-method page.
@@ -3016,6 +3052,34 @@ export type EnrolNodeRequestWritable = {
 };
 
 /**
+ * JoinMeshSetupRequest
+ *
+ * One exact request to join an existing mesh from an unclaimed daemon.
+ */
+export type JoinMeshSetupRequestWritable = {
+  /**
+   * High-entropy single-use claim printed or written by this daemon.
+   */
+  claim: string;
+  /**
+   * Human-readable physical host name created by the destination mesh.
+   */
+  host_name: string;
+  /**
+   * Self-contained administrator-issued invitation for the destination mesh.
+   */
+  join_code: string;
+  /**
+   * Human-readable daemon-node name created by the destination mesh.
+   */
+  node_name: string;
+  /**
+   * Client-generated idempotency identity retained across the internal restart.
+   */
+  operation_id: string;
+};
+
+/**
  * StepUpCurrentSessionRequest
  *
  * Input for atomically rotating the current browser session after a fresh factor.
@@ -4210,6 +4274,51 @@ export type EnrolNodeResponses = {
 };
 
 export type EnrolNodeResponse2 = EnrolNodeResponses[keyof EnrolNodeResponses];
+
+export type JoinMeshSetupData = {
+  /**
+   * Existing-mesh setup
+   */
+  body: JoinMeshSetupRequestWritable;
+  path?: never;
+  query?: never;
+  url: "/setup/joins";
+};
+
+export type JoinMeshSetupErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * First-boot claim or join invitation rejected
+   */
+  401: ApiError;
+  /**
+   * Changed retry or setup conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Internal contract failure
+   */
+  500: ApiError;
+};
+
+export type JoinMeshSetupError = JoinMeshSetupErrors[keyof JoinMeshSetupErrors];
+
+export type JoinMeshSetupResponses = {
+  /**
+   * Durable join intent accepted
+   */
+  202: JoinMeshSetupResponse;
+};
+
+export type JoinMeshSetupResponse2 =
+  JoinMeshSetupResponses[keyof JoinMeshSetupResponses];
 
 export type CreateMeshSetupData = {
   /**

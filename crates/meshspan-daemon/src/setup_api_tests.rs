@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use meshspan_api_contract::{
-    ApiError, ApiErrorCode, CreateMeshSetupRequest, CreateMeshSetupResponse, SetupState,
-    SetupStatusResponse,
+    ApiError, ApiErrorCode, CreateMeshSetupRequest, CreateMeshSetupResponse, JoinMeshSetupRequest,
+    JoinMeshSetupResponse, SetupState, SetupStatusResponse,
 };
 use meshspan_domain::{ClaimBundleError, ClaimId, NodeId, OperationId, UnixMicros};
 use meshspan_metadata::{LocalDatabase, LocalSetupKind, NewLocalClaim, NewLocalSetup};
@@ -15,8 +15,9 @@ use tempfile::tempdir;
 use tower::ServiceExt;
 
 use crate::{
-    CreateMeshSetupController, CreateMeshSetupError, SetupStateSnapshot, setup_api_router,
-    setup_api_router_with_creation,
+    CreateMeshSetupController, CreateMeshSetupError, JoinMeshSetupController, JoinMeshSetupError,
+    SetupStateSnapshot, setup_api_router, setup_api_router_with_creation,
+    setup_api_router_with_mutations,
 };
 
 #[tokio::test]
@@ -174,6 +175,36 @@ async fn creation_boundary_validates_success_and_maps_claim_rejection()
     Ok(())
 }
 
+#[tokio::test]
+async fn join_boundary_returns_the_restart_safe_operation_location()
+-> Result<(), Box<dyn std::error::Error>> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let router = setup_api_router_with_mutations(
+        Arc::new(SetupStateSnapshot::new(SetupState::ClaimRequired)),
+        FakeController::new(FakeOutcome::Success, Arc::new(AtomicUsize::new(0))),
+        FakeJoinController {
+            calls: Arc::clone(&calls),
+        },
+    )?;
+    let response = router
+        .oneshot(
+            Request::post("/api/latest/setup/joins")
+                .header("content-type", "application/json")
+                .body(Body::from(valid_join_body()?))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body = to_bytes(response.into_body(), 2_048).await?;
+    let accepted = serde_json::from_slice::<JoinMeshSetupResponse>(&body)?;
+    assert_eq!(accepted.operation_id.as_str(), TEST_OPERATION_ID);
+    assert_eq!(
+        accepted.status_url,
+        format!("/api/latest/operations/{TEST_OPERATION_ID}")
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
 async fn assert_status(
     router: &axum::Router,
     expected: SetupState,
@@ -212,6 +243,23 @@ fn valid_setup_body() -> Result<Vec<u8>, serde_json::Error> {
         "administrator_name": "Administrator",
         "host_name": "First host",
         "node_name": "First node"
+    }))
+}
+
+fn valid_join_body() -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&serde_json::json!({
+        "operation_id": TEST_OPERATION_ID,
+        "claim": format!("meshspan-claim-v1.{}.{}", "1".repeat(32), "2".repeat(64)),
+        "join_code": format!(
+            "meshspan-join-v2.{}.{}.{}.{}.{}",
+            "3".repeat(32),
+            "4".repeat(32),
+            "5".repeat(64),
+            "6".repeat(64),
+            "7".repeat(64),
+        ),
+        "host_name": "Shop host",
+        "node_name": "Shop node"
     }))
 }
 
@@ -276,5 +324,22 @@ impl CreateMeshSetupController for FakeController {
                 ClaimBundleError::InvalidEncoding,
             )),
         }
+    }
+}
+
+struct FakeJoinController {
+    calls: Arc<AtomicUsize>,
+}
+
+impl JoinMeshSetupController for FakeJoinController {
+    fn join_mesh(
+        &mut self,
+        request: &JoinMeshSetupRequest,
+    ) -> Result<JoinMeshSetupResponse, JoinMeshSetupError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(JoinMeshSetupResponse {
+            operation_id: request.operation_id.clone(),
+            status_url: format!("/api/latest/operations/{}", request.operation_id.as_str()),
+        })
     }
 }

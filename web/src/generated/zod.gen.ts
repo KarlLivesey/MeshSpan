@@ -1920,6 +1920,54 @@ export const zHealthResponse = z
   .strict();
 
 /**
+ * JoinMeshSetupRequest
+ *
+ * One exact request to join an existing mesh from an unclaimed daemon.
+ */
+export const zJoinMeshSetupRequest = z
+  .strictObject({
+    host_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    node_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * JoinMeshSetupResponse
+ *
+ * Accepted restart-safe join intent.
+ */
+export const zJoinMeshSetupResponse = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    status_url: z
+      .string()
+      .length(59)
+      .regex(
+        /^\/api\/latest\/operations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * ListAuthenticationMethodsResponse
  *
  * One bounded current-user authentication-method page.
@@ -3379,6 +3427,41 @@ export const zEnrolNodeRequestWritable = z
   .strict();
 
 /**
+ * JoinMeshSetupRequest
+ *
+ * One exact request to join an existing mesh from an unclaimed daemon.
+ */
+export const zJoinMeshSetupRequestWritable = z
+  .strictObject({
+    claim: z
+      .string()
+      .length(115)
+      .regex(/^meshspan-claim-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/),
+    host_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    join_code: z
+      .string()
+      .min(250)
+      .max(1250)
+      .regex(/^meshspan-join-v2\.[0-9a-f]+(?:\.[0-9a-f]+){4}$/),
+    node_name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * StepUpCurrentSessionRequest
  *
  * Input for atomically rotating the current browser session after a fresh factor.
@@ -3787,6 +3870,16 @@ export const zEnrolNodeBody = zEnrolNodeRequestWritable;
  * Admitted node and bootstrap trust
  */
 export const zEnrolNodeResponse2 = zEnrolNodeResponse;
+
+/**
+ * Existing-mesh setup
+ */
+export const zJoinMeshSetupBody = zJoinMeshSetupRequestWritable;
+
+/**
+ * Durable join intent accepted
+ */
+export const zJoinMeshSetupResponse2 = zJoinMeshSetupResponse;
 
 /**
  * First-mesh setup

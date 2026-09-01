@@ -10,15 +10,17 @@ use thiserror::Error;
 
 use crate::{
     ApiError, CreateMeshSetupRequest, CreateMeshSetupResponse, CreateSessionRequest,
-    CreateSessionResponse, CurrentSessionResponse, RevokeCurrentSessionRequest,
-    RevokeCurrentSessionResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
-    model::MAX_ERROR_ISSUES, schema,
+    CreateSessionResponse, CurrentSessionResponse, JoinMeshSetupRequest, JoinMeshSetupResponse,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, model::MAX_ERROR_ISSUES, schema,
 };
 
 /// Maximum accepted body size for one session-creation request.
 pub const MAX_CREATE_SESSION_BYTES: usize = 2_048;
 /// Maximum accepted body size for one first-mesh setup request.
 pub const MAX_CREATE_MESH_SETUP_BYTES: usize = 2_048;
+/// Maximum accepted body size for one existing-mesh join request.
+pub const MAX_JOIN_MESH_SETUP_BYTES: usize = 2_048;
 /// Maximum accepted body size for one current-session revocation request.
 pub const MAX_REVOKE_CURRENT_SESSION_BYTES: usize = 256;
 /// Maximum accepted body size for one current-session step-up request.
@@ -28,6 +30,10 @@ static API_ERROR_VALIDATOR: OnceLock<Result<CompiledValidator, String>> = OnceLo
 static CREATE_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
 static CREATE_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static JOIN_MESH_SETUP_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
+    OnceLock::new();
+static JOIN_MESH_SETUP_RESPONSE_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
 static CREATE_SESSION_REQUEST_VALIDATOR: OnceLock<Result<CompiledValidator, String>> =
     OnceLock::new();
@@ -94,6 +100,48 @@ pub fn decode_create_mesh_setup_request(
 /// Returns every discovered issue up to the public issue limit.
 pub fn validate_create_mesh_setup_request_value(value: &Value) -> Result<(), BoundaryError> {
     validate(create_mesh_setup_request_validator()?, value)
+}
+
+/// Validates and decodes one restart-safe existing-mesh join request without coercion.
+///
+/// # Errors
+///
+/// Returns a bounded boundary error before claim, invitation or persistence work begins.
+pub fn decode_join_mesh_setup_request(bytes: &[u8]) -> Result<JoinMeshSetupRequest, BoundaryError> {
+    if bytes.len() > MAX_JOIN_MESH_SETUP_BYTES {
+        return Err(BoundaryError::BodyTooLarge {
+            limit: MAX_JOIN_MESH_SETUP_BYTES,
+        });
+    }
+    let value = serde_json::from_slice(bytes).map_err(|_| BoundaryError::MalformedJson)?;
+    validate(join_mesh_setup_request_validator()?, &value)?;
+    serde_json::from_value(value).map_err(|_| BoundaryError::DecodeMismatch)
+}
+
+/// Canonically encodes a validated join request for protected restart-safe persistence.
+///
+/// # Errors
+///
+/// Rejects an invalid in-memory request instead of persisting it.
+pub fn encode_join_mesh_setup_request(
+    request: &JoinMeshSetupRequest,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(request).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate(join_mesh_setup_request_validator()?, &value)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
+/// Validates and encodes one accepted join intent response.
+///
+/// # Errors
+///
+/// Suppresses an invalid outgoing response.
+pub fn encode_join_mesh_setup_response(
+    response: &JoinMeshSetupResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate(join_mesh_setup_response_validator()?, &value)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
 }
 
 /// Validates and decodes one bounded current-session step-up request.
@@ -339,6 +387,20 @@ fn create_mesh_setup_response_validator() -> Result<&'static CompiledValidator, 
     validator_from(
         CREATE_MESH_SETUP_RESPONSE_VALIDATOR
             .get_or_init(|| compile(&schema::response_schema::<CreateMeshSetupResponse>())),
+    )
+}
+
+fn join_mesh_setup_request_validator() -> Result<&'static CompiledValidator, BoundaryError> {
+    validator_from(
+        JOIN_MESH_SETUP_REQUEST_VALIDATOR
+            .get_or_init(|| compile(&schema::request_schema::<JoinMeshSetupRequest>())),
+    )
+}
+
+fn join_mesh_setup_response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
+    validator_from(
+        JOIN_MESH_SETUP_RESPONSE_VALIDATOR
+            .get_or_init(|| compile(&schema::response_schema::<JoinMeshSetupResponse>())),
     )
 }
 

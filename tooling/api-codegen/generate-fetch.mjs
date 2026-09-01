@@ -52,6 +52,10 @@ import {
   renderOperationStatusRequestTypes,
   renderOperationStatusRuntime,
 } from "./render-operation-status-client.mjs";
+import {
+  renderSetupClientInterface,
+  renderSetupClientMethods,
+} from "./render-setup-client.mjs";
 
 const OPENAPI_PATH = new URL(
   "../../contracts/openapi/latest.json",
@@ -111,6 +115,8 @@ import type {
   DeleteObjectResponse,
   GetObjectResponse,
   HealthResponse,
+  JoinMeshSetupRequestWritable,
+  JoinMeshSetupResponse,
   ListDirectoryResponse,
   ListGroupMembershipsResponse,
   ListOperationsResponse,
@@ -193,6 +199,8 @@ import {
   zGetSetupStatusResponse,
   zGetUploadPath,
   zGetUploadResponse,
+  zJoinMeshSetupBody,
+  zJoinMeshSetupResponse2,
   zListDirectoryPath,
   zListDirectoryQuery,
   zListDirectoryResponse2,
@@ -325,7 +333,7 @@ export interface MeshSpanFetchClient {
   ${renderPermissionAdministrationClientInterface()}
   ${renderOperationStatusClientInterface()}
   ${renderDirectoryClientInterface()}
-  createMeshSetup(request: CreateMeshSetupRequestWritable): Promise<CreateMeshSetupResponse>;
+  ${renderSetupClientInterface()}
   createSession(request: CreateSessionRequestWritable): Promise<CreateSessionResult>;
   getCurrentSession(): Promise<CurrentSessionResponse>;
   getObject(request: GetObjectRequest): Promise<GetObjectResponse>;
@@ -383,19 +391,7 @@ export function createMeshSpanFetchClient(
     ${renderPermissionAdministrationClientMethods(routes)}
     ${renderOperationStatusClientMethods(routes)}
     ${renderDirectoryClientMethods(routes)}
-    async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
-      const body = zCreateMeshSetupBody.parse(request);
-      return requestJson(
-        context,
-        ${JSON.stringify(routes.createMeshSetup.route)},
-        {
-          body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
-          method: ${JSON.stringify(routes.createMeshSetup.method)},
-        },
-        zCreateMeshSetupResponse2,
-      );
-    },
+    ${renderSetupClientMethods(routes)}
     async createSession(request): Promise<CreateSessionResult> {
       const body = zCreateSessionBody.parse(request);
       const response = await requestJsonResponse(

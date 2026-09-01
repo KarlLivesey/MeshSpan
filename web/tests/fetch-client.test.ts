@@ -222,6 +222,47 @@ describe("generated first-mesh setup", () => {
   });
 });
 
+describe("generated existing-mesh setup", () => {
+  it("posts the claim-bound join request and validates the accepted operation", async () => {
+    const joinCode = `meshspan-join-v2.${"1".repeat(32)}.${"2".repeat(32)}.${"3".repeat(64)}.${"4".repeat(64)}.${"5".repeat(64)}`;
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input, init) => {
+        expect(readRequestUrl(input)).toBe(
+          "https://node.example/api/latest/setup/joins",
+        );
+        expect(JSON.parse(readStringBody(init?.body))).toMatchObject({
+          claim: SETUP_CLAIM,
+          join_code: joinCode,
+          operation_id: SETUP_OPERATION_ID,
+        });
+        return Promise.resolve(
+          jsonResponse(
+            {
+              operation_id: SETUP_OPERATION_ID,
+              status_url: `/api/latest/operations/${SETUP_OPERATION_ID}`,
+            },
+            202,
+          ),
+        );
+      },
+    });
+
+    await expect(
+      client.joinMeshSetup({
+        claim: SETUP_CLAIM,
+        host_name: "Shop host",
+        join_code: joinCode,
+        node_name: "Shop node",
+        operation_id: SETUP_OPERATION_ID,
+      }),
+    ).resolves.toEqual({
+      operation_id: SETUP_OPERATION_ID,
+      status_url: `/api/latest/operations/${SETUP_OPERATION_ID}`,
+    });
+  });
+});
+
 describe("generated session delivery", () => {
   it("returns the validated body and independently validated CSRF header", async () => {
     const client = createMeshSpanFetchClient({

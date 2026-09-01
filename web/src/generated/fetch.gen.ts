@@ -43,6 +43,8 @@ import type {
   DeleteObjectResponse,
   GetObjectResponse,
   HealthResponse,
+  JoinMeshSetupRequestWritable,
+  JoinMeshSetupResponse,
   ListDirectoryResponse,
   ListGroupMembershipsResponse,
   ListOperationsResponse,
@@ -125,6 +127,8 @@ import {
   zGetSetupStatusResponse,
   zGetUploadPath,
   zGetUploadResponse,
+  zJoinMeshSetupBody,
+  zJoinMeshSetupResponse2,
   zListDirectoryPath,
   zListDirectoryQuery,
   zListDirectoryResponse2,
@@ -413,9 +417,13 @@ export interface MeshSpanFetchClient {
   listNextOperations(nextPageUrl: string): Promise<ListOperationsResponse>;
   listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   listNextDirectory(nextPageUrl: string): Promise<ListDirectoryResponse>;
+
   createMeshSetup(
     request: CreateMeshSetupRequestWritable,
   ): Promise<CreateMeshSetupResponse>;
+  joinMeshSetup(
+    request: JoinMeshSetupRequestWritable,
+  ): Promise<JoinMeshSetupResponse>;
   createSession(
     request: CreateSessionRequestWritable,
   ): Promise<CreateSessionResult>;
@@ -1181,6 +1189,7 @@ export function createMeshSpanFetchClient(
         zListDirectoryResponse2,
       );
     },
+
     async createMeshSetup(request): Promise<CreateMeshSetupResponse> {
       const body = zCreateMeshSetupBody.parse(request);
       return requestJson(
@@ -1192,6 +1201,19 @@ export function createMeshSpanFetchClient(
           method: "POST",
         },
         zCreateMeshSetupResponse2,
+      );
+    },
+    async joinMeshSetup(request): Promise<JoinMeshSetupResponse> {
+      const body = zJoinMeshSetupBody.parse(request);
+      return requestJson(
+        context,
+        "/setup/joins",
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        zJoinMeshSetupResponse2,
       );
     },
     async createSession(request): Promise<CreateSessionResult> {

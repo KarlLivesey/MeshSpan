@@ -32,12 +32,17 @@ describe("first-start page", () => {
       }),
     );
     const complete = vi.fn();
+    const joinMeshSetup = vi.fn<MeshSpanFetchClient["joinMeshSetup"]>();
     const root = document.createElement("div");
     document.body.append(root);
     disposals.add(
       render(
         () => (
-          <FirstStartPage client={{ createMeshSetup }} onComplete={complete} />
+          <FirstStartPage
+            client={{ createMeshSetup, joinMeshSetup }}
+            onComplete={complete}
+            onJoinAccepted={vi.fn()}
+          />
         ),
         root,
       ),
@@ -71,6 +76,51 @@ describe("first-start page", () => {
     click("Continue to sign in");
 
     expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a join code through the shared first-start page", async () => {
+    const joinMeshSetup = vi.fn<MeshSpanFetchClient["joinMeshSetup"]>(
+      async (request) => ({
+        operation_id: request.operation_id,
+        status_url: `/api/latest/operations/${request.operation_id}`,
+      }),
+    );
+    const accepted = vi.fn();
+    const root = document.createElement("div");
+    document.body.append(root);
+    disposals.add(
+      render(
+        () => (
+          <FirstStartPage
+            client={{
+              createMeshSetup: vi.fn<MeshSpanFetchClient["createMeshSetup"]>(),
+              joinMeshSetup,
+            }}
+            onComplete={vi.fn()}
+            onJoinAccepted={accepted}
+          />
+        ),
+        root,
+      ),
+    );
+
+    click("Join a swarm");
+    enter("One-time claim", "meshspan-claim-v1.local-secret");
+    enter("Join code", "meshspan-join-v2.secret");
+    enter("Machine name", "Shop server");
+    enter("MeshSpan instance", "Shop gateway");
+    click("Join swarm");
+    await settle();
+
+    expect(joinMeshSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        claim: "meshspan-claim-v1.local-secret",
+        host_name: "Shop server",
+        join_code: "meshspan-join-v2.secret",
+        node_name: "Shop gateway",
+      }),
+    );
+    expect(accepted).toHaveBeenCalledOnce();
   });
 });
 

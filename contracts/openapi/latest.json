@@ -3684,6 +3684,85 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "JoinMeshSetupRequest": {
+        "additionalProperties": false,
+        "description": "One exact request to join an existing mesh from an unclaimed daemon.",
+        "properties": {
+          "claim": {
+            "description": "High-entropy single-use claim printed or written by this daemon.",
+            "maxLength": 115,
+            "minLength": 115,
+            "pattern": "^meshspan-claim-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "host_name": {
+            "description": "Human-readable physical host name created by the destination mesh.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "join_code": {
+            "description": "Self-contained administrator-issued invitation for the destination mesh.",
+            "maxLength": 1250,
+            "minLength": 250,
+            "pattern": "^meshspan-join-v2\\.[0-9a-f]+(?:\\.[0-9a-f]+){4}$",
+            "type": "string",
+            "writeOnly": true,
+            "x-meshspan-sensitive": true
+          },
+          "node_name": {
+            "description": "Human-readable daemon-node name created by the destination mesh.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Client-generated idempotency identity retained across the internal restart.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "claim",
+          "join_code",
+          "host_name",
+          "node_name"
+        ],
+        "title": "JoinMeshSetupRequest",
+        "type": "object"
+      },
+      "JoinMeshSetupResponse": {
+        "additionalProperties": false,
+        "description": "Accepted restart-safe join intent.",
+        "properties": {
+          "operation_id": {
+            "description": "Exact idempotency identity whose join will resume after the internal restart.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "status_url": {
+            "description": "Same-origin operation resource which becomes authoritative after enrolment.",
+            "maxLength": 59,
+            "minLength": 59,
+            "pattern": "^/api/latest/operations/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status_url"
+        ],
+        "title": "JoinMeshSetupResponse",
+        "type": "object"
+      },
       "ListAuthenticationMethodsResponse": {
         "additionalProperties": false,
         "description": "One bounded current-user authentication-method page.",
@@ -10887,6 +10966,183 @@
         },
         "summary": "Consume a pre-authorised join invitation for one node-owned identity",
         "x-meshspan-access": "join-grant",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/setup/joins": {
+      "post": {
+        "operationId": "joinMeshSetup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinMeshSetupRequest"
+              }
+            }
+          },
+          "description": "Existing-mesh setup",
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinMeshSetupResponse"
+                }
+              }
+            },
+            "description": "Durable join intent accepted",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "First-boot claim or join invitation rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or setup conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal contract failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Persist a claimed join intent and restart into the destination mesh",
+        "x-meshspan-access": "claim-and-join-grant",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
     },

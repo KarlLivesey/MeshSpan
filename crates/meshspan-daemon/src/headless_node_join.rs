@@ -67,9 +67,14 @@ pub(crate) async fn admit_headless_node(
     let node_id = local_state.node_id();
     let host_name = setup_name("host", node_id)?;
     let node_name = setup_name("node", node_id)?;
+    let operation_bytes =
+        derived_operation_id(invitation.join_grant_id().as_bytes(), node_id.as_bytes());
+    let operation_id = ApiOperationId::from_uuid_bytes(operation_bytes)
+        .ok_or(HeadlessNodeJoinError::InvalidLocalState)?;
     admit_node(
         local_state,
         invitation,
+        operation_id,
         host_name,
         node_name,
         private_endpoint,
@@ -87,18 +92,15 @@ pub(crate) async fn admit_headless_node(
 pub(crate) async fn admit_node(
     local_state: &mut DaemonLocalState,
     invitation: &JoinGrantBundle,
+    api_operation_id: ApiOperationId,
     host_name: SetupName,
     node_name: SetupName,
     private_endpoint: &str,
     now: UnixMicros,
 ) -> Result<EnrolNodeResponse, HeadlessNodeJoinError> {
     let node_id = local_state.node_id();
-    let operation_bytes =
-        derived_operation_id(invitation.join_grant_id().as_bytes(), node_id.as_bytes());
-    let operation_id = OperationId::from_bytes(operation_bytes)
+    let operation_id = OperationId::from_bytes(parse_uuid(api_operation_id.as_str())?)
         .map_err(|_| HeadlessNodeJoinError::InvalidLocalState)?;
-    let api_operation_id = ApiOperationId::from_uuid_bytes(operation_bytes)
-        .ok_or(HeadlessNodeJoinError::InvalidLocalState)?;
     let host_record_name = RecordName::new(host_name.as_str())
         .map_err(|_| HeadlessNodeJoinError::InvalidLocalState)?;
     let node_record_name = RecordName::new(node_name.as_str())
