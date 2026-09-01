@@ -4,16 +4,16 @@ use meshspan_domain::{
     ApiKeyId, AuditEventId, AuthenticationMethodId, HostId, MeshId, NodeId, OperationId,
     PartitionId, PrincipalId, Revision, RoleId, UnixMicros,
 };
-use meshspan_secret_envelope::WrappingPublicKey;
+use meshspan_secret_envelope::{SecretContext, WrappingPrivateKey};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
 use super::{ApplyDisposition, AuthoritativeRepository, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommandContext, CreateAuthenticationMethod, NewAuthenticationCredential, PartitionDatabase,
-    RecordName,
+    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CommandContext,
+    CreateAuthenticationMethod, NewAuthenticationCredential, PartitionDatabase, RecordName,
+    STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 
 #[test]
@@ -36,11 +36,41 @@ fn first_mesh_and_login_method_commit_and_replay_as_one_operation()
     assert_eq!(replay.disposition, ApplyDisposition::Replayed);
     assert_eq!(replay.result_digest, receipt.result_digest);
 
+    let permit = repository
+        .secret_generation(SecretContext::new(
+            STORAGE_PERMIT_KEY_SECRET_KIND,
+            MeshId::from_bytes([5; 16])?.as_bytes(),
+            1,
+        )?)?
+        .ok_or("bootstrap storage permit missing")?;
+    assert_eq!(permit.recipients.len(), 2);
+    for private_key in [
+        crate::test_support::node_wrapping_private_key()?,
+        recovery_private_key()?,
+    ] {
+        let public_key = private_key.public_key();
+        let envelope = permit
+            .recipients
+            .iter()
+            .find(|recipient| {
+                recipient.recipient_fingerprint().ok() == Some(public_key.fingerprint())
+            })
+            .ok_or("bootstrap permit recipient missing")?;
+        let data_key = envelope.open(&private_key)?;
+        assert_eq!(permit.secret.decrypt(&data_key)?.expose(), &[202; 32]);
+    }
+
     let database = repository.into_database();
     assert_eq!(count(database.connection(), "meshes")?, 1);
     assert_eq!(count(database.connection(), "users")?, 1);
     assert_eq!(count(database.connection(), "authentication_methods")?, 1);
     assert_eq!(count(database.connection(), "api_keys")?, 1);
+    assert_eq!(count(database.connection(), "node_wrapping_keys")?, 1);
+    assert_eq!(count(database.connection(), "secret_generations")?, 1);
+    assert_eq!(
+        count(database.connection(), "secret_recipient_envelopes")?,
+        2
+    );
     assert_eq!(count(database.connection(), "operations")?, 1);
     Ok(())
 }
@@ -79,7 +109,47 @@ fn every_apply_fault_rolls_back_mesh_and_login_method_together()
         assert_eq!(count(database.connection(), "principals")?, 0);
         assert_eq!(count(database.connection(), "authentication_methods")?, 0);
         assert_eq!(count(database.connection(), "api_keys")?, 0);
+        assert_eq!(count(database.connection(), "node_wrapping_keys")?, 0);
+        assert_eq!(count(database.connection(), "secret_generations")?, 0);
+        assert_eq!(
+            count(database.connection(), "secret_recipient_envelopes")?,
+            0
+        );
         assert_eq!(count(database.connection(), "operations")?, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn missing_permit_recipient_rejects_the_complete_bootstrap()
+-> Result<(), Box<dyn std::error::Error>> {
+    let partition_id = PartitionId::from_bytes([21; 16])?;
+    let database = PartitionDatabase::open(
+        std::path::Path::new(":memory:"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    let (context, mut command) = fixture(partition_id)?;
+    let AuthoritativeCommand::BootstrapAppliance(bootstrap) = &mut command else {
+        return Err("bootstrap fixture changed".into());
+    };
+    bootstrap.storage_permit_key_generation.recipients.pop();
+
+    assert!(matches!(
+        repository.apply_committed(LogPosition { index: 1, term: 1 }, context, &command),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    for table in [
+        "meshes",
+        "principals",
+        "authentication_methods",
+        "node_wrapping_keys",
+        "secret_generations",
+        "secret_recipient_envelopes",
+        "operations",
+    ] {
+        assert_eq!(count(repository.database.connection(), table)?, 0);
     }
     Ok(())
 }
@@ -96,8 +166,8 @@ fn fixture(
             occurred_at: UnixMicros::new(10),
             expected_revision: Some(Revision::ZERO),
         },
-        AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
-            mesh: BootstrapMesh {
+        AuthoritativeCommand::BootstrapAppliance(crate::test_support::bootstrap_appliance(
+            BootstrapMesh {
                 mesh_id: MeshId::from_bytes([5; 16])?,
                 mesh_name: RecordName::new("First mesh")?,
                 administrator_id: administrator,
@@ -109,7 +179,7 @@ fn fixture(
                 node_name: RecordName::new("First node")?,
                 partition_name: RecordName::new(&partition_id.to_string())?,
             },
-            authentication: CreateAuthenticationMethod {
+            CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([9; 16])?,
                 principal_id: administrator,
                 label: "Initial API key".to_owned(),
@@ -122,13 +192,13 @@ fn fixture(
                     valid_from: UnixMicros::new(10),
                 },
             },
-            recovery: Box::new(recovery_identity()?),
-        }),
+            Box::new(recovery_identity()?),
+        )?),
     ))
 }
 
 fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::Error>> {
-    let public_key = WrappingPublicKey::from_bytes([12; 32])?;
+    let public_key = recovery_private_key()?.public_key();
     let certificate = vec![13; 64];
     Ok(BootstrapRecoveryIdentity {
         public_wrapping_key: public_key.as_bytes(),
@@ -138,6 +208,10 @@ fn recovery_identity() -> Result<BootstrapRecoveryIdentity, Box<dyn std::error::
         bundle_digest: [14; 32],
         save_challenge_commitment: [15; 32],
     })
+}
+
+fn recovery_private_key() -> Result<WrappingPrivateKey, Box<dyn std::error::Error>> {
+    Ok(WrappingPrivateKey::from_bytes([12; 32])?)
 }
 
 fn count(connection: &rusqlite::Connection, table: &'static str) -> Result<i64, rusqlite::Error> {

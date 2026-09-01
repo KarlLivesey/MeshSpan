@@ -328,6 +328,7 @@ fn service_error_response(
             "bootstrap authority is temporarily unavailable",
         ),
         CreateMeshSetupError::Material(_)
+        | CreateMeshSetupError::StoragePermitEnvelope(_)
         | CreateMeshSetupError::RecoveryCode(_)
         | CreateMeshSetupError::RecoveryBundle(_)
         | CreateMeshSetupError::Local(LocalSetupError::Store | LocalSetupError::Invalid)

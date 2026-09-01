@@ -113,7 +113,7 @@ mod tests {
 
     use super::*;
     use crate::protected_volume_test_support::{
-        confirm_recovery, initial_volume_key, protected_bootstrap, register_gateway_key,
+        confirm_recovery, initial_volume_key, protected_bootstrap,
     };
 
     struct AuthorityFixture {
@@ -160,7 +160,7 @@ mod tests {
 
         apply(
             &mut repository,
-            9,
+            8,
             user_id,
             &AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
                 session_id,
@@ -226,12 +226,6 @@ mod tests {
             &mut repository,
             3,
             administrator_id,
-            &register_gateway_key(gateway_node_id)?,
-        )?;
-        apply(
-            &mut repository,
-            4,
-            administrator_id,
             &AuthoritativeCommand::CreateUser(CreateUser {
                 principal_id: user_id,
                 name: RecordName::new("User")?,
@@ -239,7 +233,7 @@ mod tests {
         )?;
         apply(
             &mut repository,
-            5,
+            4,
             administrator_id,
             &AuthoritativeCommand::CreateVolume(CreateVolume {
                 volume_id,
@@ -289,7 +283,7 @@ mod tests {
         let direct_digest = [20; 32];
         apply(
             repository,
-            10,
+            9,
             user_id,
             &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
                 method_id: direct_method_id,
@@ -325,7 +319,7 @@ mod tests {
         );
         apply(
             repository,
-            11,
+            10,
             user_id,
             &AuthoritativeCommand::RevokeAuthenticationMethod(RevokeAuthenticationMethod {
                 method_id: direct_method_id,
@@ -350,7 +344,7 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         apply(
             repository,
-            6,
+            5,
             user_id,
             &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([13; 16])?,
@@ -368,7 +362,7 @@ mod tests {
         )?;
         apply(
             repository,
-            7,
+            6,
             user_id,
             &AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([16; 16])?,
@@ -387,7 +381,7 @@ mod tests {
         )?;
         apply(
             repository,
-            8,
+            7,
             user_id,
             &AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
                 session_id,
@@ -402,13 +396,13 @@ mod tests {
                         SessionAuthenticationFactor::ApiKey {
                             method_id: AuthenticationMethodId::from_bytes([13; 16])?,
                             credential_generation: 1,
-                            method_revision: Revision::new(6),
+                            method_revision: Revision::new(5),
                             key_id: ApiKeyId::from_bytes([14; 16])?,
                         },
                         SessionAuthenticationFactor::Totp {
                             method_id: AuthenticationMethodId::from_bytes([16; 16])?,
                             credential_generation: 1,
-                            method_revision: Revision::new(7),
+                            method_revision: Revision::new(6),
                             accepted_step: 0,
                         },
                     ],

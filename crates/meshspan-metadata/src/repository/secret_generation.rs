@@ -2,7 +2,7 @@
 
 //! Atomic encrypted secret generations and complete recipient envelopes.
 
-use meshspan_domain::{Revision, VolumeId};
+use meshspan_domain::{MeshId, Revision, VolumeId};
 use meshspan_secret_envelope::{
     EncryptedSecret, EncryptedSecretParts, MAXIMUM_SECRET_RECIPIENTS, RecipientEnvelopeParts,
     RecipientKeyEnvelope, SecretContext, WrappingPublicKey,
@@ -12,7 +12,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, recovery_authority};
 use crate::{
-    CommandContext, CommitSecretGeneration, PartitionDatabase, VOLUME_CONTENT_KEY_SECRET_KIND,
+    CommandContext, CommitSecretGeneration, PartitionDatabase, STORAGE_PERMIT_KEY_SECRET_KIND,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 const VOLUME_CONTENT_KEY_BYTES: usize = 32;
@@ -63,29 +64,54 @@ pub(super) fn commit(
     }) {
         return Err(RepositoryError::InvalidCommand);
     }
-    let secret_context = secret.context();
-    let stored_revision = to_i64(revision.get())?;
-    insert_secret(
+    persist(
         transaction,
         context,
         command,
-        secret_context,
-        stored_revision,
-    )?;
-    for (envelope, parts) in recipients.iter().zip(&command.recipients) {
-        insert_recipient(
-            transaction,
-            context,
-            secret_context,
-            envelope,
-            parts,
-            stored_revision,
-        )?;
+        &secret,
+        &recipients,
+        revision,
+    )
+}
+
+pub(super) fn commit_initial_storage_permit_key(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    mesh_id: MeshId,
+    node_recipient: WrappingPublicKey,
+    recovery_recipient: WrappingPublicKey,
+    command: &CommitSecretGeneration,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let (secret, recipients) = validate(command)?;
+    let secret_context = secret.context();
+    if secret_context.kind() != STORAGE_PERMIT_KEY_SECRET_KIND
+        || secret_context.id() != mesh_id.as_bytes()
+        || secret_context.generation() != 1
+        || command.secret.ciphertext.len()
+            != VOLUME_CONTENT_KEY_BYTES.saturating_add(AUTHENTICATION_TAG_BYTES)
+    {
+        return Err(RepositoryError::InvalidCommand);
     }
-    Ok(EntityReference {
-        kind: EntityKind::SecretGeneration,
-        id: secret_context.id(),
-    })
+    let mut expected_recipients = vec![node_recipient, recovery_recipient];
+    expected_recipients.sort_by_key(|recipient| recipient.fingerprint());
+    let supplied_recipients = recipients
+        .iter()
+        .map(RecipientKeyEnvelope::recipient_public_key)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    if supplied_recipients != expected_recipients {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    persist(
+        transaction,
+        context,
+        command,
+        &secret,
+        &recipients,
+        revision,
+    )
+    .map(|_| ())
 }
 
 pub(super) fn commit_initial_volume_key(
@@ -310,6 +336,39 @@ fn insert_secret(
         ],
     )?;
     Ok(())
+}
+
+fn persist(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &CommitSecretGeneration,
+    secret: &EncryptedSecret,
+    recipients: &[RecipientKeyEnvelope],
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    let secret_context = secret.context();
+    let stored_revision = to_i64(revision.get())?;
+    insert_secret(
+        transaction,
+        context,
+        command,
+        secret_context,
+        stored_revision,
+    )?;
+    for (envelope, parts) in recipients.iter().zip(&command.recipients) {
+        insert_recipient(
+            transaction,
+            context,
+            secret_context,
+            envelope,
+            parts,
+            stored_revision,
+        )?;
+    }
+    Ok(EntityReference {
+        kind: EntityKind::SecretGeneration,
+        id: secret_context.id(),
+    })
 }
 
 fn insert_recipient(

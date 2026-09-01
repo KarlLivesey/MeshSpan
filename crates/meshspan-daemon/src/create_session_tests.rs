@@ -12,11 +12,10 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthoritativeCommand,
-    AuthoritativeRepository, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    BrowserSessionAccessRequest, CommandContext, CreateAuthenticationMethod, LogPosition,
-    NewAuthenticationCredential, PartitionDatabase, PasskeySessionReplay,
-    PasskeyVerificationMaterial, RecordName, RepositoryError, SessionAccessDecision,
-    SessionRevocationReplay,
+    AuthoritativeRepository, BootstrapMesh, BootstrapRecoveryIdentity, BrowserSessionAccessRequest,
+    CommandContext, CreateAuthenticationMethod, LogPosition, NewAuthenticationCredential,
+    PartitionDatabase, PasskeySessionReplay, PasskeyVerificationMaterial, RecordName,
+    RepositoryError, SessionAccessDecision, SessionRevocationReplay,
 };
 use meshspan_secret_envelope::WrappingPublicKey;
 use sha2::{Digest, Sha256};
@@ -232,34 +231,36 @@ pub(super) fn bootstrap(
     material: &InitialBootstrapMaterial,
     operation_id: OperationId,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let command = AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
-        mesh: BootstrapMesh {
-            mesh_id: material.mesh_id,
-            mesh_name: RecordName::new("Test mesh")?,
-            administrator_id: material.administrator_id,
-            administrator_name: RecordName::new("Administrator")?,
-            administrator_role_id: material.administrator_role_id,
-            host_id: material.host_id,
-            host_name: RecordName::new("Test host")?,
-            node_id: material.node_id,
-            node_name: RecordName::new("Test node")?,
-            partition_name: RecordName::new("Root authority")?,
-        },
-        authentication: CreateAuthenticationMethod {
-            method_id: material.authentication_method_id,
-            principal_id: material.administrator_id,
-            label: "Initial API key".to_owned(),
-            service_scope: 1 | 2 | 4,
-            expires_at: None,
-            credential: NewAuthenticationCredential::ApiKey {
-                key_id: material.api_key.key_id(),
-                key_digest: material.api_key.secret_digest(),
-                scopes: 1,
-                valid_from: UnixMicros::new(10),
+    let command = AuthoritativeCommand::BootstrapAppliance(
+        crate::bootstrap_test_support::bootstrap_appliance(
+            BootstrapMesh {
+                mesh_id: material.mesh_id,
+                mesh_name: RecordName::new("Test mesh")?,
+                administrator_id: material.administrator_id,
+                administrator_name: RecordName::new("Administrator")?,
+                administrator_role_id: material.administrator_role_id,
+                host_id: material.host_id,
+                host_name: RecordName::new("Test host")?,
+                node_id: material.node_id,
+                node_name: RecordName::new("Test node")?,
+                partition_name: RecordName::new("Root authority")?,
             },
-        },
-        recovery: Box::new(recovery_identity()?),
-    });
+            CreateAuthenticationMethod {
+                method_id: material.authentication_method_id,
+                principal_id: material.administrator_id,
+                label: "Initial API key".to_owned(),
+                service_scope: 1 | 2 | 4,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: material.api_key.key_id(),
+                    key_digest: material.api_key.secret_digest(),
+                    scopes: 1,
+                    valid_from: UnixMicros::new(10),
+                },
+            },
+            Box::new(recovery_identity()?),
+        )?,
+    );
     authority.repository.apply_committed(
         LogPosition { index: 1, term: 1 },
         CommandContext {

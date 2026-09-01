@@ -29,9 +29,9 @@ use super::{
 };
 use crate::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
-    AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapAppliance,
-    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration,
-    ConfigureComponent, ConfirmRecoveryBundleSaved, ConsumeJoinGrant, CreateActivationPolicy,
+    AssignComponent, AttachTag, AuthoritativeCommand, BeginScopeHandoff, BootstrapMesh,
+    BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration, ConfigureComponent,
+    ConfirmRecoveryBundleSaved, ConsumeJoinGrant, CreateActivationPolicy,
     CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateMetadataPartition,
     CreateObject, CreateScopeRoute, CreateTag, CreateUser, CreateVolume, DetachTag,
     FreezeScopeHandoff, GrantInheritance, GrantPermission, InstallScopeRouteProjection,
@@ -51,18 +51,19 @@ struct FixtureIds {
 }
 
 const TEST_RECOVERY_KEY_BYTES: [u8; 32] = [146; 32];
-const TEST_GATEWAY_KEY_BYTES: [u8; 32] = [145; 32];
 
 pub(super) fn protected_bootstrap(
     mesh: BootstrapMesh,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     let public_key = WrappingPublicKey::from_bytes(TEST_RECOVERY_KEY_BYTES)?;
     let certificate = vec![147; 64];
+    let administrator_id = mesh.administrator_id;
     Ok(AuthoritativeCommand::BootstrapAppliance(
-        BootstrapAppliance {
-            authentication: CreateAuthenticationMethod {
+        crate::test_support::bootstrap_appliance(
+            mesh,
+            CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([148; 16])?,
-                principal_id: mesh.administrator_id,
+                principal_id: administrator_id,
                 label: "Test bootstrap key".to_owned(),
                 service_scope: 7,
                 expires_at: None,
@@ -73,7 +74,7 @@ pub(super) fn protected_bootstrap(
                     valid_from: UnixMicros::new(1),
                 },
             },
-            recovery: Box::new(BootstrapRecoveryIdentity {
+            Box::new(BootstrapRecoveryIdentity {
                 public_wrapping_key: public_key.as_bytes(),
                 key_fingerprint: public_key.fingerprint(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
@@ -81,8 +82,7 @@ pub(super) fn protected_bootstrap(
                 bundle_digest: [151; 32],
                 save_challenge_commitment: [152; 32],
             }),
-            mesh,
-        },
+        )?,
     ))
 }
 
@@ -103,34 +103,6 @@ pub(super) fn mark_test_recovery_verified(
     if updated != 1 {
         return Err("test recovery authority was not pending".into());
     }
-    let node_id = repository.database.connection().query_row(
-        "SELECT node_id FROM nodes WHERE state = 2 LIMIT 1",
-        [],
-        |row| row.get::<_, Vec<u8>>(0),
-    )?;
-    let gateway_key = WrappingPublicKey::from_bytes(TEST_GATEWAY_KEY_BYTES)?;
-    repository.database.connection_mut().execute(
-        "INSERT INTO node_wrapping_keys(
-            node_id, generation, public_key, key_fingerprint, state, registered_at,
-            retired_at, revision
-         ) VALUES (?1, 1, ?2, ?3, 1, 1, NULL, 1)",
-        rusqlite::params![
-            node_id.as_slice(),
-            gateway_key.as_bytes().as_slice(),
-            gateway_key.fingerprint().as_slice(),
-        ],
-    )?;
-    repository.database.connection_mut().execute(
-        "INSERT INTO secret_wrapping_recipients(
-            key_fingerprint, recipient_kind, owner_id, generation, public_key, state,
-            registered_at, retired_at, revision
-         ) VALUES (?1, 1, ?2, 1, ?3, 1, 1, NULL, 1)",
-        rusqlite::params![
-            gateway_key.fingerprint().as_slice(),
-            node_id.as_slice(),
-            gateway_key.as_bytes().as_slice(),
-        ],
-    )?;
     Ok(())
 }
 
@@ -140,7 +112,7 @@ pub(super) fn initial_test_volume_key(
     let context = SecretContext::new(VOLUME_CONTENT_KEY_SECRET_KIND, volume_id.as_bytes(), 1)?;
     let recipients = [
         WrappingPublicKey::from_bytes(TEST_RECOVERY_KEY_BYTES)?,
-        WrappingPublicKey::from_bytes(TEST_GATEWAY_KEY_BYTES)?,
+        crate::test_support::node_wrapping_private_key()?.public_key(),
     ];
     let (secret, recipients) =
         encrypt_secret(context, &[153; 32], &recipients, &mut VolumeKeyRandom(154))?;
@@ -893,8 +865,8 @@ fn join_bootstrap(
     let recovery_key = WrappingPublicKey::from_bytes([146; 32])?;
     let certificate = vec![147; 64];
     Ok(AuthoritativeCommand::BootstrapAppliance(
-        BootstrapAppliance {
-            mesh: BootstrapMesh {
+        crate::test_support::bootstrap_appliance(
+            BootstrapMesh {
                 mesh_id: MeshId::from_bytes([132; 16])?,
                 mesh_name: RecordName::new("Join proof")?,
                 administrator_id: administrator,
@@ -906,7 +878,7 @@ fn join_bootstrap(
                 node_name: RecordName::new("First node")?,
                 partition_name: RecordName::new("Authority")?,
             },
-            authentication: CreateAuthenticationMethod {
+            CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([150; 16])?,
                 principal_id: administrator,
                 label: "Initial API key".to_owned(),
@@ -919,7 +891,7 @@ fn join_bootstrap(
                     valid_from: UnixMicros::new(100),
                 },
             },
-            recovery: Box::new(BootstrapRecoveryIdentity {
+            Box::new(BootstrapRecoveryIdentity {
                 public_wrapping_key: recovery_key.as_bytes(),
                 key_fingerprint: recovery_key.fingerprint(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
@@ -927,7 +899,7 @@ fn join_bootstrap(
                 bundle_digest: [148; 32],
                 save_challenge_commitment: [149; 32],
             }),
-        },
+        )?,
     ))
 }
 

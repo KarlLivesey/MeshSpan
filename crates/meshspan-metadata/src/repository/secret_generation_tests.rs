@@ -12,9 +12,9 @@ use tempfile::{TempDir, tempdir};
 
 use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommandContext, CommitSecretGeneration, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    NewAuthenticationCredential, PartitionDatabase, RecordName, RegisterNodeWrappingKey,
+    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CommandContext,
+    CommitSecretGeneration, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
+    NewAuthenticationCredential, PartitionDatabase, RecordName,
 };
 
 struct Fixture {
@@ -40,9 +40,9 @@ fn ciphertext_and_recipient_commit_atomically_replay_and_decrypt_after_read()
         ],
         40,
     )?;
-    let command_context = context(41, fixture.administrator, 42, 30, Some(3))?;
+    let command_context = context(41, fixture.administrator, 42, 30, Some(2))?;
     let receipt = fixture.repository.apply_committed(
-        LogPosition { index: 4, term: 1 },
+        LogPosition { index: 3, term: 1 },
         command_context,
         &command,
     )?;
@@ -65,10 +65,10 @@ fn ciphertext_and_recipient_commit_atomically_replay_and_decrypt_after_read()
         .ok_or("node recipient missing")?;
     let key = node_envelope.open(&fixture.private_key)?;
     assert_eq!(stored.secret.decrypt(&key)?.expose(), plaintext);
-    assert_eq!(stored.revision, Revision::new(4));
+    assert_eq!(stored.revision, Revision::new(3));
 
     let replay = fixture.repository.apply_committed(
-        LogPosition { index: 5, term: 1 },
+        LogPosition { index: 4, term: 1 },
         command_context,
         &command,
     )?;
@@ -90,13 +90,13 @@ fn unregistered_recipient_rolls_back_ciphertext_and_envelopes()
         52,
     )?;
     let result = fixture.repository.apply_committed(
-        LogPosition { index: 4, term: 1 },
-        context(53, fixture.administrator, 54, 30, Some(3))?,
+        LogPosition { index: 3, term: 1 },
+        context(53, fixture.administrator, 54, 30, Some(2))?,
         &command,
     );
     assert!(matches!(result, Err(RepositoryError::Sqlite(_))));
     assert_eq!(fixture.repository.secret_generation(secret_context)?, None);
-    assert_eq!(fixture.repository.current_revision()?, Revision::new(3));
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(2));
     Ok(())
 }
 
@@ -116,8 +116,8 @@ fn pending_recovery_or_missing_recovery_recipient_blocks_secret_provisioning()
     )?;
     assert!(matches!(
         pending.repository.apply_committed(
-            LogPosition { index: 3, term: 1 },
-            context(62, pending.administrator, 63, 30, Some(2))?,
+            LogPosition { index: 2, term: 1 },
+            context(62, pending.administrator, 63, 30, Some(1))?,
             &recoverable,
         ),
         Err(RepositoryError::InvalidCommand)
@@ -134,8 +134,8 @@ fn pending_recovery_or_missing_recovery_recipient_blocks_secret_provisioning()
     )?;
     assert!(matches!(
         verified.repository.apply_committed(
-            LogPosition { index: 4, term: 1 },
-            context(72, verified.administrator, 73, 30, Some(3))?,
+            LogPosition { index: 3, term: 1 },
+            context(72, verified.administrator, 73, 30, Some(2))?,
             &omitted,
         ),
         Err(RepositoryError::InvalidCommand)
@@ -164,8 +164,8 @@ fn fixture(verify_recovery: bool) -> Result<Fixture, Box<dyn std::error::Error>>
     repository.apply_committed(
         LogPosition { index: 1, term: 1 },
         context(5, administrator, 6, 10, Some(0))?,
-        &AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
-            mesh: BootstrapMesh {
+        &AuthoritativeCommand::BootstrapAppliance(crate::test_support::bootstrap_appliance(
+            BootstrapMesh {
                 mesh_id,
                 mesh_name: RecordName::new("Secret mesh")?,
                 administrator_id: administrator,
@@ -177,7 +177,7 @@ fn fixture(verify_recovery: bool) -> Result<Fixture, Box<dyn std::error::Error>>
                 node_name: RecordName::new("Node")?,
                 partition_name: RecordName::new("Root authority")?,
             },
-            authentication: CreateAuthenticationMethod {
+            CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([9; 16])?,
                 principal_id: administrator,
                 label: "Initial API key".to_owned(),
@@ -190,7 +190,7 @@ fn fixture(verify_recovery: bool) -> Result<Fixture, Box<dyn std::error::Error>>
                     valid_from: UnixMicros::new(10),
                 },
             },
-            recovery: Box::new(BootstrapRecoveryIdentity {
+            Box::new(BootstrapRecoveryIdentity {
                 public_wrapping_key: recovery_public_key.as_bytes(),
                 key_fingerprint: recovery_public_key.fingerprint(),
                 root_certificate_digest: Sha256::digest(&certificate).into(),
@@ -198,7 +198,7 @@ fn fixture(verify_recovery: bool) -> Result<Fixture, Box<dyn std::error::Error>>
                 bundle_digest: [14; 32],
                 save_challenge_commitment: [15; 32],
             }),
-        }),
+        )?),
     )?;
     if verify_recovery {
         repository.apply_committed(
@@ -211,27 +211,7 @@ fn fixture(verify_recovery: bool) -> Result<Fixture, Box<dyn std::error::Error>>
             }),
         )?;
     }
-    let private_key = WrappingPrivateKey::from_bytes([20; 32])?;
-    let public_key = private_key.public_key();
-    repository.apply_committed(
-        LogPosition {
-            index: if verify_recovery { 3 } else { 2 },
-            term: 1,
-        },
-        context(
-            21,
-            administrator,
-            22,
-            20,
-            Some(if verify_recovery { 2 } else { 1 }),
-        )?,
-        &AuthoritativeCommand::RegisterNodeWrappingKey(RegisterNodeWrappingKey {
-            node_id: node,
-            generation: 1,
-            public_key: public_key.as_bytes(),
-            key_fingerprint: public_key.fingerprint(),
-        }),
-    )?;
+    let private_key = crate::test_support::node_wrapping_private_key()?;
     Ok(Fixture {
         _directory: directory,
         repository,

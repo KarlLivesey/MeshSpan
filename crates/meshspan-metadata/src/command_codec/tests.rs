@@ -14,13 +14,12 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
-    AddGroupMember, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommitSecretGeneration, CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateUser,
-    CreateVolume, IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode,
-    RecordName, RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember,
-    RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAuthenticationFactor,
-    SessionClientLabel, StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm,
-    VOLUME_CONTENT_KEY_SECRET_KIND,
+    AddGroupMember, BootstrapMesh, BootstrapRecoveryIdentity, CommitSecretGeneration,
+    CreateAuthenticationMethod, CreateComponent, CreateGroup, CreateUser, CreateVolume,
+    IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode, RecordName,
+    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
+    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
+    StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 #[test]
@@ -457,34 +456,35 @@ fn fixture() -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::erro
         occurred_at: UnixMicros::new(-12),
         expected_revision: Some(Revision::new(4)),
     };
-    let command = AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
-        mesh: BootstrapMesh {
-            mesh_id: MeshId::from_bytes([5; 16])?,
-            mesh_name: RecordName::new("Mesh")?,
-            administrator_id: context.actor_principal_id,
-            administrator_name: RecordName::new("Administrator")?,
-            administrator_role_id: RoleId::from_bytes([6; 16])?,
-            host_id: HostId::from_bytes([7; 16])?,
-            host_name: RecordName::new("Host")?,
-            node_id: NodeId::from_bytes([8; 16])?,
-            node_name: RecordName::new("Node")?,
-            partition_name: RecordName::new("Root authority")?,
-        },
-        authentication: CreateAuthenticationMethod {
-            method_id: AuthenticationMethodId::from_bytes([9; 16])?,
-            principal_id: context.actor_principal_id,
-            label: "Initial API key".to_owned(),
-            service_scope: 7,
-            expires_at: None,
-            credential: NewAuthenticationCredential::ApiKey {
-                key_id: ApiKeyId::from_bytes([10; 16])?,
-                key_digest: [11; 32],
-                scopes: 1,
-                valid_from: context.occurred_at,
+    let command =
+        AuthoritativeCommand::BootstrapAppliance(crate::test_support::bootstrap_appliance(
+            BootstrapMesh {
+                mesh_id: MeshId::from_bytes([5; 16])?,
+                mesh_name: RecordName::new("Mesh")?,
+                administrator_id: context.actor_principal_id,
+                administrator_name: RecordName::new("Administrator")?,
+                administrator_role_id: RoleId::from_bytes([6; 16])?,
+                host_id: HostId::from_bytes([7; 16])?,
+                host_name: RecordName::new("Host")?,
+                node_id: NodeId::from_bytes([8; 16])?,
+                node_name: RecordName::new("Node")?,
+                partition_name: RecordName::new("Root authority")?,
             },
-        },
-        recovery: Box::new(recovery_identity()?),
-    });
+            CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([9; 16])?,
+                principal_id: context.actor_principal_id,
+                label: "Initial API key".to_owned(),
+                service_scope: 7,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([10; 16])?,
+                    key_digest: [11; 32],
+                    scopes: 1,
+                    valid_from: context.occurred_at,
+                },
+            },
+            Box::new(recovery_identity()?),
+        )?);
     Ok((context, command))
 }
 

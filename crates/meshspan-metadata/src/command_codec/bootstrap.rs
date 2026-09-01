@@ -6,6 +6,7 @@ use super::MetadataCommandCodecError;
 use super::authentication;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
+use super::{node_wrapping_key, secret_generation};
 use crate::{BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity, RecordName};
 
 const MAXIMUM_NAME_BYTES: usize = 256;
@@ -17,7 +18,9 @@ pub(super) fn encode(
 ) -> Result<(), MetadataCommandCodecError> {
     encode_mesh(encoder, &value.mesh)?;
     authentication::encode_payload(encoder, &value.authentication)?;
-    encode_recovery(encoder, &value.recovery)
+    encode_recovery(encoder, &value.recovery)?;
+    node_wrapping_key::encode_payload(encoder, &value.node_wrapping_key)?;
+    secret_generation::encode_payload(encoder, &value.storage_permit_key_generation)
 }
 
 pub(super) fn decode(
@@ -27,6 +30,8 @@ pub(super) fn decode(
         mesh: decode_mesh(decoder)?,
         authentication: authentication::decode_payload(decoder)?,
         recovery: Box::new(decode_recovery(decoder)?),
+        node_wrapping_key: node_wrapping_key::decode_payload(decoder)?,
+        storage_permit_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
     })
 }
 

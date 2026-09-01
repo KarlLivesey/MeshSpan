@@ -15,13 +15,13 @@ use meshspan_domain::{
     Revision, RoleId, SessionCsrfBundle, SessionTokenBundle, UnixMicros,
 };
 use meshspan_metadata::{
-    AuthoritativeCommand, AuthoritativeRepository, BootstrapAppliance, BootstrapMesh,
-    BootstrapRecoveryIdentity, BrowserSessionAccessRequest, BrowserSessionProtection,
-    CommandContext, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    IssueAuthenticationSession, NewAuthenticationCredential, PageLimit, PartitionDatabase,
-    PrincipalKind, RecordName, RegisterNodeWrappingKey, RevokeAuthenticationMethod,
-    RevokeAuthenticationSession, SessionAccessDecision, SessionAccessRequest,
-    SessionAuthenticationFactor, SessionClientLabel, VOLUME_CONTENT_KEY_SECRET_KIND,
+    AuthoritativeCommand, AuthoritativeRepository, BootstrapMesh, BootstrapRecoveryIdentity,
+    BrowserSessionAccessRequest, BrowserSessionProtection, CommandContext,
+    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, IssueAuthenticationSession,
+    NewAuthenticationCredential, PageLimit, PartitionDatabase, PrincipalKind, RecordName,
+    RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAccessDecision,
+    SessionAccessRequest, SessionAuthenticationFactor, SessionClientLabel,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
 use sha2::{Digest, Sha256};
@@ -30,10 +30,9 @@ use crate::{
     ApiKeyIssuanceAuthority, AuthenticationMethodListingAuthority,
     AuthenticationMethodRevocationAuthority, BrowserSessionAuthority,
     ConsensusAuthenticationAuthority, IdentityAdministrationAuthority,
-    IdentityAdministrationAuthorityError, LocalWrappingKey, NodeWrappingKeyRegistrationAuthority,
-    RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
-    SessionAuthority, SessionRevocationAuthority, VolumeAdministrationAuthority,
-    VolumeKeyLoadingService,
+    IdentityAdministrationAuthorityError, LocalWrappingKey, RecoveryBundleVerificationAuthority,
+    RecoveryBundleVerificationAuthorityError, SessionAuthority, SessionRevocationAuthority,
+    VolumeAdministrationAuthority, VolumeKeyLoadingService,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -87,7 +86,7 @@ async fn volume_creation_returns_exact_committed_projection()
     let mut fixture = RunningAuthority::start().await?;
     let commit = fixture.volume_lifecycle()?;
     assert_eq!(commit.record.display_name, "Shared files");
-    assert_eq!(commit.record.revision.get(), 4);
+    assert_eq!(commit.record.revision.get(), 3);
     fixture.shutdown().await
 }
 
@@ -181,11 +180,18 @@ impl RunningAuthority {
         let mut random = SequentialRandom(10);
         let api_key = ApiKeyBundle::generate(&mut random)?;
         let administrator_id = PrincipalId::from_bytes([4; 16])?;
+        let wrapping_key_path = directory.path().join("volume-wrapping.key");
+        let wrapping_key = LocalWrappingKey::open_or_create(&wrapping_key_path)?;
         let context = command_context(administrator_id, 5, 6, 10, Some(Revision::ZERO))?;
         handle
             .commit_or_resolve(
                 context,
-                bootstrap_command(node_id, administrator_id, &api_key)?,
+                bootstrap_command(
+                    node_id,
+                    administrator_id,
+                    &api_key,
+                    wrapping_key.public_key(),
+                )?,
             )
             .await?;
         Ok(Self {
@@ -389,7 +395,6 @@ impl RunningAuthority {
             .ok_or("test read connection was already consumed")?;
         let authority_handle = self.handle.clone();
         let administrator_id = self.administrator_id;
-        let node_id = self.node_id;
         let wrapping_key_path = self.directory.path().join("volume-wrapping.key");
         tokio::task::block_in_place(move || {
             let mut authority = ConsensusAuthenticationAuthority::new(
@@ -408,18 +413,6 @@ impl RunningAuthority {
                 &recovery,
             )?;
             let local_wrapping_key = LocalWrappingKey::open_or_create(&wrapping_key_path)?;
-            let wrapping_key = local_wrapping_key.public_key();
-            let registration =
-                AuthoritativeCommand::RegisterNodeWrappingKey(RegisterNodeWrappingKey {
-                    node_id,
-                    generation: 1,
-                    public_key: wrapping_key.as_bytes(),
-                    key_fingerprint: wrapping_key.fingerprint(),
-                });
-            authority.commit_or_resolve_registration(
-                command_context(administrator_id, 47, 48, 40, None)?,
-                &registration,
-            )?;
             let volume_id = meshspan_domain::VolumeId::from_bytes([50; 16])?;
             let recipients = authority.volume_key_recipients()?;
             let (secret, envelopes) = encrypt_secret(
@@ -549,10 +542,11 @@ fn bootstrap_command(
     node_id: NodeId,
     administrator_id: PrincipalId,
     api_key: &ApiKeyBundle,
+    wrapping_public_key: WrappingPublicKey,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     Ok(AuthoritativeCommand::BootstrapAppliance(
-        BootstrapAppliance {
-            mesh: BootstrapMesh {
+        crate::bootstrap_test_support::bootstrap_appliance_with_node_key(
+            BootstrapMesh {
                 mesh_id: MeshId::from_bytes([9; 16])?,
                 mesh_name: RecordName::new("Test mesh")?,
                 administrator_id,
@@ -564,7 +558,7 @@ fn bootstrap_command(
                 node_name: RecordName::new("Test node")?,
                 partition_name: RecordName::new("Root authority")?,
             },
-            authentication: CreateAuthenticationMethod {
+            CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([12; 16])?,
                 principal_id: administrator_id,
                 label: "Initial API key".to_owned(),
@@ -579,8 +573,9 @@ fn bootstrap_command(
                     valid_from: UnixMicros::new(10),
                 },
             },
-            recovery: Box::new(recovery_identity()?),
-        },
+            Box::new(recovery_identity()?),
+            wrapping_public_key,
+        )?,
     ))
 }
 

@@ -120,6 +120,7 @@ where
             local_state.claim_output_path().to_path_buf(),
             local_state.pending_recovery_bundle_path(),
             Arc::clone(&setup_state),
+            local_state.wrapping_public_key(),
             OperatingSystemRandom,
         ),
         storage_targets,

@@ -14,10 +14,12 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommandContext, CreateAuthenticationMethod, LocalDatabase, LocalSetupError, LocalSetupKind,
-    LocalSetupState, NewAuthenticationCredential, NewLocalSetup, RecordName, RecordNameError,
+    CommandContext, CommitSecretGeneration, CreateAuthenticationMethod, LocalDatabase,
+    LocalSetupError, LocalSetupKind, LocalSetupState, NewAuthenticationCredential, NewLocalSetup,
+    RecordName, RecordNameError, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_recovery_bundle::{OfflineRecoveryIdentity, RecoveryBundleCode, RecoveryBundleError};
+use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -71,6 +73,7 @@ pub struct CreateMeshSetupService<A, R> {
     claim_output_path: PathBuf,
     recovery_bundle_path: PathBuf,
     setup_state: Arc<SetupStateSnapshot>,
+    wrapping_public_key: WrappingPublicKey,
     random: R,
 }
 
@@ -87,6 +90,7 @@ where
         claim_output_path: PathBuf,
         recovery_bundle_path: PathBuf,
         setup_state: Arc<SetupStateSnapshot>,
+        wrapping_public_key: WrappingPublicKey,
         random: R,
     ) -> Self {
         Self {
@@ -95,6 +99,7 @@ where
             claim_output_path,
             recovery_bundle_path,
             setup_state,
+            wrapping_public_key,
             random,
         }
     }
@@ -154,7 +159,8 @@ where
                 &recovery_identity,
                 recovery_bundle.challenge(&recovery_code).commitment(),
                 setup.created_at,
-            );
+                self.wrapping_public_key,
+            )?;
             let committed = self.authority.commit_or_resolve(context, &command)?;
             self.local_database.record_local_setup_authority_commit(
                 input.operation_id,
@@ -220,42 +226,72 @@ impl ValidatedSetupInput {
         recovery: &OfflineRecoveryIdentity,
         save_challenge_commitment: [u8; 32],
         occurred_at: UnixMicros,
-    ) -> AuthoritativeCommand {
-        AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
-            mesh: BootstrapMesh {
-                mesh_id: material.mesh_id,
-                mesh_name: self.mesh_name.clone(),
-                administrator_id: material.administrator_id,
-                administrator_name: self.administrator_name.clone(),
-                administrator_role_id: material.administrator_role_id,
-                host_id: material.host_id,
-                host_name: self.host_name.clone(),
-                node_id: material.node_id,
-                node_name: self.node_name.clone(),
-                partition_name: self.partition_name.clone(),
-            },
-            authentication: CreateAuthenticationMethod {
-                method_id: material.authentication_method_id,
-                principal_id: material.administrator_id,
-                label: "Initial API key".to_owned(),
-                service_scope: ALL_INITIAL_SERVICE_SCOPES,
-                expires_at: None,
-                credential: NewAuthenticationCredential::ApiKey {
-                    key_id: material.api_key.key_id(),
-                    key_digest: material.api_key.secret_digest(),
-                    scopes: ALL_INITIAL_LOGIN_SCOPES,
-                    valid_from: occurred_at,
+        wrapping_public_key: WrappingPublicKey,
+    ) -> Result<AuthoritativeCommand, CreateMeshSetupError> {
+        let recovery_public_key = recovery.public_wrapping_key();
+        let mut permit_material = material.storage_permit_material();
+        let permit_key = permit_material.key();
+        let context = SecretContext::new(
+            STORAGE_PERMIT_KEY_SECRET_KIND,
+            material.mesh_id.as_bytes(),
+            1,
+        )?;
+        let (secret, recipients) = encrypt_secret(
+            context,
+            permit_key.as_ref(),
+            &[wrapping_public_key, recovery_public_key],
+            &mut permit_material,
+        )?;
+        Ok(AuthoritativeCommand::BootstrapAppliance(
+            BootstrapAppliance {
+                mesh: BootstrapMesh {
+                    mesh_id: material.mesh_id,
+                    mesh_name: self.mesh_name.clone(),
+                    administrator_id: material.administrator_id,
+                    administrator_name: self.administrator_name.clone(),
+                    administrator_role_id: material.administrator_role_id,
+                    host_id: material.host_id,
+                    host_name: self.host_name.clone(),
+                    node_id: material.node_id,
+                    node_name: self.node_name.clone(),
+                    partition_name: self.partition_name.clone(),
                 },
+                authentication: CreateAuthenticationMethod {
+                    method_id: material.authentication_method_id,
+                    principal_id: material.administrator_id,
+                    label: "Initial API key".to_owned(),
+                    service_scope: ALL_INITIAL_SERVICE_SCOPES,
+                    expires_at: None,
+                    credential: NewAuthenticationCredential::ApiKey {
+                        key_id: material.api_key.key_id(),
+                        key_digest: material.api_key.secret_digest(),
+                        scopes: ALL_INITIAL_LOGIN_SCOPES,
+                        valid_from: occurred_at,
+                    },
+                },
+                recovery: Box::new(BootstrapRecoveryIdentity {
+                    public_wrapping_key: recovery_public_key.as_bytes(),
+                    key_fingerprint: recovery_public_key.fingerprint(),
+                    root_certificate_digest: Sha256::digest(recovery.root_certificate_der()).into(),
+                    root_certificate_der: recovery.root_certificate_der().to_vec(),
+                    bundle_digest: recovery.bundle_digest(),
+                    save_challenge_commitment,
+                }),
+                node_wrapping_key: RegisterNodeWrappingKey {
+                    node_id: material.node_id,
+                    generation: 1,
+                    public_key: wrapping_public_key.as_bytes(),
+                    key_fingerprint: wrapping_public_key.fingerprint(),
+                },
+                storage_permit_key_generation: Box::new(CommitSecretGeneration {
+                    secret: secret.parts(),
+                    recipients: recipients
+                        .iter()
+                        .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                        .collect(),
+                }),
             },
-            recovery: Box::new(BootstrapRecoveryIdentity {
-                public_wrapping_key: recovery.public_wrapping_key().as_bytes(),
-                key_fingerprint: recovery.public_wrapping_key().fingerprint(),
-                root_certificate_digest: Sha256::digest(recovery.root_certificate_der()).into(),
-                root_certificate_der: recovery.root_certificate_der().to_vec(),
-                bundle_digest: recovery.bundle_digest(),
-                save_challenge_commitment,
-            }),
-        })
+        ))
     }
 
     fn request_digest(&self, claim_id: [u8; 16]) -> [u8; 32] {
@@ -374,6 +410,9 @@ pub enum CreateMeshSetupError {
     /// Protected offline recovery delivery could not be created or resumed.
     #[error("pending offline recovery bundle failed")]
     RecoveryBundle(#[from] PendingRecoveryBundleError),
+    /// Initial permit encryption or recipient composition failed closed.
+    #[error("storage permit envelope could not be created")]
+    StoragePermitEnvelope(#[from] meshspan_secret_envelope::SecretEnvelopeError),
     /// Node-local setup state rejected the transition.
     #[error("local setup transition failed")]
     Local(#[from] LocalSetupError),

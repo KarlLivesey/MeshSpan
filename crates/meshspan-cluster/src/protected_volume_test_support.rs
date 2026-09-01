@@ -6,7 +6,8 @@ use meshspan_domain::{
 use meshspan_metadata::{
     AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
     CommitSecretGeneration, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    NewAuthenticationCredential, RegisterNodeWrappingKey, VOLUME_CONTENT_KEY_SECRET_KIND,
+    NewAuthenticationCredential, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -22,12 +23,21 @@ pub(crate) fn protected_bootstrap(
     mesh: BootstrapMesh,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     let recovery_key = WrappingPublicKey::from_bytes(RECOVERY_PUBLIC_KEY)?;
+    let gateway_key = WrappingPrivateKey::from_bytes(GATEWAY_PRIVATE_KEY)?.public_key();
     let certificate = vec![204; 64];
+    let (permit_secret, permit_recipients) = encrypt_secret(
+        SecretContext::new(STORAGE_PERMIT_KEY_SECRET_KIND, mesh.mesh_id.as_bytes(), 1)?,
+        &[211; 32],
+        &[gateway_key, recovery_key],
+        &mut TestRandom(212),
+    )?;
+    let administrator_id = mesh.administrator_id;
+    let node_id = mesh.node_id;
     Ok(AuthoritativeCommand::BootstrapAppliance(
         BootstrapAppliance {
             authentication: CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([205; 16])?,
-                principal_id: mesh.administrator_id,
+                principal_id: administrator_id,
                 label: "Test bootstrap key".to_owned(),
                 service_scope: 7,
                 expires_at: None,
@@ -46,6 +56,19 @@ pub(crate) fn protected_bootstrap(
                 bundle_digest: BUNDLE_DIGEST,
                 save_challenge_commitment: SAVE_CHALLENGE_COMMITMENT,
             }),
+            node_wrapping_key: RegisterNodeWrappingKey {
+                node_id,
+                generation: 1,
+                public_key: gateway_key.as_bytes(),
+                key_fingerprint: gateway_key.fingerprint(),
+            },
+            storage_permit_key_generation: Box::new(CommitSecretGeneration {
+                secret: permit_secret.parts(),
+                recipients: permit_recipients
+                    .iter()
+                    .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                    .collect(),
+            }),
             mesh,
         },
     ))
@@ -57,20 +80,6 @@ pub(crate) fn confirm_recovery(mesh_id: MeshId) -> AuthoritativeCommand {
         bundle_digest: BUNDLE_DIGEST,
         save_challenge_commitment: SAVE_CHALLENGE_COMMITMENT,
     })
-}
-
-pub(crate) fn register_gateway_key(
-    node_id: meshspan_domain::NodeId,
-) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
-    let public_key = WrappingPrivateKey::from_bytes(GATEWAY_PRIVATE_KEY)?.public_key();
-    Ok(AuthoritativeCommand::RegisterNodeWrappingKey(
-        RegisterNodeWrappingKey {
-            node_id,
-            generation: 1,
-            public_key: public_key.as_bytes(),
-            key_fingerprint: public_key.fingerprint(),
-        },
-    ))
 }
 
 pub(crate) fn initial_volume_key(

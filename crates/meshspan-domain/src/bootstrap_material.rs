@@ -2,15 +2,19 @@
 
 //! Restart-stable, domain-separated identities for one first-appliance bootstrap.
 
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::secret_text::derive;
 use crate::{
-    ApiKeyBundle, ApiKeyBundleError, AuditEventId, AuthenticationMethodId, ClaimBundle, HostId,
-    MeshId, NodeId, OperationId, PartitionId, PrincipalId, QuorumPlanId, RoleId,
+    ApiKeyBundle, ApiKeyBundleError, AuditEventId, AuthenticationMethodId, ClaimBundle,
+    EntropyError, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId, QuorumPlanId,
+    RandomSource, RoleId,
 };
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Complete deterministic identity and secret plan for one claimed first-mesh operation.
 ///
@@ -38,6 +42,21 @@ pub struct InitialBootstrapMaterial {
     pub api_key: ApiKeyBundle,
     /// Domain-separated recovery-code seed exposed only to the recovery-bundle composer.
     recovery_bundle_code_seed: Zeroizing<[u8; 32]>,
+    /// Domain-separated storage-permit key retained only for protected setup composition.
+    storage_permit_key: Zeroizing<[u8; 32]>,
+    /// Domain-separated exact-retry entropy for the initial encrypted permit envelope.
+    storage_permit_envelope_seed: Zeroizing<[u8; 32]>,
+}
+
+/// Restart-stable secret and cryptographic stream for the initial storage-permit envelope.
+///
+/// Exact setup retries must submit byte-identical authoritative commands. This value derives both
+/// independently from the high-entropy one-time claim and is only valid for this one envelope. It
+/// deliberately implements neither `Clone` nor `Debug`.
+pub struct InitialStoragePermitMaterial {
+    key: Zeroizing<[u8; 32]>,
+    entropy_key: Zeroizing<[u8; 32]>,
+    counter: u64,
 }
 
 impl InitialBootstrapMaterial {
@@ -113,6 +132,19 @@ impl InitialBootstrapMaterial {
         if recovery_bundle_code_seed == [0; 32] {
             return Err(InitialBootstrapMaterialError::RecoveryCode);
         }
+        let storage_permit_key = derive(
+            b"meshspan.setup.storage-permit-key.v1",
+            claim.secret_bytes(),
+            operation_id,
+        );
+        let storage_permit_envelope_seed = derive(
+            b"meshspan.setup.storage-permit-envelope.v1",
+            claim.secret_bytes(),
+            operation_id,
+        );
+        if storage_permit_key == [0; 32] || storage_permit_envelope_seed == [0; 32] {
+            return Err(InitialBootstrapMaterialError::StoragePermit);
+        }
         Ok(Self {
             mesh_id: MeshId::from_bytes(identifier(
                 b"meshspan.setup.mesh-id.v1",
@@ -149,6 +181,8 @@ impl InitialBootstrapMaterial {
             ))?,
             api_key: ApiKeyBundle::derive_initial(claim, operation_id)?,
             recovery_bundle_code_seed: Zeroizing::new(recovery_bundle_code_seed),
+            storage_permit_key: Zeroizing::new(storage_permit_key),
+            storage_permit_envelope_seed: Zeroizing::new(storage_permit_envelope_seed),
         })
     }
 
@@ -156,6 +190,39 @@ impl InitialBootstrapMaterial {
     #[must_use]
     pub fn recovery_bundle_code_seed(&self) -> Zeroizing<[u8; 32]> {
         Zeroizing::new(*self.recovery_bundle_code_seed)
+    }
+
+    /// Returns a fresh exact-retry stream and the initial mesh storage-permit key.
+    #[must_use]
+    pub fn storage_permit_material(&self) -> InitialStoragePermitMaterial {
+        InitialStoragePermitMaterial {
+            key: Zeroizing::new(*self.storage_permit_key),
+            entropy_key: Zeroizing::new(*self.storage_permit_envelope_seed),
+            counter: 0,
+        }
+    }
+}
+
+impl InitialStoragePermitMaterial {
+    /// Copies the permit key into the protected envelope composer.
+    #[must_use]
+    pub fn key(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.key)
+    }
+}
+
+impl RandomSource for InitialStoragePermitMaterial {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        for chunk in destination.chunks_mut(32) {
+            self.counter = self.counter.checked_add(1).ok_or(EntropyError)?;
+            let mut mac =
+                HmacSha256::new_from_slice(self.entropy_key.as_ref()).map_err(|_| EntropyError)?;
+            mac.update(b"meshspan.setup.storage-permit-envelope-block.v1");
+            mac.update(&self.counter.to_be_bytes());
+            let block = mac.finalize().into_bytes();
+            chunk.copy_from_slice(&block[..chunk.len()]);
+        }
+        Ok(())
     }
 }
 
@@ -171,6 +238,9 @@ pub enum InitialBootstrapMaterialError {
     /// The derived offline recovery code was structurally invalid.
     #[error("derived bootstrap recovery code is invalid")]
     RecoveryCode,
+    /// The derived initial permit key or envelope stream was invalid.
+    #[error("derived bootstrap storage permit material is invalid")]
+    StoragePermit,
 }
 
 impl From<crate::IdentifierError> for InitialBootstrapMaterialError {
@@ -232,6 +302,15 @@ mod tests {
             first.api_key.expose_encoded(),
             replay.api_key.expose_encoded()
         );
+        let mut first_permit = first.storage_permit_material();
+        let mut replay_permit = replay.storage_permit_material();
+        assert_eq!(first_permit.key().as_ref(), replay_permit.key().as_ref());
+        let mut first_entropy = [0_u8; 97];
+        let mut replay_entropy = [0_u8; 97];
+        first_permit.fill_bytes(&mut first_entropy)?;
+        replay_permit.fill_bytes(&mut replay_entropy)?;
+        assert_eq!(first_entropy, replay_entropy);
+        assert_ne!(first_permit.key().as_ref(), &first_entropy[..32]);
         let identities = [
             first.mesh_id.as_bytes(),
             first.administrator_id.as_bytes(),

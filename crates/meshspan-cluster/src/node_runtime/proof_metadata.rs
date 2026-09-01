@@ -8,18 +8,21 @@ use ed25519_dalek::{Signer, SigningKey};
 use meshspan_consensus::LogEntry;
 use meshspan_domain::{
     ApiKeyId, AuditEventId, AuthenticationMethodId, DelegatedMetadataScope, DelegationAdmission,
-    GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange,
-    MetadataOperationFamily, NodeId, PartitionId, PrincipalId, Revision, RoleId,
+    EntropyError, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange,
+    MetadataOperationFamily, NodeId, PartitionId, PrincipalId, RandomSource, Revision, RoleId,
     RootDelegatedRoute, ScopeId, UnixMicros,
 };
 use meshspan_metadata::{
     ActivateScopeHandoff, AuthoritativeCommand, BeginScopeHandoff, BootstrapAppliance,
-    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, ConfirmRecoveryBundleSaved,
-    ConsumeJoinGrant, CreateAuthenticationMethod, CreateGroup, CreateMetadataPartition,
-    CreateScopeRoute, FreezeScopeHandoff, IssueJoinGrant, JoinRoles, NewAuthenticationCredential,
-    RecordName, RegisterRoutingSigner, RouteAttestation,
+    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration,
+    ConfirmRecoveryBundleSaved, ConsumeJoinGrant, CreateAuthenticationMethod, CreateGroup,
+    CreateMetadataPartition, CreateScopeRoute, FreezeScopeHandoff, IssueJoinGrant, JoinRoles,
+    NewAuthenticationCredential, RecordName, RegisterNodeWrappingKey, RegisterRoutingSigner,
+    RouteAttestation, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
-use meshspan_secret_envelope::WrappingPublicKey;
+use meshspan_secret_envelope::{
+    SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
+};
 use meshspan_transport::certificate_fingerprint;
 use rustls::pki_types::CertificateDer;
 use sha2::{Digest, Sha256};
@@ -115,20 +118,35 @@ impl ProofMetadata {
 
 fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
     let administrator_id = administrator_id()?;
+    let mesh = BootstrapMesh {
+        mesh_id: MeshId::from_bytes([9; 16])?,
+        mesh_name: RecordName::new("Stage 3 proof mesh")?,
+        administrator_id,
+        administrator_name: RecordName::new("Proof administrator")?,
+        administrator_role_id: RoleId::from_bytes([11; 16])?,
+        host_id: HostId::from_bytes([12; 16])?,
+        host_name: RecordName::new("Proof host 1")?,
+        node_id: node_id(1)?,
+        node_name: RecordName::new("Proof node 1")?,
+        partition_name: RecordName::new("Proof authority")?,
+    };
+    let recovery = recovery_identity()?;
+    let recovery_key = WrappingPublicKey::from_bytes(recovery.public_wrapping_key)
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
+    let node_key = WrappingPrivateKey::from_bytes([20; 32])
+        .map_err(|_| NodeRuntimeError::InvalidConfiguration)?
+        .public_key();
+    let (permit_secret, permit_recipients) = encrypt_secret(
+        SecretContext::new(STORAGE_PERMIT_KEY_SECRET_KIND, mesh.mesh_id.as_bytes(), 1)
+            .map_err(|_| NodeRuntimeError::InvalidConfiguration)?,
+        &[21; 32],
+        &[node_key, recovery_key],
+        &mut ProofRandom(22),
+    )
+    .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
     Ok(AuthoritativeCommand::BootstrapAppliance(
         BootstrapAppliance {
-            mesh: BootstrapMesh {
-                mesh_id: MeshId::from_bytes([9; 16])?,
-                mesh_name: RecordName::new("Stage 3 proof mesh")?,
-                administrator_id,
-                administrator_name: RecordName::new("Proof administrator")?,
-                administrator_role_id: RoleId::from_bytes([11; 16])?,
-                host_id: HostId::from_bytes([12; 16])?,
-                host_name: RecordName::new("Proof host 1")?,
-                node_id: node_id(1)?,
-                node_name: RecordName::new("Proof node 1")?,
-                partition_name: RecordName::new("Proof authority")?,
-            },
+            mesh,
             authentication: CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([13; 16])?,
                 principal_id: administrator_id,
@@ -142,9 +160,34 @@ fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
                     valid_from: UnixMicros::new(1_001),
                 },
             },
-            recovery: Box::new(recovery_identity()?),
+            recovery: Box::new(recovery),
+            node_wrapping_key: RegisterNodeWrappingKey {
+                node_id: node_id(1)?,
+                generation: 1,
+                public_key: node_key.as_bytes(),
+                key_fingerprint: node_key.fingerprint(),
+            },
+            storage_permit_key_generation: Box::new(CommitSecretGeneration {
+                secret: permit_secret.parts(),
+                recipients: permit_recipients
+                    .iter()
+                    .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                    .collect(),
+            }),
         },
     ))
+}
+
+struct ProofRandom(u8);
+
+impl RandomSource for ProofRandom {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        for byte in destination {
+            *byte = self.0;
+            self.0 = self.0.wrapping_add(1);
+        }
+        Ok(())
+    }
 }
 
 fn recovery_identity() -> Result<BootstrapRecoveryIdentity, NodeRuntimeError> {
