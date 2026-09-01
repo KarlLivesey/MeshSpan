@@ -47,10 +47,10 @@ pub struct ListVolumesQuery {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VolumeState {
-    /// Recorded but not yet serving ordinary work.
-    Registered,
     /// Serving authorised work.
     Active,
+    /// Reversibly unavailable for ordinary work.
+    Suspended,
     /// Refusing new responsibility while existing work is moved away.
     Draining,
     /// Permanently fenced from new work.

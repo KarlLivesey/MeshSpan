@@ -3535,13 +3535,13 @@
                   "description": "Current authoritative lifecycle state.",
                   "oneOf": [
                     {
-                      "const": "registered",
-                      "description": "Recorded but not yet serving ordinary work.",
+                      "const": "active",
+                      "description": "Serving authorised work.",
                       "type": "string"
                     },
                     {
-                      "const": "active",
-                      "description": "Serving authorised work.",
+                      "const": "suspended",
+                      "description": "Reversibly unavailable for ordinary work.",
                       "type": "string"
                     },
                     {

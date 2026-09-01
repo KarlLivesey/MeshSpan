@@ -1607,7 +1607,7 @@ export type ListVolumesResponse = {
     /**
      * Current authoritative lifecycle state.
      */
-    state: "registered" | "active" | "draining" | "retired";
+    state: "active" | "suspended" | "draining" | "retired";
     /**
      * Stable logical-volume identity.
      */

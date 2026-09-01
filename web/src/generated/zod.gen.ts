@@ -1773,8 +1773,8 @@ export const zListVolumesResponse = z
               .regex(/^[^\x00-\x1f\x7f]+$/),
             revision: z.int().gte(1).lte(9007199254740991),
             state: z.union([
-              z.literal("registered"),
               z.literal("active"),
+              z.literal("suspended"),
               z.literal("draining"),
               z.literal("retired"),
             ]),

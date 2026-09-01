@@ -96,6 +96,9 @@ mod user_snapshot;
 mod verify;
 mod version_cleanup;
 mod volume_head;
+mod volume_inventory;
+#[cfg(test)]
+mod volume_inventory_tests;
 
 use meshspan_domain::{GroupId, OperationId, Revision, ScopeId, ScopeRoute};
 use thiserror::Error;
@@ -187,6 +190,7 @@ pub use user_snapshot::{
 pub use verify::{InvariantFinding, InvariantKind, InvariantReport};
 pub use version_cleanup::{VersionCleanupIntent, VersionCleanupState};
 pub use volume_head::ConvergedVolumeHead;
+pub use volume_inventory::{VolumeInventoryCursor, VolumeInventoryRecord};
 
 /// Authoritative metadata repository owning one identity-bound partition database.
 pub struct AuthoritativeRepository {
@@ -999,6 +1003,19 @@ impl AuthoritativeRepository {
             after,
             limit,
         )
+    }
+
+    /// Returns one stable bounded page of logical volumes before caller-specific access filtering.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed stored identities, names, lifecycle or revision values.
+    pub fn volume_inventory_candidates(
+        &self,
+        after: Option<&VolumeInventoryCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<VolumeInventoryRecord, VolumeInventoryCursor>, RepositoryError> {
+        volume_inventory::volume_inventory_candidates(&self.database, after, limit)
     }
 
     /// Returns one stable, bounded page of active namespace children.

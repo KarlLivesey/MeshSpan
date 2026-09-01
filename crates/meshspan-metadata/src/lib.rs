@@ -165,6 +165,7 @@ pub use repository::{
     VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
     VersionCleanupItemCompletion, VersionCleanupItemCursor, VersionCleanupItemReclamation,
     VersionCleanupParticipant, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
-    VersionCleanupReclamation, VersionCleanupState, VersionRetentionPolicy, VolumeSnapshot,
-    restore_partition_backup, restore_partition_snapshot, run_repository_conformance,
+    VersionCleanupReclamation, VersionCleanupState, VersionRetentionPolicy, VolumeInventoryCursor,
+    VolumeInventoryRecord, VolumeSnapshot, restore_partition_backup, restore_partition_snapshot,
+    run_repository_conformance,
 };

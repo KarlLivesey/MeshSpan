@@ -130,6 +130,11 @@ mod totp_session_contract;
 mod totp_session_creation;
 #[cfg(test)]
 mod totp_session_creation_tests;
+mod volume_inventory;
+#[cfg(test)]
+mod volume_inventory_api_tests;
+#[cfg(test)]
+mod volume_inventory_tests;
 
 pub use api_key_issuance::ApiKeyIssuanceService;
 pub use api_key_issuance_api::{
@@ -283,6 +288,11 @@ pub use totp_secret::{TotpEnvelopeKey, TotpSecretBinding, TotpSecretCipher, Totp
 pub use totp_session::TotpSessionVerifier;
 pub use totp_session_contract::{
     DisabledTotpFactors, TotpFactorVerifier, TotpSessionError, VerifiedTotpFactor,
+};
+pub use volume_inventory::{
+    VolumeInventoryApiError, VolumeInventoryAuthority, VolumeInventoryAuthorityError,
+    VolumeInventoryController, VolumeInventoryError, VolumeInventoryService,
+    volume_inventory_api_router,
 };
 
 use meshspan_domain::{EntropyError, RandomSource};
