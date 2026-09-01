@@ -11,9 +11,9 @@ use meshspan_consensus::{
 };
 use meshspan_domain::{NodeId, OperationId, ScopeId, UnixMicros};
 use meshspan_metadata::{
-    AuthoritativeRepository, CommandReceipt, ConsensusStoreError,
-    LogPosition as MetadataLogPosition, METADATA_COMMAND_VERSION, MetadataCommandCodecError,
-    PartitionConsensusPersistence, RepositoryError, ScopeWriteAuthority,
+    AuthoritativeCommand, AuthoritativeRepository, CommandContext, CommandReceipt,
+    ConsensusStoreError, LogPosition as MetadataLogPosition, METADATA_COMMAND_VERSION,
+    MetadataCommandCodecError, PartitionConsensusPersistence, RepositoryError, ScopeWriteAuthority,
     decode_authoritative_command,
 };
 use thiserror::Error;
@@ -329,6 +329,46 @@ impl<P: PartitionConsensusPersistence + ScopeWriteAuthority> PartitionConsensusD
 }
 
 impl PartitionConsensusDriver<AuthoritativeRepository> {
+    /// Executes and rolls back the exact metadata transaction before log admission.
+    ///
+    /// # Errors
+    ///
+    /// Rejects semantic conflicts, stale revisions and invalid commands without appending them.
+    pub fn preflight_authoritative_command(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<(), ClusterDriverError> {
+        let mut preceding = Vec::new();
+        let mut index = self
+            .applied_index()
+            .checked_add(1)
+            .ok_or(ClusterDriverError::InvalidCommittedCommand)?;
+        while let Some(entry) = self.log_entry(index) {
+            if entry.command_version != METADATA_COMMAND_VERSION {
+                return Err(ClusterDriverError::InvalidCommittedCommand);
+            }
+            let decoded = decode_authoritative_command(&entry.command)?;
+            if decoded.context.operation_id != entry.operation_id {
+                return Err(ClusterDriverError::InvalidCommittedCommand);
+            }
+            preceding.push((
+                MetadataLogPosition {
+                    term: entry.position.term,
+                    index: entry.position.index,
+                },
+                decoded.context,
+                decoded.command,
+            ));
+            index = index
+                .checked_add(1)
+                .ok_or(ClusterDriverError::InvalidCommittedCommand)?;
+        }
+        self.persistence
+            .preflight_command(&preceding, context, command)?;
+        Ok(())
+    }
+
     /// Decodes and applies one exact entry previously emitted as committed by this driver.
     ///
     /// # Errors

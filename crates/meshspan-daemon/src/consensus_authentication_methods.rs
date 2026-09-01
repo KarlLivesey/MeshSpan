@@ -306,7 +306,9 @@ fn authority_failure(error: MetadataAuthorityRequestError) -> AuthorityFailure {
     match error {
         MetadataAuthorityRequestError::NotLeader { .. }
         | MetadataAuthorityRequestError::Unavailable => AuthorityFailure::Unavailable,
-        MetadataAuthorityRequestError::Conflict => AuthorityFailure::Conflict,
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            AuthorityFailure::Conflict
+        }
         MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
             AuthorityFailure::Failed
         }

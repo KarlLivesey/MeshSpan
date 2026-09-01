@@ -292,7 +292,9 @@ fn map_session_authority_error(error: MetadataAuthorityRequestError) -> SessionA
     match error {
         MetadataAuthorityRequestError::NotLeader { .. }
         | MetadataAuthorityRequestError::Unavailable => SessionAuthorityError::Unavailable,
-        MetadataAuthorityRequestError::Conflict => SessionAuthorityError::Conflict,
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            SessionAuthorityError::Conflict
+        }
         MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
             SessionAuthorityError::Failed
         }
@@ -307,7 +309,9 @@ fn map_revocation_authority_error(
         | MetadataAuthorityRequestError::Unavailable => {
             SessionRevocationAuthorityError::Unavailable
         }
-        MetadataAuthorityRequestError::Conflict => SessionRevocationAuthorityError::Conflict,
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            SessionRevocationAuthorityError::Conflict
+        }
         MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
             SessionRevocationAuthorityError::Failed
         }

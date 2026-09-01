@@ -507,6 +507,24 @@ impl AuthoritativeRepository {
         apply::apply_committed(&mut self.database, position, context, command)
     }
 
+    /// Executes the exact command transaction and rolls it back before consensus admission.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any command which could not be applied immediately after current durable state.
+    pub fn preflight_command(
+        &mut self,
+        preceding: &[(
+            LogPosition,
+            crate::CommandContext,
+            crate::AuthoritativeCommand,
+        )],
+        context: crate::CommandContext,
+        command: &crate::AuthoritativeCommand,
+    ) -> Result<(), RepositoryError> {
+        apply::preflight_command(&mut self.database, preceding, context, command)
+    }
+
     #[cfg(test)]
     fn apply_committed_with_fault(
         &mut self,
@@ -1461,6 +1479,27 @@ pub enum RepositoryError {
     /// Deterministic internal transaction interruption used by the crash-proof harness.
     #[error("injected authoritative transaction interruption")]
     InjectedFault,
+}
+
+impl RepositoryError {
+    /// Reports whether an admission failure is a deterministic outcome of the supplied command.
+    #[must_use]
+    pub fn is_command_rejection(&self) -> bool {
+        match self {
+            Self::StaleRevision
+            | Self::StaleVolumeHead
+            | Self::StaleRetentionPolicy
+            | Self::StaleAuthenticationPolicy
+            | Self::StaleSnapshot
+            | Self::StaleSnapshotSchedule
+            | Self::InvalidCommand
+            | Self::CapacityExceeded => true,
+            Self::Sqlite(rusqlite::Error::SqliteFailure(error, _)) => {
+                error.code == rusqlite::ErrorCode::ConstraintViolation
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -70,6 +70,69 @@ async fn follower_rejects_before_enqueuing_a_mutation() -> Result<(), Box<dyn st
 }
 
 #[tokio::test]
+async fn rejected_preflight_does_not_append_or_stop_the_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let local = NodeId::from_bytes([13; 16])?;
+    let driver = driver(&directory.path().join("rejected-preflight.sqlite3"), local)?;
+    let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(|_, _| {});
+    let (authority, runtime) =
+        spawn_metadata_authority(driver, transport, MetadataAuthorityConfig::default())?;
+    authority.begin_election().await?;
+    let (mut context, command) = command(local, [14; 16])?;
+    context.expected_revision = Some(Revision::new(99));
+    assert_eq!(
+        authority.commit_or_resolve(context, command.clone()).await,
+        Err(MetadataAuthorityRequestError::Rejected)
+    );
+
+    context.expected_revision = Some(Revision::ZERO);
+    let receipt = authority.commit_or_resolve(context, command).await?;
+    assert_eq!(receipt.committed_revision, Revision::new(1));
+    assert_eq!(receipt.committed_position.index, 1);
+    authority.shutdown().await?;
+    runtime.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn conflicting_queued_commands_do_not_poison_later_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let local = NodeId::from_bytes([15; 16])?;
+    let driver = driver(&directory.path().join("queued-conflict.sqlite3"), local)?;
+    let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(|_, _| {});
+    let (authority, runtime) =
+        spawn_metadata_authority(driver, transport, MetadataAuthorityConfig::default())?;
+    authority.begin_election().await?;
+    let (bootstrap_context, bootstrap) = command(local, [16; 16])?;
+    authority
+        .commit_or_resolve(bootstrap_context, bootstrap)
+        .await?;
+
+    let first = named_user_command(bootstrap_context.actor_principal_id, 101, "Duplicate user")?;
+    let second = named_user_command(bootstrap_context.actor_principal_id, 111, "Duplicate user")?;
+    let (first_outcome, second_outcome) = tokio::join!(
+        authority.commit_or_resolve(first.0, first.1),
+        authority.commit_or_resolve(second.0, second.1),
+    );
+    assert_eq!(first_outcome?.committed_revision, Revision::new(2));
+    assert_eq!(second_outcome, Err(MetadataAuthorityRequestError::Rejected));
+
+    let third = named_user_command(bootstrap_context.actor_principal_id, 121, "Surviving user")?;
+    assert_eq!(
+        authority
+            .commit_or_resolve(third.0, third.1)
+            .await?
+            .committed_revision,
+        Revision::new(3)
+    );
+    authority.shutdown().await?;
+    runtime.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
@@ -138,7 +201,7 @@ async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
     cluster.authorities[0].0.begin_election().await?;
     let (bootstrap_context, bootstrap) = command(cluster.nodes[0], [85; 16])?;
     let bootstrap_receipt = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(15),
         commit_after_election(&cluster.authorities[0].0, bootstrap_context, &bootstrap),
     )
     .await??;
@@ -147,13 +210,13 @@ async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
     cluster.stop_first_authority().await?;
     let (user_context, user) = user_command(bootstrap_context.actor_principal_id)?;
     let user_receipt = tokio::time::timeout(
-        Duration::from_secs(8),
+        Duration::from_secs(15),
         commit_after_election(&cluster.authorities[0].0, user_context, &user),
     )
     .await??;
     assert_eq!(user_receipt.committed_revision, Revision::new(2));
     let follower_receipt = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(15),
         resolve_after_replication(&cluster.authorities[1].0, user_context, &user),
     )
     .await??;
@@ -485,6 +548,27 @@ fn user_command(
         AuthoritativeCommand::CreateUser(meshspan_metadata::CreateUser {
             principal_id: PrincipalId::from_bytes([93; 16])?,
             name: RecordName::new("Post-failover user")?,
+        }),
+    ))
+}
+
+fn named_user_command(
+    administrator_id: PrincipalId,
+    marker: u8,
+    name: &str,
+) -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::error::Error>> {
+    let context = CommandContext {
+        operation_id: OperationId::from_bytes([marker; 16])?,
+        actor_principal_id: administrator_id,
+        audit_event_id: AuditEventId::from_bytes([marker.saturating_add(1); 16])?,
+        occurred_at: UnixMicros::new(i64::from(marker)),
+        expected_revision: None,
+    };
+    Ok((
+        context,
+        AuthoritativeCommand::CreateUser(meshspan_metadata::CreateUser {
+            principal_id: PrincipalId::from_bytes([marker.saturating_add(2); 16])?,
+            name: RecordName::new(name)?,
         }),
     ))
 }

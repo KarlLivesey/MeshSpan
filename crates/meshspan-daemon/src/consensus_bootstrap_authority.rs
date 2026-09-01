@@ -42,7 +42,9 @@ fn map_authority_error(error: MetadataAuthorityRequestError) -> BootstrapAuthori
     match error {
         MetadataAuthorityRequestError::NotLeader { .. }
         | MetadataAuthorityRequestError::Unavailable => BootstrapAuthorityError::Unavailable,
-        MetadataAuthorityRequestError::Conflict => BootstrapAuthorityError::Conflict,
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            BootstrapAuthorityError::Conflict
+        }
         MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
             BootstrapAuthorityError::Failed
         }

@@ -38,6 +38,13 @@ struct StoredOperation {
     committed_index: i64,
 }
 
+struct TransactionCommand<'a> {
+    position: LogPosition,
+    context: CommandContext,
+    command: &'a AuthoritativeCommand,
+    fault: Option<ApplyFaultPoint>,
+}
+
 pub(super) fn read_current_revision(
     database: &PartitionDatabase,
 ) -> Result<Revision, RepositoryError> {
@@ -58,6 +65,54 @@ pub(super) fn apply_committed(
     command: &AuthoritativeCommand,
 ) -> Result<CommandReceipt, RepositoryError> {
     apply_committed_inner(database, position, context, command, None)
+}
+
+pub(super) fn preflight_command(
+    database: &mut PartitionDatabase,
+    preceding: &[(LogPosition, CommandContext, AuthoritativeCommand)],
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<(), RepositoryError> {
+    let partition_id = database.partition_id();
+    let transaction = database
+        .connection_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut state = read_applied_state(&transaction)?;
+    for (position, preceding_context, preceding_command) in preceding {
+        apply_transaction(
+            &transaction,
+            partition_id.as_bytes(),
+            state,
+            TransactionCommand {
+                position: *position,
+                context: *preceding_context,
+                command: preceding_command,
+                fault: None,
+            },
+        )?;
+        state = read_applied_state(&transaction)?;
+    }
+    let position = LogPosition {
+        index: state
+            .position
+            .index
+            .checked_add(1)
+            .ok_or(RepositoryError::InvalidLogPosition)?,
+        term: state.position.term.max(1),
+    };
+    apply_transaction(
+        &transaction,
+        partition_id.as_bytes(),
+        state,
+        TransactionCommand {
+            position,
+            context,
+            command,
+            fault: None,
+        },
+    )?;
+    // Dropping the transaction deliberately rolls back the exact state-machine execution.
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,13 +147,41 @@ fn apply_committed_inner(
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
     let state = read_applied_state(&transaction)?;
+    let receipt = apply_transaction(
+        &transaction,
+        partition_id.as_bytes(),
+        state,
+        TransactionCommand {
+            position,
+            context,
+            command,
+            fault,
+        },
+    )?;
+    transaction.commit()?;
+    Ok(receipt)
+}
+
+fn apply_transaction(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    state: AppliedState,
+    input: TransactionCommand<'_>,
+) -> Result<CommandReceipt, RepositoryError> {
+    let TransactionCommand {
+        position,
+        context,
+        command,
+        fault,
+    } = input;
+    validate_position(position)?;
     validate_transition(state, position)?;
     let request_digest = command.request_digest(context);
-    if let Some(stored) = load_operation(&transaction, context.operation_id)? {
+    if let Some(stored) = load_operation(transaction, context.operation_id)? {
         if stored.request_digest.as_slice() != request_digest {
             return Err(RepositoryError::OperationConflict);
         }
-        advance_applied_position(&transaction, state.revision, position)?;
+        advance_applied_position(transaction, state.revision, position)?;
         let mut receipt = decode_receipt(
             context.operation_id,
             &stored.request_digest,
@@ -109,10 +192,9 @@ fn apply_committed_inner(
             position,
         )?;
         receipt.disposition = ApplyDisposition::Replayed;
-        transaction.commit()?;
         return Ok(receipt);
     }
-    if cleanup_inventory::is_reserved_operation(&transaction, context.operation_id)? {
+    if cleanup_inventory::is_reserved_operation(transaction, context.operation_id)? {
         return Err(RepositoryError::OperationConflict);
     }
 
@@ -127,20 +209,14 @@ fn apply_committed_inner(
         .revision
         .next()
         .map_err(|_| RepositoryError::CapacityExceeded)?;
-    authorise(&transaction, context, command)?;
-    let entity = execute(
-        &transaction,
-        partition_id.as_bytes(),
-        context,
-        command,
-        revision,
-    )?;
+    authorise(transaction, context, command)?;
+    let entity = execute(transaction, partition_id, context, command, revision)?;
     inject_fault(fault, ApplyFaultPoint::AfterCommand)?;
     let payload = encode_result(entity, revision, position)?;
     let stored_result_digest = result_digest(&payload);
     insert_operation(
-        &transaction,
-        partition_id.as_bytes(),
+        transaction,
+        partition_id,
         position,
         context,
         command_kind(command),
@@ -151,7 +227,7 @@ fn apply_committed_inner(
     )?;
     inject_fault(fault, ApplyFaultPoint::AfterOperation)?;
     insert_audit_event(
-        &transaction,
+        transaction,
         context,
         command_kind(command),
         entity,
@@ -159,9 +235,8 @@ fn apply_committed_inner(
         stored_result_digest,
     )?;
     inject_fault(fault, ApplyFaultPoint::AfterAudit)?;
-    advance_applied_position(&transaction, revision, position)?;
+    advance_applied_position(transaction, revision, position)?;
     inject_fault(fault, ApplyFaultPoint::BeforeCommit)?;
-    transaction.commit()?;
     Ok(CommandReceipt {
         disposition: ApplyDisposition::Applied,
         operation_id: context.operation_id,
