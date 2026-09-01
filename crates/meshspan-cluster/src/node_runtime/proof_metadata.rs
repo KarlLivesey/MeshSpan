@@ -14,10 +14,10 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, ActivateScopeHandoff, AuthoritativeCommand,
-    BeginScopeHandoff, BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommandContext, CommitSecretGeneration, ConfirmRecoveryBundleSaved, ConsumeJoinGrant,
-    CreateAuthenticationMethod, CreateGroup, CreateMetadataPartition, CreateScopeRoute,
-    FreezeScopeHandoff, IssueJoinGrant, JoinRoles, NewAuthenticationCredential,
+    BeginScopeHandoff, BootstrapAppliance, BootstrapMesh, BootstrapNodeCertificate,
+    BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration, ConfirmRecoveryBundleSaved,
+    ConsumeJoinGrant, CreateAuthenticationMethod, CreateGroup, CreateMetadataPartition,
+    CreateScopeRoute, FreezeScopeHandoff, IssueJoinGrant, JoinRoles, NewAuthenticationCredential,
     ONLINE_AUTHORITY_KEY_SECRET_KIND, RecordName, RegisterNodeWrappingKey, RegisterRoutingSigner,
     RouteAttestation, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
@@ -110,6 +110,8 @@ impl ProofMetadata {
             node_name: RecordName::new(&format!("Proof node {number}"))?,
             incarnation: 1,
             requested_roles: proof_roles()?,
+            wrapping_public_key: [70_u8.saturating_add(number); 32],
+            private_endpoint: format!("proof-node-{number}.meshspan.local:7443"),
             certificate_der,
             certificate_fingerprint: fingerprint,
             certificate_valid_until: UnixMicros::new(10_000_000),
@@ -187,6 +189,11 @@ fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
                 generation: 1,
                 public_key: node_key.as_bytes(),
                 key_fingerprint: node_key.fingerprint(),
+            },
+            node_certificate: BootstrapNodeCertificate {
+                certificate_der: vec![27; 64],
+                certificate_fingerprint: Sha256::digest([27; 64]).into(),
+                certificate_valid_until: UnixMicros::new(10_000_000),
             },
             storage_permit_key_generation: Box::new(CommitSecretGeneration {
                 secret: permit_secret.parts(),

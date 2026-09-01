@@ -174,6 +174,12 @@ impl DaemonLocalState {
         self.identity.public_key_fingerprint()
     }
 
+    /// Returns the canonical public identity safe to submit for mesh certificate issuance.
+    #[must_use]
+    pub fn node_identity_public_key(&self) -> &[u8] {
+        self.identity.public_key_sec1()
+    }
+
     /// Returns the exact public HTTPS certificate pin used by first-start and enrolment routes.
     #[must_use]
     pub fn https_certificate_fingerprint(&self) -> [u8; 32] {

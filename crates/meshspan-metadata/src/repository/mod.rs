@@ -145,7 +145,7 @@ pub use cleanup_permit::{
     VersionCleanupPermitAuthority,
 };
 pub use cleanup_reclamation::{VersionCleanupItemReclamation, VersionCleanupReclamation};
-pub use cluster::JoinGrantRecord;
+pub use cluster::{JoinGrantRecord, NodeEnrolmentRecord};
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use federation_actor_attestation::FederatedActorAttestationRecord;
 pub use federation_assignment::FederationGrantAssignmentAuthority;
@@ -288,6 +288,18 @@ impl AuthoritativeRepository {
         join_grant_id: meshspan_domain::JoinGrantId,
     ) -> Result<Option<JoinGrantRecord>, RepositoryError> {
         cluster::join_grant(&self.database, join_grant_id)
+    }
+
+    /// Returns exact durable admission facts for one pending node activation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when node, certificate or staged endpoint state is malformed.
+    pub fn node_enrolment(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<NodeEnrolmentRecord>, RepositoryError> {
+        cluster::node_enrolment(&self.database, node_id)
     }
 
     /// Wraps one already migrated and identity-verified partition database.

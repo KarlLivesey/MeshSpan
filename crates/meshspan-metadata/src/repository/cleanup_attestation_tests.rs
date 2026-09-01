@@ -299,6 +299,8 @@ fn enrol_second_gateway(
             node_name: RecordName::new("Second gateway")?,
             incarnation: 1,
             requested_roles: roles,
+            wrapping_public_key: [98; 32],
+            private_endpoint: "second-gateway.meshspan.local:7443".to_owned(),
             certificate_der,
             certificate_fingerprint,
             certificate_valid_until: UnixMicros::new(10_000),

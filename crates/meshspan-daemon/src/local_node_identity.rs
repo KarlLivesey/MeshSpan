@@ -75,6 +75,12 @@ impl LocalNodeIdentity {
         self.key.public_key_fingerprint()
     }
 
+    /// Returns the canonical public identity used for mesh certificate issuance.
+    #[must_use]
+    pub fn public_key_sec1(&self) -> &[u8] {
+        self.key.public_key_sec1()
+    }
+
     /// Returns the temporary public certificate used only by first-start HTTPS clients.
     #[must_use]
     pub fn bootstrap_certificate_der(&self) -> &[u8] {

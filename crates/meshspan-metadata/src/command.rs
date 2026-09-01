@@ -374,12 +374,25 @@ pub struct BootstrapAppliance {
     pub recovery: Box<BootstrapRecoveryIdentity>,
     /// Initial node public wrapping key whose private half remains in daemon state.
     pub node_wrapping_key: RegisterNodeWrappingKey,
+    /// Mesh-signed certificate for the already active initial node identity.
+    pub node_certificate: BootstrapNodeCertificate,
     /// Initial recoverable mesh-wide storage-permit authority.
     pub storage_permit_key_generation: Box<CommitSecretGeneration>,
     /// Initial recoverable gateway-only authentication-root authority.
     pub authentication_root_key_generation: Box<CommitSecretGeneration>,
     /// Initial recoverable online node-certificate authority private-key generation.
     pub online_authority_key_generation: Box<CommitSecretGeneration>,
+}
+
+/// Mesh-signed certificate material committed for the active initial node.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BootstrapNodeCertificate {
+    /// Signed public leaf certificate; the node private key remains in daemon state.
+    pub certificate_der: Vec<u8>,
+    /// Independently checked SHA-256 fingerprint of `certificate_der`.
+    pub certificate_fingerprint: [u8; 32],
+    /// Conservative metadata fence no later than the X.509 certificate lifetime.
+    pub certificate_valid_until: UnixMicros,
 }
 
 /// Public offline authority committed atomically with the first mesh.
@@ -1726,6 +1739,10 @@ pub struct ConsumeJoinGrant {
     pub incarnation: u64,
     /// Requested subset of roles no broader than the grant.
     pub requested_roles: JoinRoles,
+    /// Node-owned public secret-wrapping key staged until authenticated activation.
+    pub wrapping_public_key: [u8; 32],
+    /// Private QUIC endpoint staged until authenticated activation.
+    pub private_endpoint: String,
     /// Signed public leaf certificate; the node private key never enters this command.
     pub certificate_der: Vec<u8>,
     /// Independently checked SHA-256 fingerprint of `certificate_der`.
@@ -1885,6 +1902,9 @@ digest_simple_record!(
         digest.bytes(&value.recovery.bundle_digest);
         digest.bytes(&value.recovery.save_challenge_commitment);
         value.node_wrapping_key.update_digest(digest);
+        digest.bytes(&value.node_certificate.certificate_der);
+        digest.bytes(&value.node_certificate.certificate_fingerprint);
+        digest.signed(value.node_certificate.certificate_valid_until.get());
         value.storage_permit_key_generation.update_digest(digest);
         value
             .authentication_root_key_generation
@@ -2633,6 +2653,8 @@ digest_simple_record!(ConsumeJoinGrant, b"consume-join-grant", |value, digest| {
     digest.name(&value.node_name);
     digest.unsigned(value.incarnation);
     digest.byte(value.requested_roles.bits());
+    digest.bytes(&value.wrapping_public_key);
+    digest.bytes(value.private_endpoint.as_bytes());
     digest.bytes(&value.certificate_der);
     digest.bytes(&value.certificate_fingerprint);
     digest.signed(value.certificate_valid_until.get());

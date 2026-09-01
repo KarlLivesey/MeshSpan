@@ -8,17 +8,17 @@ use std::sync::Arc;
 use meshspan_api_contract::{
     CreateMeshSetupRequest, CreateMeshSetupResponse, OperationId as ApiOperationId,
 };
-use meshspan_certificates::OnlineCertificateAuthority;
+use meshspan_certificates::{NodePublicIdentity, OnlineCertificateAuthority};
 use meshspan_domain::{
     ClaimBundle, ClaimBundleError, InitialBootstrapMaterial, InitialBootstrapMaterialError,
     OperationId, RandomSource, UnixMicros,
 };
 use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, BootstrapAppliance, BootstrapMesh,
-    BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration, CreateAuthenticationMethod,
-    LocalDatabase, LocalSetupError, LocalSetupKind, LocalSetupState, NewAuthenticationCredential,
-    NewLocalSetup, ONLINE_AUTHORITY_KEY_SECRET_KIND, RecordName, RecordNameError,
-    RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
+    BootstrapNodeCertificate, BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration,
+    CreateAuthenticationMethod, LocalDatabase, LocalSetupError, LocalSetupKind, LocalSetupState,
+    NewAuthenticationCredential, NewLocalSetup, ONLINE_AUTHORITY_KEY_SECRET_KIND, RecordName,
+    RecordNameError, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_recovery_bundle::{OfflineRecoveryIdentity, RecoveryBundleCode, RecoveryBundleError};
 use meshspan_secret_envelope::{
@@ -34,6 +34,8 @@ use crate::{
 
 const ALL_INITIAL_SERVICE_SCOPES: u8 = 1 | 2 | 4;
 const ALL_INITIAL_LOGIN_SCOPES: u64 = 1 | 2 | 4;
+const NODE_CERTIFICATE_LIFETIME_MICROS: u64 = 30 * 24 * 60 * 60 * 1_000_000;
+const NODE_CERTIFICATE_DNS_NAME: &str = "meshspan.local";
 
 /// Minimal committed result needed to bridge consensus into the local setup journal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,6 +80,7 @@ pub struct CreateMeshSetupService<A, R> {
     recovery_bundle_path: PathBuf,
     setup_state: Arc<SetupStateSnapshot>,
     wrapping_public_key: WrappingPublicKey,
+    node_identity_public_key: Vec<u8>,
     random: R,
 }
 
@@ -95,6 +98,7 @@ where
         recovery_bundle_path: PathBuf,
         setup_state: Arc<SetupStateSnapshot>,
         wrapping_public_key: WrappingPublicKey,
+        node_identity_public_key: Vec<u8>,
         random: R,
     ) -> Self {
         Self {
@@ -104,6 +108,7 @@ where
             recovery_bundle_path,
             setup_state,
             wrapping_public_key,
+            node_identity_public_key,
             random,
         }
     }
@@ -167,6 +172,7 @@ where
                 recovery_bundle.challenge(&recovery_code).commitment(),
                 setup.created_at,
                 self.wrapping_public_key,
+                &self.node_identity_public_key,
                 &online_authority,
             )?;
             let committed = self.authority.commit_or_resolve(context, &command)?;
@@ -235,6 +241,7 @@ impl ValidatedSetupInput {
         save_challenge_commitment: [u8; 32],
         occurred_at: UnixMicros,
         wrapping_public_key: WrappingPublicKey,
+        node_identity_public_key: &[u8],
         online_authority: &OnlineCertificateAuthority,
     ) -> Result<AuthoritativeCommand, CreateMeshSetupError> {
         let recovery_public_key = recovery.public_wrapping_key();
@@ -244,6 +251,21 @@ impl ValidatedSetupInput {
             recovery_public_key,
             online_authority,
         )?;
+        let node_public_identity = NodePublicIdentity::from_sec1(node_identity_public_key)
+            .map_err(|_| CreateMeshSetupError::Certificate)?;
+        if InitialBootstrapMaterial::node_id(node_public_identity.public_key_fingerprint())?
+            != material.node_id
+        {
+            return Err(CreateMeshSetupError::Certificate);
+        }
+        let node_certificate_der = online_authority
+            .sign_node_public_identity(&node_public_identity, NODE_CERTIFICATE_DNS_NAME)
+            .map_err(|_| CreateMeshSetupError::Certificate)?;
+        let certificate_valid_until = occurred_at
+            .checked_add(meshspan_domain::DurationMicros::new(
+                NODE_CERTIFICATE_LIFETIME_MICROS,
+            ))
+            .ok_or(CreateMeshSetupError::Certificate)?;
         Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
             BootstrapAppliance {
                 mesh: BootstrapMesh {
@@ -289,6 +311,11 @@ impl ValidatedSetupInput {
                     generation: 1,
                     public_key: wrapping_public_key.as_bytes(),
                     key_fingerprint: wrapping_public_key.fingerprint(),
+                },
+                node_certificate: BootstrapNodeCertificate {
+                    certificate_fingerprint: Sha256::digest(&node_certificate_der).into(),
+                    certificate_der: node_certificate_der,
+                    certificate_valid_until,
                 },
                 storage_permit_key_generation: generations.storage_permit,
                 authentication_root_key_generation: generations.authentication_root,
@@ -480,6 +507,9 @@ pub enum CreateMeshSetupError {
     /// Initial protected mesh-secret encryption or recipient composition failed closed.
     #[error("initial protected mesh-secret envelope could not be created")]
     InitialSecretEnvelope(#[from] meshspan_secret_envelope::SecretEnvelopeError),
+    /// Initial node public identity or mesh certificate construction failed closed.
+    #[error("initial node certificate could not be created")]
+    Certificate,
     /// Node-local setup state rejected the transition.
     #[error("local setup transition failed")]
     Local(#[from] LocalSetupError),

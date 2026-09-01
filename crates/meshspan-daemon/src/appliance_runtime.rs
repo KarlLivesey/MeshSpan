@@ -145,6 +145,7 @@ where
             local_state.pending_recovery_bundle_path(),
             Arc::clone(&setup_state),
             local_state.wrapping_public_key(),
+            local_state.node_identity_public_key().to_vec(),
             OperatingSystemRandom,
         ),
         storage_targets,

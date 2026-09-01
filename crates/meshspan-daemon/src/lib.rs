@@ -93,6 +93,8 @@ mod native_upload_api;
 mod native_upload_api_tests;
 #[cfg(test)]
 mod native_upload_service_tests;
+mod node_enrolment;
+mod node_enrolment_api;
 mod node_join_grant;
 mod node_join_grant_api;
 mod node_wrapping_key_registration;
@@ -302,6 +304,11 @@ pub use native_upload_api::{
     NativeUploadServicePolicy, UploadRangeCursor, UploadRangePageRequest, UploadRangeWriteRequest,
     native_upload_api_router,
 };
+pub use node_enrolment::{
+    NodeEnrolmentAuthority, NodeEnrolmentAuthorityError, NodeEnrolmentCommit,
+    NodeEnrolmentController, NodeEnrolmentError, NodeEnrolmentService,
+};
+pub use node_enrolment_api::{NodeEnrolmentApiError, node_enrolment_api_router};
 pub use node_join_grant::{
     NodeJoinGrantIssuanceAuthority, NodeJoinGrantIssuanceAuthorityError,
     NodeJoinGrantIssuanceCommit, NodeJoinGrantIssuanceController, NodeJoinGrantIssuanceError,

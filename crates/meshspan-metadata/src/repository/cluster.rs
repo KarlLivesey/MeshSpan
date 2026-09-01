@@ -3,6 +3,7 @@
 //! Administrator join grants and certificate-bound node enrolment.
 
 use meshspan_domain::{JoinGrantId, PrincipalId, Revision, UnixMicros};
+use meshspan_secret_envelope::WrappingPublicKey;
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 
@@ -11,6 +12,7 @@ use super::{EntityKind, EntityReference, RepositoryError};
 use crate::{CommandContext, ConsumeJoinGrant, IssueJoinGrant, JoinRoles};
 
 const MAXIMUM_CERTIFICATE_BYTES: usize = 64 * 1_024;
+const MAXIMUM_PRIVATE_ENDPOINT_BYTES: usize = 512;
 
 /// Current immutable issuance facts for one node join grant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +30,25 @@ pub struct JoinGrantRecord {
     /// Exclusive authoritative expiry.
     pub expires_at: UnixMicros,
     /// Revision last affecting this grant.
+    pub revision: Revision,
+}
+
+/// Durable admitted-node facts needed to exactly replay an enrolment response.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NodeEnrolmentRecord {
+    /// Permanent admitted node identity.
+    pub node_id: meshspan_domain::NodeId,
+    /// Mesh-signed leaf certificate.
+    pub certificate_der: Vec<u8>,
+    /// Exact leaf certificate fingerprint.
+    pub certificate_fingerprint: [u8; 32],
+    /// Conservative metadata certificate fence.
+    pub certificate_valid_until: UnixMicros,
+    /// Staged private endpoint awaiting authenticated activation.
+    pub private_endpoint: String,
+    /// Original authoritative admission instant.
+    pub admitted_at: UnixMicros,
+    /// Admission revision.
     pub revision: Revision,
 }
 
@@ -56,6 +77,61 @@ pub(super) fn join_grant(
     stored.map_or(Ok(None), |stored| {
         decode_join_grant(join_grant_id, stored).map(Some)
     })
+}
+
+pub(super) fn node_enrolment(
+    database: &crate::PartitionDatabase,
+    node_id: meshspan_domain::NodeId,
+) -> Result<Option<NodeEnrolmentRecord>, RepositoryError> {
+    let stored = database
+        .connection()
+        .query_row(
+            "SELECT certificate.certificate_der, certificate.certificate_fingerprint,
+                    certificate.valid_until, pending.private_endpoint, node.admitted_at,
+                    node.revision
+             FROM nodes AS node
+             JOIN node_certificates AS certificate
+               ON certificate.node_id = node.node_id AND certificate.generation = 1
+             JOIN pending_node_activations AS pending ON pending.node_id = node.node_id
+             WHERE node.node_id = ?1 AND node.state = 1 AND certificate.state = 1",
+            [node_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((certificate_der, fingerprint, valid_until, private_endpoint, admitted_at, revision)) =
+        stored
+    else {
+        return Ok(None);
+    };
+    let certificate_fingerprint: [u8; 32] = fingerprint
+        .try_into()
+        .map_err(|_| RepositoryError::CorruptState)?;
+    if certificate_der.is_empty()
+        || certificate_fingerprint != <[u8; 32]>::from(Sha256::digest(&certificate_der))
+        || !valid_private_endpoint(&private_endpoint)
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(Some(NodeEnrolmentRecord {
+        node_id,
+        certificate_der,
+        certificate_fingerprint,
+        certificate_valid_until: UnixMicros::new(valid_until),
+        private_endpoint,
+        admitted_at: UnixMicros::new(admitted_at),
+        revision: Revision::new(
+            u64::try_from(revision).map_err(|_| RepositoryError::CorruptState)?,
+        ),
+    }))
 }
 
 fn decode_join_grant(
@@ -165,6 +241,7 @@ pub(super) fn consume_join_grant(
     }
     persist_host(transaction, context, command, revision)?;
     persist_node(transaction, partition_id, context, command, revision)?;
+    persist_pending_activation(transaction, context, command, revision)?;
     let updated = transaction.execute(
         "UPDATE join_grants SET used_count = used_count + 1, revision = ?1
          WHERE join_grant_id = ?2 AND used_count < maximum_uses AND revoked_at IS NULL",
@@ -190,6 +267,43 @@ pub(super) fn consume_join_grant(
         kind: EntityKind::Node,
         id: node,
     })
+}
+
+fn persist_pending_activation(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &ConsumeJoinGrant,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let wrapping_key = WrappingPublicKey::from_bytes(command.wrapping_public_key)
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    if !valid_private_endpoint(&command.private_endpoint) {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    transaction.execute(
+        "INSERT INTO pending_node_activations(
+            node_id, wrapping_public_key, wrapping_key_fingerprint, private_endpoint,
+            admitted_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            command.node_id.as_bytes().as_slice(),
+            wrapping_key.as_bytes().as_slice(),
+            wrapping_key.fingerprint().as_slice(),
+            command.private_endpoint,
+            context.occurred_at.get(),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn valid_private_endpoint(value: &str) -> bool {
+    (3..=MAXIMUM_PRIVATE_ENDPOINT_BYTES).contains(&value.len())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b':' | b'[' | b']' | b'-')
+        })
 }
 
 fn validate_enrolment(

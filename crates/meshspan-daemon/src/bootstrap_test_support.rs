@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use meshspan_domain::{EntropyError, RandomSource};
+use meshspan_domain::{EntropyError, RandomSource, UnixMicros};
 use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, BootstrapAppliance, BootstrapMesh,
-    BootstrapRecoveryIdentity, CommitSecretGeneration, CreateAuthenticationMethod,
-    ONLINE_AUTHORITY_KEY_SECRET_KIND, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
+    BootstrapNodeCertificate, BootstrapRecoveryIdentity, CommitSecretGeneration,
+    CreateAuthenticationMethod, ONLINE_AUTHORITY_KEY_SECRET_KIND, RegisterNodeWrappingKey,
+    STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{
     SecretContext, SecretEnvelopeError, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
 };
+use sha2::{Digest, Sha256};
 
 pub(crate) fn bootstrap_appliance(
     mesh: BootstrapMesh,
@@ -54,6 +56,11 @@ pub(crate) fn bootstrap_appliance_with_node_key(
             generation: 1,
             public_key: node_key.as_bytes(),
             key_fingerprint: node_key.fingerprint(),
+        },
+        node_certificate: BootstrapNodeCertificate {
+            certificate_der: vec![99; 64],
+            certificate_fingerprint: Sha256::digest([99; 64]).into(),
+            certificate_valid_until: UnixMicros::new(i64::MAX),
         },
         storage_permit_key_generation: Box::new(CommitSecretGeneration {
             secret: secret.parts(),

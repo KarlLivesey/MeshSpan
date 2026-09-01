@@ -5,6 +5,7 @@
 use meshspan_domain::Revision;
 use meshspan_secret_envelope::WrappingPublicKey;
 use rusqlite::{Transaction, params};
+use sha2::{Digest, Sha256};
 
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, authentication_policy, identity};
@@ -57,6 +58,10 @@ pub(super) fn bootstrap_appliance(
 ) -> Result<EntityReference, RepositoryError> {
     if command.authentication.principal_id != command.mesh.administrator_id
         || command.node_wrapping_key.node_id != command.mesh.node_id
+        || command.node_certificate.certificate_der.is_empty()
+        || command.node_certificate.certificate_fingerprint
+            != <[u8; 32]>::from(Sha256::digest(&command.node_certificate.certificate_der))
+        || command.node_certificate.certificate_valid_until <= context.occurred_at
     {
         return Err(RepositoryError::InvalidCommand);
     }
@@ -65,6 +70,7 @@ pub(super) fn bootstrap_appliance(
     let recovery_recipient = WrappingPublicKey::from_bytes(command.recovery.public_wrapping_key)
         .map_err(|_| RepositoryError::InvalidCommand)?;
     let mesh = bootstrap(transaction, partition_id, context, &command.mesh, revision)?;
+    persist_initial_node_certificate(transaction, context, command, revision)?;
     super::authentication_method_creation::create(
         transaction,
         context,
@@ -107,6 +113,29 @@ pub(super) fn bootstrap_appliance(
         revision,
     )?;
     Ok(mesh)
+}
+
+fn persist_initial_node_certificate(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &BootstrapAppliance,
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    transaction.execute(
+        "INSERT INTO node_certificates(
+            node_id, generation, certificate_der, certificate_fingerprint, valid_from,
+            valid_until, state, revision
+         ) VALUES (?1, 1, ?2, ?3, ?4, ?5, 1, ?6)",
+        params![
+            command.mesh.node_id.as_bytes().as_slice(),
+            command.node_certificate.certificate_der,
+            command.node_certificate.certificate_fingerprint.as_slice(),
+            context.occurred_at.get(),
+            command.node_certificate.certificate_valid_until.get(),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    Ok(())
 }
 
 fn persist_mesh(

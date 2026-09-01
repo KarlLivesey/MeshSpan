@@ -3,12 +3,13 @@
 //! Consensus-backed node join-grant and enrolment authority adapters.
 
 use meshspan_cluster::MetadataAuthorityRequestError;
-use meshspan_domain::{JoinGrantId, MeshId, OperationId, PrincipalId, UnixMicros};
+use meshspan_domain::{JoinGrantId, MeshId, NodeId, OperationId, PrincipalId, UnixMicros};
 use meshspan_metadata::{AuthoritativeCommand, CommandContext, EntityKind, RepositoryError};
 
 use crate::{
-    ConsensusAuthenticationAuthority, NodeJoinGrantIssuanceAuthority,
-    NodeJoinGrantIssuanceAuthorityError, NodeJoinGrantIssuanceCommit,
+    ConsensusAuthenticationAuthority, NodeEnrolmentAuthority, NodeEnrolmentAuthorityError,
+    NodeEnrolmentCommit, NodeJoinGrantIssuanceAuthority, NodeJoinGrantIssuanceAuthorityError,
+    NodeJoinGrantIssuanceCommit,
 };
 
 impl NodeJoinGrantIssuanceAuthority for ConsensusAuthenticationAuthority {
@@ -53,6 +54,78 @@ impl NodeJoinGrantIssuanceAuthority for ConsensusAuthenticationAuthority {
         };
         issuance_commit(self, receipt, issued.join_grant_id)
     }
+}
+
+impl NodeEnrolmentAuthority for ConsensusAuthenticationAuthority {
+    fn join_grant(
+        &self,
+        join_grant_id: JoinGrantId,
+    ) -> Result<Option<meshspan_metadata::JoinGrantRecord>, NodeEnrolmentAuthorityError> {
+        self.reader()
+            .join_grant(join_grant_id)
+            .map_err(|error| node_repository_error(&error))
+    }
+
+    fn mesh_recovery_authority(
+        &self,
+        mesh_id: MeshId,
+    ) -> Result<Option<meshspan_metadata::MeshRecoveryAuthority>, NodeEnrolmentAuthorityError> {
+        self.reader()
+            .mesh_recovery_authority(mesh_id)
+            .map_err(|error| node_repository_error(&error))
+    }
+
+    fn resolve_node_enrolment(
+        &self,
+        operation_id: OperationId,
+        node_id: NodeId,
+    ) -> Result<Option<NodeEnrolmentCommit>, NodeEnrolmentAuthorityError> {
+        self.reader()
+            .resolve_operation(operation_id)
+            .map_err(|error| node_repository_error(&error))?
+            .map(|receipt| node_enrolment_commit(self, receipt, node_id))
+            .transpose()
+    }
+
+    fn commit_or_resolve_node_enrolment(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<NodeEnrolmentCommit, NodeEnrolmentAuthorityError> {
+        let receipt = self
+            .commit_authoritative(context, command)
+            .map_err(node_authority_error)?;
+        let AuthoritativeCommand::ConsumeJoinGrant(consumed) = command else {
+            return Err(NodeEnrolmentAuthorityError::Failed);
+        };
+        node_enrolment_commit(self, receipt, consumed.node_id)
+    }
+}
+
+fn node_enrolment_commit(
+    authority: &ConsensusAuthenticationAuthority,
+    receipt: meshspan_metadata::CommandReceipt,
+    node_id: NodeId,
+) -> Result<NodeEnrolmentCommit, NodeEnrolmentAuthorityError> {
+    if receipt.entity.kind != EntityKind::Node
+        || receipt.entity.id != node_id.as_bytes()
+        || receipt.result_digest == [0; 32]
+    {
+        return Err(NodeEnrolmentAuthorityError::Failed);
+    }
+    let record = authority
+        .reader()
+        .node_enrolment(node_id)
+        .map_err(|error| node_repository_error(&error))?
+        .ok_or(NodeEnrolmentAuthorityError::Failed)?;
+    if record.revision != receipt.committed_revision {
+        return Err(NodeEnrolmentAuthorityError::Failed);
+    }
+    Ok(NodeEnrolmentCommit {
+        request_digest: receipt.request_digest,
+        result_digest: receipt.result_digest,
+        record,
+    })
 }
 
 fn issuance_commit(
@@ -104,6 +177,29 @@ const fn authority_error(
         }
         MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
             NodeJoinGrantIssuanceAuthorityError::Failed
+        }
+    }
+}
+
+fn node_repository_error(error: &RepositoryError) -> NodeEnrolmentAuthorityError {
+    match error {
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            NodeEnrolmentAuthorityError::Unavailable
+        }
+        RepositoryError::OperationConflict => NodeEnrolmentAuthorityError::Conflict,
+        RepositoryError::InvalidCommand => NodeEnrolmentAuthorityError::Rejected,
+        _ => NodeEnrolmentAuthorityError::Failed,
+    }
+}
+
+const fn node_authority_error(error: MetadataAuthorityRequestError) -> NodeEnrolmentAuthorityError {
+    match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => NodeEnrolmentAuthorityError::Unavailable,
+        MetadataAuthorityRequestError::Conflict => NodeEnrolmentAuthorityError::Conflict,
+        MetadataAuthorityRequestError::Rejected => NodeEnrolmentAuthorityError::Rejected,
+        MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
+            NodeEnrolmentAuthorityError::Failed
         }
     }
 }

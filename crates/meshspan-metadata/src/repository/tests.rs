@@ -797,6 +797,8 @@ fn administrator_join_grant_enrols_once_and_exact_replay_is_safe()
         node_name: RecordName::new("Second node")?,
         incarnation: 1,
         requested_roles: roles,
+        wrapping_public_key: [144; 32],
+        private_endpoint: "second-node.meshspan.local:7443".to_owned(),
         certificate_der,
         certificate_fingerprint,
         certificate_valid_until: UnixMicros::new(10_000),

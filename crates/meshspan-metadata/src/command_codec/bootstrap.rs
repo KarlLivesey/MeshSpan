@@ -7,10 +7,14 @@ use super::authentication;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use super::{node_wrapping_key, secret_generation};
-use crate::{BootstrapAppliance, BootstrapMesh, BootstrapRecoveryIdentity, RecordName};
+use crate::{
+    BootstrapAppliance, BootstrapMesh, BootstrapNodeCertificate, BootstrapRecoveryIdentity,
+    RecordName,
+};
 
 const MAXIMUM_NAME_BYTES: usize = 256;
 const MAXIMUM_ROOT_CERTIFICATE_BYTES: usize = 8 * 1_024;
+const MAXIMUM_NODE_CERTIFICATE_BYTES: usize = 64 * 1_024;
 
 pub(super) fn encode(
     encoder: &mut Encoder,
@@ -20,6 +24,7 @@ pub(super) fn encode(
     authentication::encode_payload(encoder, &value.authentication)?;
     encode_recovery(encoder, &value.recovery)?;
     node_wrapping_key::encode_payload(encoder, &value.node_wrapping_key)?;
+    encode_node_certificate(encoder, &value.node_certificate)?;
     secret_generation::encode_payload(encoder, &value.storage_permit_key_generation)?;
     secret_generation::encode_payload(encoder, &value.authentication_root_key_generation)?;
     secret_generation::encode_payload(encoder, &value.online_authority_key_generation)
@@ -33,9 +38,33 @@ pub(super) fn decode(
         authentication: authentication::decode_payload(decoder)?,
         recovery: Box::new(decode_recovery(decoder)?),
         node_wrapping_key: node_wrapping_key::decode_payload(decoder)?,
+        node_certificate: decode_node_certificate(decoder)?,
         storage_permit_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
         authentication_root_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
         online_authority_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
+    })
+}
+
+fn encode_node_certificate(
+    encoder: &mut Encoder,
+    value: &BootstrapNodeCertificate,
+) -> Result<(), MetadataCommandCodecError> {
+    encoder.bytes(&value.certificate_der, MAXIMUM_NODE_CERTIFICATE_BYTES)?;
+    encoder.fixed(&value.certificate_fingerprint)?;
+    encoder.i64(value.certificate_valid_until.get())
+}
+
+fn decode_node_certificate(
+    decoder: &mut Decoder<'_>,
+) -> Result<BootstrapNodeCertificate, MetadataCommandCodecError> {
+    let certificate_der = decoder.bytes(MAXIMUM_NODE_CERTIFICATE_BYTES)?;
+    if certificate_der.is_empty() {
+        return Err(MetadataCommandCodecError::Invalid);
+    }
+    Ok(BootstrapNodeCertificate {
+        certificate_der,
+        certificate_fingerprint: decoder.fixed()?,
+        certificate_valid_until: meshspan_domain::UnixMicros::new(decoder.i64()?),
     })
 }
 

@@ -5,9 +5,10 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, BootstrapAppliance, BootstrapMesh,
-    BootstrapRecoveryIdentity, CommitSecretGeneration, ConfirmRecoveryBundleSaved,
-    CreateAuthenticationMethod, NewAuthenticationCredential, ONLINE_AUTHORITY_KEY_SECRET_KIND,
-    RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND, VOLUME_CONTENT_KEY_SECRET_KIND,
+    BootstrapNodeCertificate, BootstrapRecoveryIdentity, CommitSecretGeneration,
+    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, NewAuthenticationCredential,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, RegisterNodeWrappingKey, STORAGE_PERMIT_KEY_SECRET_KIND,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -80,6 +81,11 @@ pub(crate) fn protected_bootstrap(
                 generation: 1,
                 public_key: gateway_key.as_bytes(),
                 key_fingerprint: gateway_key.fingerprint(),
+            },
+            node_certificate: BootstrapNodeCertificate {
+                certificate_der: vec![218; 64],
+                certificate_fingerprint: Sha256::digest([218; 64]).into(),
+                certificate_valid_until: UnixMicros::new(10_000_000),
             },
             storage_permit_key_generation: Box::new(CommitSecretGeneration {
                 secret: permit_secret.parts(),
