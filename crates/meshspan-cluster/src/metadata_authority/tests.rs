@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Mutex;
+use std::time::Duration;
 
 use meshspan_consensus::{ConsensusCore, CoreConfig, MemberIncarnations, compile_plan, flat_plan};
 use meshspan_domain::{
@@ -63,26 +65,161 @@ async fn follower_rejects_before_enqueuing_a_mutation() -> Result<(), Box<dyn st
     Ok(())
 }
 
+#[tokio::test]
+async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let nodes = [
+        NodeId::from_bytes([61; 16])?,
+        NodeId::from_bytes([62; 16])?,
+        NodeId::from_bytes([63; 16])?,
+    ];
+    let plan = plan(&nodes)?;
+    let handles = Arc::new(Mutex::new(BTreeMap::new()));
+    let mut authorities = Vec::new();
+    for (index, node_id) in nodes.into_iter().enumerate() {
+        let driver = driver_with_plan(
+            &directory.path().join(format!("node-{index}.sqlite3")),
+            node_id,
+            &plan,
+        )?;
+        let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(InMemoryTransport {
+            from: node_id,
+            peers: Arc::clone(&handles),
+        });
+        let config = MetadataAuthorityConfig {
+            heartbeat_interval: Duration::from_millis(20),
+            election_timeout: Duration::from_secs(60),
+            election_check_interval: Duration::from_millis(10),
+            ..MetadataAuthorityConfig::default()
+        };
+        authorities.push(spawn_metadata_authority(driver, transport, config)?);
+    }
+    {
+        let mut registered = handles.lock().map_err(|_| "transport registry poisoned")?;
+        for (node_id, (handle, _)) in nodes.into_iter().zip(&authorities) {
+            registered.insert(node_id, handle.clone());
+        }
+    }
+    authorities[0].0.begin_election().await?;
+    let (context, command) = command(nodes[0], [64; 16])?;
+    let receipt = tokio::time::timeout(
+        Duration::from_secs(5),
+        commit_after_election(&authorities[0].0, context, &command),
+    )
+    .await??;
+    assert_eq!(receipt.operation_id, context.operation_id);
+
+    for (authority, _) in &authorities {
+        let replay = tokio::time::timeout(
+            Duration::from_secs(5),
+            resolve_after_replication(authority, context, &command),
+        )
+        .await??;
+        assert_eq!(replay.result_digest, receipt.result_digest);
+    }
+    for (authority, _) in &authorities {
+        authority.shutdown().await?;
+    }
+    for (_, runtime) in authorities {
+        runtime.await??;
+    }
+    Ok(())
+}
+
+struct InMemoryTransport {
+    from: NodeId,
+    peers: Arc<Mutex<BTreeMap<NodeId, MetadataAuthorityHandle>>>,
+}
+
+impl ConsensusMessageTransport for InMemoryTransport {
+    fn send(&self, to: NodeId, message: CoreMessage) {
+        let Ok(peers) = self.peers.lock() else {
+            return;
+        };
+        let Some(peer) = peers.get(&to) else {
+            return;
+        };
+        let _full_or_closed = peer
+            .events
+            .try_send(AuthorityEvent::Peer(PeerConsensusMessage {
+                from: self.from,
+                sender_incarnation: 1,
+                message,
+            }));
+    }
+}
+
+async fn commit_after_election(
+    authority: &MetadataAuthorityHandle,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
+    loop {
+        match authority.commit_or_resolve(context, command.clone()).await {
+            Err(MetadataAuthorityRequestError::NotLeader { .. }) => {
+                tokio::task::yield_now().await;
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
+async fn resolve_after_replication(
+    authority: &MetadataAuthorityHandle,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
+    loop {
+        match authority.commit_or_resolve(context, command.clone()).await {
+            Err(MetadataAuthorityRequestError::NotLeader { .. }) => {
+                tokio::task::yield_now().await;
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
 fn driver(
     file_path: &std::path::Path,
     local: NodeId,
 ) -> Result<PartitionConsensusDriver<AuthoritativeRepository>, Box<dyn std::error::Error>> {
-    let partition_id = PartitionId::from_bytes([20; 16])?;
-    let plan = compile_plan(flat_plan(
+    let plan = plan(&[local])?;
+    driver_with_plan(file_path, local, &plan)
+}
+
+fn plan(
+    nodes: &[NodeId],
+) -> Result<meshspan_consensus::CompiledQuorumPlan, Box<dyn std::error::Error>> {
+    Ok(compile_plan(flat_plan(
         QuorumPlanId::from_bytes([21; 16])?,
         1,
-        BTreeSet::from([local]),
+        nodes.iter().copied().collect(),
         BTreeSet::new(),
-    )?)?;
+    )?)?)
+}
+
+fn driver_with_plan(
+    file_path: &std::path::Path,
+    local: NodeId,
+    plan: &meshspan_consensus::CompiledQuorumPlan,
+) -> Result<PartitionConsensusDriver<AuthoritativeRepository>, Box<dyn std::error::Error>> {
+    let partition_id = PartitionId::from_bytes([20; 16])?;
     let database = PartitionDatabase::open(file_path, partition_id, UnixMicros::new(1))?;
     let mut repository = AuthoritativeRepository::new(database);
-    repository.initialise_consensus_quorum_plan(&plan, UnixMicros::new(2))?;
-    let incarnations = MemberIncarnations::new(BTreeMap::from([(local, 1)]), &plan)?;
+    repository.initialise_consensus_quorum_plan(plan, UnixMicros::new(2))?;
+    let incarnations = MemberIncarnations::new(
+        plan.members()
+            .into_iter()
+            .map(|node_id| (node_id, 1))
+            .collect(),
+        plan,
+    )?;
     let core = ConsensusCore::new(CoreConfig {
         partition_id,
         local_node_id: local,
         local_incarnation: 1,
-        plan,
+        plan: plan.clone(),
         member_incarnations: incarnations,
     })?;
     Ok(PartitionConsensusDriver::new(core, repository))
