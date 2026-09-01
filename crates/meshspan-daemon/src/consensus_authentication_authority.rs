@@ -10,8 +10,9 @@ use meshspan_domain::{
 use meshspan_metadata::{
     ApiKeyAuthentication, ApiKeySessionReplay, AuthenticationPolicy, AuthenticationSessionReplay,
     AuthoritativeCommand, AuthoritativeRepository, BrowserSessionAccessRequest, CommandContext,
-    PasskeySessionReplay, PasskeyVerificationMaterial, RecoveryCodeVerificationMaterial,
-    RepositoryError, SessionAccessDecision, SessionRevocationReplay, TotpVerificationMaterial,
+    CommandReceipt, PasskeySessionReplay, PasskeyVerificationMaterial,
+    RecoveryCodeVerificationMaterial, RepositoryError, SessionAccessDecision,
+    SessionRevocationReplay, TotpVerificationMaterial,
 };
 
 use crate::{
@@ -48,14 +49,17 @@ impl ConsensusAuthenticationAuthority {
         }
     }
 
-    fn commit(
+    pub(crate) const fn reader(&self) -> &AuthoritativeRepository {
+        &self.reader
+    }
+
+    pub(crate) fn commit_authoritative(
         &self,
         context: CommandContext,
         command: &AuthoritativeCommand,
-    ) -> Result<[u8; 32], MetadataAuthorityRequestError> {
+    ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
         self.runtime
             .block_on(self.authority.commit_or_resolve(context, command.clone()))
-            .map(|receipt| receipt.result_digest)
     }
 }
 
@@ -156,8 +160,10 @@ impl SessionAuthority for ConsensusAuthenticationAuthority {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<SessionCommit, SessionAuthorityError> {
-        self.commit(context, command)
-            .map(|result_digest| SessionCommit { result_digest })
+        self.commit_authoritative(context, command)
+            .map(|receipt| SessionCommit {
+                result_digest: receipt.result_digest,
+            })
             .map_err(map_session_authority_error)
     }
 }
@@ -231,8 +237,10 @@ impl SessionRevocationAuthority for ConsensusAuthenticationAuthority {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<SessionRevocationCommit, SessionRevocationAuthorityError> {
-        self.commit(context, command)
-            .map(|result_digest| SessionRevocationCommit { result_digest })
+        self.commit_authoritative(context, command)
+            .map(|receipt| SessionRevocationCommit {
+                result_digest: receipt.result_digest,
+            })
             .map_err(map_revocation_authority_error)
     }
 }

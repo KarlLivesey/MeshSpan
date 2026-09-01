@@ -39,6 +39,7 @@ mod claim_service_tests;
 mod consensus_authentication_authority;
 #[cfg(test)]
 mod consensus_authentication_authority_tests;
+mod consensus_authentication_methods;
 mod consensus_bootstrap_authority;
 mod create_mesh_setup;
 #[cfg(test)]

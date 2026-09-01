@@ -17,14 +17,15 @@ use meshspan_domain::{
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, BootstrapAppliance, BootstrapMesh,
     BrowserSessionAccessRequest, BrowserSessionProtection, CommandContext,
-    CreateAuthenticationMethod, IssueAuthenticationSession, NewAuthenticationCredential,
-    PartitionDatabase, RecordName, RevokeAuthenticationSession, SessionAccessDecision,
-    SessionAccessRequest, SessionAuthenticationFactor, SessionClientLabel,
+    CreateAuthenticationMethod, IssueAuthenticationSession, NewAuthenticationCredential, PageLimit,
+    PartitionDatabase, RecordName, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SessionAccessDecision, SessionAccessRequest, SessionAuthenticationFactor, SessionClientLabel,
 };
 
 use crate::{
-    BrowserSessionAuthority, ConsensusAuthenticationAuthority, SessionAuthority,
-    SessionRevocationAuthority,
+    ApiKeyIssuanceAuthority, AuthenticationMethodListingAuthority,
+    AuthenticationMethodRevocationAuthority, BrowserSessionAuthority,
+    ConsensusAuthenticationAuthority, SessionAuthority, SessionRevocationAuthority,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -45,6 +46,18 @@ async fn authentication_reads_and_session_mutation_share_committed_consensus_sta
     fixture.shutdown().await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn api_key_lifecycle_is_committed_listed_and_revoked_through_consensus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = RunningAuthority::start().await?;
+    let result = fixture.api_key_lifecycle()?;
+    assert_eq!(result.method_count, 2);
+    assert_eq!(result.issuance.method_id, result.revocation.method_id);
+    assert!(result.authenticated_before_revocation);
+    assert!(!result.authenticated_after_revocation);
+    fixture.shutdown().await
+}
+
 type AuthorityRuntime = tokio::task::JoinHandle<Result<(), MetadataAuthorityRuntimeError>>;
 
 struct AuthenticationRoundTrip {
@@ -52,6 +65,14 @@ struct AuthenticationRoundTrip {
     before_revocation: SessionAccessDecision,
     revocation: crate::SessionRevocationCommit,
     after_revocation: SessionAccessDecision,
+}
+
+struct ApiKeyLifecycle {
+    issuance: crate::ApiKeyIssuanceCommit,
+    revocation: crate::AuthenticationMethodRevocationCommit,
+    method_count: usize,
+    authenticated_before_revocation: bool,
+    authenticated_after_revocation: bool,
 }
 
 struct RunningAuthority {
@@ -201,11 +222,91 @@ impl RunningAuthority {
         })
     }
 
+    fn api_key_lifecycle(&mut self) -> Result<ApiKeyLifecycle, Box<dyn std::error::Error>> {
+        let reader = self
+            .reader
+            .take()
+            .ok_or("test read connection was already consumed")?;
+        let authority_handle = self.handle.clone();
+        let administrator_id = self.administrator_id;
+        tokio::task::block_in_place(move || {
+            let mut authority = ConsensusAuthenticationAuthority::new(
+                reader,
+                authority_handle,
+                tokio::runtime::Handle::current(),
+            );
+            let mut random = SequentialRandom(100);
+            let api_key = ApiKeyBundle::generate(&mut random)?;
+            let method_id = AuthenticationMethodId::from_bytes([15; 16])?;
+            let creation = api_key_creation(administrator_id, method_id, &api_key);
+            let issuance = authority.commit_or_resolve_api_key_issuance(
+                command_context(administrator_id, 16, 17, 30, None)?,
+                &creation,
+            )?;
+            let method_count = authority
+                .authentication_methods(administrator_id, None, PageLimit::new(10)?)?
+                .items
+                .len();
+            let authenticated_before_revocation = authority
+                .authenticate_api_key(
+                    api_key.key_id(),
+                    api_key.secret_digest(),
+                    UnixMicros::new(31),
+                )?
+                .is_some();
+            let revocation = authority.commit_or_resolve_authentication_method_revocation(
+                command_context(administrator_id, 18, 19, 32, None)?,
+                &AuthoritativeCommand::RevokeAuthenticationMethod(RevokeAuthenticationMethod {
+                    method_id,
+                    principal_id: administrator_id,
+                    reason: "No longer needed".to_owned(),
+                }),
+            )?;
+            let authenticated_after_revocation = authority
+                .authenticate_api_key(
+                    api_key.key_id(),
+                    api_key.secret_digest(),
+                    UnixMicros::new(33),
+                )?
+                .is_some();
+            Ok::<_, Box<dyn std::error::Error>>(ApiKeyLifecycle {
+                issuance,
+                revocation,
+                method_count,
+                authenticated_before_revocation,
+                authenticated_after_revocation,
+            })
+        })
+    }
+
     async fn shutdown(self) -> Result<(), Box<dyn std::error::Error>> {
         self.handle.shutdown().await?;
         self.runtime.await??;
         Ok(())
     }
+}
+
+fn api_key_creation(
+    principal_id: PrincipalId,
+    method_id: AuthenticationMethodId,
+    api_key: &ApiKeyBundle,
+) -> AuthoritativeCommand {
+    AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+        method_id,
+        principal_id,
+        label: "Automation".to_owned(),
+        service_scope: AuthenticationService::Https.scope_bit()
+            | AuthenticationService::HeadlessApi.scope_bit()
+            | AuthenticationService::Smb.scope_bit(),
+        expires_at: None,
+        credential: NewAuthenticationCredential::ApiKey {
+            key_id: api_key.key_id(),
+            key_digest: api_key.secret_digest(),
+            scopes: AuthenticationService::Https.api_key_login_scope()
+                | AuthenticationService::HeadlessApi.api_key_login_scope(),
+            valid_from: UnixMicros::new(30),
+        },
+    })
 }
 
 fn bootstrap_command(
