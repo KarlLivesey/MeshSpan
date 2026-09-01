@@ -98,6 +98,55 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
     proof
 }
 
+#[tokio::test]
+async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<(), Box<dyn Error>>
+{
+    let root = ProcessFixture::new()?;
+    let peer = ProcessFixture::new()?;
+    let mut processes = Vec::new();
+    let proof = async {
+        processes.push(root.start()?);
+        let claim = wait_for_claim(&root.claim_path).await?;
+        let root_client = wait_for_client(&root.identity_path).await?;
+        wait_for_status(root.address, &root_client, "claim_required").await?;
+        let administrator_id = bootstrap_administrator_id(&claim, &root.identity_path)?;
+        let created = create_process_mesh(&root, &root_client, &claim).await?;
+        let api_key = created["api_key"]
+            .as_str()
+            .ok_or("setup response omitted the API key")?;
+        save_and_verify_recovery_bundle(&root, &root_client, api_key, &created).await?;
+
+        let join_code = issue_join_code(&root, &root_client, api_key).await?;
+        processes.push(peer.start_join(&join_code)?);
+        let peer_client = wait_for_client(&peer.identity_path).await?;
+        wait_for_status(peer.address, &peer_client, "configured").await?;
+        wait_for_storage_folder_visibility(&root, &root_client, api_key).await?;
+        wait_for_storage_folder_visibility(&peer, &peer_client, api_key).await?;
+        register_storage_folder(
+            root.address,
+            &root_client,
+            api_key,
+            &root.additional_storage_path,
+        )
+        .await?;
+
+        let group_id = create_group(root.address, &root_client, api_key).await?;
+        let user_id = create_user(root.address, &root_client, api_key).await?;
+        add_group_member(root.address, &root_client, api_key, &group_id, &user_id).await?;
+        let volume_id =
+            create_volume(root.address, &root_client, api_key, &administrator_id).await?;
+        create_volume_permission_grant(root.address, &root_client, api_key, &volume_id, &group_id)
+            .await?;
+
+        let content = b"clean machine native HTTPS round trip";
+        upload_file(root.address, &root_client, api_key, &volume_id, content).await?;
+        wait_for_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await
+    }
+    .await;
+    stop_processes(&mut processes);
+    proof
+}
+
 async fn create_process_mesh(
     fixture: &ProcessFixture,
     client: &ClientConfig,
@@ -310,6 +359,99 @@ async fn wait_for_file_surfaces(
             .into());
         }
         sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_storage_folder_visibility(
+    fixture: &ProcessFixture,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let error = match assert_storage_folder_visible(fixture, client, api_key).await {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "CLI storage-folder registration never became visible over HTTPS at {}: {}",
+                fixture.address, error
+            )
+            .into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn assert_storage_folder_visible(
+    fixture: &ProcessFixture,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        fixture.address,
+        client,
+        "GET",
+        "/api/latest/admin/storage-folders?limit=100",
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "200 OK", "list CLI-registered storage folder")?;
+    let payload: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
+    let expected_path = fixture
+        .storage_path
+        .to_str()
+        .ok_or("temporary storage path was not UTF-8")?;
+    let visible = payload["folders"].as_array().is_some_and(|folders| {
+        folders.iter().any(|folder| {
+            folder["path"].as_str() == Some(expected_path)
+                && folder["state"].as_str() == Some("active")
+        })
+    });
+    visible
+        .then_some(())
+        .ok_or_else(|| "public storage-folder inventory omitted the active CLI path".into())
+}
+
+async fn register_storage_folder(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    folder_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let path = folder_path
+        .to_str()
+        .ok_or("additional storage path was not UTF-8")?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000033",
+        "path": path,
+        "usage_limit": { "kind": "percent", "percent": 90 }
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/admin/storage-folders",
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(
+        &response,
+        "201 Created",
+        "register storage folder over HTTPS",
+    )?;
+    let payload: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
+    if payload["folder"]["path"].as_str() == Some(path)
+        && payload["folder"]["state"].as_str() == Some("active")
+    {
+        Ok(())
+    } else {
+        Err("storage-folder registration returned the wrong active path".into())
     }
 }
 
@@ -1556,6 +1698,7 @@ struct ProcessFixture {
     identity_path: PathBuf,
     state_path: PathBuf,
     storage_path: PathBuf,
+    additional_storage_path: PathBuf,
     pending_recovery_bundle_path: PathBuf,
     saved_recovery_bundle_path: PathBuf,
     saved_recovery_code_path: PathBuf,
@@ -1566,7 +1709,9 @@ impl ProcessFixture {
         let temporary = TempDir::new()?;
         let state_path = temporary.path().join("state");
         let storage_path = temporary.path().join("storage");
+        let additional_storage_path = temporary.path().join("additional-storage");
         fs::create_dir(&storage_path)?;
+        fs::create_dir(&additional_storage_path)?;
         fs::write(storage_path.join("operator-file.txt"), b"untouched")?;
         Ok(Self {
             address: unused_address()?,
@@ -1575,6 +1720,7 @@ impl ProcessFixture {
             identity_path: state_path.join("secrets/node-identity.pk8"),
             state_path,
             storage_path,
+            additional_storage_path,
             pending_recovery_bundle_path: temporary
                 .path()
                 .join("state/secrets/pending-offline-recovery.bundle"),
