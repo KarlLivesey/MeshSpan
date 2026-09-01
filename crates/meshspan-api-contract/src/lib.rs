@@ -154,10 +154,14 @@ pub use object_stat_validation::{
 };
 pub use openapi::{OPENAPI_PATH, OpenApiDocument, generate_openapi};
 pub use operation_status::{
-    OperationFailure, OperationKind, OperationProgress, OperationProgressUnit, OperationRetryClass,
-    OperationState, OperationStatusResponse,
+    ListOperationsQuery, ListOperationsResponse, OperationCursor, OperationFailure, OperationKind,
+    OperationProgress, OperationProgressUnit, OperationRetryClass, OperationState,
+    OperationStatusResponse,
 };
-pub use operation_status_validation::encode_operation_status_response;
+pub use operation_status_validation::{
+    encode_list_operations_response, encode_operation_status_response,
+    validate_list_operations_query,
+};
 pub use passkey_registration::{
     AuthenticationMethodId, AuthenticationMethodLabel, CreatePasskeyRegistrationChallengeRequest,
     CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,

@@ -5,11 +5,15 @@
 use axum::http::HeaderMap;
 use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_api_contract::{
-    OperationFailure, OperationId as ApiOperationId, OperationKind, OperationRetryClass,
-    OperationState, OperationStatusResponse,
+    ListOperationsQuery, ListOperationsResponse, OperationCursor, OperationFailure,
+    OperationId as ApiOperationId, OperationKind, OperationRetryClass, OperationState,
+    OperationStatusResponse, validate_list_operations_query,
 };
 use meshspan_domain::{AssuranceLevel, OperationId, PrincipalId, UnixMicros};
-use meshspan_metadata::{AuthoritativeOperationState, AuthoritativeOperationStatus};
+use meshspan_metadata::{
+    AuthoritativeOperationCursor, AuthoritativeOperationState, AuthoritativeOperationStatus, Page,
+    PageLimit,
+};
 use thiserror::Error;
 
 use crate::create_mesh_setup::parse_uuid;
@@ -20,6 +24,7 @@ use crate::{
 };
 
 const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+const DEFAULT_PAGE_LIMIT: u16 = 50;
 
 /// Replicated reads required to authorise and resolve operation status.
 pub trait OperationStatusAuthority: BrowserSessionAuthority + NativeApiKeyAuthority {
@@ -28,6 +33,16 @@ pub trait OperationStatusAuthority: BrowserSessionAuthority + NativeApiKeyAuthor
         &self,
         operation_id: OperationId,
     ) -> Result<Option<AuthoritativeOperationStatus>, OperationStatusAuthorityError>;
+
+    /// Returns one bounded reverse-chronological operation page.
+    fn operation_statuses(
+        &self,
+        after: Option<AuthoritativeOperationCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<AuthoritativeOperationStatus, AuthoritativeOperationCursor>,
+        OperationStatusAuthorityError,
+    >;
 
     /// Reports current system-manager authority.
     fn is_system_manager(
@@ -52,6 +67,13 @@ pub trait OperationStatusController: Send + 'static {
         viewer: OperationStatusViewer,
         operation_id: &ApiOperationId,
     ) -> Result<OperationStatusResponse, OperationStatusError>;
+
+    /// Returns one manager-only operation page under current authority.
+    fn list_operations(
+        &self,
+        viewer: OperationStatusViewer,
+        query: ListOperationsQuery,
+    ) -> Result<ListOperationsResponse, OperationStatusError>;
 }
 
 /// Authenticated principal and authoritative instant used for visibility checks.
@@ -126,9 +148,35 @@ where
         }
         public_status(record)
     }
+
+    fn list_operations(
+        &self,
+        viewer: OperationStatusViewer,
+        query: ListOperationsQuery,
+    ) -> Result<ListOperationsResponse, OperationStatusError> {
+        if !self
+            .authority
+            .is_system_manager(viewer.principal_id, viewer.now)
+            .map_err(map_authority_error)?
+        {
+            return Err(OperationStatusError::Forbidden);
+        }
+        validate_list_operations_query(&query).map_err(|_| OperationStatusError::InvalidInput)?;
+        let after = query.cursor.as_ref().map(decode_cursor).transpose()?;
+        let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        let page = self
+            .authority
+            .operation_statuses(
+                after,
+                PageLimit::new(usize::from(limit))
+                    .map_err(|_| OperationStatusError::InvalidInput)?,
+            )
+            .map_err(map_authority_error)?;
+        list_response(page, limit)
+    }
 }
 
-fn public_status(
+pub(crate) fn public_status(
     record: AuthoritativeOperationStatus,
 ) -> Result<OperationStatusResponse, OperationStatusError> {
     let started_at = safe_timestamp(record.started_at)?;
@@ -159,6 +207,85 @@ fn public_status(
         result_url: None,
         revision: record.revision.get(),
     })
+}
+
+fn list_response(
+    page: Page<AuthoritativeOperationStatus, AuthoritativeOperationCursor>,
+    limit: u16,
+) -> Result<ListOperationsResponse, OperationStatusError> {
+    let operations = page
+        .items
+        .into_iter()
+        .map(public_status)
+        .collect::<Result<Vec<_>, _>>()?;
+    let next_page_url = page
+        .next
+        .map(|cursor| {
+            let encoded = encode_cursor(cursor)?;
+            let url = format!(
+                "/api/latest/admin/operations?limit={limit}&cursor={}",
+                encoded.as_str()
+            );
+            (url.len() <= 16_384)
+                .then_some(url)
+                .ok_or(OperationStatusError::Failed)
+        })
+        .transpose()?;
+    Ok(ListOperationsResponse {
+        operations,
+        next_page_url,
+    })
+}
+
+fn encode_cursor(
+    cursor: AuthoritativeOperationCursor,
+) -> Result<OperationCursor, OperationStatusError> {
+    let encoded = format!(
+        "v1.{}.{}",
+        cursor.revision().get(),
+        encode_hex(&cursor.operation_id().as_bytes())
+    );
+    OperationCursor::from_encoded(encoded).ok_or(OperationStatusError::Failed)
+}
+
+fn decode_cursor(
+    cursor: &OperationCursor,
+) -> Result<AuthoritativeOperationCursor, OperationStatusError> {
+    let mut fields = cursor.as_str().split('.');
+    if fields.next() != Some("v1") {
+        return Err(OperationStatusError::InvalidInput);
+    }
+    let revision = fields
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| (1..=MAX_SAFE_INTEGER as u64).contains(value))
+        .ok_or(OperationStatusError::InvalidInput)?;
+    let operation = fields.next().ok_or(OperationStatusError::InvalidInput)?;
+    if fields.next().is_some() || operation.len() != 32 {
+        return Err(OperationStatusError::InvalidInput);
+    }
+    let mut bytes = [0; 16];
+    for (index, destination) in bytes.iter_mut().enumerate() {
+        let offset = index * 2;
+        *destination = u8::from_str_radix(&operation[offset..offset + 2], 16)
+            .map_err(|_| OperationStatusError::InvalidInput)?;
+    }
+    let operation_id =
+        OperationId::from_bytes(bytes).map_err(|_| OperationStatusError::InvalidInput)?;
+    Ok(AuthoritativeOperationCursor::new(
+        meshspan_domain::Revision::new(revision),
+        operation_id,
+    ))
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn parse_operation_id(value: &ApiOperationId) -> Result<OperationId, OperationStatusError> {
@@ -222,6 +349,9 @@ pub enum OperationStatusError {
     /// Authentication was absent, ambiguous or rejected.
     #[error("operation-status authentication was rejected")]
     Unauthenticated,
+    /// Current authority does not permit operation administration.
+    #[error("system-manager authority is required")]
+    Forbidden,
     /// The operation does not exist or is not visible to this caller.
     #[error("operation was not found")]
     NotFound,

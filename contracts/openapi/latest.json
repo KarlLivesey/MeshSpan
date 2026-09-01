@@ -4229,6 +4229,309 @@
         "title": "ListGroupMembershipsResponse",
         "type": "object"
       },
+      "ListOperationsResponse": {
+        "additionalProperties": false,
+        "description": "One bounded reverse-chronological administrator operation page.",
+        "properties": {
+          "next_page_url": {
+            "description": "Ready-to-follow relative URL, or null at the terminal page.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/admin/operations",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operations": {
+            "description": "Current authoritative operation projections, newest revision first.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Current durable state of one exact operation visible to the caller.",
+              "properties": {
+                "cancellation_available": {
+                  "description": "Whether a cancellation request is currently safe and supported.",
+                  "type": "boolean"
+                },
+                "completed_at_epoch_micros": {
+                  "description": "Terminal instant, or null while work remains non-terminal.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "failure": {
+                  "additionalProperties": false,
+                  "description": "Typed terminal failure, or null for non-failed states.",
+                  "properties": {
+                    "code": {
+                      "description": "Stable machine-readable failure category.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[a-z][a-z0-9_]*$",
+                      "type": "string"
+                    },
+                    "message": {
+                      "description": "Bounded plain-language explanation.",
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "retry": {
+                      "description": "Safe retry classification independent of the prose.",
+                      "oneOf": [
+                        {
+                          "const": "never",
+                          "description": "The operation is terminal and another attempt would not help.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "automatic",
+                          "description": "`MeshSpan` owns bounded automatic retries.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "same_operation",
+                          "description": "A caller may retry only with the same operation identity.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "action_required",
+                          "description": "Authorised action or changed external state is required first.",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "retry"
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "description": "Stable work family.",
+                  "oneOf": [
+                    {
+                      "const": "metadata_mutation",
+                      "description": "One ordinary consensus-committed metadata mutation.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "setup_join",
+                      "description": "First-start enrolment into an existing swarm.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "placement",
+                      "description": "Placement or protection convergence.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "repair",
+                      "description": "Reconstruction of missing or corrupt protected content.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "scrub",
+                      "description": "Integrity verification.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "drain",
+                      "description": "Safe removal of a node, target or location.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "reconciliation",
+                      "description": "Disconnected-history or federation convergence.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "certificate",
+                      "description": "Certificate issuance, distribution or rotation.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "backup",
+                      "description": "Metadata backup or restore-readiness work.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "update",
+                      "description": "Compatibility-checked software update work.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "operation_id": {
+                  "description": "Exact operation being resolved.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "progress": {
+                  "additionalProperties": false,
+                  "description": "Advisory bounded progress, or null when the work is not meaningfully countable.",
+                  "properties": {
+                    "completed": {
+                      "description": "Completed work in the declared unit.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "total": {
+                      "description": "Current known total, which may increase as bounded discovery proceeds.",
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "unit": {
+                      "description": "Meaning of both counters.",
+                      "oneOf": [
+                        {
+                          "const": "steps",
+                          "description": "Logical steps whose exact meaning is operation-specific.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "bytes",
+                          "description": "Immutable bytes verified or moved.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "items",
+                          "description": "Bounded logical items processed.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "nodes",
+                          "description": "Nodes which have reached the required state.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "targets",
+                          "description": "Storage targets which have reached the required state.",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "completed",
+                    "total",
+                    "unit"
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "result_url": {
+                  "description": "Ready-to-follow committed result URL when the result has an addressable resource.",
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "pattern": "^/api/latest/",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "revision": {
+                  "description": "Authoritative operation revision used by conditional clients and event projections.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "started_at_epoch_micros": {
+                  "description": "Original accepted instant.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "state": {
+                  "description": "Authoritative lifecycle state.",
+                  "oneOf": [
+                    {
+                      "const": "queued",
+                      "description": "Accepted but not yet claimed by a worker.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "running",
+                      "description": "A fenced worker currently owns the next attempt.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "awaiting_action",
+                      "description": "Durable input from an authorised user or external system is required.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "succeeded",
+                      "description": "The terminal committed outcome is available.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "failed",
+                      "description": "The operation reached a terminal typed failure.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "cancelled",
+                      "description": "A safe cancellation reached its terminal state.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "status_url": {
+                  "description": "Ready-to-follow current status URL.",
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "pattern": "^/api/latest/operations/",
+                  "type": "string"
+                },
+                "updated_at_epoch_micros": {
+                  "description": "Most recent authoritative lifecycle change.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "operation_id",
+                "kind",
+                "state",
+                "progress",
+                "cancellation_available",
+                "started_at_epoch_micros",
+                "updated_at_epoch_micros",
+                "completed_at_epoch_micros",
+                "failure",
+                "status_url",
+                "result_url",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 200,
+            "type": "array"
+          }
+        },
+        "required": [
+          "operations",
+          "next_page_url"
+        ],
+        "title": "ListOperationsResponse",
+        "type": "object"
+      },
       "ListPrincipalsResponse": {
         "additionalProperties": false,
         "description": "One bounded, permission-filtered administrator identity page.",
@@ -4842,7 +5145,7 @@
                   },
                   {
                     "const": "automatic",
-                    "description": "MeshSpan owns bounded automatic retries.",
+                    "description": "`MeshSpan` owns bounded automatic retries.",
                     "type": "string"
                   },
                   {
@@ -7231,6 +7534,194 @@
         "summary": "Issue one self-contained bounded node join invitation",
         "x-meshspan-access": "system-manager",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/operations": {
+      "get": {
+        "operationId": "listOperations",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOperationsResponse"
+                }
+              }
+            },
+            "description": "One reverse-chronological operation page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Operation authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List recent durable operations for administration",
+        "x-meshspan-access": "system-manager"
       }
     },
     "/admin/recovery-bundle-verifications": {

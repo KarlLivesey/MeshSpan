@@ -45,6 +45,7 @@ import type {
   HealthResponse,
   ListDirectoryResponse,
   ListGroupMembershipsResponse,
+  ListOperationsResponse,
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListUploadRangesResponse,
@@ -129,6 +130,8 @@ import {
   zListDirectoryResponse2,
   zListGroupsQuery,
   zListGroupsResponse,
+  zListOperationsQuery,
+  zListOperationsResponse,
   zListGroupMembersPath,
   zListGroupMembersQuery,
   zListGroupMembersResponse,
@@ -242,6 +245,11 @@ export type ListVolumesRequest = Readonly<{
 
 export type ListVolumePermissionGrantsRequest = Readonly<{
   volumeId: string;
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type ListOperationsRequest = Readonly<{
   cursor?: string;
   limit?: number;
 }>;
@@ -399,6 +407,10 @@ export interface MeshSpanFetchClient {
     csrfToken?: string,
   ): Promise<RevokePermissionGrantResponse>;
   getOperationStatus(operationId: string): Promise<OperationStatusResponse>;
+  listOperations(
+    request?: ListOperationsRequest,
+  ): Promise<ListOperationsResponse>;
+  listNextOperations(nextPageUrl: string): Promise<ListOperationsResponse>;
   listDirectory(request: ListDirectoryRequest): Promise<ListDirectoryResponse>;
   listNextDirectory(nextPageUrl: string): Promise<ListDirectoryResponse>;
   createMeshSetup(
@@ -1120,6 +1132,23 @@ export function createMeshSpanFetchClient(
         zGetOperationStatusResponse,
       );
     },
+    async listOperations(request = {}): Promise<ListOperationsResponse> {
+      const query = zListOperationsQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/admin/operations", query),
+        { method: "GET" },
+        zListOperationsResponse,
+      );
+    },
+    async listNextOperations(nextPageUrl): Promise<ListOperationsResponse> {
+      return requestJson(
+        context,
+        validateOperationPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListOperationsResponse,
+      );
+    },
     async listDirectory(request): Promise<ListDirectoryResponse> {
       const path = zListDirectoryPath.parse({ volume_id: request.volumeId });
       const query = zListDirectoryQuery.parse({
@@ -1684,14 +1713,7 @@ function validatePermissionGrantPageUrl(apiRoot: URL, value: string): string {
   const route = new URL(value, apiRoot.origin);
   const prefix = "/api/latest/admin/volumes/";
   const suffix = "/permission-grants";
-  if (
-    route.origin !== apiRoot.origin ||
-    route.username !== "" ||
-    route.password !== "" ||
-    route.hash !== "" ||
-    !route.pathname.startsWith(prefix) ||
-    !route.pathname.endsWith(suffix)
-  ) {
+  if (!isPermissionGrantPageRoute(apiRoot, route, prefix, suffix)) {
     throw new TypeError(
       "permission-grant page URL is outside the administration API",
     );
@@ -1711,4 +1733,53 @@ function validatePermissionGrantPageUrl(apiRoot: URL, value: string): string {
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
   });
   return route.pathname + route.search;
+}
+
+function isPermissionGrantPageRoute(
+  apiRoot: URL,
+  route: URL,
+  prefix: string,
+  suffix: string,
+): boolean {
+  return (
+    route.origin === apiRoot.origin &&
+    route.username === "" &&
+    route.password === "" &&
+    route.hash === "" &&
+    route.pathname.startsWith(prefix) &&
+    route.pathname.endsWith(suffix)
+  );
+}
+
+function validateOperationPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("operation page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  if (!isOperationPageRoute(apiRoot, route)) {
+    throw new TypeError("operation page URL is outside the administration API");
+  }
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("operation page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListOperationsQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+  return route.pathname + route.search;
+}
+
+function isOperationPageRoute(apiRoot: URL, route: URL): boolean {
+  return (
+    route.origin === apiRoot.origin &&
+    route.username === "" &&
+    route.password === "" &&
+    route.hash === "" &&
+    route.pathname === "/api/latest/admin/operations"
+  );
 }

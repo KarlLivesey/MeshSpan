@@ -21,13 +21,14 @@ use crate::{
     CreateVolumePermissionGrantResponse, CreateVolumeRequest, CreateVolumeResponse,
     CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
     EnrolNodeResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
-    ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
-    ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
-    OperationStatusResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
-    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
-    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
-    RevokePermissionGrantRequest, RevokePermissionGrantResponse, SetupStatusResponse,
-    StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
+    ListDirectoryResponse, ListGroupMembershipsResponse, ListOperationsResponse,
+    ListPrincipalsResponse, ListUploadRangesResponse, ListVolumePermissionGrantsResponse,
+    ListVolumesResponse, OperationStatusResponse, RemoveGroupMemberRequest,
+    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
+    RevokePermissionGrantResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
+    UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -151,6 +152,7 @@ fn components() -> Value {
         schema_response::<ListAuthenticationMethodsResponse>("ListAuthenticationMethodsResponse"),
         schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
         schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
+        schema_response::<ListOperationsResponse>("ListOperationsResponse"),
         schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
         schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
         schema_response::<ListVolumePermissionGrantsResponse>("ListVolumePermissionGrantsResponse"),
@@ -367,7 +369,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 7] {
+fn administration_paths() -> [(String, Value); 8] {
     [
         (
             "/admin/users".to_owned(),
@@ -386,6 +388,7 @@ fn administration_paths() -> [(String, Value); 7] {
             group_membership_removal_path(),
         ),
         ("/admin/volumes".to_owned(), create_volume_path()),
+        ("/admin/operations".to_owned(), list_operations_path()),
         (
             "/admin/volumes/{volume_id}/permission-grants".to_owned(),
             volume_permission_grants_path(),
@@ -395,6 +398,25 @@ fn administration_paths() -> [(String, Value); 7] {
             permission_grant_revocation_path(),
         ),
     ]
+}
+
+fn list_operations_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listOperations",
+            "summary": "List recent durable operations for administration",
+            "x-meshspan-access": "system-manager",
+            "parameters": [cursor_parameter(), operation_limit_parameter()],
+            "responses": {
+                "200": json_response("One reverse-chronological operation page", "#/components/schemas/ListOperationsResponse"),
+                "400": json_response("Invalid query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Operation authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn volume_permission_grants_path() -> Value {
@@ -577,6 +599,15 @@ fn limit_parameter() -> Value {
         "in": "query",
         "required": false,
         "schema": { "type": "integer", "minimum": 1, "maximum": 256 }
+    })
+}
+
+fn operation_limit_parameter() -> Value {
+    json!({
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "integer", "minimum": 1, "maximum": 200 }
     })
 }
 

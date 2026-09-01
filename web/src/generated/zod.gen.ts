@@ -2169,6 +2169,107 @@ export const zListGroupMembershipsResponse = z
   .strict();
 
 /**
+ * ListOperationsResponse
+ *
+ * One bounded reverse-chronological administrator operation page.
+ */
+export const zListOperationsResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/operations/)
+      .nullable(),
+    operations: z
+      .array(
+        z
+          .strictObject({
+            cancellation_available: z.boolean(),
+            completed_at_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
+              .nullable(),
+            failure: z
+              .strictObject({
+                code: z
+                  .string()
+                  .min(1)
+                  .max(64)
+                  .regex(/^[a-z][a-z0-9_]*$/),
+                message: z.string().min(1).max(512),
+                retry: z.union([
+                  z.literal("never"),
+                  z.literal("automatic"),
+                  z.literal("same_operation"),
+                  z.literal("action_required"),
+                ]),
+              })
+              .strict()
+              .nullable(),
+            kind: z.union([
+              z.literal("metadata_mutation"),
+              z.literal("setup_join"),
+              z.literal("placement"),
+              z.literal("repair"),
+              z.literal("scrub"),
+              z.literal("drain"),
+              z.literal("reconciliation"),
+              z.literal("certificate"),
+              z.literal("backup"),
+              z.literal("update"),
+            ]),
+            operation_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            progress: z
+              .strictObject({
+                completed: z.int().gte(0).lte(9007199254740991),
+                total: z.int().gte(1).lte(9007199254740991),
+                unit: z.union([
+                  z.literal("steps"),
+                  z.literal("bytes"),
+                  z.literal("items"),
+                  z.literal("nodes"),
+                  z.literal("targets"),
+                ]),
+              })
+              .strict()
+              .nullable(),
+            result_url: z
+              .string()
+              .min(1)
+              .max(16384)
+              .regex(/^\/api\/latest\//)
+              .nullable(),
+            revision: z.int().gte(1).lte(9007199254740991),
+            started_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+            state: z.union([
+              z.literal("queued"),
+              z.literal("running"),
+              z.literal("awaiting_action"),
+              z.literal("succeeded"),
+              z.literal("failed"),
+              z.literal("cancelled"),
+            ]),
+            status_url: z
+              .string()
+              .min(1)
+              .max(512)
+              .regex(/^\/api\/latest\/operations\//),
+            updated_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+          })
+          .strict(),
+      )
+      .max(200),
+  })
+  .strict();
+
+/**
  * ListPrincipalsResponse
  *
  * One bounded, permission-filtered administrator identity page.
@@ -3437,6 +3538,23 @@ export const zCreateNodeJoinGrantBody = zCreateNodeJoinGrantRequest;
  * Committed join invitation
  */
 export const zCreateNodeJoinGrantResponse2 = zCreateNodeJoinGrantResponse;
+
+export const zListOperationsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(200).optional(),
+  })
+  .strict();
+
+/**
+ * One reverse-chronological operation page
+ */
+export const zListOperationsResponse2 = zListOperationsResponse;
 
 /**
  * Offline recovery save proof

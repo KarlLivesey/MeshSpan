@@ -1900,6 +1900,113 @@ export type ListGroupMembershipsResponse = {
 };
 
 /**
+ * ListOperationsResponse
+ *
+ * One bounded reverse-chronological administrator operation page.
+ */
+export type ListOperationsResponse = {
+  /**
+   * Ready-to-follow relative URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Current authoritative operation projections, newest revision first.
+   */
+  operations: Array<{
+    /**
+     * Whether a cancellation request is currently safe and supported.
+     */
+    cancellation_available: boolean;
+    /**
+     * Terminal instant, or null while work remains non-terminal.
+     */
+    completed_at_epoch_micros: number | null;
+    /**
+     * Typed terminal failure, or null for non-failed states.
+     */
+    failure: {
+      /**
+       * Stable machine-readable failure category.
+       */
+      code: string;
+      /**
+       * Bounded plain-language explanation.
+       */
+      message: string;
+      /**
+       * Safe retry classification independent of the prose.
+       */
+      retry: "never" | "automatic" | "same_operation" | "action_required";
+    } | null;
+    /**
+     * Stable work family.
+     */
+    kind:
+      | "metadata_mutation"
+      | "setup_join"
+      | "placement"
+      | "repair"
+      | "scrub"
+      | "drain"
+      | "reconciliation"
+      | "certificate"
+      | "backup"
+      | "update";
+    /**
+     * Exact operation being resolved.
+     */
+    operation_id: string;
+    /**
+     * Advisory bounded progress, or null when the work is not meaningfully countable.
+     */
+    progress: {
+      /**
+       * Completed work in the declared unit.
+       */
+      completed: number;
+      /**
+       * Current known total, which may increase as bounded discovery proceeds.
+       */
+      total: number;
+      /**
+       * Meaning of both counters.
+       */
+      unit: "steps" | "bytes" | "items" | "nodes" | "targets";
+    } | null;
+    /**
+     * Ready-to-follow committed result URL when the result has an addressable resource.
+     */
+    result_url: string | null;
+    /**
+     * Authoritative operation revision used by conditional clients and event projections.
+     */
+    revision: number;
+    /**
+     * Original accepted instant.
+     */
+    started_at_epoch_micros: number;
+    /**
+     * Authoritative lifecycle state.
+     */
+    state:
+      | "queued"
+      | "running"
+      | "awaiting_action"
+      | "succeeded"
+      | "failed"
+      | "cancelled";
+    /**
+     * Ready-to-follow current status URL.
+     */
+    status_url: string;
+    /**
+     * Most recent authoritative lifecycle change.
+     */
+    updated_at_epoch_micros: number;
+  }>;
+};
+
+/**
  * ListPrincipalsResponse
  *
  * One bounded, permission-filtered administrator identity page.
@@ -3285,6 +3392,52 @@ export type CreateNodeJoinGrantResponses = {
 
 export type CreateNodeJoinGrantResponse2 =
   CreateNodeJoinGrantResponses[keyof CreateNodeJoinGrantResponses];
+
+export type ListOperationsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/operations";
+};
+
+export type ListOperationsErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Operation authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListOperationsError =
+  ListOperationsErrors[keyof ListOperationsErrors];
+
+export type ListOperationsResponses = {
+  /**
+   * One reverse-chronological operation page
+   */
+  200: ListOperationsResponse;
+};
+
+export type ListOperationsResponse2 =
+  ListOperationsResponses[keyof ListOperationsResponses];
 
 export type ConfirmRecoveryBundleSavedData = {
   /**
