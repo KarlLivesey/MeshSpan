@@ -64,15 +64,69 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert!(!fixture.claim_path.exists());
     wait_for_status(fixture.address, &client, "configured").await?;
     assert_session_created(fixture.address, &client, &session_body).await?;
+    create_user(fixture.address, &client, api_key).await?;
 
     process.kill()?;
     process.wait()?;
     process = fixture.start()?;
     wait_for_status(fixture.address, &client, "configured").await?;
     assert_session_created(fixture.address, &client, &session_body).await?;
+    assert_user_visible(fixture.address, &client, api_key).await?;
     process.kill()?;
     process.wait()?;
     Ok(())
+}
+
+async fn create_user(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000003",
+        "display_name": "Managed user"
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/admin/users",
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    if response.starts_with("HTTP/1.1 201 Created\r\n") {
+        Ok(())
+    } else {
+        Err(format!(
+            "headless process user creation returned {}",
+            response.lines().next().unwrap_or("an invalid response")
+        )
+        .into())
+    }
+}
+
+async fn assert_user_visible(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/admin/users?limit=100",
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    if response.starts_with("HTTP/1.1 200 OK\r\n") && response.contains("Managed user") {
+        Ok(())
+    } else {
+        Err("restarted process did not return the committed user".into())
+    }
 }
 
 async fn assert_session_created(
@@ -199,15 +253,33 @@ async fn request(
     target: &str,
     body: Option<&[u8]>,
 ) -> Result<String, Box<dyn Error>> {
+    request_with_headers(address, client, method, target, body, &[]).await
+}
+
+async fn request_with_headers(
+    address: SocketAddr,
+    client: &ClientConfig,
+    method: &str,
+    target: &str,
+    body: Option<&[u8]>,
+    additional_headers: &[(&str, &str)],
+) -> Result<String, Box<dyn Error>> {
     let stream = TcpStream::connect(address).await?;
     let connector = TlsConnector::from(Arc::new(client.clone()));
     let name = ServerName::try_from(CERTIFICATE_NAME)?.to_owned();
     let mut stream = connector.connect(name, stream).await?;
     let body = body.unwrap_or_default();
-    let headers = format!(
+    let mut headers = format!(
         "{method} {target} HTTP/1.1\r\nHost: {CERTIFICATE_NAME}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
+    let insertion = headers
+        .len()
+        .checked_sub(2)
+        .ok_or("HTTP header construction underflowed")?;
+    for (name, value) in additional_headers.iter().rev() {
+        headers.insert_str(insertion, &format!("{name}: {value}\r\n"));
+    }
     stream.write_all(headers.as_bytes()).await?;
     stream.write_all(body).await?;
     let mut response = Vec::new();

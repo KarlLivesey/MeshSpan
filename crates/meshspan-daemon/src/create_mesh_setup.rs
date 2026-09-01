@@ -23,7 +23,7 @@ use thiserror::Error;
 use crate::{ClaimFile, ClaimFileError, SetupLifecycleError, SetupStateSnapshot};
 
 const ALL_INITIAL_SERVICE_SCOPES: u8 = 1 | 2 | 4;
-const LOGIN_SCOPE: u64 = 1;
+const ALL_INITIAL_LOGIN_SCOPES: u64 = 1 | 2 | 4;
 
 /// Minimal committed result needed to bridge consensus into the local setup journal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,7 +216,7 @@ impl ValidatedSetupInput {
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: material.api_key.key_id(),
                     key_digest: material.api_key.secret_digest(),
-                    scopes: LOGIN_SCOPE,
+                    scopes: ALL_INITIAL_LOGIN_SCOPES,
                     valid_from: occurred_at,
                 },
             },

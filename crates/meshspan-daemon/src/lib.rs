@@ -42,6 +42,7 @@ mod consensus_authentication_authority;
 mod consensus_authentication_authority_tests;
 mod consensus_authentication_methods;
 mod consensus_bootstrap_authority;
+mod consensus_identity_administration;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;

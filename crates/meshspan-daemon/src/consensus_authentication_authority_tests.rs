@@ -18,14 +18,16 @@ use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, BootstrapAppliance, BootstrapMesh,
     BrowserSessionAccessRequest, BrowserSessionProtection, CommandContext,
     CreateAuthenticationMethod, IssueAuthenticationSession, NewAuthenticationCredential, PageLimit,
-    PartitionDatabase, RecordName, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SessionAccessDecision, SessionAccessRequest, SessionAuthenticationFactor, SessionClientLabel,
+    PartitionDatabase, PrincipalKind, RecordName, RevokeAuthenticationMethod,
+    RevokeAuthenticationSession, SessionAccessDecision, SessionAccessRequest,
+    SessionAuthenticationFactor, SessionClientLabel,
 };
 
 use crate::{
     ApiKeyIssuanceAuthority, AuthenticationMethodListingAuthority,
     AuthenticationMethodRevocationAuthority, BrowserSessionAuthority,
-    ConsensusAuthenticationAuthority, SessionAuthority, SessionRevocationAuthority,
+    ConsensusAuthenticationAuthority, IdentityAdministrationAuthority,
+    IdentityAdministrationAuthorityError, SessionAuthority, SessionRevocationAuthority,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -58,6 +60,21 @@ async fn api_key_lifecycle_is_committed_listed_and_revoked_through_consensus()
     fixture.shutdown().await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn identity_creation_conflict_and_later_work_share_consensus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = RunningAuthority::start().await?;
+    let result = fixture.identity_lifecycle()?;
+    assert_eq!(result.first_revision, 2);
+    assert_eq!(result.final_revision, 3);
+    assert_eq!(result.user_count, 3);
+    assert_eq!(
+        result.conflict,
+        IdentityAdministrationAuthorityError::Conflict
+    );
+    fixture.shutdown().await
+}
+
 type AuthorityRuntime = tokio::task::JoinHandle<Result<(), MetadataAuthorityRuntimeError>>;
 
 struct AuthenticationRoundTrip {
@@ -73,6 +90,13 @@ struct ApiKeyLifecycle {
     method_count: usize,
     authenticated_before_revocation: bool,
     authenticated_after_revocation: bool,
+}
+
+struct IdentityLifecycle {
+    first_revision: u64,
+    final_revision: u64,
+    user_count: usize,
+    conflict: IdentityAdministrationAuthorityError,
 }
 
 struct RunningAuthority {
@@ -279,11 +303,69 @@ impl RunningAuthority {
         })
     }
 
+    fn identity_lifecycle(&mut self) -> Result<IdentityLifecycle, Box<dyn std::error::Error>> {
+        let reader = self
+            .reader
+            .take()
+            .ok_or("test read connection was already consumed")?;
+        let authority_handle = self.handle.clone();
+        let administrator_id = self.administrator_id;
+        tokio::task::block_in_place(move || {
+            let mut authority = ConsensusAuthenticationAuthority::new(
+                reader,
+                authority_handle,
+                tokio::runtime::Handle::current(),
+            );
+            let first = user_creation(20, "Managed user")?;
+            let first_commit = authority.commit_or_resolve_principal_creation(
+                command_context(administrator_id, 20, 21, 40, None)?,
+                &first,
+                PrincipalKind::User,
+            )?;
+            let duplicate = user_creation(30, "Managed user")?;
+            let Err(conflict) = authority.commit_or_resolve_principal_creation(
+                command_context(administrator_id, 30, 31, 41, None)?,
+                &duplicate,
+                PrincipalKind::User,
+            ) else {
+                return Err("duplicate canonical name was accepted".into());
+            };
+            let final_command = user_creation(40, "Later user")?;
+            let final_commit = authority.commit_or_resolve_principal_creation(
+                command_context(administrator_id, 40, 41, 42, None)?,
+                &final_command,
+                PrincipalKind::User,
+            )?;
+            let user_count = authority
+                .principals(PrincipalKind::User, None, PageLimit::new(10)?)?
+                .items
+                .len();
+            Ok::<_, Box<dyn std::error::Error>>(IdentityLifecycle {
+                first_revision: first_commit.committed_revision,
+                final_revision: final_commit.committed_revision,
+                user_count,
+                conflict,
+            })
+        })
+    }
+
     async fn shutdown(self) -> Result<(), Box<dyn std::error::Error>> {
         self.handle.shutdown().await?;
         self.runtime.await??;
         Ok(())
     }
+}
+
+fn user_creation(
+    marker: u8,
+    name: &str,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    Ok(AuthoritativeCommand::CreateUser(
+        meshspan_metadata::CreateUser {
+            principal_id: PrincipalId::from_bytes([marker; 16])?,
+            name: RecordName::new(name)?,
+        },
+    ))
 }
 
 fn api_key_creation(

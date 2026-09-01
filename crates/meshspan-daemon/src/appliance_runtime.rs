@@ -32,11 +32,13 @@ use crate::{
     ConsensusBootstrapAuthority, CreateMeshSetupService, CreateSessionService,
     CurrentSessionApiError, DaemonLocalState, DaemonLocalStateError, DisabledTotpFactors,
     GatewaySessionIdentity, HeadlessDaemonConfig, HeadlessDaemonConfigError, HttpsServer,
-    HttpsServerError, PublicContractApiError, ReadinessSource, RevokeCurrentSessionApiError,
+    HttpsServerError, IdentityAdministrationApiError, IdentityAdministrationService,
+    PublicContractApiError, ReadinessSource, RevokeCurrentSessionApiError,
     RevokeCurrentSessionService, SessionApiError, SetupApiError, SetupLifecycleError,
     SetupStateSnapshot, StepUpCurrentSessionApiError, StepUpCurrentSessionService,
-    current_session_api_router, public_contract_api_router, revoke_current_session_api_router,
-    session_api_router, setup_api_router_with_creation, step_up_current_session_api_router,
+    current_session_api_router, identity_administration_api_router, public_contract_api_router,
+    revoke_current_session_api_router, session_api_router, setup_api_router_with_creation,
+    step_up_current_session_api_router,
 };
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
@@ -172,6 +174,9 @@ fn authentication_session_routes(
                 gateway,
                 DisabledTotpFactors,
             ),
+        )?)
+        .merge(identity_administration_api_router(
+            IdentityAdministrationService::new(authentication_authority()?, gateway),
         )?))
 }
 
@@ -262,6 +267,9 @@ pub enum DaemonProcessError {
     /// Session step-up API construction failed.
     #[error("daemon session step-up API failed")]
     StepUpSessionApi(#[from] StepUpCurrentSessionApiError),
+    /// Identity-administration API construction failed.
+    #[error("daemon identity-administration API failed")]
+    IdentityAdministrationApi(#[from] IdentityAdministrationApiError),
     /// The HTTPS listener failed.
     #[error("daemon HTTPS listener failed")]
     Https(#[from] HttpsServerError),
