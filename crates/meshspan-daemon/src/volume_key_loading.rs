@@ -4,8 +4,11 @@
 
 use std::sync::Arc;
 
-use meshspan_domain::VolumeId;
-use meshspan_filesystem::VolumeKeyEncryptionKey;
+use meshspan_domain::{ContentManifestId, RandomSource, VolumeId};
+use meshspan_filesystem::{
+    ContentEncryptionKey, ContentKeyEnvelopeCipher, ContentKeyError, VolumeContentKeys,
+    VolumeKeyEncryptionKey, WrappedContentKey,
+};
 use meshspan_metadata::{SecretGenerationRecord, VOLUME_CONTENT_KEY_SECRET_KIND};
 use meshspan_secret_envelope::{
     EncryptedSecret, RecipientKeyEnvelope, SecretContext, SecretPlaintext, WrappingPublicKey,
@@ -19,6 +22,16 @@ const VOLUME_CONTENT_KEY_BYTES: usize = 32;
 
 /// Authoritative encrypted-secret read needed by one gateway volume-key load.
 pub trait VolumeKeyAuthority {
+    /// Returns the newest committed generation used to wrap new content keys.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when replicated metadata is unavailable or invalid.
+    fn latest_generation(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<Option<u64>, VolumeKeyAuthorityError>;
+
     /// Returns one exact committed encrypted generation.
     ///
     /// # Errors
@@ -34,6 +47,13 @@ impl<T> VolumeKeyAuthority for &T
 where
     T: VolumeKeyAuthority + ?Sized,
 {
+    fn latest_generation(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<Option<u64>, VolumeKeyAuthorityError> {
+        (*self).latest_generation(volume_id)
+    }
+
     fn secret_generation(
         &self,
         context: SecretContext,
@@ -46,6 +66,13 @@ impl<T> VolumeKeyAuthority for Arc<T>
 where
     T: VolumeKeyAuthority + ?Sized,
 {
+    fn latest_generation(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<Option<u64>, VolumeKeyAuthorityError> {
+        self.as_ref().latest_generation(volume_id)
+    }
+
     fn secret_generation(
         &self,
         context: SecretContext,
@@ -142,6 +169,22 @@ where
     A: VolumeKeyAuthority,
     D: VolumeKeyDecryptor,
 {
+    /// Loads the newest committed generation used for new content-key envelopes.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent or invalid generation authority and every exact-load failure.
+    pub fn load_latest(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<VolumeKeyEncryptionKey, VolumeKeyLoadingError> {
+        let generation = self
+            .authority
+            .latest_generation(volume_id)?
+            .ok_or(VolumeKeyLoadingError::NotFound)?;
+        self.load(volume_id, generation)
+    }
+
     /// Authenticates and unwraps one exact volume key into a non-exportable filesystem capability.
     ///
     /// # Errors
@@ -176,6 +219,45 @@ where
         bytes.copy_from_slice(plaintext.expose());
         VolumeKeyEncryptionKey::from_protected_bytes(generation, bytes)
             .map_err(|_| VolumeKeyLoadingError::Failed)
+    }
+}
+
+impl<A, D> VolumeContentKeys for VolumeKeyLoadingService<A, D>
+where
+    A: VolumeKeyAuthority,
+    D: VolumeKeyDecryptor,
+{
+    fn wrap_content_key(
+        &self,
+        volume_id: VolumeId,
+        manifest_id: ContentManifestId,
+        content_key: &ContentEncryptionKey,
+        random: &mut dyn RandomSource,
+    ) -> Result<WrappedContentKey, ContentKeyError> {
+        let key = self.load_latest(volume_id).map_err(map_content_key_load)?;
+        ContentKeyEnvelopeCipher::new(key).wrap(manifest_id, content_key, random)
+    }
+
+    fn unwrap_content_key(
+        &self,
+        volume_id: VolumeId,
+        manifest_id: ContentManifestId,
+        envelope: WrappedContentKey,
+    ) -> Result<ContentEncryptionKey, ContentKeyError> {
+        let key = self
+            .load(volume_id, envelope.key_generation)
+            .map_err(map_content_key_load)?;
+        ContentKeyEnvelopeCipher::new(key).unwrap(manifest_id, envelope)
+    }
+}
+
+const fn map_content_key_load(error: VolumeKeyLoadingError) -> ContentKeyError {
+    match error {
+        VolumeKeyLoadingError::InvalidInput => ContentKeyError::InvalidInput,
+        VolumeKeyLoadingError::NotFound
+        | VolumeKeyLoadingError::NotRecipient
+        | VolumeKeyLoadingError::Unavailable => ContentKeyError::Unavailable,
+        VolumeKeyLoadingError::Failed => ContentKeyError::Corrupt,
     }
 }
 

@@ -114,18 +114,31 @@ impl VolumeAdministrationAuthority for ConsensusAuthenticationAuthority {
 }
 
 impl VolumeKeyAuthority for ConsensusAuthenticationAuthority {
+    fn latest_generation(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<u64>, VolumeKeyAuthorityError> {
+        self.reader()
+            .latest_volume_key_generation(volume_id)
+            .map_err(|error| map_volume_key_repository_error(&error))
+    }
+
     fn secret_generation(
         &self,
         context: meshspan_secret_envelope::SecretContext,
     ) -> Result<Option<meshspan_metadata::SecretGenerationRecord>, VolumeKeyAuthorityError> {
         self.reader()
             .secret_generation(context)
-            .map_err(|error| match error {
-                RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
-                    VolumeKeyAuthorityError::Unavailable
-                }
-                _ => VolumeKeyAuthorityError::Failed,
-            })
+            .map_err(|error| map_volume_key_repository_error(&error))
+    }
+}
+
+fn map_volume_key_repository_error(error: &RepositoryError) -> VolumeKeyAuthorityError {
+    match error {
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            VolumeKeyAuthorityError::Unavailable
+        }
+        _ => VolumeKeyAuthorityError::Failed,
     }
 }
 

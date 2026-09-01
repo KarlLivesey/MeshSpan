@@ -261,6 +261,30 @@ pub(super) fn load(
     }))
 }
 
+pub(super) fn latest_volume_generation(
+    database: &PartitionDatabase,
+    volume_id: VolumeId,
+) -> Result<Option<u64>, RepositoryError> {
+    let stored = database.connection().query_row(
+        "SELECT MAX(generation)
+         FROM secret_generations
+         WHERE secret_kind = ?1 AND secret_id = ?2",
+        params![
+            i64::from(VOLUME_CONTENT_KEY_SECRET_KIND),
+            volume_id.as_bytes().as_slice()
+        ],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
+    stored
+        .map(|generation| {
+            u64::try_from(generation)
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or(RepositoryError::CorruptState)
+        })
+        .transpose()
+}
+
 fn insert_secret(
     transaction: &Transaction<'_>,
     command_context: CommandContext,
