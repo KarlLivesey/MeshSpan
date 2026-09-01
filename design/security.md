@@ -45,6 +45,10 @@ operation relies on.
 - Logical-volume creation commits its first content-key generation and every
   recipient envelope in the same consensus transaction. Current gateways and
   the verified offline recovery key receive envelopes; storage-only nodes do not.
+- A gateway reloads a volume key only by selecting its exact committed recipient
+  envelope and opening it inside the node-local wrapping-key boundary. The result
+  becomes a zeroising filesystem capability; connectors and storage providers do
+  not receive the node private key or exportable volume-key bytes.
 - CA and recovery design must avoid one plaintext key copied to every node.
 - Public-service certificate keys may be shared only through per-node encrypted
   envelopes and only with eligible gateway nodes.
