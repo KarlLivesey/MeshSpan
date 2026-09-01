@@ -2,15 +2,17 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationMethodId, GroupId, HostId, MeshId,
-    NodeId, OperationId, PrincipalId, RecoveryCodeId, Revision, RoleId, UnixMicros,
+    ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationMethodId, AuthenticationService,
+    GroupId, HostId, MeshId, NodeId, OperationId, PrincipalId, RecoveryCodeId, Revision, RoleId,
+    SessionId, UnixMicros,
 };
 
 use super::*;
 use crate::{
     AddGroupMember, BootstrapAppliance, BootstrapMesh, CreateAuthenticationMethod, CreateGroup,
-    CreateUser, NewAuthenticationCredential, NewRecoveryCode, RecordName, RemoveGroupMember,
-    TotpAlgorithm,
+    CreateUser, IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode,
+    RecordName, RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SessionAuthenticationFactor, SessionClientLabel, StepUpAuthenticationSession, TotpAlgorithm,
 };
 
 #[test]
@@ -149,6 +151,88 @@ fn every_authentication_credential_family_round_trips() -> Result<(), Box<dyn st
             }),
         )?;
     }
+    Ok(())
+}
+
+#[test]
+fn session_lifecycle_commands_round_trip_every_factor_and_null_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let principal_id = context.actor_principal_id;
+    let factors = vec![
+        SessionAuthenticationFactor::Passkey {
+            method_id: AuthenticationMethodId::from_bytes([61; 16])?,
+            credential_generation: 2,
+            method_revision: Revision::new(3),
+            credential_id: vec![4, 5],
+            signature_counter: 6,
+            backup_state: true,
+        },
+        SessionAuthenticationFactor::Totp {
+            method_id: AuthenticationMethodId::from_bytes([62; 16])?,
+            credential_generation: 7,
+            method_revision: Revision::new(8),
+            accepted_step: 9,
+        },
+        SessionAuthenticationFactor::RecoveryCode {
+            method_id: AuthenticationMethodId::from_bytes([63; 16])?,
+            credential_generation: 10,
+            method_revision: Revision::new(11),
+            code_id: RecoveryCodeId::from_bytes([64; 16])?,
+        },
+        SessionAuthenticationFactor::ApiKey {
+            method_id: AuthenticationMethodId::from_bytes([65; 16])?,
+            credential_generation: 12,
+            method_revision: Revision::new(13),
+            key_id: ApiKeyId::from_bytes([66; 16])?,
+        },
+    ];
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::IssueAuthenticationSession(IssueAuthenticationSession {
+            session_id: SessionId::from_bytes([67; 16])?,
+            principal_id,
+            token_digest: [68; 32],
+            csrf_digest: [69; 32],
+            client_label: SessionClientLabel::Null,
+            persistent_cookie: true,
+            service: AuthenticationService::Https,
+            factors: BoundedItems::new(factors, 8)?,
+            expires_at: UnixMicros::new(500),
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::StepUpAuthenticationSession(StepUpAuthenticationSession {
+            source_session_id: SessionId::from_bytes([70; 16])?,
+            replacement_session_id: SessionId::from_bytes([71; 16])?,
+            principal_id,
+            token_digest: [72; 32],
+            csrf_digest: [73; 32],
+            additional_factor: SessionAuthenticationFactor::Totp {
+                method_id: AuthenticationMethodId::from_bytes([74; 16])?,
+                credential_generation: 1,
+                method_revision: Revision::new(2),
+                accepted_step: 3,
+            },
+            expires_at: UnixMicros::new(600),
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::RevokeAuthenticationSession(RevokeAuthenticationSession {
+            session_id: SessionId::from_bytes([75; 16])?,
+            principal_id,
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::RevokeAuthenticationMethod(RevokeAuthenticationMethod {
+            method_id: AuthenticationMethodId::from_bytes([76; 16])?,
+            principal_id,
+            reason: "Rotated".to_owned(),
+        }),
+    )?;
     Ok(())
 }
 

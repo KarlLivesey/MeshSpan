@@ -7,6 +7,7 @@ mod bootstrap;
 mod decoder;
 mod encoder;
 mod identity;
+mod session;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, Revision, UnixMicros};
 use thiserror::Error;
@@ -102,6 +103,18 @@ fn encode_command(
         AuthoritativeCommand::CreateAuthenticationMethod(value) => {
             authentication::encode_create(encoder, value)
         }
+        AuthoritativeCommand::IssueAuthenticationSession(value) => {
+            session::encode_issue(encoder, value)
+        }
+        AuthoritativeCommand::StepUpAuthenticationSession(value) => {
+            session::encode_step_up(encoder, value)
+        }
+        AuthoritativeCommand::RevokeAuthenticationSession(value) => {
+            session::encode_revoke_session(encoder, value)
+        }
+        AuthoritativeCommand::RevokeAuthenticationMethod(value) => {
+            session::encode_revoke_method(encoder, value)
+        }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -117,6 +130,14 @@ fn decode_command(
         5 => identity::decode_remove_member(decoder).map(AuthoritativeCommand::RemoveGroupMember),
         6 => authentication::decode_create(decoder)
             .map(AuthoritativeCommand::CreateAuthenticationMethod),
+        7 => session::decode_issue(decoder).map(AuthoritativeCommand::IssueAuthenticationSession),
+        8 => {
+            session::decode_step_up(decoder).map(AuthoritativeCommand::StepUpAuthenticationSession)
+        }
+        9 => session::decode_revoke_session(decoder)
+            .map(AuthoritativeCommand::RevokeAuthenticationSession),
+        10 => session::decode_revoke_method(decoder)
+            .map(AuthoritativeCommand::RevokeAuthenticationMethod),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
