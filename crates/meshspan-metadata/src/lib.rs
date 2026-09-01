@@ -4,6 +4,7 @@
 
 mod authentication_integrity;
 mod command;
+mod command_codec;
 mod database;
 mod federation_actor_attestation_command;
 mod federation_command;
@@ -56,6 +57,10 @@ pub use command::{
     SessionAuthenticationFactor, SessionClientLabel, SetObjectGrantInheritance,
     SnapshotExpiryReason, StepUpAuthenticationSession, TagTarget, TotpAlgorithm,
     VersionCleanupAttestation, VersionCleanupItemPlacement,
+};
+pub use command_codec::{
+    DecodedAuthoritativeCommand, METADATA_COMMAND_VERSION, MetadataCommandCodecError,
+    decode_authoritative_command, encode_authoritative_command,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use federation_actor_attestation_command::{

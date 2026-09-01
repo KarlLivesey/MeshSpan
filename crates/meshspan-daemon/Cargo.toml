@@ -19,6 +19,7 @@ hyper.workspace = true
 hyper-util.workspace = true
 meshspan-api-contract = { path = "../meshspan-api-contract" }
 meshspan-certificates = { path = "../meshspan-certificates" }
+meshspan-cluster = { path = "../meshspan-cluster" }
 meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-filesystem = { path = "../meshspan-filesystem" }

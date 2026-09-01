@@ -36,6 +36,7 @@ mod claim_file;
 mod claim_service;
 #[cfg(test)]
 mod claim_service_tests;
+mod consensus_bootstrap_authority;
 mod create_mesh_setup;
 #[cfg(test)]
 mod create_mesh_setup_tests;
@@ -195,6 +196,7 @@ pub use claim_service::{
     ClaimConsumptionOutcome, ClaimEnsureDisposition, ClaimEnsureOutcome, ClaimRotationOutcome,
     FirstBootClaimError, FirstBootClaimService,
 };
+pub use consensus_bootstrap_authority::ConsensusBootstrapAuthority;
 pub use create_mesh_setup::{
     BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, CreateMeshSetupError,
     CreateMeshSetupService,

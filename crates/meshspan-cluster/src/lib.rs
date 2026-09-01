@@ -6,6 +6,7 @@ mod access_administration;
 mod cleanup;
 mod cleanup_network;
 mod cleanup_worker;
+mod consensus_network;
 mod convergence;
 mod driver;
 mod federation_authority;
@@ -44,6 +45,7 @@ mod federation_storage_inventory_wire;
 mod filesystem_authority;
 mod filesystem_convergence;
 mod membership;
+mod metadata_authority;
 mod node_runtime;
 mod retention;
 mod status;
@@ -84,8 +86,14 @@ pub use cleanup_worker::{
 
 #[cfg(test)]
 mod cleanup_worker_tests;
+pub use consensus_network::{
+    ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
+};
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
-pub use driver::{ClusterDriverError, DriverEffect, PartitionConsensusDriver, ScopedProposal};
+pub use driver::{
+    AppliedAuthoritativeCommand, ClusterDriverError, DriverEffect, PartitionConsensusDriver,
+    ScopedProposal,
+};
 pub use federation_authority::{
     FederationAuthorityError, FederationConnectionAuthority, federation_connection_authority,
 };
@@ -222,6 +230,11 @@ pub use filesystem_convergence::{
     FilesystemConvergenceError, FilesystemConvergenceService, PreparedHistoryReconciliation,
 };
 pub use meshspan_metadata::FederationRemoteAuthoritySnapshot;
+pub use metadata_authority::{
+    ConsensusMessageTransport, MetadataAuthorityConfig, MetadataAuthorityHandle,
+    MetadataAuthorityRequestError, MetadataAuthorityRuntimeError, MetadataAuthorityStartError,
+    PeerConsensusMessage, spawn_metadata_authority,
+};
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
 pub use retention::version_retention_selection_policy;
 pub use status::{

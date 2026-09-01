@@ -11,7 +11,10 @@ use meshspan_consensus::{
 };
 use meshspan_domain::{NodeId, OperationId, ScopeId, UnixMicros};
 use meshspan_metadata::{
-    ConsensusStoreError, PartitionConsensusPersistence, RepositoryError, ScopeWriteAuthority,
+    AuthoritativeRepository, CommandReceipt, ConsensusStoreError,
+    LogPosition as MetadataLogPosition, METADATA_COMMAND_VERSION, MetadataCommandCodecError,
+    PartitionConsensusPersistence, RepositoryError, ScopeWriteAuthority,
+    decode_authoritative_command,
 };
 use thiserror::Error;
 
@@ -79,6 +82,15 @@ pub struct ScopedProposal {
     pub command_version: u16,
     /// Validated command payload.
     pub command: Vec<u8>,
+}
+
+/// Durable state-machine result plus effects unlocked by reporting its applied position.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppliedAuthoritativeCommand {
+    /// Exact idempotent metadata receipt.
+    pub receipt: CommandReceipt,
+    /// Consensus effects which became safe only after state-machine durability.
+    pub effects: Vec<DriverEffect>,
 }
 
 /// One partition's core plus its replaceable durable consensus repository.
@@ -316,6 +328,41 @@ impl<P: PartitionConsensusPersistence + ScopeWriteAuthority> PartitionConsensusD
     }
 }
 
+impl PartitionConsensusDriver<AuthoritativeRepository> {
+    /// Decodes and applies one exact entry previously emitted as committed by this driver.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an uncommitted, substituted, unsupported or operation-mismatched entry before
+    /// mutating metadata. Repository durability precedes the applied-through acknowledgement.
+    pub fn apply_authoritative_committed(
+        &mut self,
+        entry: &LogEntry,
+        applied_at: UnixMicros,
+    ) -> Result<AppliedAuthoritativeCommand, ClusterDriverError> {
+        if entry.command_version != METADATA_COMMAND_VERSION
+            || entry.position.index > self.commit_index()
+            || self.log_entry(entry.position.index) != Some(entry)
+        {
+            return Err(ClusterDriverError::InvalidCommittedCommand);
+        }
+        let decoded = decode_authoritative_command(&entry.command)?;
+        if decoded.context.operation_id != entry.operation_id {
+            return Err(ClusterDriverError::InvalidCommittedCommand);
+        }
+        let receipt = self.persistence.apply_committed(
+            MetadataLogPosition {
+                term: entry.position.term,
+                index: entry.position.index,
+            },
+            decoded.context,
+            &decoded.command,
+        )?;
+        let effects = self.step(CoreInput::AppliedThrough(entry.position.index), applied_at)?;
+        Ok(AppliedAuthoritativeCommand { receipt, effects })
+    }
+}
+
 fn prepend(queue: &mut VecDeque<CoreEffect>, effects: Vec<CoreEffect>) {
     for effect in effects.into_iter().rev() {
         queue.push_front(effect);
@@ -334,6 +381,12 @@ pub enum ClusterDriverError {
     /// The durable routing projection could not authorise a scoped proposal safely.
     #[error("cluster scope authority lookup failed")]
     Authority(#[from] RepositoryError),
+    /// Replicated command bytes or their closed version are invalid.
+    #[error("cluster metadata command codec rejected committed bytes")]
+    CommandCodec(#[from] MetadataCommandCodecError),
+    /// Entry was not the exact committed local log entry or named another operation.
+    #[error("cluster committed metadata command is invalid")]
+    InvalidCommittedCommand,
     /// This partition is not the sole writer for the presented scope route epoch.
     #[error("cluster scope write is fenced")]
     WriteFenced,
@@ -350,7 +403,15 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use meshspan_consensus::{CoreConfig, MemberIncarnations, compile_plan, flat_plan};
-    use meshspan_domain::{PartitionId, QuorumPlanId};
+    use meshspan_domain::{
+        ApiKeyId, AuditEventId, AuthenticationMethodId, HostId, MeshId, OperationId, PartitionId,
+        PrincipalId, QuorumPlanId, Revision, RoleId,
+    };
+    use meshspan_metadata::{
+        AuthoritativeCommand, BootstrapAppliance, BootstrapMesh, CommandContext,
+        CreateAuthenticationMethod, NewAuthenticationCredential, PartitionDatabase, RecordName,
+        encode_authoritative_command,
+    };
 
     use super::*;
 
@@ -435,5 +496,120 @@ mod tests {
             } if *to == peer
         )));
         Ok(())
+    }
+
+    #[test]
+    fn committed_command_is_verified_applied_and_acknowledged_in_order()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let local = NodeId::from_bytes([21; 16])?;
+        let partition = PartitionId::from_bytes([22; 16])?;
+        let plan = compile_plan(flat_plan(
+            QuorumPlanId::from_bytes([23; 16])?,
+            1,
+            BTreeSet::from([local]),
+            BTreeSet::new(),
+        )?)?;
+        let database = PartitionDatabase::open(
+            &directory.path().join("authority.sqlite3"),
+            partition,
+            UnixMicros::new(1),
+        )?;
+        let mut repository = AuthoritativeRepository::new(database);
+        repository.initialise_consensus_quorum_plan(&plan, UnixMicros::new(2))?;
+        let incarnations = MemberIncarnations::new(BTreeMap::from([(local, 1)]), &plan)?;
+        let core = ConsensusCore::new(CoreConfig {
+            partition_id: partition,
+            local_node_id: local,
+            local_incarnation: 1,
+            plan,
+            member_incarnations: incarnations,
+        })?;
+        let mut driver = PartitionConsensusDriver::new(core, repository);
+        driver.step(CoreInput::ElectionTimeout, UnixMicros::new(3))?;
+        assert_eq!(driver.role(), Role::Leader);
+
+        let (context, command) = bootstrap_command(local)?;
+        let command = encode_authoritative_command(context, &command)?;
+        let effects = driver.step(
+            CoreInput::Propose {
+                proposal_id: ProposalId(1),
+                operation_id: context.operation_id,
+                command_version: METADATA_COMMAND_VERSION,
+                command,
+            },
+            UnixMicros::new(4),
+        )?;
+        let entry = effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                DriverEffect::ApplyCommitted { mut entries } if entries.len() == 1 => entries.pop(),
+                _ => None,
+            })
+            .ok_or("single-voter proposal did not commit")?;
+
+        let mut substituted = entry.clone();
+        substituted.operation_id = OperationId::from_bytes([99; 16])?;
+        assert!(matches!(
+            driver.apply_authoritative_committed(&substituted, UnixMicros::new(5)),
+            Err(ClusterDriverError::InvalidCommittedCommand)
+        ));
+        assert_eq!(driver.persistence().current_revision()?, Revision::ZERO);
+
+        let applied = driver.apply_authoritative_committed(&entry, UnixMicros::new(6))?;
+        assert_eq!(applied.receipt.operation_id, context.operation_id);
+        assert_eq!(applied.receipt.committed_revision, Revision::new(1));
+        assert_eq!(driver.applied_index(), entry.position.index);
+        let resolved = driver
+            .persistence()
+            .resolve_operation(context.operation_id)?
+            .ok_or("committed operation did not resolve")?;
+        assert_eq!(resolved.result_digest, applied.receipt.result_digest);
+        assert_eq!(
+            resolved.committed_position,
+            applied.receipt.committed_position
+        );
+        Ok(())
+    }
+
+    fn bootstrap_command(
+        node_id: NodeId,
+    ) -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::error::Error>> {
+        let administrator_id = PrincipalId::from_bytes([31; 16])?;
+        let context = CommandContext {
+            operation_id: OperationId::from_bytes([32; 16])?,
+            actor_principal_id: administrator_id,
+            audit_event_id: AuditEventId::from_bytes([33; 16])?,
+            occurred_at: UnixMicros::new(10),
+            expected_revision: Some(Revision::ZERO),
+        };
+        let command = AuthoritativeCommand::BootstrapAppliance(BootstrapAppliance {
+            mesh: BootstrapMesh {
+                mesh_id: MeshId::from_bytes([34; 16])?,
+                mesh_name: RecordName::new("Driver mesh")?,
+                administrator_id,
+                administrator_name: RecordName::new("Administrator")?,
+                administrator_role_id: RoleId::from_bytes([35; 16])?,
+                host_id: HostId::from_bytes([36; 16])?,
+                host_name: RecordName::new("Host")?,
+                node_id,
+                node_name: RecordName::new("Node")?,
+                partition_name: RecordName::new("Root authority")?,
+            },
+            authentication: CreateAuthenticationMethod {
+                method_id: AuthenticationMethodId::from_bytes([37; 16])?,
+                principal_id: administrator_id,
+                label: "Initial API key".to_owned(),
+                service_scope: 7,
+                expires_at: None,
+                credential: NewAuthenticationCredential::ApiKey {
+                    key_id: ApiKeyId::from_bytes([38; 16])?,
+                    key_digest: [39; 32],
+                    scopes: 1,
+                    valid_from: context.occurred_at,
+                },
+            },
+        });
+        Ok((context, command))
     }
 }

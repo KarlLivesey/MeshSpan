@@ -1066,6 +1066,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -1099,6 +1100,7 @@ dependencies = [
  "hyper-util",
  "meshspan-api-contract",
  "meshspan-certificates",
+ "meshspan-cluster",
  "meshspan-contracts",
  "meshspan-domain",
  "meshspan-filesystem",
