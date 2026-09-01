@@ -1233,6 +1233,80 @@ export const zCreateUserRequest = z
   .strict();
 
 /**
+ * CreateVolumeRequest
+ *
+ * Idempotent administrator request to create one logical volume.
+ */
+export const zCreateVolumeRequest = z
+  .strictObject({
+    name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    owner_principal_ids: z
+      .array(
+        z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      )
+      .min(1)
+      .max(1024),
+  })
+  .strict();
+
+/**
+ * CreateVolumeResponse
+ *
+ * Durable authoritative volume-creation outcome.
+ */
+export const zCreateVolumeResponse = z
+  .strictObject({
+    created_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    name: z.string(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    owner_principal_ids: z
+      .array(
+        z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      )
+      .min(1)
+      .max(1024),
+    revision: z.int().gte(1).lte(9007199254740991),
+    root_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CurrentSessionResponse
  *
  * Current caller identity and coarse panel-navigation authority.
@@ -2610,6 +2684,25 @@ export const zCreateUserBody = zCreateUserRequest;
  * Principal durably created or exactly replayed
  */
 export const zCreateUserResponse = zCreatePrincipalResponse;
+
+/**
+ * Logical-volume creation
+ */
+export const zCreateVolumeBody = zCreateVolumeRequest;
+
+export const zCreateVolumeHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Volume durably created or exactly replayed
+ */
+export const zCreateVolumeResponse2 = zCreateVolumeResponse;
 
 /**
  * Process readiness

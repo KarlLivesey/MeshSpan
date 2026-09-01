@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use meshspan_daemon::{ClaimFile, LocalNodeIdentity};
+use meshspan_domain::{InitialBootstrapMaterial, OperationId};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use tempfile::TempDir;
@@ -30,6 +31,7 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     let mut process = fixture.start()?;
     let claim = wait_for_claim(&fixture.claim_path).await?;
     let client = wait_for_client(&fixture.identity_path).await?;
+    let administrator_id = bootstrap_administrator_id(&claim, &fixture.identity_path)?;
     wait_for_status(fixture.address, &client, "claim_required").await?;
 
     let encoded_claim = claim.expose_encoded();
@@ -64,22 +66,24 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert!(!fixture.claim_path.exists());
     wait_for_status(fixture.address, &client, "configured").await?;
     assert_session_created(fixture.address, &client, &session_body).await?;
-    assert_volume_inventory_visible(fixture.address, &client, api_key).await?;
+    assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
+    create_volume(fixture.address, &client, api_key, &administrator_id).await?;
+    assert_volume_visible(fixture.address, &client, api_key).await?;
 
     process.kill()?;
     process.wait()?;
     process = fixture.start()?;
     wait_for_status(fixture.address, &client, "configured").await?;
     assert_session_created(fixture.address, &client, &session_body).await?;
-    assert_volume_inventory_visible(fixture.address, &client, api_key).await?;
+    assert_volume_visible(fixture.address, &client, api_key).await?;
     assert_user_visible(fixture.address, &client, api_key).await?;
     process.kill()?;
     process.wait()?;
     Ok(())
 }
 
-async fn assert_volume_inventory_visible(
+async fn assert_volume_inventory_empty(
     address: SocketAddr,
     client: &ClientConfig,
     api_key: &str,
@@ -98,6 +102,69 @@ async fn assert_volume_inventory_visible(
         Ok(())
     } else {
         Err("headless process did not return its authorised volume inventory".into())
+    }
+}
+
+async fn create_volume(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    owner_principal_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000004",
+        "name": "Process files",
+        "owner_principal_ids": [owner_principal_id]
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/admin/volumes",
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    if response.starts_with("HTTP/1.1 201 Created\r\n")
+        && response.contains("\"name\":\"Process files\"")
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "headless process volume creation returned {}: {}",
+            response.lines().next().unwrap_or("an invalid response"),
+            response_body(&response).unwrap_or("invalid response")
+        )
+        .into())
+    }
+}
+
+async fn assert_volume_visible(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        "/api/latest/volumes?limit=100",
+        None,
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    if response.starts_with("HTTP/1.1 200 OK\r\n")
+        && response.contains("\"name\":\"Process files\"")
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "headless process did not return its committed volume: {}",
+            response_body(&response).unwrap_or("invalid response")
+        )
+        .into())
     }
 }
 
@@ -129,6 +196,43 @@ async fn create_user(
         )
         .into())
     }
+}
+
+fn bootstrap_administrator_id(
+    claim: &meshspan_domain::ClaimBundle,
+    identity_path: &Path,
+) -> Result<String, Box<dyn Error>> {
+    let identity = LocalNodeIdentity::open(identity_path, CERTIFICATE_NAME)?;
+    let node_id = InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
+    let mut operation = [0_u8; 16];
+    operation[6] = 0x40;
+    operation[8] = 0x80;
+    operation[15] = 1;
+    let material =
+        InitialBootstrapMaterial::derive(claim, OperationId::from_bytes(operation)?, node_id)?;
+    Ok(uuid_text(material.administrator_id.as_bytes()))
+}
+
+fn uuid_text(bytes: [u8; 16]) -> String {
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
 }
 
 async fn assert_user_visible(

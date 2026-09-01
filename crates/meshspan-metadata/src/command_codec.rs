@@ -7,6 +7,7 @@ mod bootstrap;
 mod decoder;
 mod encoder;
 mod identity;
+mod namespace;
 mod session;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, Revision, UnixMicros};
@@ -115,6 +116,7 @@ fn encode_command(
         AuthoritativeCommand::RevokeAuthenticationMethod(value) => {
             session::encode_revoke_method(encoder, value)
         }
+        AuthoritativeCommand::CreateVolume(value) => namespace::encode_volume(encoder, value),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -138,6 +140,9 @@ fn decode_command(
             .map(AuthoritativeCommand::RevokeAuthenticationSession),
         10 => session::decode_revoke_method(decoder)
             .map(AuthoritativeCommand::RevokeAuthenticationMethod),
+        namespace::CREATE_VOLUME => {
+            namespace::decode_volume(decoder).map(AuthoritativeCommand::CreateVolume)
+        }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }

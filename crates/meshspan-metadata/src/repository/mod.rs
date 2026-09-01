@@ -1036,6 +1036,18 @@ impl AuthoritativeRepository {
         volume_inventory::volume_inventory_candidates(&self.database, after, limit)
     }
 
+    /// Returns one exact logical-volume record and its stable root identity.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed stored identities, names, lifecycle or revision values.
+    pub fn volume_inventory_record(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VolumeInventoryRecord>, RepositoryError> {
+        volume_inventory::volume_inventory_record(&self.database, volume_id)
+    }
+
     /// Returns one stable, bounded page of active namespace children.
     ///
     /// # Errors

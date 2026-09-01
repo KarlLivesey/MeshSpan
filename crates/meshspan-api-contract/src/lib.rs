@@ -185,8 +185,10 @@ pub use validation::{
     validate_setup_status_response_value, validate_step_up_current_session_request_value,
 };
 pub use volume_inventory::{
-    ListVolumesQuery, ListVolumesResponse, NamespaceRight, VolumeCursor, VolumeState, VolumeSummary,
+    CreateVolumeRequest, CreateVolumeResponse, ListVolumesQuery, ListVolumesResponse,
+    NamespaceRight, VolumeCursor, VolumeName, VolumeState, VolumeSummary,
 };
 pub use volume_inventory_validation::{
+    MAX_CREATE_VOLUME_BYTES, decode_create_volume_request, encode_create_volume_response,
     encode_list_volumes_response, validate_list_volumes_query, validate_list_volumes_query_value,
 };

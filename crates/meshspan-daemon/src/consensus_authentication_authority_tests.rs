@@ -28,6 +28,7 @@ use crate::{
     AuthenticationMethodRevocationAuthority, BrowserSessionAuthority,
     ConsensusAuthenticationAuthority, IdentityAdministrationAuthority,
     IdentityAdministrationAuthorityError, SessionAuthority, SessionRevocationAuthority,
+    VolumeAdministrationAuthority,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -72,6 +73,16 @@ async fn identity_creation_conflict_and_later_work_share_consensus()
         result.conflict,
         IdentityAdministrationAuthorityError::Conflict
     );
+    fixture.shutdown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn volume_creation_returns_exact_committed_projection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = RunningAuthority::start().await?;
+    let commit = fixture.volume_lifecycle()?;
+    assert_eq!(commit.record.display_name, "Shared files");
+    assert_eq!(commit.record.revision.get(), 2);
     fixture.shutdown().await
 }
 
@@ -346,6 +357,37 @@ impl RunningAuthority {
                 user_count,
                 conflict,
             })
+        })
+    }
+
+    fn volume_lifecycle(
+        &mut self,
+    ) -> Result<crate::VolumeAdministrationCommit, Box<dyn std::error::Error>> {
+        let reader = self
+            .reader
+            .take()
+            .ok_or("test read connection was already consumed")?;
+        let authority_handle = self.handle.clone();
+        let administrator_id = self.administrator_id;
+        tokio::task::block_in_place(move || {
+            let mut authority = ConsensusAuthenticationAuthority::new(
+                reader,
+                authority_handle,
+                tokio::runtime::Handle::current(),
+            );
+            let command = AuthoritativeCommand::CreateVolume(meshspan_metadata::CreateVolume {
+                volume_id: meshspan_domain::VolumeId::from_bytes([50; 16])?,
+                name: RecordName::new("Shared files")?,
+                root_object_id: meshspan_domain::ObjectId::from_bytes([51; 16])?,
+                owner_set_id: meshspan_domain::OwnerSetId::from_bytes([52; 16])?,
+                owners: BoundedItems::new(vec![administrator_id], 1_024)?,
+            });
+            authority
+                .commit_or_resolve_volume_creation(
+                    command_context(administrator_id, 50, 51, 40, None)?,
+                    &command,
+                )
+                .map_err(Into::into)
         })
     }
 

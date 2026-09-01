@@ -16,12 +16,12 @@ use crate::{
     CreateRecoveryCodesRequest, CreateRecoveryCodesResponse, CreateSessionRequest,
     CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
     CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CreateUserRequest, CurrentSessionResponse, DeleteObjectRequest,
-    DeleteObjectResponse, GetObjectResponse, HealthResponse, ListAuthenticationMethodsResponse,
-    ListDirectoryResponse, ListGroupMembershipsResponse, ListPrincipalsResponse,
-    ListUploadRangesResponse, ListVolumesResponse, RemoveGroupMemberRequest,
-    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
-    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumeRequest, CreateVolumeResponse,
+    CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, GetObjectResponse,
+    HealthResponse, ListAuthenticationMethodsResponse, ListDirectoryResponse,
+    ListGroupMembershipsResponse, ListPrincipalsResponse, ListUploadRangesResponse,
+    ListVolumesResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest,
+    RenameObjectResponse, RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, SetupStatusResponse,
     StepUpCurrentSessionRequest, UploadStatusResponse, WriteUploadRangeResponse, schema,
 };
@@ -127,6 +127,8 @@ fn components() -> Value {
         schema_request::<CreateTotpRegistrationRequest>("CreateTotpRegistrationRequest"),
         schema_response::<CreateTotpRegistrationResponse>("CreateTotpRegistrationResponse"),
         schema_request::<CreateUserRequest>("CreateUserRequest"),
+        schema_request::<CreateVolumeRequest>("CreateVolumeRequest"),
+        schema_response::<CreateVolumeResponse>("CreateVolumeResponse"),
         schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
         schema_request::<DeleteObjectRequest>("DeleteObjectRequest"),
         schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
@@ -299,7 +301,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 4] {
+fn administration_paths() -> [(String, Value); 5] {
     [
         (
             "/admin/users".to_owned(),
@@ -317,7 +319,31 @@ fn administration_paths() -> [(String, Value); 4] {
             "/admin/groups/{group_id}/members/{member_principal_id}/removals".to_owned(),
             group_membership_removal_path(),
         ),
+        ("/admin/volumes".to_owned(), create_volume_path()),
     ]
+}
+
+fn create_volume_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "createVolume",
+            "summary": "Create one logical volume with an explicit owner set",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [optional_csrf_parameter()],
+            "requestBody": json_request("Logical-volume creation", "#/components/schemas/CreateVolumeRequest"),
+            "responses": {
+                "201": json_response("Volume durably created or exactly replayed", "#/components/schemas/CreateVolumeResponse"),
+                "400": json_response("Invalid volume request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Name, owner or operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Volume authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn group_membership_path() -> Value {

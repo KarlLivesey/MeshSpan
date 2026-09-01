@@ -1098,6 +1098,62 @@ export type CreateUserRequest = {
 };
 
 /**
+ * CreateVolumeRequest
+ *
+ * Idempotent administrator request to create one logical volume.
+ */
+export type CreateVolumeRequest = {
+  /**
+   * Human-readable logical-volume name.
+   */
+  name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Non-empty user/group owner set; ownership is never inferred from shard placement.
+   */
+  owner_principal_ids: Array<string>;
+};
+
+/**
+ * CreateVolumeResponse
+ *
+ * Durable authoritative volume-creation outcome.
+ */
+export type CreateVolumeResponse = {
+  /**
+   * Original authoritative creation instant as epoch microseconds.
+   */
+  created_at_epoch_micros: number;
+  /**
+   * Case-preserved authoritative name.
+   */
+  name: string;
+  /**
+   * Exact idempotency identity whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Exact immutable initial owner set.
+   */
+  owner_principal_ids: Array<string>;
+  /**
+   * Authoritative revision created by the operation.
+   */
+  revision: number;
+  /**
+   * Stable root-directory identity used by connectors.
+   */
+  root_object_id: string;
+  /**
+   * Stable logical-volume identity.
+   */
+  volume_id: string;
+};
+
+/**
  * CurrentSessionResponse
  *
  * Current caller identity and coarse panel-navigation authority.
@@ -2611,6 +2667,65 @@ export type CreateUserResponses = {
 };
 
 export type CreateUserResponse = CreateUserResponses[keyof CreateUserResponses];
+
+export type CreateVolumeData = {
+  /**
+   * Logical-volume creation
+   */
+  body: CreateVolumeRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/volumes";
+};
+
+export type CreateVolumeErrors = {
+  /**
+   * Invalid volume request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Name, owner or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Volume authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateVolumeError = CreateVolumeErrors[keyof CreateVolumeErrors];
+
+export type CreateVolumeResponses = {
+  /**
+   * Volume durably created or exactly replayed
+   */
+  201: CreateVolumeResponse;
+};
+
+export type CreateVolumeResponse2 =
+  CreateVolumeResponses[keyof CreateVolumeResponses];
 
 export type GetHealthData = {
   body?: never;

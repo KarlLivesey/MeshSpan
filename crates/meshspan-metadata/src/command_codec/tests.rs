@@ -3,16 +3,17 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationMethodId, AuthenticationService,
-    GroupId, HostId, MeshId, NodeId, OperationId, PrincipalId, RecoveryCodeId, Revision, RoleId,
-    SessionId, UnixMicros,
+    GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PrincipalId,
+    RecoveryCodeId, Revision, RoleId, SessionId, UnixMicros, VolumeId,
 };
 
 use super::*;
 use crate::{
     AddGroupMember, BootstrapAppliance, BootstrapMesh, CreateAuthenticationMethod, CreateGroup,
-    CreateUser, IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode,
-    RecordName, RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SessionAuthenticationFactor, SessionClientLabel, StepUpAuthenticationSession, TotpAlgorithm,
+    CreateUser, CreateVolume, IssueAuthenticationSession, NewAuthenticationCredential,
+    NewRecoveryCode, RecordName, RemoveGroupMember, RevokeAuthenticationMethod,
+    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
+    StepUpAuthenticationSession, TotpAlgorithm,
 };
 
 #[test]
@@ -95,6 +96,29 @@ fn identity_commands_round_trip_without_losing_optional_intent()
     ] {
         assert_round_trip(context, command)?;
     }
+    Ok(())
+}
+
+#[test]
+fn volume_creation_round_trips_every_identity_and_owner() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (context, _) = fixture()?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::CreateVolume(CreateVolume {
+            volume_id: VolumeId::from_bytes([61; 16])?,
+            name: RecordName::new("Shared files")?,
+            root_object_id: ObjectId::from_bytes([62; 16])?,
+            owner_set_id: OwnerSetId::from_bytes([63; 16])?,
+            owners: BoundedItems::new(
+                vec![
+                    PrincipalId::from_bytes([64; 16])?,
+                    PrincipalId::from_bytes([65; 16])?,
+                ],
+                1_024,
+            )?,
+        }),
+    )?;
     Ok(())
 }
 

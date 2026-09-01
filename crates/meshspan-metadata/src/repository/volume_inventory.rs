@@ -3,6 +3,7 @@
 //! Indexed logical-volume candidates for permission-filtered inventories.
 
 use meshspan_domain::{ObjectId, Revision, UnixMicros, VolumeId};
+use rusqlite::OptionalExtension;
 use rusqlite::params;
 
 use super::{Page, PageLimit, RepositoryError};
@@ -94,6 +95,36 @@ pub(super) fn volume_inventory_candidates(
     let next = (items.len() > limit.get()).then(|| cursor(&items[limit.get() - 1]));
     items.truncate(limit.get());
     Ok(Page { items, next })
+}
+
+pub(super) fn volume_inventory_record(
+    database: &PartitionDatabase,
+    volume_id: VolumeId,
+) -> Result<Option<VolumeInventoryRecord>, RepositoryError> {
+    let stored = database
+        .connection()
+        .query_row(
+            "SELECT volume.volume_id, root.object_id, volume.display_name,
+                    volume.canonical_name, volume.state, volume.created_at, volume.revision
+             FROM volumes AS volume
+             JOIN namespace_objects AS root
+               ON root.volume_id = volume.volume_id AND root.parent_object_id IS NULL
+             WHERE volume.volume_id = ?1",
+            [volume_id.as_bytes().as_slice()],
+            |row| {
+                Ok(StoredVolume {
+                    volume_id: row.get(0)?,
+                    root_object_id: row.get(1)?,
+                    display_name: row.get(2)?,
+                    canonical_name: row.get(3)?,
+                    state: row.get(4)?,
+                    created_at: row.get(5)?,
+                    revision: row.get(6)?,
+                })
+            },
+        )
+        .optional()?;
+    stored.map(parse_record).transpose()
 }
 
 struct StoredVolume {

@@ -157,6 +157,8 @@ mod totp_session_contract;
 mod totp_session_creation;
 #[cfg(test)]
 mod totp_session_creation_tests;
+mod volume_administration;
+mod volume_administration_api;
 mod volume_inventory;
 #[cfg(test)]
 mod volume_inventory_api_tests;
@@ -329,6 +331,13 @@ pub use totp_secret::{TotpEnvelopeKey, TotpSecretBinding, TotpSecretCipher, Totp
 pub use totp_session::TotpSessionVerifier;
 pub use totp_session_contract::{
     DisabledTotpFactors, TotpFactorVerifier, TotpSessionError, VerifiedTotpFactor,
+};
+pub use volume_administration::{
+    VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
+    VolumeAdministrationController, VolumeAdministrationError, VolumeAdministrationService,
+};
+pub use volume_administration_api::{
+    VolumeAdministrationApiError, volume_administration_api_router,
 };
 pub use volume_inventory::{
     VolumeInventoryApiError, VolumeInventoryAuthority, VolumeInventoryAuthorityError,
