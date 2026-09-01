@@ -20,6 +20,7 @@ hyper-util.workspace = true
 meshspan-api-contract = { path = "../meshspan-api-contract" }
 meshspan-certificates = { path = "../meshspan-certificates" }
 meshspan-cluster = { path = "../meshspan-cluster" }
+meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-filesystem = { path = "../meshspan-filesystem" }
@@ -38,7 +39,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 blake3.workspace = true
-meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 p256.workspace = true
 tempfile = "3.27.0"

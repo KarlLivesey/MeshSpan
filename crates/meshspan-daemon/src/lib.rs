@@ -14,6 +14,7 @@ mod api_key_issuance_tests;
 mod appliance_api;
 #[cfg(test)]
 mod appliance_api_tests;
+mod appliance_runtime;
 mod auth_api;
 #[cfg(test)]
 mod auth_api_tests;
@@ -172,6 +173,7 @@ pub use appliance_api::{
     AdministrationApiRoutes, ApplianceApiRoutes, AuthenticationApiRoutes, FileApiRoutes,
     SessionApiRoutes,
 };
+pub use appliance_runtime::{DaemonProcessError, run_headless_daemon};
 pub use auth_api::{CreateSessionController, SessionApiError, session_api_router};
 pub use authentication_method_listing::{
     AuthenticationMethodListingApiError, AuthenticationMethodListingAuthority,

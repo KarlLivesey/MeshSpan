@@ -129,6 +129,19 @@ impl DaemonLocalState {
         &mut self.database
     }
 
+    /// Opens another hardened connection to this daemon's identity-bound local database.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a missing, replaced, corrupt or differently identified local database.
+    pub fn open_local_database(
+        &self,
+        now: UnixMicros,
+    ) -> Result<LocalDatabase, DaemonLocalStateError> {
+        LocalDatabase::open_existing(&self.directory.path().join(LOCAL_DATABASE_FILE), now)
+            .map_err(Into::into)
+    }
+
     /// Returns the node public-key fingerprint safe for claim and enrolment binding.
     #[must_use]
     pub fn public_key_fingerprint(&self) -> [u8; 32] {
