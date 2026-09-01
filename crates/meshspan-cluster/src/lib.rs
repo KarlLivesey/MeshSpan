@@ -6,6 +6,7 @@ mod access_administration;
 mod cleanup;
 mod cleanup_network;
 mod cleanup_worker;
+mod consensus_network;
 mod convergence;
 mod driver;
 mod federation_authority;
@@ -85,6 +86,9 @@ pub use cleanup_worker::{
 
 #[cfg(test)]
 mod cleanup_worker_tests;
+pub use consensus_network::{
+    ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
+};
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
 pub use driver::{
     AppliedAuthoritativeCommand, ClusterDriverError, DriverEffect, PartitionConsensusDriver,
