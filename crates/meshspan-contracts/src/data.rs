@@ -272,6 +272,52 @@ pub struct RepairPlacementPlan {
     pub capacity_revision: Revision,
 }
 
+/// Fixed-revision input for deciding whether one existing stripe has a strictly better layout.
+#[derive(Clone, Copy, Debug)]
+pub struct RebalancePlacementRequest<'a> {
+    /// Operation/deadline context.
+    pub context: RequestContext,
+    /// Existing immutable coding geometry.
+    pub coding_layout: CodingLayout,
+    /// Current target for every indexed shard.
+    pub current_targets: &'a [TargetId],
+    /// Alternative failure scenarios the complete layout should survive.
+    pub scenarios: &'a [FailureScenario],
+    /// Scenario subset whose restoration has priority over eventual policy goals.
+    pub required_scenarios: &'a [FailureScenario],
+    /// Fixed topology snapshot.
+    pub topology: &'a Topology,
+    /// Revision of the fixed topology snapshot.
+    pub topology_revision: Revision,
+    /// Revision of the fixed capacity observations.
+    pub capacity_revision: Revision,
+    /// Currently writable replacement candidates.
+    pub candidates: &'a [PlacementCandidate],
+    /// Cell-local placement predicates resolved at the same policy revision.
+    pub cells: &'a [PlacementCellRequirement],
+}
+
+/// One strict copy-on-write improvement to an existing stripe layout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RebalancePlacementPlan {
+    /// Stable shard position whose current route should be replaced.
+    pub source_shard_index: u16,
+    /// Exact writable destination selected for the replacement.
+    pub replacement_target_id: TargetId,
+    /// Incarnation fence of the selected destination.
+    pub replacement_target_generation: u64,
+    /// Whether the current layout satisfies every configured scenario and cell goal.
+    pub current_fully_protected: bool,
+    /// Whether the resulting layout satisfies every configured scenario and cell goal.
+    pub resulting_fully_protected: bool,
+    /// Exact scenario proofs for the resulting complete layout.
+    pub protection_proofs: BoundedItems<ProtectionProof>,
+    /// Topology revision used for the decision.
+    pub topology_revision: Revision,
+    /// Capacity observation revision used for the decision.
+    pub capacity_revision: Revision,
+}
+
 /// Fault-aware target selection without shard IO or namespace authority.
 pub trait PlacementPolicy: ComponentLifecycle {
     /// Selects targets and proves the requested scenario at fixed revisions.
@@ -291,6 +337,18 @@ pub trait PlacementPolicy: ComponentLifecycle {
         &self,
         request: RepairPlacementRequest<'_>,
     ) -> Result<RepairPlacementPlan, ContractError>;
+
+    /// Returns one strict protection/locality improvement, or `None` for an already optimal
+    /// stripe under the supplied snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or stale placement evidence. Resource exhaustion is not an error when
+    /// the current layout is valid and no strictly better single-shard move exists.
+    fn plan_rebalance(
+        &self,
+        request: RebalancePlacementRequest<'_>,
+    ) -> Result<Option<RebalancePlacementPlan>, ContractError>;
 
     /// Re-evaluates an existing placement against one exact topology snapshot.
     ///

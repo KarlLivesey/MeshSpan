@@ -9,8 +9,9 @@ use meshspan_contracts::{
     BoundedBytes, BoundedItems, CodingLayout, ComponentConfiguration, ComponentLifecycle,
     ComponentObservation, ComponentTransition, ContractError, ContractKind, ContractLimits,
     ContractVersion, ImplementationDescriptor, PlacementCandidate, PlacementCellRequirement,
-    PlacementCellRole, PlacementPlan, PlacementPolicy, PlacementRequest, RepairPlacementPlan,
-    RepairPlacementRequest, ShardAcknowledgement, VersionedPayload,
+    PlacementCellRole, PlacementPlan, PlacementPolicy, PlacementRequest, RebalancePlacementPlan,
+    RebalancePlacementRequest, RepairPlacementPlan, RepairPlacementRequest, ShardAcknowledgement,
+    VersionedPayload,
 };
 use meshspan_domain::{
     FailureScenario, LifecycleState, ProtectionError, ProtectionLayout, ProtectionProof, Revision,
@@ -236,7 +237,7 @@ impl PlacementPolicy for FaultAwarePlacement {
                 candidate.target_id,
             )
         });
-        let mut selected = None;
+        let mut selected: Option<RepairCandidateEvaluation<'_>> = None;
         for candidate in candidates {
             let evaluation = evaluate_repair_candidate(request, candidate)?;
             if selected
@@ -258,6 +259,58 @@ impl PlacementPolicy for FaultAwarePlacement {
         })
     }
 
+    fn plan_rebalance(
+        &self,
+        request: RebalancePlacementRequest<'_>,
+    ) -> Result<Option<RebalancePlacementPlan>, ContractError> {
+        self.require_active()?;
+        validate_rebalance_request(request)?;
+        let evaluation = layout_evaluation_context(request);
+        let current = evaluate_layout(&evaluation, request.current_targets)?;
+        let candidates = eligible_rebalance_candidates(request);
+        let mut selected: Option<RebalanceCandidateEvaluation<'_>> = None;
+        for source_shard_index in 0..request.current_targets.len() {
+            for candidate in &candidates {
+                let mut targets = request.current_targets.to_vec();
+                targets[source_shard_index] = candidate.target_id;
+                let resulting = evaluate_layout(&evaluation, &targets)?;
+                if resulting.quality <= current.quality {
+                    continue;
+                }
+                let candidate = RebalanceCandidateEvaluation {
+                    source_shard_index: u16::try_from(source_shard_index)
+                        .map_err(|_| ContractError::InternalContract)?,
+                    target: candidate,
+                    resulting,
+                };
+                if selected
+                    .as_ref()
+                    .is_none_or(|selected| candidate.resulting.quality > selected.resulting.quality)
+                {
+                    selected = Some(candidate);
+                }
+            }
+        }
+        selected
+            .map(|selected| {
+                Ok(RebalancePlacementPlan {
+                    source_shard_index: selected.source_shard_index,
+                    replacement_target_id: selected.target.target_id,
+                    replacement_target_generation: selected.target.target_generation,
+                    current_fully_protected: current.quality.fully_protected,
+                    resulting_fully_protected: selected.resulting.quality.fully_protected,
+                    protection_proofs: BoundedItems::new(
+                        selected.resulting.proofs,
+                        MAXIMUM_SCENARIOS,
+                    )
+                    .map_err(|_| ContractError::InternalContract)?,
+                    topology_revision: request.topology_revision,
+                    capacity_revision: request.capacity_revision,
+                })
+            })
+            .transpose()
+    }
+
     fn evaluate(
         &self,
         scenario: &FailureScenario,
@@ -271,7 +324,7 @@ impl PlacementPolicy for FaultAwarePlacement {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct RepairCandidateScore {
+struct LayoutQuality {
     fully_protected: bool,
     required_policy_satisfied: bool,
     surviving_scenarios: usize,
@@ -282,7 +335,27 @@ struct RepairCandidateScore {
 struct RepairCandidateEvaluation<'a> {
     target: &'a PlacementCandidate,
     proofs: Vec<ProtectionProof>,
-    score: RepairCandidateScore,
+    score: LayoutQuality,
+}
+
+struct LayoutEvaluation {
+    proofs: Vec<ProtectionProof>,
+    quality: LayoutQuality,
+}
+
+struct LayoutEvaluationContext<'a> {
+    topology: &'a Topology,
+    scenarios: &'a [FailureScenario],
+    required_scenarios: &'a [FailureScenario],
+    candidates: &'a [PlacementCandidate],
+    cells: &'a [PlacementCellRequirement],
+    data_slices: u16,
+}
+
+struct RebalanceCandidateEvaluation<'a> {
+    source_shard_index: u16,
+    target: &'a PlacementCandidate,
+    resulting: LayoutEvaluation,
 }
 
 fn validate_repair_request(request: RepairPlacementRequest<'_>) -> Result<(), ContractError> {
@@ -322,6 +395,76 @@ fn validate_repair_request(request: RepairPlacementRequest<'_>) -> Result<(), Co
     validate_cells(request.cells)
 }
 
+fn validate_rebalance_request(request: RebalancePlacementRequest<'_>) -> Result<(), ContractError> {
+    let total_slices = usize::from(request.coding_layout.total_slices());
+    let mut current = BTreeSet::new();
+    let mut candidates = BTreeSet::new();
+    if request.context.contract_version != ContractVersion::V1_0
+        || request.context.deadline.get() == 0
+        || request.topology_revision == Revision::ZERO
+        || request.capacity_revision == Revision::ZERO
+        || request.scenarios.is_empty()
+        || request.scenarios.len() > MAXIMUM_SCENARIOS
+        || request.required_scenarios.len() > request.scenarios.len()
+        || request.cells.len() > MAXIMUM_CELLS
+        || request.candidates.is_empty()
+        || request.candidates.len() > MAXIMUM_CANDIDATES
+        || request.current_targets.len() != total_slices
+        || request
+            .current_targets
+            .iter()
+            .any(|target| !current.insert(*target))
+        || request.candidates.iter().any(|candidate| {
+            candidate.target_generation == 0
+                || candidate.writable_bytes == 0
+                || candidate.performance_weight == 0
+                || !candidates.insert(candidate.target_id)
+        })
+        || request
+            .required_scenarios
+            .iter()
+            .any(|required| !request.scenarios.contains(required))
+    {
+        return Err(ContractError::InvalidInput);
+    }
+    validate_cells(request.cells)
+}
+
+fn layout_evaluation_context(
+    request: RebalancePlacementRequest<'_>,
+) -> LayoutEvaluationContext<'_> {
+    LayoutEvaluationContext {
+        topology: request.topology,
+        scenarios: request.scenarios,
+        required_scenarios: request.required_scenarios,
+        candidates: request.candidates,
+        cells: request.cells,
+        data_slices: request.coding_layout.data_slices(),
+    }
+}
+
+fn eligible_rebalance_candidates(
+    request: RebalancePlacementRequest<'_>,
+) -> Vec<&PlacementCandidate> {
+    let mut candidates = request
+        .candidates
+        .iter()
+        .filter(|candidate| {
+            !request.current_targets.contains(&candidate.target_id)
+                && !candidate_is_excluded(candidate, request.cells)
+                && candidate.writable_bytes >= u64::from(request.coding_layout.slice_bytes())
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| {
+        (
+            Reverse(candidate.performance_weight),
+            Reverse(candidate.writable_bytes),
+            candidate.target_id,
+        )
+    });
+    candidates
+}
+
 fn validate_cells(cells: &[PlacementCellRequirement]) -> Result<(), ContractError> {
     let mut identifiers = BTreeSet::new();
     if cells.iter().any(|cell| {
@@ -350,35 +493,57 @@ fn evaluate_repair_candidate<'a>(
 ) -> Result<RepairCandidateEvaluation<'a>, ContractError> {
     let mut targets = request.current_targets.to_vec();
     targets[usize::from(request.source_shard_index)] = candidate.target_id;
-    let layout = ProtectionLayout::new(request.coding_layout.data_slices(), targets.clone())
+    let evaluation = evaluate_layout(
+        &LayoutEvaluationContext {
+            topology: request.topology,
+            scenarios: request.scenarios,
+            required_scenarios: request.required_scenarios,
+            candidates: request.candidates,
+            cells: request.cells,
+            data_slices: request.coding_layout.data_slices(),
+        },
+        &targets,
+    )?;
+    Ok(RepairCandidateEvaluation {
+        target: candidate,
+        proofs: evaluation.proofs,
+        score: evaluation.quality,
+    })
+}
+
+fn evaluate_layout(
+    context: &LayoutEvaluationContext<'_>,
+    targets: &[TargetId],
+) -> Result<LayoutEvaluation, ContractError> {
+    let layout = ProtectionLayout::new(context.data_slices, targets.to_vec())
         .map_err(|_| ContractError::InvalidInput)?;
-    let proofs = request
+    let proofs = context
         .scenarios
         .iter()
-        .map(|scenario| best_effort_proof(request.topology, scenario, &layout))
+        .map(|scenario| best_effort_proof(context.topology, scenario, &layout))
         .collect::<Result<Vec<_>, _>>()?;
-    let required_scenarios_satisfied = request.required_scenarios.iter().all(|required| {
-        request
+    let required_scenarios_satisfied = context.required_scenarios.iter().all(|required| {
+        context
             .scenarios
             .iter()
             .position(|scenario| scenario == required)
             .is_some_and(|index| proofs[index].survives)
     });
     let required_cells_satisfied = cell_constraints_satisfied(
-        request.topology,
-        request.candidates,
-        &targets,
-        request.cells,
+        context.topology,
+        context.candidates,
+        targets,
+        context.cells,
         false,
-        request.coding_layout.data_slices(),
+        context.data_slices,
     )?;
     let all_cells_satisfied = cell_constraints_satisfied(
-        request.topology,
-        request.candidates,
-        &targets,
-        request.cells,
+        context.topology,
+        context.candidates,
+        targets,
+        context.cells,
         true,
-        request.coding_layout.data_slices(),
+        context.data_slices,
     )?;
     let surviving_scenarios = proofs.iter().filter(|proof| proof.survives).count();
     let minimum_remaining_slices = proofs
@@ -387,10 +552,9 @@ fn evaluate_repair_candidate<'a>(
         .min()
         .unwrap_or_default();
     let all_scenarios_satisfied = surviving_scenarios == proofs.len();
-    Ok(RepairCandidateEvaluation {
-        target: candidate,
+    Ok(LayoutEvaluation {
         proofs,
-        score: RepairCandidateScore {
+        quality: LayoutQuality {
             fully_protected: all_scenarios_satisfied && all_cells_satisfied,
             required_policy_satisfied: required_scenarios_satisfied && required_cells_satisfied,
             surviving_scenarios,
@@ -1009,8 +1173,8 @@ fn hash_optional_u16(digest: &mut blake3::Hasher, value: Option<u16>) {
 mod tests {
     use meshspan_contracts::{
         BoundedItems, CodingLayout, ContractError, PlacementCandidate, PlacementCellRequirement,
-        PlacementCellRole, PlacementPolicy, PlacementRequest, RepairPlacementRequest,
-        RequestContext,
+        PlacementCellRole, PlacementPolicy, PlacementRequest, RebalancePlacementRequest,
+        RepairPlacementRequest, RequestContext,
     };
     use meshspan_domain::{
         AvailabilityCellId, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
@@ -1457,6 +1621,68 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn rebalance_returns_only_a_strict_fault_independence_improvement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut topology = Topology::default();
+        let candidates = (1_u8..=3)
+            .map(|value| {
+                topology.register_host(host(value)?)?;
+                topology.register_target(target(value)?, host(value)?)?;
+                candidate(target(value)?, host(value)?)
+            })
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        let shared = group(1)?;
+        let independent = group(2)?;
+        topology.register_fault_group(shared, class(2)?)?;
+        topology.register_fault_group(independent, class(2)?)?;
+        topology.add_fault_group_member(shared, FaultGroupMember::Target(target(1)?))?;
+        topology.add_fault_group_member(shared, FaultGroupMember::Target(target(2)?))?;
+        topology.add_fault_group_member(independent, FaultGroupMember::Target(target(3)?))?;
+        let scenario = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2)?,
+            failure_count: 1,
+        }])?;
+        let current = [target(1)?, target(2)?];
+
+        let plan = FaultAwarePlacement::new()
+            .plan_rebalance(rebalance_request(
+                &topology,
+                &candidates,
+                std::slice::from_ref(&scenario),
+                &current,
+            )?)?
+            .ok_or("unsafe current placement produced no improvement")?;
+
+        assert_eq!(plan.source_shard_index, 0);
+        assert_eq!(plan.replacement_target_id, target(3)?);
+        assert!(!plan.current_fully_protected);
+        assert!(plan.resulting_fully_protected);
+        assert!(plan.protection_proofs.as_slice()[0].survives);
+        Ok(())
+    }
+
+    #[test]
+    fn rebalance_keeps_an_equally_safe_layout_stable() -> Result<(), Box<dyn std::error::Error>> {
+        let (topology, candidates) = independent_targets(3)?;
+        let scenario = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2)?,
+            failure_count: 1,
+        }])?;
+        let current = [target(1)?, target(2)?];
+
+        assert_eq!(
+            FaultAwarePlacement::new().plan_rebalance(rebalance_request(
+                &topology,
+                &candidates,
+                std::slice::from_ref(&scenario),
+                &current,
+            )?)?,
+            None
+        );
+        Ok(())
+    }
+
     fn six_machine_topology()
     -> Result<(Topology, Vec<PlacementCandidate>), Box<dyn std::error::Error>> {
         let mut topology = Topology::default();
@@ -1538,6 +1764,31 @@ mod tests {
             },
             coding_layout: CodingLayout::new(1, 1, 4_096)?,
             source_shard_index: 1,
+            current_targets,
+            scenarios,
+            required_scenarios: &[],
+            topology,
+            topology_revision: Revision::new(1),
+            capacity_revision: Revision::new(1),
+            candidates,
+            cells: &[],
+        })
+    }
+
+    fn rebalance_request<'a>(
+        topology: &'a Topology,
+        candidates: &'a [PlacementCandidate],
+        scenarios: &'a [FailureScenario],
+        current_targets: &'a [TargetId],
+    ) -> Result<RebalancePlacementRequest<'a>, Box<dyn std::error::Error>> {
+        Ok(RebalancePlacementRequest {
+            context: RequestContext {
+                contract_version: meshspan_contracts::ContractVersion::V1_0,
+                operation_id: OperationId::from_bytes([92; 16])?,
+                deadline: UnixMicros::new(1),
+                expected_revision: None,
+            },
+            coding_layout: CodingLayout::new(1, 1, 4_096)?,
             current_targets,
             scenarios,
             required_scenarios: &[],
