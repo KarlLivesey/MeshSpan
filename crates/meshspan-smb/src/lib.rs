@@ -10,6 +10,7 @@ mod direct_tcp;
 mod header;
 mod negotiate;
 mod negotiate_response;
+mod ntlm_v2;
 mod status;
 
 pub use direct_tcp::{
@@ -23,4 +24,5 @@ pub use negotiate_response::{
     EncryptionCipher, NegotiateResponse, NegotiateResponseConfig, NegotiateResponseError,
     NegotiateSelection, SigningAlgorithm,
 };
+pub use ntlm_v2::{NtlmPasswordVerifier, NtlmSessionBaseKey, NtlmVerificationError};
 pub use status::{ConnectorFailure, NtStatus};

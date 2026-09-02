@@ -50,12 +50,15 @@ source/advisory policy automation arrive before a release artefact is built.
 | `chacha20`                               |           0.10.2 | `MIT OR Apache-2.0`        |
 | `jsonschema`                             |           0.52.0 | `MIT`                      |
 | `hmac`                                   |           0.13.0 | `MIT OR Apache-2.0`        |
+| `md-5`                                   |           0.11.0 | `MIT OR Apache-2.0`        |
+| `md4`                                    |           0.11.0 | `MIT OR Apache-2.0`        |
 | `meshspan-otp` (workspace)               |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-protobuf` (workspace)          |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-passkey` (workspace)           |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-quinn-rustls` (workspace)      |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-rustls-provider` (workspace)   |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-secret-envelope` (workspace)   |            0.1.0 | `GPL-2.0-only`             |
+| `meshspan-smb` (workspace)               |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-test-certificates` (workspace) |            0.1.0 | `GPL-2.0-only`             |
 | `sync_wrapper` (workspace)               |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                                   |           0.14.0 | `Apache-2.0 OR MIT`        |
@@ -206,6 +209,8 @@ the first implementation.
 | `sha2`             | Standards that mandate SHA-2, including certificate and SMB constructions      |
 | `getrandom`        | Operating-system cryptographic randomness                                      |
 | `hmac`             | Maintained RFC HMAC construction used by interoperable TOTP verification       |
+| `md4`              | NTLM's mandatory password-equivalent verifier derivation only                  |
+| `md-5`             | NTLMv2 challenge proof and session-base-key derivation only                    |
 | `sha1`             | TOTP's interoperable HMAC-SHA-1 profile only; never a content/security digest  |
 | `zeroize`          | Best-effort erasure for owned secret buffers                                   |
 | `secrecy`          | Types that prevent accidental secret formatting/logging                        |
@@ -222,6 +227,14 @@ cryptographic primitive. The independently extractable `GPL-2.0-only`
 verification. It uses the current RustCrypto `hmac`, `sha1` and `sha2` releases
 under their MIT option, has no MeshSpan application dependency and returns the
 exact accepted counter for authoritative replay prevention.
+
+The `GPL-2.0-only` `meshspan-smb` crate uses current RustCrypto `md4` and `md-5`
+0.11 releases under their MIT/Apache-2.0 licence choice solely because standard
+SMB clients require NTLMv2 challenge authentication when no external Kerberos
+realm exists. The obsolete digests never protect content, API requests or stored
+plaintext. They derive and verify password-equivalent material for the same
+high-entropy, scoped and revocable MeshSpan API key, backed by Microsoft vectors;
+persisted verification material must remain encrypted at rest.
 
 No ACME library is selected yet. The current candidates each miss at least one
 mandatory constraint, most importantly first-class HTTP-01 plus DNS-01 control
