@@ -14,6 +14,7 @@ mod node_wrapping_key;
 mod recovery;
 mod secret_generation;
 mod session;
+mod smb_export;
 mod storage_target;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, Revision, UnixMicros};
@@ -142,6 +143,10 @@ fn encode_command(
         AuthoritativeCommand::SetHostFaultGroupMembership(value) => {
             fault_group::encode_membership(encoder, *value)
         }
+        AuthoritativeCommand::PublishSmbExport(value) => smb_export::encode_publish(encoder, value),
+        AuthoritativeCommand::WithdrawSmbExport(value) => {
+            smb_export::encode_withdraw(encoder, value)
+        }
         AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
             node_wrapping_key::encode(encoder, value)
         }
@@ -199,6 +204,12 @@ fn decode_command(
         }
         fault_group::SET_HOST_FAULT_GROUP_MEMBERSHIP => fault_group::decode_membership(decoder)
             .map(AuthoritativeCommand::SetHostFaultGroupMembership),
+        smb_export::PUBLISH_SMB_EXPORT => {
+            smb_export::decode_publish(decoder).map(AuthoritativeCommand::PublishSmbExport)
+        }
+        smb_export::WITHDRAW_SMB_EXPORT => {
+            smb_export::decode_withdraw(decoder).map(AuthoritativeCommand::WithdrawSmbExport)
+        }
         node_wrapping_key::REGISTER_NODE_WRAPPING_KEY => {
             node_wrapping_key::decode(decoder).map(AuthoritativeCommand::RegisterNodeWrappingKey)
         }

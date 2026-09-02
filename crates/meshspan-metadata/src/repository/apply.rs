@@ -15,8 +15,8 @@ use super::{
     federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
     namespace, node_wrapping_key, recovery_authority, retention, root_delegation, routing,
-    secret_generation, session, snapshot_schedule, storage_target, tags, topology, user_snapshot,
-    version_cleanup, volume_head,
+    secret_generation, session, smb_export_configuration, snapshot_schedule, storage_target, tags,
+    topology, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -551,6 +551,8 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::RegisterStorageTarget(_)
             | AuthoritativeCommand::CreateFaultGroup(_)
             | AuthoritativeCommand::SetHostFaultGroupMembership(_)
+            | AuthoritativeCommand::PublishSmbExport(_)
+            | AuthoritativeCommand::WithdrawSmbExport(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
             | AuthoritativeCommand::CommitSecretGeneration(_)
             | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
@@ -585,6 +587,12 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::SetHostFaultGroupMembership(value) => {
             topology::set_host_membership(transaction, *value, revision)
+        }
+        AuthoritativeCommand::PublishSmbExport(value) => {
+            smb_export_configuration::publish(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::WithdrawSmbExport(value) => {
+            smb_export_configuration::withdraw(transaction, value, revision)
         }
         AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
             node_wrapping_key::register(transaction, context, *value, revision)
@@ -1104,6 +1112,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ActivateNode(_) => 86,
         AuthoritativeCommand::CreateFaultGroup(_) => 88,
         AuthoritativeCommand::SetHostFaultGroupMembership(_) => 89,
+        AuthoritativeCommand::PublishSmbExport(_) => 90,
+        AuthoritativeCommand::WithdrawSmbExport(_) => 91,
     }
 }
 

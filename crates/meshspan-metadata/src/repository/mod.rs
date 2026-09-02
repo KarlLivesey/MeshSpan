@@ -103,6 +103,7 @@ mod session_access;
 #[cfg(test)]
 mod session_tests;
 mod smb_export;
+mod smb_export_configuration;
 #[cfg(test)]
 mod smb_export_tests;
 mod snapshot;

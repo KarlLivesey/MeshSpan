@@ -53,6 +53,12 @@ pub(super) fn smb_exports_for_gateway(
                 export.encryption_required, export.revision
          FROM smb_exports AS export
          WHERE export.state = 1
+           AND EXISTS (
+                SELECT 1 FROM nodes AS node
+                JOIN node_roles AS role
+                  ON role.node_id = node.node_id AND role.role_code = 2
+                WHERE node.node_id = ?1 AND node.state = 2 AND node.retired_at IS NULL
+           )
            AND (export.gateway_policy = 1 OR EXISTS (
                 SELECT 1 FROM smb_export_gateways AS gateway
                 WHERE gateway.export_id = export.export_id AND gateway.node_id = ?1
