@@ -23,19 +23,19 @@ use crate::{
     AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageTargetDrain, BootstrapMesh,
     BootstrapRecoveryIdentity, ClaimMaintenanceWork, CommitConvergedVolumeHead,
     CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration, CommitShardRepair,
-    CompleteMaintenanceWork, ConvergedHeadEvidence, CreateAcknowledgementPolicy,
-    CreateActivationPolicy, CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent,
-    CreateFaultGroup, CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser,
-    CreateVolume, GrantInheritance, GrantPermission, GrantPermissionWithActivation,
-    IssueAuthenticationSession, LocalityRequirementConfiguration, MaintenanceWorkCompletion,
-    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
-    PublishSmbExport, QueueMaintenanceWork, RebalanceScanCursor, RecordName,
-    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewMaintenanceWork,
-    RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAuthenticationFactor,
-    SessionClientLabel, SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
-    SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
-    StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
-    WithdrawSmbExport,
+    CommitTargetReconciliation, CompleteMaintenanceWork, ConvergedHeadEvidence,
+    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
+    CreateProtectionPolicy, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
+    MaintenanceWorkCompletion, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
+    ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork, RebalanceScanCursor,
+    RecordName, RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember,
+    RenewMaintenanceWork, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SessionAuthenticationFactor, SessionClientLabel, SetHostAvailabilityCellMembership,
+    SetHostFaultGroupMembership, SetTargetAvailabilityCellMembership, SmbExportGatewaySelection,
+    StepUpAuthenticationSession, StorageUsageLimit, StrongFallbackMode, TotpAlgorithm,
+    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
 };
 
 #[test]
@@ -375,6 +375,7 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
             replacement_receipt: repair_receipt(91, 92)?,
         }),
         scrub_pass_command(identity.0, identity.2)?,
+        reconciliation_pass_command(identity.0, identity.2)?,
         AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
             work_id: identity.0,
             claim_generation: identity.1,
@@ -503,6 +504,32 @@ fn scrub_pass_command(
         deferred_count: 1,
         evidence_digest: [95; 32],
     }))
+}
+
+fn reconciliation_pass_command(
+    work_id: WorkId,
+    worker_node_id: NodeId,
+) -> Result<AuthoritativeCommand, meshspan_domain::IdentifierError> {
+    Ok(AuthoritativeCommand::CommitTargetReconciliation(
+        CommitTargetReconciliation {
+            work_id,
+            claim_generation: 3,
+            worker_node_id,
+            worker_incarnation: 4,
+            fence: 5,
+            target_id: TargetId::from_bytes([96; 16])?,
+            target_generation: 7,
+            observation_count: 15,
+            verified_bytes: 16_384,
+            healthy_count: 9,
+            missing_count: 1,
+            corrupt_count: 1,
+            unreadable_count: 1,
+            unexpected_count: 2,
+            deferred_count: 1,
+            evidence_digest: [97; 32],
+        },
+    ))
 }
 
 fn repair_receipt(

@@ -89,6 +89,11 @@ impl NativeStorageTarget {
     pub(crate) fn provider(&self) -> LocalFolderStorageProvider {
         self.provider.clone()
     }
+
+    /// Probes the exact open target generation before it remains in live routing.
+    pub(crate) fn check_health(&self) -> Result<(), meshspan_storage::FolderShardStoreError> {
+        self.provider.check_health()
+    }
 }
 
 /// Immutable paths and authority handles needed to open the production filesystem after setup.
@@ -342,6 +347,18 @@ impl NativeFilesystemRuntime {
         state.filesystem = Some(filesystem);
         state.active_targets = contexts;
         state.writable_targets = writable_ids;
+        Ok(())
+    }
+
+    /// Drops every live provider handle after the reconciler detects a changed target set.
+    ///
+    /// The next [`Self::ensure_open`] call reconstructs routing from the surviving/reopened
+    /// providers even when their durable target identities have not changed.
+    pub(crate) fn invalidate_target_set(&self) -> Result<(), NativeFilesystemRuntimeError> {
+        let mut state = self.lock()?;
+        state.filesystem = None;
+        state.active_targets.clear();
+        state.writable_targets.clear();
         Ok(())
     }
 

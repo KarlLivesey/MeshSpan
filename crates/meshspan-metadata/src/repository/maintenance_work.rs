@@ -10,11 +10,13 @@ use super::apply::to_i64;
 use super::{AuthoritativeRepository, EntityKind, EntityReference, RepositoryError};
 use crate::{
     ClaimMaintenanceWork, CommandContext, CommitScrubPass, CommitShardRepair,
-    CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork, RenewMaintenanceWork,
+    CommitTargetReconciliation, CompleteMaintenanceWork, MaintenanceWorkCompletion,
+    QueueMaintenanceWork, RenewMaintenanceWork,
 };
 
 mod drain;
 mod rebalance;
+mod reconcile;
 mod repair;
 mod scrub;
 mod scrub_schedule;
@@ -286,7 +288,7 @@ fn effect_reference(
         WorkKind::Scrub => ("maintenance_scrub_effects", SCRUB_EFFECT_KIND),
         WorkKind::Drain => ("storage_target_drain_effects", DRAIN_EFFECT_KIND),
         WorkKind::Rebalance => ("maintenance_rebalance_effects", REBALANCE_EFFECT_KIND),
-        WorkKind::Reconcile => return Ok(None),
+        WorkKind::Reconcile => ("maintenance_reconciliation_effects", RECONCILE_EFFECT_KIND),
     };
     let sql = format!(
         "SELECT effect.effect_operation_id, operation.revision, operation.result_digest,
@@ -707,6 +709,15 @@ pub(super) fn commit_scrub(
     scrub::commit(transaction, context, value, revision)
 }
 
+pub(super) fn commit_reconciliation(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    value: CommitTargetReconciliation,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    reconcile::commit(transaction, context, value, revision)
+}
+
 type CompletionValues = (
     i64,
     i64,
@@ -855,7 +866,17 @@ fn validate_effect(
                 |row| row.get::<_, i64>(0),
             )? == 1
         }
-        WorkKind::Reconcile => false,
+        WorkKind::Reconcile => {
+            transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM maintenance_reconciliation_effects
+                 WHERE effect_operation_id = ?1 AND work_id = ?2)",
+                params![
+                    operation_id.as_bytes().as_slice(),
+                    work_id.as_bytes().as_slice(),
+                ],
+                |row| row.get::<_, i64>(0),
+            )? == 1
+        }
     };
     if operation_matches && effect_matches {
         Ok(())

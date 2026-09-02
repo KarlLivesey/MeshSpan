@@ -9,8 +9,9 @@ use meshspan_contracts::{
 use meshspan_domain::{TargetId, UnixMicros, WorkId};
 use meshspan_metadata::{
     AuthoritativeCommand, ClaimMaintenanceWork, CommandContext, CommandReceipt, CommitScrubPass,
-    CompleteMaintenanceWork, LocalDatabase, LocalScrubProgress, LocalScrubProgressError,
-    LocalScrubProgressUpdate, MaintenanceEffectReference, MaintenanceWorkCompletion,
+    CommitTargetReconciliation, CompleteMaintenanceWork, LocalDatabase, LocalScrubProgress,
+    LocalScrubProgressError, LocalScrubProgressUpdate, MaintenanceEffectReference,
+    MaintenanceWorkCompletion,
 };
 use thiserror::Error;
 
@@ -106,6 +107,16 @@ pub enum ResumableStorageScrubReceipt {
         /// Terminal work-completion receipt from this claim.
         completion: CommandReceipt,
     },
+}
+
+/// Reconciliation uses the same bounded physical verification evidence as scrub while committing
+/// a distinct authoritative effect and operation kind.
+pub type ResumableTargetReconciliationReceipt = ResumableStorageScrubReceipt;
+
+#[derive(Clone, Copy)]
+enum VerificationPurpose {
+    Scrub,
+    Reconciliation,
 }
 
 /// Closed failure phases; none claims success without an exact committed effect.
@@ -329,6 +340,63 @@ where
     Findings: ScrubFindingSink,
     Progress: ScrubProgressStore,
 {
+    execute_resumable_storage_verification(
+        authority,
+        provider,
+        findings,
+        progress_store,
+        execution,
+        VerificationPurpose::Scrub,
+    )
+}
+
+/// Reconciles one returning target through the same restart-safe full-byte inventory walk.
+///
+/// Non-healthy or no-longer-current entries are fed through the ordinary finding scheduler; the
+/// pass records its own authoritative reconciliation effect rather than masquerading as a
+/// periodic scrub.
+///
+/// # Errors
+///
+/// Rejects invalid claims, malformed provider evidence, unsafe progress, finding admission
+/// failure and unavailable metadata authority.
+pub fn execute_resumable_target_reconciliation<Authority, Provider, Findings, Progress>(
+    authority: &Authority,
+    provider: &mut Provider,
+    findings: &mut Findings,
+    progress_store: &mut Progress,
+    execution: &ResumableStorageScrubExecution,
+) -> Result<ResumableTargetReconciliationReceipt, StorageScrubExecutionError>
+where
+    Authority: RecoverableMaintenanceAuthority,
+    Provider: PhysicalStorageScrub,
+    Findings: ScrubFindingSink,
+    Progress: ScrubProgressStore,
+{
+    execute_resumable_storage_verification(
+        authority,
+        provider,
+        findings,
+        progress_store,
+        execution,
+        VerificationPurpose::Reconciliation,
+    )
+}
+
+fn execute_resumable_storage_verification<Authority, Provider, Findings, Progress>(
+    authority: &Authority,
+    provider: &mut Provider,
+    findings: &mut Findings,
+    progress_store: &mut Progress,
+    execution: &ResumableStorageScrubExecution,
+    purpose: VerificationPurpose,
+) -> Result<ResumableStorageScrubReceipt, StorageScrubExecutionError>
+where
+    Authority: RecoverableMaintenanceAuthority,
+    Provider: PhysicalStorageScrub,
+    Findings: ScrubFindingSink,
+    Progress: ScrubProgressStore,
+{
     validate_resumable_execution(execution)?;
     authority.commit(
         execution.claim_context,
@@ -345,7 +413,7 @@ where
         execution.observed_at,
     )?;
     if progress.complete {
-        return commit_completed_progress(authority, execution, &progress)
+        return commit_completed_progress(authority, execution, &progress, purpose)
             .map(ResumableStorageScrubReceipt::Completed);
     }
     let cursor = progress
@@ -369,7 +437,7 @@ where
     let update = accumulate_progress(&progress, &page)?;
     let progress = progress_store.advance(&progress, &update, execution.observed_at)?;
     if progress.complete {
-        commit_completed_progress(authority, execution, &progress)
+        commit_completed_progress(authority, execution, &progress, purpose)
             .map(ResumableStorageScrubReceipt::Completed)
     } else {
         let completion = authority.commit(
@@ -421,30 +489,52 @@ fn commit_completed_progress<Authority: MaintenanceMetadataAuthority>(
     authority: &Authority,
     execution: &ResumableStorageScrubExecution,
     progress: &LocalScrubProgress,
+    purpose: VerificationPurpose,
 ) -> Result<StorageScrubExecutionReceipt, StorageScrubExecutionError> {
-    let summary = summary_from_progress(progress)?;
+    let summary = summary_from_progress(progress, purpose)?;
     let counts = summary.outcome_counts;
-    let effect = authority.commit(
-        execution.effect_context,
-        &AuthoritativeCommand::CommitScrubPass(CommitScrubPass {
-            work_id: execution.claim.work_id,
-            claim_generation: execution.claim.claim_generation,
-            worker_node_id: execution.claim.worker_node_id,
-            worker_incarnation: execution.claim.worker_incarnation,
-            fence: execution.claim.fence,
-            target_id: execution.target_id,
-            target_generation: execution.target_generation,
-            observation_count: summary.observation_count,
-            verified_bytes: summary.verified_bytes,
-            healthy_count: counts[0],
-            missing_count: counts[1],
-            corrupt_count: counts[2],
-            unreadable_count: counts[3],
-            unexpected_count: counts[4],
-            deferred_count: counts[5],
-            evidence_digest: summary.evidence_digest,
-        }),
-    )?;
+    let scrub = CommitScrubPass {
+        work_id: execution.claim.work_id,
+        claim_generation: execution.claim.claim_generation,
+        worker_node_id: execution.claim.worker_node_id,
+        worker_incarnation: execution.claim.worker_incarnation,
+        fence: execution.claim.fence,
+        target_id: execution.target_id,
+        target_generation: execution.target_generation,
+        observation_count: summary.observation_count,
+        verified_bytes: summary.verified_bytes,
+        healthy_count: counts[0],
+        missing_count: counts[1],
+        corrupt_count: counts[2],
+        unreadable_count: counts[3],
+        unexpected_count: counts[4],
+        deferred_count: counts[5],
+        evidence_digest: summary.evidence_digest,
+    };
+    let command = match purpose {
+        VerificationPurpose::Scrub => AuthoritativeCommand::CommitScrubPass(scrub),
+        VerificationPurpose::Reconciliation => {
+            AuthoritativeCommand::CommitTargetReconciliation(CommitTargetReconciliation {
+                work_id: scrub.work_id,
+                claim_generation: scrub.claim_generation,
+                worker_node_id: scrub.worker_node_id,
+                worker_incarnation: scrub.worker_incarnation,
+                fence: scrub.fence,
+                target_id: scrub.target_id,
+                target_generation: scrub.target_generation,
+                observation_count: scrub.observation_count,
+                verified_bytes: scrub.verified_bytes,
+                healthy_count: scrub.healthy_count,
+                missing_count: scrub.missing_count,
+                corrupt_count: scrub.corrupt_count,
+                unreadable_count: scrub.unreadable_count,
+                unexpected_count: scrub.unexpected_count,
+                deferred_count: scrub.deferred_count,
+                evidence_digest: scrub.evidence_digest,
+            })
+        }
+    };
+    let effect = authority.commit(execution.effect_context, &command)?;
     let completion = complete_existing_effect(
         authority,
         execution,
@@ -535,12 +625,18 @@ fn accumulate_progress(
 
 fn summary_from_progress(
     progress: &LocalScrubProgress,
+    purpose: VerificationPurpose,
 ) -> Result<StorageScrubSummary, StorageScrubExecutionError> {
     if !progress.complete || progress.rolling_evidence_digest == [0; 32] {
         return Err(StorageScrubExecutionError::InvalidEvidence);
     }
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.storage.scrub-progress-complete.v1\0");
+    digest.update(match purpose {
+        VerificationPurpose::Scrub => b"meshspan.storage.scrub-progress-complete.v1\0",
+        VerificationPurpose::Reconciliation => {
+            b"meshspan.storage.return-reconciliation-complete.v1\0"
+        }
+    });
     digest.update(&progress.target_id.as_bytes());
     digest.update(&progress.target_generation.to_be_bytes());
     digest.update(&progress.page_index.to_be_bytes());
@@ -971,6 +1067,43 @@ mod tests {
         ));
         assert!(matches!(
             commands[4],
+            AuthoritativeCommand::CompleteMaintenanceWork(_)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn returning_target_commits_distinct_reconciliation_effect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let mut progress = LocalDatabase::open(
+            &directory.path().join("local.sqlite3"),
+            NodeId::from_bytes([30; 16])?,
+            UnixMicros::new(1),
+        )?;
+        let authority = RecordingAuthority::default();
+        let mut provider = PageProvider::new([Ok(page(vec![healthy(1), missing(2)], None)?)]);
+        let mut findings = RecordingFindings::default();
+
+        let receipt = execute_resumable_target_reconciliation(
+            &authority,
+            &mut provider,
+            &mut findings,
+            &mut progress,
+            &resumable_execution(1, 40, 10)?,
+        )?;
+        let ResumableStorageScrubReceipt::Completed(receipt) = receipt else {
+            return Err("single-page return reconciliation did not complete".into());
+        };
+        assert_eq!(receipt.summary.outcome_counts, [1, 1, 0, 0, 0, 0]);
+        assert_eq!(findings.observations, vec![missing(2)]);
+        let commands = authority.commands.borrow();
+        assert!(matches!(
+            commands[1],
+            AuthoritativeCommand::CommitTargetReconciliation(_)
+        ));
+        assert!(matches!(
+            commands[2],
             AuthoritativeCommand::CompleteMaintenanceWork(_)
         ));
         Ok(())

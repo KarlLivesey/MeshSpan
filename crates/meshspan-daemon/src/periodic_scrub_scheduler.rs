@@ -140,6 +140,68 @@ where
         })
     }
 
+    /// Immediately admits one exact target generation after its focused return probes pass.
+    ///
+    /// The supplied return instant defines a distinct, restart-safe verification cycle. Replays
+    /// at that instant coalesce through the same semantic key; a later disappearance and return
+    /// produces a new cycle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero generation or budget, unavailable consensus, entropy failure and
+    /// contradictory authority output.
+    pub fn admit_returned_target(
+        &mut self,
+        target_id: meshspan_domain::TargetId,
+        target_generation: u64,
+        returned_at: UnixMicros,
+        maximum_in_flight_bytes: u64,
+    ) -> Result<(), PeriodicScrubSchedulingError> {
+        if target_generation == 0 || maximum_in_flight_bytes == 0 {
+            return Err(PeriodicScrubSchedulingError::Invalid);
+        }
+        let subject = WorkSubject::Reconcile {
+            target_id,
+            target_generation,
+        };
+        let (operation_id, audit_event_id, work_id) = random_identities(self.random)?;
+        let context = CommandContext {
+            operation_id,
+            actor_principal_id: self.actor_principal_id,
+            audit_event_id,
+            occurred_at: returned_at,
+            expected_revision: None,
+        };
+        let command = AuthoritativeCommand::QueueMaintenanceWork(QueueMaintenanceWork {
+            work_id,
+            deduplication_key: return_cycle_key(subject, returned_at),
+            subject,
+            signals: WorkSignals {
+                data_unavailable: false,
+                remaining_recovery_margin: 1,
+                protection_debt: 0,
+                locality_debt: 0,
+                instability: 1,
+                access_heat: 0,
+                created_at: returned_at,
+                due_at: Some(returned_at),
+            },
+            demand: WorkDemand {
+                in_flight_bytes: maximum_in_flight_bytes,
+            },
+            next_attempt_at: returned_at,
+        });
+        let receipt = self.authority.commit(context, &command)?;
+        if receipt.operation_id != operation_id
+            || receipt.request_digest != command.request_digest(context)
+            || receipt.result_digest == [0; 32]
+            || receipt.entity.kind != EntityKind::MaintenanceWork
+        {
+            return Err(PeriodicScrubSchedulingError::Invalid);
+        }
+        Ok(())
+    }
+
     fn admit_candidate(
         &mut self,
         candidate: DueStorageScrub,
@@ -197,6 +259,14 @@ fn scrub_cycle_key(subject: WorkSubject, due_at: UnixMicros) -> [u8; 32] {
     digest.update(b"meshspan.periodic-scrub-cycle.v1\0");
     digest.update(&subject.encode());
     digest.update(&due_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+fn return_cycle_key(subject: WorkSubject, returned_at: UnixMicros) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.return-reconciliation-cycle.v1\0");
+    digest.update(&subject.encode());
+    digest.update(&returned_at.get().to_be_bytes());
     digest.finalize().into()
 }
 
@@ -285,6 +355,44 @@ mod tests {
         assert_eq!(first.subject, second.subject);
         assert_eq!(first.signals.due_at, Some(UnixMicros::new(50)));
         assert_eq!(first.demand.in_flight_bytes, 4_096);
+        Ok(())
+    }
+
+    #[test]
+    fn returned_target_is_admitted_immediately_with_exact_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let target_id = TargetId::from_bytes([7; 16])?;
+        let authority = RecordingAuthority {
+            due: DueStorageScrubPage {
+                targets: Vec::new(),
+                next: None,
+            },
+            commands: RefCell::new(Vec::new()),
+        };
+        let mut random = CounterRandom(80);
+        PeriodicScrubScheduler::new(
+            &authority,
+            &mut random,
+            NodeId::from_bytes([8; 16])?,
+            PrincipalId::from_bytes([9; 16])?,
+        )
+        .admit_returned_target(target_id, 4, UnixMicros::new(500), 8_192)?;
+
+        let commands = authority.commands.borrow();
+        let AuthoritativeCommand::QueueMaintenanceWork(work) = commands[0] else {
+            return Err("return admission was not reconciliation work".into());
+        };
+        assert_eq!(
+            work.subject,
+            WorkSubject::Reconcile {
+                target_id,
+                target_generation: 4,
+            }
+        );
+        assert_eq!(work.signals.created_at, UnixMicros::new(500));
+        assert_eq!(work.signals.due_at, Some(UnixMicros::new(500)));
+        assert_eq!(work.next_attempt_at, UnixMicros::new(500));
+        assert_eq!(work.demand.in_flight_bytes, 8_192);
         Ok(())
     }
 

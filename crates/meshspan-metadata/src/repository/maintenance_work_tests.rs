@@ -14,10 +14,10 @@ use super::{
 };
 use crate::{
     AuthoritativeCommand, BootstrapMesh, ClaimMaintenanceWork, CommandContext,
-    CommitRebalanceScanPage, CommitScrubPass, CommitShardRepair, CompleteMaintenanceWork,
-    CreateComponent, MaintenanceWorkCompletion, PartitionDatabase, QueueMaintenanceWork,
-    RebalanceScanCursor, RecordName, RegisterStorageTarget, RenewMaintenanceWork,
-    StorageUsageLimit,
+    CommitRebalanceScanPage, CommitScrubPass, CommitShardRepair, CommitTargetReconciliation,
+    CompleteMaintenanceWork, CreateComponent, MaintenanceWorkCompletion, PartitionDatabase,
+    QueueMaintenanceWork, RebalanceScanCursor, RecordName, RegisterStorageTarget,
+    RenewMaintenanceWork, StorageUsageLimit,
 };
 
 #[test]
@@ -349,6 +349,76 @@ fn scrub_effect_requires_exact_classified_summary_then_completes_claim()
             worker_node_id: fixture.node,
             worker_incarnation: 1,
             fence: 801,
+            outcome: MaintenanceWorkCompletion::Succeeded {
+                effect_operation_id: effect.operation_id,
+                effect_revision: effect.committed_revision,
+                effect_result_digest: effect.result_digest,
+            },
+        }),
+    )?;
+    assert_eq!(
+        fixture.record(work_id)?.state,
+        MaintenanceWorkState::Complete
+    );
+    Ok(())
+}
+
+#[test]
+fn returning_target_reconciliation_has_its_own_terminal_effect()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let target_id = TargetId::from_bytes([64; 16])?;
+    fixture.register_target(2, target_id, 65)?;
+    let work_id = WorkId::from_bytes([66; 16])?;
+    let mut work = Fixture::scrub_queue(work_id, target_id);
+    work.subject = WorkSubject::Reconcile {
+        target_id,
+        target_generation: 1,
+    };
+    fixture.apply(3, 70, &AuthoritativeCommand::QueueMaintenanceWork(work))?;
+    fixture.apply(
+        4,
+        71,
+        &AuthoritativeCommand::ClaimMaintenanceWork(fixture.claim(work_id, 1, 811, 120)),
+    )?;
+    let effect = fixture.apply(
+        5,
+        72,
+        &AuthoritativeCommand::CommitTargetReconciliation(CommitTargetReconciliation {
+            work_id,
+            claim_generation: 1,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 811,
+            target_id,
+            target_generation: 1,
+            observation_count: 2,
+            verified_bytes: 4_096,
+            healthy_count: 1,
+            missing_count: 1,
+            corrupt_count: 0,
+            unreadable_count: 0,
+            unexpected_count: 0,
+            deferred_count: 0,
+            evidence_digest: [67; 32],
+        }),
+    )?;
+    let reference = fixture
+        .repository
+        .maintenance_effect_reference(work_id)?
+        .ok_or("reconciliation effect missing")?;
+    assert_eq!(reference.operation_id, effect.operation_id);
+    assert_eq!(reference.revision, effect.committed_revision);
+    assert_eq!(reference.result_digest, effect.result_digest);
+    fixture.apply(
+        6,
+        73,
+        &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+            work_id,
+            claim_generation: 1,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 811,
             outcome: MaintenanceWorkCompletion::Succeeded {
                 effect_operation_id: effect.operation_id,
                 effect_revision: effect.committed_revision,

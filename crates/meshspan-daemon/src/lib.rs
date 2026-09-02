@@ -217,9 +217,10 @@ pub use shard_repair_worker::{
 };
 pub use storage_scrub_worker::{
     PhysicalStorageScrub, RecoverableMaintenanceAuthority, ResumableStorageScrubExecution,
-    ResumableStorageScrubReceipt, ScrubProgressStore, StorageScrubExecution,
-    StorageScrubExecutionError, StorageScrubExecutionReceipt, StorageScrubSummary,
-    execute_resumable_storage_scrub, execute_storage_scrub,
+    ResumableStorageScrubReceipt, ResumableTargetReconciliationReceipt, ScrubProgressStore,
+    StorageScrubExecution, StorageScrubExecutionError, StorageScrubExecutionReceipt,
+    StorageScrubSummary, execute_resumable_storage_scrub, execute_resumable_target_reconciliation,
+    execute_storage_scrub,
 };
 pub use target_drain_worker::{
     TargetDrainError, TargetDrainExecution, TargetDrainStepReceipt, TargetShardInventorySource,

@@ -95,17 +95,17 @@ use crate::{
     VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
     authentication_method_revocation_api_router, classify_native_filesystem_error,
     current_session_api_router, directory_listing_api_router, execute_rebalance_step,
-    execute_resumable_storage_scrub, execute_shard_repair, execute_target_drain_step,
-    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
-    native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
-    object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
-    passkey_registration_api_router, permission_administration_api_router,
-    public_contract_api_router, recovery_bundle_verification_api_router,
-    recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
-    setup_api_router_with_mutations, smb_export_administration_api_router,
-    step_up_current_session_api_router, storage_folder_administration_api_router,
-    topology_administration_api_router, totp_registration_api_router,
-    volume_administration_api_router, volume_inventory_api_router,
+    execute_resumable_storage_scrub, execute_resumable_target_reconciliation, execute_shard_repair,
+    execute_target_drain_step, file_read_api_router, identity_administration_api_router,
+    native_namespace_mutation_api_router, native_upload_api_router, node_enrolment_api_router,
+    node_join_grant_api_router, object_stat_api_router, operation_status_api_router,
+    passkey_challenge_api_router, passkey_registration_api_router,
+    permission_administration_api_router, public_contract_api_router,
+    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
+    revoke_current_session_api_router, session_api_router, setup_api_router_with_mutations,
+    smb_export_administration_api_router, step_up_current_session_api_router,
+    storage_folder_administration_api_router, topology_administration_api_router,
+    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
@@ -124,6 +124,8 @@ const SMB_PACKET_BYTES: usize = meshspan_smb::DIRECT_TCP_MAX_PAYLOAD_LENGTH;
 const SMB_INACTIVITY_TIMEOUT: Duration = Duration::from_mins(5);
 const SCRUB_MAXIMUM_AGE_MICROS: u64 = 7 * 24 * 60 * 60 * 1_000_000;
 const SCRUB_ADMISSION_INTERVAL_MICROS: u64 = 60 * 1_000_000;
+const TARGET_HEALTH_PROBE_INTERVAL_MICROS: u64 = 30 * 1_000_000;
+const RETURN_SCAN_ADMISSIONS_PER_TICK: usize = 16;
 const SCRUB_PAGE_ITEMS: usize = 32;
 const SCRUB_PAGE_IN_FLIGHT_BYTES: u64 =
     SCRUB_PAGE_ITEMS as u64 * crate::native_filesystem_runtime::MAXIMUM_NATIVE_SHARD_BYTES as u64;
@@ -1958,6 +1960,8 @@ struct StorageTargetRuntime {
     native_filesystem: NativeFilesystemRuntime,
     configured_paths: Vec<PathBuf>,
     active: BTreeMap<PathBuf, NativeStorageTarget>,
+    pending_return_scans: BTreeMap<TargetId, (u64, UnixMicros)>,
+    next_target_health_probe_at: Option<UnixMicros>,
     scrub_admission_cursor: Option<meshspan_metadata::DueStorageScrubCursor>,
     next_scrub_admission_at: Option<UnixMicros>,
     rebalance_admission_cursor: Option<meshspan_metadata::VolumeInventoryCursor>,
@@ -2002,6 +2006,8 @@ impl StorageTargetRuntime {
             native_filesystem,
             configured_paths,
             active: BTreeMap::new(),
+            pending_return_scans: BTreeMap::new(),
+            next_target_health_probe_at: None,
             scrub_admission_cursor: None,
             next_scrub_admission_at: None,
             rebalance_admission_cursor: None,
@@ -2045,6 +2051,7 @@ impl StorageTargetRuntime {
         self.execute_one_repair(now)?;
         self.execute_one_target_drain(now)?;
         self.execute_one_rebalance(now)?;
+        self.execute_one_reconciliation(now)?;
         self.execute_one_scrub_page(now)
     }
 
@@ -2158,8 +2165,64 @@ impl StorageTargetRuntime {
             &mut finding_random,
             actor,
         );
-        let execution = maintenance_scrub_execution(assignment, self.local_node_id, actor, now)?;
+        let execution = maintenance_verification_execution(
+            assignment,
+            WorkKind::Scrub,
+            self.local_node_id,
+            actor,
+            now,
+        )?;
         execute_resumable_storage_scrub(
+            &self.maintenance_authority,
+            &mut provider,
+            &mut findings,
+            &mut self.maintenance_progress,
+            &execution,
+        )
+        .map(|_| ())
+        .map_err(|_| ())
+    }
+
+    fn execute_one_reconciliation(&mut self, now: UnixMicros) -> Result<(), ()> {
+        let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Reconcile)? else {
+            return Ok(());
+        };
+        let WorkSubject::Reconcile {
+            target_id,
+            target_generation,
+        } = assignment.subject
+        else {
+            return Err(());
+        };
+        let mut provider = self
+            .active
+            .values()
+            .find(|target| {
+                let context = target.context();
+                context.target_id == target_id && context.generation == target_generation
+            })
+            .map(NativeStorageTarget::provider)
+            .ok_or(())?;
+        let actor = self.maintenance_actor(now)?;
+        let catalogue = self
+            .native_filesystem
+            .maintenance_catalogue(now)
+            .map_err(|_| ())?;
+        let mut finding_random = OperatingSystemRandom;
+        let mut findings = crate::AutomaticScrubFindingScheduler::new(
+            &self.maintenance_authority,
+            &catalogue,
+            &mut finding_random,
+            actor,
+        );
+        let execution = maintenance_verification_execution(
+            assignment,
+            WorkKind::Reconcile,
+            self.local_node_id,
+            actor,
+            now,
+        )?;
+        execute_resumable_target_reconciliation(
             &self.maintenance_authority,
             &mut provider,
             &mut findings,
@@ -2372,6 +2435,70 @@ impl StorageTargetRuntime {
             .ok_or(())
     }
 
+    fn probe_active_targets(&mut self, now: UnixMicros) -> Result<usize, ()> {
+        if self
+            .next_target_health_probe_at
+            .is_some_and(|eligible_at| eligible_at > now)
+        {
+            return Ok(0);
+        }
+        self.next_target_health_probe_at =
+            now.checked_add(DurationMicros::new(TARGET_HEALTH_PROBE_INTERVAL_MICROS));
+        let unavailable = self
+            .active
+            .iter()
+            .filter_map(|(canonical_path, target)| {
+                target
+                    .check_health()
+                    .is_err()
+                    .then_some(canonical_path.clone())
+            })
+            .collect::<Vec<_>>();
+        if unavailable.is_empty() {
+            return Ok(0);
+        }
+        for canonical_path in &unavailable {
+            if let Some(target) = self.active.remove(canonical_path) {
+                self.pending_return_scans
+                    .remove(&target.context().target_id);
+            }
+        }
+        self.native_filesystem
+            .invalidate_target_set()
+            .map_err(|_| ())?;
+        Ok(unavailable.len())
+    }
+
+    fn admit_return_scans(&mut self, now: UnixMicros) -> Result<(), ()> {
+        if self.pending_return_scans.is_empty() {
+            return Ok(());
+        }
+        let actor = self.maintenance_actor(now)?;
+        let pending = self
+            .pending_return_scans
+            .iter()
+            .take(RETURN_SCAN_ADMISSIONS_PER_TICK)
+            .map(|(target_id, (generation, returned_at))| (*target_id, *generation, *returned_at))
+            .collect::<Vec<_>>();
+        for (target_id, generation, returned_at) in pending {
+            PeriodicScrubScheduler::new(
+                &self.maintenance_authority,
+                &mut OperatingSystemRandom,
+                self.local_node_id,
+                actor,
+            )
+            .admit_returned_target(
+                target_id,
+                generation,
+                returned_at,
+                SCRUB_PAGE_IN_FLIGHT_BYTES,
+            )
+            .map_err(|_| ())?;
+            self.pending_return_scans.remove(&target_id);
+        }
+        Ok(())
+    }
+
     fn reconcile(&mut self, now: UnixMicros) {
         let mut failures = 0_usize;
         if self.restore_persisted_paths().is_err() {
@@ -2379,6 +2506,10 @@ impl StorageTargetRuntime {
         }
         if self.wrapping_registration.ensure(now).is_err() {
             failures = failures.saturating_add(1);
+        }
+        match self.probe_active_targets(now) {
+            Ok(unavailable) => failures = failures.saturating_add(unavailable),
+            Err(()) => failures = failures.saturating_add(1),
         }
         for configured_path in &self.configured_paths {
             let Ok(canonical_path) = std::fs::canonicalize(configured_path) else {
@@ -2393,6 +2524,8 @@ impl StorageTargetRuntime {
                     let context = target.context();
                     match self.opening.open(target, now) {
                         Ok(provider) => {
+                            self.pending_return_scans
+                                .insert(context.target_id, (context.generation, now));
                             self.active.insert(
                                 canonical_path,
                                 NativeStorageTarget::new(context, provider),
@@ -2403,6 +2536,9 @@ impl StorageTargetRuntime {
                 }
                 Err(_) => failures = failures.saturating_add(1),
             }
+        }
+        if self.admit_return_scans(now).is_err() {
+            failures = failures.saturating_add(1);
         }
         if !self.active.is_empty() {
             let targets = self.active.values().cloned().collect::<Vec<_>>();
@@ -2417,16 +2553,27 @@ impl StorageTargetRuntime {
     }
 }
 
-fn maintenance_scrub_execution(
+fn maintenance_verification_execution(
     assignment: crate::MaintenanceDispatchAssignment,
+    expected_kind: WorkKind,
     worker_node_id: NodeId,
     actor_principal_id: PrincipalId,
     now: UnixMicros,
 ) -> Result<ResumableStorageScrubExecution, ()> {
-    let WorkSubject::Scrub {
-        target_id,
-        target_generation,
-    } = assignment.subject
+    let ((
+        WorkKind::Scrub,
+        WorkSubject::Scrub {
+            target_id,
+            target_generation,
+        },
+    )
+    | (
+        WorkKind::Reconcile,
+        WorkSubject::Reconcile {
+            target_id,
+            target_generation,
+        },
+    )) = (expected_kind, assignment.subject)
     else {
         return Err(());
     };
