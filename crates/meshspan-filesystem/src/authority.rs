@@ -872,7 +872,7 @@ where
                     })
             })
             .transpose()?;
-        let receipt = self.close_handle(
+        let mut receipt = self.close_handle(
             context,
             FilesystemHandleCloseRequest {
                 close: crate::CloseHandleRequest {
@@ -887,7 +887,8 @@ where
             },
         )?;
         if receipt.close.outcome == CloseHandleOutcome::DeleteReady {
-            self.complete_adapter_delete_on_close(branch_id, context, request, target)?;
+            receipt.delete =
+                Some(self.complete_adapter_delete_on_close(branch_id, context, request, target)?);
         }
         Ok(receipt)
     }
@@ -898,14 +899,14 @@ where
         context: FilesystemAccessContext,
         request: AdapterCloseFileRequest,
         target: crate::HandleAuthorityTarget,
-    ) -> Result<(), AuthorisedFilesystemError<A::Error>> {
+    ) -> Result<NamespaceUnlinkReceipt, AuthorisedFilesystemError<A::Error>> {
         if let Some(existing) = self
             .filesystem
             .resolve_namespace_unlink(request.delete_operation_id)
             .map_err(AuthorisedFilesystemError::Handle)?
         {
             return if existing.object_id == target.object_id {
-                Ok(())
+                Ok(existing)
             } else {
                 Err(AuthorisedFilesystemError::InvalidInput)
             };
@@ -929,8 +930,7 @@ where
                 request.observed_at,
             )
             .map_err(AuthorisedFilesystemError::Handle)?;
-        self.unlink_namespace(context, &publication)?;
-        Ok(())
+        self.unlink_namespace(context, &publication)
     }
 
     pub(crate) fn adapter_renew_lease(

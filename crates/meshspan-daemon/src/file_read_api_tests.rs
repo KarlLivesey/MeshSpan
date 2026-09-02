@@ -241,6 +241,7 @@ impl FileRangeReader for TestReader {
         self.record("close")?;
         Ok(FilesystemHandleCloseReceipt {
             flush: None,
+            delete: None,
             close: CloseHandleReceipt {
                 disposition: PublicationDisposition::Applied,
                 operation_id: request.operation_id,

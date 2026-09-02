@@ -994,6 +994,20 @@ impl VersionPublicationStore {
         namespace::receive_namespace_history_object(&mut self.connection, session_id, record, now)
     }
 
+    /// Returns one bounded page of immutable bodies still required by a receive session.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown sessions, zero or excessive bounds, malformed state and persistence
+    /// failure.
+    pub fn namespace_history_missing_immutable_digests(
+        &self,
+        session_id: [u8; 32],
+        limit: usize,
+    ) -> Result<Vec<[u8; 32]>, PublicationError> {
+        namespace::namespace_history_missing_immutable_digests(&self.connection, session_id, limit)
+    }
+
     /// Atomically imports a terminal, complete and cross-record-valid receive session.
     ///
     /// # Errors
@@ -1010,8 +1024,9 @@ impl VersionPublicationStore {
     /// Fast-forwards one local connector branch to an already imported immutable head.
     ///
     /// This operation never rewrites or merges history. The advertised head must select the exact
-    /// root supplied by the caller and descend from the current local head. Exact retries return
-    /// the existing head without advancing its sequence.
+    /// root supplied by the caller and belong to the current local lineage. A descendant advances
+    /// the branch; an exact retry or already-superseded ancestor returns the existing head without
+    /// advancing its sequence. Divergent history is never selected implicitly.
     ///
     /// # Errors
     ///

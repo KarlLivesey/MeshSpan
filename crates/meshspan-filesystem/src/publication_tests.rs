@@ -483,6 +483,45 @@ use super::{
 };
 
 #[test]
+fn imported_head_accepts_an_already_superseded_ancestor_without_rewinding()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source_directory = tempdir()?;
+    let target_directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut source = VersionPublicationStore::open(source_directory.path(), UnixMicros::new(1))?;
+    source.publish_root_file(&first)?;
+    source.publish_root_file(&second)?;
+    let history = source.export_namespace_history(
+        first.file.volume_id,
+        &[second.namespace_commit_id],
+        &[],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+
+    let mut target = VersionPublicationStore::open(target_directory.path(), UnixMicros::new(2))?;
+    target.import_namespace_history(&history, NamespaceHistoryLimits::DEFAULT)?;
+    let branch = BranchId::from_bytes([111; 16])?;
+    let adopted = target.adopt_imported_namespace_head(
+        branch,
+        second.file.volume_id,
+        second.namespace_commit_id,
+        second.root_object_revision_id,
+    )?;
+    let stale_retry = target.adopt_imported_namespace_head(
+        branch,
+        first.file.volume_id,
+        first.namespace_commit_id,
+        first.root_object_revision_id,
+    )?;
+
+    assert_eq!(stale_retry, adopted);
+    assert_eq!(stale_retry.namespace_commit_id, second.namespace_commit_id);
+    assert_eq!(stale_retry.sequence, 1);
+    Ok(())
+}
+
+#[test]
 fn two_restarted_isolated_stores_exchange_and_converge_without_moving_local_heads()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = isolated_history_fixture()?;
@@ -856,6 +895,25 @@ fn durable_history_receive_resumes_and_publishes_only_after_complete_validation(
     assert!(!initial.terminal);
 
     let advertised = receive_home_history_pages(&fixture, &request)?;
+
+    let receiver = fixture.open_office()?;
+    assert_eq!(
+        receiver.namespace_history_missing_immutable_digests(request.session_id, 2)?,
+        advertised[..2]
+    );
+    assert!(matches!(
+        receiver.namespace_history_missing_immutable_digests(request.session_id, 0),
+        Err(PublicationError::InvalidInput)
+    ));
+    assert!(matches!(
+        receiver.namespace_history_missing_immutable_digests(request.session_id, 257),
+        Err(PublicationError::InvalidInput)
+    ));
+    assert!(matches!(
+        receiver.namespace_history_missing_immutable_digests([255; 32], 1),
+        Err(PublicationError::InvalidInput)
+    ));
+    drop(receiver);
 
     let mut receiver = fixture.open_office()?;
     assert!(matches!(

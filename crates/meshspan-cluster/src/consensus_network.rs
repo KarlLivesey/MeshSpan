@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use meshspan_consensus::CoreMessage;
@@ -45,6 +45,7 @@ const STREAM_WINDOW: u32 = 64 * 1_024;
 const CONNECTION_WINDOW: u32 = 4 * 1_024 * 1_024;
 const OUTBOUND_QUEUE_CAPACITY: usize = 32;
 const PEER_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
+const CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// One exact enrolled peer route and leaf-certificate binding.
@@ -124,6 +125,7 @@ pub struct ConsensusNetwork {
     runtime: tokio::runtime::Handle,
     client: quinn::Endpoint,
     peers: Arc<RwLock<ConsensusPeers>>,
+    control_connections: Arc<Mutex<BTreeMap<NodeId, quinn::Connection>>>,
     local_node_id: NodeId,
     local_incarnation: u64,
     mesh_id: MeshId,
@@ -296,6 +298,7 @@ impl ConsensusNetwork {
                 registry,
                 outbound: BTreeMap::new(),
             })),
+            control_connections: Arc::new(Mutex::new(BTreeMap::new())),
             local_node_id: config.local_node_id,
             local_incarnation: config.local_incarnation,
             mesh_id: config.mesh_id,
@@ -367,6 +370,10 @@ impl ConsensusNetwork {
         peers.registry = registry;
         peers.outbound.insert(peer.node_id, sender);
         drop(peers);
+        self.control_connections
+            .lock()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .remove(&peer.node_id);
         self.spawn_outbound_worker(peer.node_id, receiver);
         Ok(())
     }
@@ -382,14 +389,30 @@ impl ConsensusNetwork {
         to: NodeId,
         request: &ControlEnvelope,
     ) -> Result<meshspan_protocol::ValidatedControlEnvelope, ConsensusNetworkError> {
-        let connection = tokio::time::timeout(PEER_OPERATION_TIMEOUT, self.connect_peer(to))
-            .await
-            .map_err(|_| ConsensusNetworkError::AuthorityStopped)??;
-        let (mut send, mut receive) = open_stream(&connection, StreamKind::Metadata).await?;
+        let connection = self.control_connection(to).await?;
+        let result = self
+            .request_control_on_connection(to, request, &connection)
+            .await;
+        if result.is_err() {
+            self.control_connections
+                .lock()
+                .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+                .remove(&to);
+        }
+        result
+    }
+
+    async fn request_control_on_connection(
+        &self,
+        to: NodeId,
+        request: &ControlEnvelope,
+        connection: &quinn::Connection,
+    ) -> Result<meshspan_protocol::ValidatedControlEnvelope, ConsensusNetworkError> {
+        let (mut send, mut receive) = open_stream(connection, StreamKind::Metadata).await?;
         send_control(&mut send, request, self.wire_limits).await?;
         send.finish()?;
         let response = tokio::time::timeout(
-            PEER_OPERATION_TIMEOUT,
+            CONTROL_RESPONSE_TIMEOUT,
             receive_control(&mut receive, self.wire_limits),
         )
         .await
@@ -404,6 +427,30 @@ impl ConsensusNetwork {
             .ok_or(ConsensusNetworkError::InvalidConfiguration)?;
         self.verify_header(&response, to, incarnation)?;
         Ok(response)
+    }
+
+    async fn control_connection(
+        &self,
+        to: NodeId,
+    ) -> Result<quinn::Connection, ConsensusNetworkError> {
+        if let Some(connection) = self
+            .control_connections
+            .lock()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .get(&to)
+            .filter(|connection| connection.close_reason().is_none())
+            .cloned()
+        {
+            return Ok(connection);
+        }
+        let connection = tokio::time::timeout(PEER_OPERATION_TIMEOUT, self.connect_peer(to))
+            .await
+            .map_err(|_| ConsensusNetworkError::AuthorityStopped)??;
+        self.control_connections
+            .lock()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .insert(to, connection.clone());
+        Ok(connection)
     }
 
     /// Proves that one configured peer accepts an mTLS connection and exact hello negotiation.
@@ -617,7 +664,7 @@ impl ConsensusNetwork {
                         })
                         .await
                         .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
-                    let response = tokio::time::timeout(PEER_OPERATION_TIMEOUT, response)
+                    let response = tokio::time::timeout(CONTROL_RESPONSE_TIMEOUT, response)
                         .await
                         .map_err(|_| ConsensusNetworkError::AuthorityStopped)?
                         .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;

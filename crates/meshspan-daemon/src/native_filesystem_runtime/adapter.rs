@@ -137,6 +137,9 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
                 request.observed_at,
             )?;
         }
+        if let Some(delete) = receipt.delete {
+            self.publish_namespace_head(delete.namespace_commit_id, None, request.observed_at)?;
+        }
         Ok(receipt)
     }
 

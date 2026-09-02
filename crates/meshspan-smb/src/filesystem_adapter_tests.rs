@@ -319,6 +319,7 @@ impl FilesystemFileAdapter for TestFilesystem {
                 .flush
                 .map(|flush| publication(flush.operation_id))
                 .transpose()?,
+            delete: None,
             close: CloseHandleReceipt {
                 disposition: PublicationDisposition::Applied,
                 operation_id: request.operation_id,

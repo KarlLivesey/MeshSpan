@@ -169,6 +169,8 @@ pub struct FilesystemHandleCloseRequest {
 pub struct FilesystemHandleCloseReceipt {
     /// Namespace publication produced by a dirty close.
     pub flush: Option<crate::NamespacePublicationReceipt>,
+    /// Namespace publication produced when delete-on-close completed.
+    pub delete: Option<crate::NamespaceUnlinkReceipt>,
     /// Final handle release and delete-on-close readiness.
     pub close: crate::CloseHandleReceipt,
 }

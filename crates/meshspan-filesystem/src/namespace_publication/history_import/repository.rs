@@ -161,6 +161,29 @@ pub(super) fn status(
     })
 }
 
+pub(super) fn missing_immutable_digests(
+    connection: &Connection,
+    session_id: [u8; 32],
+    limit: usize,
+) -> Result<Vec<[u8; 32]>, PublicationError> {
+    if limit == 0 || limit > 256 || load_session(connection, session_id)?.is_none() {
+        return Err(PublicationError::InvalidInput);
+    }
+    let mut statement = connection.prepare(
+        "SELECT record_digest FROM namespace_history_import_records
+         WHERE session_id = ?1 AND record_kind = 2 AND canonical_bytes IS NULL
+         ORDER BY record_ordinal LIMIT ?2",
+    )?;
+    let rows = statement.query_map(
+        params![
+            session_id.as_slice(),
+            i64::try_from(limit).map_err(|_| PublicationError::InvalidInput)?
+        ],
+        |row| row.get::<_, Vec<u8>>(0),
+    )?;
+    rows.map(|row| copy_array(&row?)).collect()
+}
+
 pub(super) fn load_heads(
     connection: &Connection,
     session_id: [u8; 32],

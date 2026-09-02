@@ -703,7 +703,11 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
                 .flush
                 .map(|flush| self.flush_handle(flush))
                 .transpose()?;
-            return Ok(FilesystemHandleCloseReceipt { flush, close });
+            return Ok(FilesystemHandleCloseReceipt {
+                flush,
+                delete: None,
+                close,
+            });
         }
 
         let uses_stage = self
@@ -741,7 +745,11 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .map(|flush| self.flush_handle(flush))
             .transpose()?;
         let close = self.publications.close_handle(request.close)?;
-        Ok(FilesystemHandleCloseReceipt { flush, close })
+        Ok(FilesystemHandleCloseReceipt {
+            flush,
+            delete: None,
+            close,
+        })
     }
 
     fn commit_handle_plan(

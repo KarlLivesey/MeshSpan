@@ -107,6 +107,7 @@ mod storage_folder_backend;
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
 const INITIAL_MEMBERSHIP_EPOCH: u64 = 1;
+const PRIVATE_CONTROL_CONCURRENCY: usize = 64;
 const UPLOAD_LIFETIME_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
 const CONTENT_OPERATION_DEADLINE_MICROS: u64 = 60 * 1_000_000;
 const TOTP_REGISTRATION_LIFETIME_MICROS: u64 = 5 * 60 * 1_000_000;
@@ -244,22 +245,55 @@ impl PrivateNetworkStarter {
         let authority = self.authority.clone();
         let state_directory = self.state_directory.clone();
         let runtime = self.runtime.clone();
+        let permits = Arc::new(tokio::sync::Semaphore::new(PRIVATE_CONTROL_CONCURRENCY));
+        let mutations = Arc::new(tokio::sync::Semaphore::new(1));
         self.runtime.spawn(async move {
             while let Some(request) = requests.recv().await {
-                let response = handle_private_control(
-                    &network,
-                    &authority,
-                    &state_directory,
-                    &runtime,
-                    &request,
-                )
-                .await;
-                if let Ok(response) = response {
-                    let _closed = request.respond.send(response);
-                }
+                let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
+                    break;
+                };
+                let network = network.clone();
+                let authority = authority.clone();
+                let state_directory = state_directory.clone();
+                let runtime = runtime.clone();
+                let mutation_permit = (!private_control_is_fetch(&request))
+                    .then(|| Arc::clone(&mutations).acquire_owned())
+                    .map(|permit| async move { permit.await.ok() });
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let _mutation_permit = match mutation_permit {
+                        Some(permit) => match permit.await {
+                            Some(permit) => Some(permit),
+                            None => return,
+                        },
+                        None => None,
+                    };
+                    let response = handle_private_control(
+                        &network,
+                        &authority,
+                        &state_directory,
+                        &runtime,
+                        &request,
+                    )
+                    .await;
+                    if let Ok(response) = response {
+                        let _closed = request.respond.send(response);
+                    }
+                });
             }
         });
     }
+}
+
+fn private_control_is_fetch(request: &PeerControlRequest) -> bool {
+    matches!(
+        request.envelope.as_inner().message.as_ref(),
+        Some(
+            Message::FetchNamespaceHistoryPage(_)
+                | Message::FetchNamespaceHistoryObject(_)
+                | Message::FetchNativeContentLayout(_)
+        )
+    )
 }
 
 struct NetworkStartingSetup<C> {

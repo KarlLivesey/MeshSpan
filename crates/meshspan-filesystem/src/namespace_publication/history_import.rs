@@ -33,6 +33,14 @@ const RECORD_IMMUTABLE: i64 = 2;
 const MAXIMUM_CURSOR_BYTES: usize = 256;
 const MAXIMUM_SESSION_MICROS: i64 = 86_400_000_000;
 
+pub(super) fn missing_immutable_digests(
+    connection: &Connection,
+    session_id: [u8; 32],
+    limit: usize,
+) -> Result<Vec<[u8; 32]>, PublicationError> {
+    repository::missing_immutable_digests(connection, session_id, limit)
+}
+
 /// Immutable authority and resource bounds for one durable receive transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceHistoryReceiveRequest {
@@ -153,6 +161,10 @@ pub(super) fn adopt_head(
             return Ok(head);
         }
         Some(head) => {
+            if is_ancestor(&transaction, namespace_commit_id, head.namespace_commit_id)? {
+                transaction.commit()?;
+                return Ok(head);
+            }
             if !is_ancestor(&transaction, head.namespace_commit_id, namespace_commit_id)? {
                 return Err(PublicationError::StaleHead);
             }
