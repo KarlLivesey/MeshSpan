@@ -594,6 +594,22 @@ impl DurableContentCatalog {
         })
     }
 
+    /// Reconstructs immutable write acknowledgement evidence for one committed protected file.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown, incomplete, legacy or corrupt content and missing durable receipts.
+    pub fn committed_acknowledgement_evidence(
+        &self,
+        content: PublishedContentReference,
+    ) -> Result<crate::ContentAcknowledgementEvidence, ContentCatalogError> {
+        let committed = self.committed_layout(content)?;
+        if committed.request.format_version != 2 {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        self.protected_acknowledgement_evidence(committed.request)
+    }
+
     /// Resolves and independently verifies one committed manifest without source-local operation
     /// knowledge.
     ///

@@ -16,7 +16,9 @@ pub(crate) fn classify_native_filesystem_error(
     error: &NativeFilesystemRuntimeError,
 ) -> FileApiFailure {
     match error {
-        NativeFilesystemRuntimeError::Unavailable => FileApiFailure::Unavailable,
+        NativeFilesystemRuntimeError::Unavailable
+        | NativeFilesystemRuntimeError::StrongBarrierPending => FileApiFailure::Unavailable,
+        NativeFilesystemRuntimeError::StrongBarrierFailed => FileApiFailure::Failed,
         NativeFilesystemRuntimeError::Operation(error) => classify_operation_error(error),
     }
 }

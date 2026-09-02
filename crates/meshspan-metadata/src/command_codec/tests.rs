@@ -5,10 +5,10 @@ use meshspan_domain::{
     AcknowledgementPolicyId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
     AuthenticationMethodId, AuthenticationService, AvailabilityCellId, ComponentInstanceId,
     DurationMicros, EntropyError, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
-    GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId, NodeId, ObjectId,
-    OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId, RandomSource,
-    RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros,
-    VolumeId,
+    GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId, NamespaceCommitId,
+    NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId,
+    ProtectionScenarioId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId,
+    SmbExportId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -19,7 +19,8 @@ use super::*;
 use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
     AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
-    AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity, CommitSecretGeneration,
+    AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommitConvergedVolumeHead, CommitSecretGeneration, ConvergedHeadEvidence,
     CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
     CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
     CreateProtectionPolicy, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
@@ -79,6 +80,38 @@ fn unsupported_command_never_produces_partial_wire_bytes() -> Result<(), Box<dyn
         encode_authoritative_command(context, &command),
         Err(MetadataCommandCodecError::Unsupported)
     );
+    Ok(())
+}
+
+#[test]
+fn converged_volume_head_evidence_round_trips_canonically() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (context, _) = fixture()?;
+    for evidence in [
+        ConvergedHeadEvidence::Publication {
+            operation_id: OperationId::from_bytes([31; 16])?,
+            request_digest: [32; 32],
+            result_digest: [33; 32],
+        },
+        ConvergedHeadEvidence::Reconciliation {
+            operation_id: OperationId::from_bytes([34; 16])?,
+            request_digest: [35; 32],
+            causal_plan_digest: [36; 32],
+            replay_plan_digest: [37; 32],
+            result_digest: [38; 32],
+        },
+    ] {
+        assert_round_trip(
+            context,
+            AuthoritativeCommand::CommitConvergedVolumeHead(CommitConvergedVolumeHead {
+                volume_id: VolumeId::from_bytes([39; 16])?,
+                expected_namespace_commit_id: Some(NamespaceCommitId::from_bytes([40; 16])?),
+                namespace_commit_id: NamespaceCommitId::from_bytes([41; 16])?,
+                root_object_revision_id: ObjectRevisionId::from_bytes([42; 16])?,
+                evidence,
+            }),
+        )?;
+    }
     Ok(())
 }
 

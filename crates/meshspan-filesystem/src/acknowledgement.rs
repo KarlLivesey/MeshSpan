@@ -97,24 +97,110 @@ pub struct PublicationAcknowledgement {
 }
 
 impl ContentAcknowledgementEvidence {
-    /// Finalises content evidence after the atomic namespace transition has succeeded.
+    /// Finalises content evidence after the local branch transition has succeeded.
     #[must_use]
-    pub const fn namespace_committed(self) -> PublicationAcknowledgement {
+    pub const fn branch_committed(self) -> PublicationAcknowledgement {
         PublicationAcknowledgement {
             configured_class: self.configured_class,
             acknowledged_class: self.acknowledged_class,
             fallback_applied: self.fallback_applied,
-            durability_scope: match self.acknowledged_class {
-                ContentAcknowledgementClass::Eventual => self.content_scope,
-                ContentAcknowledgementClass::Strong => DurabilityScope::GloballyConverged,
-            },
-            policy_committed: !self.fallback_applied,
+            durability_scope: self.content_scope,
+            policy_committed: matches!(
+                (self.configured_class, self.acknowledged_class),
+                (
+                    ContentAcknowledgementClass::Eventual,
+                    ContentAcknowledgementClass::Eventual
+                )
+            ),
             required_shard_receipts: self.required_shard_receipts,
             eventual_shard_receipts: self.eventual_shard_receipts,
             pending_eventual_shards: self.pending_eventual_shards,
             policy_evidence_digest: self.policy_evidence_digest,
             achieved_protection_digest: self.achieved_protection_digest,
             pending_debt_digest: self.pending_debt_digest,
+        }
+    }
+}
+
+impl PublicationAcknowledgement {
+    /// Marks a strong acknowledgement complete only after replicated metadata commits its head.
+    #[must_use]
+    pub const fn globally_converged(self) -> Option<Self> {
+        if matches!(
+            (self.configured_class, self.acknowledged_class),
+            (
+                ContentAcknowledgementClass::Strong,
+                ContentAcknowledgementClass::Strong
+            )
+        ) && !self.fallback_applied
+        {
+            Some(Self {
+                durability_scope: DurabilityScope::GloballyConverged,
+                policy_committed: true,
+                ..self
+            })
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strong_content_never_claims_global_convergence_before_metadata_commit()
+    -> Result<(), &'static str> {
+        let branch = evidence(
+            ContentAcknowledgementClass::Strong,
+            ContentAcknowledgementClass::Strong,
+            false,
+        )
+        .branch_committed();
+
+        assert_eq!(branch.durability_scope, DurabilityScope::CellReplicated);
+        assert!(!branch.policy_committed);
+        let converged = branch
+            .globally_converged()
+            .ok_or("strong acknowledgement was not promoted")?;
+        assert_eq!(
+            converged.durability_scope,
+            DurabilityScope::GloballyConverged
+        );
+        assert!(converged.policy_committed);
+        Ok(())
+    }
+
+    #[test]
+    fn eventual_fallback_cannot_be_promoted_to_strong_success() {
+        let fallback = evidence(
+            ContentAcknowledgementClass::Strong,
+            ContentAcknowledgementClass::Eventual,
+            true,
+        )
+        .branch_committed();
+
+        assert!(!fallback.policy_committed);
+        assert_eq!(fallback.globally_converged(), None);
+    }
+
+    const fn evidence(
+        configured_class: ContentAcknowledgementClass,
+        acknowledged_class: ContentAcknowledgementClass,
+        fallback_applied: bool,
+    ) -> ContentAcknowledgementEvidence {
+        ContentAcknowledgementEvidence {
+            configured_class,
+            acknowledged_class,
+            fallback_applied,
+            content_scope: DurabilityScope::CellReplicated,
+            required_shard_receipts: 2,
+            eventual_shard_receipts: 1,
+            pending_eventual_shards: 1,
+            policy_evidence_digest: [1; 32],
+            achieved_protection_digest: [2; 32],
+            pending_debt_digest: [3; 32],
         }
     }
 }

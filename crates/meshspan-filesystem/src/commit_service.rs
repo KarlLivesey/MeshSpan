@@ -354,7 +354,7 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         let acknowledgement = self
             .content
             .acknowledgement_evidence(request.publication.content_publication_request())?
-            .namespace_committed();
+            .branch_committed();
         let session = crate::upload_service::finish_commit(&mut self.uploads, transition)?;
         Ok(crate::UploadCommitReceipt {
             session,

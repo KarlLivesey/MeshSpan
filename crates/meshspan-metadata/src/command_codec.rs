@@ -20,6 +20,7 @@ mod secret_generation;
 mod session;
 mod smb_export;
 mod storage_target;
+mod volume_head;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, Revision, UnixMicros};
 use thiserror::Error;
@@ -187,6 +188,9 @@ fn encode_command(
         AuthoritativeCommand::IssueJoinGrant(value) => enrolment::encode_issue(encoder, value),
         AuthoritativeCommand::ConsumeJoinGrant(value) => enrolment::encode_consume(encoder, value),
         AuthoritativeCommand::ActivateNode(value) => enrolment::encode_activate(encoder, value),
+        AuthoritativeCommand::CommitConvergedVolumeHead(value) => {
+            volume_head::encode(encoder, *value)
+        }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -286,6 +290,9 @@ fn decode_command(
         }
         enrolment::ACTIVATE_NODE => {
             enrolment::decode_activate(decoder).map(AuthoritativeCommand::ActivateNode)
+        }
+        volume_head::COMMIT_CONVERGED_VOLUME_HEAD => {
+            volume_head::decode(decoder).map(AuthoritativeCommand::CommitConvergedVolumeHead)
         }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }

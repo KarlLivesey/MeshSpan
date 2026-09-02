@@ -132,8 +132,8 @@ pub use publication::{
     NamespaceReconciliationReceipt, NamespaceRenamePublication, NamespaceRenameReceipt,
     NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,
     PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
-    SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedReconciliationHead,
-    VerifiedSnapshotRestoreHead, VersionPublicationStore,
+    SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedPublicationHead,
+    VerifiedReconciliationHead, VerifiedSnapshotRestoreHead, VersionPublicationStore,
 };
 pub use reachability::{
     ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource, VersionReachabilityError,

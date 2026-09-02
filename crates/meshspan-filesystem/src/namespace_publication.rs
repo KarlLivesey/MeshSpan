@@ -233,6 +233,44 @@ pub(super) fn load_snapshot_restore(
     snapshot_restore::load_receipt(connection, operation_id, disposition)
 }
 
+pub(super) fn verify_publication_head(
+    connection: &Connection,
+    receipt: super::NamespacePublicationReceipt,
+) -> Result<super::VerifiedPublicationHead, PublicationError> {
+    let durable = repository::load_file_operation(
+        connection,
+        receipt.operation_id,
+        PublicationDisposition::Replayed,
+    )?
+    .ok_or(PublicationError::InvalidInput)?;
+    if durable.operation_id != receipt.operation_id
+        || durable.request_digest != receipt.request_digest
+        || durable.file_version_id != receipt.file_version_id
+        || durable.namespace_commit_id != receipt.namespace_commit_id
+        || durable.head_sequence != receipt.head_sequence
+        || durable.result_digest != receipt.result_digest
+    {
+        return Err(PublicationError::OperationConflict);
+    }
+    let commit = repository::load_commit(connection, receipt.namespace_commit_id)?;
+    let head = repository::load_head(connection, commit.branch_id, commit.volume_id)?
+        .ok_or(PublicationError::Corrupt)?;
+    if commit.operation_id != receipt.operation_id
+        || head.namespace_commit_id != receipt.namespace_commit_id
+        || head.sequence != receipt.head_sequence
+    {
+        return Err(PublicationError::StaleHead);
+    }
+    Ok(super::VerifiedPublicationHead::new(
+        durable,
+        commit.volume_id,
+        commit.parent_id,
+        commit.root_object_revision_id,
+        commit.created_by,
+        commit.created_at,
+    ))
+}
+
 pub(super) fn verify_snapshot_restore_head(
     connection: &Connection,
     volume_id: VolumeId,

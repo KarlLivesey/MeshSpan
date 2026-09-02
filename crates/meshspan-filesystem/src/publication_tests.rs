@@ -2674,9 +2674,28 @@ fn root_file_publication_moves_file_and_volume_heads_once_across_restart()
     let replayed = reopened.publish_root_file(&first)?;
     assert_eq!(replayed.disposition, PublicationDisposition::Replayed);
     assert_eq!(replayed.result_digest, applied.result_digest);
+    let verified_first = reopened.verify_publication_head(applied)?;
+    assert_eq!(verified_first.receipt(), replayed);
+    assert_eq!(verified_first.volume_id(), first.file.volume_id);
+    assert_eq!(verified_first.expected_namespace_commit_id(), None);
+    assert_eq!(
+        verified_first.root_object_revision_id(),
+        first.root_object_revision_id
+    );
+    assert_eq!(verified_first.created_by(), first.file.created_by);
+    assert_eq!(verified_first.created_at(), first.file.created_at);
     let second = next_root_publication(&first)?;
     let next = reopened.publish_root_file(&second)?;
     assert_eq!(next.head_sequence, 2);
+    assert!(matches!(
+        reopened.verify_publication_head(applied),
+        Err(PublicationError::StaleHead)
+    ));
+    let verified_next = reopened.verify_publication_head(next)?;
+    assert_eq!(
+        verified_next.expected_namespace_commit_id(),
+        Some(first.namespace_commit_id)
+    );
     assert_eq!(
         reopened.resolve_namespace_publication(first.file.operation_id)?,
         Some(NamespacePublicationReceipt {
