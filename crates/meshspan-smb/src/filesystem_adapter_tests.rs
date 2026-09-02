@@ -2,8 +2,8 @@
 
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
-    AssuranceLevel, AuthenticationService, FileVersionId, NamespaceCommitId, NodeId, ObjectId,
-    ObjectRevisionId, OperationId, UnixMicros, VolumeId,
+    AssuranceLevel, AuthenticationService, FileVersionId, LockId, NamespaceCommitId, NodeId,
+    ObjectId, ObjectRevisionId, OperationId, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
@@ -15,7 +15,7 @@ use meshspan_filesystem::{
     FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt, HandleLeaseReceipt,
     HandleWriteAdmissionReceipt, LockRangeReceipt, NamespaceListPage, NamespaceObjectStat,
     NamespacePublicationReceipt, NamespaceRenameReceipt, NamespaceUnlinkReceipt, OpenHandleReceipt,
-    PublicationDisposition, StageWriteOutcome, UnlockRangeReceipt,
+    PublicationDisposition, RangeLockKind, StageWriteOutcome, UnlockRangeReceipt,
 };
 
 use super::{
@@ -24,7 +24,8 @@ use super::{
 };
 use crate::{
     CloseRequest, CreateDisposition, CreateOptions, CreateRequest, CreateTargetKind, FlushRequest,
-    ReadRequest, Smb2Command, Smb2Header, SmbRequestedAccess, SmbShareAccess, WriteRequest,
+    LockElement, LockKind, LockRequest, ReadRequest, Smb2Command, Smb2Header, SmbRequestedAccess,
+    SmbShareAccess, WriteRequest,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -51,6 +52,14 @@ enum Call {
     },
     Close {
         has_flush: bool,
+    },
+    Lock {
+        offset: u64,
+        length: u64,
+        kind: RangeLockKind,
+    },
+    Unlock {
+        lock_id: LockId,
     },
 }
 
@@ -241,17 +250,45 @@ impl FilesystemFileAdapter for TestFilesystem {
     fn lock_range(
         &mut self,
         _context: FilesystemAccessContext,
-        _request: AdapterLockRequest,
+        request: AdapterLockRequest,
     ) -> Result<LockRangeReceipt, Self::Error> {
-        Err(TestError)
+        self.calls.push(Call::Lock {
+            offset: request.range.start(),
+            length: request.range.length(),
+            kind: request.kind,
+        });
+        Ok(LockRangeReceipt {
+            disposition: PublicationDisposition::Applied,
+            operation_id: request.operation_id,
+            lock_id: request.lock_id,
+            handle_id: request.handle_id,
+            request_digest: [12; 32],
+            handle_fence: request.handle_fence,
+            range: request.range,
+            kind: request.kind,
+            lease_expires_at: request.lease_expires_at,
+            result_digest: [13; 32],
+        })
     }
 
     fn unlock_range(
         &mut self,
         _context: FilesystemAccessContext,
-        _request: AdapterUnlockRequest,
+        request: AdapterUnlockRequest,
     ) -> Result<UnlockRangeReceipt, Self::Error> {
-        Err(TestError)
+        self.calls.push(Call::Unlock {
+            lock_id: request.lock_id,
+        });
+        Ok(UnlockRangeReceipt {
+            disposition: PublicationDisposition::Applied,
+            operation_id: request.operation_id,
+            lock_id: request.lock_id,
+            handle_id: request.handle_id,
+            request_digest: [14; 32],
+            handle_fence: request.handle_fence,
+            released_at: request.observed_at,
+            result_digest: [15; 32],
+        })
     }
 }
 
@@ -355,6 +392,56 @@ fn identity_and_size_fail_before_common_filesystem_dispatch()
         Err(SmbFilesystemAdapterError::LimitExceeded)
     ));
     assert_eq!(adapter.into_inner().calls.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn exact_range_lock_is_retained_for_a_later_unlock() -> Result<(), Box<dyn std::error::Error>> {
+    let mut adapter = adapter(64)?;
+    let opened = adapter.create_file(
+        context()?,
+        &create_request(30, vec!["locked.txt".to_owned()]),
+    )?;
+    adapter.lock_ranges(
+        context()?,
+        &LockRequest {
+            header: header(Smb2Command::Lock, 31),
+            file_id: opened.file_id,
+            elements: vec![LockElement {
+                offset: 5,
+                length: 7,
+                kind: LockKind::Exclusive {
+                    fail_immediately: true,
+                },
+            }],
+        },
+    )?;
+    adapter.lock_ranges(
+        context()?,
+        &LockRequest {
+            header: header(Smb2Command::Lock, 32),
+            file_id: opened.file_id,
+            elements: vec![LockElement {
+                offset: 5,
+                length: 7,
+                kind: LockKind::Unlock,
+            }],
+        },
+    )?;
+
+    let calls = adapter.into_inner().calls;
+    assert!(matches!(
+        calls.get(1),
+        Some(Call::Lock {
+            offset: 5,
+            length: 7,
+            kind: RangeLockKind::Exclusive
+        })
+    ));
+    let Some(Call::Unlock { lock_id }) = calls.get(2) else {
+        return Err(Box::new(TestError));
+    };
+    assert_ne!(*lock_id, LockId::from_bytes([16; 16])?);
     Ok(())
 }
 

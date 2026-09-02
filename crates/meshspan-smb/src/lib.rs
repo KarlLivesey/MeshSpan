@@ -6,6 +6,7 @@
 //! namespace semantics or provider paths; those remain behind `MeshSpan`'s shared
 //! authentication and filesystem interfaces.
 
+mod byte_range_lock;
 mod close_flush;
 mod create;
 mod direct_tcp;
@@ -25,6 +26,7 @@ mod status;
 mod transform;
 mod tree_connect;
 
+pub use byte_range_lock::{LockElement, LockKind, LockRequest, LockResponse, SmbLockError};
 pub use close_flush::{
     CloseRequest, CloseResponse, CloseResponseAttributes, FlushRequest, SmbCloseFlushError,
 };

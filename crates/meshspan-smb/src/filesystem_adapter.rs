@@ -5,19 +5,19 @@
 use std::collections::BTreeMap;
 
 use meshspan_contracts::BoundedBytes;
-use meshspan_domain::{DurationMicros, HandleId, OperationId, UnixMicros, VolumeId};
+use meshspan_domain::{DurationMicros, HandleId, LockId, OperationId, UnixMicros, VolumeId};
 use meshspan_filesystem::{
-    AdapterCloseFileRequest, AdapterCreateFileRequest, AdapterFlushFileRequest,
-    AdapterReadFileRequest, AdapterWriteFileRequest, CreateDisposition as FilesystemDisposition,
-    FilesystemAccessContext, FilesystemFileAdapter, HandleAccess, HandleShare, NamespaceLimits,
-    NamespacePath,
+    AdapterCloseFileRequest, AdapterCreateFileRequest, AdapterFlushFileRequest, AdapterLockRequest,
+    AdapterReadFileRequest, AdapterUnlockRequest, AdapterWriteFileRequest, ByteRange,
+    CreateDisposition as FilesystemDisposition, FilesystemAccessContext, FilesystemFileAdapter,
+    HandleAccess, HandleShare, NamespaceLimits, NamespacePath, RangeLockKind,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
     CloseRequest, CloseResponse, CloseResponseAttributes, CreateAction, CreateDisposition,
-    CreateRequest, CreateResponse, CreateResponseValues, CreateTargetKind, FlushRequest,
-    ReadRequest, ReadResponse, SmbFileId, WriteRequest, WriteResponse,
+    CreateRequest, CreateResponse, CreateResponseValues, CreateTargetKind, FlushRequest, LockKind,
+    LockRequest, LockResponse, ReadRequest, ReadResponse, SmbFileId, WriteRequest, WriteResponse,
 };
 
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
@@ -112,6 +112,7 @@ pub struct SmbFilesystemAdapter<F> {
     tree: SmbTreeBinding,
     limits: SmbFilesystemLimits,
     handles: BTreeMap<SmbFileId, OpenFile>,
+    locks: BTreeMap<(SmbFileId, u64, u64), LockId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,6 +121,7 @@ struct OpenFile {
     fence: u64,
     checkpoint_sequence: u64,
     logical_length: u64,
+    lease_expires_at: UnixMicros,
     dirty: bool,
 }
 
@@ -135,6 +137,7 @@ where
             tree,
             limits,
             handles: BTreeMap::new(),
+            locks: BTreeMap::new(),
         }
     }
 
@@ -246,6 +249,7 @@ where
                 fence: receipt.handle.handle_fence,
                 checkpoint_sequence: 0,
                 logical_length,
+                lease_expires_at,
                 dirty: receipt.handle.truncate_on_first_write,
             },
         );
@@ -358,6 +362,83 @@ where
         Ok(request.success_response())
     }
 
+    /// Applies each lock or unlock in wire order against the common fenced handle authority.
+    ///
+    /// Successfully applied earlier elements remain effective if a later element fails, matching
+    /// SMB's prescribed partial-array processing semantics.
+    ///
+    /// # Errors
+    ///
+    /// Rejects mismatched or stale identities, malformed ranges, duplicate/unknown local locks or
+    /// a common authority/filesystem failure.
+    pub fn lock_ranges(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &LockRequest,
+    ) -> Result<LockResponse, SmbFilesystemAdapterError<F::Error>> {
+        self.validate_header(request.header.session_id, request.header.tree_id)?;
+        let open = *self.open(request.file_id)?;
+        for (index, element) in request.elements.iter().copied().enumerate() {
+            let range = ByteRange::new(element.offset, element.length)
+                .map_err(|_| SmbFilesystemAdapterError::InvalidRange)?;
+            let key = (request.file_id, element.offset, element.length);
+            match element.kind {
+                LockKind::Shared { .. } | LockKind::Exclusive { .. } => {
+                    if self.locks.contains_key(&key) {
+                        return Err(SmbFilesystemAdapterError::DuplicateLock);
+                    }
+                    let lock_id = indexed_lock_id(request.header, index)?;
+                    self.filesystem
+                        .lock_range(
+                            context,
+                            AdapterLockRequest {
+                                operation_id: indexed_operation_id(request.header, b"lock", index)?,
+                                lock_id,
+                                handle_id: open.handle_id,
+                                handle_fence: open.fence,
+                                range,
+                                kind: match element.kind {
+                                    LockKind::Shared { .. } => RangeLockKind::Shared,
+                                    LockKind::Exclusive { .. } => RangeLockKind::Exclusive,
+                                    LockKind::Unlock => {
+                                        return Err(SmbFilesystemAdapterError::InvalidRange);
+                                    }
+                                },
+                                lease_expires_at: open.lease_expires_at,
+                                observed_at: context.now,
+                            },
+                        )
+                        .map_err(SmbFilesystemAdapterError::Filesystem)?;
+                    self.locks.insert(key, lock_id);
+                }
+                LockKind::Unlock => {
+                    let lock_id = *self
+                        .locks
+                        .get(&key)
+                        .ok_or(SmbFilesystemAdapterError::UnknownLock)?;
+                    self.filesystem
+                        .unlock_range(
+                            context,
+                            AdapterUnlockRequest {
+                                operation_id: indexed_operation_id(
+                                    request.header,
+                                    b"unlock",
+                                    index,
+                                )?,
+                                lock_id,
+                                handle_id: open.handle_id,
+                                handle_fence: open.fence,
+                                observed_at: context.now,
+                            },
+                        )
+                        .map_err(SmbFilesystemAdapterError::Filesystem)?;
+                    self.locks.remove(&key);
+                }
+            }
+        }
+        Ok(request.success_response())
+    }
+
     /// Publishes dirty content when required and releases the exact common handle.
     ///
     /// # Errors
@@ -398,6 +479,8 @@ where
             )
             .map_err(SmbFilesystemAdapterError::Filesystem)?;
         self.handles.remove(&request.file_id);
+        self.locks
+            .retain(|(file_id, _, _), _| *file_id != request.file_id);
         Ok(CloseResponse::encode(
             request,
             Some(CloseResponseAttributes {
@@ -523,6 +606,45 @@ fn operation_id<E>(
     .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)
 }
 
+fn indexed_operation_id<E>(
+    header: crate::Smb2Header,
+    phase: &[u8],
+    index: usize,
+) -> Result<OperationId, SmbFilesystemAdapterError<E>> {
+    let digest = indexed_identity_digest(header, phase, index);
+    OperationId::from_bytes(
+        digest[..16]
+            .try_into()
+            .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)?,
+    )
+    .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)
+}
+
+fn indexed_lock_id<E>(
+    header: crate::Smb2Header,
+    index: usize,
+) -> Result<LockId, SmbFilesystemAdapterError<E>> {
+    let digest = indexed_identity_digest(header, b"lock-id", index);
+    LockId::from_bytes(
+        digest[..16]
+            .try_into()
+            .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)?,
+    )
+    .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)
+}
+
+fn indexed_identity_digest(header: crate::Smb2Header, phase: &[u8], index: usize) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(identity_digest(
+        header.session_id,
+        header.tree_id,
+        header.message_id,
+        phase,
+    ));
+    digest.update((index as u64).to_be_bytes());
+    digest.finalize().into()
+}
+
 fn identity_digest(session_id: u64, tree_id: u32, message_id: u64, phase: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"meshspan.smb.filesystem-identity.v1\0");
@@ -574,9 +696,18 @@ pub enum SmbFilesystemAdapterError<E> {
     /// A request exceeds a daemon-owned resource bound.
     #[error("SMB filesystem request exceeds its resource bound")]
     LimitExceeded,
+    /// A lock range cannot be represented by the common durable lock service.
+    #[error("SMB lock range is invalid")]
+    InvalidRange,
     /// A deterministic file identity collided with another live open.
     #[error("SMB file identity is already live")]
     DuplicateFileIdentity,
+    /// The same connection-local range is already locked by this open.
+    #[error("SMB range is already locked by this open")]
+    DuplicateLock,
+    /// The requested unlock does not identify a live connection-local lock.
+    #[error("SMB range does not identify a live lock")]
+    UnknownLock,
     /// The connection-visible file identity is absent or already closed.
     #[error("SMB file identity is not live")]
     UnknownFile,
