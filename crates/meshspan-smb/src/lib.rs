@@ -8,6 +8,7 @@
 
 mod byte_range_lock;
 mod close_flush;
+mod command_dispatcher;
 mod connection_control;
 mod create;
 mod direct_tcp;
@@ -34,6 +35,10 @@ mod tree_connect;
 pub use byte_range_lock::{LockElement, LockKind, LockRequest, LockResponse, SmbLockError};
 pub use close_flush::{
     CloseRequest, CloseResponse, CloseResponseAttributes, FlushRequest, SmbCloseFlushError,
+};
+pub use command_dispatcher::{
+    SmbCommandDispatchError, SmbCommandDispatcher, SmbCommandDispatcherConfigurationError,
+    SmbPublishedShare,
 };
 pub use connection_control::{
     EchoRequest, LogoffRequest, SmbConnectionControlError, SmbErrorResponse,
