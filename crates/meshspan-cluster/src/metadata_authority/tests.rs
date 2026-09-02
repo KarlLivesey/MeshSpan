@@ -194,7 +194,7 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut cluster = RealAuthorityCluster::start().await?;
