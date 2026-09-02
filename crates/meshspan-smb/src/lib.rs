@@ -11,6 +11,7 @@ mod close_flush;
 mod create;
 mod direct_tcp;
 mod file_id;
+mod file_information;
 mod file_io;
 mod filesystem_adapter;
 mod header;
@@ -39,6 +40,10 @@ pub use direct_tcp::{
     DirectTcpFrame, DirectTcpFrameError, DirectTcpFrameHeader, encode_direct_tcp_header,
 };
 pub use file_id::SmbFileId;
+pub use file_information::{
+    FileInformationClass, FileInformationValues, QueryInfoRequest, QueryInfoResponse,
+    SetFileInformation, SetInfoRequest, SmbFileInformationError,
+};
 pub use file_io::{ReadRequest, ReadResponse, SmbFileIoError, WriteRequest, WriteResponse};
 pub use filesystem_adapter::{
     SmbCreateOutcome, SmbFilesystemAdapter, SmbFilesystemAdapterError, SmbFilesystemLimits,
