@@ -17,7 +17,7 @@ report(generation);
 if (!generation.passed) {
   process.exitCode = 1;
 } else {
-  const lanes = [
+  const rustQualityLanes = [
     {
       name: "Rust format",
       steps: [["cargo", ["fmt", "--all", "--", "--check"]]],
@@ -43,158 +43,11 @@ if (!generation.passed) {
       name: "Rust dependency licences",
       steps: [["cargo", ["deny", "check", "licenses"]]],
     },
+  ];
+  const independentStaticLanes = [
     {
       name: "JavaScript dependency licences",
       steps: [[process.execPath, ["scripts/check-javascript-licences.mjs"]]],
-    },
-    {
-      name: "Rust domain and authentication primitives",
-      steps: [
-        [
-          "cargo",
-          [
-            "test",
-            "-p",
-            "meshspan-domain",
-            "-p",
-            "meshspan-contracts",
-            "-p",
-            "meshspan-passkey",
-            "-p",
-            "meshspan-otp",
-            "-p",
-            "sync_wrapper",
-            "--all-targets",
-            "--all-features",
-          ],
-        ],
-      ],
-    },
-    {
-      name: "public API conformance",
-      steps: [
-        [
-          "cargo",
-          [
-            "test",
-            "-p",
-            "meshspan-api-contract",
-            "--all-targets",
-            "--all-features",
-          ],
-        ],
-      ],
-    },
-    {
-      name: "metadata kernel tests",
-      steps: [
-        [
-          "cargo",
-          [
-            "test",
-            "-p",
-            "meshspan-metadata",
-            "--all-targets",
-            "--all-features",
-          ],
-        ],
-      ],
-    },
-    {
-      name: "consensus proof tests",
-      steps: [
-        [
-          "cargo",
-          [
-            "test",
-            "-p",
-            "meshspan-consensus",
-            "--all-targets",
-            "--all-features",
-          ],
-        ],
-      ],
-    },
-    {
-      name: "private protocol compatibility",
-      steps: [
-        [
-          "cargo",
-          [
-            "test",
-            "-p",
-            "meshspan-protocol",
-            "--all-targets",
-            "--all-features",
-          ],
-        ],
-      ],
-    },
-    {
-      name: "authenticated QUIC transport tests",
-      steps: [
-        [
-          "cargo",
-          [
-            "test",
-            "-p",
-            "meshspan-quinn-rustls",
-            "-p",
-            "meshspan-rustls-provider",
-            "-p",
-            "meshspan-test-certificates",
-            "-p",
-            "meshspan-transport",
-            "--all-targets",
-            "--all-features",
-          ],
-        ],
-      ],
-    },
-    {
-      name: "storage, data-plane and filesystem proofs",
-      steps: [
-        [
-          "cargo",
-          [
-            "test",
-            "-p",
-            "meshspan-storage",
-            "-p",
-            "meshspan-data-plane",
-            "-p",
-            "meshspan-filesystem",
-            "--all-targets",
-            "--all-features",
-          ],
-        ],
-      ],
-    },
-    {
-      name: "cluster driver and wire tests",
-      steps: [
-        [
-          "cargo",
-          [
-            "test",
-            "-p",
-            "meshspan-cluster",
-            "--all-targets",
-            "--all-features",
-            "--",
-            "--test-threads=2",
-          ],
-        ],
-      ],
-    },
-    {
-      name: "daemon lifecycle tests",
-      steps: [
-        [
-          "cargo",
-          ["test", "-p", "meshspan-daemon", "--all-targets", "--all-features"],
-        ],
-      ],
     },
     {
       name: "workspace format",
@@ -253,13 +106,42 @@ if (!generation.passed) {
         ],
       ],
     },
+  ];
+  const testLanes = [
+    {
+      name: "Rust workspace tests",
+      steps: [
+        ["cargo", ["test", "--workspace", "--all-targets", "--all-features"]],
+      ],
+    },
     {
       name: "web tests",
       steps: [["web/node_modules/.bin/vitest", ["run", "--root", "web"]]],
     },
   ];
-  const results = await runWithLimit(lanes, workerCount, runLane);
-  results.forEach(report);
+  const results = [];
+  for (const lane of rustQualityLanes) {
+    const result = await runLane(lane);
+    results.push(result);
+    report(result);
+    if (!result.passed) {
+      break;
+    }
+  }
+  if (results.every((result) => result.passed)) {
+    const staticResults = await runWithLimit(
+      independentStaticLanes,
+      workerCount,
+      runLane,
+    );
+    results.push(...staticResults);
+    staticResults.forEach(report);
+  }
+  if (results.every((result) => result.passed)) {
+    const testResults = await runWithLimit(testLanes, workerCount, runLane);
+    results.push(...testResults);
+    testResults.forEach(report);
+  }
   process.exitCode = results.some((result) => !result.passed) ? 1 : 0;
 }
 process.stdout.write(
