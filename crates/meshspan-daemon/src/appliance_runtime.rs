@@ -95,17 +95,17 @@ use crate::{
     VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
     authentication_method_revocation_api_router, classify_native_filesystem_error,
     current_session_api_router, directory_listing_api_router, execute_rebalance_step,
-    execute_resumable_storage_scrub, execute_shard_repair, execute_target_drain_step,
-    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
-    native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
-    object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
-    passkey_registration_api_router, permission_administration_api_router,
-    public_contract_api_router, recovery_bundle_verification_api_router,
-    recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
-    setup_api_router_with_mutations, smb_export_administration_api_router,
-    step_up_current_session_api_router, storage_folder_administration_api_router,
-    topology_administration_api_router, totp_registration_api_router,
-    volume_administration_api_router, volume_inventory_api_router,
+    execute_resumable_storage_scrub, execute_resumable_target_reconciliation, execute_shard_repair,
+    execute_target_drain_step, file_read_api_router, identity_administration_api_router,
+    native_namespace_mutation_api_router, native_upload_api_router, node_enrolment_api_router,
+    node_join_grant_api_router, object_stat_api_router, operation_status_api_router,
+    passkey_challenge_api_router, passkey_registration_api_router,
+    permission_administration_api_router, public_contract_api_router,
+    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
+    revoke_current_session_api_router, session_api_router, setup_api_router_with_mutations,
+    smb_export_administration_api_router, step_up_current_session_api_router,
+    storage_folder_administration_api_router, topology_administration_api_router,
+    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
@@ -2051,6 +2051,7 @@ impl StorageTargetRuntime {
         self.execute_one_repair(now)?;
         self.execute_one_target_drain(now)?;
         self.execute_one_rebalance(now)?;
+        self.execute_one_reconciliation(now)?;
         self.execute_one_scrub_page(now)
     }
 
@@ -2164,8 +2165,64 @@ impl StorageTargetRuntime {
             &mut finding_random,
             actor,
         );
-        let execution = maintenance_scrub_execution(assignment, self.local_node_id, actor, now)?;
+        let execution = maintenance_verification_execution(
+            assignment,
+            WorkKind::Scrub,
+            self.local_node_id,
+            actor,
+            now,
+        )?;
         execute_resumable_storage_scrub(
+            &self.maintenance_authority,
+            &mut provider,
+            &mut findings,
+            &mut self.maintenance_progress,
+            &execution,
+        )
+        .map(|_| ())
+        .map_err(|_| ())
+    }
+
+    fn execute_one_reconciliation(&mut self, now: UnixMicros) -> Result<(), ()> {
+        let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Reconcile)? else {
+            return Ok(());
+        };
+        let WorkSubject::Reconcile {
+            target_id,
+            target_generation,
+        } = assignment.subject
+        else {
+            return Err(());
+        };
+        let mut provider = self
+            .active
+            .values()
+            .find(|target| {
+                let context = target.context();
+                context.target_id == target_id && context.generation == target_generation
+            })
+            .map(NativeStorageTarget::provider)
+            .ok_or(())?;
+        let actor = self.maintenance_actor(now)?;
+        let catalogue = self
+            .native_filesystem
+            .maintenance_catalogue(now)
+            .map_err(|_| ())?;
+        let mut finding_random = OperatingSystemRandom;
+        let mut findings = crate::AutomaticScrubFindingScheduler::new(
+            &self.maintenance_authority,
+            &catalogue,
+            &mut finding_random,
+            actor,
+        );
+        let execution = maintenance_verification_execution(
+            assignment,
+            WorkKind::Reconcile,
+            self.local_node_id,
+            actor,
+            now,
+        )?;
+        execute_resumable_target_reconciliation(
             &self.maintenance_authority,
             &mut provider,
             &mut findings,
@@ -2496,16 +2553,27 @@ impl StorageTargetRuntime {
     }
 }
 
-fn maintenance_scrub_execution(
+fn maintenance_verification_execution(
     assignment: crate::MaintenanceDispatchAssignment,
+    expected_kind: WorkKind,
     worker_node_id: NodeId,
     actor_principal_id: PrincipalId,
     now: UnixMicros,
 ) -> Result<ResumableStorageScrubExecution, ()> {
-    let WorkSubject::Scrub {
-        target_id,
-        target_generation,
-    } = assignment.subject
+    let ((
+        WorkKind::Scrub,
+        WorkSubject::Scrub {
+            target_id,
+            target_generation,
+        },
+    )
+    | (
+        WorkKind::Reconcile,
+        WorkSubject::Reconcile {
+            target_id,
+            target_generation,
+        },
+    )) = (expected_kind, assignment.subject)
     else {
         return Err(());
     };

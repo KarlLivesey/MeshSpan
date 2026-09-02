@@ -157,16 +157,49 @@ where
         returned_at: UnixMicros,
         maximum_in_flight_bytes: u64,
     ) -> Result<(), PeriodicScrubSchedulingError> {
-        self.admit_candidate(
-            DueStorageScrub {
-                target_id,
-                target_generation,
-                due_at: returned_at,
-                last_completed_at: None,
+        if target_generation == 0 || maximum_in_flight_bytes == 0 {
+            return Err(PeriodicScrubSchedulingError::Invalid);
+        }
+        let subject = WorkSubject::Reconcile {
+            target_id,
+            target_generation,
+        };
+        let (operation_id, audit_event_id, work_id) = random_identities(self.random)?;
+        let context = CommandContext {
+            operation_id,
+            actor_principal_id: self.actor_principal_id,
+            audit_event_id,
+            occurred_at: returned_at,
+            expected_revision: None,
+        };
+        let command = AuthoritativeCommand::QueueMaintenanceWork(QueueMaintenanceWork {
+            work_id,
+            deduplication_key: return_cycle_key(subject, returned_at),
+            subject,
+            signals: WorkSignals {
+                data_unavailable: false,
+                remaining_recovery_margin: 1,
+                protection_debt: 0,
+                locality_debt: 0,
+                instability: 1,
+                access_heat: 0,
+                created_at: returned_at,
+                due_at: Some(returned_at),
             },
-            returned_at,
-            maximum_in_flight_bytes,
-        )
+            demand: WorkDemand {
+                in_flight_bytes: maximum_in_flight_bytes,
+            },
+            next_attempt_at: returned_at,
+        });
+        let receipt = self.authority.commit(context, &command)?;
+        if receipt.operation_id != operation_id
+            || receipt.request_digest != command.request_digest(context)
+            || receipt.result_digest == [0; 32]
+            || receipt.entity.kind != EntityKind::MaintenanceWork
+        {
+            return Err(PeriodicScrubSchedulingError::Invalid);
+        }
+        Ok(())
     }
 
     fn admit_candidate(
@@ -226,6 +259,14 @@ fn scrub_cycle_key(subject: WorkSubject, due_at: UnixMicros) -> [u8; 32] {
     digest.update(b"meshspan.periodic-scrub-cycle.v1\0");
     digest.update(&subject.encode());
     digest.update(&due_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+fn return_cycle_key(subject: WorkSubject, returned_at: UnixMicros) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.return-reconciliation-cycle.v1\0");
+    digest.update(&subject.encode());
+    digest.update(&returned_at.get().to_be_bytes());
     digest.finalize().into()
 }
 
@@ -339,11 +380,11 @@ mod tests {
 
         let commands = authority.commands.borrow();
         let AuthoritativeCommand::QueueMaintenanceWork(work) = commands[0] else {
-            return Err("return admission was not scrub work".into());
+            return Err("return admission was not reconciliation work".into());
         };
         assert_eq!(
             work.subject,
-            WorkSubject::Scrub {
+            WorkSubject::Reconcile {
                 target_id,
                 target_generation: 4,
             }

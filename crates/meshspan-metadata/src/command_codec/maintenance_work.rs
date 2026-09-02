@@ -9,8 +9,9 @@ use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
     AttestStorageTargetDrain, BeginStorageTargetDrain, ClaimMaintenanceWork,
-    CommitRebalanceScanPage, CommitScrubPass, CommitShardRepair, CompleteMaintenanceWork,
-    MaintenanceWorkCompletion, QueueMaintenanceWork, RebalanceScanCursor, RenewMaintenanceWork,
+    CommitRebalanceScanPage, CommitScrubPass, CommitShardRepair, CommitTargetReconciliation,
+    CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork, RebalanceScanCursor,
+    RenewMaintenanceWork,
 };
 
 pub(super) const QUEUE_MAINTENANCE_WORK: u16 = 36;
@@ -22,6 +23,7 @@ pub(super) const COMMIT_SCRUB_PASS: u16 = 41;
 pub(super) const BEGIN_STORAGE_TARGET_DRAIN: u16 = 42;
 pub(super) const ATTEST_STORAGE_TARGET_DRAIN: u16 = 43;
 pub(super) const COMMIT_REBALANCE_SCAN_PAGE: u16 = 44;
+pub(super) const COMMIT_TARGET_RECONCILIATION: u16 = 45;
 
 pub(super) fn encode_command(
     encoder: &mut Encoder,
@@ -55,6 +57,9 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::CommitRebalanceScanPage(value) => {
             encode_rebalance_scan_page(encoder, *value)?;
         }
+        crate::AuthoritativeCommand::CommitTargetReconciliation(value) => {
+            encode_reconciliation(encoder, *value)?;
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -72,6 +77,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | BEGIN_STORAGE_TARGET_DRAIN
             | ATTEST_STORAGE_TARGET_DRAIN
             | COMMIT_REBALANCE_SCAN_PAGE
+            | COMMIT_TARGET_RECONCILIATION
     )
 }
 
@@ -104,6 +110,8 @@ pub(super) fn decode_command(
             .map(crate::AuthoritativeCommand::AttestStorageTargetDrain),
         COMMIT_REBALANCE_SCAN_PAGE => decode_rebalance_scan_page(decoder)
             .map(crate::AuthoritativeCommand::CommitRebalanceScanPage),
+        COMMIT_TARGET_RECONCILIATION => decode_reconciliation(decoder)
+            .map(crate::AuthoritativeCommand::CommitTargetReconciliation),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -550,16 +558,100 @@ fn decode_scrub(decoder: &mut Decoder<'_>) -> Result<CommitScrubPass, MetadataCo
 }
 
 fn validate_scrub_summary(value: CommitScrubPass) -> Result<(), MetadataCommandCodecError> {
-    let classified = value
-        .healthy_count
-        .checked_add(value.missing_count)
-        .and_then(|count| count.checked_add(value.corrupt_count))
-        .and_then(|count| count.checked_add(value.unreadable_count))
-        .and_then(|count| count.checked_add(value.unexpected_count))
-        .and_then(|count| count.checked_add(value.deferred_count));
-    if value.target_generation == 0
-        || value.evidence_digest == [0; 32]
-        || classified != Some(value.observation_count)
+    validate_verification_summary(
+        value.target_generation,
+        value.observation_count,
+        [
+            value.healthy_count,
+            value.missing_count,
+            value.corrupt_count,
+            value.unreadable_count,
+            value.unexpected_count,
+            value.deferred_count,
+        ],
+        value.evidence_digest,
+    )
+}
+
+fn encode_reconciliation(
+    encoder: &mut Encoder,
+    value: CommitTargetReconciliation,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_reconciliation_summary(value)?;
+    encoder.u16(COMMIT_TARGET_RECONCILIATION)?;
+    encode_claim_identity(
+        encoder,
+        value.work_id,
+        value.claim_generation,
+        value.worker_node_id,
+        value.worker_incarnation,
+        value.fence,
+    )?;
+    encoder.identifier(value.target_id.as_bytes())?;
+    encoder.u64(value.target_generation)?;
+    encoder.u64(value.observation_count)?;
+    encoder.u64(value.verified_bytes)?;
+    encoder.u64(value.healthy_count)?;
+    encoder.u64(value.missing_count)?;
+    encoder.u64(value.corrupt_count)?;
+    encoder.u64(value.unreadable_count)?;
+    encoder.u64(value.unexpected_count)?;
+    encoder.u64(value.deferred_count)?;
+    encoder.fixed(&value.evidence_digest)
+}
+
+fn decode_reconciliation(
+    decoder: &mut Decoder<'_>,
+) -> Result<CommitTargetReconciliation, MetadataCommandCodecError> {
+    let identity = decode_claim_identity(decoder)?;
+    let value = CommitTargetReconciliation {
+        work_id: identity.work_id,
+        claim_generation: identity.claim_generation,
+        worker_node_id: identity.worker_node_id,
+        worker_incarnation: identity.worker_incarnation,
+        fence: identity.fence,
+        target_id: TargetId::from_bytes(decoder.identifier()?)?,
+        target_generation: decoder.u64()?,
+        observation_count: decoder.u64()?,
+        verified_bytes: decoder.u64()?,
+        healthy_count: decoder.u64()?,
+        missing_count: decoder.u64()?,
+        corrupt_count: decoder.u64()?,
+        unreadable_count: decoder.u64()?,
+        unexpected_count: decoder.u64()?,
+        deferred_count: decoder.u64()?,
+        evidence_digest: decoder.fixed()?,
+    };
+    validate_reconciliation_summary(value)?;
+    Ok(value)
+}
+
+fn validate_reconciliation_summary(
+    value: CommitTargetReconciliation,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_verification_summary(
+        value.target_generation,
+        value.observation_count,
+        [
+            value.healthy_count,
+            value.missing_count,
+            value.corrupt_count,
+            value.unreadable_count,
+            value.unexpected_count,
+            value.deferred_count,
+        ],
+        value.evidence_digest,
+    )
+}
+
+fn validate_verification_summary(
+    target_generation: u64,
+    observation_count: u64,
+    outcome_counts: [u64; 6],
+    evidence_digest: [u8; 32],
+) -> Result<(), MetadataCommandCodecError> {
+    let classified = outcome_counts.into_iter().try_fold(0_u64, u64::checked_add);
+    if target_generation == 0 || evidence_digest == [0; 32] || classified != Some(observation_count)
     {
         Err(MetadataCommandCodecError::Invalid)
     } else {
