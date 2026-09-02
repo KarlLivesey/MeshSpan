@@ -135,10 +135,29 @@ impl<Source: MaintenanceWorkSource> MaintenanceDispatcher<'_, Source> {
         usage: WorkUsage,
         limit: usize,
     ) -> Result<MaintenanceDispatchBatch, MaintenanceDispatchError> {
+        self.prepare_batch_where(now, budget, usage, limit, |_| true)
+    }
+
+    /// Selects only subjects executable by this local runtime before reserving resources.
+    ///
+    /// # Errors
+    ///
+    /// Has the same closed failure modes as [`Self::prepare_batch`].
+    pub fn prepare_batch_where(
+        &self,
+        now: UnixMicros,
+        budget: WorkBudget,
+        usage: WorkUsage,
+        limit: usize,
+        executable: impl Fn(WorkSubject) -> bool,
+    ) -> Result<MaintenanceDispatchBatch, MaintenanceDispatchError> {
         let ready = self.source.ready_work(now, budget, usage, limit)?;
         let mut reserved_usage = usage;
         let mut assignments = Vec::with_capacity(ready.work.len());
         for selected in ready.work {
+            if !executable(selected.subject) {
+                continue;
+            }
             let Some(record) = self.source.work(selected.work_id)? else {
                 continue;
             };

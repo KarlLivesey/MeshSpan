@@ -264,6 +264,20 @@ impl NativeFilesystemRuntime {
         Ok(())
     }
 
+    /// Opens an independent hardened content-catalogue connection for maintenance planning.
+    pub(crate) fn maintenance_catalogue(
+        &self,
+        now: UnixMicros,
+    ) -> Result<meshspan_filesystem::DurableContentCatalog, NativeFilesystemRuntimeError> {
+        let state_directory = self
+            .lock()?
+            .configuration
+            .filesystem_state_directory
+            .clone();
+        meshspan_filesystem::DurableContentCatalog::open(&state_directory, now)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)
+    }
+
     fn lock_opening(
         &self,
     ) -> Result<MutexGuard<'_, NativeFilesystemRuntimeState>, NativeFilesystemOpeningError> {
