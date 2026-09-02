@@ -12,6 +12,7 @@ mod negotiate;
 mod negotiate_response;
 mod ntlm_v2;
 mod session_keys;
+mod session_setup;
 mod signing;
 mod status;
 mod transform;
@@ -29,6 +30,9 @@ pub use negotiate_response::{
 };
 pub use ntlm_v2::{NtlmPasswordVerifier, NtlmSessionBaseKey, NtlmVerificationError};
 pub use session_keys::{Smb311PreauthHash, Smb311SessionKeys, SmbSessionKeyError};
+pub use session_setup::{
+    SessionSetupRequest, SessionSetupResponse, SessionSetupResponseConfig, SmbSessionSetupError,
+};
 pub use signing::{SmbPacketSender, SmbSigningError, sign_smb311, verify_smb311};
 pub use status::{ConnectorFailure, NtStatus};
 pub use transform::{Smb311Transform, SmbTransformError};
