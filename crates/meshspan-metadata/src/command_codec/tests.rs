@@ -385,6 +385,17 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
                 retry_at: UnixMicros::new(12),
             },
         }),
+        AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+            work_id: identity.0,
+            claim_generation: identity.1,
+            worker_node_id: identity.2,
+            worker_incarnation: identity.3,
+            fence: identity.4,
+            outcome: MaintenanceWorkCompletion::Continue {
+                progress_digest: [89; 32],
+                retry_at: UnixMicros::new(13),
+            },
+        }),
     ];
     for command in commands {
         assert_round_trip(context, command)?;

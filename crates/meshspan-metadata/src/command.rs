@@ -2006,6 +2006,13 @@ pub enum MaintenanceWorkCompletion {
         /// Future authority-agreed instant for another claim.
         retry_at: UnixMicros,
     },
+    /// Bounded progress was durably checkpointed; another claim should continue the same job.
+    Continue {
+        /// Digest of the exact durable progress checkpoint.
+        progress_digest: [u8; 32],
+        /// Future authority-agreed instant for the next bounded claim.
+        retry_at: UnixMicros,
+    },
 }
 
 /// One copy-on-write shard replacement committed under a live repair claim.
@@ -3304,6 +3311,14 @@ digest_simple_record!(
             } => {
                 digest.byte(2);
                 digest.bytes(&failure_digest);
+                digest.signed(retry_at.get());
+            }
+            MaintenanceWorkCompletion::Continue {
+                progress_digest,
+                retry_at,
+            } => {
+                digest.byte(3);
+                digest.bytes(&progress_digest);
                 digest.signed(retry_at.get());
             }
         }

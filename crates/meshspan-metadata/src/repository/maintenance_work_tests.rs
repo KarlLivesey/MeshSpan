@@ -60,7 +60,7 @@ fn work_is_deduplicated_leased_retried_and_fenced() -> Result<(), Box<dyn std::e
     fixture.apply(
         6,
         40,
-        &AuthoritativeCommand::CompleteMaintenanceWork(fixture.retry(work_id, 1, 101, 200)),
+        &AuthoritativeCommand::CompleteMaintenanceWork(fixture.continue_at(work_id, 1, 101, 200)),
     )?;
     let record = fixture.record(work_id)?;
     assert_eq!(record.state, MaintenanceWorkState::Queued);
@@ -697,6 +697,26 @@ impl Fixture {
             fence,
             outcome: MaintenanceWorkCompletion::Retry {
                 failure_digest: [55; 32],
+                retry_at: UnixMicros::new(retry_at),
+            },
+        }
+    }
+
+    const fn continue_at(
+        &self,
+        work_id: WorkId,
+        generation: u64,
+        fence: u64,
+        retry_at: i64,
+    ) -> CompleteMaintenanceWork {
+        CompleteMaintenanceWork {
+            work_id,
+            claim_generation: generation,
+            worker_node_id: self.node,
+            worker_incarnation: 1,
+            fence,
+            outcome: MaintenanceWorkCompletion::Continue {
+                progress_digest: [56; 32],
                 retry_at: UnixMicros::new(retry_at),
             },
         }

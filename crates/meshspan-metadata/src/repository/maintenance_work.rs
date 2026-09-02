@@ -617,10 +617,14 @@ fn completion_values(
             ))
         }
         MaintenanceWorkCompletion::Retry {
-            failure_digest,
+            failure_digest: attempt_digest,
+            retry_at,
+        }
+        | MaintenanceWorkCompletion::Continue {
+            progress_digest: attempt_digest,
             retry_at,
         } => {
-            if failure_digest == [0; 32] || retry_at <= context.occurred_at {
+            if attempt_digest == [0; 32] || retry_at <= context.occurred_at {
                 return Err(RepositoryError::InvalidCommand);
             }
             Ok((
@@ -628,7 +632,7 @@ fn completion_values(
                 retry_at.get(),
                 None,
                 None,
-                failure_digest,
+                attempt_digest,
                 Some(retry_at.get()),
             ))
         }

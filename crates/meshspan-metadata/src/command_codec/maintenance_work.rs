@@ -234,6 +234,14 @@ fn encode_complete(
             encoder.fixed(&failure_digest)?;
             encoder.i64(retry_at.get())
         }
+        MaintenanceWorkCompletion::Continue {
+            progress_digest,
+            retry_at,
+        } => {
+            encoder.u8(3)?;
+            encoder.fixed(&progress_digest)?;
+            encoder.i64(retry_at.get())
+        }
     }
 }
 
@@ -249,6 +257,10 @@ fn decode_complete(
         },
         2 => MaintenanceWorkCompletion::Retry {
             failure_digest: nonzero_digest(decoder.fixed()?)?,
+            retry_at: UnixMicros::new(decoder.i64()?),
+        },
+        3 => MaintenanceWorkCompletion::Continue {
+            progress_digest: nonzero_digest(decoder.fixed()?)?,
             retry_at: UnixMicros::new(decoder.i64()?),
         },
         _ => return Err(MetadataCommandCodecError::Invalid),
