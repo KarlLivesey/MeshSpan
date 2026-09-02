@@ -21,6 +21,7 @@ mod negotiate_response;
 mod ntlm_v2;
 mod ntlm_wire;
 mod query_directory;
+mod secure_channel;
 mod session_handshake;
 mod session_keys;
 mod session_setup;
@@ -70,6 +71,7 @@ pub use query_directory::{
     DirectoryInformationClass, DirectoryResponseEntry, QueryDirectoryRequest,
     QueryDirectoryResponse, SmbQueryDirectoryError,
 };
+pub use secure_channel::{SmbSecureChannel, SmbSecureChannelError};
 pub use session_handshake::{
     AuthenticatedSmbSession, SmbSessionAuthenticator, SmbSessionEstablishmentError,
     SmbSessionHandshake, SmbSessionHandshakeError,

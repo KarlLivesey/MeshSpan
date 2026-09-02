@@ -6,7 +6,7 @@ use super::{SmbSessionAuthenticator, SmbSessionHandshake, SmbSessionHandshakeErr
 use crate::{
     EncryptionCipher, NegotiateResponseConfig, NtlmAuthenticate, NtlmChallenge,
     NtlmChallengeConfig, NtlmPasswordVerifier, NtlmSessionBaseKey, Smb311PreauthHash,
-    Smb311SessionKeys,
+    Smb311SessionKeys, SmbSecureChannel, SmbSecureChannelError,
 };
 
 #[test]
@@ -40,6 +40,16 @@ fn exact_negotiate_challenge_and_proof_establish_one_encrypted_session()
     assert!(session.encryption_required());
     assert_eq!(&session.response()[8..12], &[0; 4]);
     assert_eq!(session.keys().signing_key().len(), 16);
+    let final_response = session.response().to_vec();
+    let channel = SmbSecureChannel::new(session);
+    assert!(matches!(
+        channel.decode_request(&session_setup_packet(4, 9, &ntlm_authenticate())),
+        Err(SmbSecureChannelError::EncryptionRequired)
+    ));
+    assert_eq!(
+        channel.encode_response(final_response)?.get(..4),
+        Some([0xfd, b'S', b'M', b'B'].as_slice())
+    );
     assert!(matches!(
         handshake.negotiate(&negotiate, negotiate_config()),
         Err(SmbSessionHandshakeError::OutOfOrder)
