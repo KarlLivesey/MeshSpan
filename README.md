@@ -56,11 +56,11 @@ administrator to operate a separate certificate system.
 ## Status
 
 MeshSpan is a clean-slate, pre-alpha project. No compatibility or stability guarantee applies
-before version 1.0. The executable foundations through Stage 6 and the accepted authentication,
-federation and topology retrofit are complete. This includes native HTTPS file access,
-authentication, user/group, volume, local storage-folder and mesh-topology administration,
-operation tracking, and both create/join first-start paths. See the
-[Stage 6 evidence](design/stage-6-evidence.md),
+before version 1.0. The executable foundations through Stage 7 and the accepted authentication,
+federation and topology retrofit are complete. This includes native HTTPS and embedded SMB 3.1.1
+file access, authentication, user/group, volume, local storage-folder and mesh-topology
+administration, operation tracking, and both create/join first-start paths. See the
+[Stage 7 evidence](design/stage-7-evidence.md), [Stage 6 evidence](design/stage-6-evidence.md),
 [retrofit evidence](design/pre-stage-6-retrofit-evidence.md),
 [federation contract](design/federation.md) and [roadmap](design/roadmap.md).
 The accepted requirements, architecture and implementation order are in the
