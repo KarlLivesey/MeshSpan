@@ -81,6 +81,9 @@ mod kernel;
 mod locality_policy;
 #[cfg(test)]
 mod locality_policy_tests;
+mod maintenance_work;
+#[cfg(test)]
+mod maintenance_work_tests;
 mod membership;
 mod mesh_identity;
 mod namespace;
@@ -203,6 +206,7 @@ pub use kernel::{
 pub use locality_policy::{
     LocalityPolicyCursor, LocalityPolicyRecord, LocalityRequirementRecord, VolumeLocalityPolicy,
 };
+pub use maintenance_work::{MaintenanceWorkClaim, MaintenanceWorkRecord, MaintenanceWorkState};
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
 pub use node_wrapping_key::NodeWrappingKeyRecord;

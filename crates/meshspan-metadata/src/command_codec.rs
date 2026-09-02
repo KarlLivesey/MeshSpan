@@ -12,6 +12,7 @@ mod enrolment;
 mod fault_group;
 mod identity;
 mod locality_policy;
+mod maintenance_work;
 mod namespace;
 mod node_wrapping_key;
 mod protection_policy;
@@ -102,6 +103,9 @@ fn encode_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<(), MetadataCommandCodecError> {
+    if maintenance_work::encode_command(encoder, command)? {
+        return Ok(());
+    }
     match command {
         AuthoritativeCommand::BootstrapAppliance(value) => {
             encoder.u16(1)?;
@@ -198,7 +202,14 @@ fn encode_command(
 fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
-    match decoder.u16()? {
+    let kind = decoder.u16()?;
+    if maintenance_work::is_command_kind(kind) {
+        return maintenance_work::decode_command(kind, decoder);
+    }
+    if let Some(command) = decode_storage_policy_command(kind, decoder)? {
+        return Ok(command);
+    }
+    match kind {
         1 => bootstrap::decode(decoder)
             .map(Box::new)
             .map(AuthoritativeCommand::BootstrapAppliance),
@@ -234,6 +245,39 @@ fn decode_command(
         storage_target::REGISTER_STORAGE_TARGET => {
             storage_target::decode(decoder).map(AuthoritativeCommand::RegisterStorageTarget)
         }
+        smb_export::PUBLISH_SMB_EXPORT => {
+            smb_export::decode_publish(decoder).map(AuthoritativeCommand::PublishSmbExport)
+        }
+        smb_export::WITHDRAW_SMB_EXPORT => {
+            smb_export::decode_withdraw(decoder).map(AuthoritativeCommand::WithdrawSmbExport)
+        }
+        node_wrapping_key::REGISTER_NODE_WRAPPING_KEY => {
+            node_wrapping_key::decode(decoder).map(AuthoritativeCommand::RegisterNodeWrappingKey)
+        }
+        secret_generation::COMMIT_SECRET_GENERATION => {
+            secret_generation::decode(decoder).map(AuthoritativeCommand::CommitSecretGeneration)
+        }
+        enrolment::ISSUE_JOIN_GRANT => {
+            enrolment::decode_issue(decoder).map(AuthoritativeCommand::IssueJoinGrant)
+        }
+        enrolment::CONSUME_JOIN_GRANT => {
+            enrolment::decode_consume(decoder).map(AuthoritativeCommand::ConsumeJoinGrant)
+        }
+        enrolment::ACTIVATE_NODE => {
+            enrolment::decode_activate(decoder).map(AuthoritativeCommand::ActivateNode)
+        }
+        volume_head::COMMIT_CONVERGED_VOLUME_HEAD => {
+            volume_head::decode(decoder).map(AuthoritativeCommand::CommitConvergedVolumeHead)
+        }
+        _ => Err(MetadataCommandCodecError::Unsupported),
+    }
+}
+
+fn decode_storage_policy_command(
+    kind: u16,
+    decoder: &mut Decoder<'_>,
+) -> Result<Option<AuthoritativeCommand>, MetadataCommandCodecError> {
+    let command = match kind {
         fault_group::CREATE_FAULT_GROUP => {
             fault_group::decode_create(decoder).map(AuthoritativeCommand::CreateFaultGroup)
         }
@@ -270,32 +314,9 @@ fn decode_command(
             acknowledgement_policy::decode_assignment(decoder)
                 .map(AuthoritativeCommand::AssignVolumeAcknowledgementPolicy)
         }
-        smb_export::PUBLISH_SMB_EXPORT => {
-            smb_export::decode_publish(decoder).map(AuthoritativeCommand::PublishSmbExport)
-        }
-        smb_export::WITHDRAW_SMB_EXPORT => {
-            smb_export::decode_withdraw(decoder).map(AuthoritativeCommand::WithdrawSmbExport)
-        }
-        node_wrapping_key::REGISTER_NODE_WRAPPING_KEY => {
-            node_wrapping_key::decode(decoder).map(AuthoritativeCommand::RegisterNodeWrappingKey)
-        }
-        secret_generation::COMMIT_SECRET_GENERATION => {
-            secret_generation::decode(decoder).map(AuthoritativeCommand::CommitSecretGeneration)
-        }
-        enrolment::ISSUE_JOIN_GRANT => {
-            enrolment::decode_issue(decoder).map(AuthoritativeCommand::IssueJoinGrant)
-        }
-        enrolment::CONSUME_JOIN_GRANT => {
-            enrolment::decode_consume(decoder).map(AuthoritativeCommand::ConsumeJoinGrant)
-        }
-        enrolment::ACTIVATE_NODE => {
-            enrolment::decode_activate(decoder).map(AuthoritativeCommand::ActivateNode)
-        }
-        volume_head::COMMIT_CONVERGED_VOLUME_HEAD => {
-            volume_head::decode(decoder).map(AuthoritativeCommand::CommitConvergedVolumeHead)
-        }
-        _ => Err(MetadataCommandCodecError::Unsupported),
-    }
+        _ => return Ok(None),
+    }?;
+    Ok(Some(command))
 }
 
 /// Closed failures for hostile replicated command bytes.

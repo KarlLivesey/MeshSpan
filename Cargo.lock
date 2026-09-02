@@ -1259,6 +1259,7 @@ dependencies = [
  "meshspan-contracts",
  "meshspan-domain",
  "meshspan-secret-envelope",
+ "meshspan-work",
  "rusqlite",
  "sha2",
  "tempfile",

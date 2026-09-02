@@ -18,8 +18,10 @@ use meshspan_domain::{
     NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId,
     ProtectionPolicyId, ProtectionScenarioId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId,
     SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
+    WorkId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
+use meshspan_work::{WorkSignals, WorkSubject};
 use sha2::{Digest, Sha256};
 
 use crate::AdmitFederatedMutation;
@@ -182,6 +184,14 @@ pub enum AuthoritativeCommand {
     CreateAcknowledgementPolicy(CreateAcknowledgementPolicy),
     /// Selects one acknowledgement policy as the volume-wide inherited default.
     AssignVolumeAcknowledgementPolicy(AssignVolumeAcknowledgementPolicy),
+    /// Creates or coalesces one durable maintenance job from exact health evidence.
+    QueueMaintenanceWork(QueueMaintenanceWork),
+    /// Fences one eligible worker's bounded lease over a ready maintenance job.
+    ClaimMaintenanceWork(ClaimMaintenanceWork),
+    /// Extends the same live claim without changing its fence or assignment.
+    RenewMaintenanceWork(RenewMaintenanceWork),
+    /// Commits exact work evidence as terminal success or a bounded retry.
+    CompleteMaintenanceWork(CompleteMaintenanceWork),
     /// Publishes one volume or folder through explicitly selected SMB gateways.
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
@@ -344,6 +354,10 @@ impl AuthoritativeCommand {
             Self::AssignVolumeLocalityPolicy(value) => value.update_digest(digest),
             Self::CreateAcknowledgementPolicy(value) => value.update_digest(digest),
             Self::AssignVolumeAcknowledgementPolicy(value) => value.update_digest(digest),
+            Self::QueueMaintenanceWork(value) => value.update_digest(digest),
+            Self::ClaimMaintenanceWork(value) => value.update_digest(digest),
+            Self::RenewMaintenanceWork(value) => value.update_digest(digest),
+            Self::CompleteMaintenanceWork(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -1899,6 +1913,93 @@ pub struct AssignVolumeAcknowledgementPolicy {
     pub policy_id: AcknowledgementPolicyId,
 }
 
+/// One exact deduplicated maintenance job admitted to authoritative scheduling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueueMaintenanceWork {
+    /// Stable job identity returned by every exact deduplication replay.
+    pub work_id: WorkId,
+    /// Semantic identity shared by findings that require the same physical outcome.
+    pub deduplication_key: [u8; 32],
+    /// Closed, generation-bound repair, scrub, drain, rebalance or return subject.
+    pub subject: WorkSubject,
+    /// Current safety and demand evidence used to derive queue priority.
+    pub signals: WorkSignals,
+    /// Earliest authority-agreed instant at which a worker may claim this job.
+    pub next_attempt_at: UnixMicros,
+}
+
+/// One new fenced execution attempt over a durable maintenance job.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimMaintenanceWork {
+    /// Existing ready job.
+    pub work_id: WorkId,
+    /// Worker authenticated by the private node boundary.
+    pub worker_node_id: NodeId,
+    /// Exact current worker incarnation.
+    pub worker_incarnation: u64,
+    /// Next monotonically increasing claim generation.
+    pub claim_generation: u64,
+    /// Positive unpredictable fence carried by every work result.
+    pub fence: u64,
+    /// Short-lived authoritative lease end.
+    pub lease_expires_at: UnixMicros,
+}
+
+/// Extension of one still-current maintenance claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RenewMaintenanceWork {
+    /// Claimed job.
+    pub work_id: WorkId,
+    /// Exact current claim generation.
+    pub claim_generation: u64,
+    /// Worker owning the claim.
+    pub worker_node_id: NodeId,
+    /// Exact current worker incarnation.
+    pub worker_incarnation: u64,
+    /// Unchanged live fence.
+    pub fence: u64,
+    /// New bounded lease end, later than the current lease.
+    pub lease_expires_at: UnixMicros,
+}
+
+/// Terminal evidence or explicit retry from one still-current maintenance claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompleteMaintenanceWork {
+    /// Claimed job.
+    pub work_id: WorkId,
+    /// Exact current claim generation.
+    pub claim_generation: u64,
+    /// Worker owning the claim.
+    pub worker_node_id: NodeId,
+    /// Exact current worker incarnation.
+    pub worker_incarnation: u64,
+    /// Unchanged live fence.
+    pub fence: u64,
+    /// Validated authoritative effect or bounded retry evidence.
+    pub outcome: MaintenanceWorkCompletion,
+}
+
+/// Exact result of one fenced maintenance attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MaintenanceWorkCompletion {
+    /// A separately committed domain operation proves the job's requested effect.
+    Succeeded {
+        /// Exact idempotency identity of the authoritative effect.
+        effect_operation_id: OperationId,
+        /// Revision committed by that operation.
+        effect_revision: Revision,
+        /// Exact committed operation-result digest.
+        effect_result_digest: [u8; 32],
+    },
+    /// No safety claim is made; the job returns to the queue after a bounded delay.
+    Retry {
+        /// Digest of typed, redacted attempt failure evidence.
+        failure_digest: [u8; 32],
+        /// Future authority-agreed instant for another claim.
+        retry_at: UnixMicros,
+    },
+}
+
 /// Explicit gateway selection for one SMB export.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmbExportGatewaySelection {
@@ -3062,6 +3163,79 @@ digest_simple_record!(
     |value, digest| {
         digest.identifier(value.volume_id.as_bytes());
         digest.identifier(value.policy_id.as_bytes());
+    }
+);
+digest_simple_record!(
+    QueueMaintenanceWork,
+    b"queue-maintenance-work",
+    |value, digest| {
+        digest.identifier(value.work_id.as_bytes());
+        digest.bytes(&value.deduplication_key);
+        digest.bytes(&value.subject.encode());
+        digest.boolean(value.signals.data_unavailable);
+        digest.unsigned(u64::from(value.signals.remaining_recovery_margin));
+        digest.unsigned(u64::from(value.signals.protection_debt));
+        digest.unsigned(u64::from(value.signals.locality_debt));
+        digest.unsigned(u64::from(value.signals.instability));
+        digest.unsigned(u64::from(value.signals.access_heat));
+        digest.signed(value.signals.created_at.get());
+        digest.optional_instant(value.signals.due_at);
+        digest.signed(value.next_attempt_at.get());
+    }
+);
+digest_simple_record!(
+    ClaimMaintenanceWork,
+    b"claim-maintenance-work",
+    |value, digest| {
+        digest.identifier(value.work_id.as_bytes());
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.claim_generation);
+        digest.unsigned(value.fence);
+        digest.signed(value.lease_expires_at.get());
+    }
+);
+digest_simple_record!(
+    RenewMaintenanceWork,
+    b"renew-maintenance-work",
+    |value, digest| {
+        digest.identifier(value.work_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        digest.signed(value.lease_expires_at.get());
+    }
+);
+digest_simple_record!(
+    CompleteMaintenanceWork,
+    b"complete-maintenance-work",
+    |value, digest| {
+        digest.identifier(value.work_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        match value.outcome {
+            MaintenanceWorkCompletion::Succeeded {
+                effect_operation_id,
+                effect_revision,
+                effect_result_digest,
+            } => {
+                digest.byte(1);
+                digest.identifier(effect_operation_id.as_bytes());
+                digest.unsigned(effect_revision.get());
+                digest.bytes(&effect_result_digest);
+            }
+            MaintenanceWorkCompletion::Retry {
+                failure_digest,
+                retry_at,
+            } => {
+                digest.byte(2);
+                digest.bytes(&failure_digest);
+                digest.signed(retry_at.get());
+            }
+        }
     }
 );
 digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {

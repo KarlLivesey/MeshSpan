@@ -8,30 +8,33 @@ use meshspan_domain::{
     GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId, NamespaceCommitId,
     NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId,
     ProtectionScenarioId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId,
-    SmbExportId, TargetId, UnixMicros, VolumeId,
+    SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
 };
+use meshspan_work::{WorkSignals, WorkSubject};
 use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
     AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
-    AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommitConvergedVolumeHead, CommitSecretGeneration, ConvergedHeadEvidence,
-    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
-    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
-    CreateProtectionPolicy, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
-    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
-    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
-    PublishSmbExport, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
-    RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SessionAuthenticationFactor, SessionClientLabel, SetHostAvailabilityCellMembership,
-    SetHostFaultGroupMembership, SetTargetAvailabilityCellMembership, SmbExportGatewaySelection,
-    StepUpAuthenticationSession, StorageUsageLimit, StrongFallbackMode, TotpAlgorithm,
-    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
+    AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity, ClaimMaintenanceWork,
+    CommitConvergedVolumeHead, CommitSecretGeneration, CompleteMaintenanceWork,
+    ConvergedHeadEvidence, CreateAcknowledgementPolicy, CreateActivationPolicy,
+    CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
+    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
+    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
+    LocalityRequirementConfiguration, MaintenanceWorkCompletion, NewAuthenticationCredential,
+    NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration, PublishSmbExport,
+    QueueMaintenanceWork, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
+    RemoveGroupMember, RenewMaintenanceWork, RevokeAuthenticationMethod,
+    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
+    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
+    SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
+    StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
+    WithdrawSmbExport,
 };
 
 #[test]
@@ -292,6 +295,81 @@ fn acknowledgement_policy_commands_round_trip_exact_barriers()
             },
         ),
     ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let work_id = WorkId::from_bytes([81; 16])?;
+    let worker_node_id = NodeId::from_bytes([82; 16])?;
+    let identity = (work_id, 3, worker_node_id, 4, 5);
+    let commands = [
+        AuthoritativeCommand::QueueMaintenanceWork(QueueMaintenanceWork {
+            work_id,
+            deduplication_key: [83; 32],
+            subject: WorkSubject::Repair {
+                volume_id: VolumeId::from_bytes([84; 16])?,
+                manifest_id: meshspan_domain::ContentManifestId::from_bytes([85; 16])?,
+                stripe_index: 6,
+                source_generation: 7,
+            },
+            signals: WorkSignals {
+                data_unavailable: false,
+                remaining_recovery_margin: 1,
+                protection_debt: 2,
+                locality_debt: 3,
+                instability: 4,
+                access_heat: 5,
+                created_at: UnixMicros::new(6),
+                due_at: Some(UnixMicros::new(7)),
+            },
+            next_attempt_at: UnixMicros::new(8),
+        }),
+        AuthoritativeCommand::ClaimMaintenanceWork(ClaimMaintenanceWork {
+            work_id: identity.0,
+            claim_generation: identity.1,
+            worker_node_id: identity.2,
+            worker_incarnation: identity.3,
+            fence: identity.4,
+            lease_expires_at: UnixMicros::new(9),
+        }),
+        AuthoritativeCommand::RenewMaintenanceWork(RenewMaintenanceWork {
+            work_id: identity.0,
+            claim_generation: identity.1,
+            worker_node_id: identity.2,
+            worker_incarnation: identity.3,
+            fence: identity.4,
+            lease_expires_at: UnixMicros::new(10),
+        }),
+        AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+            work_id: identity.0,
+            claim_generation: identity.1,
+            worker_node_id: identity.2,
+            worker_incarnation: identity.3,
+            fence: identity.4,
+            outcome: MaintenanceWorkCompletion::Succeeded {
+                effect_operation_id: OperationId::from_bytes([86; 16])?,
+                effect_revision: Revision::new(11),
+                effect_result_digest: [87; 32],
+            },
+        }),
+        AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+            work_id: identity.0,
+            claim_generation: identity.1,
+            worker_node_id: identity.2,
+            worker_incarnation: identity.3,
+            fence: identity.4,
+            outcome: MaintenanceWorkCompletion::Retry {
+                failure_digest: [88; 32],
+                retry_at: UnixMicros::new(12),
+            },
+        }),
+    ];
+    for command in commands {
         assert_round_trip(context, command)?;
     }
     Ok(())

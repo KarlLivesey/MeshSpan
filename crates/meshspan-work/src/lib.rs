@@ -6,7 +6,15 @@
 //! stable priority and admits work against an explicit resource budget, allowing the daemon and
 //! future embedders to supply their own persistence and execution runtimes.
 
-use meshspan_domain::{DurationMicros, UnixMicros};
+use std::fmt;
+
+use meshspan_domain::{
+    ContentManifestId, DurationMicros, FaultGroupId, NodeId, Revision, TargetId, UnixMicros,
+    VolumeId,
+};
+
+/// Maximum canonical bytes occupied by any supported work subject.
+pub const MAXIMUM_WORK_SUBJECT_BYTES: usize = 128;
 
 /// Closed maintenance families sharing the durable work coordinator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +30,271 @@ pub enum WorkKind {
     Rebalance = 4,
     /// Reconciles a returning target's journal-known inventory with authoritative metadata.
     Reconcile = 5,
+}
+
+/// Exact authoritative subject of one durable maintenance job.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkSubject {
+    /// One immutable stripe generation whose placement no longer satisfies policy.
+    Repair {
+        /// Volume whose current policy controls replacement placement.
+        volume_id: VolumeId,
+        /// Immutable content manifest containing the stripe.
+        manifest_id: ContentManifestId,
+        /// Zero-based stripe index inside the manifest.
+        stripe_index: u64,
+        /// Exact immutable generation whose catalogue entry is the compare-and-swap base.
+        source_generation: u64,
+    },
+    /// One target generation requiring a bounded page of full-byte verification.
+    Scrub {
+        /// Target to inspect.
+        target_id: TargetId,
+        /// Exact target generation; path reuse cannot inherit the job.
+        target_generation: u64,
+    },
+    /// One target, node or shared-failure group being evacuated.
+    Drain(DrainScope),
+    /// One volume whose safe placement may improve after a topology change.
+    Rebalance {
+        /// Volume to evaluate.
+        volume_id: VolumeId,
+        /// Exact authoritative topology revision that produced the candidate work.
+        topology_revision: Revision,
+    },
+    /// One returning target generation whose journal inventory must be reconciled.
+    Reconcile {
+        /// Returning target.
+        target_id: TargetId,
+        /// Exact marker generation admitted by authority.
+        target_generation: u64,
+    },
+}
+
+impl WorkSubject {
+    /// Returns the maintenance family implied by the closed subject.
+    #[must_use]
+    pub const fn kind(self) -> WorkKind {
+        match self {
+            Self::Repair { .. } => WorkKind::Repair,
+            Self::Scrub { .. } => WorkKind::Scrub,
+            Self::Drain(_) => WorkKind::Drain,
+            Self::Rebalance { .. } => WorkKind::Rebalance,
+            Self::Reconcile { .. } => WorkKind::Reconcile,
+        }
+    }
+
+    /// Encodes the closed subject into deterministic versioned bytes for durable metadata.
+    #[must_use]
+    pub fn encode(self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(MAXIMUM_WORK_SUBJECT_BYTES);
+        bytes.push(1);
+        match self {
+            Self::Repair {
+                volume_id,
+                manifest_id,
+                stripe_index,
+                source_generation,
+            } => {
+                bytes.push(1);
+                bytes.extend_from_slice(&volume_id.as_bytes());
+                bytes.extend_from_slice(&manifest_id.as_bytes());
+                bytes.extend_from_slice(&stripe_index.to_be_bytes());
+                bytes.extend_from_slice(&source_generation.to_be_bytes());
+            }
+            Self::Scrub {
+                target_id,
+                target_generation,
+            } => encode_target_subject(&mut bytes, 2, target_id, target_generation),
+            Self::Drain(scope) => encode_drain_subject(&mut bytes, scope),
+            Self::Rebalance {
+                volume_id,
+                topology_revision,
+            } => {
+                bytes.push(6);
+                bytes.extend_from_slice(&volume_id.as_bytes());
+                bytes.extend_from_slice(&topology_revision.get().to_be_bytes());
+            }
+            Self::Reconcile {
+                target_id,
+                target_generation,
+            } => encode_target_subject(&mut bytes, 7, target_id, target_generation),
+        }
+        bytes
+    }
+
+    /// Decodes and validates one exact canonical subject representation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown versions or variants, nil identities, zero generations and trailing or
+    /// truncated bytes.
+    pub fn decode(bytes: &[u8]) -> Result<Self, WorkSubjectError> {
+        if bytes.len() > MAXIMUM_WORK_SUBJECT_BYTES {
+            return Err(WorkSubjectError::Invalid);
+        }
+        let mut decoder = SubjectDecoder::new(bytes);
+        if decoder.byte()? != 1 {
+            return Err(WorkSubjectError::Invalid);
+        }
+        let subject = match decoder.byte()? {
+            1 => Self::Repair {
+                volume_id: VolumeId::from_bytes(decoder.identifier()?)?,
+                manifest_id: ContentManifestId::from_bytes(decoder.identifier()?)?,
+                stripe_index: decoder.u64()?,
+                source_generation: nonzero(decoder.u64()?)?,
+            },
+            2 => Self::Scrub {
+                target_id: TargetId::from_bytes(decoder.identifier()?)?,
+                target_generation: nonzero(decoder.u64()?)?,
+            },
+            3 => Self::Drain(DrainScope::Target {
+                target_id: TargetId::from_bytes(decoder.identifier()?)?,
+                target_generation: nonzero(decoder.u64()?)?,
+            }),
+            4 => Self::Drain(DrainScope::Node {
+                node_id: NodeId::from_bytes(decoder.identifier()?)?,
+                node_incarnation: nonzero(decoder.u64()?)?,
+            }),
+            5 => Self::Drain(DrainScope::FaultGroup {
+                fault_group_id: FaultGroupId::from_bytes(decoder.identifier()?)?,
+            }),
+            6 => Self::Rebalance {
+                volume_id: VolumeId::from_bytes(decoder.identifier()?)?,
+                topology_revision: Revision::new(nonzero(decoder.u64()?)?),
+            },
+            7 => Self::Reconcile {
+                target_id: TargetId::from_bytes(decoder.identifier()?)?,
+                target_generation: nonzero(decoder.u64()?)?,
+            },
+            _ => return Err(WorkSubjectError::Invalid),
+        };
+        decoder.finish()?;
+        Ok(subject)
+    }
+}
+
+fn encode_target_subject(
+    bytes: &mut Vec<u8>,
+    kind: u8,
+    target_id: TargetId,
+    target_generation: u64,
+) {
+    bytes.push(kind);
+    bytes.extend_from_slice(&target_id.as_bytes());
+    bytes.extend_from_slice(&target_generation.to_be_bytes());
+}
+
+fn encode_drain_subject(bytes: &mut Vec<u8>, scope: DrainScope) {
+    match scope {
+        DrainScope::Target {
+            target_id,
+            target_generation,
+        } => encode_target_subject(bytes, 3, target_id, target_generation),
+        DrainScope::Node {
+            node_id,
+            node_incarnation,
+        } => {
+            bytes.push(4);
+            bytes.extend_from_slice(&node_id.as_bytes());
+            bytes.extend_from_slice(&node_incarnation.to_be_bytes());
+        }
+        DrainScope::FaultGroup { fault_group_id } => {
+            bytes.push(5);
+            bytes.extend_from_slice(&fault_group_id.as_bytes());
+        }
+    }
+}
+
+fn nonzero(value: u64) -> Result<u64, WorkSubjectError> {
+    if value == 0 {
+        Err(WorkSubjectError::Invalid)
+    } else {
+        Ok(value)
+    }
+}
+
+struct SubjectDecoder<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> SubjectDecoder<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { remaining: bytes }
+    }
+
+    fn byte(&mut self) -> Result<u8, WorkSubjectError> {
+        Ok(self.take::<1>()?[0])
+    }
+
+    fn identifier(&mut self) -> Result<[u8; 16], WorkSubjectError> {
+        self.take()
+    }
+
+    fn u64(&mut self) -> Result<u64, WorkSubjectError> {
+        self.take().map(u64::from_be_bytes)
+    }
+
+    fn take<const LENGTH: usize>(&mut self) -> Result<[u8; LENGTH], WorkSubjectError> {
+        let Some((value, remaining)) = self.remaining.split_first_chunk::<LENGTH>() else {
+            return Err(WorkSubjectError::Invalid);
+        };
+        self.remaining = remaining;
+        Ok(*value)
+    }
+
+    fn finish(self) -> Result<(), WorkSubjectError> {
+        if self.remaining.is_empty() {
+            Ok(())
+        } else {
+            Err(WorkSubjectError::Invalid)
+        }
+    }
+}
+
+/// Invalid or non-canonical durable work subject.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkSubjectError {
+    /// The version, variant, bounds or required positive values were invalid.
+    Invalid,
+}
+
+impl fmt::Display for WorkSubjectError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid maintenance-work subject")
+    }
+}
+
+impl std::error::Error for WorkSubjectError {}
+
+impl From<meshspan_domain::IdentifierError> for WorkSubjectError {
+    fn from(_: meshspan_domain::IdentifierError) -> Self {
+        Self::Invalid
+    }
+}
+
+/// Authoritative scope evacuated by one drain job.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DrainScope {
+    /// One registered storage target generation.
+    Target {
+        /// Target to stop using for new placement and evacuate.
+        target_id: TargetId,
+        /// Exact generation being drained.
+        target_generation: u64,
+    },
+    /// Every storage target owned by one daemon node incarnation.
+    Node {
+        /// Node to evacuate.
+        node_id: NodeId,
+        /// Exact incarnation that accepted the drain.
+        node_incarnation: u64,
+    },
+    /// Every storage target within one administrator-defined shared-failure group.
+    FaultGroup {
+        /// Failure group to evacuate.
+        fault_group_id: FaultGroupId,
+    },
 }
 
 /// Safety consequence that primarily orders background work.
@@ -239,6 +512,54 @@ pub fn repair_due_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_subject_has_one_exact_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let subjects = [
+            WorkSubject::Repair {
+                volume_id: VolumeId::from_bytes([1; 16])?,
+                manifest_id: ContentManifestId::from_bytes([2; 16])?,
+                stripe_index: 3,
+                source_generation: 4,
+            },
+            WorkSubject::Scrub {
+                target_id: TargetId::from_bytes([5; 16])?,
+                target_generation: 6,
+            },
+            WorkSubject::Drain(DrainScope::Target {
+                target_id: TargetId::from_bytes([7; 16])?,
+                target_generation: 8,
+            }),
+            WorkSubject::Drain(DrainScope::Node {
+                node_id: NodeId::from_bytes([9; 16])?,
+                node_incarnation: 10,
+            }),
+            WorkSubject::Drain(DrainScope::FaultGroup {
+                fault_group_id: FaultGroupId::from_bytes([11; 16])?,
+            }),
+            WorkSubject::Rebalance {
+                volume_id: VolumeId::from_bytes([12; 16])?,
+                topology_revision: Revision::new(13),
+            },
+            WorkSubject::Reconcile {
+                target_id: TargetId::from_bytes([14; 16])?,
+                target_generation: 15,
+            },
+        ];
+
+        for subject in subjects {
+            let encoded = subject.encode();
+            assert!(encoded.len() <= MAXIMUM_WORK_SUBJECT_BYTES);
+            assert_eq!(WorkSubject::decode(&encoded)?, subject);
+            let mut with_trailing_byte = encoded;
+            with_trailing_byte.push(0);
+            assert_eq!(
+                WorkSubject::decode(&with_trailing_byte),
+                Err(WorkSubjectError::Invalid)
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn actual_unavailability_outranks_age_heat_and_debt() {

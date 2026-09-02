@@ -128,6 +128,8 @@ pub enum EntityKind {
     LocalityPolicy = 46,
     /// Immutable write-acknowledgement policy revision.
     AcknowledgementPolicy = 47,
+    /// Durable repair, scrub, drain, rebalance or reconciliation work.
+    MaintenanceWork = 48,
 }
 
 impl EntityKind {
@@ -180,6 +182,7 @@ impl EntityKind {
             45 => Ok(Self::AvailabilityCellMembership),
             46 => Ok(Self::LocalityPolicy),
             47 => Ok(Self::AcknowledgementPolicy),
+            48 => Ok(Self::MaintenanceWork),
             _ => Err(RepositoryError::CorruptState),
         }
     }
