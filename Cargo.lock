@@ -1291,6 +1291,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-smb"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "meshspan-storage"
 version = "0.1.0"
 dependencies = [
