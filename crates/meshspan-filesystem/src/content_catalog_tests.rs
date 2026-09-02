@@ -279,11 +279,10 @@ fn portable_layout_import_resumes_rewraps_and_collects_only_local_receipts()
     assert_eq!(
         receiver
             .connection
-            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row
-                .get::<_, u32>(
-                0
-            ))?,
-        super::repository::SCHEMA_VERSION
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get::<_, u32>(0)
+            })?,
+        u32::try_from(super::repository::SCHEMA_VERSION)?
     );
     Ok(())
 }
