@@ -26,8 +26,8 @@ use super::{
 use crate::{
     CloseRequest, CreateDisposition, CreateOptions, CreateRequest, CreateTargetKind,
     DirectoryInformationClass, FlushRequest, LockElement, LockKind, LockRequest,
-    QueryDirectoryRequest, ReadRequest, Smb2Command, Smb2Header, SmbRequestedAccess,
-    SmbShareAccess, WriteRequest,
+    QueryDirectoryRequest, QueryInfoRequest, ReadRequest, SetFileInformation, SetInfoRequest,
+    Smb2Command, Smb2Header, SmbRequestedAccess, SmbShareAccess, WriteRequest,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -65,6 +65,10 @@ enum Call {
     },
     Unlock {
         lock_id: LockId,
+    },
+    Rename {
+        source: Vec<String>,
+        target: Vec<String>,
     },
 }
 
@@ -249,9 +253,32 @@ impl FilesystemFileAdapter for TestFilesystem {
     fn rename(
         &mut self,
         _context: FilesystemAccessContext,
-        _request: &AdapterRenameRequest,
+        request: &AdapterRenameRequest,
     ) -> Result<NamespaceRenameReceipt, Self::Error> {
-        Err(TestError)
+        self.calls.push(Call::Rename {
+            source: request
+                .source
+                .components()
+                .iter()
+                .map(|component| component.display().to_owned())
+                .collect(),
+            target: request
+                .target
+                .components()
+                .iter()
+                .map(|component| component.display().to_owned())
+                .collect(),
+        });
+        Ok(NamespaceRenameReceipt {
+            disposition: PublicationDisposition::Applied,
+            operation_id: request.operation_id,
+            request_digest: [23; 32],
+            object_id: object()?,
+            object_revision_id: object_revision()?,
+            namespace_commit_id: namespace_commit()?,
+            head_sequence: 2,
+            result_digest: [24; 32],
+        })
     }
 
     fn close_file(
@@ -528,6 +555,67 @@ fn directory_create_enumerate_and_close_use_the_logical_namespace()
         vec![Call::CreateDirectory {
             components: vec!["shared".to_owned(), "documents".to_owned()]
         }]
+    );
+    Ok(())
+}
+
+#[test]
+fn query_and_rename_use_current_logical_open_state() -> Result<(), Box<dyn std::error::Error>> {
+    let mut adapter = adapter(64)?;
+    let mut create = create_request(50, vec!["old.txt".to_owned()]);
+    create.desired_access.delete = true;
+    create.desired_access.wire_mask = 0x0013_0089;
+    create.share_access.delete = true;
+    let opened = adapter.create(context()?, &create)?;
+
+    let before = adapter.query_info(
+        context()?,
+        QueryInfoRequest {
+            header: header(Smb2Command::QueryInfo, 51),
+            information_class: crate::FileInformationClass::All,
+            output_buffer_length: 4_096,
+            file_id: opened.file_id,
+        },
+    )?;
+    assert_eq!(&before.packet[168..172], &16_u32.to_le_bytes());
+
+    let rename = SetInfoRequest {
+        header: header(Smb2Command::SetInfo, 52),
+        file_id: opened.file_id,
+        information: SetFileInformation::Rename {
+            replace_if_exists: false,
+            target_components: vec!["archive".to_owned(), "new.txt".to_owned()],
+        },
+    };
+    assert_eq!(
+        &adapter.set_info(context()?, &rename)?[64..],
+        &2_u16.to_le_bytes()
+    );
+
+    let after = adapter.query_info(
+        context()?,
+        QueryInfoRequest {
+            header: header(Smb2Command::QueryInfo, 53),
+            information_class: crate::FileInformationClass::NormalizedName,
+            output_buffer_length: 4_096,
+            file_id: opened.file_id,
+        },
+    )?;
+    let expected = "\\archive\\new.txt"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(&after.packet[76..], expected);
+    assert_eq!(
+        adapter.into_inner().calls.get(1),
+        Some(&Call::Rename {
+            source: vec!["shared".to_owned(), "old.txt".to_owned()],
+            target: vec![
+                "shared".to_owned(),
+                "archive".to_owned(),
+                "new.txt".to_owned(),
+            ],
+        })
     );
     Ok(())
 }

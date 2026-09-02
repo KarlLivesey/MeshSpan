@@ -11,8 +11,8 @@ use meshspan_domain::{
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterListRequest, AdapterLockRequest, AdapterReadFileRequest,
-    AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest, ByteRange,
-    CreateDisposition as FilesystemDisposition, DirectoryEntryKind, DirectoryListCursor,
+    AdapterRenameRequest, AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest,
+    ByteRange, CreateDisposition as FilesystemDisposition, DirectoryEntryKind, DirectoryListCursor,
     FilesystemAccessContext, FilesystemFileAdapter, HandleAccess, HandleShare, NamespaceLimits,
     NamespacePath, RangeLockKind,
 };
@@ -21,8 +21,10 @@ use sha2::{Digest, Sha256};
 use crate::{
     CloseRequest, CloseResponse, CloseResponseAttributes, CreateAction, CreateDisposition,
     CreateRequest, CreateResponse, CreateResponseValues, CreateTargetKind, DirectoryResponseEntry,
-    FlushRequest, LockKind, LockRequest, LockResponse, QueryDirectoryRequest,
-    QueryDirectoryResponse, ReadRequest, ReadResponse, SmbFileId, WriteRequest, WriteResponse,
+    FileInformationValues, FlushRequest, LockKind, LockRequest, LockResponse,
+    QueryDirectoryRequest, QueryDirectoryResponse, QueryInfoRequest, QueryInfoResponse,
+    ReadRequest, ReadResponse, SetFileInformation, SetInfoRequest, SmbFileId, WriteRequest,
+    WriteResponse,
 };
 
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
@@ -121,13 +123,17 @@ pub struct SmbFilesystemAdapter<F> {
     locks: BTreeMap<(SmbFileId, u64, u64), LockId>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct OpenFile {
     handle_id: HandleId,
+    object_id: ObjectId,
+    path: NamespacePath,
     fence: u64,
     checkpoint_sequence: u64,
     logical_length: u64,
     lease_expires_at: UnixMicros,
+    granted_access: u32,
+    delete_pending: bool,
     dirty: bool,
 }
 
@@ -135,6 +141,13 @@ struct OpenFile {
 struct OpenDirectory {
     path: Option<NamespacePath>,
     cursor: Option<DirectoryListCursor>,
+    object_id: ObjectId,
+    granted_access: u32,
+}
+
+struct RelocationPlan {
+    files: Vec<(SmbFileId, NamespacePath)>,
+    directories: Vec<(SmbFileId, NamespacePath)>,
 }
 
 impl<F> SmbFilesystemAdapter<F>
@@ -205,7 +218,7 @@ where
                     operation_id,
                     handle_id,
                     volume_id: self.tree.volume_id,
-                    path,
+                    path: path.clone(),
                     create_disposition: map_disposition(request.disposition),
                     desired_access,
                     share_access: HandleShare::new(
@@ -259,10 +272,14 @@ where
             file_id,
             OpenFile {
                 handle_id,
+                object_id: receipt.handle.object_id,
+                path,
                 fence: receipt.handle.handle_fence,
                 checkpoint_sequence: 0,
                 logical_length,
                 lease_expires_at,
+                granted_access: request.desired_access.wire_mask,
+                delete_pending: request.options.delete_on_close,
                 dirty: receipt.handle.truncate_on_first_write,
             },
         );
@@ -333,6 +350,75 @@ where
         Ok(response)
     }
 
+    /// Reads bounded file information for one exact live open.
+    ///
+    /// # Errors
+    ///
+    /// Rejects mismatched identities, unknown opens, inconsistent local state, invalid time or a
+    /// response that exceeds the client's exact byte bound.
+    pub fn query_info(
+        &self,
+        context: FilesystemAccessContext,
+        request: QueryInfoRequest,
+    ) -> Result<QueryInfoResponse, SmbFilesystemAdapterError<F::Error>> {
+        self.validate_header(request.header.session_id, request.header.tree_id)?;
+        let values = if let Some(open) = self.handles.get(&request.file_id) {
+            self.file_information(context.now, open)?
+        } else if let Some(open) = self.directories.get(&request.file_id) {
+            self.directory_information(context.now, open)?
+        } else {
+            return Err(SmbFilesystemAdapterError::UnknownFile);
+        };
+        QueryInfoResponse::encode(request, &values)
+            .map_err(|_| SmbFilesystemAdapterError::InvalidResponse)
+    }
+
+    /// Applies a supported file-information mutation through the shared filesystem contract.
+    ///
+    /// The first mapping supports atomic rename without replacement. Delete-pending and logical
+    /// length changes require durable mutable-handle contracts and fail closed until those common
+    /// operations are available.
+    ///
+    /// # Errors
+    ///
+    /// Rejects mismatched identities, unknown opens, replacement requests, unsafe paths,
+    /// unsupported mutations or any common authority/filesystem failure.
+    pub fn set_info(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &SetInfoRequest,
+    ) -> Result<[u8; 66], SmbFilesystemAdapterError<F::Error>> {
+        self.validate_header(request.header.session_id, request.header.tree_id)?;
+        let SetFileInformation::Rename {
+            replace_if_exists,
+            target_components,
+        } = &request.information
+        else {
+            return Err(SmbFilesystemAdapterError::UnsupportedMutation);
+        };
+        if *replace_if_exists {
+            return Err(SmbFilesystemAdapterError::UnsupportedReplacement);
+        }
+        let target = self.path(target_components)?;
+        let (source, requesting_handle_id) = self.rename_source(request.file_id)?;
+        let relocations = self.relocation_plan(&source, &target)?;
+        self.filesystem
+            .rename(
+                context,
+                &AdapterRenameRequest {
+                    operation_id: operation_id(request.header, b"set-info-rename")?,
+                    volume_id: self.tree.volume_id,
+                    source,
+                    target,
+                    requesting_handle_id,
+                    observed_at: context.now,
+                },
+            )
+            .map_err(SmbFilesystemAdapterError::Filesystem)?;
+        self.apply_relocations(relocations)?;
+        Ok(request.success_response())
+    }
+
     /// Reads one verified bounded range from an exact live SMB open.
     ///
     /// # Errors
@@ -377,7 +463,7 @@ where
         request: &WriteRequest,
     ) -> Result<WriteResponse, SmbFilesystemAdapterError<F::Error>> {
         self.validate_header(request.header.session_id, request.header.tree_id)?;
-        let open = *self.open(request.file_id)?;
+        let open = self.open(request.file_id)?.clone();
         let write_end = request
             .offset
             .checked_add(
@@ -454,7 +540,7 @@ where
         request: &LockRequest,
     ) -> Result<LockResponse, SmbFilesystemAdapterError<F::Error>> {
         self.validate_header(request.header.session_id, request.header.tree_id)?;
-        let open = *self.open(request.file_id)?;
+        let open = self.open(request.file_id)?.clone();
         for (index, element) in request.elements.iter().copied().enumerate() {
             let range = ByteRange::new(element.offset, element.length)
                 .map_err(|_| SmbFilesystemAdapterError::InvalidRange)?;
@@ -542,7 +628,7 @@ where
                 }),
             ));
         }
-        let open = *self.open(request.file_id)?;
+        let open = self.open(request.file_id)?.clone();
         let flush = if open.dirty {
             Some(AdapterFlushFileRequest {
                 operation_id: operation_id(request.header, b"close-flush")?,
@@ -601,7 +687,7 @@ where
             return Err(SmbFilesystemAdapterError::UnsupportedTarget);
         }
         let path = self.optional_path(&request.path_components)?;
-        let action = match request.disposition {
+        let (action, object_id) = match request.disposition {
             CreateDisposition::OpenExisting => {
                 if let Some(path) = &path {
                     let stat = self
@@ -618,12 +704,18 @@ where
                     if stat.kind != DirectoryEntryKind::Directory {
                         return Err(SmbFilesystemAdapterError::UnsupportedTarget);
                     }
+                    (CreateAction::Opened, stat.object_id)
+                } else {
+                    (
+                        CreateAction::Opened,
+                        root_directory_object_id(self.tree.volume_id)?,
+                    )
                 }
-                CreateAction::Opened
             }
             CreateDisposition::CreateNew => {
                 let path = path.clone().ok_or(SmbFilesystemAdapterError::InvalidPath)?;
-                self.filesystem
+                let receipt = self
+                    .filesystem
                     .create_directory(
                         context,
                         &AdapterCreateDirectoryRequest {
@@ -634,7 +726,7 @@ where
                         },
                     )
                     .map_err(SmbFilesystemAdapterError::Filesystem)?;
-                CreateAction::Created
+                (CreateAction::Created, receipt.directory_object_id)
             }
             CreateDisposition::OpenOrCreate
             | CreateDisposition::OverwriteExisting
@@ -665,9 +757,154 @@ where
             },
         )
         .map_err(|_| SmbFilesystemAdapterError::InvalidResponse)?;
-        self.directories
-            .insert(file_id, OpenDirectory { path, cursor: None });
+        self.directories.insert(
+            file_id,
+            OpenDirectory {
+                path,
+                cursor: None,
+                object_id,
+                granted_access: request.desired_access.wire_mask,
+            },
+        );
         Ok(SmbCreateOutcome { response, file_id })
+    }
+
+    fn file_information(
+        &self,
+        now: UnixMicros,
+        open: &OpenFile,
+    ) -> Result<FileInformationValues, SmbFilesystemAdapterError<F::Error>> {
+        let filetime = unix_micros_to_filetime(now)?;
+        Ok(FileInformationValues {
+            creation_time: filetime,
+            last_access_time: filetime,
+            last_write_time: filetime,
+            change_time: filetime,
+            allocation_size: allocation_size(open.logical_length)?,
+            end_of_file: open.logical_length,
+            file_attributes: FILE_ATTRIBUTE_NORMAL,
+            delete_pending: open.delete_pending,
+            directory: false,
+            granted_access: open.granted_access,
+            current_byte_offset: 0,
+            file_id: open.object_id.as_bytes(),
+            normalized_name: self.relative_display_path(Some(&open.path))?,
+        })
+    }
+
+    fn directory_information(
+        &self,
+        now: UnixMicros,
+        open: &OpenDirectory,
+    ) -> Result<FileInformationValues, SmbFilesystemAdapterError<F::Error>> {
+        let filetime = unix_micros_to_filetime(now)?;
+        Ok(FileInformationValues {
+            creation_time: filetime,
+            last_access_time: filetime,
+            last_write_time: filetime,
+            change_time: filetime,
+            allocation_size: 0,
+            end_of_file: 0,
+            file_attributes: 0x0000_0010,
+            delete_pending: false,
+            directory: true,
+            granted_access: open.granted_access,
+            current_byte_offset: 0,
+            file_id: open.object_id.as_bytes(),
+            normalized_name: self.relative_display_path(open.path.as_ref())?,
+        })
+    }
+
+    fn relative_display_path(
+        &self,
+        path: Option<&NamespacePath>,
+    ) -> Result<String, SmbFilesystemAdapterError<F::Error>> {
+        let Some(path) = path else {
+            return Ok("\\".to_owned());
+        };
+        let components = path.components();
+        let root_length = self.tree.root_components.len();
+        if components.len() < root_length
+            || components
+                .iter()
+                .take(root_length)
+                .zip(&self.tree.root_components)
+                .any(|(actual, expected)| actual.display() != expected)
+        {
+            return Err(SmbFilesystemAdapterError::InvalidPath);
+        }
+        let relative = components[root_length..]
+            .iter()
+            .map(meshspan_filesystem::NamespaceComponent::display)
+            .collect::<Vec<_>>()
+            .join("\\");
+        Ok(if relative.is_empty() {
+            "\\".to_owned()
+        } else {
+            format!("\\{relative}")
+        })
+    }
+
+    fn rename_source(
+        &self,
+        file_id: SmbFileId,
+    ) -> Result<(NamespacePath, Option<HandleId>), SmbFilesystemAdapterError<F::Error>> {
+        if let Some(open) = self.handles.get(&file_id) {
+            return Ok((open.path.clone(), Some(open.handle_id)));
+        }
+        let directory = self
+            .directories
+            .get(&file_id)
+            .ok_or(SmbFilesystemAdapterError::UnknownFile)?;
+        directory
+            .path
+            .clone()
+            .map(|path| (path, None))
+            .ok_or(SmbFilesystemAdapterError::InvalidPath)
+    }
+
+    fn relocation_plan(
+        &self,
+        source: &NamespacePath,
+        target: &NamespacePath,
+    ) -> Result<RelocationPlan, SmbFilesystemAdapterError<F::Error>> {
+        let mut files = Vec::new();
+        for (file_id, open) in &self.handles {
+            if let Some(path) =
+                relocated_path(&open.path, source, target, self.tree.namespace_limits)?
+            {
+                files.push((*file_id, path));
+            }
+        }
+        let mut directories = Vec::new();
+        for (file_id, open) in &self.directories {
+            if let Some(path) = open.path.as_ref()
+                && let Some(path) =
+                    relocated_path(path, source, target, self.tree.namespace_limits)?
+            {
+                directories.push((*file_id, path));
+            }
+        }
+        Ok(RelocationPlan { files, directories })
+    }
+
+    fn apply_relocations(
+        &mut self,
+        plan: RelocationPlan,
+    ) -> Result<(), SmbFilesystemAdapterError<F::Error>> {
+        for (file_id, path) in plan.files {
+            self.handles
+                .get_mut(&file_id)
+                .ok_or(SmbFilesystemAdapterError::UnknownFile)?
+                .path = path;
+        }
+        for (file_id, path) in plan.directories {
+            self.directories
+                .get_mut(&file_id)
+                .ok_or(SmbFilesystemAdapterError::UnknownDirectory)?
+                .path = Some(path);
+        }
+        Ok(())
     }
 
     fn flush_open(
@@ -676,7 +913,7 @@ where
         file_id: SmbFileId,
         operation_id: OperationId,
     ) -> Result<(), SmbFilesystemAdapterError<F::Error>> {
-        let open = *self.open(file_id)?;
+        let open = self.open(file_id)?.clone();
         if !open.dirty {
             return Ok(());
         }
@@ -748,6 +985,53 @@ where
             .get_mut(&file_id)
             .ok_or(SmbFilesystemAdapterError::UnknownFile)
     }
+}
+
+fn allocation_size<E>(logical_length: u64) -> Result<u64, SmbFilesystemAdapterError<E>> {
+    const ALLOCATION_UNIT: u64 = 4_096;
+    if logical_length == 0 {
+        return Ok(0);
+    }
+    logical_length
+        .checked_add(ALLOCATION_UNIT - 1)
+        .map(|length| length / ALLOCATION_UNIT * ALLOCATION_UNIT)
+        .ok_or(SmbFilesystemAdapterError::LimitExceeded)
+}
+
+fn root_directory_object_id<E>(
+    volume_id: VolumeId,
+) -> Result<ObjectId, SmbFilesystemAdapterError<E>> {
+    let mut digest = Sha256::new();
+    digest.update(b"meshspan.smb.root-directory-object.v1\0");
+    digest.update(volume_id.as_bytes());
+    let bytes: [u8; 32] = digest.finalize().into();
+    ObjectId::from_bytes(
+        bytes[..16]
+            .try_into()
+            .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)?,
+    )
+    .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)
+}
+
+fn relocated_path<E>(
+    path: &NamespacePath,
+    source: &NamespacePath,
+    target: &NamespacePath,
+    limits: NamespaceLimits,
+) -> Result<Option<NamespacePath>, SmbFilesystemAdapterError<E>> {
+    if path.components().len() < source.components().len()
+        || &path.components()[..source.components().len()] != source.components()
+    {
+        return Ok(None);
+    }
+    let components = target
+        .components()
+        .iter()
+        .chain(&path.components()[source.components().len()..])
+        .map(meshspan_filesystem::NamespaceComponent::display);
+    NamespacePath::from_components(components, limits)
+        .map(Some)
+        .map_err(|_| SmbFilesystemAdapterError::InvalidPath)
 }
 
 fn map_disposition(disposition: CreateDisposition) -> FilesystemDisposition {
@@ -913,6 +1197,12 @@ pub enum SmbFilesystemAdapterError<E> {
     /// The requested wildcard profile is not implemented by the bounded namespace adapter.
     #[error("SMB directory search pattern is unsupported")]
     UnsupportedSearchPattern,
+    /// Replacement rename is not yet represented by the common atomic namespace contract.
+    #[error("SMB replacement rename is unsupported")]
+    UnsupportedReplacement,
+    /// The mutation needs a common durable handle operation that is not yet available.
+    #[error("SMB file-information mutation is unsupported")]
+    UnsupportedMutation,
     /// The requested access cannot form a common handle contract.
     #[error("SMB requested access is invalid")]
     InvalidAccess,
