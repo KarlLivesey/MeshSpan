@@ -180,6 +180,12 @@ mod revoke_session_api;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
+mod shard_repair_worker;
+
+pub use shard_repair_worker::{
+    PhysicalShardRepair, RepairMetadataAuthority, ShardRepairExecution, ShardRepairExecutionError,
+    ShardRepairExecutionReceipt, execute_shard_repair,
+};
 mod smb_authentication;
 mod smb_connection;
 mod smb_export_administration;
