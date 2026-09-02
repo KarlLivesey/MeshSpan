@@ -9,8 +9,8 @@ use meshspan_contracts::{
     BoundedBytes, BoundedItems, CodingLayout, ComponentConfiguration, ComponentLifecycle,
     ComponentObservation, ComponentTransition, ContractError, ContractKind, ContractLimits,
     ContractVersion, ImplementationDescriptor, PlacementCandidate, PlacementCellRequirement,
-    PlacementCellRole, PlacementPlan, PlacementPolicy, PlacementRequest, ShardAcknowledgement,
-    VersionedPayload,
+    PlacementCellRole, PlacementPlan, PlacementPolicy, PlacementRequest, RepairPlacementPlan,
+    RepairPlacementRequest, ShardAcknowledgement, VersionedPayload,
 };
 use meshspan_domain::{
     FailureScenario, LifecycleState, ProtectionError, ProtectionLayout, ProtectionProof, Revision,
@@ -214,6 +214,50 @@ impl PlacementPolicy for FaultAwarePlacement {
         build_best_effort_plan(request, &candidates)
     }
 
+    fn plan_repair(
+        &self,
+        request: RepairPlacementRequest<'_>,
+    ) -> Result<RepairPlacementPlan, ContractError> {
+        self.require_active()?;
+        validate_repair_request(request)?;
+        let mut candidates = request
+            .candidates
+            .iter()
+            .filter(|candidate| {
+                !request.current_targets.contains(&candidate.target_id)
+                    && !candidate_is_excluded(candidate, request.cells)
+                    && candidate.writable_bytes >= u64::from(request.coding_layout.slice_bytes())
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|candidate| {
+            (
+                Reverse(candidate.performance_weight),
+                Reverse(candidate.writable_bytes),
+                candidate.target_id,
+            )
+        });
+        let mut selected = None;
+        for candidate in candidates {
+            let evaluation = evaluate_repair_candidate(request, candidate)?;
+            if selected
+                .as_ref()
+                .is_none_or(|current: &RepairCandidateEvaluation| evaluation.score > current.score)
+            {
+                selected = Some(evaluation);
+            }
+        }
+        let selected = selected.ok_or(ContractError::ResourceExhausted)?;
+        Ok(RepairPlacementPlan {
+            replacement_target_id: selected.target.target_id,
+            replacement_target_generation: selected.target.target_generation,
+            fully_protected: selected.score.fully_protected,
+            protection_proofs: BoundedItems::new(selected.proofs, MAXIMUM_SCENARIOS)
+                .map_err(|_| ContractError::InternalContract)?,
+            topology_revision: request.topology_revision,
+            capacity_revision: request.capacity_revision,
+        })
+    }
+
     fn evaluate(
         &self,
         scenario: &FailureScenario,
@@ -224,6 +268,136 @@ impl PlacementPolicy for FaultAwarePlacement {
         prove_protection(topology, scenario, layout, MAXIMUM_PROOF_LOSS_SETS)
             .map_err(|_| ContractError::InvalidInput)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct RepairCandidateScore {
+    fully_protected: bool,
+    required_policy_satisfied: bool,
+    surviving_scenarios: usize,
+    all_cells_satisfied: bool,
+    minimum_remaining_slices: usize,
+}
+
+struct RepairCandidateEvaluation<'a> {
+    target: &'a PlacementCandidate,
+    proofs: Vec<ProtectionProof>,
+    score: RepairCandidateScore,
+}
+
+fn validate_repair_request(request: RepairPlacementRequest<'_>) -> Result<(), ContractError> {
+    let total_slices = usize::from(request.coding_layout.total_slices());
+    let source_index = usize::from(request.source_shard_index);
+    let mut current = BTreeSet::new();
+    let mut candidates = BTreeSet::new();
+    if request.context.contract_version != ContractVersion::V1_0
+        || request.context.deadline.get() == 0
+        || request.topology_revision == Revision::ZERO
+        || request.capacity_revision == Revision::ZERO
+        || request.scenarios.is_empty()
+        || request.scenarios.len() > MAXIMUM_SCENARIOS
+        || request.required_scenarios.len() > request.scenarios.len()
+        || request.cells.len() > MAXIMUM_CELLS
+        || request.candidates.is_empty()
+        || request.candidates.len() > MAXIMUM_CANDIDATES
+        || request.current_targets.len() != total_slices
+        || source_index >= total_slices
+        || request
+            .current_targets
+            .iter()
+            .any(|target| !current.insert(*target))
+        || request.candidates.iter().any(|candidate| {
+            candidate.target_generation == 0
+                || candidate.writable_bytes == 0
+                || candidate.performance_weight == 0
+                || !candidates.insert(candidate.target_id)
+        })
+        || request
+            .required_scenarios
+            .iter()
+            .any(|required| !request.scenarios.contains(required))
+    {
+        return Err(ContractError::InvalidInput);
+    }
+    validate_cells(request.cells)
+}
+
+fn validate_cells(cells: &[PlacementCellRequirement]) -> Result<(), ContractError> {
+    let mut identifiers = BTreeSet::new();
+    if cells.iter().any(|cell| {
+        !identifiers.insert(cell.cell_id)
+            || cell.minimum_durable_targets == Some(0)
+            || cell.minimum_distinct_nodes == Some(0)
+            || cell
+                .minimum_distinct_nodes
+                .zip(cell.minimum_durable_targets)
+                .is_some_and(|(nodes, targets)| nodes > targets)
+            || (cell.role == PlacementCellRole::Excluded
+                && (cell.complete_local
+                    || cell.minimum_durable_targets.is_some()
+                    || cell.minimum_distinct_nodes.is_some()
+                    || !cell.local_scenarios.is_empty()))
+    }) {
+        Err(ContractError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn evaluate_repair_candidate<'a>(
+    request: RepairPlacementRequest<'_>,
+    candidate: &'a PlacementCandidate,
+) -> Result<RepairCandidateEvaluation<'a>, ContractError> {
+    let mut targets = request.current_targets.to_vec();
+    targets[usize::from(request.source_shard_index)] = candidate.target_id;
+    let layout = ProtectionLayout::new(request.coding_layout.data_slices(), targets.clone())
+        .map_err(|_| ContractError::InvalidInput)?;
+    let proofs = request
+        .scenarios
+        .iter()
+        .map(|scenario| best_effort_proof(request.topology, scenario, &layout))
+        .collect::<Result<Vec<_>, _>>()?;
+    let required_scenarios_satisfied = request.required_scenarios.iter().all(|required| {
+        request
+            .scenarios
+            .iter()
+            .position(|scenario| scenario == required)
+            .is_some_and(|index| proofs[index].survives)
+    });
+    let required_cells_satisfied = cell_constraints_satisfied(
+        request.topology,
+        request.candidates,
+        &targets,
+        request.cells,
+        false,
+        request.coding_layout.data_slices(),
+    )?;
+    let all_cells_satisfied = cell_constraints_satisfied(
+        request.topology,
+        request.candidates,
+        &targets,
+        request.cells,
+        true,
+        request.coding_layout.data_slices(),
+    )?;
+    let surviving_scenarios = proofs.iter().filter(|proof| proof.survives).count();
+    let minimum_remaining_slices = proofs
+        .iter()
+        .map(|proof| proof.minimum_remaining_slices)
+        .min()
+        .unwrap_or_default();
+    let all_scenarios_satisfied = surviving_scenarios == proofs.len();
+    Ok(RepairCandidateEvaluation {
+        target: candidate,
+        proofs,
+        score: RepairCandidateScore {
+            fully_protected: all_scenarios_satisfied && all_cells_satisfied,
+            required_policy_satisfied: required_scenarios_satisfied && required_cells_satisfied,
+            surviving_scenarios,
+            all_cells_satisfied,
+            minimum_remaining_slices,
+        },
+    })
 }
 
 fn build_best_effort_plan(
@@ -834,8 +1008,9 @@ fn hash_optional_u16(digest: &mut blake3::Hasher, value: Option<u16>) {
 #[cfg(test)]
 mod tests {
     use meshspan_contracts::{
-        BoundedItems, PlacementCandidate, PlacementCellRequirement, PlacementCellRole,
-        PlacementPolicy, PlacementRequest, RequestContext,
+        BoundedItems, CodingLayout, ContractError, PlacementCandidate, PlacementCellRequirement,
+        PlacementCellRole, PlacementPolicy, PlacementRequest, RepairPlacementRequest,
+        RequestContext,
     };
     use meshspan_domain::{
         AvailabilityCellId, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
@@ -1217,6 +1392,71 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn repair_selects_a_distinct_writable_target_and_retains_geometry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (topology, candidates) = independent_targets(3)?;
+        let scenario = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2)?,
+            failure_count: 1,
+        }])?;
+        let current = [target(1)?, target(2)?];
+        let plan = FaultAwarePlacement::new().plan_repair(repair_request(
+            &topology,
+            &candidates,
+            std::slice::from_ref(&scenario),
+            &current,
+        )?)?;
+
+        assert_eq!(plan.replacement_target_id, target(3)?);
+        assert_eq!(plan.replacement_target_generation, 1);
+        assert!(plan.fully_protected);
+        assert!(plan.protection_proofs.as_slice()[0].survives);
+        Ok(())
+    }
+
+    #[test]
+    fn repair_reports_best_effort_when_fixed_geometry_cannot_meet_policy()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (topology, candidates) = independent_targets(3)?;
+        let scenario = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2)?,
+            failure_count: 2,
+        }])?;
+        let current = [target(1)?, target(2)?];
+        let plan = FaultAwarePlacement::new().plan_repair(repair_request(
+            &topology,
+            &candidates,
+            std::slice::from_ref(&scenario),
+            &current,
+        )?)?;
+
+        assert_eq!(plan.replacement_target_id, target(3)?);
+        assert!(!plan.fully_protected);
+        assert!(!plan.protection_proofs.as_slice()[0].survives);
+        Ok(())
+    }
+
+    #[test]
+    fn repair_fails_when_no_new_target_exists() -> Result<(), Box<dyn std::error::Error>> {
+        let (topology, candidates) = independent_targets(2)?;
+        let scenario = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2)?,
+            failure_count: 1,
+        }])?;
+        let current = [target(1)?, target(2)?];
+        assert_eq!(
+            FaultAwarePlacement::new().plan_repair(repair_request(
+                &topology,
+                &candidates,
+                std::slice::from_ref(&scenario),
+                &current,
+            )?),
+            Err(ContractError::ResourceExhausted)
+        );
+        Ok(())
+    }
+
     fn six_machine_topology()
     -> Result<(Topology, Vec<PlacementCandidate>), Box<dyn std::error::Error>> {
         let mut topology = Topology::default();
@@ -1279,6 +1519,32 @@ mod tests {
             candidates,
             minimum_durable_targets: 1,
             minimum_distinct_nodes: 1,
+            cells: &[],
+        })
+    }
+
+    fn repair_request<'a>(
+        topology: &'a Topology,
+        candidates: &'a [PlacementCandidate],
+        scenarios: &'a [FailureScenario],
+        current_targets: &'a [TargetId],
+    ) -> Result<RepairPlacementRequest<'a>, Box<dyn std::error::Error>> {
+        Ok(RepairPlacementRequest {
+            context: RequestContext {
+                contract_version: meshspan_contracts::ContractVersion::V1_0,
+                operation_id: OperationId::from_bytes([91; 16])?,
+                deadline: UnixMicros::new(1),
+                expected_revision: None,
+            },
+            coding_layout: CodingLayout::new(1, 1, 4_096)?,
+            source_shard_index: 1,
+            current_targets,
+            scenarios,
+            required_scenarios: &[],
+            topology,
+            topology_revision: Revision::new(1),
+            capacity_revision: Revision::new(1),
+            candidates,
             cells: &[],
         })
     }
