@@ -55,9 +55,33 @@ pub(super) fn provider_context(
     Ok(context.filter(|context| context.node_id == node_id))
 }
 
+pub(super) fn readable_provider_context(
+    database: &crate::PartitionDatabase,
+    node_id: NodeId,
+    target_id: TargetId,
+) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
+    let context = readable_provider_context_by_target(database, target_id)?;
+    Ok(context.filter(|context| context.node_id == node_id))
+}
+
 pub(super) fn provider_context_by_target(
     database: &crate::PartitionDatabase,
     target_id: TargetId,
+) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
+    load_provider_context(database, target_id, false)
+}
+
+pub(super) fn readable_provider_context_by_target(
+    database: &crate::PartitionDatabase,
+    target_id: TargetId,
+) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
+    load_provider_context(database, target_id, true)
+}
+
+fn load_provider_context(
+    database: &crate::PartitionDatabase,
+    target_id: TargetId,
+    allow_draining: bool,
 ) -> Result<Option<StorageTargetProviderContext>, RepositoryError> {
     let stored = database
         .connection()
@@ -72,7 +96,9 @@ pub(super) fn provider_context_by_target(
              CROSS JOIN meshes m
              CROSS JOIN applied_state a
              WHERE st.target_id = ?1
-               AND st.state = ?2 AND st.draining_at IS NULL AND st.retired_at IS NULL
+               AND ((?4 = 0 AND st.state = ?2 AND st.draining_at IS NULL)
+                    OR (?4 = 1 AND st.state IN (?2, 3)))
+               AND st.retired_at IS NULL
                AND tg.state = ?3 AND tg.retired_at IS NULL
                AND n.state = 2 AND n.retired_at IS NULL
                AND h.state = 1 AND h.retired_at IS NULL
@@ -81,6 +107,7 @@ pub(super) fn provider_context_by_target(
                 target_id.as_bytes().as_slice(),
                 i64::from(ACTIVE_TARGET_STATE),
                 i64::from(ACTIVE_GENERATION_STATE),
+                i64::from(allow_draining),
             ],
             |row| {
                 Ok((

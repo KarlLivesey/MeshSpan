@@ -46,11 +46,12 @@ pub trait StorageTargetRegistrationAuthority {
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, StorageTargetRegistrationAuthorityError>;
 
-    /// Returns the current active replicated provider configuration after registration.
+    /// Returns current readable replicated provider configuration after registration or restart.
     ///
     /// # Errors
     ///
-    /// Fails closed when the target is absent, inactive, foreign or malformed.
+    /// Fails closed when the target is absent, detached, foreign or malformed. A draining target
+    /// remains readable so restart cannot make evacuation source bytes disappear.
     fn provider_context(
         &self,
         node_id: NodeId,

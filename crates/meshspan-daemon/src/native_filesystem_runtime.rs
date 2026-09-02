@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use meshspan_cluster::{MetadataAuthorityHandle, MetadataFilesystemAuthorityError};
 use meshspan_domain::{
     AuditEventId, BranchId, FileVersionId, InitialBootstrapMaterial, NamespaceCommitId,
-    OperationId, PartitionId, UnixMicros,
+    OperationId, PartitionId, TargetId, UnixMicros,
 };
 use meshspan_filesystem::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter,
@@ -162,6 +162,7 @@ impl NativeFilesystemRuntimeConfiguration {
     fn open(
         &self,
         targets: &[NativeStorageTarget],
+        writable_targets: &[StorageTargetProviderContext],
         now: UnixMicros,
     ) -> Result<ProductionFilesystem, NativeFilesystemOpeningError> {
         let primary = targets
@@ -187,15 +188,14 @@ impl NativeFilesystemRuntimeConfiguration {
             targets
                 .iter()
                 .map(|target| (target.context(), target.provider())),
+            writable_targets.iter().map(|target| target.target_id),
             permit_key,
             authority,
             Arc::clone(&self.network),
             self.runtime.clone(),
         );
-        let policies = NativeProtectionPolicySource::new(
-            self.repository(now)?,
-            targets.iter().map(NativeStorageTarget::context).collect(),
-        );
+        let policies =
+            NativeProtectionPolicySource::new(self.repository(now)?, writable_targets.to_vec());
         let publisher = ProtectedContentPublisher::open(
             &self.filesystem_state_directory,
             now,
@@ -220,6 +220,7 @@ impl NativeFilesystemRuntimeConfiguration {
     fn repairer(
         &self,
         targets: &[NativeStorageTarget],
+        writable_targets: &[StorageTargetProviderContext],
         now: UnixMicros,
     ) -> Result<ProductionShardRepairer, NativeFilesystemOpeningError> {
         let primary = targets
@@ -243,6 +244,7 @@ impl NativeFilesystemRuntimeConfiguration {
             targets
                 .iter()
                 .map(|target| (target.context(), target.provider())),
+            writable_targets.iter().map(|target| target.target_id),
             permit_key,
             authority,
             Arc::clone(&self.network),
@@ -255,12 +257,40 @@ impl NativeFilesystemRuntimeConfiguration {
             read_permit_key,
         ))
     }
+
+    fn writable_targets(
+        &self,
+        targets: &[NativeStorageTarget],
+        now: UnixMicros,
+    ) -> Result<Vec<StorageTargetProviderContext>, NativeFilesystemOpeningError> {
+        let authority = self.repository(now)?;
+        let mut writable = Vec::new();
+        for opened in targets {
+            let opened_context = opened.context();
+            let Some(current) = authority
+                .storage_target_provider_context_by_target(opened_context.target_id)
+                .map_err(|_| NativeFilesystemOpeningError::Unavailable)?
+            else {
+                continue;
+            };
+            if current.mesh_id != opened_context.mesh_id
+                || current.node_id != opened_context.node_id
+                || current.target_id != opened_context.target_id
+                || current.generation != opened_context.generation
+            {
+                return Err(NativeFilesystemOpeningError::Unavailable);
+            }
+            writable.push(current);
+        }
+        Ok(writable)
+    }
 }
 
 struct NativeFilesystemRuntimeState {
     configuration: NativeFilesystemRuntimeConfiguration,
     filesystem: Option<ProductionFilesystem>,
     active_targets: Vec<StorageTargetProviderContext>,
+    writable_targets: Vec<TargetId>,
 }
 
 /// Cloneable connector boundary backed by exactly one production filesystem state machine.
@@ -278,6 +308,7 @@ impl NativeFilesystemRuntime {
                 configuration,
                 filesystem: None,
                 active_targets: Vec::new(),
+                writable_targets: Vec::new(),
             })),
         }
     }
@@ -296,12 +327,21 @@ impl NativeFilesystemRuntime {
             .iter()
             .map(NativeStorageTarget::context)
             .collect::<Vec<_>>();
-        if state.filesystem.is_some() && state.active_targets == contexts {
+        let writable = state.configuration.writable_targets(targets, now)?;
+        let writable_ids = writable
+            .iter()
+            .map(|target| target.target_id)
+            .collect::<Vec<_>>();
+        if state.filesystem.is_some()
+            && state.active_targets == contexts
+            && state.writable_targets == writable_ids
+        {
             return Ok(());
         }
-        let filesystem = state.configuration.open(targets, now)?;
+        let filesystem = state.configuration.open(targets, &writable, now)?;
         state.filesystem = Some(filesystem);
         state.active_targets = contexts;
+        state.writable_targets = writable_ids;
         Ok(())
     }
 
@@ -326,9 +366,14 @@ impl NativeFilesystemRuntime {
         targets: &[NativeStorageTarget],
         now: UnixMicros,
     ) -> Result<ProductionShardRepairer, NativeFilesystemRuntimeError> {
-        self.lock()?
+        let state = self.lock()?;
+        let writable = state
             .configuration
-            .repairer(targets, now)
+            .writable_targets(targets, now)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+        state
+            .configuration
+            .repairer(targets, &writable, now)
             .map_err(|_| NativeFilesystemRuntimeError::Unavailable)
     }
 
@@ -341,12 +386,16 @@ impl NativeFilesystemRuntime {
         now: UnixMicros,
     ) -> Result<meshspan_filesystem::ProtectionConfiguration, NativeFilesystemRuntimeError> {
         let state = self.lock()?;
+        let writable = state
+            .configuration
+            .writable_targets(targets, now)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
         NativeProtectionPolicySource::new(
             state
                 .configuration
                 .repository(now)
                 .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?,
-            targets.iter().map(NativeStorageTarget::context).collect(),
+            writable,
         )
         .current_configuration(volume_id)
         .map_err(|_| NativeFilesystemRuntimeError::Unavailable)

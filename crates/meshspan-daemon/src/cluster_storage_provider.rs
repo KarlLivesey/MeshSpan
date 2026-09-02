@@ -2,7 +2,7 @@
 
 //! Local-write and authenticated remote-read composition for native gateway content.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use meshspan_contracts::{
@@ -23,6 +23,7 @@ use crate::private_consensus_runtime::PrivateConsensusRuntime;
 pub(crate) struct ClusterShardRouter {
     mesh_id: MeshId,
     locals: BTreeMap<TargetId, (u64, LocalFolderStorageProvider)>,
+    writable_targets: BTreeSet<TargetId>,
     permit_key: StoragePermitMacKey,
     authority: AuthoritativeRepository,
     network: Arc<PrivateConsensusRuntime>,
@@ -35,6 +36,7 @@ impl ClusterShardRouter {
     pub(crate) fn new(
         mesh_id: MeshId,
         locals: impl IntoIterator<Item = (StorageTargetProviderContext, LocalFolderStorageProvider)>,
+        writable_targets: impl IntoIterator<Item = TargetId>,
         permit_key: StoragePermitMacKey,
         authority: AuthoritativeRepository,
         network: Arc<PrivateConsensusRuntime>,
@@ -46,6 +48,7 @@ impl ClusterShardRouter {
                 .into_iter()
                 .map(|(context, provider)| (context.target_id, (context.generation, provider)))
                 .collect(),
+            writable_targets: writable_targets.into_iter().collect(),
             permit_key,
             authority,
             network,
@@ -60,18 +63,21 @@ impl ClusterShardRouter {
             .map(|(_, provider)| provider)
     }
 
-    fn local_mut(
+    fn writable_local_mut(
         &mut self,
         target_id: TargetId,
         generation: u64,
     ) -> Option<&mut LocalFolderStorageProvider> {
+        if !self.writable_targets.contains(&target_id) {
+            return None;
+        }
         self.locals
             .get_mut(&target_id)
             .filter(|(current, _)| *current == generation)
             .map(|(_, provider)| provider)
     }
 
-    fn route(
+    fn writable_route(
         &self,
         target_id: TargetId,
         generation: u64,
@@ -88,11 +94,28 @@ impl ClusterShardRouter {
         }
     }
 
+    fn readable_route(
+        &self,
+        target_id: TargetId,
+        generation: u64,
+    ) -> Result<StorageTargetProviderContext, ContractError> {
+        let route = self
+            .authority
+            .readable_storage_target_provider_context_by_target(target_id)
+            .map_err(|_| ContractError::Unavailable)?
+            .ok_or(ContractError::Unavailable)?;
+        if route.mesh_id != self.mesh_id || route.generation != generation {
+            Err(ContractError::Stale)
+        } else {
+            Ok(route)
+        }
+    }
+
     fn remote_reservation(
         &self,
         request: ReserveStorageRequest,
     ) -> Result<StorageReservation, ContractError> {
-        self.route(request.target_id, request.target_generation)?;
+        self.writable_route(request.target_id, request.target_generation)?;
         if request.bytes == 0
             || request.context.deadline <= request.observed_at
             || request.context.expected_revision.is_none()
@@ -127,7 +150,7 @@ impl ClusterShardRouter {
         {
             return Err(ContractError::InvalidInput);
         }
-        let route = self.route(
+        let route = self.writable_route(
             request.reservation.target_id,
             request.reservation.target_generation,
         )?;
@@ -171,7 +194,7 @@ impl ClusterShardRouter {
         context: RequestContext,
         permit: ShardReadPermit,
     ) -> Result<BoundedBytes, ContractError> {
-        let route = self.route(permit.target_id, permit.target_generation)?;
+        let route = self.readable_route(permit.target_id, permit.target_generation)?;
         let network = self
             .network
             .network()
@@ -204,7 +227,7 @@ impl ContentShardRouter for ClusterShardRouter {
         &mut self,
         request: ReserveStorageRequest,
     ) -> Result<StorageReservation, ContractError> {
-        match self.local_mut(request.target_id, request.target_generation) {
+        match self.writable_local_mut(request.target_id, request.target_generation) {
             Some(provider) => StorageProvider::reserve(provider, request),
             None => self.remote_reservation(request),
         }
@@ -215,7 +238,7 @@ impl ContentShardRouter for ClusterShardRouter {
         request: PutShardRequest,
         observed_at: UnixMicros,
     ) -> Result<ShardReceipt, ContractError> {
-        match self.local_mut(
+        match self.writable_local_mut(
             request.reservation.target_id,
             request.reservation.target_generation,
         ) {

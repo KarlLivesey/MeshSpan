@@ -211,6 +211,44 @@ fn registration_context_requires_the_exact_active_node_and_current_manager()
     Ok(())
 }
 
+#[test]
+fn draining_target_is_readable_but_never_returned_as_writable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 2, term: 1 },
+        context(30, fixture.administrator, 31, 30, Some(1))?,
+        &target_command(&fixture, StorageUsageLimit::Percent(95))?,
+    )?;
+    let target_id = TargetId::from_bytes([40; 16])?;
+    let database = fixture.repository.into_database();
+    database.connection().execute(
+        "UPDATE storage_targets SET state = 3, draining_at = 40, revision = 3
+         WHERE target_id = ?1",
+        [target_id.as_bytes().as_slice()],
+    )?;
+    let repository = AuthoritativeRepository::new(database);
+
+    assert_eq!(
+        repository.storage_target_provider_context(fixture.node, target_id)?,
+        None
+    );
+    assert_eq!(
+        repository.storage_target_provider_context_by_target(target_id)?,
+        None
+    );
+    let readable = repository
+        .readable_storage_target_provider_context(fixture.node, target_id)?
+        .ok_or("draining provider was not readable")?;
+    assert_eq!(readable.target_id, target_id);
+    assert_eq!(readable.generation, 1);
+    assert_eq!(
+        repository.readable_storage_target_provider_context_by_target(target_id)?,
+        Some(readable)
+    );
+    Ok(())
+}
+
 fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let partition = PartitionId::from_bytes([1; 16])?;
