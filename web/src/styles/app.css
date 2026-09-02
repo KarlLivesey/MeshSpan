@@ -816,6 +816,23 @@ select:hover {
   border-top: 1px solid var(--line);
 }
 
+.smb-export-administration {
+  display: grid;
+  gap: var(--space-xl);
+  margin-top: var(--space-3xl);
+  padding-top: var(--space-3xl);
+  border-top: 1px solid var(--line);
+}
+
+.smb-export-form {
+  display: grid;
+  gap: var(--space-lg);
+  max-width: 42rem;
+  padding: var(--space-lg);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
 .first-start-page,
 .setup-status {
   width: min(100% - 2rem, 62rem);

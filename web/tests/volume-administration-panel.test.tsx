@@ -129,10 +129,67 @@ it("commits and revokes reason-activated volume access", async () => {
   );
 });
 
+it("publishes and withdraws the selected volume through embedded SMB", async () => {
+  const publish = vi.fn<VolumeAdministrationClient["publishSmbExport"]>(
+    async (volumeId, request) => ({
+      ...request,
+      export_id: "00000000-0000-4000-8000-000000000008",
+      revision: 2,
+      volume_id: volumeId,
+    }),
+  );
+  const withdraw = vi.fn<VolumeAdministrationClient["withdrawSmbExport"]>(
+    async (exportId, request) => ({
+      export_id: exportId,
+      operation_id: request.operation_id,
+      revision: 3,
+    }),
+  );
+  mountPanel(
+    clientFixture(vi.fn(), {
+      listVolumes: async () => volumePage(true),
+      publishSmbExport: publish,
+      withdrawSmbExport: withdraw,
+    }),
+  );
+  await settle();
+
+  clickButton("Manage access");
+  enterLabelledInput("Share name", "Accounts");
+  clickButton("Publish SMB share");
+  await settle();
+  await settle();
+
+  expect(publish).toHaveBeenCalledWith(
+    VOLUME_ID,
+    expect.objectContaining({
+      encryption_required: true,
+      gateways: { kind: "all_eligible" },
+      root_object_id: ROOT_OBJECT_ID,
+      share_name: "Accounts",
+    }),
+    CSRF_TOKEN,
+  );
+  expect(document.body.textContent).toContain("Accounts is published");
+
+  enterLabelledInput("Reason for withdrawing access", "Office closed");
+  clickButton("Withdraw SMB share");
+  await settle();
+  await settle();
+  expect(withdraw).toHaveBeenCalledWith(
+    "00000000-0000-4000-8000-000000000008",
+    expect.objectContaining({ reason: "Office closed" }),
+    CSRF_TOKEN,
+  );
+  expect(document.body.textContent).toContain("Publish SMB share");
+});
+
 type ClientOverrides = Partial<
   Pick<
     VolumeAdministrationClient,
     "createVolumePermissionGrant" | "listVolumes" | "revokePermissionGrant"
+    | "publishSmbExport"
+    | "withdrawSmbExport"
   >
 >;
 
@@ -173,6 +230,14 @@ function clientFixture(
     listUsers,
     listVolumePermissionGrants,
     listVolumes: overrides.listVolumes ?? listVolumes,
+    publishSmbExport:
+      overrides.publishSmbExport ??
+      (async (volumeId, request) => ({
+        ...request,
+        export_id: "00000000-0000-4000-8000-000000000008",
+        revision: 2,
+        volume_id: volumeId,
+      })),
     revokePermissionGrant:
       overrides.revokePermissionGrant ??
       (async (_volumeId, grantId, request) => ({
@@ -180,6 +245,13 @@ function clientFixture(
         operation_id: request.operation_id,
         revision: 3,
         revoked_at_epoch_micros: 90_000_000,
+      })),
+    withdrawSmbExport:
+      overrides.withdrawSmbExport ??
+      (async (exportId, request) => ({
+        export_id: exportId,
+        operation_id: request.operation_id,
+        revision: 3,
       })),
   };
 }
@@ -215,6 +287,7 @@ function volumePage(includeVolume = false): ListVolumesResponse {
             effective_rights: ["read_data", "change_permissions"],
             name: "Shared work",
             revision: 1,
+            root_object_id: ROOT_OBJECT_ID,
             state: "active",
             volume_id: VOLUME_ID,
           },

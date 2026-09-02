@@ -2547,6 +2547,10 @@ export type ListVolumesResponse = {
      */
     revision: number;
     /**
+     * Stable root-directory identity used by connectors and administration.
+     */
+    root_object_id: string;
+    /**
      * Current authoritative lifecycle state.
      */
     state: "active" | "suspended" | "draining" | "retired";

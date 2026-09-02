@@ -117,6 +117,7 @@ function readAdministrationRoutes(operations) {
     ),
     listUsers: requireOperation(operations, "listUsers"),
     listVolumes: requireOperation(operations, "listVolumes"),
+    publishSmbExport: requireOperation(operations, "publishSmbExport"),
     removeGroupMember: requireOperation(operations, "removeGroupMember"),
     setFaultGroupMembership: requireOperation(
       operations,
@@ -130,6 +131,7 @@ function readAdministrationRoutes(operations) {
       operations,
       "registerStorageFolder",
     ),
+    withdrawSmbExport: requireOperation(operations, "withdrawSmbExport"),
   };
 }
 

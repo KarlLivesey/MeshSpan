@@ -2848,6 +2848,12 @@ export const zListVolumesResponse = z
               .max(256)
               .regex(/^[^\x00-\x1f\x7f]+$/),
             revision: z.int().gte(1).lte(9007199254740991),
+            root_object_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
             state: z.union([
               z.literal("active"),
               z.literal("suspended"),

@@ -5797,6 +5797,13 @@
                   "minimum": 1,
                   "type": "integer"
                 },
+                "root_object_id": {
+                  "description": "Stable root-directory identity used by connectors and administration.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
                 "state": {
                   "description": "Current authoritative lifecycle state.",
                   "oneOf": [
@@ -5832,6 +5839,7 @@
               },
               "required": [
                 "volume_id",
+                "root_object_id",
                 "name",
                 "state",
                 "effective_rights",
