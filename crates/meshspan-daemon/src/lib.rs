@@ -179,6 +179,7 @@ mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 mod smb_authentication;
+mod smb_connection;
 mod smb_server;
 mod smb_verifier_secret;
 mod step_up_session;

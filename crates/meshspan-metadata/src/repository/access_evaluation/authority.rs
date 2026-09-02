@@ -27,10 +27,9 @@ pub(super) fn load_authentication(
 ) -> Result<Option<AuthenticatedPrincipal>, RepositoryError> {
     match request.authentication_service {
         AuthenticationService::Https => load_session(database, request, current_identity_revision),
-        AuthenticationService::HeadlessApi => {
+        AuthenticationService::HeadlessApi | AuthenticationService::Smb => {
             load_direct_api_key(database, request, current_identity_revision)
         }
-        AuthenticationService::Smb => Ok(None),
     }
 }
 
@@ -96,8 +95,8 @@ fn load_direct_api_key(
     let Some(key) = super::super::authentication_method::authenticate_api_key(
         database.connection(),
         request.credential_digest,
-        AuthenticationService::HeadlessApi,
-        AuthenticationService::HeadlessApi.api_key_login_scope(),
+        request.authentication_service,
+        request.authentication_service.api_key_login_scope(),
         request.now,
     )?
     else {
@@ -108,7 +107,7 @@ fn load_direct_api_key(
         principal_id: key.principal_id,
         factor_state: super::super::session::SessionFactorState {
             assurance: AssuranceLevel::SingleFactor,
-            service: AuthenticationService::HeadlessApi,
+            service: request.authentication_service,
             factor_classes: AuthenticationMethodKind::ApiKey.class_bit(),
             factor_count: 1,
             issued_at: request.now,

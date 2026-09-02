@@ -109,7 +109,9 @@ where
     ///
     /// # Errors
     ///
-    /// Rejects an empty or excessive share catalogue and case-insensitive duplicate names.
+    /// Rejects an excessive share catalogue and case-insensitive duplicate names. An empty
+    /// catalogue remains valid so an unconfigured or storage-only gateway can reject tree names
+    /// normally after authentication without changing its listener lifecycle.
     pub fn new(
         channel: SmbSecureChannel<I>,
         filesystem: F,
@@ -118,8 +120,7 @@ where
         make_context: C,
         classify_filesystem_error: M,
     ) -> Result<Self, SmbCommandDispatcherConfigurationError> {
-        if shares.is_empty()
-            || shares.len() > MAXIMUM_PUBLISHED_SHARES
+        if shares.len() > MAXIMUM_PUBLISHED_SHARES
             || shares.iter().enumerate().any(|(index, share)| {
                 shares[..index]
                     .iter()

@@ -19,9 +19,11 @@ async fn real_direct_tcp_listener_isolates_bad_connections_and_frames_responses(
         SmbServer::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0), limits).await?;
     let address = server.local_addr()?;
     let (stop, stopped) = oneshot::channel();
-    let task = tokio::spawn(server.run_until(|| EchoHandler, async move {
-        drop(stopped.await);
-    }));
+    let task = tokio::spawn(
+        server.run_until(|| Ok::<_, Infallible>(EchoHandler), async move {
+            drop(stopped.await);
+        }),
+    );
 
     let mut hostile = TcpStream::connect(address).await?;
     hostile.write_all(&[1, 0, 0, 64]).await?;

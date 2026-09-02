@@ -107,15 +107,16 @@ impl SmbServer {
     /// # Errors
     ///
     /// Returns only when the shared listener can no longer accept connections.
-    pub async fn run_until<F, Make, H>(
+    pub async fn run_until<F, Make, H, E>(
         self,
         make_handler: Make,
         shutdown: F,
     ) -> Result<(), SmbServerError>
     where
         F: Future<Output = ()> + Send,
-        Make: Fn() -> H + Clone + Send + Sync + 'static,
+        Make: Fn() -> Result<H, E> + Clone + Send + Sync + 'static,
         H: SmbConnectionHandler,
+        E: Send,
     {
         let mut connections = JoinSet::new();
         tokio::pin!(shutdown);
@@ -124,7 +125,9 @@ impl SmbServer {
                 () = &mut shutdown => break,
                 accepted = self.listener.accept() => {
                     let (stream, _) = accepted.map_err(SmbServerError::Accept)?;
-                    let mut handler = make_handler();
+                    let Ok(mut handler) = make_handler() else {
+                        continue;
+                    };
                     let limits = self.limits;
                     connections.spawn(async move {
                         drop(serve_connection(stream, limits, &mut handler).await);
