@@ -15,6 +15,7 @@ members = [
     "crates/meshspan-metadata",
     "crates/meshspan-otp",
     "crates/meshspan-passkey",
+    "crates/meshspan-placement",
     "crates/meshspan-protobuf",
     "crates/meshspan-protocol",
     "crates/meshspan-quinn-rustls",

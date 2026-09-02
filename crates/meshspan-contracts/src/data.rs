@@ -125,16 +125,31 @@ pub trait CodingScheme: ComponentLifecycle {
 /// Revision-bound placement decision with exact proof evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlacementPlan {
+    /// Automatically selected systematic coding geometry.
+    pub coding_layout: CodingLayout,
     /// Target selected for every indexed slice.
     pub slice_targets: BoundedItems<TargetId>,
     /// Topology revision used for eligibility and failure proof.
     pub topology_revision: Revision,
     /// Capacity observation revision used for admission.
     pub capacity_revision: Revision,
-    /// Exact proof against the requested scenario.
-    pub protection_proof: ProtectionProof,
+    /// Exact proofs in the same order as the requested alternative scenarios.
+    pub protection_proofs: BoundedItems<ProtectionProof>,
     /// Independently versioned acknowledgement/locality evidence.
     pub policy_evidence: VersionedPayload,
+}
+
+/// One fixed-revision target candidate admitted to placement planning.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlacementCandidate {
+    /// Stable target identity.
+    pub target_id: TargetId,
+    /// Positive current target generation.
+    pub target_generation: u64,
+    /// Bytes available to this write after authoritative reserves and limits.
+    pub writable_bytes: u64,
+    /// Relative performance preference; independence remains a hard constraint.
+    pub performance_weight: u16,
 }
 
 /// Complete fixed-revision input to one placement decision.
@@ -142,16 +157,18 @@ pub struct PlacementPlan {
 pub struct PlacementRequest<'a> {
     /// Operation/deadline context.
     pub context: RequestContext,
-    /// Exact coding geometry requiring target locations.
-    pub coding_layout: CodingLayout,
-    /// Failure scenario that every returned plan must survive.
-    pub scenario: &'a FailureScenario,
+    /// Exact logical bytes in this bounded stripe before padding.
+    pub logical_stripe_bytes: u32,
+    /// Alternative failure scenarios that every returned plan must survive independently.
+    pub scenarios: &'a [FailureScenario],
     /// Fixed topology snapshot.
     pub topology: &'a Topology,
     /// Revision of the fixed topology snapshot.
     pub topology_revision: Revision,
-    /// Bounded fixed-revision capacity evidence.
-    pub capacity: &'a VersionedPayload,
+    /// Revision of the fixed capacity observations.
+    pub capacity_revision: Revision,
+    /// Bounded target capacity and performance evidence at `capacity_revision`.
+    pub candidates: &'a [PlacementCandidate],
 }
 
 /// Fault-aware target selection without shard IO or namespace authority.

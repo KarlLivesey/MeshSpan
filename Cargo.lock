@@ -1285,6 +1285,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-placement"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "meshspan-contracts",
+ "meshspan-domain",
+]
+
+[[package]]
 name = "meshspan-protobuf"
 version = "0.1.0"
 

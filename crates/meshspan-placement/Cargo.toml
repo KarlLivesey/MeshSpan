@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-placement"
+description = "Deterministic fault-aware placement planner for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+blake3.workspace = true
+meshspan-contracts = { path = "../meshspan-contracts" }
+meshspan-domain = { path = "../meshspan-domain" }
+
+[lints]
+workspace = true
