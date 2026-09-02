@@ -55,10 +55,7 @@ export function TopologyAdministrationPanel(
         saving={directory.phase() === "saving"}
       />
       <NodeInventory directory={directory} />
-      <FaultGroupEditor
-        directory={directory}
-        csrfToken={props.csrfToken}
-      />
+      <FaultGroupEditor directory={directory} csrfToken={props.csrfToken} />
       <TargetInventory directory={directory} />
     </div>
   );

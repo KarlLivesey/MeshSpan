@@ -117,7 +117,8 @@ pub(super) fn node_response(
             .next
             .as_ref()
             .map(encode_node_cursor)
-            .map(|cursor| page_url("nodes", cursor, query.limit))
+            .transpose()?
+            .map(|cursor| page_url("nodes", &cursor, query.limit))
             .transpose()?,
     })
 }
@@ -136,7 +137,8 @@ pub(super) fn target_response(
             .next
             .as_ref()
             .map(encode_target_cursor)
-            .map(|cursor| page_url("targets", cursor, query.limit))
+            .transpose()?
+            .map(|cursor| page_url("targets", &cursor, query.limit))
             .transpose()?,
     })
 }
@@ -151,7 +153,8 @@ pub(super) fn group_response(
             .next
             .as_ref()
             .map(encode_group_cursor)
-            .map(|cursor| page_url("fault-groups", cursor, query.limit))
+            .transpose()?
+            .map(|cursor| page_url("fault-groups", &cursor, query.limit))
             .transpose()?,
     })
 }
@@ -164,8 +167,10 @@ pub(super) fn membership_response(
         memberships: page.items.into_iter().map(membership_summary).collect(),
         next_page_url: page
             .next
+            .as_ref()
             .map(encode_membership_cursor)
-            .map(|cursor| page_url("fault-group-memberships", cursor, query.limit))
+            .transpose()?
+            .map(|cursor| page_url("fault-group-memberships", &cursor, query.limit))
             .transpose()?,
     })
 }
@@ -302,11 +307,15 @@ fn derived_uuid(domain: &[u8], value: &[u8]) -> Result<[u8; 16], TopologyAdminis
         .map_err(|_| TopologyAdministrationError::Failed)
 }
 
-fn encode_node_cursor(cursor: &TopologyNodeCursor) -> TopologyCursor {
+fn encode_node_cursor(
+    cursor: &TopologyNodeCursor,
+) -> Result<TopologyCursor, TopologyAdministrationError> {
     encoded_cursor("n", cursor.node_id().as_bytes(), &[cursor.canonical_name()])
 }
 
-fn encode_target_cursor(cursor: &TopologyTargetCursor) -> TopologyCursor {
+fn encode_target_cursor(
+    cursor: &TopologyTargetCursor,
+) -> Result<TopologyCursor, TopologyAdministrationError> {
     encoded_cursor(
         "t",
         cursor.target_id().as_bytes(),
@@ -314,7 +323,9 @@ fn encode_target_cursor(cursor: &TopologyTargetCursor) -> TopologyCursor {
     )
 }
 
-fn encode_group_cursor(cursor: &FaultGroupCursor) -> TopologyCursor {
+fn encode_group_cursor(
+    cursor: &FaultGroupCursor,
+) -> Result<TopologyCursor, TopologyAdministrationError> {
     encoded_cursor(
         "g",
         cursor.group_id().as_bytes(),
@@ -322,22 +333,28 @@ fn encode_group_cursor(cursor: &FaultGroupCursor) -> TopologyCursor {
     )
 }
 
-fn encode_membership_cursor(cursor: FaultGroupMembershipCursor) -> TopologyCursor {
+fn encode_membership_cursor(
+    cursor: &FaultGroupMembershipCursor,
+) -> Result<TopologyCursor, TopologyAdministrationError> {
     let encoded = format!(
         "v1.m.{}.{}",
         format_uuid(cursor.host_id().as_bytes()),
         format_uuid(cursor.group_id().as_bytes())
     );
-    TopologyCursor::from_encoded(encoded).expect("bounded UUID cursor is valid")
+    TopologyCursor::from_encoded(encoded).ok_or(TopologyAdministrationError::Failed)
 }
 
-fn encoded_cursor(kind: &str, identifier: [u8; 16], names: &[&str]) -> TopologyCursor {
+fn encoded_cursor(
+    kind: &str,
+    identifier: [u8; 16],
+    names: &[&str],
+) -> Result<TopologyCursor, TopologyAdministrationError> {
     let mut encoded = format!("v1.{kind}.{}", format_uuid(identifier));
     for name in names {
         encoded.push('.');
         append_hex(&mut encoded, name.as_bytes());
     }
-    TopologyCursor::from_encoded(encoded).expect("bounded persisted name cursor is valid")
+    TopologyCursor::from_encoded(encoded).ok_or(TopologyAdministrationError::Failed)
 }
 
 fn cursor_fields<'a>(
@@ -368,12 +385,12 @@ fn append_hex(output: &mut String, value: &[u8]) {
 }
 
 fn decode_text(value: &str) -> Result<String, TopologyAdministrationError> {
-    if !value.len().is_multiple_of(2) {
+    let (pairs, remainder) = value.as_bytes().as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err(TopologyAdministrationError::InvalidInput);
     }
-    let bytes = value
-        .as_bytes()
-        .chunks_exact(2)
+    let bytes = pairs
+        .iter()
         .map(|pair| {
             let text =
                 std::str::from_utf8(pair).map_err(|_| TopologyAdministrationError::InvalidInput)?;
@@ -385,7 +402,7 @@ fn decode_text(value: &str) -> Result<String, TopologyAdministrationError> {
 
 fn page_url(
     resource: &str,
-    cursor: TopologyCursor,
+    cursor: &TopologyCursor,
     limit: Option<u16>,
 ) -> Result<String, TopologyAdministrationError> {
     let mut url = format!(

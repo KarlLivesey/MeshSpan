@@ -58,23 +58,7 @@ export function VolumeAdministrationPanel(
 
   return (
     <div class="volume-administration">
-      <header class="page-intro">
-        <p class="eyebrow">Administration / Storage</p>
-        <h1>Volumes</h1>
-        <p>
-          Create one logical file space, choose its initial owners, and use it
-          from any supported gateway.
-        </p>
-      </header>
-      <nav class="administration-nav" aria-label="Administration sections">
-        <a href="/admin/identities">People and groups</a>
-        <a aria-current="page" href="/admin/volumes">
-          Volumes
-        </a>
-        <a href="/admin/storage-folders">Storage folders</a>
-        <a href="/admin/topology">Mesh topology</a>
-        <a href="/admin/operations">Operations</a>
-      </nav>
+      <VolumeAdministrationHeader />
       <CreateVolumeForm
         create={create}
         owners={owners()}
@@ -98,5 +82,29 @@ export function VolumeAdministrationPanel(
         )}
       </Show>
     </div>
+  );
+}
+
+function VolumeAdministrationHeader(): JSX.Element {
+  return (
+    <>
+      <header class="page-intro">
+        <p class="eyebrow">Administration / Storage</p>
+        <h1>Volumes</h1>
+        <p>
+          Create one logical file space, choose its initial owners, and use it
+          from any supported gateway.
+        </p>
+      </header>
+      <nav class="administration-nav" aria-label="Administration sections">
+        <a href="/admin/identities">People and groups</a>
+        <a aria-current="page" href="/admin/volumes">
+          Volumes
+        </a>
+        <a href="/admin/storage-folders">Storage folders</a>
+        <a href="/admin/topology">Mesh topology</a>
+        <a href="/admin/operations">Operations</a>
+      </nav>
+    </>
   );
 }

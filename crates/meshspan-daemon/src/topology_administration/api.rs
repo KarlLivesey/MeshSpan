@@ -439,7 +439,7 @@ fn failed<C>(state: &ApiState<C>, request_id: String) -> Response<Body> {
 /// Router-construction failures for topology administration.
 #[derive(Debug, Error)]
 pub enum TopologyAdministrationApiError {
-    /// OpenAPI generation failed.
+    /// `OpenAPI` generation failed.
     #[error("topology administration OpenAPI generation failed: {0}")]
     OpenApi(#[from] serde_json::Error),
     /// Schema digest was not a valid HTTP header.

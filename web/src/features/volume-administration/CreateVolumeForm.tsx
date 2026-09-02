@@ -12,6 +12,58 @@ type CreateVolumeFormProps = Readonly<{
 }>;
 
 export function CreateVolumeForm(props: CreateVolumeFormProps): JSX.Element {
+  const model = createVolumeFormModel(props);
+  const submit = (event: SubmitEvent): void => {
+    event.preventDefault();
+    void model.submit();
+  };
+  return (
+    <form class="volume-create" onSubmit={submit}>
+      <div class="section-heading">
+        <p class="eyebrow">New volume</p>
+        <h2>Create shared storage</h2>
+      </div>
+      <label class="volume-name-field">
+        <span>Name</span>
+        <input
+          autocomplete="off"
+          disabled={model.pending()}
+          maxlength="256"
+          onInput={(event) => {
+            model.setName(event.currentTarget.value);
+          }}
+          value={model.name()}
+        />
+      </label>
+      <OwnerFields
+        loading={props.ownersLoading}
+        owners={props.owners}
+        pending={model.pending()}
+        selectedOwnerIds={model.selectedOwnerIds()}
+        toggle={model.toggleOwner}
+      />
+      <button
+        class="primary-action"
+        disabled={
+          model.pending() || props.ownersLoading || props.owners.length === 0
+        }
+        type="submit"
+      >
+        {model.pending() ? "Committing volume…" : "Create volume"}
+      </button>
+      <div class="form-message" aria-live="polite">
+        <Show when={model.error()}>
+          {(message) => <p class="error">{message()}</p>}
+        </Show>
+        <Show when={model.success()}>
+          {(message) => <p class="success">{message()}</p>}
+        </Show>
+      </div>
+    </form>
+  );
+}
+
+function createVolumeFormModel(props: CreateVolumeFormProps) {
   const [name, setName] = createSignal("");
   const [selectedOwnerIds, setSelectedOwnerIds] = createSignal<
     readonly string[]
@@ -20,8 +72,7 @@ export function CreateVolumeForm(props: CreateVolumeFormProps): JSX.Element {
   const [error, setError] = createSignal<string>();
   const [success, setSuccess] = createSignal<string>();
 
-  const submit = async (event: SubmitEvent): Promise<void> => {
-    event.preventDefault();
+  const submit = async (): Promise<void> => {
     if (pending()) {
       return;
     }
@@ -59,72 +110,62 @@ export function CreateVolumeForm(props: CreateVolumeFormProps): JSX.Element {
     );
   };
 
+  return {
+    error,
+    name,
+    pending,
+    selectedOwnerIds,
+    setName,
+    submit,
+    success,
+    toggleOwner,
+  };
+}
+
+function OwnerFields(
+  props: Readonly<{
+    loading: boolean;
+    owners: readonly PrincipalSummary[];
+    pending: boolean;
+    selectedOwnerIds: readonly string[];
+    toggle: (principalId: string, selected: boolean) => void;
+  }>,
+): JSX.Element {
   return (
-    <form class="volume-create" onSubmit={(event) => void submit(event)}>
-      <div class="section-heading">
-        <p class="eyebrow">New volume</p>
-        <h2>Create shared storage</h2>
-      </div>
-      <label class="volume-name-field">
-        <span>Name</span>
-        <input
-          autocomplete="off"
-          disabled={pending()}
-          maxlength="256"
-          onInput={(event) => setName(event.currentTarget.value)}
-          value={name()}
-        />
-      </label>
-      <fieldset class="owner-fields" disabled={pending()}>
-        <legend>Initial owners</legend>
-        <Show
-          when={!props.ownersLoading}
-          fallback={<p>Reading committed users and groups…</p>}
-        >
-          <Show
-            when={props.owners.length > 0}
-            fallback={
-              <p>Create a user or group before creating the first volume.</p>
-            }
-          >
-            <For each={props.owners}>
-              {(owner) => (
-                <label class="check-field">
-                  <input
-                    checked={selectedOwnerIds().includes(owner.principal_id)}
-                    onChange={(event) =>
-                      toggleOwner(
-                        owner.principal_id,
-                        event.currentTarget.checked,
-                      )
-                    }
-                    type="checkbox"
-                    value={owner.principal_id}
-                  />
-                  <span>
-                    {owner.display_name} <small>{owner.kind}</small>
-                  </span>
-                </label>
-              )}
-            </For>
-          </Show>
-        </Show>
-      </fieldset>
-      <button
-        class="primary-action"
-        disabled={pending() || props.ownersLoading || props.owners.length === 0}
-        type="submit"
+    <fieldset class="owner-fields" disabled={props.pending}>
+      <legend>Initial owners</legend>
+      <Show
+        when={!props.loading}
+        fallback={<p>Reading committed users and groups…</p>}
       >
-        {pending() ? "Committing volume…" : "Create volume"}
-      </button>
-      <div class="form-message" aria-live="polite">
-        <Show when={error()}>
-          {(message) => <p class="error">{message()}</p>}
+        <Show
+          when={props.owners.length > 0}
+          fallback={
+            <p>Create a user or group before creating the first volume.</p>
+          }
+        >
+          <For each={props.owners}>
+            {(owner) => (
+              <label class="check-field">
+                <input
+                  checked={props.selectedOwnerIds.includes(owner.principal_id)}
+                  onChange={(event) => {
+                    props.toggle(
+                      owner.principal_id,
+                      event.currentTarget.checked,
+                    );
+                  }}
+                  type="checkbox"
+                  value={owner.principal_id}
+                />
+                <span>
+                  {owner.display_name} <small>{owner.kind}</small>
+                </span>
+              </label>
+            )}
+          </For>
         </Show>
-        <Show when={success()}>
-          {(message) => <p class="success">{message()}</p>}
-        </Show>
-      </div>
-    </form>
+      </Show>
+    </fieldset>
   );
 }

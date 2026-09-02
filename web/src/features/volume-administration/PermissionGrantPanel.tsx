@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { For, Show, createEffect, createSignal } from "solid-js";
+import { For, Show, createEffect } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
 import { instantFromEpochMicroseconds } from "../../domain/instant";
 import type { PrincipalSummary } from "../identity-administration/model";
 import type { AdminVolume } from "./model";
+import { GrantRevocation } from "./GrantRevocation";
 import { PermissionGrantForm } from "./PermissionGrantForm";
 import { createPermissionGrantDirectory } from "./permission-grant-model";
 import type {
@@ -113,37 +114,10 @@ type GrantCardProps = GrantListProps &
   Readonly<{ grant: VolumePermissionGrant }>;
 
 function GrantCard(props: GrantCardProps): JSX.Element {
-  const [confirming, setConfirming] = createSignal(false);
-  const [reason, setReason] = createSignal("");
-  const [pending, setPending] = createSignal(false);
-  const [error, setError] = createSignal<string>();
   const principal = () =>
     props.owners.find(
       (owner) => owner.principal_id === props.grant.subject_principal_id,
     );
-
-  const revoke = async (): Promise<void> => {
-    const auditReason = reason().trim();
-    if (auditReason.length === 0 || pending()) {
-      setError("Enter a reason for removing access.");
-      return;
-    }
-    setPending(true);
-    setError(undefined);
-    try {
-      const response = await props.client.revokePermissionGrant(
-        props.volumeId,
-        props.grant.grant_id,
-        { operation_id: crypto.randomUUID(), reason: auditReason },
-        props.csrfToken,
-      );
-      props.directory.remove(response);
-    } catch {
-      setError("MeshSpan could not remove this access grant.");
-    } finally {
-      setPending(false);
-    }
-  };
 
   return (
     <article class="permission-grant-card">
@@ -163,51 +137,13 @@ function GrantCard(props: GrantCardProps): JSX.Element {
           <dd>{formatOptionalInstant(props.grant.valid_until_epoch_micros)}</dd>
         </div>
       </dl>
-      <Show
-        when={confirming()}
-        fallback={
-          <button
-            class="quiet-action danger-action"
-            onClick={() => setConfirming(true)}
-            type="button"
-          >
-            Remove access
-          </button>
-        }
-      >
-        <div class="grant-revocation">
-          <label>
-            <span>Reason for removing access</span>
-            <input
-              disabled={pending()}
-              maxlength="512"
-              onInput={(event) => setReason(event.currentTarget.value)}
-              value={reason()}
-            />
-          </label>
-          <div class="membership-removal-actions">
-            <button
-              class="primary-action danger-button"
-              disabled={pending()}
-              onClick={() => void revoke()}
-              type="button"
-            >
-              {pending() ? "Removing access…" : "Remove access"}
-            </button>
-            <button
-              class="quiet-button"
-              disabled={pending()}
-              onClick={() => setConfirming(false)}
-              type="button"
-            >
-              Keep access
-            </button>
-          </div>
-          <Show when={error()}>
-            {(message) => <p class="error">{message()}</p>}
-          </Show>
-        </div>
-      </Show>
+      <GrantRevocation
+        client={props.client}
+        csrfToken={props.csrfToken}
+        grant={props.grant}
+        remove={props.directory.remove}
+        volumeId={props.volumeId}
+      />
     </article>
   );
 }

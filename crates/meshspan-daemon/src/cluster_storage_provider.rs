@@ -86,7 +86,7 @@ impl ClusterStorageProvider {
                 MAXIMUM_NATIVE_SHARD_BYTES,
                 network.wire_limits(),
             ))
-            .map_err(map_data_plane_error)
+            .map_err(|error| map_data_plane_error(&error))
     }
 }
 
@@ -176,9 +176,9 @@ impl StorageProvider for ClusterStorageProvider {
     }
 }
 
-fn map_data_plane_error(error: meshspan_data_plane::DataPlaneError) -> ContractError {
+fn map_data_plane_error(error: &meshspan_data_plane::DataPlaneError) -> ContractError {
     match error {
-        meshspan_data_plane::DataPlaneError::Contract(error) => error,
+        meshspan_data_plane::DataPlaneError::Contract(error) => *error,
         meshspan_data_plane::DataPlaneError::Remote(code) => match code {
             ErrorCode::Invalid => ContractError::InvalidInput,
             ErrorCode::Unauthorised => ContractError::Unauthorized,

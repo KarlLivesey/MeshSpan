@@ -19,8 +19,9 @@ use tempfile::tempdir;
 use tower::ServiceExt;
 
 use crate::{
-    BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, ClaimFile, CreateMeshSetupError,
-    CreateMeshSetupService, SetupStateSnapshot, SetupStatusSource, setup_api_router_with_creation,
+    BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, ClaimFile,
+    CreateMeshSetupConfiguration, CreateMeshSetupError, CreateMeshSetupService, SetupStateSnapshot,
+    SetupStatusSource, setup_api_router_with_creation,
 };
 
 const OPERATION_TEXT: &str = "00000000-0000-4000-8000-000000000001";
@@ -150,11 +151,13 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
             repository: AuthoritativeRepository::new(partition),
             lose_first_response,
         },
-        claim_path.clone(),
-        recovery_path,
         Arc::clone(&setup_state),
-        WrappingPrivateKey::from_bytes([61; 32])?.public_key(),
-        node_identity.public_key_sec1().to_vec(),
+        CreateMeshSetupConfiguration::new(
+            claim_path.clone(),
+            recovery_path,
+            WrappingPrivateKey::from_bytes([61; 32])?.public_key(),
+            node_identity.public_key_sec1().to_vec(),
+        ),
         SequentialRandom(101),
     );
     let request = request(&claim, "First mesh")?;

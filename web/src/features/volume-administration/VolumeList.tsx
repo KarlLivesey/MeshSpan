@@ -45,43 +45,7 @@ export function VolumeList(
               </thead>
               <tbody>
                 <For each={props.directory.items()}>
-                  {(volume) => (
-                    <tr>
-                      <th data-label="Name" scope="row">
-                        {volume.name}
-                      </th>
-                      <td data-label="State">
-                        <span class={`state state-${volume.state}`}>
-                          {volume.state}
-                        </span>
-                      </td>
-                      <td data-label="Revision">{volume.revision}</td>
-                      <td data-label="Created" class="timestamp">
-                        {instantFromEpochMicroseconds(
-                          volume.createdAtEpochMicros,
-                        ).toLocaleString(undefined, {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        })}
-                      </td>
-                      <td data-label="Access">
-                        <button
-                          aria-pressed={
-                            props.selectedVolumeId === volume.volumeId
-                              ? "true"
-                              : "false"
-                          }
-                          class="quiet-action table-action"
-                          onClick={() => props.onSelect(volume)}
-                          type="button"
-                        >
-                          {props.selectedVolumeId === volume.volumeId
-                            ? "Managing"
-                            : "Manage access"}
-                        </button>
-                      </td>
-                    </tr>
-                  )}
+                  {(volume) => <VolumeRow {...props} volume={volume} />}
                 </For>
               </tbody>
             </table>
@@ -96,7 +60,9 @@ export function VolumeList(
           <button
             class="quiet-action"
             disabled={props.directory.phase() !== "idle"}
-            onClick={() => void props.directory.loadNext()}
+            onClick={() => {
+              void props.directory.loadNext();
+            }}
             type="button"
           >
             {props.directory.phase() === "loading_more"
@@ -106,5 +72,48 @@ export function VolumeList(
         </Show>
       </div>
     </section>
+  );
+}
+
+function VolumeRow(
+  props: Readonly<{
+    onSelect: (volume: AdminVolume) => void;
+    selectedVolumeId: string | undefined;
+    volume: AdminVolume;
+  }>,
+): JSX.Element {
+  const selected = () => props.selectedVolumeId === props.volume.volumeId;
+  return (
+    <tr>
+      <th data-label="Name" scope="row">
+        {props.volume.name}
+      </th>
+      <td data-label="State">
+        <span class={`state state-${props.volume.state}`}>
+          {props.volume.state}
+        </span>
+      </td>
+      <td data-label="Revision">{props.volume.revision}</td>
+      <td data-label="Created" class="timestamp">
+        {instantFromEpochMicroseconds(
+          props.volume.createdAtEpochMicros,
+        ).toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        })}
+      </td>
+      <td data-label="Access">
+        <button
+          aria-pressed={selected() ? "true" : "false"}
+          class="quiet-action table-action"
+          onClick={() => {
+            props.onSelect(props.volume);
+          }}
+          type="button"
+        >
+          {selected() ? "Managing" : "Manage access"}
+        </button>
+      </td>
+    </tr>
   );
 }

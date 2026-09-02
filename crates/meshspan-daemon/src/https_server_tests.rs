@@ -80,14 +80,14 @@ async fn shutdown_drains_an_accepted_response_before_returning() -> Result<(), B
     let client = tokio::spawn(async move {
         https_request_path(address, client_config, "/slow")
             .await
-            .expect("fixture HTTPS request must complete")
+            .map_err(|error| error.to_string())
     });
 
     entered.notified().await;
     assert!(shutdown_tx.send(()).is_ok());
     release.notify_one();
 
-    let response = client.await?;
+    let response = client.await??;
     assert!(response.contains("completed"));
     server_task.await??;
     Ok(())

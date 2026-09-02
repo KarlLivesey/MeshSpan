@@ -80,7 +80,7 @@ impl ConsensusNetwork {
             &mut send,
             Message::SnapshotBegin(SnapshotBegin {
                 snapshot_id: manifest.snapshot_id.as_bytes().to_vec(),
-                included_position: Some(included_position.clone()),
+                included_position: Some(included_position),
                 state_revision: manifest.backup.state_revision.get(),
                 total_bytes: manifest.backup.byte_length,
                 digest: manifest.backup.digest.to_vec(),
@@ -156,7 +156,7 @@ impl ConsensusNetwork {
         send_control(
             send,
             &ControlEnvelope {
-                header: Some(self.request_header(operation_id, i64::MAX)?),
+                header: Some(self.request_header(operation_id, i64::MAX)),
                 message: Some(message),
             },
             self.wire_limits,

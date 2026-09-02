@@ -156,7 +156,9 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
             election_check_interval: Duration::from_millis(10),
             ..MetadataAuthorityConfig::default()
         };
-        authorities.push(spawn_metadata_authority(driver, transport, config)?);
+        authorities.push(spawn_replication_fixture_authority(
+            driver, transport, config,
+        )?);
     }
     {
         let mut registered = handles.lock().map_err(|_| "transport registry poisoned")?;
@@ -170,15 +172,17 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
         Duration::from_secs(5),
         commit_after_election(&authorities[0].0, context, &command),
     )
-    .await??;
+    .await
+    .map_err(|_| "leader commit timed out")??;
     assert_eq!(receipt.operation_id, context.operation_id);
 
-    for (authority, _) in &authorities {
+    for (index, (authority, _)) in authorities.iter().enumerate() {
         let replay = tokio::time::timeout(
             Duration::from_secs(5),
             resolve_after_replication(authority, context, &command),
         )
-        .await??;
+        .await
+        .map_err(|_| format!("replica {index} resolution timed out"))??;
         assert_eq!(replay.result_digest, receipt.result_digest);
     }
     for (authority, _) in &authorities {
@@ -193,14 +197,15 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
 #[tokio::test]
 async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
 -> Result<(), Box<dyn std::error::Error>> {
-    let mut cluster = RealAuthorityCluster::start()?;
+    let mut cluster = RealAuthorityCluster::start().await?;
     cluster.authorities[0].0.begin_election().await?;
     let (bootstrap_context, bootstrap) = command(cluster.nodes[0], [85; 16])?;
     let bootstrap_receipt = tokio::time::timeout(
         Duration::from_secs(15),
         commit_after_election(&cluster.authorities[0].0, bootstrap_context, &bootstrap),
     )
-    .await??;
+    .await
+    .map_err(|_| "initial Quinn authority commit timed out")??;
     assert_eq!(bootstrap_receipt.committed_revision, Revision::new(1));
 
     cluster.stop_first_authority().await?;
@@ -209,13 +214,15 @@ async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
         Duration::from_secs(15),
         commit_after_election(&cluster.authorities[0].0, user_context, &user),
     )
-    .await??;
+    .await
+    .map_err(|_| "Quinn authority re-election commit timed out")??;
     assert_eq!(user_receipt.committed_revision, Revision::new(2));
     let follower_receipt = tokio::time::timeout(
         Duration::from_secs(15),
         resolve_after_replication(&cluster.authorities[1].0, user_context, &user),
     )
-    .await??;
+    .await
+    .map_err(|_| "Quinn follower catch-up timed out")??;
     assert_eq!(follower_receipt.result_digest, user_receipt.result_digest);
 
     cluster.shutdown().await?;
@@ -235,7 +242,7 @@ struct RealAuthorityCluster {
 }
 
 impl RealAuthorityCluster {
-    fn start() -> Result<Self, Box<dyn std::error::Error>> {
+    async fn start() -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let certificate_authority = CertificateAuthority::new()?;
         let authority_certificate = certificate_authority.certificate_der().to_vec();
@@ -264,6 +271,7 @@ impl RealAuthorityCluster {
             MeshId::from_bytes([84; 16])?,
             partition_id,
         )?;
+        probe_network_mesh(&networks, &nodes).await?;
         let authorities = start_authorities(&directory, &nodes, &plan, networks)?;
         let forwarders = start_forwarders(inbound, &authorities);
         Ok(Self {
@@ -294,6 +302,20 @@ impl RealAuthorityCluster {
         }
         Ok(())
     }
+}
+
+async fn probe_network_mesh(
+    networks: &[ConsensusNetwork],
+    nodes: &[NodeId; 3],
+) -> Result<(), ConsensusNetworkError> {
+    for (source_index, network) in networks.iter().enumerate() {
+        for (target_index, node_id) in nodes.iter().copied().enumerate() {
+            if source_index != target_index {
+                network.probe_peer(node_id).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn start_networks(
@@ -348,7 +370,9 @@ fn start_authorities(
             )?;
             let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(network);
             let config = authority_config(index)?;
-            Ok(spawn_metadata_authority(driver, transport, config)?)
+            Ok(spawn_replication_fixture_authority(
+                driver, transport, config,
+            )?)
         })
         .collect()
 }
@@ -392,6 +416,16 @@ struct InMemoryTransport {
     peers: Arc<Mutex<BTreeMap<NodeId, MetadataAuthorityHandle>>>,
 }
 
+fn spawn_replication_fixture_authority(
+    driver: PartitionConsensusDriver<AuthoritativeRepository>,
+    transport: Arc<dyn ConsensusMessageTransport>,
+    config: MetadataAuthorityConfig,
+) -> Result<AuthorityTask, MetadataAuthorityStartError> {
+    // These fixtures start from an already formed three-voter plan so they can isolate replication
+    // and transport. Production authorities always coordinate membership from enrolled learners.
+    spawn_metadata_authority_runtime(driver, transport, config, false)
+}
+
 impl ConsensusMessageTransport for InMemoryTransport {
     fn send(&self, to: NodeId, message: CoreMessage) {
         let Ok(peers) = self.peers.lock() else {
@@ -417,8 +451,11 @@ async fn commit_after_election(
 ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
     loop {
         match authority.commit_or_resolve(context, command.clone()).await {
-            Err(MetadataAuthorityRequestError::NotLeader { .. }) => {
-                tokio::task::yield_now().await;
+            Err(
+                MetadataAuthorityRequestError::NotLeader { .. }
+                | MetadataAuthorityRequestError::Unavailable,
+            ) => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
             outcome => return outcome,
         }
@@ -432,8 +469,11 @@ async fn resolve_after_replication(
 ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
     loop {
         match authority.commit_or_resolve(context, command.clone()).await {
-            Err(MetadataAuthorityRequestError::NotLeader { .. }) => {
-                tokio::task::yield_now().await;
+            Err(
+                MetadataAuthorityRequestError::NotLeader { .. }
+                | MetadataAuthorityRequestError::Unavailable,
+            ) => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
             outcome => return outcome,
         }

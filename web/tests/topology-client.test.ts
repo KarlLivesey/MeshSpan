@@ -58,7 +58,9 @@ describe("generated topology client", () => {
       baseUrl: "https://node.example/api/latest/",
       fetch: async () => {
         calls += 1;
-        return Promise.resolve(jsonResponse({ nodes: [], next_page_url: null }));
+        return Promise.resolve(
+          jsonResponse({ nodes: [], next_page_url: null }),
+        );
       },
     });
     await expect(

@@ -21,8 +21,8 @@ use meshspan_cluster::{
     ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
     MetadataAuthorityConfig, MetadataAuthorityHandle, MetadataAuthorityRequestError,
     MetadataAuthorityRuntimeError, MetadataAuthorityStartError, OutboundConsensusSnapshot,
-    PartitionConsensusDriver, PeerControlRequest, PeerDataStream, restore_member_incarnations,
-    spawn_metadata_authority,
+    PartitionConsensusDriver, PeerConsensusMessage, PeerControlRequest, PeerDataStream,
+    restore_member_incarnations, spawn_metadata_authority,
 };
 use meshspan_consensus::{
     ActiveQuorumPlan, ConsensusCore, CoreConfig, CoreError, QuorumPlanError, compile_plan,
@@ -56,8 +56,8 @@ use crate::{
     ApiKeyIssuanceApiError, AuthenticationMethodListingApiError,
     AuthenticationMethodListingService, AuthenticationMethodRevocationApiError,
     AuthenticationMethodRevocationService, BrowserAuthenticationError, BrowserSessionAuthenticator,
-    ConsensusAuthenticationAuthority, ConsensusBootstrapAuthority, CreateMeshSetupController,
-    CreateMeshSetupError, CreateMeshSetupService, CreateSessionService,
+    ConsensusAuthenticationAuthority, ConsensusBootstrapAuthority, CreateMeshSetupConfiguration,
+    CreateMeshSetupController, CreateMeshSetupError, CreateMeshSetupService, CreateSessionService,
     CurrentNodeBootstrapPeerSource, CurrentSessionApiError, DaemonLocalState,
     DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService, FileApiRoutes,
     FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
@@ -121,6 +121,24 @@ struct StorageRuntimeComposition {
     readiness: Arc<RuntimeReadiness>,
     targets: Arc<Mutex<StorageTargetRuntime>>,
     native_filesystem: NativeFilesystemRuntime,
+}
+
+struct DaemonNodeRuntime {
+    local_state: DaemonLocalState,
+    setup_state: Arc<SetupStateSnapshot>,
+    private_endpoint: String,
+    private_network: Arc<PrivateConsensusRuntime>,
+    data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
+    received_data_streams: Option<tokio::sync::mpsc::Receiver<PeerDataStream>>,
+    joining_peer_messages: Option<tokio::sync::mpsc::Receiver<PeerConsensusMessage>>,
+    joining_control_requests: Option<tokio::sync::mpsc::Receiver<PeerControlRequest>>,
+}
+
+struct PrivateAuthorityRuntime {
+    authority: MetadataAuthorityHandle,
+    authority_task: JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
+    removal_authority_epoch: u64,
+    network_starter: PrivateNetworkStarter,
 }
 
 #[derive(Clone)]
@@ -298,13 +316,33 @@ where
     F: Future<Output = ()> + Send,
 {
     let started_at = current_time()?;
-    let mut local_state = DaemonLocalState::open(&config, started_at)?;
+    let mut node = initialise_daemon_node(config, started_at).await?;
+    let private_authority = start_private_authority(&mut node, config, started_at).await?;
+    let (restart, restart_requests) = tokio::sync::mpsc::unbounded_channel();
+    let router =
+        compose_appliance_router(&mut node, &private_authority, config, restart, started_at)?;
+    serve_daemon_cycle(
+        config,
+        &node.local_state,
+        router,
+        private_authority.authority,
+        private_authority.authority_task,
+        restart_requests,
+        shutdown,
+    )
+    .await
+}
+
+async fn initialise_daemon_node(
+    config: &HeadlessDaemonConfig,
+    started_at: UnixMicros,
+) -> Result<DaemonNodeRuntime, DaemonProcessError> {
+    let mut local_state = DaemonLocalState::open(config, started_at)?;
     let setup_state = Arc::new(SetupStateSnapshot::new(SetupState::ClaimRequired));
     let setup_lifecycle = setup_state.reconcile(local_state.local_database())?;
-    let private_endpoint = advertised_private_endpoint(&config)?;
+    let private_endpoint = advertised_private_endpoint(config)?;
     let private_network = Arc::new(PrivateConsensusRuntime::default());
     let (data_streams, received_data_streams) = tokio::sync::mpsc::channel(128);
-    let (restart, mut restart_requests) = tokio::sync::mpsc::unbounded_channel();
     let mut joining_peer_messages = None;
     let mut joining_control_requests = None;
     if setup_lifecycle == SetupState::Configured {
@@ -359,12 +397,28 @@ where
             }
         }
     }
+    Ok(DaemonNodeRuntime {
+        local_state,
+        setup_state,
+        private_endpoint,
+        private_network,
+        data_streams,
+        received_data_streams: Some(received_data_streams),
+        joining_peer_messages,
+        joining_control_requests,
+    })
+}
 
+async fn start_private_authority(
+    node: &mut DaemonNodeRuntime,
+    config: &HeadlessDaemonConfig,
+    started_at: UnixMicros,
+) -> Result<PrivateAuthorityRuntime, DaemonProcessError> {
     let consensus_transport: Arc<dyn meshspan_cluster::ConsensusMessageTransport> =
-        private_network.clone();
+        node.private_network.clone();
     let (authority, authority_task, removal_authority_epoch) =
-        start_root_authority(&local_state, started_at, consensus_transport)?;
-    if let Some(mut messages) = joining_peer_messages {
+        start_root_authority(&node.local_state, started_at, consensus_transport)?;
+    if let Some(mut messages) = node.joining_peer_messages.take() {
         let joining_authority = authority.clone();
         tokio::spawn(async move {
             while let Some(message) = messages.recv().await {
@@ -378,119 +432,174 @@ where
     }
     let private_network_starter = PrivateNetworkStarter {
         runtime: tokio::runtime::Handle::current(),
-        network: Arc::clone(&private_network),
+        network: Arc::clone(&node.private_network),
         authority: authority.clone(),
-        state_directory: local_state.state_directory().to_path_buf(),
-        local_node_id: local_state.node_id(),
+        state_directory: node.local_state.state_directory().to_path_buf(),
+        local_node_id: node.local_state.node_id(),
         local_private_key_pkcs8: Arc::new(Zeroizing::new(
-            local_state.node_identity_private_key_pkcs8().to_vec(),
+            node.local_state.node_identity_private_key_pkcs8().to_vec(),
         )),
         listen_address: config.private_listen(),
-        data_streams,
+        data_streams: node.data_streams.clone(),
     };
-    if let Some(control_requests) = joining_control_requests {
+    if let Some(control_requests) = node.joining_control_requests.take() {
         private_network_starter.spawn_control_runtime(
-            private_network
+            node.private_network
                 .network()
                 .map_err(|()| DaemonProcessError::PrivateNetworkState)?,
             control_requests,
         );
     }
-    if setup_state.setup_state() == SetupState::Configured {
+    if node.setup_state.setup_state() == SetupState::Configured {
         private_network_starter.start(started_at)?;
     }
+    Ok(PrivateAuthorityRuntime {
+        authority,
+        authority_task,
+        removal_authority_epoch,
+        network_starter: private_network_starter,
+    })
+}
+
+fn compose_appliance_router(
+    node: &mut DaemonNodeRuntime,
+    private_authority: &PrivateAuthorityRuntime,
+    config: &HeadlessDaemonConfig,
+    restart: tokio::sync::mpsc::UnboundedSender<()>,
+    started_at: UnixMicros,
+) -> Result<Router, DaemonProcessError> {
     let StorageRuntimeComposition {
         readiness,
         targets: storage_targets,
         native_filesystem,
     } = compose_storage_runtime(
-        &local_state,
-        &authority,
-        Arc::clone(&private_network),
-        removal_authority_epoch,
+        &node.local_state,
+        &private_authority.authority,
+        &node.private_network,
+        private_authority.removal_authority_epoch,
         config.storage().storage_paths().to_vec(),
         started_at,
     )?;
+    let received_data_streams = node
+        .received_data_streams
+        .take()
+        .ok_or(DaemonProcessError::PrivateNetworkState)?;
     spawn_data_plane_runtime(Arc::clone(&storage_targets), received_data_streams);
     spawn_storage_target_reconciler(Arc::clone(&storage_targets));
-    let bootstrap =
-        ConsensusBootstrapAuthority::new(authority.clone(), tokio::runtime::Handle::current());
-    let setup = SetupWithStorageTargets {
-        setup: NetworkStartingSetup::new(
-            CreateMeshSetupService::new(
-                local_state.open_local_database(started_at)?,
-                bootstrap,
-                local_state.claim_output_path().to_path_buf(),
-                local_state.pending_recovery_bundle_path(),
-                Arc::clone(&setup_state),
-                local_state.wrapping_public_key(),
-                local_state.node_identity_public_key().to_vec(),
-                OperatingSystemRandom,
-            ),
-            private_network_starter,
-        ),
-        storage_targets: Arc::clone(&storage_targets),
-    };
-    let gateway = GatewaySessionIdentity::new(local_state.node_id(), 1)?;
-    let enrolment = NetworkRegisteringEnrolment::new(
-        NodeEnrolmentService::new(
-            open_authentication_authority(
-                &local_state,
-                &authority,
-                Arc::clone(&private_network),
-                started_at,
-            )?,
-            open_authentication_authority(
-                &local_state,
-                &authority,
-                Arc::clone(&private_network),
-                started_at,
-            )?,
-            local_state.open_wrapping_key()?,
-            CurrentNodeBootstrapPeerSource::new(
-                open_authentication_authority(
-                    &local_state,
-                    &authority,
-                    Arc::clone(&private_network),
-                    started_at,
-                )?,
-                local_state.node_id(),
-                open_root_repository(&local_state, started_at)?.partition_id(),
-                1,
-                private_endpoint,
-            ),
-        ),
-        Arc::clone(&private_network),
-    );
+    let gateway = GatewaySessionIdentity::new(node.local_state.node_id(), 1)?;
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
-        .merge(setup_api_router_with_mutations(
-            Arc::clone(&setup_state),
-            setup,
-            JoinMeshSetupService::new(
-                local_state.claim_output_path().to_path_buf(),
-                local_state.pending_interactive_join_path(),
-                setup_state,
-                restart,
-            ),
+        .merge(setup_and_enrolment_routes(
+            node,
+            private_authority,
+            Arc::clone(&storage_targets),
+            restart,
+            started_at,
         )?)
-        .merge(node_enrolment_api_router(enrolment)?)
         .merge(authentication_session_routes(
-            &local_state,
-            &authority,
+            &node.local_state,
+            &private_authority.authority,
             gateway,
             started_at,
             config.https_listen(),
-            private_network,
+            &node.private_network,
             Arc::clone(&storage_targets),
         )?)
         .merge(native_file_routes(
-            &local_state,
-            &authority,
+            &node.local_state,
+            &private_authority.authority,
             gateway,
             started_at,
             native_filesystem,
         )?);
+    Ok(router)
+}
+
+fn setup_and_enrolment_routes(
+    node: &DaemonNodeRuntime,
+    private_authority: &PrivateAuthorityRuntime,
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+    restart: tokio::sync::mpsc::UnboundedSender<()>,
+    started_at: UnixMicros,
+) -> Result<Router, DaemonProcessError> {
+    let bootstrap = ConsensusBootstrapAuthority::new(
+        private_authority.authority.clone(),
+        tokio::runtime::Handle::current(),
+    );
+    let setup = SetupWithStorageTargets {
+        setup: NetworkStartingSetup::new(
+            CreateMeshSetupService::new(
+                node.local_state.open_local_database(started_at)?,
+                bootstrap,
+                Arc::clone(&node.setup_state),
+                CreateMeshSetupConfiguration::new(
+                    node.local_state.claim_output_path().to_path_buf(),
+                    node.local_state.pending_recovery_bundle_path(),
+                    node.local_state.wrapping_public_key(),
+                    node.local_state.node_identity_public_key().to_vec(),
+                ),
+                OperatingSystemRandom,
+            ),
+            private_authority.network_starter.clone(),
+        ),
+        storage_targets,
+    };
+    let enrolment = NetworkRegisteringEnrolment::new(
+        NodeEnrolmentService::new(
+            open_authentication_authority(
+                &node.local_state,
+                &private_authority.authority,
+                Arc::clone(&node.private_network),
+                started_at,
+            )?,
+            open_authentication_authority(
+                &node.local_state,
+                &private_authority.authority,
+                Arc::clone(&node.private_network),
+                started_at,
+            )?,
+            node.local_state.open_wrapping_key()?,
+            CurrentNodeBootstrapPeerSource::new(
+                open_authentication_authority(
+                    &node.local_state,
+                    &private_authority.authority,
+                    Arc::clone(&node.private_network),
+                    started_at,
+                )?,
+                node.local_state.node_id(),
+                open_root_repository(&node.local_state, started_at)?.partition_id(),
+                1,
+                node.private_endpoint.clone(),
+            ),
+        ),
+        Arc::clone(&node.private_network),
+    );
+    Ok(Router::new()
+        .merge(setup_api_router_with_mutations(
+            Arc::clone(&node.setup_state),
+            setup,
+            JoinMeshSetupService::new(
+                node.local_state.claim_output_path().to_path_buf(),
+                node.local_state.pending_interactive_join_path(),
+                Arc::clone(&node.setup_state),
+                restart,
+            ),
+        )?)
+        .merge(node_enrolment_api_router(enrolment)?))
+}
+
+async fn serve_daemon_cycle<F>(
+    config: &HeadlessDaemonConfig,
+    local_state: &DaemonLocalState,
+    router: Router,
+    authority: MetadataAuthorityHandle,
+    authority_task: JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
+    mut restart_requests: tokio::sync::mpsc::UnboundedReceiver<()>,
+    shutdown: Pin<&mut F>,
+) -> Result<DaemonCycleExit, DaemonProcessError>
+where
+    F: Future<Output = ()> + Send,
+{
     let server = HttpsServer::bind(
         config.https_listen(),
         local_state.bootstrap_server_config()?,
@@ -514,17 +623,17 @@ where
     server_result?;
     shutdown_result?;
     authority_result.map_err(|_| DaemonProcessError::AuthorityTaskStopped)??;
-    if restart_requested.load(Ordering::Acquire) {
-        Ok(DaemonCycleExit::RestartForJoin)
+    Ok(if restart_requested.load(Ordering::Acquire) {
+        DaemonCycleExit::RestartForJoin
     } else {
-        Ok(DaemonCycleExit::Shutdown)
-    }
+        DaemonCycleExit::Shutdown
+    })
 }
 
 fn compose_storage_runtime(
     local_state: &DaemonLocalState,
     authority: &MetadataAuthorityHandle,
-    private_network: Arc<PrivateConsensusRuntime>,
+    private_network: &Arc<PrivateConsensusRuntime>,
     removal_authority_epoch: u64,
     configured_paths: Vec<PathBuf>,
     now: UnixMicros,
@@ -536,7 +645,7 @@ fn compose_storage_runtime(
             open_root_repository(local_state, now)?,
             authority.clone(),
             runtime.clone(),
-            Arc::clone(&private_network),
+            Arc::clone(private_network),
         ))
     };
     let readiness = Arc::new(RuntimeReadiness::default());
@@ -547,34 +656,37 @@ fn compose_storage_runtime(
             local_state.node_id(),
             root_partition_id,
             authority.clone(),
-            Arc::clone(&private_network),
+            Arc::clone(private_network),
             runtime.clone(),
         )
         .map_err(|_| DaemonProcessError::NativeFilesystemConfiguration)?,
     );
-    let targets = StorageTargetRuntime::new(
-        NodeWrappingKeyRegistrationService::new(
+    let services = StorageTargetRuntimeServices {
+        wrapping_registration: NodeWrappingKeyRegistrationService::new(
             local_state.node_id(),
             local_state.wrapping_public_key(),
             authentication_authority()?,
             OperatingSystemRandom,
         ),
-        StorageTargetRegistrationService::new(
+        registration: StorageTargetRegistrationService::new(
             local_state.open_local_database(now)?,
             authentication_authority()?,
             OperatingSystemRandom,
         ),
-        StorageProviderOpeningService::new(
+        opening: StorageProviderOpeningService::new(
             authentication_authority()?,
             local_state.open_wrapping_key()?,
             local_state.state_directory().to_path_buf(),
             removal_authority_epoch,
             OperatingSystemRandom,
         )?,
-        StoragePermitLoadingService::new(
+        data_permits: StoragePermitLoadingService::new(
             authentication_authority()?,
             local_state.open_wrapping_key()?,
         ),
+    };
+    let targets = StorageTargetRuntime::new(
+        services,
         local_state.node_id(),
         native_filesystem.clone(),
         configured_paths,
@@ -634,7 +746,7 @@ fn authentication_session_routes(
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
     https_listen: SocketAddr,
-    private_network: Arc<PrivateConsensusRuntime>,
+    private_network: &Arc<PrivateConsensusRuntime>,
     storage_targets: Arc<Mutex<StorageTargetRuntime>>,
 ) -> Result<Router, DaemonProcessError> {
     let passkey_origin = passkey_origin(https_listen);
@@ -645,7 +757,7 @@ fn authentication_session_routes(
             gateway,
             now,
             &passkey_origin,
-            &private_network,
+            private_network,
         )?)
         .merge(authentication_method_routes(
             local_state,
@@ -653,14 +765,14 @@ fn authentication_session_routes(
             gateway,
             now,
             passkey_origin,
-            &private_network,
+            private_network,
         )?)
         .merge(authenticated_administration_routes(
             local_state,
             authority,
             gateway,
             now,
-            &private_network,
+            private_network,
             storage_targets,
         )?))
 }
@@ -758,6 +870,31 @@ fn authentication_method_routes(
     private_network: &Arc<PrivateConsensusRuntime>,
 ) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
+        .merge(credential_management_routes(
+            local_state,
+            authority,
+            gateway,
+            now,
+            private_network,
+        )?)
+        .merge(factor_registration_routes(
+            local_state,
+            authority,
+            gateway,
+            now,
+            passkey_origin,
+            private_network,
+        )?))
+}
+
+fn credential_management_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    private_network: &Arc<PrivateConsensusRuntime>,
+) -> Result<Router, DaemonProcessError> {
+    Ok(Router::new()
         .merge(api_key_issuance_api_router(
             ProtectedApiKeyIssuanceController::new(
                 open_authentication_authority(
@@ -798,6 +935,35 @@ fn authentication_method_routes(
                 gateway,
             ),
         )?)
+        .merge(recovery_code_issuance_api_router(
+            ProtectedRecoveryCodeIssuanceController::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                local_state.open_wrapping_key()?,
+                gateway,
+            ),
+        )?))
+}
+
+fn factor_registration_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    passkey_origin: String,
+    private_network: &Arc<PrivateConsensusRuntime>,
+) -> Result<Router, DaemonProcessError> {
+    Ok(Router::new()
         .merge(totp_registration_api_router(
             TotpRegistrationService::with_secret_protector(
                 local_state.open_local_database(now)?,
@@ -842,24 +1008,6 @@ fn authentication_method_routes(
                     vec![passkey_origin],
                     DurationMicros::new(PASSKEY_CEREMONY_LIFETIME_MICROS),
                 )?,
-                gateway,
-            ),
-        )?)
-        .merge(recovery_code_issuance_api_router(
-            ProtectedRecoveryCodeIssuanceController::new(
-                open_authentication_authority(
-                    local_state,
-                    authority,
-                    Arc::clone(private_network),
-                    now,
-                )?,
-                open_authentication_authority(
-                    local_state,
-                    authority,
-                    Arc::clone(private_network),
-                    now,
-                )?,
-                local_state.open_wrapping_key()?,
                 gateway,
             ),
         )?))
@@ -1036,7 +1184,7 @@ async fn handle_private_control(
     }
     match envelope.message.as_ref() {
         Some(Message::NodeActivationRequest(activation)) => {
-            let outcome = activate_private_node(
+            handle_node_activation_control(
                 network,
                 authority,
                 state_directory,
@@ -1045,59 +1193,97 @@ async fn handle_private_control(
                 operation_id,
                 activation,
             )
-            .await;
-            let outcome = match outcome {
-                Ok((commit, actor_principal_id)) => {
-                    match redistribute_activated_gateway_secrets(
-                        authority,
-                        state_directory,
-                        runtime,
-                        actor_principal_id,
-                    )
-                    .await
-                    {
-                        Ok(()) => Ok(commit),
-                        Err(error) => Err(error.activation_error()),
-                    }
-                }
-                Err(error) => Err(error),
-            };
-            if let Ok(commit) = &outcome {
-                spawn_learner_snapshot(
-                    network.clone(),
-                    state_directory.to_path_buf(),
-                    commit.record.node_id,
-                );
-                spawn_topology_broadcast(network.clone(), commit.record.revision.get());
-            }
-            let (result, active_revision) = activation_result(outcome);
-            Ok(ControlEnvelope {
-                header: Some(network.control_header(operation_id, header.deadline_unix_micros)?),
-                message: Some(Message::NodeActivationResult(NodeActivationResult {
-                    result: Some(result),
-                    active_revision,
-                })),
-            })
+            .await
         }
         Some(Message::NodeTopologyUpdate(update)) => {
-            apply_topology_update(network, update).await?;
-            let result_digest = topology_result_digest(update.topology_revision);
-            Ok(ControlEnvelope {
-                header: Some(network.control_header(operation_id, header.deadline_unix_micros)?),
-                message: Some(Message::NodeTopologyResult(NodeTopologyResult {
-                    result: Some(OperationResult {
-                        outcome: OperationOutcome::Durable.into(),
-                        committed_revision: Some(update.topology_revision),
-                        error: None,
-                        result: None,
-                        result_digest: result_digest.to_vec(),
-                    }),
-                    applied_revision: update.topology_revision,
-                })),
-            })
+            handle_topology_control(network, operation_id, header.deadline_unix_micros, update)
+                .await
         }
         _ => Err(DaemonProcessError::PrivateNetworkState),
     }
+}
+
+async fn handle_node_activation_control(
+    network: &ConsensusNetwork,
+    authority: &MetadataAuthorityHandle,
+    state_directory: &std::path::Path,
+    runtime: &tokio::runtime::Handle,
+    peer: &PeerControlRequest,
+    operation_id: OperationId,
+    activation: &meshspan_protocol::v1::NodeActivationRequest,
+) -> Result<ControlEnvelope, DaemonProcessError> {
+    let outcome = activate_private_node(
+        network,
+        authority,
+        state_directory,
+        runtime,
+        peer,
+        operation_id,
+        activation,
+    )
+    .await;
+    let outcome = match outcome {
+        Ok((commit, actor_principal_id)) => {
+            match redistribute_activated_gateway_secrets(
+                authority,
+                state_directory,
+                runtime,
+                actor_principal_id,
+            )
+            .await
+            {
+                Ok(()) => Ok(commit),
+                Err(error) => Err(error.activation_error()),
+            }
+        }
+        Err(error) => Err(error),
+    };
+    if let Ok(commit) = &outcome {
+        spawn_learner_snapshot(
+            network.clone(),
+            state_directory.to_path_buf(),
+            commit.record.node_id,
+        );
+        spawn_topology_broadcast(network.clone(), commit.record.revision.get());
+    }
+    let (result, active_revision) = activation_result(outcome);
+    let deadline_unix_micros = peer
+        .envelope
+        .as_inner()
+        .header
+        .as_ref()
+        .ok_or(DaemonProcessError::PrivateNetworkState)?
+        .deadline_unix_micros;
+    Ok(ControlEnvelope {
+        header: Some(network.control_header(operation_id, deadline_unix_micros)?),
+        message: Some(Message::NodeActivationResult(NodeActivationResult {
+            result: Some(result),
+            active_revision,
+        })),
+    })
+}
+
+async fn handle_topology_control(
+    network: &ConsensusNetwork,
+    operation_id: OperationId,
+    deadline_unix_micros: i64,
+    update: &NodeTopologyUpdate,
+) -> Result<ControlEnvelope, DaemonProcessError> {
+    apply_topology_update(network, update).await?;
+    let result_digest = topology_result_digest(update.topology_revision);
+    Ok(ControlEnvelope {
+        header: Some(network.control_header(operation_id, deadline_unix_micros)?),
+        message: Some(Message::NodeTopologyResult(NodeTopologyResult {
+            result: Some(OperationResult {
+                outcome: OperationOutcome::Durable.into(),
+                committed_revision: Some(update.topology_revision),
+                error: None,
+                result: None,
+                result_digest: result_digest.to_vec(),
+            }),
+            applied_revision: update.topology_revision,
+        })),
+    })
 }
 
 async fn apply_topology_update(
@@ -1121,7 +1307,7 @@ async fn apply_topology_update(
             .map_err(|_| DaemonProcessError::PrivateNetworkState)?
             .next()
             .ok_or(DaemonProcessError::PrivateNetworkState)?;
-        network.upsert_peer(ConsensusPeerConfig {
+        network.upsert_peer(&ConsensusPeerConfig {
             node_id,
             incarnation: route.incarnation,
             address,
@@ -1184,7 +1370,7 @@ fn topology_operation_id(
 fn topology_result_digest(topology_revision: u64) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"meshspan.node-topology-result.v1\0");
-    digest.update(&topology_revision.to_be_bytes());
+    digest.update(topology_revision.to_be_bytes());
     digest.finalize().into()
 }
 
@@ -1593,35 +1779,33 @@ struct StorageTargetRuntime {
     readiness: Arc<RuntimeReadiness>,
 }
 
+struct StorageTargetRuntimeServices {
+    wrapping_registration:
+        NodeWrappingKeyRegistrationService<ConsensusAuthenticationAuthority, OperatingSystemRandom>,
+    registration:
+        StorageTargetRegistrationService<ConsensusAuthenticationAuthority, OperatingSystemRandom>,
+    opening: StorageProviderOpeningService<
+        ConsensusAuthenticationAuthority,
+        crate::LocalWrappingKey,
+        OperatingSystemRandom,
+    >,
+    data_permits:
+        StoragePermitLoadingService<ConsensusAuthenticationAuthority, crate::LocalWrappingKey>,
+}
+
 impl StorageTargetRuntime {
     fn new(
-        wrapping_registration: NodeWrappingKeyRegistrationService<
-            ConsensusAuthenticationAuthority,
-            OperatingSystemRandom,
-        >,
-        registration: StorageTargetRegistrationService<
-            ConsensusAuthenticationAuthority,
-            OperatingSystemRandom,
-        >,
-        opening: StorageProviderOpeningService<
-            ConsensusAuthenticationAuthority,
-            crate::LocalWrappingKey,
-            OperatingSystemRandom,
-        >,
-        data_permits: StoragePermitLoadingService<
-            ConsensusAuthenticationAuthority,
-            crate::LocalWrappingKey,
-        >,
+        services: StorageTargetRuntimeServices,
         local_node_id: NodeId,
         native_filesystem: NativeFilesystemRuntime,
         configured_paths: Vec<PathBuf>,
         readiness: Arc<RuntimeReadiness>,
     ) -> Self {
         Self {
-            wrapping_registration,
-            registration,
-            opening,
-            data_permits,
+            wrapping_registration: services.wrapping_registration,
+            registration: services.registration,
+            opening: services.opening,
+            data_permits: services.data_permits,
             local_node_id,
             native_filesystem,
             configured_paths,

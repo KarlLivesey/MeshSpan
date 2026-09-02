@@ -36,7 +36,7 @@ impl PrivateConsensusRuntime {
     }
 
     /// Adds or replaces one newly admitted certificate-bound peer route.
-    pub(crate) fn upsert_peer(&self, peer: ConsensusPeerConfig) -> Result<(), ()> {
+    pub(crate) fn upsert_peer(&self, peer: &ConsensusPeerConfig) -> Result<(), ()> {
         self.network()
             .and_then(|network| network.upsert_peer(peer).map_err(|_| ()))
     }
@@ -81,14 +81,14 @@ where
             .next()
             .ok_or(NodeEnrolmentError::Unavailable)?;
         self.network
-            .upsert_peer(ConsensusPeerConfig {
+            .upsert_peer(&ConsensusPeerConfig {
                 node_id,
                 incarnation: 1,
                 address,
                 certificate_der,
                 certificate_name: certificate_name(node_id),
             })
-            .map_err(|_| NodeEnrolmentError::Unavailable)?;
+            .map_err(|()| NodeEnrolmentError::Unavailable)?;
         Ok(response)
     }
 }

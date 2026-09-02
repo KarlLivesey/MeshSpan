@@ -28,6 +28,72 @@ use super::{
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
+        Message::MetadataCommand(_)
+        | Message::NodeActivationRequest(_)
+        | Message::NodeActivationResult(_)
+        | Message::NodeTopologyUpdate(_)
+        | Message::NodeTopologyResult(_)
+        | Message::MetadataQuery(_)
+        | Message::MetadataPage(_)
+        | Message::OperationStatusRequest(_)
+        | Message::OperationStatusResponse(_)
+        | Message::MetadataWatch(_)
+        | Message::MetadataChangeBatch(_)
+        | Message::ResolveScopeRoute(_)
+        | Message::ScopeRoute(_)
+        | Message::FetchRoutingDelta(_)
+        | Message::RoutingDelta(_)
+        | Message::RoutingSnapshotRequired(_)
+        | Message::BeginScopeHandoff(_)
+        | Message::FreezeScope(_)
+        | Message::ActivateScope(_)
+        | Message::AbortScopeHandoff(_) => metadata_and_routing(value, limits),
+        Message::FetchIdentityProjection(_)
+        | Message::IdentityProjection(_)
+        | Message::PublishPresence(_)
+        | Message::PublishComponentSupport(_)
+        | Message::PublishComponentObservation(_)
+        | Message::PublishTargetStatus(_)
+        | Message::InventoryBegin(_)
+        | Message::InventoryBatch(_)
+        | Message::InventoryFinish(_)
+        | Message::ScrubObservation(_) => topology_and_inventory(value, limits),
+        Message::CompareBranchHeads(_)
+        | Message::BranchHeadSummary(_)
+        | Message::FetchBranchCommits(_)
+        | Message::BranchCommitBatch(_)
+        | Message::FetchImmutableObjects(_)
+        | Message::ImmutableObjectBatch(_)
+        | Message::ProposeBranchInclusion(_)
+        | Message::BranchInclusionResult(_)
+        | Message::FetchMergeCommit(_)
+        | Message::MergeCommitResult(_)
+        | Message::PublishConvergenceReceipt(_)
+        | Message::PublishIsolationDelegation(_)
+        | Message::FetchIsolationDelegation(_)
+        | Message::PublishNamespaceHead(_)
+        | Message::NamespaceHeadAccepted(_)
+        | Message::FetchNamespaceHistoryPage(_)
+        | Message::NamespaceHistoryPageResult(_)
+        | Message::FetchNamespaceHistoryObject(_)
+        | Message::NamespaceHistoryObjectResult(_)
+        | Message::FetchNativeContentLayout(_)
+        | Message::NativeContentLayoutPage(_) => namespace_replication(value, limits),
+        Message::ClaimWork(_)
+        | Message::WorkLease(_)
+        | Message::RenewWork(_)
+        | Message::ReportWorkProgress(_)
+        | Message::CompleteWork(_)
+        | Message::PublishCertificateBundle(_)
+        | Message::FetchCertificateEnvelope(_)
+        | Message::AcknowledgeCertificateInstall(_)
+        | Message::RevokeCertificateEnvelope(_) => work_and_certificates(value, limits),
+        _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn metadata_and_routing(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
+    match value {
         Message::MetadataCommand(value) => metadata_command(value, limits),
         Message::NodeActivationRequest(value) => node_activation_request(value),
         Message::NodeActivationResult(value) => node_activation_result(value, limits),
@@ -53,6 +119,12 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         Message::FreezeScope(value) => routing::freeze_scope(value),
         Message::ActivateScope(value) => routing::activate_scope(value),
         Message::AbortScopeHandoff(value) => routing::abort_handoff(value),
+        _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn topology_and_inventory(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
+    match value {
         Message::FetchIdentityProjection(value) => fetch_identity(value, limits),
         Message::IdentityProjection(value) => identity_projection(value, limits),
         Message::PublishPresence(value) => presence(value, limits),
@@ -63,6 +135,12 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         Message::InventoryBatch(value) => inventory_batch(value, limits),
         Message::InventoryFinish(value) => inventory_finish(value),
         Message::ScrubObservation(value) => scrub_observation(value),
+        _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn namespace_replication(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
+    match value {
         Message::CompareBranchHeads(value) => {
             valid_identifier(&value.scope_id)?;
             valid_digests(&value.head_digests, limits, false)?;
@@ -155,6 +233,12 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
                 Ok(())
             }
         }
+        _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn work_and_certificates(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
+    match value {
         Message::ClaimWork(value) => claim_work(value, limits),
         Message::WorkLease(value) => work_lease(value, limits),
         Message::RenewWork(value) => renew_work(value),

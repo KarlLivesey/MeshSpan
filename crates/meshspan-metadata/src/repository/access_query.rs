@@ -257,7 +257,7 @@ pub(super) fn permission_grant(
             read_grant_row,
         )
         .optional()?;
-    row.map(grant_from_row).transpose()
+    row.as_ref().map(grant_from_row).transpose()
 }
 
 pub(super) fn permission_grant_revocation(
@@ -411,12 +411,12 @@ fn collect_grants(
 ) -> Result<Vec<PermissionGrantRecord>, RepositoryError> {
     let mut items = Vec::with_capacity(limit.get().saturating_add(1));
     for row in rows {
-        items.push(grant_from_row(row?)?);
+        items.push(grant_from_row(&row?)?);
     }
     Ok(items)
 }
 
-fn grant_from_row(row: GrantRow) -> Result<PermissionGrantRecord, RepositoryError> {
+fn grant_from_row(row: &GrantRow) -> Result<PermissionGrantRecord, RepositoryError> {
     Ok(PermissionGrantRecord {
         grant_id: grant_id(&row.0)?,
         subject_principal_id: principal_id(&row.1)?,

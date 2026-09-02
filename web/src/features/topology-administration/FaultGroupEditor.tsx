@@ -3,11 +3,7 @@
 import { For, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
-import type {
-  FaultGroup,
-  TopologyDirectory,
-  TopologyNode,
-} from "./model";
+import type { FaultGroup, TopologyDirectory, TopologyNode } from "./model";
 
 export function FaultGroupEditor(
   props: Readonly<{

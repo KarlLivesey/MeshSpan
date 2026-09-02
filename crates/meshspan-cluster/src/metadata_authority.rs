@@ -188,10 +188,31 @@ pub fn spawn_metadata_authority(
     ),
     MetadataAuthorityStartError,
 > {
+    spawn_metadata_authority_runtime(driver, transport, config, true)
+}
+
+fn spawn_metadata_authority_runtime(
+    driver: PartitionConsensusDriver<AuthoritativeRepository>,
+    transport: Arc<dyn ConsensusMessageTransport>,
+    config: MetadataAuthorityConfig,
+    coordinates_membership: bool,
+) -> Result<
+    (
+        MetadataAuthorityHandle,
+        JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
+    ),
+    MetadataAuthorityStartError,
+> {
     let config = config.validate()?;
     let (events, received_events) = mpsc::channel(config.event_capacity);
     let handle = MetadataAuthorityHandle { events };
-    let runtime = MetadataAuthorityRuntime::new(driver, transport, config, received_events);
+    let runtime = MetadataAuthorityRuntime::new(
+        driver,
+        transport,
+        config,
+        received_events,
+        coordinates_membership,
+    );
     Ok((handle, tokio::spawn(runtime.run())))
 }
 
@@ -229,6 +250,7 @@ struct MetadataAuthorityRuntime {
     queued: VecDeque<QueuedOperation>,
     next_proposal_id: u64,
     last_leader_contact: Instant,
+    coordinates_membership: bool,
 }
 
 impl MetadataAuthorityRuntime {
@@ -237,6 +259,7 @@ impl MetadataAuthorityRuntime {
         transport: Arc<dyn ConsensusMessageTransport>,
         config: MetadataAuthorityConfig,
         events: mpsc::Receiver<AuthorityEvent>,
+        coordinates_membership: bool,
     ) -> Self {
         Self {
             driver,
@@ -247,6 +270,7 @@ impl MetadataAuthorityRuntime {
             queued: VecDeque::new(),
             next_proposal_id: 1,
             last_leader_contact: Instant::now(),
+            coordinates_membership,
         }
     }
 
@@ -491,11 +515,13 @@ impl MetadataAuthorityRuntime {
                 if !self.pending.is_empty() {
                     break;
                 }
-                let membership_effects = self.plan_membership_transition()?;
-                if !membership_effects.is_empty() {
-                    pending_effects
-                        .extend(membership_effects.into_iter().map(|effect| (effect, None)));
-                    continue;
+                if self.coordinates_membership {
+                    let membership_effects = self.plan_membership_transition()?;
+                    if !membership_effects.is_empty() {
+                        pending_effects
+                            .extend(membership_effects.into_iter().map(|effect| (effect, None)));
+                        continue;
+                    }
                 }
                 let Some((effects, operation_id)) = self.admit_next()? else {
                     break;

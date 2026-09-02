@@ -29,12 +29,20 @@ const DEFAULT_PAGE_LIMIT: u16 = 50;
 /// Replicated reads required to authorise and resolve operation status.
 pub trait OperationStatusAuthority: BrowserSessionAuthority + NativeApiKeyAuthority {
     /// Returns one exact operation when it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed status cannot be read safely.
     fn operation_status(
         &self,
         operation_id: OperationId,
     ) -> Result<Option<AuthoritativeOperationStatus>, OperationStatusAuthorityError>;
 
     /// Returns one bounded reverse-chronological operation page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed status cannot be read safely.
     fn operation_statuses(
         &self,
         after: Option<AuthoritativeOperationCursor>,
@@ -45,6 +53,10 @@ pub trait OperationStatusAuthority: BrowserSessionAuthority + NativeApiKeyAuthor
     >;
 
     /// Reports current system-manager authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when current authority cannot be established.
     fn is_system_manager(
         &self,
         principal_id: PrincipalId,
@@ -55,6 +67,10 @@ pub trait OperationStatusAuthority: BrowserSessionAuthority + NativeApiKeyAuthor
 /// Synchronous operation-status controller executed on a blocking worker.
 pub trait OperationStatusController: Send + 'static {
     /// Authenticates the caller before an operation identifier is resolved.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, ambiguous, expired or invalid authentication.
     fn authenticate(
         &self,
         headers: &HeaderMap,
@@ -62,6 +78,10 @@ pub trait OperationStatusController: Send + 'static {
     ) -> Result<OperationStatusViewer, OperationStatusError>;
 
     /// Returns one operation visible to its actor or a current system manager.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, hidden, unavailable or corrupt operation state.
     fn get_operation_status(
         &self,
         viewer: OperationStatusViewer,
@@ -69,6 +89,10 @@ pub trait OperationStatusController: Send + 'static {
     ) -> Result<OperationStatusResponse, OperationStatusError>;
 
     /// Returns one manager-only operation page under current authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, forbidden, unavailable or corrupt operation state.
     fn list_operations(
         &self,
         viewer: OperationStatusViewer,
@@ -370,12 +394,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_metadata_status_is_canonical_and_validated() {
+    fn terminal_metadata_status_is_canonical_and_validated()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut operation_bytes = [23; 16];
         operation_bytes[6] = 0x80;
         operation_bytes[8] = 0x80;
         let record = AuthoritativeOperationStatus {
-            operation_id: OperationId::from_bytes(operation_bytes).expect("valid operation id"),
+            operation_id: OperationId::from_bytes(operation_bytes)?,
             actor_principal_id: None,
             operation_kind: 1,
             state: AuthoritativeOperationState::Succeeded,
@@ -386,13 +411,13 @@ mod tests {
             revision: Revision::new(4),
         };
 
-        let response = public_status(record).expect("valid public status");
+        let response = public_status(record)?;
 
         assert_eq!(response.state, OperationState::Succeeded);
         assert_eq!(response.updated_at_epoch_micros, 120);
         assert_eq!(response.completed_at_epoch_micros, Some(120));
         assert_eq!(response.revision, 4);
-        meshspan_api_contract::encode_operation_status_response(&response)
-            .expect("outgoing status satisfies the generated contract");
+        meshspan_api_contract::encode_operation_status_response(&response)?;
+        Ok(())
     }
 }

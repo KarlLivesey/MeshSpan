@@ -37,7 +37,7 @@ pub(crate) async fn handle(
             let request = request.clone();
             let requester = peer.from;
             tokio::task::spawn_blocking(move || {
-                source::history_object(&state_directory, requester, request)
+                source::history_object(&state_directory, requester, &request)
             })
             .await
             .map_err(|_| NativeGatewaySyncError::Unavailable)??
@@ -45,7 +45,7 @@ pub(crate) async fn handle(
         Message::FetchNativeContentLayout(request) => {
             let state_directory = state_directory.to_path_buf();
             let request = request.clone();
-            tokio::task::spawn_blocking(move || source::content_layout(&state_directory, request))
+            tokio::task::spawn_blocking(move || source::content_layout(&state_directory, &request))
                 .await
                 .map_err(|_| NativeGatewaySyncError::Unavailable)??
         }

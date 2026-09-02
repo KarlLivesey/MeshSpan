@@ -23,6 +23,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../schema/content/003_publication_volume.sql"),
     include_str!("../../schema/content/004_remote_shard_routes.sql"),
 ];
+pub(super) const SCHEMA_VERSION: usize = MIGRATIONS.len();
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 
 pub(super) struct LayoutSummary {
@@ -457,7 +458,7 @@ fn migrate(connection: &mut Connection, at: UnixMicros) -> Result<(), ContentCat
     } else {
         0
     };
-    if usize::try_from(applied).map_err(|_| ContentCatalogError::Corrupt)? > MIGRATIONS.len() {
+    if usize::try_from(applied).map_err(|_| ContentCatalogError::Corrupt)? > SCHEMA_VERSION {
         return Err(ContentCatalogError::Corrupt);
     }
     for (offset, migration) in MIGRATIONS.iter().enumerate() {

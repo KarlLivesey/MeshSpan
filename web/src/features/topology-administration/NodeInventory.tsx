@@ -43,7 +43,9 @@ export function NodeInventory(
                     <li>Metadata eligible</li>
                   </Show>
                 </ul>
-                <small>{node.private_endpoint ?? "Endpoint not active yet"}</small>
+                <small>
+                  {node.private_endpoint ?? "Endpoint not active yet"}
+                </small>
               </article>
             )}
           </For>

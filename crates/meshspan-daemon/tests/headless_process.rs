@@ -73,6 +73,7 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
             .await?;
         let volume_id =
             create_volume(second.address, &second_client, api_key, &administrator_id).await?;
+        wait_for_volume_visibility(third.address, &third_client, api_key).await?;
         create_volume_permission_grant(
             third.address,
             &third_client,
@@ -251,8 +252,7 @@ async fn wait_for_user_creation(
         };
         if Instant::now() >= deadline {
             return Err(format!(
-                "surviving daemon never accepted a committed metadata write: {}",
-                error
+                "surviving daemon never accepted a committed metadata write: {error}"
             )
             .into());
         }
@@ -272,6 +272,26 @@ async fn wait_for_user_visibility(
         }
         if Instant::now() >= deadline {
             return Err("committed survivor write never became visible on the other node".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_volume_visibility(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if assert_volume_visible(address, client, api_key)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("committed volume never became visible on the peer gateway".into());
         }
         sleep(RETRY_INTERVAL).await;
     }
@@ -353,8 +373,7 @@ async fn wait_for_file_surfaces(
         };
         if Instant::now() >= deadline {
             return Err(format!(
-                "native survivor bytes never became readable through the peer gateway: {}",
-                error
+                "native survivor bytes never became readable through the peer gateway: {error}"
             )
             .into());
         }

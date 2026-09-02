@@ -320,8 +320,8 @@ mod tests {
 
     use super::{LocalDatabase, MetadataStoreError, PartitionDatabase, open_connection};
     use crate::migration::{
-        local_authentication_ceremony_migration_digest, local_claim_bundle_migration_digest,
-        local_federation_authority_cache_migration_digest,
+        PARTITION_SCHEMA_VERSION, local_authentication_ceremony_migration_digest,
+        local_claim_bundle_migration_digest, local_federation_authority_cache_migration_digest,
         local_federation_storage_capability_migration_digest,
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
@@ -389,7 +389,10 @@ mod tests {
         let second = PartitionId::from_bytes([2; 16])?;
         let database = PartitionDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.partition_id(), first);
-        assert_eq!(database.check_integrity()?.schema_version, 55);
+        assert_eq!(
+            database.check_integrity()?.schema_version,
+            PARTITION_SCHEMA_VERSION
+        );
         drop(database);
         assert!(PartitionDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         assert!(matches!(
@@ -439,7 +442,7 @@ mod tests {
         assert_eq!(event, (1, None, 1, None, principal.to_vec(), 20, 7));
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            55
+            PARTITION_SCHEMA_VERSION
         );
         Ok(())
     }
@@ -1640,7 +1643,7 @@ mod tests {
         assert_eq!(policy_id, expected);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            55
+            PARTITION_SCHEMA_VERSION
         );
         Ok(())
     }
@@ -1684,7 +1687,7 @@ mod tests {
         assert_eq!(sessions, 0);
         assert_eq!(
             connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
-            55
+            PARTITION_SCHEMA_VERSION
         );
         Ok(())
     }

@@ -278,8 +278,8 @@ pub use claim_service::{
 pub use consensus_authentication_authority::ConsensusAuthenticationAuthority;
 pub use consensus_bootstrap_authority::ConsensusBootstrapAuthority;
 pub use create_mesh_setup::{
-    BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, CreateMeshSetupError,
-    CreateMeshSetupService,
+    BootstrapAuthority, BootstrapAuthorityError, BootstrapCommit, CreateMeshSetupConfiguration,
+    CreateMeshSetupError, CreateMeshSetupService,
 };
 pub use create_session::{
     CreateSessionError, CreateSessionResult, CreateSessionService, SessionAuthority,

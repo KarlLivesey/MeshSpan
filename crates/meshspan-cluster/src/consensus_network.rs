@@ -342,7 +342,11 @@ impl ConsensusNetwork {
     ///
     /// Existing queued traffic is retained for an unchanged identity and replaced for a new
     /// incarnation or certificate. The authoritative caller remains responsible for fencing.
-    pub fn upsert_peer(&self, peer: ConsensusPeerConfig) -> Result<(), ConsensusNetworkError> {
+    ///
+    /// # Errors
+    ///
+    /// Rejects the local node, an invalid route/certificate binding or poisoned peer state.
+    pub fn upsert_peer(&self, peer: &ConsensusPeerConfig) -> Result<(), ConsensusNetworkError> {
         if peer.node_id == self.local_node_id
             || peer.incarnation == 0
             || peer.certificate_der.is_empty()
@@ -403,6 +407,10 @@ impl ConsensusNetwork {
     }
 
     /// Proves that one configured peer accepts an mTLS connection and exact hello negotiation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown peer or a failed, timed-out or misbound mTLS connection.
     pub async fn probe_peer(&self, to: NodeId) -> Result<(), ConsensusNetworkError> {
         let connection = tokio::time::timeout(PEER_OPERATION_TIMEOUT, self.connect_peer(to))
             .await
@@ -433,7 +441,7 @@ impl ConsensusNetwork {
     ///
     /// # Errors
     ///
-    /// Rejects a non-positive deadline or exhausted request identity space.
+    /// Rejects a non-positive deadline.
     pub fn control_header(
         &self,
         operation_id: OperationId,
@@ -442,7 +450,7 @@ impl ConsensusNetwork {
         if deadline_unix_micros <= 0 {
             return Err(ConsensusNetworkError::InvalidConfiguration);
         }
-        self.request_header(operation_id, deadline_unix_micros)
+        Ok(self.request_header(operation_id, deadline_unix_micros))
     }
 
     /// Returns the exact digest of this network's negotiated role/component presentation.
@@ -631,7 +639,7 @@ impl ConsensusNetwork {
                     data.as_ref()
                         .ok_or(ConsensusNetworkError::InvalidTraffic)?
                         .send(PeerDataStream {
-                            peer: peer.clone(),
+                            peer,
                             stream: accepted,
                             limits: self.wire_limits,
                         })
@@ -664,7 +672,7 @@ impl ConsensusNetwork {
                     self.next_request.fetch_add(1, Ordering::Relaxed).max(1),
                 ))?,
                 i64::MAX,
-            )?),
+            )),
             message: Some(encode_consensus_message(&message)),
         };
         send_control(&mut send, &envelope, self.wire_limits).await?;
@@ -731,10 +739,10 @@ impl ConsensusNetwork {
         &self,
         operation_id: OperationId,
         deadline_unix_micros: i64,
-    ) -> Result<RequestHeader, ConsensusNetworkError> {
+    ) -> RequestHeader {
         let request_number = self.next_request.fetch_add(1, Ordering::Relaxed).max(1);
         let identifier = request_identifier(request_number);
-        Ok(RequestHeader {
+        RequestHeader {
             version: Some(ProtocolVersion { major: 1, minor: 0 }),
             mesh_id: self.mesh_id.as_bytes().to_vec(),
             partition_id: self.partition_id.as_bytes().to_vec(),
@@ -745,7 +753,7 @@ impl ConsensusNetwork {
             operation_id: operation_id.as_bytes().to_vec(),
             deadline_unix_micros,
             trace_id: identifier.to_vec(),
-        })
+        }
     }
 
     fn verify_header(
@@ -824,10 +832,7 @@ fn validate_config(config: &ConsensusNetworkConfig) -> Result<(), ConsensusNetwo
         || config.routing_epoch == 0
         || config.roles.is_empty()
         || config.roles.len() > 4
-        || config
-            .roles
-            .iter()
-            .any(|role| *role == NodeRole::Unspecified)
+        || config.roles.contains(&NodeRole::Unspecified)
         || config.certificate_chain_der.is_empty()
         || config.certificate_chain_der.len() > 8
         || config.certificate_chain_der.iter().any(Vec::is_empty)
