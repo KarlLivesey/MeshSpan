@@ -6,7 +6,9 @@ const HEADER_LENGTH: usize = 64;
 const PROTOCOL_ID: [u8; 4] = [0xfe, b'S', b'M', b'B'];
 const SERVER_TO_CLIENT: u32 = 0x0000_0001;
 const ASYNC_COMMAND: u32 = 0x0000_0002;
+const RELATED_OPERATIONS: u32 = 0x0000_0004;
 const SIGNED: u32 = 0x0000_0008;
+const RESPONSE_FLAGS_FROM_REQUEST: u32 = RELATED_OPERATIONS | SIGNED;
 const ALLOWED_REQUEST_FLAGS: u32 = 0x3000_007e;
 
 /// One command in the SMB 2/3 command space.
@@ -164,9 +166,9 @@ impl Smb2Header {
         output[8..12].copy_from_slice(&status.to_le_bytes());
         output[12..14].copy_from_slice(&self.command.wire_value().to_le_bytes());
         output[14..16].copy_from_slice(&credits_granted.to_le_bytes());
-        output[16..20].copy_from_slice(&(self.flags | SERVER_TO_CLIENT).to_le_bytes());
+        let response_flags = self.flags & RESPONSE_FLAGS_FROM_REQUEST | SERVER_TO_CLIENT;
+        output[16..20].copy_from_slice(&response_flags.to_le_bytes());
         output[24..32].copy_from_slice(&self.message_id.to_le_bytes());
-        output[32..36].copy_from_slice(&self.process_id.to_le_bytes());
         output[36..40].copy_from_slice(&tree_id.to_le_bytes());
         output[40..48].copy_from_slice(&session_id.to_le_bytes());
         output

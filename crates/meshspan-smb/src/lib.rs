@@ -9,6 +9,8 @@
 mod direct_tcp;
 mod header;
 mod negotiate;
+mod negotiate_response;
+mod status;
 
 pub use direct_tcp::{
     DirectTcpFrame, DirectTcpFrameError, DirectTcpFrameHeader, encode_direct_tcp_header,
@@ -17,3 +19,8 @@ pub use header::{Smb2Command, Smb2Header, Smb2HeaderError};
 pub use negotiate::{
     NegotiateContext, NegotiateContextType, NegotiateRequest, NegotiateRequestError,
 };
+pub use negotiate_response::{
+    EncryptionCipher, NegotiateResponse, NegotiateResponseConfig, NegotiateResponseError,
+    NegotiateSelection, SigningAlgorithm,
+};
+pub use status::{ConnectorFailure, NtStatus};
