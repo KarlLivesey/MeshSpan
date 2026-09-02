@@ -197,14 +197,15 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
 #[tokio::test]
 async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
 -> Result<(), Box<dyn std::error::Error>> {
-    let mut cluster = RealAuthorityCluster::start()?;
+    let mut cluster = RealAuthorityCluster::start().await?;
     cluster.authorities[0].0.begin_election().await?;
     let (bootstrap_context, bootstrap) = command(cluster.nodes[0], [85; 16])?;
     let bootstrap_receipt = tokio::time::timeout(
         Duration::from_secs(15),
         commit_after_election(&cluster.authorities[0].0, bootstrap_context, &bootstrap),
     )
-    .await??;
+    .await
+    .map_err(|_| "initial Quinn authority commit timed out")??;
     assert_eq!(bootstrap_receipt.committed_revision, Revision::new(1));
 
     cluster.stop_first_authority().await?;
@@ -213,13 +214,15 @@ async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
         Duration::from_secs(15),
         commit_after_election(&cluster.authorities[0].0, user_context, &user),
     )
-    .await??;
+    .await
+    .map_err(|_| "Quinn authority re-election commit timed out")??;
     assert_eq!(user_receipt.committed_revision, Revision::new(2));
     let follower_receipt = tokio::time::timeout(
         Duration::from_secs(15),
         resolve_after_replication(&cluster.authorities[1].0, user_context, &user),
     )
-    .await??;
+    .await
+    .map_err(|_| "Quinn follower catch-up timed out")??;
     assert_eq!(follower_receipt.result_digest, user_receipt.result_digest);
 
     cluster.shutdown().await?;
@@ -239,7 +242,7 @@ struct RealAuthorityCluster {
 }
 
 impl RealAuthorityCluster {
-    fn start() -> Result<Self, Box<dyn std::error::Error>> {
+    async fn start() -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let certificate_authority = CertificateAuthority::new()?;
         let authority_certificate = certificate_authority.certificate_der().to_vec();
@@ -268,6 +271,7 @@ impl RealAuthorityCluster {
             MeshId::from_bytes([84; 16])?,
             partition_id,
         )?;
+        probe_network_mesh(&networks, &nodes).await?;
         let authorities = start_authorities(&directory, &nodes, &plan, networks)?;
         let forwarders = start_forwarders(inbound, &authorities);
         Ok(Self {
@@ -298,6 +302,20 @@ impl RealAuthorityCluster {
         }
         Ok(())
     }
+}
+
+async fn probe_network_mesh(
+    networks: &[ConsensusNetwork],
+    nodes: &[NodeId; 3],
+) -> Result<(), ConsensusNetworkError> {
+    for (source_index, network) in networks.iter().enumerate() {
+        for (target_index, node_id) in nodes.iter().copied().enumerate() {
+            if source_index != target_index {
+                network.probe_peer(node_id).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn start_networks(
