@@ -37,6 +37,7 @@ import {
   renderOperationStatusRuntime,
 } from "./render-operation-status-client.mjs";
 import { renderSetupClientMethods } from "./render-setup-client.mjs";
+import { renderSmbExportClientMethods } from "./render-smb-export-client.mjs";
 import {
   renderStorageFolderClientMethods,
   renderStorageFolderRuntime,
@@ -123,6 +124,8 @@ import type {
   ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
   OperationStatusResponse,
+  PublishSmbExportRequest,
+  PublishSmbExportResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -140,6 +143,8 @@ import type {
   SetFaultGroupMembershipResponse,
   StepUpCurrentSessionRequestWritable,
   UploadStatusResponse,
+  WithdrawSmbExportRequest,
+  WithdrawSmbExportResponse,
   WriteUploadRangeResponse,
 } from "./types.gen";
 import {
@@ -239,6 +244,9 @@ import {
   zListVolumesResponse2,
   zReadFilePath,
   zReadFileQuery,
+  zPublishSmbExportBody,
+  zPublishSmbExportPath,
+  zPublishSmbExportResponse2,
   zRevokeCurrentUserAuthenticationMethodBody,
   zRevokeCurrentUserAuthenticationMethodPath,
   zRevokeCurrentUserAuthenticationMethodResponse,
@@ -263,6 +271,9 @@ import {
   zWriteUploadRangeHeaders,
   zWriteUploadRangePath,
   zWriteUploadRangeResponse2,
+  zWithdrawSmbExportBody,
+  zWithdrawSmbExportPath,
+  zWithdrawSmbExportResponse2,
 } from "./zod.gen";
 import {
   appendQuery,
@@ -327,6 +338,7 @@ export function createMeshSpanFetchClient(
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
     ${renderVolumeClientMethods(routes)}
+    ${renderSmbExportClientMethods(routes)}
     ${renderPermissionAdministrationClientMethods(routes)}
     ${renderOperationStatusClientMethods(routes)}
     ${renderStorageFolderClientMethods(routes)}

@@ -11,15 +11,17 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-const FORMAT_VERSION: u8 = 1;
+const FORMAT_VERSION: u8 = 2;
 const GENERATION_BYTES: usize = 8;
 const NONCE_BYTES: usize = 24;
 const VERIFIER_BYTES: usize = 16;
+const CREDENTIAL_DIGEST_BYTES: usize = 32;
+const PLAINTEXT_BYTES: usize = VERIFIER_BYTES + CREDENTIAL_DIGEST_BYTES;
 const AUTHENTICATION_TAG_BYTES: usize = 16;
 const HEADER_BYTES: usize = 1 + GENERATION_BYTES + NONCE_BYTES;
-const ENVELOPE_BYTES: usize = HEADER_BYTES + VERIFIER_BYTES + AUTHENTICATION_TAG_BYTES;
-const AAD_DOMAIN: &[u8] = b"meshspan.authentication.smb-verifier.v1\0";
-const NONCE_DOMAIN: &[u8] = b"meshspan.authentication.smb-verifier-nonce.v1\0";
+const ENVELOPE_BYTES: usize = HEADER_BYTES + PLAINTEXT_BYTES + AUTHENTICATION_TAG_BYTES;
+const AAD_DOMAIN: &[u8] = b"meshspan.authentication.smb-verifier.v2\0";
+const NONCE_DOMAIN: &[u8] = b"meshspan.authentication.smb-verifier-nonce.v2\0";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -95,6 +97,28 @@ pub struct SmbVerifierCipher {
     generation: u64,
 }
 
+/// Decrypted verifier plus the ordinary API-key digest needed by the common authority boundary.
+///
+/// The type deliberately omits `Debug`, `Clone` and `Copy`; both values are credential material.
+pub struct SmbVerifierMaterial {
+    verifier: NtlmPasswordVerifier,
+    credential_digest: Zeroizing<[u8; CREDENTIAL_DIGEST_BYTES]>,
+}
+
+impl SmbVerifierMaterial {
+    /// Returns the NTLM verifier only to the proof checker.
+    #[must_use]
+    pub const fn verifier(&self) -> &NtlmPasswordVerifier {
+        &self.verifier
+    }
+
+    /// Copies the digest used by the common operation-time API-key authority.
+    #[must_use]
+    pub fn credential_digest(&self) -> [u8; CREDENTIAL_DIGEST_BYTES] {
+        *self.credential_digest
+    }
+}
+
 impl SmbVerifierCipher {
     /// Creates a cipher from the current mesh authentication-root generation.
     ///
@@ -147,15 +171,22 @@ impl SmbVerifierCipher {
         &self,
         binding: SmbVerifierBinding,
         verifier: &NtlmPasswordVerifier,
+        credential_digest: [u8; CREDENTIAL_DIGEST_BYTES],
     ) -> Result<Vec<u8>, SmbVerifierSecretError> {
+        if credential_digest == [0; CREDENTIAL_DIGEST_BYTES] {
+            return Err(SmbVerifierSecretError::InvalidCredential);
+        }
         let aad = self.associated_data(binding)?;
-        let nonce = self.nonce(&aad)?;
+        let mut plaintext = Zeroizing::new([0_u8; PLAINTEXT_BYTES]);
+        plaintext[..VERIFIER_BYTES].copy_from_slice(verifier.expose_for_encryption());
+        plaintext[VERIFIER_BYTES..].copy_from_slice(&credential_digest);
+        let nonce = self.nonce(&aad, plaintext.as_ref())?;
         let encrypted = self
             .cipher()?
             .encrypt(
                 &XNonce::from(nonce),
                 Payload {
-                    msg: verifier.expose_for_encryption(),
+                    msg: plaintext.as_ref(),
                     aad: &aad,
                 },
             )
@@ -177,7 +208,7 @@ impl SmbVerifierCipher {
         &self,
         binding: SmbVerifierBinding,
         envelope: &[u8],
-    ) -> Result<NtlmPasswordVerifier, SmbVerifierSecretError> {
+    ) -> Result<SmbVerifierMaterial, SmbVerifierSecretError> {
         if envelope.len() != ENVELOPE_BYTES || envelope[0] != FORMAT_VERSION {
             return Err(SmbVerifierSecretError::InvalidEnvelope);
         }
@@ -198,17 +229,31 @@ impl SmbVerifierCipher {
                 )
                 .map_err(|_| SmbVerifierSecretError::InvalidEnvelope)?,
         );
-        let verifier = <[u8; VERIFIER_BYTES]>::try_from(plaintext.as_slice())
+        let verifier = <[u8; VERIFIER_BYTES]>::try_from(&plaintext[..VERIFIER_BYTES])
             .map_err(|_| SmbVerifierSecretError::InvalidEnvelope)?;
-        NtlmPasswordVerifier::from_bytes(verifier)
-            .map_err(|_| SmbVerifierSecretError::InvalidEnvelope)
+        let credential_digest =
+            <[u8; CREDENTIAL_DIGEST_BYTES]>::try_from(&plaintext[VERIFIER_BYTES..])
+                .map_err(|_| SmbVerifierSecretError::InvalidEnvelope)?;
+        if credential_digest == [0; CREDENTIAL_DIGEST_BYTES] {
+            return Err(SmbVerifierSecretError::InvalidEnvelope);
+        }
+        Ok(SmbVerifierMaterial {
+            verifier: NtlmPasswordVerifier::from_bytes(verifier)
+                .map_err(|_| SmbVerifierSecretError::InvalidEnvelope)?,
+            credential_digest: Zeroizing::new(credential_digest),
+        })
     }
 
-    fn nonce(&self, aad: &[u8]) -> Result<[u8; NONCE_BYTES], SmbVerifierSecretError> {
+    fn nonce(
+        &self,
+        aad: &[u8],
+        plaintext: &[u8],
+    ) -> Result<[u8; NONCE_BYTES], SmbVerifierSecretError> {
         let mut mac = <HmacSha256 as KeyInit>::new_from_slice(self.key.nonce.as_ref())
             .map_err(|_| SmbVerifierSecretError::InvalidKey)?;
         mac.update(NONCE_DOMAIN);
         mac.update(aad);
+        mac.update(plaintext);
         let mut nonce = [0; NONCE_BYTES];
         nonce.copy_from_slice(&mac.finalize().into_bytes()[..NONCE_BYTES]);
         if nonce == [0; NONCE_BYTES] {
@@ -242,6 +287,9 @@ pub enum SmbVerifierSecretError {
     /// Method, principal, key or scope authority is invalid.
     #[error("SMB verifier binding is invalid")]
     InvalidBinding,
+    /// The common API-key digest is reserved or missing.
+    #[error("SMB verifier credential evidence is invalid")]
+    InvalidCredential,
     /// Ciphertext format, authentication tag, key or binding failed validation.
     #[error("SMB verifier envelope is invalid")]
     InvalidEnvelope,
@@ -265,19 +313,21 @@ mod tests {
         let cipher = cipher()?;
         let binding = binding()?;
         let verifier = NtlmPasswordVerifier::derive("meshspan_v1_fixture-secret")?;
-        let first = cipher.encrypt(binding, &verifier)?;
-        assert_eq!(first, cipher.encrypt(binding, &verifier)?);
-        assert_eq!(first.len(), 65);
+        let first = cipher.encrypt(binding, &verifier, [8; 32])?;
+        assert_eq!(first, cipher.encrypt(binding, &verifier, [8; 32])?);
+        assert_eq!(first.len(), 97);
         assert_eq!(SmbVerifierCipher::envelope_generation(&first)?, 7);
         assert!(
             !first
                 .windows(16)
                 .any(|window| { window == verifier.expose_for_encryption().as_slice() })
         );
+        let decrypted = cipher.decrypt(binding, &first)?;
         assert_eq!(
-            cipher.decrypt(binding, &first)?.expose_for_encryption(),
+            decrypted.verifier().expose_for_encryption(),
             verifier.expose_for_encryption()
         );
+        assert_eq!(decrypted.credential_digest(), [8; 32]);
 
         let changed = SmbVerifierBinding {
             scopes: 5,
@@ -307,9 +357,13 @@ mod tests {
         let mut invalid = binding()?;
         invalid.service_scope = 1;
         assert!(matches!(
-            cipher()?.encrypt(invalid, &verifier),
+            cipher()?.encrypt(invalid, &verifier, [8; 32]),
             Err(SmbVerifierSecretError::InvalidBinding)
         ));
+        assert_eq!(
+            cipher()?.encrypt(binding()?, &verifier, [0; 32]),
+            Err(SmbVerifierSecretError::InvalidCredential)
+        );
         Ok(())
     }
 

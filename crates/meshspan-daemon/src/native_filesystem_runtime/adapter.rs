@@ -5,16 +5,18 @@
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
-    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
+    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest,
+    AdapterSetDispositionRequest, AdapterSetLengthRequest, AdapterStatRequest,
     AdapterUnlinkRequest, AdapterUnlockRequest, AdapterUploadAbortRequest,
     AdapterUploadBeginRequest, AdapterUploadCommitRequest, AdapterUploadRangePageRequest,
     AdapterUploadStatusRequest, AdapterUploadWriteRequest, AdapterWriteFileRequest,
     DirectoryPublicationReceipt, FilesystemFileAdapter, FilesystemHandleCloseReceipt,
-    FilesystemHandleCreateReceipt, FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt,
-    FilesystemUploadAdapter, HandleLeaseReceipt, LockRangeReceipt, NamespaceListPage,
-    NamespaceObjectStat, NamespacePublicationReceipt, NamespaceRenameReceipt,
-    NamespaceUnlinkReceipt, UnlockRangeReceipt, UploadCommitReceipt, UploadRangePageReceipt,
-    UploadSession, UploadStatusReceipt, UploadWriteReceipt,
+    FilesystemHandleCreateReceipt, FilesystemHandleLengthReceipt, FilesystemHandleReadReceipt,
+    FilesystemHandleWriteReceipt, FilesystemUploadAdapter, HandleInformationReceipt,
+    HandleLeaseReceipt, LockRangeReceipt, NamespaceListPage, NamespaceObjectStat,
+    NamespacePublicationReceipt, NamespaceRenameReceipt, NamespaceUnlinkReceipt,
+    UnlockRangeReceipt, UploadCommitReceipt, UploadRangePageReceipt, UploadSession,
+    UploadStatusReceipt, UploadWriteReceipt,
 };
 
 use super::{NativeFilesystemRuntime, NativeFilesystemRuntimeError};
@@ -135,6 +137,9 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
                 request.observed_at,
             )?;
         }
+        if let Some(delete) = receipt.delete {
+            self.publish_namespace_head(delete.namespace_commit_id, None, request.observed_at)?;
+        }
         Ok(receipt)
     }
 
@@ -160,6 +165,22 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         request: AdapterUnlockRequest,
     ) -> Result<UnlockRangeReceipt, Self::Error> {
         self.with_mut(|filesystem| filesystem.unlock_range(context, request))
+    }
+
+    fn set_length(
+        &mut self,
+        context: meshspan_filesystem::FilesystemAccessContext,
+        request: AdapterSetLengthRequest,
+    ) -> Result<FilesystemHandleLengthReceipt, Self::Error> {
+        self.with_mut(|filesystem| filesystem.set_length(context, request))
+    }
+
+    fn set_disposition(
+        &mut self,
+        context: meshspan_filesystem::FilesystemAccessContext,
+        request: AdapterSetDispositionRequest,
+    ) -> Result<HandleInformationReceipt, Self::Error> {
+        self.with_mut(|filesystem| filesystem.set_disposition(context, request))
     }
 }
 

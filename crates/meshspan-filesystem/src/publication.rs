@@ -37,7 +37,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 39] = [
+const MIGRATIONS: [Migration; 41] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -194,8 +194,16 @@ const MIGRATIONS: [Migration; 39] = [
         version: 39,
         sql: include_str!("../schema/branch/039_initial_directory_plans.sql"),
     },
+    Migration {
+        version: 40,
+        sql: include_str!("../schema/branch/040_handle_information_mutations.sql"),
+    },
+    Migration {
+        version: 41,
+        sql: include_str!("../schema/branch/041_initial_file_create_plans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 39;
+const SCHEMA_VERSION: u32 = 41;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -986,6 +994,20 @@ impl VersionPublicationStore {
         namespace::receive_namespace_history_object(&mut self.connection, session_id, record, now)
     }
 
+    /// Returns one bounded page of immutable bodies still required by a receive session.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown sessions, zero or excessive bounds, malformed state and persistence
+    /// failure.
+    pub fn namespace_history_missing_immutable_digests(
+        &self,
+        session_id: [u8; 32],
+        limit: usize,
+    ) -> Result<Vec<[u8; 32]>, PublicationError> {
+        namespace::namespace_history_missing_immutable_digests(&self.connection, session_id, limit)
+    }
+
     /// Atomically imports a terminal, complete and cross-record-valid receive session.
     ///
     /// # Errors
@@ -1002,8 +1024,9 @@ impl VersionPublicationStore {
     /// Fast-forwards one local connector branch to an already imported immutable head.
     ///
     /// This operation never rewrites or merges history. The advertised head must select the exact
-    /// root supplied by the caller and descend from the current local head. Exact retries return
-    /// the existing head without advancing its sequence.
+    /// root supplied by the caller and belong to the current local lineage. A descendant advances
+    /// the branch; an exact retry or already-superseded ancestor returns the existing head without
+    /// advancing its sequence. Divergent history is never selected implicitly.
     ///
     /// # Errors
     ///
@@ -1502,6 +1525,30 @@ impl VersionPublicationStore {
         )
     }
 
+    pub(crate) fn ready_namespace_delete(
+        &mut self,
+        requesting_handle_id: HandleId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::ReadyNamespaceDelete, crate::HandleError> {
+        crate::handles::load_ready_delete(&mut self.connection, requesting_handle_id, observed_at)
+    }
+
+    pub(crate) fn prepare_ready_namespace_delete(
+        &self,
+        operation_id: OperationId,
+        ready: &crate::ReadyNamespaceDelete,
+        created_by: PrincipalId,
+        observed_at: UnixMicros,
+    ) -> Result<NamespaceUnlinkPublication, crate::HandleError> {
+        crate::namespace_planning::unlink::prepare_ready_delete(
+            &self.connection,
+            operation_id,
+            ready,
+            created_by,
+            observed_at,
+        )
+    }
+
     /// Loads the exact current namespace commit for one branch and volume.
     ///
     /// # Errors
@@ -1767,6 +1814,32 @@ impl VersionPublicationStore {
         request: crate::HandleLeaseRequest,
     ) -> Result<crate::HandleLeaseReceipt, crate::HandleError> {
         crate::handles::renew(&mut self.connection, request)
+    }
+
+    /// Sets one exact private working length under the current fenced handle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/expired fences, principal or gateway substitution, missing write access,
+    /// conflicting retries, invalid lengths and persistence failure.
+    pub fn set_handle_length(
+        &mut self,
+        request: crate::SetHandleLengthRequest,
+    ) -> Result<crate::HandleInformationReceipt, crate::HandleError> {
+        crate::handles::set_length(&mut self.connection, request)
+    }
+
+    /// Sets or clears delete-on-close under the current fenced handle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/expired fences, principal or gateway substitution, missing delete access,
+    /// conflicting retries and persistence failure.
+    pub fn set_handle_disposition(
+        &mut self,
+        request: crate::SetHandleDispositionRequest,
+    ) -> Result<crate::HandleInformationReceipt, crate::HandleError> {
+        crate::handles::set_disposition(&mut self.connection, request)
     }
 
     /// Closes one fenced handle, releases its locks and advances delete-on-close readiness.

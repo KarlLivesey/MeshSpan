@@ -114,6 +114,14 @@ pub(super) fn receive_namespace_history_object(
     history_import::accept_object(connection, session_id, record, now)
 }
 
+pub(super) fn namespace_history_missing_immutable_digests(
+    connection: &Connection,
+    session_id: [u8; 32],
+    limit: usize,
+) -> Result<Vec<[u8; 32]>, PublicationError> {
+    history_import::missing_immutable_digests(connection, session_id, limit)
+}
+
 pub(super) fn complete_namespace_history_receive(
     connection: &mut Connection,
     session_id: [u8; 32],
@@ -480,6 +488,7 @@ fn publish_inner(
                     publication.file.object_id,
                     publication.file_object_revision_id,
                     publication.file.version_id,
+                    publication.file.manifest.logical_length,
                 ),
             )
         })

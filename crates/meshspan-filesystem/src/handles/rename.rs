@@ -63,6 +63,53 @@ pub(crate) fn load_ready_deletes(
     Ok(page)
 }
 
+pub(crate) fn load_ready_delete(
+    connection: &mut Connection,
+    requesting_handle_id: HandleId,
+    observed_at: UnixMicros,
+) -> Result<ReadyNamespaceDelete, HandleError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    expire_stale_handles(&transaction, observed_at)?;
+    let stored = transaction
+        .query_row(
+            "SELECT branch_id, volume_id, object_id, object_revision_id, version_id,
+                    requested_at, ready_at
+             FROM pending_object_deletes
+             WHERE requesting_handle_id = ?1 AND state = 2",
+            [requesting_handle_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(HandleError::DeletePending)?;
+    let (branch, volume, object, revision, version, requested_at, ready_at) = stored;
+    if ready_at < requested_at {
+        return Err(HandleError::Corrupt);
+    }
+    let ready = ReadyNamespaceDelete {
+        branch_id: super::identifier(&branch, BranchId::from_bytes)?,
+        volume_id: super::identifier(&volume, VolumeId::from_bytes)?,
+        object_id: super::identifier(&object, ObjectId::from_bytes)?,
+        requesting_handle_id,
+        object_revision_id: super::identifier(&revision, ObjectRevisionId::from_bytes)?,
+        file_version_id: super::identifier(&version, FileVersionId::from_bytes)?,
+        path: path::load(&transaction, requesting_handle_id)?,
+        requested_at: UnixMicros::new(requested_at),
+        ready_at: UnixMicros::new(ready_at),
+    };
+    transaction.commit()?;
+    Ok(ready)
+}
+
 fn read_ready_deletes(
     connection: &Connection,
     branch_id: BranchId,

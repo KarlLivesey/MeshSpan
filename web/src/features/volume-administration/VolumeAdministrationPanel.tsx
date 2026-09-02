@@ -8,6 +8,7 @@ import { CreateVolumeForm } from "./CreateVolumeForm";
 import { createVolumeDirectory } from "./model";
 import type { AdminVolume, VolumeAdministrationClient } from "./model";
 import { PermissionGrantPanel } from "./PermissionGrantPanel";
+import { SmbExportPanel } from "./SmbExportPanel";
 import { VolumeList } from "./VolumeList";
 
 type VolumeAdministrationPanelProps = Readonly<{
@@ -71,14 +72,21 @@ export function VolumeAdministrationPanel(
       />
       <Show when={selectedVolume()}>
         {(volume) => (
-          <PermissionGrantPanel
-            client={props.client}
-            csrfToken={props.csrfToken}
-            loadMoreOwners={loadMoreOwners}
-            owners={owners()}
-            ownersHaveMore={ownersHaveMore()}
-            volume={volume()}
-          />
+          <>
+            <SmbExportPanel
+              client={props.client}
+              csrfToken={props.csrfToken}
+              volume={volume()}
+            />
+            <PermissionGrantPanel
+              client={props.client}
+              csrfToken={props.csrfToken}
+              loadMoreOwners={loadMoreOwners}
+              owners={owners()}
+              ownersHaveMore={ownersHaveMore()}
+              volume={volume()}
+            />
+          </>
         )}
       </Show>
     </div>

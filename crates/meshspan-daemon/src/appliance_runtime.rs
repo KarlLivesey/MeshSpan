@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use meshspan_api_contract::{
@@ -52,6 +52,7 @@ use crate::join_mesh_setup::{load_pending_join, remove_pending_join};
 use crate::private_consensus_runtime::{
     NetworkRegisteringEnrolment, PrivateConsensusRuntime, certificate_name,
 };
+use crate::smb_connection::{SmbConnectionFactory, SmbConnectionFactoryConfiguration};
 use crate::{
     ApiKeyIssuanceApiError, AuthenticationMethodListingApiError,
     AuthenticationMethodListingService, AuthenticationMethodRevocationApiError,
@@ -79,7 +80,9 @@ use crate::{
     ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
-    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageFolderAdministrationApiError,
+    SmbExportAdministrationApiError, SmbExportAdministrationService, SmbServer,
+    SmbServerConfigurationError, SmbServerError, SmbServerLimits, StepUpCurrentSessionApiError,
+    StepUpCurrentSessionService, StorageFolderAdministrationApiError,
     StorageFolderAdministrationService, StoragePermitLoadingService, StorageProviderOpeningError,
     StorageProviderOpeningService, StorageTargetRegistrationService,
     TopologyAdministrationApiError, TopologyAdministrationService, TotpRegistrationApiError,
@@ -94,15 +97,17 @@ use crate::{
     passkey_registration_api_router, permission_administration_api_router,
     public_contract_api_router, recovery_bundle_verification_api_router,
     recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
-    setup_api_router_with_mutations, step_up_current_session_api_router,
-    storage_folder_administration_api_router, topology_administration_api_router,
-    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
+    setup_api_router_with_mutations, smb_export_administration_api_router,
+    step_up_current_session_api_router, storage_folder_administration_api_router,
+    topology_administration_api_router, totp_registration_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
 
 const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
 const INITIAL_MEMBERSHIP_EPOCH: u64 = 1;
+const PRIVATE_CONTROL_CONCURRENCY: usize = 64;
 const UPLOAD_LIFETIME_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
 const CONTENT_OPERATION_DEADLINE_MICROS: u64 = 60 * 1_000_000;
 const TOTP_REGISTRATION_LIFETIME_MICROS: u64 = 5 * 60 * 1_000_000;
@@ -110,6 +115,8 @@ const TOTP_ISSUER: &str = "MeshSpan";
 const PASSKEY_RELYING_PARTY_ID: &str = "meshspan.local";
 const PASSKEY_RELYING_PARTY_NAME: &str = "MeshSpan";
 const PASSKEY_CEREMONY_LIFETIME_MICROS: u64 = 5 * 60 * 1_000_000;
+const SMB_PACKET_BYTES: usize = meshspan_smb::DIRECT_TCP_MAX_PAYLOAD_LENGTH;
+const SMB_INACTIVITY_TIMEOUT: Duration = Duration::from_mins(5);
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
@@ -121,6 +128,11 @@ struct StorageRuntimeComposition {
     readiness: Arc<RuntimeReadiness>,
     targets: Arc<Mutex<StorageTargetRuntime>>,
     native_filesystem: NativeFilesystemRuntime,
+}
+
+struct ApplianceServiceComposition {
+    router: Router,
+    smb_connections: SmbConnectionFactory,
 }
 
 struct DaemonNodeRuntime {
@@ -233,22 +245,55 @@ impl PrivateNetworkStarter {
         let authority = self.authority.clone();
         let state_directory = self.state_directory.clone();
         let runtime = self.runtime.clone();
+        let permits = Arc::new(tokio::sync::Semaphore::new(PRIVATE_CONTROL_CONCURRENCY));
+        let mutations = Arc::new(tokio::sync::Semaphore::new(1));
         self.runtime.spawn(async move {
             while let Some(request) = requests.recv().await {
-                let response = handle_private_control(
-                    &network,
-                    &authority,
-                    &state_directory,
-                    &runtime,
-                    &request,
-                )
-                .await;
-                if let Ok(response) = response {
-                    let _closed = request.respond.send(response);
-                }
+                let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
+                    break;
+                };
+                let network = network.clone();
+                let authority = authority.clone();
+                let state_directory = state_directory.clone();
+                let runtime = runtime.clone();
+                let mutation_permit = (!private_control_is_fetch(&request))
+                    .then(|| Arc::clone(&mutations).acquire_owned())
+                    .map(|permit| async move { permit.await.ok() });
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let _mutation_permit = match mutation_permit {
+                        Some(permit) => match permit.await {
+                            Some(permit) => Some(permit),
+                            None => return,
+                        },
+                        None => None,
+                    };
+                    let response = handle_private_control(
+                        &network,
+                        &authority,
+                        &state_directory,
+                        &runtime,
+                        &request,
+                    )
+                    .await;
+                    if let Ok(response) = response {
+                        let _closed = request.respond.send(response);
+                    }
+                });
             }
         });
     }
+}
+
+fn private_control_is_fetch(request: &PeerControlRequest) -> bool {
+    matches!(
+        request.envelope.as_inner().message.as_ref(),
+        Some(
+            Message::FetchNamespaceHistoryPage(_)
+                | Message::FetchNamespaceHistoryObject(_)
+                | Message::FetchNativeContentLayout(_)
+        )
+    )
 }
 
 struct NetworkStartingSetup<C> {
@@ -319,12 +364,12 @@ where
     let mut node = initialise_daemon_node(config, started_at).await?;
     let private_authority = start_private_authority(&mut node, config, started_at).await?;
     let (restart, restart_requests) = tokio::sync::mpsc::unbounded_channel();
-    let router =
-        compose_appliance_router(&mut node, &private_authority, config, restart, started_at)?;
+    let services =
+        compose_appliance_services(&mut node, &private_authority, config, restart, started_at)?;
     serve_daemon_cycle(
         config,
         &node.local_state,
-        router,
+        services,
         private_authority.authority,
         private_authority.authority_task,
         restart_requests,
@@ -461,13 +506,13 @@ async fn start_private_authority(
     })
 }
 
-fn compose_appliance_router(
+fn compose_appliance_services(
     node: &mut DaemonNodeRuntime,
     private_authority: &PrivateAuthorityRuntime,
     config: &HeadlessDaemonConfig,
     restart: tokio::sync::mpsc::UnboundedSender<()>,
     started_at: UnixMicros,
-) -> Result<Router, DaemonProcessError> {
+) -> Result<ApplianceServiceComposition, DaemonProcessError> {
     let StorageRuntimeComposition {
         readiness,
         targets: storage_targets,
@@ -487,6 +532,21 @@ fn compose_appliance_router(
     spawn_data_plane_runtime(Arc::clone(&storage_targets), received_data_streams);
     spawn_storage_target_reconciler(Arc::clone(&storage_targets));
     let gateway = GatewaySessionIdentity::new(node.local_state.node_id(), 1)?;
+    let smb_connections = SmbConnectionFactory::new(
+        SmbConnectionFactoryConfiguration {
+            authority_database: node
+                .local_state
+                .state_directory()
+                .join(ROOT_AUTHORITY_DATABASE),
+            wrapping_key_path: node.local_state.wrapping_key_path(),
+            partition_id: open_root_repository(&node.local_state, started_at)?.partition_id(),
+            node_id: node.local_state.node_id(),
+        },
+        private_authority.authority.clone(),
+        Arc::clone(&node.private_network),
+        tokio::runtime::Handle::current(),
+        native_filesystem.clone(),
+    );
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
         .merge(setup_and_enrolment_routes(
@@ -512,7 +572,10 @@ fn compose_appliance_router(
             started_at,
             native_filesystem,
         )?);
-    Ok(router)
+    Ok(ApplianceServiceComposition {
+        router,
+        smb_connections,
+    })
 }
 
 fn setup_and_enrolment_routes(
@@ -591,7 +654,7 @@ fn setup_and_enrolment_routes(
 async fn serve_daemon_cycle<F>(
     config: &HeadlessDaemonConfig,
     local_state: &DaemonLocalState,
-    router: Router,
+    services: ApplianceServiceComposition,
     authority: MetadataAuthorityHandle,
     authority_task: JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
     mut restart_requests: tokio::sync::mpsc::UnboundedReceiver<()>,
@@ -600,10 +663,15 @@ async fn serve_daemon_cycle<F>(
 where
     F: Future<Output = ()> + Send,
 {
-    let server = HttpsServer::bind(
+    let https_server = HttpsServer::bind(
         config.https_listen(),
         local_state.bootstrap_server_config()?,
-        router,
+        services.router,
+    )
+    .await?;
+    let smb_server = SmbServer::bind(
+        config.smb_listen(),
+        SmbServerLimits::new(SMB_PACKET_BYTES, SMB_INACTIVITY_TIMEOUT)?,
     )
     .await?;
     let restart_requested = Arc::new(AtomicBool::new(false));
@@ -617,10 +685,46 @@ where
             }
         }
     };
-    let server_result = server.run_until(lifecycle).await;
+    let (listener_shutdown, _) = tokio::sync::watch::channel(false);
+    let https_shutdown = listener_shutdown.subscribe();
+    let smb_shutdown = listener_shutdown.subscribe();
+    let mut https_task = tokio::spawn(https_server.run_until(wait_for_shutdown(https_shutdown)));
+    let connection_factory = services.smb_connections;
+    let mut smb_task = tokio::spawn(smb_server.run_until(
+        move || connection_factory.open(),
+        wait_for_shutdown(smb_shutdown),
+    ));
+    let first_completion = tokio::select! {
+        biased;
+        () = lifecycle => ListenerCompletion::Lifecycle,
+        result = &mut https_task => ListenerCompletion::Https(result),
+        result = &mut smb_task => ListenerCompletion::Smb(result),
+    };
+    let _ = listener_shutdown.send(true);
+    match first_completion {
+        ListenerCompletion::Lifecycle => {
+            https_task
+                .await
+                .map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
+            smb_task
+                .await
+                .map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
+        }
+        ListenerCompletion::Https(result) => {
+            result.map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
+            smb_task
+                .await
+                .map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
+        }
+        ListenerCompletion::Smb(result) => {
+            result.map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
+            https_task
+                .await
+                .map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
+        }
+    }
     let shutdown_result = authority.shutdown().await;
     let authority_result = authority_task.await;
-    server_result?;
     shutdown_result?;
     authority_result.map_err(|_| DaemonProcessError::AuthorityTaskStopped)??;
     Ok(if restart_requested.load(Ordering::Acquire) {
@@ -628,6 +732,23 @@ where
     } else {
         DaemonCycleExit::Shutdown
     })
+}
+
+enum ListenerCompletion {
+    Lifecycle,
+    Https(Result<Result<(), HttpsServerError>, tokio::task::JoinError>),
+    Smb(Result<Result<(), SmbServerError>, tokio::task::JoinError>),
+}
+
+async fn wait_for_shutdown(mut receiver: tokio::sync::watch::Receiver<bool>) {
+    if *receiver.borrow() {
+        return;
+    }
+    while receiver.changed().await.is_ok() {
+        if *receiver.borrow() {
+            return;
+        }
+    }
 }
 
 fn compose_storage_runtime(
@@ -1021,6 +1142,26 @@ fn authenticated_administration_routes(
     private_network: &Arc<PrivateConsensusRuntime>,
     storage_targets: Arc<Mutex<StorageTargetRuntime>>,
 ) -> Result<Router, DaemonProcessError> {
+    let security =
+        security_administration_routes(local_state, authority, gateway, now, private_network)?;
+    let resources = resource_administration_routes(
+        local_state,
+        authority,
+        gateway,
+        now,
+        private_network,
+        storage_targets,
+    )?;
+    Ok(security.merge(resources))
+}
+
+fn security_administration_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    private_network: &Arc<PrivateConsensusRuntime>,
+) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
         .merge(identity_administration_api_router(
             IdentityAdministrationService::new(
@@ -1052,6 +1193,40 @@ fn authenticated_administration_routes(
                 local_state.https_certificate_fingerprint(),
             ),
         )?)
+        .merge(permission_administration_api_router(
+            PermissionAdministrationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+            ),
+        )?)
+        .merge(recovery_bundle_verification_api_router(
+            RecoveryBundleVerificationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+                local_state.pending_recovery_bundle_path(),
+            ),
+        )?))
+}
+
+fn resource_administration_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    private_network: &Arc<PrivateConsensusRuntime>,
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+) -> Result<Router, DaemonProcessError> {
+    Ok(Router::new()
         .merge(volume_administration_api_router(
             VolumeAdministrationService::new(
                 open_authentication_authority(
@@ -1064,8 +1239,8 @@ fn authenticated_administration_routes(
                 OperatingSystemRandom,
             ),
         )?)
-        .merge(permission_administration_api_router(
-            PermissionAdministrationService::new(
+        .merge(smb_export_administration_api_router(
+            SmbExportAdministrationService::new(
                 open_authentication_authority(
                     local_state,
                     authority,
@@ -1105,18 +1280,6 @@ fn authenticated_administration_routes(
                     now,
                 )?,
                 gateway,
-            ),
-        )?)
-        .merge(recovery_bundle_verification_api_router(
-            RecoveryBundleVerificationService::new(
-                open_authentication_authority(
-                    local_state,
-                    authority,
-                    Arc::clone(private_network),
-                    now,
-                )?,
-                gateway,
-                local_state.pending_recovery_bundle_path(),
             ),
         )?))
 }
@@ -2104,6 +2267,9 @@ pub enum DaemonProcessError {
     /// Manager-only volume-administration API construction failed.
     #[error("daemon volume-administration API failed")]
     VolumeAdministrationApi(#[from] VolumeAdministrationApiError),
+    /// Explicit SMB-export administration API construction failed.
+    #[error("daemon SMB-export administration API failed")]
+    SmbExportAdministrationApi(#[from] SmbExportAdministrationApiError),
     /// Manager-only permission-administration API construction failed.
     #[error("daemon permission-administration API failed")]
     PermissionAdministrationApi(#[from] PermissionAdministrationApiError),
@@ -2122,6 +2288,15 @@ pub enum DaemonProcessError {
     /// The HTTPS listener failed.
     #[error("daemon HTTPS listener failed")]
     Https(#[from] HttpsServerError),
+    /// The embedded SMB listener failed.
+    #[error("daemon SMB listener failed")]
+    Smb(#[from] SmbServerError),
+    /// The embedded SMB listener policy is invalid.
+    #[error("daemon SMB listener policy failed")]
+    SmbConfiguration(#[from] SmbServerConfigurationError),
+    /// A public listener task ended without a typed result.
+    #[error("daemon listener task stopped unexpectedly")]
+    ListenerTaskStopped,
     /// The authority task ended without a typed result.
     #[error("daemon metadata authority task stopped unexpectedly")]
     AuthorityTaskStopped,

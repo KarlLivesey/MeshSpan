@@ -15,8 +15,8 @@ use meshspan_domain::{
     FileVersionId, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId,
     MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId, ObjectId,
     ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, RecoveryCodeId, Revision,
-    Rights, RoleId, ScopeId, SessionId, SnapshotId, SnapshotScheduleId, TagId, TargetId,
-    UnixMicros, VolumeId,
+    Rights, RoleId, ScopeId, SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId,
+    TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
 use sha2::{Digest, Sha256};
@@ -163,6 +163,10 @@ pub enum AuthoritativeCommand {
     CreateFaultGroup(CreateFaultGroup),
     /// Adds or removes one machine from one shared-failure group.
     SetHostFaultGroupMembership(SetHostFaultGroupMembership),
+    /// Publishes one volume or folder through explicitly selected SMB gateways.
+    PublishSmbExport(PublishSmbExport),
+    /// Withdraws one exact SMB export while retaining its audit history.
+    WithdrawSmbExport(WithdrawSmbExport),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -309,6 +313,8 @@ impl AuthoritativeCommand {
             Self::RegisterStorageTarget(value) => value.update_digest(digest),
             Self::CreateFaultGroup(value) => value.update_digest(digest),
             Self::SetHostFaultGroupMembership(value) => value.update_digest(digest),
+            Self::PublishSmbExport(value) => value.update_digest(digest),
+            Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -1684,6 +1690,41 @@ pub struct SetHostFaultGroupMembership {
     pub present: bool,
 }
 
+/// Explicit gateway selection for one SMB export.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SmbExportGatewaySelection {
+    /// Every currently eligible gateway may publish the export.
+    AllEligible,
+    /// Only the non-empty bounded node set may publish the export.
+    Selected(BoundedItems<NodeId>),
+}
+
+/// Replicated publication of one logical directory as an SMB share.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishSmbExport {
+    /// Stable export identity.
+    pub export_id: SmbExportId,
+    /// Volume containing the exported root.
+    pub volume_id: VolumeId,
+    /// Existing folder exposed as the share root.
+    pub root_object_id: ObjectId,
+    /// User-visible case-insensitive share name.
+    pub share_name: RecordName,
+    /// Eligible gateway policy.
+    pub gateways: SmbExportGatewaySelection,
+    /// Whether every post-tree packet must be encrypted.
+    pub encryption_required: bool,
+}
+
+/// Audited withdrawal of one current SMB export.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WithdrawSmbExport {
+    /// Existing active export.
+    pub export_id: SmbExportId,
+    /// Non-blank bounded human audit reason.
+    pub reason: String,
+}
+
 /// First public secret-wrapping-key generation for one exact active node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RegisterNodeWrappingKey {
@@ -2696,6 +2737,37 @@ digest_simple_record!(
         digest.identifier(value.group_id.as_bytes());
         digest.identifier(value.host_id.as_bytes());
         digest.boolean(value.present);
+    }
+);
+digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {
+    digest.identifier(value.export_id.as_bytes());
+    digest.identifier(value.volume_id.as_bytes());
+    digest.identifier(value.root_object_id.as_bytes());
+    digest.name(&value.share_name);
+    match &value.gateways {
+        SmbExportGatewaySelection::AllEligible => digest.byte(1),
+        SmbExportGatewaySelection::Selected(nodes) => {
+            digest.byte(2);
+            let mut identifiers = nodes
+                .as_slice()
+                .iter()
+                .map(|node| node.as_bytes())
+                .collect::<Vec<_>>();
+            identifiers.sort_unstable();
+            digest.unsigned(u64::try_from(identifiers.len()).unwrap_or(u64::MAX));
+            for identifier in identifiers {
+                digest.identifier(identifier);
+            }
+        }
+    }
+    digest.boolean(value.encryption_required);
+});
+digest_simple_record!(
+    WithdrawSmbExport,
+    b"withdraw-smb-export",
+    |value, digest| {
+        digest.identifier(value.export_id.as_bytes());
+        digest.bytes(value.reason.as_bytes());
     }
 );
 digest_simple_record!(

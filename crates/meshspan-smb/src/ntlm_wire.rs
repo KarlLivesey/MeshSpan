@@ -17,6 +17,8 @@ const MAXIMUM_AV_PAIRS: usize = 32;
 
 const NEGOTIATE_UNICODE: u32 = 0x0000_0001;
 const REQUEST_TARGET: u32 = 0x0000_0004;
+const NEGOTIATE_SIGN: u32 = 0x0000_0010;
+const NEGOTIATE_SEAL: u32 = 0x0000_0020;
 const NEGOTIATE_DATAGRAM: u32 = 0x0000_0040;
 const NEGOTIATE_LM_KEY: u32 = 0x0000_0080;
 const NEGOTIATE_NTLM: u32 = 0x0000_0200;
@@ -42,6 +44,9 @@ const SERVER_FLAGS: u32 = NEGOTIATE_UNICODE
     | TARGET_TYPE_SERVER
     | NEGOTIATE_EXTENDED_SESSION_SECURITY
     | NEGOTIATE_TARGET_INFO;
+const SUPPORTED_OPTIONAL_CLIENT_FLAGS: u32 =
+    NEGOTIATE_SIGN | NEGOTIATE_SEAL | NEGOTIATE_128 | NEGOTIATE_56;
+const CHALLENGE_ONLY_FLAGS: u32 = TARGET_TYPE_SERVER | NEGOTIATE_TARGET_INFO;
 
 const MSV_AV_EOL: u16 = 0;
 const MSV_AV_NB_COMPUTER_NAME: u16 = 1;
@@ -98,7 +103,7 @@ pub struct NtlmChallengeConfig<'a> {
 pub struct NtlmChallenge {
     message: Vec<u8>,
     server_challenge: [u8; 8],
-    flags: u32,
+    authenticate_required_flags: u32,
     required_target_info: Vec<AvPair>,
 }
 
@@ -127,11 +132,7 @@ impl NtlmChallenge {
             required_target_info.push(AvPair::text(MSV_AV_DNS_DOMAIN_NAME, name)?);
         }
         let target_info = encode_av_pairs(&required_target_info)?;
-        let flags = SERVER_FLAGS
-            | negotiate.flags
-                & (NEGOTIATE_128 | NEGOTIATE_56)
-                & !NEGOTIATE_KEY_EXCHANGE
-                & !NEGOTIATE_VERSION;
+        let flags = SERVER_FLAGS | negotiate.flags & SUPPORTED_OPTIONAL_CLIENT_FLAGS;
         let target_name_offset = CHALLENGE_FIXED_LENGTH;
         let target_info_offset = target_name_offset
             .checked_add(target_name.len())
@@ -151,7 +152,7 @@ impl NtlmChallenge {
         Ok(Self {
             message,
             server_challenge: config.server_challenge,
-            flags,
+            authenticate_required_flags: flags & !CHALLENGE_ONLY_FLAGS,
             required_target_info,
         })
     }
@@ -182,7 +183,7 @@ impl<'a> NtlmAuthenticate<'a> {
     pub fn parse(message: &'a [u8], challenge: &NtlmChallenge) -> Result<Self, NtlmWireError> {
         validate_message(message, AUTHENTICATE_MESSAGE, AUTHENTICATE_FIXED_LENGTH)?;
         let flags = read_u32(message, 60)?;
-        if flags & challenge.flags != challenge.flags
+        if flags & challenge.authenticate_required_flags != challenge.authenticate_required_flags
             || flags & FORBIDDEN_CLIENT_FLAGS != 0
             || flags & NEGOTIATE_KEY_EXCHANGE != 0
         {
@@ -390,12 +391,10 @@ fn validate_client_target_info(response: &[u8], required: &[AvPair]) -> Result<(
     let client_challenge = response
         .get(16..)
         .ok_or(NtlmWireError::InvalidNtlmV2Response)?;
-    let av_end = client_challenge
-        .len()
-        .checked_sub(4)
-        .filter(|end| *end >= 28)
+    let target_info = client_challenge
+        .get(28..)
         .ok_or(NtlmWireError::InvalidNtlmV2Response)?;
-    let pairs = parse_av_pairs(&client_challenge[28..av_end])?;
+    let pairs = parse_client_av_pairs(target_info)?;
     for expected in required {
         if !pairs
             .iter()
@@ -405,6 +404,15 @@ fn validate_client_target_info(response: &[u8], required: &[AvPair]) -> Result<(
         }
     }
     Ok(())
+}
+
+fn parse_client_av_pairs(bytes: &[u8]) -> Result<Vec<AvPair>, NtlmWireError> {
+    parse_av_pairs(bytes).or_else(|_| {
+        let without_reserved = bytes
+            .strip_suffix(&[0; 4])
+            .ok_or(NtlmWireError::InvalidTargetInfo)?;
+        parse_av_pairs(without_reserved)
+    })
 }
 
 fn parse_av_pairs(mut bytes: &[u8]) -> Result<Vec<AvPair>, NtlmWireError> {
@@ -516,8 +524,8 @@ mod tests {
     use crate::NtlmPasswordVerifier;
 
     use super::{
-        NtlmAuthenticate, NtlmChallenge, NtlmChallengeConfig, NtlmNegotiate, NtlmWireError,
-        SERVER_FLAGS,
+        NEGOTIATE_SEAL, NEGOTIATE_SIGN, NtlmAuthenticate, NtlmChallenge, NtlmChallengeConfig,
+        NtlmNegotiate, NtlmWireError, SERVER_FLAGS,
     };
 
     #[test]
@@ -582,6 +590,38 @@ mod tests {
             NtlmAuthenticate::parse(&changed, &challenge),
             Err(NtlmWireError::InvalidSecurityBuffer)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn samba_sign_and_seal_offer_is_preserved_in_the_challenge()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut message = negotiate_message();
+        let samba_flags = 0x6208_8235_u32;
+        message[12..16].copy_from_slice(&samba_flags.to_le_bytes());
+        message.resize(40, 0);
+        let challenge = NtlmChallenge::encode(
+            NtlmNegotiate::parse(&message)?,
+            NtlmChallengeConfig {
+                server_challenge: hex8("0123456789abcdef"),
+                computer_name: "Server",
+                domain_name: "Domain",
+                dns_computer_name: None,
+                dns_domain_name: None,
+            },
+        )?;
+        let challenge_flags = u32::from_le_bytes(challenge.message()[20..24].try_into()?);
+
+        assert_eq!(challenge_flags & (NEGOTIATE_SIGN | NEGOTIATE_SEAL), 0x30);
+        let mut authenticate_message = authenticate_message();
+        authenticate_message[60..64].copy_from_slice(&0x2208_8235_u32.to_le_bytes());
+        let response_length =
+            usize::from(u16::from_le_bytes(authenticate_message[20..22].try_into()?));
+        let compact_length = response_length - 4;
+        authenticate_message[20..22].copy_from_slice(&u16::try_from(compact_length)?.to_le_bytes());
+        authenticate_message[22..24].copy_from_slice(&u16::try_from(compact_length)?.to_le_bytes());
+        authenticate_message.truncate(authenticate_message.len() - 4);
+        NtlmAuthenticate::parse(&authenticate_message, &challenge)?;
         Ok(())
     }
 

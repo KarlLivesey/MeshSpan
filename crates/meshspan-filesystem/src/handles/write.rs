@@ -88,9 +88,34 @@ pub(crate) fn admit_write(
     let handle = load_active(&transaction, request.handle_id, request.observed_at)?;
     validate_authority(request, &handle)?;
     reject_conflicting_lock(&transaction, request, &handle)?;
+    advance_working_length(&transaction, request, &handle)?;
     let receipt = persist(&transaction, request, request_digest)?;
     transaction.commit()?;
     Ok(receipt)
+}
+
+fn advance_working_length(
+    transaction: &rusqlite::Transaction<'_>,
+    request: HandleWriteAdmissionRequest,
+    handle: &ActiveHandle,
+) -> Result<(), HandleError> {
+    let working_length = handle.working_logical_length.max(request.range.end());
+    let changed = transaction.execute(
+        "UPDATE open_handles SET working_logical_length = ?1
+         WHERE handle_id = ?2 AND state = 1 AND handle_fence = ?3
+           AND lease_expires_at > ?4",
+        params![
+            to_i64(working_length)?,
+            request.handle_id.as_bytes().as_slice(),
+            to_i64(request.handle_fence)?,
+            request.observed_at.get(),
+        ],
+    )?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(HandleError::StaleHandle)
+    }
 }
 
 fn validate_request(request: HandleWriteAdmissionRequest) -> Result<(), HandleError> {

@@ -1152,6 +1152,7 @@ pub(crate) fn reject_operation_collision(
           OR EXISTS(SELECT 1 FROM namespace_rename_operations WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
+          OR EXISTS(SELECT 1 FROM handle_information_operations WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM handle_flush_plans WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM version_reachability_scans WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM retired_manifest_roots WHERE retirement_operation_id = ?1)

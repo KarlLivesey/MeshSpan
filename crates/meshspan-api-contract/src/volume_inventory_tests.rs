@@ -73,6 +73,8 @@ fn valid_response() -> Result<ListVolumesResponse, Box<dyn std::error::Error>> {
     Ok(ListVolumesResponse {
         volumes: vec![VolumeSummary {
             volume_id: VolumeId::from_uuid_bytes(versioned(1)).ok_or("invalid volume")?,
+            root_object_id: crate::ObjectId::from_uuid_bytes(versioned(2))
+                .ok_or("invalid root object")?,
             name: "Shared files".to_owned(),
             state: VolumeState::Active,
             effective_rights: vec![

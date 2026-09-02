@@ -10,13 +10,14 @@ use meshspan_metadata::{
 };
 use meshspan_smb::{
     EncryptionCipher, NtlmAuthenticate, NtlmChallenge, NtlmSessionBaseKey, Smb311PreauthHash,
-    Smb311SessionKeys,
+    Smb311SessionKeys, SmbSessionAuthenticator,
 };
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::{
-    AuthenticationRootAuthority, AuthenticationRootLoadingService, AuthenticationRuntimeKeys,
-    SecretGenerationDecryptor, SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey,
+    AuthenticationRootAuthority, AuthenticationRootLoadingService, SecretGenerationDecryptor,
+    SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey,
 };
 
 /// Current replicated SMB authentication-material query boundary.
@@ -71,8 +72,7 @@ where
         generation: u64,
     ) -> Result<SmbVerifierEnvelopeKey, SmbAuthenticationError> {
         self.loader
-            .load_generation(generation)
-            .map(AuthenticationRuntimeKeys::into_smb_verifier_envelope_key)
+            .load_smb_verifier_generation(generation)
             .map_err(|error| match error {
                 crate::AuthenticationRootLoadingError::NotFound
                 | crate::AuthenticationRootLoadingError::NotRecipient
@@ -106,6 +106,43 @@ pub struct SmbAuthenticatedIdentity {
 pub struct SmbAuthentication {
     identity: SmbAuthenticatedIdentity,
     session_base_key: NtlmSessionBaseKey,
+    credential: SmbCredentialEvidence,
+}
+
+/// Credential evidence retained by an authenticated SMB session for common live authority checks.
+///
+/// This type deliberately implements neither `Debug`, `Clone`, `Copy` nor `Display`, and clears
+/// its digest on drop.
+pub struct SmbCredentialEvidence {
+    digest: Zeroizing<[u8; 32]>,
+}
+
+/// Common identity and live credential evidence retained by one established SMB session.
+pub struct SmbSessionAuthority {
+    identity: SmbAuthenticatedIdentity,
+    credential: SmbCredentialEvidence,
+}
+
+impl SmbSessionAuthority {
+    /// Returns the non-secret authenticated principal and revision evidence.
+    #[must_use]
+    pub const fn identity(&self) -> SmbAuthenticatedIdentity {
+        self.identity
+    }
+
+    /// Returns the credential digest for one short-lived common access context.
+    #[must_use]
+    pub fn credential_digest(&self) -> [u8; 32] {
+        self.credential.digest()
+    }
+}
+
+impl SmbCredentialEvidence {
+    /// Copies the digest into one short-lived common filesystem access context.
+    #[must_use]
+    pub fn digest(&self) -> [u8; 32] {
+        *self.digest
+    }
 }
 
 impl SmbAuthentication {
@@ -124,10 +161,17 @@ impl SmbAuthentication {
         self,
         preauth_hash: &Smb311PreauthHash,
         cipher: EncryptionCipher,
-    ) -> Result<(SmbAuthenticatedIdentity, Smb311SessionKeys), SmbAuthenticationError> {
+    ) -> Result<
+        (
+            SmbAuthenticatedIdentity,
+            Smb311SessionKeys,
+            SmbCredentialEvidence,
+        ),
+        SmbAuthenticationError,
+    > {
         let keys = Smb311SessionKeys::derive(&self.session_base_key, preauth_hash, cipher)
             .map_err(|_| SmbAuthenticationError::State)?;
-        Ok((self.identity, keys))
+        Ok((self.identity, keys, self.credential))
     }
 }
 
@@ -189,7 +233,8 @@ where
                     invalid_envelope = true;
                     continue;
                 };
-                let Ok(session_base_key) = authenticate.verify(&verifier, challenge) else {
+                let Ok(session_base_key) = authenticate.verify(verifier.verifier(), challenge)
+                else {
                     continue;
                 };
                 if matched.is_some() {
@@ -198,6 +243,9 @@ where
                 matched = Some(SmbAuthentication {
                     identity: identity(material),
                     session_base_key,
+                    credential: SmbCredentialEvidence {
+                        digest: Zeroizing::new(verifier.credential_digest()),
+                    },
                 });
             }
         }
@@ -206,6 +254,41 @@ where
         } else {
             SmbAuthenticationError::Denied
         })
+    }
+}
+
+impl<A, K> SmbSessionAuthenticator for SmbAuthenticationService<A, K>
+where
+    A: SmbAuthenticationAuthority,
+    K: SmbVerifierKeySource,
+{
+    type Identity = SmbSessionAuthority;
+    type Verified = SmbAuthentication;
+    type Error = SmbAuthenticationError;
+
+    fn verify(
+        &mut self,
+        authenticate: &NtlmAuthenticate<'_>,
+        challenge: &NtlmChallenge,
+        observed_at: UnixMicros,
+    ) -> Result<Self::Verified, Self::Error> {
+        self.authenticate(authenticate, challenge, observed_at)
+    }
+
+    fn establish(
+        &mut self,
+        verified: Self::Verified,
+        preauth: &Smb311PreauthHash,
+        cipher: EncryptionCipher,
+    ) -> Result<(Self::Identity, Smb311SessionKeys), Self::Error> {
+        let (identity, keys, credential) = verified.into_session_keys(preauth, cipher)?;
+        Ok((
+            SmbSessionAuthority {
+                identity,
+                credential,
+            },
+            keys,
+        ))
     }
 }
 
@@ -323,7 +406,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let cipher = SmbVerifierCipher::new(key()?, 7)?;
-        let ciphertext = cipher.encrypt(binding, &NtlmPasswordVerifier::derive("Password")?)?;
+        let ciphertext =
+            cipher.encrypt(binding, &NtlmPasswordVerifier::derive("Password")?, [8; 32])?;
         let service = SmbAuthenticationService::new(
             FakeAuthority {
                 material: material(binding, ciphertext),
@@ -347,9 +431,10 @@ mod tests {
         assert_eq!(authenticated.identity().principal_id, binding.principal_id);
         let mut preauth = Smb311PreauthHash::new();
         preauth.update(b"exact negotiate and session transcript");
-        let (identity, keys) =
+        let (identity, keys, credential) =
             authenticated.into_session_keys(&preauth, EncryptionCipher::Aes128Gcm)?;
         assert_eq!(identity.method_id, binding.method_id);
+        assert_eq!(credential.digest(), [8; 32]);
         assert_eq!(keys.signing_key().len(), 16);
         assert_eq!(keys.outgoing_encryption_key().len(), 16);
         Ok(())

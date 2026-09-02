@@ -2,8 +2,8 @@
 
 use meshspan_contracts::{ShardIdentity, ShardReceipt};
 use meshspan_domain::{
-    ContentManifestId, EntropyError, OperationId, RandomSource, Revision, TargetId, UnixMicros,
-    VolumeId,
+    ContentManifestId, EntropyError, NodeId, OperationId, RandomSource, Revision, TargetId,
+    UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
@@ -284,6 +284,36 @@ fn portable_layout_import_resumes_rewraps_and_collects_only_local_receipts()
             })?,
         u32::try_from(super::repository::SCHEMA_VERSION)?
     );
+    Ok(())
+}
+
+#[test]
+fn remote_route_replay_ignores_observation_time_but_rejects_a_different_source()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source_directory = tempdir()?;
+    let fixture = export_committed_source_layout(source_directory.path())?;
+    let receiver_directory = tempdir()?;
+    let request = imported_request(fixture.manifest)?;
+    let mut receiver = DurableContentCatalog::open(receiver_directory.path(), UnixMicros::new(6))?;
+    receiver.begin_layout_import(request, fixture.header)?;
+    receiver.append_layout_import_page(request, fixture.header, &fixture.first_page)?;
+    receiver.append_layout_import_page(request, fixture.header, &fixture.second_page)?;
+    receiver.seal_layout_import(request, fixture.header)?;
+    let source = NodeId::from_bytes([41; 16])?;
+    let receipt = receipt(fixture.chunks[0], fixture.manifest.root_digest)?;
+
+    receiver.record_remote_shard_route(request, 0, source, receipt, UnixMicros::new(7))?;
+    receiver.record_remote_shard_route(request, 0, source, receipt, UnixMicros::new(8))?;
+    assert!(matches!(
+        receiver.record_remote_shard_route(
+            request,
+            0,
+            NodeId::from_bytes([42; 16])?,
+            receipt,
+            UnixMicros::new(8)
+        ),
+        Err(ContentCatalogError::Conflict)
+    ));
     Ok(())
 }
 

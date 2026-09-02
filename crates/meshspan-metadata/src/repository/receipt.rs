@@ -116,6 +116,8 @@ pub enum EntityKind {
     FaultGroup = 40,
     /// Desired machine membership in one shared-failure boundary.
     FaultGroupMembership = 41,
+    /// Explicit replicated SMB export desired state.
+    SmbExport = 42,
 }
 
 impl EntityKind {
@@ -162,6 +164,7 @@ impl EntityKind {
             39 => Ok(Self::RecoveryAuthority),
             40 => Ok(Self::FaultGroup),
             41 => Ok(Self::FaultGroupMembership),
+            42 => Ok(Self::SmbExport),
             _ => Err(RepositoryError::CorruptState),
         }
     }

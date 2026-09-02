@@ -2547,6 +2547,10 @@ export type ListVolumesResponse = {
      */
     revision: number;
     /**
+     * Stable root-directory identity used by connectors and administration.
+     */
+    root_object_id: string;
+    /**
      * Current authoritative lifecycle state.
      */
     state: "active" | "suspended" | "draining" | "retired";
@@ -2653,6 +2657,94 @@ export type OperationStatusResponse = {
    * Most recent authoritative lifecycle change.
    */
   updated_at_epoch_micros: number;
+};
+
+/**
+ * PublishSmbExportRequest
+ *
+ * Exact-retry request to publish one existing volume or folder explicitly.
+ */
+export type PublishSmbExportRequest = {
+  /**
+   * Whether every packet after tree connection must be encrypted.
+   */
+  encryption_required: boolean;
+  /**
+   * Explicit gateway publication policy.
+   */
+  gateways:
+    | {
+        kind: "all_eligible";
+      }
+    | {
+        kind: "selected";
+        /**
+         * Non-empty unique canonical node UUIDs.
+         */
+        node_ids: Array<string>;
+      };
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Stable existing directory exposed as the share root.
+   */
+  root_object_id: string;
+  /**
+   * Chosen case-insensitive share name.
+   */
+  share_name: string;
+};
+
+/**
+ * PublishSmbExportResponse
+ *
+ * Durable publication result.
+ */
+export type PublishSmbExportResponse = {
+  /**
+   * Committed tree-encryption policy.
+   */
+  encryption_required: boolean;
+  /**
+   * Stable export identity derived from that operation.
+   */
+  export_id: string;
+  /**
+   * Committed gateway policy.
+   */
+  gateways:
+    | {
+        kind: "all_eligible";
+      }
+    | {
+        kind: "selected";
+        /**
+         * Non-empty unique canonical node UUIDs.
+         */
+        node_ids: Array<string>;
+      };
+  /**
+   * Exact operation whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Authoritative committed revision.
+   */
+  revision: number;
+  /**
+   * Exact published directory.
+   */
+  root_object_id: string;
+  /**
+   * Case-preserved authoritative share name.
+   */
+  share_name: string;
+  /**
+   * Exact containing volume.
+   */
+  volume_id: string;
 };
 
 /**
@@ -3088,6 +3180,42 @@ export type UploadStatusResponse = {
    * Selected logical volume.
    */
   volume_id: string;
+};
+
+/**
+ * WithdrawSmbExportRequest
+ *
+ * Exact-retry audited withdrawal request.
+ */
+export type WithdrawSmbExportRequest = {
+  /**
+   * Client-generated idempotency identity.
+   */
+  operation_id: string;
+  /**
+   * Non-blank human audit reason.
+   */
+  reason: string;
+};
+
+/**
+ * WithdrawSmbExportResponse
+ *
+ * Durable export-withdrawal result.
+ */
+export type WithdrawSmbExportResponse = {
+  /**
+   * Stable withdrawn export identity.
+   */
+  export_id: string;
+  /**
+   * Exact operation whose committed result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Authoritative committed revision.
+   */
+  revision: number;
 };
 
 /**
@@ -3993,6 +4121,72 @@ export type ConfirmRecoveryBundleSavedResponses = {
 export type ConfirmRecoveryBundleSavedResponse =
   ConfirmRecoveryBundleSavedResponses[keyof ConfirmRecoveryBundleSavedResponses];
 
+export type WithdrawSmbExportData = {
+  /**
+   * Audited SMB export withdrawal
+   */
+  body: WithdrawSmbExportRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    export_id: string;
+  };
+  query?: never;
+  url: "/admin/smb-exports/{export_id}/withdrawals";
+};
+
+export type WithdrawSmbExportErrors = {
+  /**
+   * Invalid withdrawal request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Active SMB export not found
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * SMB export authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type WithdrawSmbExportError =
+  WithdrawSmbExportErrors[keyof WithdrawSmbExportErrors];
+
+export type WithdrawSmbExportResponses = {
+  /**
+   * SMB export durably withdrawn or exactly replayed
+   */
+  200: WithdrawSmbExportResponse;
+};
+
+export type WithdrawSmbExportResponse2 =
+  WithdrawSmbExportResponses[keyof WithdrawSmbExportResponses];
+
 export type ListStorageFoldersData = {
   body?: never;
   path?: never;
@@ -4758,6 +4952,72 @@ export type RevokePermissionGrantResponses = {
 
 export type RevokePermissionGrantResponse2 =
   RevokePermissionGrantResponses[keyof RevokePermissionGrantResponses];
+
+export type PublishSmbExportData = {
+  /**
+   * SMB export publication
+   */
+  body: PublishSmbExportRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+  };
+  query?: never;
+  url: "/admin/volumes/{volume_id}/smb-exports";
+};
+
+export type PublishSmbExportErrors = {
+  /**
+   * Invalid export request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Volume, directory or gateway not found
+   */
+  404: ApiError;
+  /**
+   * Share name or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * SMB export authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type PublishSmbExportError =
+  PublishSmbExportErrors[keyof PublishSmbExportErrors];
+
+export type PublishSmbExportResponses = {
+  /**
+   * SMB export durably published or exactly replayed
+   */
+  201: PublishSmbExportResponse;
+};
+
+export type PublishSmbExportResponse2 =
+  PublishSmbExportResponses[keyof PublishSmbExportResponses];
 
 export type GetHealthData = {
   body?: never;

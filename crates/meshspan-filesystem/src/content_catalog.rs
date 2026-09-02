@@ -369,7 +369,7 @@ impl DurableContentCatalog {
             .connection
             .query_row(
                 "SELECT source_node_id, source_provider_operation_id, target_id,
-                        target_generation, recorded_at
+                        target_generation
                  FROM content_remote_shard_routes
                  WHERE operation_id = ?1 AND chunk_index = ?2",
                 params![
@@ -382,7 +382,6 @@ impl DurableContentCatalog {
                         row.get::<_, Vec<u8>>(1)?,
                         row.get::<_, Vec<u8>>(2)?,
                         row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
                     ))
                 },
             )
@@ -392,7 +391,6 @@ impl DurableContentCatalog {
             receipt.operation_id.as_bytes().to_vec(),
             receipt.target_id.as_bytes().to_vec(),
             to_i64(receipt.target_generation)?,
-            recorded_at.get(),
         );
         if let Some(existing) = existing {
             return if existing == expected {

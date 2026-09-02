@@ -19,13 +19,16 @@ export type VolumeAdministrationClient = Pick<
   | "listUsers"
   | "listVolumes"
   | "listVolumePermissionGrants"
+  | "publishSmbExport"
   | "revokePermissionGrant"
+  | "withdrawSmbExport"
 >;
 
 export type AdminVolume = Readonly<{
   createdAtEpochMicros: number;
   name: string;
   revision: number;
+  rootObjectId: string;
   state: ListVolumesResponse["volumes"][number]["state"] | "committed";
   volumeId: string;
 }>;
@@ -58,13 +61,7 @@ export function createVolumeDirectory(
   });
 
   const applyPage = (page: ListVolumesResponse, append: boolean): void => {
-    const volumes = page.volumes.map((volume) => ({
-      createdAtEpochMicros: volume.created_at_epoch_micros,
-      name: volume.name,
-      revision: volume.revision,
-      state: volume.state,
-      volumeId: volume.volume_id,
-    }));
+    const volumes = page.volumes.map(publicVolume);
     setItems((current) => mergeVolumes(append ? current : [], volumes));
     setNextPageUrl(page.next_page_url);
   };
@@ -105,6 +102,7 @@ export function createVolumeDirectory(
             createdAtEpochMicros: response.created_at_epoch_micros,
             name: response.name,
             revision: response.revision,
+            rootObjectId: response.root_object_id,
             state: "committed",
             volumeId: response.volume_id,
           },
@@ -122,6 +120,19 @@ export function createVolumeDirectory(
     nextPageUrl,
     phase,
     recordCommitted,
+  };
+}
+
+function publicVolume(
+  volume: ListVolumesResponse["volumes"][number],
+): AdminVolume {
+  return {
+    createdAtEpochMicros: volume.created_at_epoch_micros,
+    name: volume.name,
+    revision: volume.revision,
+    rootObjectId: volume.root_object_id,
+    state: volume.state,
+    volumeId: volume.volume_id,
   };
 }
 

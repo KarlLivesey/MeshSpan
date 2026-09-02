@@ -17,6 +17,8 @@ pub enum ConnectorFailure {
     InvalidInput,
     /// The authenticated principal lacks required authority.
     AccessDenied,
+    /// Session authentication proof was not accepted.
+    AuthenticationRejected,
     /// The selected logical object does not exist.
     NotFound,
     /// Creation selected an existing name.
@@ -62,6 +64,7 @@ impl ConnectorFailure {
             Self::EndOfFile => NtStatus::EndOfFile,
             Self::InvalidInput => NtStatus::InvalidParameter,
             Self::AccessDenied => NtStatus::AccessDenied,
+            Self::AuthenticationRejected => NtStatus::LogonFailure,
             Self::NotFound => NtStatus::ObjectNameNotFound,
             Self::AlreadyExists => NtStatus::ObjectNameCollision,
             Self::IsDirectory => NtStatus::FileIsDirectory,
@@ -98,6 +101,8 @@ pub enum NtStatus {
     InvalidParameter = 0xc000_000d,
     /// Access is not authorised.
     AccessDenied = 0xc000_0022,
+    /// Session authentication proof was not accepted.
+    LogonFailure = 0xc000_006d,
     /// The selected path does not exist.
     ObjectNameNotFound = 0xc000_0034,
     /// The selected creation name already exists.
@@ -149,6 +154,10 @@ mod tests {
         let cases = [
             (ConnectorFailure::Success, NtStatus::Success),
             (ConnectorFailure::AccessDenied, NtStatus::AccessDenied),
+            (
+                ConnectorFailure::AuthenticationRejected,
+                NtStatus::LogonFailure,
+            ),
             (ConnectorFailure::NotFound, NtStatus::ObjectNameNotFound),
             (
                 ConnectorFailure::SharingViolation,

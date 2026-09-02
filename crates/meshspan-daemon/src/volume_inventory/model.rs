@@ -3,8 +3,8 @@
 //! Cursor and strict public projection for permission-filtered volumes.
 
 use meshspan_api_contract::{
-    ListVolumesResponse, NamespaceRight, VolumeCursor as ApiCursor, VolumeId as ApiVolumeId,
-    VolumeState as ApiState, VolumeSummary,
+    ListVolumesResponse, NamespaceRight, ObjectId as ApiObjectId, VolumeCursor as ApiCursor,
+    VolumeId as ApiVolumeId, VolumeState as ApiState, VolumeSummary,
 };
 use meshspan_domain::{Rights, VolumeId};
 use meshspan_metadata::{VolumeInventoryCursor, VolumeInventoryRecord};
@@ -58,6 +58,8 @@ fn public_volume(
     }
     Ok(VolumeSummary {
         volume_id: ApiVolumeId::from_uuid_bytes(record.volume_id.as_bytes())
+            .ok_or(VolumeInventoryError::Failed)?,
+        root_object_id: ApiObjectId::from_uuid_bytes(record.root_object_id.as_bytes())
             .ok_or(VolumeInventoryError::Failed)?,
         name: record.display_name,
         state: public_state(record.state)?,

@@ -61,6 +61,8 @@ import type {
   ListVolumePermissionGrantsResponse,
   ListVolumesResponse,
   OperationStatusResponse,
+  PublishSmbExportRequest,
+  PublishSmbExportResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -78,6 +80,8 @@ import type {
   SetFaultGroupMembershipResponse,
   StepUpCurrentSessionRequestWritable,
   UploadStatusResponse,
+  WithdrawSmbExportRequest,
+  WithdrawSmbExportResponse,
   WriteUploadRangeResponse,
 } from "./types.gen";
 import {
@@ -177,6 +181,9 @@ import {
   zListVolumesResponse2,
   zReadFilePath,
   zReadFileQuery,
+  zPublishSmbExportBody,
+  zPublishSmbExportPath,
+  zPublishSmbExportResponse2,
   zRevokeCurrentUserAuthenticationMethodBody,
   zRevokeCurrentUserAuthenticationMethodPath,
   zRevokeCurrentUserAuthenticationMethodResponse,
@@ -201,6 +208,9 @@ import {
   zWriteUploadRangeHeaders,
   zWriteUploadRangePath,
   zWriteUploadRangeResponse2,
+  zWithdrawSmbExportBody,
+  zWithdrawSmbExportPath,
+  zWithdrawSmbExportResponse2,
 } from "./zod.gen";
 import {
   appendQuery,
@@ -437,6 +447,16 @@ export interface MeshSpanFetchClient {
   ): Promise<CreateVolumeResponse>;
   listVolumes(request?: ListVolumesRequest): Promise<ListVolumesResponse>;
   listNextVolumes(nextPageUrl: string): Promise<ListVolumesResponse>;
+  publishSmbExport(
+    volumeId: string,
+    request: PublishSmbExportRequest,
+    csrfToken?: string,
+  ): Promise<PublishSmbExportResponse>;
+  withdrawSmbExport(
+    exportId: string,
+    request: WithdrawSmbExportRequest,
+    csrfToken?: string,
+  ): Promise<WithdrawSmbExportResponse>;
   createVolumePermissionGrant(
     volumeId: string,
     request: CreateVolumePermissionGrantRequest,
@@ -1121,6 +1141,50 @@ export function createMeshSpanFetchClient(
           { method: "GET" },
           zListVolumesResponse2,
         ),
+      );
+    },
+    async publishSmbExport(
+      volumeId,
+      request,
+      csrfToken,
+    ): Promise<PublishSmbExportResponse> {
+      const path = zPublishSmbExportPath.parse({ volume_id: volumeId });
+      const body = zPublishSmbExportBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/admin/volumes/{volume_id}/smb-exports",
+          "volume_id",
+          path.volume_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zPublishSmbExportResponse2,
+      );
+    },
+    async withdrawSmbExport(
+      exportId,
+      request,
+      csrfToken,
+    ): Promise<WithdrawSmbExportResponse> {
+      const path = zWithdrawSmbExportPath.parse({ export_id: exportId });
+      const body = zWithdrawSmbExportBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/admin/smb-exports/{export_id}/withdrawals",
+          "export_id",
+          path.export_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zWithdrawSmbExportResponse2,
       );
     },
     async createVolumePermissionGrant(

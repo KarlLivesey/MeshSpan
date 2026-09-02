@@ -377,6 +377,10 @@ API-001–005, EXT-006.
 **Depends on:** Stage 5. May proceed alongside Stage 6 only on a separate
 independent contributor branch; it merges before dependent storage work.
 
+**Status:** complete. The embedded SMB 3.1.1 implementation and its real-client,
+three-gateway failure proof pass locally. See
+[`stage-7-evidence.md`](stage-7-evidence.md).
+
 Build:
 
 - SMB 3.1.1-only profile inside the Rust daemon;

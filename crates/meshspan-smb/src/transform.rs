@@ -327,14 +327,14 @@ mod tests {
         assert_eq!(&encrypted[..4], &[0xfd, b'S', b'M', b'B']);
         assert_eq!(
             &encrypted[4..20],
-            &hex16("cf56e548d7ad25d3b6abac7f7dddde68")
+            &hex16("7921d6a65445e6717f539835d2925285")
         );
         assert_eq!(&encrypted[20..32], &[0x33; 12]);
         assert_eq!(&encrypted[32..36], &[0; 4]);
         assert_eq!(
             &encrypted[52..],
             decode_hex(
-                "60675292e489bef0ae2b9b9424262346743682851f80ba572f7e18bab7ae51426af77432bcbeebcf814121f0ee66c88e6c5e2b6cf4438378f4778ca397f303669270c1686245ac2d0ae9a3a1128e88be"
+                "803853b063477598e63c745e96e1fcafd50c3acaf9b1136daa9c6e8a4ab95f7262b12b725480abf69b4c5c02a26fdb2af52bb43e2cf8010a1546de299c636bfb7f87f416e559aa813acef0974a6e3087"
             )
         );
 

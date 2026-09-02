@@ -157,6 +157,66 @@ fn direct_headless_key_is_service_scoped_and_revoked_at_operation_time()
 }
 
 #[test]
+fn smb_api_key_uses_the_same_operation_time_permission_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = build_fixture(false)?;
+    let method_id = AuthenticationMethodId::from_bytes([73; 16])?;
+    let key_id = ApiKeyId::from_bytes([74; 16])?;
+    let key_digest = [75; 32];
+    let user = fixture.user;
+    apply(
+        &mut fixture,
+        user,
+        131,
+        AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
+            method_id,
+            principal_id: user,
+            label: "Shared SMB API key".to_owned(),
+            service_scope: AuthenticationService::Smb.scope_bit(),
+            expires_at: None,
+            credential: NewAuthenticationCredential::ApiKey {
+                key_id,
+                key_digest,
+                smb_verifier_ciphertext: Some(vec![1; 65]),
+                scopes: AuthenticationService::Smb.api_key_login_scope(),
+                valid_from: UnixMicros::new(100),
+            },
+        }),
+    )?;
+
+    let mut direct = request(&fixture, key_digest, Rights::READ_DATA, 200);
+    direct.authentication_service = AuthenticationService::Smb;
+    let AccessDecision::Granted(capability) = fixture.repository.evaluate_access(direct)? else {
+        return Err("current SMB key was unexpectedly denied".into());
+    };
+    assert_eq!(
+        capability.authentication,
+        AccessAuthentication::ApiKey(key_id)
+    );
+    assert_eq!(
+        capability.authentication_service,
+        AuthenticationService::Smb
+    );
+
+    apply(
+        &mut fixture,
+        user,
+        211,
+        AuthoritativeCommand::RevokeAuthenticationMethod(RevokeAuthenticationMethod {
+            method_id,
+            principal_id: user,
+            reason: "operator revoked shared SMB access".to_owned(),
+        }),
+    )?;
+    direct.now = UnixMicros::new(220);
+    assert_eq!(
+        fixture.repository.evaluate_access(direct)?,
+        AccessDecision::Denied(AccessDenial::AuthenticationUnavailable)
+    );
+    Ok(())
+}
+
+#[test]
 fn browser_session_access_binds_cookie_identity_and_csrf_for_mutations()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = build_fixture(false)?;

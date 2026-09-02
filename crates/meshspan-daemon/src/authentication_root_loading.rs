@@ -169,6 +169,32 @@ where
         self.load(mesh_id, generation)
     }
 
+    /// Loads the current recipient envelope while deriving the stable SMB key named by an older
+    /// verifier envelope.
+    ///
+    /// Recipient redistribution advances the protected-envelope generation without changing the
+    /// authentication root. Existing verifier ciphertext therefore remains usable by newly
+    /// authorised gateways. A genuine root-material rotation changes the derived key and makes
+    /// older verifier ciphertext fail authenticated decryption until it is replaced.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero or future verifier generations and any unavailable, unauthorised or malformed
+    /// current root generation.
+    pub fn load_smb_verifier_generation(
+        &self,
+        generation: u64,
+    ) -> Result<SmbVerifierEnvelopeKey, AuthenticationRootLoadingError> {
+        if generation == 0 {
+            return Err(AuthenticationRootLoadingError::InvalidInput);
+        }
+        let keys = self.load_latest()?;
+        if generation > keys.generation {
+            return Err(AuthenticationRootLoadingError::NotFound);
+        }
+        Ok(keys.into_smb_verifier_envelope_key())
+    }
+
     fn load(
         &self,
         mesh_id: MeshId,
@@ -359,7 +385,6 @@ fn derive(
     mac.update(domain);
     mac.update(&context.kind().to_be_bytes());
     mac.update(&context.id());
-    mac.update(&context.generation().to_be_bytes());
     let output: [u8; 32] = mac.finalize().into_bytes().into();
     if output == [0; 32] {
         Err(AuthenticationRootLoadingError::Failed)

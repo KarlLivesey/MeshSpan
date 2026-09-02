@@ -3,7 +3,10 @@
 //! Bounded SMB Direct TCP framing.
 
 const HEADER_LENGTH: usize = 4;
-const MAX_WIRE_PAYLOAD_LENGTH: usize = 0x00ff_ffff;
+/// Largest payload representable by the 24-bit Direct TCP length field.
+pub const DIRECT_TCP_MAX_PAYLOAD_LENGTH_U32: u32 = 0x00ff_ffff;
+/// Largest payload representable by the 24-bit Direct TCP length field on allocation boundaries.
+pub const DIRECT_TCP_MAX_PAYLOAD_LENGTH: usize = DIRECT_TCP_MAX_PAYLOAD_LENGTH_U32 as usize;
 
 /// A validated Direct TCP frame header.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,7 +103,7 @@ pub fn encode_direct_tcp_header(
     if payload_length == 0 {
         return Err(DirectTcpFrameError::EmptyPayload);
     }
-    if payload_length > MAX_WIRE_PAYLOAD_LENGTH {
+    if payload_length > DIRECT_TCP_MAX_PAYLOAD_LENGTH {
         return Err(DirectTcpFrameError::PayloadTooLarge);
     }
     let length = u32::try_from(payload_length).map_err(|_| DirectTcpFrameError::PayloadTooLarge)?;
@@ -109,7 +112,7 @@ pub fn encode_direct_tcp_header(
 }
 
 fn validate_maximum(maximum_payload_length: usize) -> Result<(), DirectTcpFrameError> {
-    if maximum_payload_length == 0 || maximum_payload_length > MAX_WIRE_PAYLOAD_LENGTH {
+    if maximum_payload_length == 0 || maximum_payload_length > DIRECT_TCP_MAX_PAYLOAD_LENGTH {
         Err(DirectTcpFrameError::InvalidMaximum)
     } else {
         Ok(())
@@ -167,6 +170,15 @@ mod tests {
             DirectTcpFrameHeader::parse([0, 0, 1, 0], 255),
             Err(DirectTcpFrameError::PayloadTooLarge)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn samba_negotiate_header_uses_the_full_24_bit_length_field() -> Result<(), DirectTcpFrameError>
+    {
+        let header = DirectTcpFrameHeader::parse([0, 0, 0, 0xf0], 0x00ff_ffff)?;
+
+        assert_eq!(header.payload_length(), 240);
         Ok(())
     }
 

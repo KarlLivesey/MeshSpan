@@ -197,6 +197,62 @@ fn writable_handle_stage_and_write_replay_together_after_restart()
 }
 
 #[test]
+fn length_retry_completes_the_private_stage_after_authority_only_crash()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let open = writable_open(23, 24, 200)?;
+    let mut service =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+    service.open_handle(&FilesystemHandleOpenRequest {
+        handle: open.clone(),
+        maximum_stage_bytes: Some(1_024),
+    })?;
+    drop(service);
+
+    let request = crate::SetHandleLengthRequest {
+        operation_id: OperationId::from_bytes([25; 16])?,
+        handle_id: open.handle_id,
+        handle_fence: 1,
+        principal_id: open.principal_id,
+        gateway_node_id: open.gateway_node_id,
+        logical_length: 42,
+        observed_at: UnixMicros::new(20),
+    };
+    let mut publications = VersionPublicationStore::open(directory.path(), UnixMicros::new(3))?;
+    assert_eq!(
+        publications.set_handle_length(request)?.disposition,
+        PublicationDisposition::Applied
+    );
+    drop(publications);
+
+    let mut recovered =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(4), UnusedPublisher)?;
+    let receipt = recovered.set_handle_length(request)?;
+    assert_eq!(
+        receipt.authority.disposition,
+        PublicationDisposition::Replayed
+    );
+    assert_eq!(receipt.stage.outcome, StageWriteOutcome::Applied);
+    assert_eq!(receipt.checkpoint.sequence, 1);
+    assert_eq!(receipt.checkpoint.logical_extent, 42);
+    recovered.write_handle(&handle_write(26, &open, 50, b"x")?)?;
+    drop(recovered);
+
+    let mut replayed =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(5), UnusedPublisher)?;
+    let receipt = replayed.set_handle_length(request)?;
+    assert_eq!(
+        receipt.authority.disposition,
+        PublicationDisposition::Replayed
+    );
+    assert_eq!(receipt.stage.outcome, StageWriteOutcome::Replayed);
+    assert_eq!(receipt.checkpoint.sequence, 2);
+    assert_eq!(receipt.checkpoint.logical_extent, 51);
+    Ok(())
+}
+
+#[test]
 fn stage_policy_matches_handle_access_without_partial_open()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;

@@ -33,7 +33,7 @@ struct StoredPlan {
     version: Vec<u8>,
     manifest: Vec<u8>,
     root_object: Vec<u8>,
-    expected_commit: Vec<u8>,
+    expected_commit: Option<Vec<u8>>,
     file_revision: Vec<u8>,
     root_revision: Vec<u8>,
     commit: Vec<u8>,
@@ -101,7 +101,8 @@ pub(crate) fn prepare(
         return Err(HandleError::OperationConflict);
     }
     reject_operation_collision(&transaction, request.operation_id)?;
-    let current = resolve_current(&transaction, branch_id, request)?;
+    let current =
+        resolve_current_or_initial(&transaction, branch_id, request, expected_target.object_id)?;
     if target_from_resolution(&current, request)? != expected_target {
         return Err(HandleError::StaleHandle);
     }
@@ -124,12 +125,6 @@ fn validate_request(
     request: &AdapterCreateFileRequest,
 ) -> Result<(), HandleError> {
     let stage_shape = request.desired_access.writes() == request.maximum_stage_bytes.is_some();
-    let creation_capable = matches!(
-        request.create_disposition,
-        CreateDisposition::CreateNew
-            | CreateDisposition::OpenOrCreate
-            | CreateDisposition::OverwriteOrCreate
-    );
     if context.now != request.observed_at
         || context.gateway_incarnation == 0
         || context.credential_digest == [0; 32]
@@ -138,7 +133,6 @@ fn validate_request(
         || request.content_deadline <= request.observed_at
         || request.content_deadline > request.lease_expires_at
         || !stage_shape
-        || !creation_capable
         || request.create_disposition.truncates_existing() && !request.desired_access.writes()
         || request.delete_on_close && !request.desired_access.deletes()
     {
@@ -154,6 +148,24 @@ fn resolve_current(
     request: &AdapterCreateFileRequest,
 ) -> Result<resolution::ResolvedNamespacePath, HandleError> {
     resolution::resolve(connection, branch_id, request.volume_id, &request.path)
+}
+
+fn resolve_current_or_initial(
+    connection: &Connection,
+    branch_id: BranchId,
+    request: &AdapterCreateFileRequest,
+    root_object: ObjectId,
+) -> Result<resolution::ResolvedNamespacePath, HandleError> {
+    if request.path.components().len() != 1 {
+        return resolve_current(connection, branch_id, request);
+    }
+    resolution::resolve_or_initial(
+        connection,
+        branch_id,
+        request.volume_id,
+        &request.path,
+        root_object,
+    )
 }
 
 fn target_from_resolution(
@@ -303,9 +315,7 @@ fn persist_plan(
             file.manifest_id.as_bytes().as_slice(),
             file.root_object_id.as_bytes().as_slice(),
             file.expected_namespace_commit_id
-                .ok_or(HandleError::Corrupt)?
-                .as_bytes()
-                .as_slice(),
+                .map(NamespaceCommitId::as_bytes),
             file.file_object_revision_id.as_bytes().as_slice(),
             file.root_object_revision_id.as_bytes().as_slice(),
             file.namespace_commit_id.as_bytes().as_slice(),
@@ -524,10 +534,11 @@ fn reconstruct_plan(
             content_authorization_revision: header.authorization_revision,
             content_deadline: request.content_deadline,
             root_object_id: identifier(&stored.root_object, ObjectId::from_bytes)?,
-            expected_namespace_commit_id: Some(identifier(
-                &stored.expected_commit,
-                NamespaceCommitId::from_bytes,
-            )?),
+            expected_namespace_commit_id: stored
+                .expected_commit
+                .as_deref()
+                .map(|value| identifier(value, NamespaceCommitId::from_bytes))
+                .transpose()?,
             expected_file_object_revision_id: None,
             file_object_revision_id: identifier(
                 &stored.file_revision,
@@ -607,7 +618,8 @@ fn reject_operation_collision(
           OR EXISTS(SELECT 1 FROM adapter_directory_plans WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM adapter_unlink_plans WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM adapter_rename_plans WHERE operation_id = ?1)
-          OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)",
+          OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
+          OR EXISTS(SELECT 1 FROM handle_information_operations WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;

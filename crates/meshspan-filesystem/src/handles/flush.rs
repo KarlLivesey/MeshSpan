@@ -415,6 +415,7 @@ fn validate_authority(
         || handle.gateway != request.gateway_node_id
         || handle.authorization_revision != request.authorization_revision
         || request.content_deadline > handle.lease_expires_at
+        || request.final_length != handle.working_logical_length
     {
         return Err(HandleError::StaleHandle);
     }
@@ -949,6 +950,7 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM handle_information_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),

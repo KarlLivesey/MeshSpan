@@ -136,6 +136,8 @@ fn page(next_page_url: Option<String>) -> Result<ListVolumesResponse, Box<dyn st
     Ok(ListVolumesResponse {
         volumes: vec![VolumeSummary {
             volume_id: VolumeId::from_uuid_bytes(versioned(1)).ok_or("invalid volume")?,
+            root_object_id: meshspan_api_contract::ObjectId::from_uuid_bytes(versioned(2))
+                .ok_or("invalid root object")?,
             name: "Shared files".to_owned(),
             state: VolumeState::Active,
             effective_rights: vec![

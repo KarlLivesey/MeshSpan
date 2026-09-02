@@ -38,7 +38,8 @@ mod upload_service_tests;
 pub use adapter::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
-    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
+    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest,
+    AdapterSetDispositionRequest, AdapterSetLengthRequest, AdapterStatRequest,
     AdapterUnlinkRequest, AdapterUnlockRequest, AdapterWriteFileRequest, BoundFilesystemAdapter,
     FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemFileAdapter,
     FilesystemUploadAdapter,
@@ -91,16 +92,17 @@ pub use directory::{
 };
 pub use handle_io::{
     FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
-    FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleOpenRequest,
-    FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
-    FilesystemHandleWriteRequest, HandleIoError, HandleReadError,
+    FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleLengthReceipt,
+    FilesystemHandleOpenRequest, FilesystemHandleReadReceipt, FilesystemHandleReadRequest,
+    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleIoError, HandleReadError,
 };
 pub use handles::{
     ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,
-    HandleAccess, HandleAuthorityTarget, HandleError, HandleLeaseReceipt, HandleLeaseRequest,
-    HandleShare, HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest, LockRangeReceipt,
-    LockRangeRequest, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, ReadyNamespaceDelete,
-    ReadyNamespaceDeletePage, UnlockRangeReceipt, UnlockRangeRequest,
+    HandleAccess, HandleAuthorityTarget, HandleError, HandleInformationReceipt, HandleLeaseReceipt,
+    HandleLeaseRequest, HandleShare, HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest,
+    LockRangeReceipt, LockRangeRequest, OpenHandleReceipt, OpenHandleRequest, RangeLockKind,
+    ReadyNamespaceDelete, ReadyNamespaceDeletePage, SetHandleDispositionRequest,
+    SetHandleLengthRequest, UnlockRangeReceipt, UnlockRangeRequest,
 };
 pub use name::{
     CompatibilityProfile, NamespaceComponent, NamespaceLimits, NamespaceNameError, NamespacePath,
@@ -142,8 +144,8 @@ pub use reconciliation::{
 pub use stage_store::{
     CompletedStage, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, StageAbortReceipt,
     StageAbortRequest, StageCompletionRequest, StageLeaseReceipt, StageLeaseRequest,
-    StageRangePage, StageRangePageRequest, StageRangeReadRequest, StageRegistration,
-    StageStoreError,
+    StageLengthReceipt, StageLengthRequest, StageRangePage, StageRangePageRequest,
+    StageRangeReadRequest, StageRegistration, StageStoreError,
 };
 pub use staging::{Checkpoint, StageOverlay, StageWrite, StageWriteError, StageWriteOutcome};
 pub use upload::{

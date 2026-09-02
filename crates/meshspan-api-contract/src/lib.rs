@@ -35,6 +35,8 @@ mod recovery_bundle_verification_validation;
 mod recovery_code_management;
 mod recovery_code_validation;
 mod schema;
+mod smb_export_administration;
+mod smb_export_administration_validation;
 mod storage_folder_administration;
 mod storage_folder_administration_validation;
 mod topology_administration;
@@ -57,6 +59,8 @@ mod identity_administration_tests;
 mod namespace_mutation_tests;
 #[cfg(test)]
 mod recovery_bundle_verification_tests;
+#[cfg(test)]
+mod smb_export_administration_tests;
 #[cfg(test)]
 mod volume_inventory_tests;
 
@@ -213,6 +217,15 @@ pub use recovery_code_validation::{
     MAX_CREATE_RECOVERY_CODES_BYTES, decode_create_recovery_codes_request,
     encode_create_recovery_codes_response, validate_create_recovery_codes_request_value,
     validate_create_recovery_codes_response_value,
+};
+pub use smb_export_administration::{
+    PublishSmbExportRequest, PublishSmbExportResponse, SmbExportGatewaySelection, SmbExportId,
+    SmbShareName, WithdrawSmbExportRequest, WithdrawSmbExportResponse,
+};
+pub use smb_export_administration_validation::{
+    MAX_PUBLISH_SMB_EXPORT_BYTES, MAX_WITHDRAW_SMB_EXPORT_BYTES, decode_publish_smb_export_request,
+    decode_withdraw_smb_export_request, encode_publish_smb_export_response,
+    encode_withdraw_smb_export_response,
 };
 pub use storage_folder_administration::{
     ListStorageFoldersQuery, ListStorageFoldersResponse, RegisterStorageFolderRequest,

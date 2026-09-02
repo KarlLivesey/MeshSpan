@@ -116,6 +116,8 @@ pub enum NamespaceRight {
 pub struct VolumeSummary {
     /// Stable logical-volume identity.
     pub volume_id: VolumeId,
+    /// Stable root-directory identity used by connectors and administration.
+    pub root_object_id: crate::ObjectId,
     /// Case-preserved user-facing name.
     #[schemars(length(min = 1, max = 256), pattern(r"^[^\x00-\x1f\x7f]+$"))]
     pub name: String,

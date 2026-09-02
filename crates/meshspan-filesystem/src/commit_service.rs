@@ -6,8 +6,8 @@ use std::io::Write;
 use std::path::Path;
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    PrincipalId, Revision, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId, ObjectId,
+    ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
 };
 use thiserror::Error;
 
@@ -377,6 +377,20 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .handle_authority_target(handle_id, observed_at)
     }
 
+    pub(crate) fn set_handle_length(
+        &mut self,
+        request: crate::SetHandleLengthRequest,
+    ) -> Result<crate::FilesystemHandleLengthReceipt, crate::HandleIoError> {
+        crate::handle_io::set_length(&mut self.stages, &mut self.publications, request)
+    }
+
+    pub(crate) fn set_handle_disposition(
+        &mut self,
+        request: crate::SetHandleDispositionRequest,
+    ) -> Result<crate::HandleInformationReceipt, crate::HandleError> {
+        self.publications.set_handle_disposition(request)
+    }
+
     pub(crate) fn lock_range(
         &mut self,
         request: crate::LockRangeRequest,
@@ -689,7 +703,11 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
                 .flush
                 .map(|flush| self.flush_handle(flush))
                 .transpose()?;
-            return Ok(FilesystemHandleCloseReceipt { flush, close });
+            return Ok(FilesystemHandleCloseReceipt {
+                flush,
+                delete: None,
+                close,
+            });
         }
 
         let uses_stage = self
@@ -727,7 +745,11 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .map(|flush| self.flush_handle(flush))
             .transpose()?;
         let close = self.publications.close_handle(request.close)?;
-        Ok(FilesystemHandleCloseReceipt { flush, close })
+        Ok(FilesystemHandleCloseReceipt {
+            flush,
+            delete: None,
+            close,
+        })
     }
 
     fn commit_handle_plan(
@@ -912,6 +934,39 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         publication: &crate::NamespaceUnlinkPublication,
     ) -> Result<crate::NamespaceUnlinkReceipt, crate::HandleError> {
         self.publications.unlink_namespace(publication)
+    }
+
+    pub(crate) fn resolve_namespace_unlink(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<crate::NamespaceUnlinkReceipt>, crate::HandleError> {
+        self.publications
+            .resolve_namespace_unlink(operation_id)
+            .map_err(crate::HandleError::from)
+    }
+
+    pub(crate) fn ready_namespace_delete(
+        &mut self,
+        requesting_handle_id: HandleId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::ReadyNamespaceDelete, crate::HandleError> {
+        self.publications
+            .ready_namespace_delete(requesting_handle_id, observed_at)
+    }
+
+    pub(crate) fn prepare_ready_namespace_delete(
+        &self,
+        operation_id: OperationId,
+        ready: &crate::ReadyNamespaceDelete,
+        created_by: PrincipalId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::NamespaceUnlinkPublication, crate::HandleError> {
+        self.publications.prepare_ready_namespace_delete(
+            operation_id,
+            ready,
+            created_by,
+            observed_at,
+        )
     }
 
     pub(crate) fn adapter_unlink_target(

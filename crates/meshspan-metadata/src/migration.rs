@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 59;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 60;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 11;
 
-const PARTITION_MIGRATIONS: [Migration; 59] = [
+const PARTITION_MIGRATIONS: [Migration; 60] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -247,8 +247,12 @@ const PARTITION_MIGRATIONS: [Migration; 59] = [
         sql: include_str!("../schema/partition/058_fault_group_administration.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 59,
         sql: include_str!("../schema/partition/059_api_key_smb_verifiers.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/060_smb_exports.sql"),
     },
 ];
 
@@ -767,6 +771,11 @@ pub(crate) fn partition_pending_node_activations_migration_digest() -> [u8; 32] 
 #[cfg(test)]
 pub(crate) fn partition_node_activations_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[56].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_smb_exports_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[59].sql)
 }
 
 #[cfg(test)]

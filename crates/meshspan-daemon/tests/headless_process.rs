@@ -19,7 +19,10 @@ use hmac::{Hmac, Mac};
 use meshspan_consensus::ActiveQuorumPlan;
 use meshspan_daemon::{ClaimFile, LocalNodeIdentity, LocalWrappingKey};
 use meshspan_domain::{InitialBootstrapMaterial, OperationId, PartitionId, UnixMicros};
-use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
+use meshspan_metadata::{
+    AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeRepository, PartitionDatabase,
+};
+use meshspan_secret_envelope::SecretContext;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use sha1::Sha1;
@@ -32,6 +35,440 @@ use tokio_rustls::TlsConnector;
 const CERTIFICATE_NAME: &str = "meshspan.local";
 const WAIT_LIMIT: Duration = Duration::from_secs(15);
 const RETRY_INTERVAL: Duration = Duration::from_millis(50);
+const SMB_CLIENT_IMAGE: &str = "meshspan-smbclient-test:bookworm";
+
+#[tokio::test]
+#[ignore = "requires the local pinned smbclient container image"]
+async fn real_smb311_clients_round_trip_one_volume_through_three_gateways()
+-> Result<(), Box<dyn Error>> {
+    let root = ProcessFixture::new()?;
+    let second = ProcessFixture::new()?;
+    let third = ProcessFixture::new()?;
+    let mut processes = vec![root.start()?];
+    let proof = async {
+        let claim = wait_for_claim(&root.claim_path).await?;
+        let client = wait_for_client(&root.identity_path).await?;
+        let administrator_id = bootstrap_administrator_id(&claim, &root.identity_path)?;
+        wait_for_status(root.address, &client, "claim_required").await?;
+        let created = create_process_mesh(&root, &client, &claim).await?;
+        let api_key = created["api_key"]
+            .as_str()
+            .ok_or("setup response omitted the API key")?;
+        save_and_verify_recovery_bundle(&root, &client, api_key, &created).await?;
+        let join_code = issue_join_code(&root, &client, api_key).await?;
+        processes.push(second.start_join(&join_code)?);
+        let second_client = wait_for_client(&second.identity_path).await?;
+        wait_for_status(second.address, &second_client, "configured").await?;
+        processes.push(third.start_join(&join_code)?);
+        let third_client = wait_for_client(&third.identity_path).await?;
+        wait_for_status(third.address, &third_client, "configured").await?;
+        wait_for_three_voters([&root, &second, &third], &root.identity_path).await?;
+        let volume =
+            create_volume_details(root.address, &client, api_key, &administrator_id).await?;
+        publish_smb_export(root.address, &client, api_key, &volume).await?;
+        wait_for_smb_export_visibility([&root, &second, &third], &root.identity_path).await?;
+        wait_for_authentication_root_access([&root, &second, &third], &root.identity_path).await?;
+        for fixture in [&root, &second, &third] {
+            wait_for_smb_listener(fixture.smb_address).await?;
+        }
+        run_cross_gateway_smb_cycle(
+            [&root, &second, &third],
+            [&client, &second_client, &third_client],
+            api_key,
+            &volume.volume_id,
+        )
+        .await?;
+        exercise_smb_process_failures(
+            [&root, &second, &third],
+            &mut processes,
+            api_key.to_owned(),
+            &root.identity_path,
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    stop_processes(&mut processes);
+    proof
+}
+
+async fn run_cross_gateway_smb_cycle(
+    fixtures: [&ProcessFixture; 3],
+    clients: [&ClientConfig; 3],
+    api_key: &str,
+    volume_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let exchange = TempDir::new()?;
+    let expected = b"exact external SMB 3.1.1 bytes";
+    fs::write(exchange.path().join("upload.bin"), expected)?;
+    fs::write(
+        exchange.path().join("remote-source.bin"),
+        b"acknowledged bytes owned by the storage process",
+    )?;
+    run_real_smb_command(
+        fixtures[0].smb_address.port(),
+        api_key.to_owned(),
+        exchange.path(),
+        "put /proof/upload.bin proof.bin",
+    )
+    .await?;
+    wait_for_named_file_length(
+        fixtures[1].address,
+        clients[1],
+        api_key,
+        volume_id,
+        "proof.bin",
+        expected.len(),
+    )
+    .await
+    .map_err(|error| format!("gateway two did not import proof.bin: {error}"))?;
+    run_real_smb_command(
+        fixtures[1].smb_address.port(),
+        api_key.to_owned(),
+        exchange.path(),
+        "get proof.bin /proof/gateway-two.bin; rename proof.bin renamed.bin; put /proof/remote-source.bin remote-only.bin",
+    )
+    .await?;
+    wait_for_named_file_length(
+        fixtures[1].address,
+        clients[1],
+        api_key,
+        volume_id,
+        "remote-only.bin",
+        b"acknowledged bytes owned by the storage process".len(),
+    )
+    .await
+    .map_err(|error| format!("gateway two did not retain remote-only.bin: {error}"))?;
+    if fs::read(exchange.path().join("gateway-two.bin"))? != expected {
+        return Err("gateway two returned different bytes".into());
+    }
+    wait_for_named_file_length(
+        fixtures[2].address,
+        clients[2],
+        api_key,
+        volume_id,
+        "remote-only.bin",
+        b"acknowledged bytes owned by the storage process".len(),
+    )
+    .await?;
+    wait_for_named_file_length(
+        fixtures[2].address,
+        clients[2],
+        api_key,
+        volume_id,
+        "renamed.bin",
+        expected.len(),
+    )
+    .await?;
+    run_real_smb_command(
+        fixtures[2].smb_address.port(),
+        api_key.to_owned(),
+        exchange.path(),
+        "get renamed.bin /proof/gateway-three.bin; del renamed.bin",
+    )
+    .await?;
+    if fs::read(exchange.path().join("gateway-three.bin"))? != expected {
+        return Err("gateway three returned different bytes".into());
+    }
+    wait_for_named_file_listing_state(
+        fixtures[1].address,
+        clients[1],
+        api_key,
+        volume_id,
+        "renamed.bin",
+        false,
+    )
+    .await
+}
+
+async fn exercise_smb_process_failures(
+    fixtures: [&ProcessFixture; 3],
+    processes: &mut [Child],
+    api_key: String,
+    root_identity_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    wait_for_root_leadership(fixtures, root_identity_path).await?;
+    let exchange = TempDir::new()?;
+    fs::write(
+        exchange.path().join("survivor-source.bin"),
+        b"exact acknowledged bytes retained by the surviving gateway",
+    )?;
+
+    let proof_directory = exchange.path().to_path_buf();
+    let proof_port = fixtures[2].smb_address.port();
+    let proof = tokio::task::spawn_blocking(move || {
+        smb_client_process(
+            proof_port,
+            api_key,
+            Some(&proof_directory),
+            smb_resilience_client_script(),
+        )
+        .output()
+    });
+    wait_for_file(&exchange.path().join("ready-for-leader-loss")).await?;
+    processes[0].kill()?;
+    processes[0].wait()?;
+    fs::write(exchange.path().join("leader-lost"), [])?;
+    wait_for_file(&exchange.path().join("read-after-leader-loss")).await?;
+    processes[1].kill()?;
+    processes[1].wait()?;
+    fs::write(exchange.path().join("storage-lost"), [])?;
+    let proof = proof.await??;
+    require_smb_client_success(&proof)?;
+    let expected_error = fs::read_to_string(exchange.path().join("expected-error.txt"))?;
+    if !expected_error.contains("NT_STATUS_IO_TIMEOUT") {
+        return Err(
+            format!("lost remote storage returned the wrong SMB status: {expected_error}").into(),
+        );
+    }
+    Ok(())
+}
+
+async fn wait_for_named_file_length(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    name: &str,
+    expected_length: usize,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let expected = format!("\"logical_length\":{expected_length}");
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let response = request_with_headers(
+            address,
+            client,
+            "GET",
+            &format!("/api/latest/volumes/{volume_id}/objects?path={name}"),
+            None,
+            &[("Authorization", authorization.as_str())],
+        )
+        .await?;
+        if response.starts_with("HTTP/1.1 200 OK\r\n")
+            && response_body(&response)?.contains(&expected)
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "expected {name} length {expected_length} did not converge at {address}: {}",
+                response_body(&response).unwrap_or("invalid response")
+            )
+            .into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_named_file_listing_state(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    name: &str,
+    expected_presence: bool,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let expected = format!("\"name\":\"{name}\"");
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let response = request_with_headers(
+            address,
+            client,
+            "GET",
+            &format!("/api/latest/volumes/{volume_id}/directory-entries?limit=100"),
+            None,
+            &[("Authorization", authorization.as_str())],
+        )
+        .await?;
+        if response.starts_with("HTTP/1.1 200 OK\r\n") {
+            let present = response_body(&response)?.contains(&expected);
+            if present == expected_presence {
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "expected presence {expected_presence} for {name} did not converge at {address}"
+            )
+            .into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_root_leadership(
+    fixtures: [&ProcessFixture; 3],
+    root_identity_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let identity = LocalNodeIdentity::open(root_identity_path, CERTIFICATE_NAME)?;
+    let root_node = InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
+    let partition_id = InitialBootstrapMaterial::root_partition_id(root_node)?;
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let observed_votes = fixtures
+            .iter()
+            .map(|fixture| {
+                durable_vote(&fixture.state_path, partition_id).map_err(|error| error.to_string())
+            })
+            .collect::<Vec<_>>();
+        let root_term = observed_votes
+            .first()
+            .and_then(|vote| vote.as_ref().ok())
+            .filter(|(_, vote)| *vote == Some(root_node))
+            .map(|(term, _)| *term);
+        let root_is_only_candidate = root_term.is_some_and(|root_term| {
+            observed_votes.iter().all(|vote| {
+                vote.as_ref().is_ok_and(|(term, candidate)| {
+                    *term == root_term && candidate.is_none_or(|candidate| candidate == root_node)
+                })
+            })
+        });
+        if root_is_only_candidate {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "initial metadata leader lacked a durable vote majority: {observed_votes:?}"
+            )
+            .into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+fn durable_vote(
+    state_path: &Path,
+    partition_id: PartitionId,
+) -> Result<(u64, Option<meshspan_domain::NodeId>), Box<dyn Error>> {
+    let database = PartitionDatabase::open(
+        &state_path.join("root-authority.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let repository = AuthoritativeRepository::new(database);
+    let plan = repository
+        .load_active_consensus_quorum_plan()?
+        .ok_or("active quorum plan missing")?;
+    let state = repository.load_consensus_state(plan.membership_epoch())?;
+    Ok((state.current_term, state.voted_for))
+}
+
+async fn wait_for_file(path: &Path) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if path.is_file() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("SMB failure proof did not create {}", path.display()).into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_authentication_root_access(
+    fixtures: [&ProcessFixture; 3],
+    root_identity_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let root_identity = LocalNodeIdentity::open(root_identity_path, CERTIFICATE_NAME)?;
+    let root_node = InitialBootstrapMaterial::node_id(root_identity.public_key_fingerprint())?;
+    let partition_id = InitialBootstrapMaterial::root_partition_id(root_node)?;
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let all_accessible = fixtures
+            .iter()
+            .all(|fixture| has_authentication_root_access(fixture, partition_id).unwrap_or(false));
+        if all_accessible {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("authentication root did not become accessible to every gateway".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+fn has_authentication_root_access(
+    fixture: &ProcessFixture,
+    partition_id: PartitionId,
+) -> Result<bool, Box<dyn Error>> {
+    let database = PartitionDatabase::open(
+        &fixture.state_path.join("root-authority.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let repository = AuthoritativeRepository::new(database);
+    let Some(mesh_id) = repository.local_mesh_id()? else {
+        return Ok(false);
+    };
+    let Some(generation) = repository.latest_authentication_root_generation(mesh_id)? else {
+        return Ok(false);
+    };
+    let context = SecretContext::new(
+        AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+        mesh_id.as_bytes(),
+        generation,
+    )?;
+    let Some(record) = repository.secret_generation(context)? else {
+        return Ok(false);
+    };
+    let wrapping_key =
+        LocalWrappingKey::open(&fixture.state_path.join("secrets/node-wrapping-key.x25519"))?;
+    let public_key = wrapping_key.public_key();
+    let Some(recipient) = record
+        .recipients
+        .iter()
+        .find(|recipient| recipient.recipient_public_key().ok() == Some(public_key))
+    else {
+        return Ok(false);
+    };
+    Ok(wrapping_key
+        .decrypt_secret(&record.secret, recipient)
+        .is_ok())
+}
+
+async fn wait_for_smb_export_visibility(
+    fixtures: [&ProcessFixture; 3],
+    root_identity_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let root_identity = LocalNodeIdentity::open(root_identity_path, CERTIFICATE_NAME)?;
+    let root_node = InitialBootstrapMaterial::node_id(root_identity.public_key_fingerprint())?;
+    let partition_id = InitialBootstrapMaterial::root_partition_id(root_node)?;
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let all_visible = fixtures.iter().all(|fixture| {
+            has_smb_export(&fixture.state_path, &fixture.identity_path, partition_id)
+                .unwrap_or(false)
+        });
+        if all_visible {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("published SMB export did not converge to every gateway".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+fn has_smb_export(
+    state_path: &Path,
+    identity_path: &Path,
+    partition_id: PartitionId,
+) -> Result<bool, Box<dyn Error>> {
+    let identity = LocalNodeIdentity::open(identity_path, CERTIFICATE_NAME)?;
+    let node_id = InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
+    let database = PartitionDatabase::open(
+        &state_path.join("root-authority.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let exports = AuthoritativeRepository::new(database).smb_exports_for_gateway(node_id)?;
+    Ok(exports
+        .iter()
+        .any(|export| export.display_name == "process-files"))
+}
 
 #[tokio::test]
 async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), Box<dyn Error>> {
@@ -1169,6 +1606,24 @@ async fn create_volume(
     api_key: &str,
     owner_principal_id: &str,
 ) -> Result<String, Box<dyn Error>> {
+    Ok(
+        create_volume_details(address, client, api_key, owner_principal_id)
+            .await?
+            .volume_id,
+    )
+}
+
+struct CreatedVolume {
+    root_object_id: String,
+    volume_id: String,
+}
+
+async fn create_volume_details(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    owner_principal_id: &str,
+) -> Result<CreatedVolume, Box<dyn Error>> {
     let body = serde_json::to_vec(&serde_json::json!({
         "operation_id": "00000000-0000-4000-8000-000000000004",
         "name": "Process files",
@@ -1195,11 +1650,164 @@ async fn create_volume(
         .into())
     } else {
         let created: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
-        created["volume_id"]
+        let volume_id = created["volume_id"]
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| "headless volume creation omitted its identity".into())
+            .ok_or("headless volume creation omitted its identity")?;
+        let root_object_id = created["root_object_id"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or("headless volume creation omitted its root identity")?;
+        Ok(CreatedVolume {
+            root_object_id,
+            volume_id,
+        })
     }
+}
+
+async fn publish_smb_export(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume: &CreatedVolume,
+) -> Result<(), Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000040",
+        "root_object_id": volume.root_object_id,
+        "share_name": "process-files",
+        "gateways": { "kind": "all_eligible" },
+        "encryption_required": true
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        &format!("/api/latest/admin/volumes/{}/smb-exports", volume.volume_id),
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "201 Created", "publish SMB export")
+}
+
+async fn wait_for_smb_listener(address: SocketAddr) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if TcpStream::connect(address).await.is_ok() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("embedded SMB listener did not accept TCP connections".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn run_real_smb_command(
+    port: u16,
+    api_key: String,
+    exchange: &Path,
+    smb_command: &str,
+) -> Result<(), Box<dyn Error>> {
+    let exchange = exchange.to_path_buf();
+    let smb_command = smb_command.to_owned();
+    let output = tokio::task::spawn_blocking(move || {
+        let mut process =
+            smb_client_process(port, api_key, Some(&exchange), real_smb_command_script());
+        process.env("MESHSPAN_SMB_COMMAND", smb_command).output()
+    })
+    .await??;
+    require_smb_client_success(&output)
+}
+
+fn smb_client_process(
+    port: u16,
+    api_key: String,
+    exchange: Option<&Path>,
+    script: &str,
+) -> Command {
+    let mut process = Command::new("docker");
+    process.args([
+        "run",
+        "--rm",
+        "--entrypoint",
+        "/bin/sh",
+        "--env",
+        "MESHSPAN_SMB_PASSWORD",
+        "--env",
+        "MESHSPAN_SMB_COMMAND",
+    ]);
+    if let Some(exchange) = exchange {
+        process
+            .arg("--volume")
+            .arg(format!("{}:/proof", exchange.as_os_str().to_string_lossy()));
+    }
+    process
+        .arg(SMB_CLIENT_IMAGE)
+        .args(["-ec", script, "smb-proof", &port.to_string()])
+        .env("MESHSPAN_SMB_PASSWORD", api_key)
+        .env("MESHSPAN_SMB_COMMAND", "");
+    process
+}
+
+fn require_smb_client_success(output: &std::process::Output) -> Result<(), Box<dyn Error>> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.success() && !stdout.contains("NT_STATUS_") && !stderr.contains("NT_STATUS_") {
+        return Ok(());
+    }
+    Err(format!("real SMB 3.1.1 client failed; stdout: {stdout}; stderr: {stderr}").into())
+}
+
+const fn real_smb_command_script() -> &'static str {
+    r#"
+set -eu
+port="$1"
+printf 'username = Administrator\npassword = %s\n' "$MESHSPAN_SMB_PASSWORD" > /tmp/credentials
+chmod 600 /tmp/credentials
+smbclient '//host.docker.internal/process-files' \
+  --port "$port" \
+  --max-protocol SMB3 \
+  --option 'client min protocol=SMB3_11' \
+  --option 'client max protocol=SMB3_11' \
+  --client-protection encrypt \
+  --authentication-file /tmp/credentials \
+  --command "$MESHSPAN_SMB_COMMAND"
+"#
+}
+
+const fn smb_resilience_client_script() -> &'static str {
+    r#"
+set -eu
+port="$1"
+printf 'username = Administrator\npassword = %s\n' "$MESHSPAN_SMB_PASSWORD" > /tmp/credentials
+chmod 600 /tmp/credentials
+smb() {
+  smbclient '//host.docker.internal/process-files' \
+    --port "$port" \
+    --max-protocol SMB3 \
+    --option 'client min protocol=SMB3_11' \
+    --option 'client max protocol=SMB3_11' \
+    --client-protection encrypt \
+    --authentication-file /tmp/credentials \
+    --command "$1"
+}
+smb 'put /proof/survivor-source.bin survivor.bin'
+touch /proof/ready-for-leader-loss
+while test ! -f /proof/leader-lost; do sleep 0.05; done
+smb 'get survivor.bin /proof/after-leader.bin'
+cmp /proof/survivor-source.bin /proof/after-leader.bin
+touch /proof/read-after-leader-loss
+while test ! -f /proof/storage-lost; do sleep 0.05; done
+smb 'get survivor.bin /proof/after-storage.bin'
+cmp /proof/survivor-source.bin /proof/after-storage.bin
+if smb 'get remote-only.bin /proof/unavailable.bin' > /proof/expected-error.txt 2>&1; then
+  echo 'remote-only read unexpectedly succeeded after its storage process was killed'
+  exit 1
+fi
+grep -Eq 'NT_STATUS_[A-Z_]+' /proof/expected-error.txt
+"#
 }
 
 async fn create_volume_permission_grant(
@@ -1712,6 +2320,7 @@ fn response_body(response: &str) -> Result<&str, Box<dyn Error>> {
 struct ProcessFixture {
     _temporary: TempDir,
     address: SocketAddr,
+    smb_address: SocketAddr,
     private_address: SocketAddr,
     claim_path: PathBuf,
     identity_path: PathBuf,
@@ -1734,6 +2343,7 @@ impl ProcessFixture {
         fs::write(storage_path.join("operator-file.txt"), b"untouched")?;
         Ok(Self {
             address: unused_address()?,
+            smb_address: unused_address()?,
             private_address: unused_udp_address()?,
             claim_path: state_path.join("first-boot.claim"),
             identity_path: state_path.join("secrets/node-identity.pk8"),
@@ -1768,6 +2378,8 @@ impl ProcessFixture {
             .arg(&self.storage_path)
             .arg("--https-listen")
             .arg(self.address.to_string())
+            .arg("--smb-listen")
+            .arg(self.smb_address.to_string())
             .arg("--private-listen")
             .arg(self.private_address.to_string())
             .arg("--private-endpoint")

@@ -18,6 +18,9 @@ getrandom.workspace = true
 hmac.workspace = true
 md-5.workspace = true
 md4.workspace = true
+meshspan-contracts = { path = "../meshspan-contracts" }
+meshspan-domain = { path = "../meshspan-domain" }
+meshspan-filesystem = { path = "../meshspan-filesystem" }
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true

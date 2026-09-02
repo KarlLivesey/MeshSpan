@@ -26,12 +26,13 @@ use crate::{
     ListOperationsResponse, ListPrincipalsResponse, ListStorageFoldersResponse,
     ListTopologyNodesResponse, ListTopologyTargetsResponse, ListUploadRangesResponse,
     ListVolumePermissionGrantsResponse, ListVolumesResponse, OperationStatusResponse,
-    RegisterStorageFolderRequest, RegisterStorageFolderResponse, RemoveGroupMemberRequest,
-    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
-    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
-    RevokePermissionGrantResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
-    SetupStatusResponse, StepUpCurrentSessionRequest, UploadStatusResponse,
+    PublishSmbExportRequest, PublishSmbExportResponse, RegisterStorageFolderRequest,
+    RegisterStorageFolderResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
+    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
+    RevokePermissionGrantRequest, RevokePermissionGrantResponse, SetFaultGroupMembershipRequest,
+    SetFaultGroupMembershipResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
+    UploadStatusResponse, WithdrawSmbExportRequest, WithdrawSmbExportResponse,
     WriteUploadRangeResponse, schema,
 };
 
@@ -94,106 +95,137 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
     Ok(OpenApiDocument { document, digest })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "this is one declarative schema registry; splitting it would obscure duplicate names"
+)]
 fn components() -> Value {
-    let schemas = Map::from_iter([
-        schema_response::<ApiError>("ApiError"),
-        schema_request::<AbortUploadRequest>("AbortUploadRequest"),
-        schema_response::<AbortUploadResponse>("AbortUploadResponse"),
-        schema_request::<AddGroupMemberRequest>("AddGroupMemberRequest"),
-        schema_response::<AddGroupMemberResponse>("AddGroupMemberResponse"),
-        schema_request::<BeginUploadRequest>("BeginUploadRequest"),
-        schema_response::<BeginUploadResponse>("BeginUploadResponse"),
-        schema_request::<CommitUploadRequest>("CommitUploadRequest"),
-        schema_response::<CommitUploadResponse>("CommitUploadResponse"),
-        schema_request::<ConfirmRecoveryBundleRequest>("ConfirmRecoveryBundleRequest"),
-        schema_response::<ConfirmRecoveryBundleResponse>("ConfirmRecoveryBundleResponse"),
-        schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
-        schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
-        schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
-        schema_response::<CreateDirectoryResponse>("CreateDirectoryResponse"),
-        schema_request::<CreateFaultGroupRequest>("CreateFaultGroupRequest"),
-        schema_response::<CreateFaultGroupResponse>("CreateFaultGroupResponse"),
-        schema_request::<CreateGroupRequest>("CreateGroupRequest"),
-        schema_request::<CreateMeshSetupRequest>("CreateMeshSetupRequest"),
-        schema_response::<CreateMeshSetupResponse>("CreateMeshSetupResponse"),
-        schema_request::<CreateNodeJoinGrantRequest>("CreateNodeJoinGrantRequest"),
-        schema_response::<CreateNodeJoinGrantResponse>("CreateNodeJoinGrantResponse"),
-        schema_request::<CreatePasskeyChallengeRequest>("CreatePasskeyChallengeRequest"),
-        schema_response::<CreatePasskeyChallengeResponse>("CreatePasskeyChallengeResponse"),
-        schema_request::<CreatePasskeyRegistrationChallengeRequest>(
-            "CreatePasskeyRegistrationChallengeRequest",
-        ),
-        schema_response::<CreatePasskeyRegistrationChallengeResponse>(
-            "CreatePasskeyRegistrationChallengeResponse",
-        ),
-        schema_request::<CreatePasskeyRegistrationRequest>("CreatePasskeyRegistrationRequest"),
-        schema_response::<CreatePasskeyRegistrationResponse>("CreatePasskeyRegistrationResponse"),
-        schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
-        schema_request::<CreateRecoveryCodesRequest>("CreateRecoveryCodesRequest"),
-        schema_response::<CreateRecoveryCodesResponse>("CreateRecoveryCodesResponse"),
-        schema_request::<CreateSessionRequest>("CreateSessionRequest"),
-        schema_response::<CreateSessionResponse>("CreateSessionResponse"),
-        schema_request::<CreateTotpRegistrationChallengeRequest>(
-            "CreateTotpRegistrationChallengeRequest",
-        ),
-        schema_response::<CreateTotpRegistrationChallengeResponse>(
-            "CreateTotpRegistrationChallengeResponse",
-        ),
-        schema_request::<CreateTotpRegistrationRequest>("CreateTotpRegistrationRequest"),
-        schema_response::<CreateTotpRegistrationResponse>("CreateTotpRegistrationResponse"),
-        schema_request::<CreateUserRequest>("CreateUserRequest"),
-        schema_request::<CreateVolumePermissionGrantRequest>("CreateVolumePermissionGrantRequest"),
-        schema_response::<CreateVolumePermissionGrantResponse>(
-            "CreateVolumePermissionGrantResponse",
-        ),
-        schema_request::<CreateVolumeRequest>("CreateVolumeRequest"),
-        schema_response::<CreateVolumeResponse>("CreateVolumeResponse"),
-        schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
-        schema_request::<EnrolNodeRequest>("EnrolNodeRequest"),
-        schema_response::<EnrolNodeResponse>("EnrolNodeResponse"),
-        schema_request::<DeleteObjectRequest>("DeleteObjectRequest"),
-        schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
-        schema_response::<GetObjectResponse>("GetObjectResponse"),
-        schema_response::<HealthResponse>("HealthResponse"),
-        schema_request::<JoinMeshSetupRequest>("JoinMeshSetupRequest"),
-        schema_response::<JoinMeshSetupResponse>("JoinMeshSetupResponse"),
-        schema_response::<ListAuthenticationMethodsResponse>("ListAuthenticationMethodsResponse"),
-        schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
-        schema_response::<ListFaultGroupMembershipsResponse>("ListFaultGroupMembershipsResponse"),
-        schema_response::<ListFaultGroupsResponse>("ListFaultGroupsResponse"),
-        schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
-        schema_response::<ListOperationsResponse>("ListOperationsResponse"),
-        schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
-        schema_response::<ListStorageFoldersResponse>("ListStorageFoldersResponse"),
-        schema_response::<ListTopologyNodesResponse>("ListTopologyNodesResponse"),
-        schema_response::<ListTopologyTargetsResponse>("ListTopologyTargetsResponse"),
-        schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
-        schema_response::<ListVolumePermissionGrantsResponse>("ListVolumePermissionGrantsResponse"),
-        schema_response::<ListVolumesResponse>("ListVolumesResponse"),
-        schema_response::<OperationStatusResponse>("OperationStatusResponse"),
-        schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
-        schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
-        schema_request::<RevokePermissionGrantRequest>("RevokePermissionGrantRequest"),
-        schema_response::<RevokePermissionGrantResponse>("RevokePermissionGrantResponse"),
-        schema_request::<RegisterStorageFolderRequest>("RegisterStorageFolderRequest"),
-        schema_response::<RegisterStorageFolderResponse>("RegisterStorageFolderResponse"),
-        schema_request::<RemoveGroupMemberRequest>("RemoveGroupMemberRequest"),
-        schema_response::<RemoveGroupMemberResponse>("RemoveGroupMemberResponse"),
-        schema_request::<RenameObjectRequest>("RenameObjectRequest"),
-        schema_response::<RenameObjectResponse>("RenameObjectResponse"),
-        schema_request::<RevokeAuthenticationMethodRequest>("RevokeAuthenticationMethodRequest"),
-        schema_response::<RevokeAuthenticationMethodResponse>("RevokeAuthenticationMethodResponse"),
-        schema_response::<SetupStatusResponse>("SetupStatusResponse"),
-        schema_request::<SetFaultGroupMembershipRequest>("SetFaultGroupMembershipRequest"),
-        schema_response::<SetFaultGroupMembershipResponse>("SetFaultGroupMembershipResponse"),
-        schema_request::<StepUpCurrentSessionRequest>("StepUpCurrentSessionRequest"),
-        schema_response::<UploadStatusResponse>("UploadStatusResponse"),
-        schema_response::<WriteUploadRangeResponse>("WriteUploadRangeResponse"),
-    ]);
+    let schemas = Map::from_iter(
+        [
+            schema_response::<ApiError>("ApiError"),
+            schema_request::<AbortUploadRequest>("AbortUploadRequest"),
+            schema_response::<AbortUploadResponse>("AbortUploadResponse"),
+            schema_request::<AddGroupMemberRequest>("AddGroupMemberRequest"),
+            schema_response::<AddGroupMemberResponse>("AddGroupMemberResponse"),
+            schema_request::<BeginUploadRequest>("BeginUploadRequest"),
+            schema_response::<BeginUploadResponse>("BeginUploadResponse"),
+            schema_request::<CommitUploadRequest>("CommitUploadRequest"),
+            schema_response::<CommitUploadResponse>("CommitUploadResponse"),
+            schema_request::<ConfirmRecoveryBundleRequest>("ConfirmRecoveryBundleRequest"),
+            schema_response::<ConfirmRecoveryBundleResponse>("ConfirmRecoveryBundleResponse"),
+            schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
+            schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
+            schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
+            schema_response::<CreateDirectoryResponse>("CreateDirectoryResponse"),
+            schema_request::<CreateFaultGroupRequest>("CreateFaultGroupRequest"),
+            schema_response::<CreateFaultGroupResponse>("CreateFaultGroupResponse"),
+            schema_request::<CreateGroupRequest>("CreateGroupRequest"),
+            schema_request::<CreateMeshSetupRequest>("CreateMeshSetupRequest"),
+            schema_response::<CreateMeshSetupResponse>("CreateMeshSetupResponse"),
+            schema_request::<CreateNodeJoinGrantRequest>("CreateNodeJoinGrantRequest"),
+            schema_response::<CreateNodeJoinGrantResponse>("CreateNodeJoinGrantResponse"),
+            schema_request::<CreatePasskeyChallengeRequest>("CreatePasskeyChallengeRequest"),
+            schema_response::<CreatePasskeyChallengeResponse>("CreatePasskeyChallengeResponse"),
+            schema_request::<CreatePasskeyRegistrationChallengeRequest>(
+                "CreatePasskeyRegistrationChallengeRequest",
+            ),
+            schema_response::<CreatePasskeyRegistrationChallengeResponse>(
+                "CreatePasskeyRegistrationChallengeResponse",
+            ),
+            schema_request::<CreatePasskeyRegistrationRequest>("CreatePasskeyRegistrationRequest"),
+            schema_response::<CreatePasskeyRegistrationResponse>(
+                "CreatePasskeyRegistrationResponse",
+            ),
+            schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
+            schema_request::<CreateRecoveryCodesRequest>("CreateRecoveryCodesRequest"),
+            schema_response::<CreateRecoveryCodesResponse>("CreateRecoveryCodesResponse"),
+            schema_request::<CreateSessionRequest>("CreateSessionRequest"),
+            schema_response::<CreateSessionResponse>("CreateSessionResponse"),
+            schema_request::<CreateTotpRegistrationChallengeRequest>(
+                "CreateTotpRegistrationChallengeRequest",
+            ),
+            schema_response::<CreateTotpRegistrationChallengeResponse>(
+                "CreateTotpRegistrationChallengeResponse",
+            ),
+            schema_request::<CreateTotpRegistrationRequest>("CreateTotpRegistrationRequest"),
+            schema_response::<CreateTotpRegistrationResponse>("CreateTotpRegistrationResponse"),
+            schema_request::<CreateUserRequest>("CreateUserRequest"),
+            schema_request::<CreateVolumePermissionGrantRequest>(
+                "CreateVolumePermissionGrantRequest",
+            ),
+            schema_response::<CreateVolumePermissionGrantResponse>(
+                "CreateVolumePermissionGrantResponse",
+            ),
+            schema_request::<CreateVolumeRequest>("CreateVolumeRequest"),
+            schema_response::<CreateVolumeResponse>("CreateVolumeResponse"),
+            schema_response::<CurrentSessionResponse>("CurrentSessionResponse"),
+            schema_request::<EnrolNodeRequest>("EnrolNodeRequest"),
+            schema_response::<EnrolNodeResponse>("EnrolNodeResponse"),
+            schema_request::<DeleteObjectRequest>("DeleteObjectRequest"),
+            schema_response::<DeleteObjectResponse>("DeleteObjectResponse"),
+            schema_response::<GetObjectResponse>("GetObjectResponse"),
+            schema_response::<HealthResponse>("HealthResponse"),
+            schema_request::<JoinMeshSetupRequest>("JoinMeshSetupRequest"),
+            schema_response::<JoinMeshSetupResponse>("JoinMeshSetupResponse"),
+            schema_response::<ListAuthenticationMethodsResponse>(
+                "ListAuthenticationMethodsResponse",
+            ),
+            schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
+            schema_response::<ListFaultGroupMembershipsResponse>(
+                "ListFaultGroupMembershipsResponse",
+            ),
+            schema_response::<ListFaultGroupsResponse>("ListFaultGroupsResponse"),
+            schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
+            schema_response::<ListOperationsResponse>("ListOperationsResponse"),
+            schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
+            schema_response::<ListStorageFoldersResponse>("ListStorageFoldersResponse"),
+            schema_response::<ListTopologyNodesResponse>("ListTopologyNodesResponse"),
+            schema_response::<ListTopologyTargetsResponse>("ListTopologyTargetsResponse"),
+            schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
+            schema_response::<ListVolumePermissionGrantsResponse>(
+                "ListVolumePermissionGrantsResponse",
+            ),
+            schema_response::<ListVolumesResponse>("ListVolumesResponse"),
+            schema_response::<OperationStatusResponse>("OperationStatusResponse"),
+            schema_request::<RevokeCurrentSessionRequest>("RevokeCurrentSessionRequest"),
+            schema_response::<RevokeCurrentSessionResponse>("RevokeCurrentSessionResponse"),
+            schema_request::<RevokePermissionGrantRequest>("RevokePermissionGrantRequest"),
+            schema_response::<RevokePermissionGrantResponse>("RevokePermissionGrantResponse"),
+            schema_request::<RegisterStorageFolderRequest>("RegisterStorageFolderRequest"),
+            schema_response::<RegisterStorageFolderResponse>("RegisterStorageFolderResponse"),
+            schema_request::<RemoveGroupMemberRequest>("RemoveGroupMemberRequest"),
+            schema_response::<RemoveGroupMemberResponse>("RemoveGroupMemberResponse"),
+            schema_request::<RenameObjectRequest>("RenameObjectRequest"),
+            schema_response::<RenameObjectResponse>("RenameObjectResponse"),
+            schema_request::<RevokeAuthenticationMethodRequest>(
+                "RevokeAuthenticationMethodRequest",
+            ),
+            schema_response::<RevokeAuthenticationMethodResponse>(
+                "RevokeAuthenticationMethodResponse",
+            ),
+            schema_response::<SetupStatusResponse>("SetupStatusResponse"),
+            schema_request::<SetFaultGroupMembershipRequest>("SetFaultGroupMembershipRequest"),
+            schema_response::<SetFaultGroupMembershipResponse>("SetFaultGroupMembershipResponse"),
+            schema_request::<StepUpCurrentSessionRequest>("StepUpCurrentSessionRequest"),
+            schema_response::<UploadStatusResponse>("UploadStatusResponse"),
+            schema_response::<WriteUploadRangeResponse>("WriteUploadRangeResponse"),
+        ]
+        .into_iter()
+        .chain(smb_export_component_schemas()),
+    );
     Value::Object(Map::from_iter([(
         "schemas".to_owned(),
         Value::Object(schemas),
     )]))
+}
+
+fn smb_export_component_schemas() -> [(String, Value); 4] {
+    [
+        schema_request::<PublishSmbExportRequest>("PublishSmbExportRequest"),
+        schema_response::<PublishSmbExportResponse>("PublishSmbExportResponse"),
+        schema_request::<WithdrawSmbExportRequest>("WithdrawSmbExportRequest"),
+        schema_response::<WithdrawSmbExportResponse>("WithdrawSmbExportResponse"),
+    ]
 }
 
 fn schema_request<T: schemars::JsonSchema>(name: &str) -> (String, Value) {
@@ -387,7 +419,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 14] {
+fn administration_paths() -> [(String, Value); 16] {
     [
         (
             "/admin/users".to_owned(),
@@ -406,6 +438,14 @@ fn administration_paths() -> [(String, Value); 14] {
             group_membership_removal_path(),
         ),
         ("/admin/volumes".to_owned(), create_volume_path()),
+        (
+            "/admin/volumes/{volume_id}/smb-exports".to_owned(),
+            publish_smb_export_path(),
+        ),
+        (
+            "/admin/smb-exports/{export_id}/withdrawals".to_owned(),
+            withdraw_smb_export_path(),
+        ),
         ("/admin/operations".to_owned(), list_operations_path()),
         (
             "/admin/storage-folders".to_owned(),
@@ -452,6 +492,54 @@ fn administration_paths() -> [(String, Value); 14] {
             permission_grant_revocation_path(),
         ),
     ]
+}
+
+fn publish_smb_export_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "publishSmbExport",
+            "summary": "Explicitly publish one existing directory through embedded SMB",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [volume_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request("SMB export publication", "#/components/schemas/PublishSmbExportRequest"),
+            "responses": {
+                "201": json_response("SMB export durably published or exactly replayed", "#/components/schemas/PublishSmbExportResponse"),
+                "400": json_response("Invalid export request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Volume, directory or gateway not found", "#/components/schemas/ApiError"),
+                "409": json_response("Share name or operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("SMB export authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn withdraw_smb_export_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "withdrawSmbExport",
+            "summary": "Withdraw one explicitly published SMB export",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [smb_export_parameter(), optional_csrf_parameter()],
+            "requestBody": json_request("Audited SMB export withdrawal", "#/components/schemas/WithdrawSmbExportRequest"),
+            "responses": {
+                "200": json_response("SMB export durably withdrawn or exactly replayed", "#/components/schemas/WithdrawSmbExportResponse"),
+                "400": json_response("Invalid withdrawal request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Active SMB export not found", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("SMB export authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn topology_inventory_path(operation_id: &str, summary: &str, response_schema: &str) -> Value {
@@ -1231,6 +1319,15 @@ fn upload_json_responses(success: &str, description: &str, schema_reference: &st
 fn volume_parameter() -> Value {
     json!({
         "name": "volume_id",
+        "in": "path",
+        "required": true,
+        "schema": uuid_parameter_schema()
+    })
+}
+
+fn smb_export_parameter() -> Value {
+    json!({
+        "name": "export_id",
         "in": "path",
         "required": true,
         "schema": uuid_parameter_schema()

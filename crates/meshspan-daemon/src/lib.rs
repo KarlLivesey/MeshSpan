@@ -52,6 +52,7 @@ mod consensus_identity_administration;
 mod consensus_node_enrolment;
 mod consensus_operation_status;
 mod consensus_permission_administration;
+mod consensus_smb_export_administration;
 mod consensus_topology_administration;
 mod create_mesh_setup;
 #[cfg(test)]
@@ -179,6 +180,12 @@ mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 mod smb_authentication;
+mod smb_connection;
+mod smb_export_administration;
+mod smb_export_administration_api;
+#[cfg(test)]
+mod smb_export_administration_api_tests;
+mod smb_server;
 mod smb_verifier_secret;
 mod step_up_session;
 mod step_up_session_api;
@@ -439,10 +446,23 @@ pub use setup_api::{
 pub use smb_authentication::{
     ProtectedSmbVerifierKeySource, SmbAuthenticatedIdentity, SmbAuthentication,
     SmbAuthenticationAuthority, SmbAuthenticationAuthorityError, SmbAuthenticationError,
-    SmbAuthenticationService, SmbVerifierKeySource,
+    SmbAuthenticationService, SmbCredentialEvidence, SmbSessionAuthority, SmbVerifierKeySource,
+};
+pub use smb_export_administration::{
+    SmbExportAdministrationAuthority, SmbExportAdministrationAuthorityError,
+    SmbExportAdministrationController, SmbExportAdministrationError,
+    SmbExportAdministrationService,
+};
+pub use smb_export_administration_api::{
+    SmbExportAdministrationApiError, smb_export_administration_api_router,
+};
+pub use smb_server::{
+    SmbConnectionHandler, SmbHandlerFuture, SmbServer, SmbServerConfigurationError, SmbServerError,
+    SmbServerLimits,
 };
 pub use smb_verifier_secret::{
-    SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey, SmbVerifierSecretError,
+    SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey, SmbVerifierMaterial,
+    SmbVerifierSecretError,
 };
 pub use step_up_session::{
     StepUpCurrentSessionError, StepUpCurrentSessionService, StepUpSessionAuthority,

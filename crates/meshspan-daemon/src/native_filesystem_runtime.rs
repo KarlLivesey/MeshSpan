@@ -36,6 +36,8 @@ use crate::{
 pub(crate) use classification::classify_native_filesystem_error;
 
 const CONTENT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+const HEAD_PUBLICATION_ATTEMPTS: usize = 32;
+const HEAD_PUBLICATION_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 pub(crate) const MAXIMUM_NATIVE_SHARD_BYTES: usize = CONTENT_CHUNK_BYTES + 16;
 
 type ProductionPublisher = UnprotectedContentPublisher<
@@ -369,9 +371,33 @@ fn spawn_head_publication(
         ),
     };
     runtime.spawn(async move {
-        let _response = network.request_control(peer, &envelope).await;
+        for attempt in 0..HEAD_PUBLICATION_ATTEMPTS {
+            if network
+                .request_control(peer, &envelope)
+                .await
+                .is_ok_and(|response| namespace_head_was_accepted(&response))
+            {
+                return;
+            }
+            if attempt + 1 < HEAD_PUBLICATION_ATTEMPTS {
+                tokio::time::sleep(HEAD_PUBLICATION_RETRY_DELAY).await;
+            }
+        }
     });
     Ok(())
+}
+
+fn namespace_head_was_accepted(response: &meshspan_protocol::ValidatedControlEnvelope) -> bool {
+    let Some(meshspan_protocol::v1::control_envelope::Message::NamespaceHeadAccepted(accepted)) =
+        response.as_inner().message.as_ref()
+    else {
+        return false;
+    };
+    accepted.result.as_ref().is_some_and(|result| {
+        result.outcome == i32::from(meshspan_protocol::v1::OperationOutcome::Durable)
+            && result.result_digest.len() == 32
+            && result.result_digest.iter().any(|byte| *byte != 0)
+    })
 }
 
 fn publication_operation_id(

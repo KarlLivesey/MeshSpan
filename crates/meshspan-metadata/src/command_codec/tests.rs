@@ -5,8 +5,8 @@ use meshspan_domain::{
     ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId,
     AuthenticationService, ComponentInstanceId, DurationMicros, EntropyError, FaultGroupClassId,
     FaultGroupId, GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
-    PrincipalId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId, TargetId,
-    UnixMicros, VolumeId,
+    PrincipalId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId,
+    TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -19,10 +19,11 @@ use crate::{
     CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent, CreateFaultGroup,
     CreateGroup, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
     GrantPermissionWithActivation, IssueAuthenticationSession, NewAuthenticationCredential,
-    NewRecoveryCode, PermissionScope, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
-    RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SessionAuthenticationFactor, SessionClientLabel, SetHostFaultGroupMembership,
-    StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
+    NewRecoveryCode, PermissionScope, PublishSmbExport, RecordName, RegisterNodeWrappingKey,
+    RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
+    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
+    SetHostFaultGroupMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
+    StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
 };
 
 #[test]
@@ -123,6 +124,33 @@ fn topology_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::
             group_id,
             host_id: HostId::from_bytes([92; 16])?,
             present: true,
+        }),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn smb_export_commands_round_trip_gateway_selection_and_audit_reason()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let export_id = SmbExportId::from_bytes([93; 16])?;
+    for command in [
+        AuthoritativeCommand::PublishSmbExport(PublishSmbExport {
+            export_id,
+            volume_id: VolumeId::from_bytes([94; 16])?,
+            root_object_id: ObjectId::from_bytes([95; 16])?,
+            share_name: RecordName::new("Finance")?,
+            gateways: SmbExportGatewaySelection::Selected(BoundedItems::new(
+                vec![NodeId::from_bytes([96; 16])?, NodeId::from_bytes([97; 16])?],
+                1_024,
+            )?),
+            encryption_required: true,
+        }),
+        AuthoritativeCommand::WithdrawSmbExport(WithdrawSmbExport {
+            export_id,
+            reason: "No longer published".to_owned(),
         }),
     ] {
         assert_round_trip(context, command)?;

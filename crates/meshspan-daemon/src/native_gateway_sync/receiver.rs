@@ -32,6 +32,7 @@ use sha2::{Digest, Sha256};
 use super::{NativeGatewaySyncError, identifier};
 
 const PAGE_ITEMS: u32 = 128;
+const IMMUTABLE_FETCH_CONCURRENCY: usize = 32;
 const RECORD_FORMAT_VERSION: u32 = 1;
 const REQUEST_TIMEOUT_MICROS: i64 = 60 * 1_000_000;
 
@@ -203,6 +204,11 @@ async fn receive_history_pages(
     advertised: &AdvertisedHead,
     mut status: NamespaceHistoryReceiveStatus,
 ) -> Result<NamespaceHistoryReceiveStatus, NativeGatewaySyncError> {
+    let known_commits = local_known_commits(
+        network.local_node_id(),
+        state_directory,
+        advertised.volume_id,
+    )?;
     while !status.terminal {
         let input_cursor = status.next_cursor.clone();
         let response = request(
@@ -214,7 +220,10 @@ async fn receive_history_pages(
             Message::FetchNamespaceHistoryPage(FetchNamespaceHistoryPage {
                 volume_id: advertised.volume_id.as_bytes().to_vec(),
                 requested_heads: vec![advertised.namespace_commit_id.as_bytes().to_vec()],
-                known_commits: Vec::new(),
+                known_commits: known_commits
+                    .iter()
+                    .map(|commit| commit.as_bytes().to_vec())
+                    .collect(),
                 cursor: input_cursor.clone(),
                 limit: PAGE_ITEMS,
             }),
@@ -232,6 +241,21 @@ async fn receive_history_pages(
             .map_err(|_| NativeGatewaySyncError::Invalid)?;
     }
     Ok(status)
+}
+
+fn local_known_commits(
+    local_node_id: NodeId,
+    state_directory: &Path,
+    volume_id: VolumeId,
+) -> Result<Vec<NamespaceCommitId>, NativeGatewaySyncError> {
+    let branch_id = InitialBootstrapMaterial::local_branch_id(local_node_id)
+        .map_err(|_| NativeGatewaySyncError::Invalid)?;
+    let now = current_time()?;
+    Ok(open_version_store(state_directory, now)?
+        .namespace_head(branch_id, volume_id)
+        .map_err(|_| NativeGatewaySyncError::Invalid)?
+        .map(|head| vec![head.namespace_commit_id])
+        .unwrap_or_default())
 }
 
 fn decode_history_page(
@@ -270,48 +294,81 @@ async fn receive_history_objects(
     volume_id: VolumeId,
     mut status: NamespaceHistoryReceiveStatus,
 ) -> Result<(), NativeGatewaySyncError> {
-    while let Some(expected_digest) = status.next_missing_immutable_record {
+    while status.missing_immutable_records != 0 {
         let export_token = status.export_token.ok_or(NativeGatewaySyncError::Invalid)?;
-        let response = request(
-            network,
-            source,
-            &session_id,
-            2,
-            &expected_digest,
-            Message::FetchNamespaceHistoryObject(FetchNamespaceHistoryObject {
-                export_token: export_token.to_vec(),
-                object_digest: expected_digest.to_vec(),
-                volume_id: volume_id.as_bytes().to_vec(),
-            }),
-        )
-        .await?;
-        let Some(Message::NamespaceHistoryObjectResult(result)) =
-            response.as_inner().message.as_ref()
-        else {
-            return Err(NativeGatewaySyncError::Invalid);
-        };
-        let object = result
-            .object
-            .as_ref()
-            .ok_or(NativeGatewaySyncError::Invalid)?;
-        if object.format_version != RECORD_FORMAT_VERSION {
+        let digests = open_version_store(state_directory, current_time()?)?
+            .namespace_history_missing_immutable_digests(session_id, IMMUTABLE_FETCH_CONCURRENCY)
+            .map_err(|_| NativeGatewaySyncError::Invalid)?;
+        if digests.is_empty() {
             return Err(NativeGatewaySyncError::Invalid);
         }
-        let record = NamespaceHistoryImmutableRecord::from_expected_digest(
-            expected_digest,
-            object.canonical_bytes.clone(),
-        )
-        .map_err(|_| NativeGatewaySyncError::Invalid)?;
-        let now = current_time()?;
-        status = open_version_store(state_directory, now)?
-            .receive_namespace_history_object(session_id, &record, now)
-            .map_err(|_| NativeGatewaySyncError::Invalid)?;
+        let mut requests = tokio::task::JoinSet::new();
+        for digest in digests {
+            let network = network.clone();
+            requests.spawn(async move {
+                fetch_history_object(
+                    &network,
+                    source,
+                    session_id,
+                    export_token,
+                    volume_id,
+                    digest,
+                )
+                .await
+            });
+        }
+        while let Some(result) = requests.join_next().await {
+            let record = result.map_err(|_| NativeGatewaySyncError::Unavailable)??;
+            let now = current_time()?;
+            status = open_version_store(state_directory, now)?
+                .receive_namespace_history_object(session_id, &record, now)
+                .map_err(|_| NativeGatewaySyncError::Invalid)?;
+        }
     }
     if status.terminal && status.missing_immutable_records == 0 {
         Ok(())
     } else {
         Err(NativeGatewaySyncError::Invalid)
     }
+}
+
+async fn fetch_history_object(
+    network: &ConsensusNetwork,
+    source: NodeId,
+    session_id: [u8; 32],
+    export_token: [u8; 32],
+    volume_id: VolumeId,
+    expected_digest: [u8; 32],
+) -> Result<NamespaceHistoryImmutableRecord, NativeGatewaySyncError> {
+    let response = request(
+        network,
+        source,
+        &session_id,
+        2,
+        &expected_digest,
+        Message::FetchNamespaceHistoryObject(FetchNamespaceHistoryObject {
+            export_token: export_token.to_vec(),
+            object_digest: expected_digest.to_vec(),
+            volume_id: volume_id.as_bytes().to_vec(),
+        }),
+    )
+    .await?;
+    let Some(Message::NamespaceHistoryObjectResult(result)) = response.as_inner().message.as_ref()
+    else {
+        return Err(NativeGatewaySyncError::Invalid);
+    };
+    let object = result
+        .object
+        .as_ref()
+        .ok_or(NativeGatewaySyncError::Invalid)?;
+    if object.format_version != RECORD_FORMAT_VERSION {
+        return Err(NativeGatewaySyncError::Invalid);
+    }
+    NamespaceHistoryImmutableRecord::from_expected_digest(
+        expected_digest,
+        object.canonical_bytes.clone(),
+    )
+    .map_err(|_| NativeGatewaySyncError::Invalid)
 }
 
 fn complete_received_history(
@@ -392,13 +449,21 @@ async fn import_layout_pages(
         }
         expected_header = Some(header);
         let contract = import_contract(source, volume_id, route, header)?;
-        let layout_page = decode_layout_page(&page, route)?;
+        let layout_page = if page.chunks.is_empty() {
+            decode_receipts(&page, route)?;
+            if header.chunk_count != 0 || page.next_index.is_some() {
+                return Err(NativeGatewaySyncError::Invalid);
+            }
+            None
+        } else {
+            Some(decode_layout_page(&page, route)?)
+        };
         let now = current_time()?;
         let mut catalog = open_catalog(state_directory, now)?;
         catalog
             .begin_layout_import(contract, header)
             .map_err(|_| NativeGatewaySyncError::Invalid)?;
-        if !layout_page.chunks().is_empty() {
+        if let Some(layout_page) = layout_page {
             catalog
                 .append_layout_import_page(contract, header, &layout_page)
                 .map_err(|_| NativeGatewaySyncError::Invalid)?;

@@ -82,6 +82,7 @@ function volume() {
     effective_rights: ["traverse", "list", "read_data"],
     name: "Shared files",
     revision: 1,
+    root_object_id: "00000000-0000-4000-8000-000000000002",
     state: "active",
     volume_id: "00000000-0000-4000-8000-000000000001",
   };

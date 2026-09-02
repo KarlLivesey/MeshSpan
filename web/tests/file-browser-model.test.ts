@@ -161,6 +161,7 @@ function volume(): VolumeSummary {
     ],
     name: "Shared files",
     revision: 1,
+    root_object_id: DIRECTORY_ID,
     state: "active",
     volume_id: VOLUME_ID,
   };

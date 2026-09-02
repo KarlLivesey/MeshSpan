@@ -233,6 +233,7 @@ fn reject_collision(
         "SELECT EXISTS(SELECT 1 FROM upload_publication_plans WHERE upload_id = ?1)
           OR EXISTS(SELECT 1 FROM namespace_publication_operations WHERE operation_id = ?2)
           OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?2)
+          OR EXISTS(SELECT 1 FROM handle_information_operations WHERE operation_id = ?2)
           OR EXISTS(SELECT 1 FROM namespace_rename_operations WHERE operation_id = ?2)
           OR EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?2)",
         params![

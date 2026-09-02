@@ -4,6 +4,8 @@
 
 #[path = "handles/flush.rs"]
 mod flush;
+#[path = "handles/information.rs"]
+mod information;
 #[path = "handles/lease.rs"]
 mod lease;
 #[path = "handles/locks.rs"]
@@ -26,6 +28,10 @@ pub(crate) use flush::{
     advance_progress as advance_flush_progress, base_content as handle_base_content,
     committed_stage_sequence, prepare as prepare_flush,
 };
+pub use information::{
+    HandleInformationReceipt, SetHandleDispositionRequest, SetHandleLengthRequest,
+};
+pub(crate) use information::{set_disposition, set_length};
 pub use lease::{
     CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, HandleLeaseReceipt,
     HandleLeaseRequest,
@@ -37,6 +43,7 @@ pub use locks::{
 };
 pub(crate) use locks::{lock_range, unlock_range};
 pub(crate) use read::{HandleReadPlan, prepare_read};
+pub(crate) use rename::load_ready_delete;
 pub use rename::{ReadyNamespaceDelete, ReadyNamespaceDeletePage};
 pub(crate) use rename::{
     consume_unlink_authority, load_ready_deletes, prepare as prepare_rename, prepare_unlink,
@@ -271,6 +278,8 @@ pub struct OpenHandleReceipt {
     pub object_revision_id: ObjectRevisionId,
     /// Exact immutable file version pinned at open.
     pub opened_version_id: FileVersionId,
+    /// Exact logical length of the pinned version before private writes.
+    pub opened_logical_length: u64,
     /// First fencing generation issued for the handle.
     pub handle_fence: u64,
     /// Whether the adapter must initialise an empty private write stage.
@@ -294,6 +303,10 @@ pub struct HandleAuthorityTarget {
     pub authorization_revision: Revision,
     /// Operations originally admitted for the handle.
     pub desired_access: HandleAccess,
+    /// Exact private working length selected by ordered writes or an explicit size mutation.
+    pub working_logical_length: u64,
+    /// Whether final close currently requests logical deletion.
+    pub delete_on_close: bool,
     /// Exclusive handle lease deadline.
     pub lease_expires_at: UnixMicros,
 }
@@ -357,6 +370,7 @@ pub(crate) struct ResolvedFile {
     object: ObjectId,
     object_revision: ObjectRevisionId,
     version: FileVersionId,
+    logical_length: u64,
 }
 
 impl ResolvedFile {
@@ -365,12 +379,14 @@ impl ResolvedFile {
         object: ObjectId,
         object_revision: ObjectRevisionId,
         version: FileVersionId,
+        logical_length: u64,
     ) -> Self {
         Self {
             namespace_commit,
             object,
             object_revision,
             version,
+            logical_length,
         }
     }
 }
@@ -644,6 +660,8 @@ fn resolve_leaf(
     namespace_commit_id: NamespaceCommitId,
     entry: &DirectoryEntry,
 ) -> Result<Option<ResolvedFile>, HandleError> {
+    type StoredHead = (Vec<u8>, Option<Vec<u8>>, Option<i64>);
+
     if entry.kind() != DirectoryEntryKind::File {
         return Ok(None);
     }
@@ -655,18 +673,20 @@ fn resolve_leaf(
     {
         return Err(HandleError::Corrupt);
     }
-    let stored_head: Option<(Vec<u8>, Option<Vec<u8>>)> = connection
+    let stored_head: Option<StoredHead> = connection
         .query_row(
-            "SELECT volume_id, current_version_id FROM branch_files
-             WHERE branch_id = ?1 AND object_id = ?2",
+            "SELECT files.volume_id, files.current_version_id, versions.logical_length
+             FROM branch_files files
+             LEFT JOIN file_versions versions ON versions.version_id = files.current_version_id
+             WHERE files.branch_id = ?1 AND files.object_id = ?2",
             params![
                 branch_id.as_bytes().as_slice(),
                 entry.object_id().as_bytes().as_slice()
             ],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let Some((volume, current)) = stored_head else {
+    let Some((volume, current, logical_length)) = stored_head else {
         return Err(HandleError::Corrupt);
     };
     if volume.as_slice() != volume_id.as_bytes()
@@ -679,6 +699,8 @@ fn resolve_leaf(
         object: entry.object_id(),
         object_revision: entry.object_revision_id(),
         version: version_id,
+        logical_length: u64::try_from(logical_length.ok_or(HandleError::Corrupt)?)
+            .map_err(|_| HandleError::Corrupt)?,
     }))
 }
 
@@ -806,10 +828,11 @@ fn persist_open(
             opened_namespace_commit_id, object_id, object_revision_id, opened_version_id, principal_id,
             authorization_revision, gateway_node_id, opened_fence, handle_fence,
             desired_access, share_access, create_disposition, delete_on_close,
-            lease_expires_at, state, opened_at, closed_at, receipt_digest
+            lease_expires_at, state, opened_at, closed_at, receipt_digest,
+            working_logical_length
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 1,
-            ?13, ?14, ?15, ?16, ?17, 1, ?18, NULL, ?19
+            ?13, ?14, ?15, ?16, ?17, 1, ?18, NULL, ?19, ?20
          )",
         params![
             request.handle_id.as_bytes().as_slice(),
@@ -831,6 +854,11 @@ fn persist_open(
             request.lease_expires_at.get(),
             request.opened_at.get(),
             result_digest.as_slice(),
+            if request.create_disposition.truncates_existing() {
+                0
+            } else {
+                to_i64(resolved.logical_length)?
+            },
         ],
     )?;
     path::persist(transaction, request.handle_id, &actual_path)?;
@@ -843,6 +871,7 @@ fn persist_open(
         object_id: resolved.object,
         object_revision_id: resolved.object_revision,
         opened_version_id: resolved.version,
+        opened_logical_length: resolved.logical_length,
         handle_fence: 1,
         truncate_on_first_write: request.create_disposition.truncates_existing(),
         result_digest,
@@ -950,6 +979,7 @@ fn decode_open_receipt(
     let object_id = identifier(&stored.object, ObjectId::from_bytes)?;
     let object_revision_id = identifier(&stored.object_revision, ObjectRevisionId::from_bytes)?;
     let opened_version_id = identifier(&stored.opened_version, FileVersionId::from_bytes)?;
+    let opened_logical_length = load_version_length(connection, opened_version_id)?;
     let fence = u64::try_from(stored.opened_fence).map_err(|_| HandleError::Corrupt)?;
     let desired = u8::try_from(stored.desired_access).map_err(|_| HandleError::Corrupt)?;
     let shared = u8::try_from(stored.share_access).map_err(|_| HandleError::Corrupt)?;
@@ -973,6 +1003,7 @@ fn decode_open_receipt(
         object: object_id,
         object_revision: object_revision_id,
         version: opened_version_id,
+        logical_length: opened_logical_length,
     };
     let expected = open_result_digest_fields(
         operation_id,
@@ -994,6 +1025,7 @@ fn decode_open_receipt(
         object_id,
         object_revision_id,
         opened_version_id,
+        opened_logical_length,
         handle_fence: fence,
         truncate_on_first_write: create_disposition.truncates_existing(),
         result_digest,
@@ -1041,6 +1073,21 @@ fn validate_open_lineage(
     } else {
         Err(HandleError::Corrupt)
     }
+}
+
+fn load_version_length(
+    connection: &Connection,
+    version_id: FileVersionId,
+) -> Result<u64, HandleError> {
+    let length = connection
+        .query_row(
+            "SELECT logical_length FROM file_versions WHERE version_id = ?1",
+            [version_id.as_bytes().as_slice()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .ok_or(HandleError::Corrupt)?;
+    u64::try_from(length).map_err(|_| HandleError::Corrupt)
 }
 
 fn expire_stale_handles(transaction: &Transaction<'_>, now: UnixMicros) -> Result<(), HandleError> {
@@ -1101,6 +1148,7 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM handle_information_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_flush_plans WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
@@ -1201,7 +1249,7 @@ fn open_result_digest_fields(
     truncate: bool,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.open-handle-result.v1\0");
+    digest.update(b"meshspan.filesystem.open-handle-result.v2\0");
     digest.update(&operation_id.as_bytes());
     digest.update(&handle_id.as_bytes());
     digest.update(&request_digest);
@@ -1209,6 +1257,7 @@ fn open_result_digest_fields(
     digest.update(&resolved.object.as_bytes());
     digest.update(&resolved.object_revision.as_bytes());
     digest.update(&resolved.version.as_bytes());
+    digest.update(&resolved.logical_length.to_be_bytes());
     digest.update(&fence.to_be_bytes());
     digest.update(&[u8::from(truncate)]);
     digest.finalize().into()

@@ -16,6 +16,7 @@ import {
   renderPermissionAdministrationRequestTypes,
 } from "./render-permission-administration-client.mjs";
 import { renderSetupClientInterface } from "./render-setup-client.mjs";
+import { renderSmbExportClientInterface } from "./render-smb-export-client.mjs";
 import {
   renderStorageFolderClientInterface,
   renderStorageFolderRequestTypes,
@@ -108,6 +109,7 @@ function renderClientInterface() {
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
   ${renderVolumeClientInterface()}
+  ${renderSmbExportClientInterface()}
   ${renderPermissionAdministrationClientInterface()}
   ${renderOperationStatusClientInterface()}
   ${renderStorageFolderClientInterface()}
