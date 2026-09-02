@@ -22,7 +22,8 @@ use meshspan_filesystem::{
     CompletedStage, ContentChunkLimits, ContentPublicationRequest, ContentReadError,
     ContentReadRequest, ContentShardRouter, DurableContentPublisher, DurableContentReader,
     ProtectedContentAccess, ProtectedContentPublisher, ProtectionConfiguration,
-    PublishedContentReference, VolumeContentKeyring, VolumeKeyEncryptionKey,
+    ProtectionPolicySource, PublishedContentReference, VolumeContentKeyring,
+    VolumeKeyEncryptionKey,
 };
 use meshspan_placement::FaultAwarePlacement;
 use meshspan_storage::{
@@ -96,7 +97,7 @@ fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses(
         router,
         ReedSolomonCoding::new(),
         FaultAwarePlacement::new(),
-        protection,
+        VolumeBoundProtection::new(volume_id, protection),
         FixedRandom,
         VolumeContentKeyring::new(volume_id, VolumeKeyEncryptionKey::from_bytes(1, [4; 32])?),
         ContentChunkLimits::new(350_000)?,
@@ -140,6 +141,32 @@ fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses(
         Err(ContentReadError::Unavailable)
     ));
     Ok(())
+}
+
+struct VolumeBoundProtection {
+    volume_id: VolumeId,
+    configuration: ProtectionConfiguration,
+}
+
+impl VolumeBoundProtection {
+    const fn new(volume_id: VolumeId, configuration: ProtectionConfiguration) -> Self {
+        Self {
+            volume_id,
+            configuration,
+        }
+    }
+}
+
+impl ProtectionPolicySource for VolumeBoundProtection {
+    fn configuration(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<ProtectionConfiguration, meshspan_filesystem::ContentPublicationError> {
+        if volume_id != self.volume_id {
+            return Err(meshspan_filesystem::ContentPublicationError::InvalidInput);
+        }
+        Ok(self.configuration.clone())
+    }
 }
 
 fn open_provider(

@@ -29,6 +29,7 @@ mod recovery;
 
 pub use protected::{
     ContentShardRouter, ProtectedContentAccess, ProtectedContentPublisher, ProtectionConfiguration,
+    ProtectionPolicySource,
 };
 
 const SPOOL_DIRECTORY: &str = "content-spools";

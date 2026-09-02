@@ -13,7 +13,9 @@ use meshspan_contracts::{
     ReservationClass, ReserveStorageRequest, ShardAcknowledgement, ShardIdentity, ShardReadPermit,
     ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation, read_permit_mac,
 };
-use meshspan_domain::{FailureScenario, MeshId, OperationId, RandomSource, Revision, Topology};
+use meshspan_domain::{
+    FailureScenario, MeshId, OperationId, RandomSource, Revision, Topology, VolumeId,
+};
 
 use super::{
     PREPARE_PAGE_ITEMS, cleanup_spool, map_catalog, map_catalog_read, map_contract,
@@ -149,6 +151,31 @@ impl ProtectionConfiguration {
     }
 }
 
+/// Resolves one immutable protection snapshot for the volume being published.
+///
+/// Resolution happens once before layout planning, preventing one publication from mixing policy
+/// revisions between stripes.
+pub trait ProtectionPolicySource {
+    /// Returns the exact topology, capacity and failure promise for one volume publication.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the policy is absent, stale, malformed or temporarily unavailable.
+    fn configuration(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<ProtectionConfiguration, ContentPublicationError>;
+}
+
+impl ProtectionPolicySource for ProtectionConfiguration {
+    fn configuration(
+        &self,
+        _volume_id: VolumeId,
+    ) -> Result<ProtectionConfiguration, ContentPublicationError> {
+        Ok(self.clone())
+    }
+}
+
 /// Shared read authority for every exact target selected by protected placement.
 pub struct ProtectedContentAccess {
     mesh_id: MeshId,
@@ -167,28 +194,35 @@ impl ProtectedContentAccess {
 }
 
 /// Durable encrypted publisher using injected placement, coding and target routing boundaries.
-pub struct ProtectedContentPublisher<Router, Coding, Placement, Random, Keys = VolumeContentKeyring>
-{
+pub struct ProtectedContentPublisher<
+    Router,
+    Coding,
+    Placement,
+    Random,
+    Keys = VolumeContentKeyring,
+    Policies = ProtectionConfiguration,
+> {
     catalog: DurableContentCatalog,
     spools: Dir,
     router: Router,
     coding: Coding,
     placement: Placement,
-    protection: ProtectionConfiguration,
+    policies: Policies,
     random: Random,
     key_envelopes: Keys,
     chunk_limits: ContentChunkLimits,
     access: ProtectedContentAccess,
 }
 
-impl<Router, Coding, Placement, Random, Keys>
-    ProtectedContentPublisher<Router, Coding, Placement, Random, Keys>
+impl<Router, Coding, Placement, Random, Keys, Policies>
+    ProtectedContentPublisher<Router, Coding, Placement, Random, Keys, Policies>
 where
     Router: ContentShardRouter,
     Coding: CodingScheme,
     Placement: PlacementPolicy,
     Random: RandomSource,
     Keys: VolumeContentKeys,
+    Policies: ProtectionPolicySource,
 {
     /// Opens the durable publication journal and private write-spool directory.
     ///
@@ -205,7 +239,7 @@ where
         router: Router,
         coding: Coding,
         placement: Placement,
-        protection: ProtectionConfiguration,
+        policies: Policies,
         random: Random,
         key_envelopes: Keys,
         chunk_limits: ContentChunkLimits,
@@ -218,7 +252,7 @@ where
             router,
             coding,
             placement,
-            protection,
+            policies,
             random,
             key_envelopes,
             chunk_limits,
@@ -259,7 +293,8 @@ where
             )
             .map_err(map_key_publication)?;
         let cipher = ContentChunkCipher::new(content_key, self.chunk_limits);
-        let mut candidates = self.protection.candidates.clone();
+        let protection = self.policies.configuration(request.volume_id)?;
+        let mut candidates = protection.candidates.clone();
         file.seek(SeekFrom::Start(0))?;
         let mut remaining = completed.logical_length;
         let mut chunk_index = 0_u64;
@@ -295,7 +330,7 @@ where
                 provider_operation_id: provider_operation_id(request.operation_id, chunk_index)
                     .map_err(|_| ContentPublicationError::Corrupt)?,
             };
-            let plan = self.plan_stripe(request, chunk, &candidates)?;
+            let plan = self.plan_stripe(request, chunk, &candidates, &protection)?;
             let slices =
                 self.encode_stripe(request, chunk, plan.coding_layout, &encrypted.ciphertext)?;
             let stripe = build_stripe(request, chunk, plan, &slices, &candidates)?;
@@ -335,6 +370,7 @@ where
         request: ContentPublicationRequest,
         chunk: PreparedContentChunk,
         candidates: &[PlacementCandidate],
+        protection: &ProtectionConfiguration,
     ) -> Result<meshspan_contracts::PlacementPlan, ContentPublicationError> {
         self.placement
             .plan_write(PlacementRequest {
@@ -346,10 +382,10 @@ where
                 },
                 logical_stripe_bytes: u32::try_from(chunk.ciphertext_length)
                     .map_err(|_| ContentPublicationError::InvalidInput)?,
-                scenarios: &self.protection.scenarios,
-                topology: &self.protection.topology,
-                topology_revision: self.protection.topology_revision,
-                capacity_revision: self.protection.capacity_revision,
+                scenarios: &protection.scenarios,
+                topology: &protection.topology,
+                topology_revision: protection.topology_revision,
+                capacity_revision: protection.capacity_revision,
                 candidates,
             })
             .map_err(map_contract)
@@ -522,14 +558,15 @@ where
     }
 }
 
-impl<Router, Coding, Placement, Random, Keys> DurableContentPublisher
-    for ProtectedContentPublisher<Router, Coding, Placement, Random, Keys>
+impl<Router, Coding, Placement, Random, Keys, Policies> DurableContentPublisher
+    for ProtectedContentPublisher<Router, Coding, Placement, Random, Keys, Policies>
 where
     Router: ContentShardRouter,
     Coding: CodingScheme,
     Placement: PlacementPolicy,
     Random: RandomSource,
     Keys: VolumeContentKeys,
+    Policies: ProtectionPolicySource,
 {
     type Sink = DurableContentSink;
 
@@ -608,14 +645,15 @@ where
     }
 }
 
-impl<Router, Coding, Placement, Random, Keys> DurableContentReader
-    for ProtectedContentPublisher<Router, Coding, Placement, Random, Keys>
+impl<Router, Coding, Placement, Random, Keys, Policies> DurableContentReader
+    for ProtectedContentPublisher<Router, Coding, Placement, Random, Keys, Policies>
 where
     Router: ContentShardRouter,
     Coding: CodingScheme,
     Placement: PlacementPolicy,
     Random: RandomSource,
     Keys: VolumeContentKeys,
+    Policies: ProtectionPolicySource,
 {
     fn stream_range(
         &mut self,
@@ -677,8 +715,8 @@ where
     }
 }
 
-impl<Router, Coding, Placement, Random, Keys>
-    ProtectedContentPublisher<Router, Coding, Placement, Random, Keys>
+impl<Router, Coding, Placement, Random, Keys, Policies>
+    ProtectedContentPublisher<Router, Coding, Placement, Random, Keys, Policies>
 where
     Router: ContentShardRouter,
     Coding: CodingScheme,
