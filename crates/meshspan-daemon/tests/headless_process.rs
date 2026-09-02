@@ -4,6 +4,8 @@
 
 #[path = "support/passkey.rs"]
 mod passkey_support;
+#[path = "headless_process/stage8.rs"]
+mod stage8;
 
 use std::error::Error;
 use std::fs;
