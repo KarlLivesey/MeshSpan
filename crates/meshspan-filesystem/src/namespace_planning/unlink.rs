@@ -366,6 +366,7 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM adapter_rename_plans WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM handle_information_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),

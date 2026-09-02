@@ -11,8 +11,9 @@ use meshspan_domain::{
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterListRequest, AdapterLockRequest, AdapterReadFileRequest,
-    AdapterRenameRequest, AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest,
-    ByteRange, CreateDisposition as FilesystemDisposition, DirectoryEntryKind, DirectoryListCursor,
+    AdapterRenameRequest, AdapterSetDispositionRequest, AdapterSetLengthRequest,
+    AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest, ByteRange,
+    CreateDisposition as FilesystemDisposition, DirectoryEntryKind, DirectoryListCursor,
     FilesystemAccessContext, FilesystemFileAdapter, HandleAccess, HandleShare, NamespaceLimits,
     NamespacePath, RangeLockKind,
 };
@@ -375,10 +376,6 @@ where
 
     /// Applies a supported file-information mutation through the shared filesystem contract.
     ///
-    /// The first mapping supports atomic rename without replacement. Delete-pending and logical
-    /// length changes require durable mutable-handle contracts and fail closed until those common
-    /// operations are available.
-    ///
     /// # Errors
     ///
     /// Rejects mismatched identities, unknown opens, replacement requests, unsafe paths,
@@ -389,14 +386,29 @@ where
         request: &SetInfoRequest,
     ) -> Result<[u8; 66], SmbFilesystemAdapterError<F::Error>> {
         self.validate_header(request.header.session_id, request.header.tree_id)?;
-        let SetFileInformation::Rename {
-            replace_if_exists,
-            target_components,
-        } = &request.information
-        else {
-            return Err(SmbFilesystemAdapterError::UnsupportedMutation);
-        };
-        if *replace_if_exists {
+        match &request.information {
+            SetFileInformation::Rename {
+                replace_if_exists,
+                target_components,
+            } => self.rename_open(context, request, *replace_if_exists, target_components)?,
+            SetFileInformation::EndOfFile { length } => {
+                self.set_open_length(context, request, *length)?;
+            }
+            SetFileInformation::Disposition { delete_pending } => {
+                self.set_open_disposition(context, request, *delete_pending)?;
+            }
+        }
+        Ok(request.success_response())
+    }
+
+    fn rename_open(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &SetInfoRequest,
+        replace_if_exists: bool,
+        target_components: &[String],
+    ) -> Result<(), SmbFilesystemAdapterError<F::Error>> {
+        if replace_if_exists {
             return Err(SmbFilesystemAdapterError::UnsupportedReplacement);
         }
         let target = self.path(target_components)?;
@@ -416,7 +428,61 @@ where
             )
             .map_err(SmbFilesystemAdapterError::Filesystem)?;
         self.apply_relocations(relocations)?;
-        Ok(request.success_response())
+        Ok(())
+    }
+
+    fn set_open_length(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &SetInfoRequest,
+        logical_length: u64,
+    ) -> Result<(), SmbFilesystemAdapterError<F::Error>> {
+        if logical_length > self.limits.maximum_writable_file_bytes {
+            return Err(SmbFilesystemAdapterError::LimitExceeded);
+        }
+        let open = self.open(request.file_id)?.clone();
+        let receipt = self
+            .filesystem
+            .set_length(
+                context,
+                AdapterSetLengthRequest {
+                    operation_id: operation_id(request.header, b"set-info-length")?,
+                    handle_id: open.handle_id,
+                    handle_fence: open.fence,
+                    logical_length,
+                    observed_at: context.now,
+                },
+            )
+            .map_err(SmbFilesystemAdapterError::Filesystem)?;
+        let state = self.open_mut(request.file_id)?;
+        state.logical_length = receipt.checkpoint.logical_extent;
+        state.checkpoint_sequence = receipt.checkpoint.sequence;
+        state.dirty = true;
+        Ok(())
+    }
+
+    fn set_open_disposition(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &SetInfoRequest,
+        delete_pending: bool,
+    ) -> Result<(), SmbFilesystemAdapterError<F::Error>> {
+        let open = self.open(request.file_id)?.clone();
+        let receipt = self
+            .filesystem
+            .set_disposition(
+                context,
+                AdapterSetDispositionRequest {
+                    operation_id: operation_id(request.header, b"set-info-disposition")?,
+                    handle_id: open.handle_id,
+                    handle_fence: open.fence,
+                    delete_on_close: delete_pending,
+                    observed_at: context.now,
+                },
+            )
+            .map_err(SmbFilesystemAdapterError::Filesystem)?;
+        self.open_mut(request.file_id)?.delete_pending = receipt.delete_on_close;
+        Ok(())
     }
 
     /// Reads one verified bounded range from an exact live SMB open.
@@ -636,7 +702,7 @@ where
                 handle_fence: open.fence,
                 expected_stage_sequence: open.checkpoint_sequence,
                 final_length: open.logical_length,
-                sparse: false,
+                sparse: true,
                 content_deadline: deadline(context.now, self.limits.content_timeout)?,
                 observed_at: context.now,
             })
@@ -926,7 +992,7 @@ where
                     handle_fence: open.fence,
                     expected_stage_sequence: open.checkpoint_sequence,
                     final_length: open.logical_length,
-                    sparse: false,
+                    sparse: true,
                     content_deadline: deadline(context.now, self.limits.content_timeout)?,
                     observed_at: context.now,
                 },

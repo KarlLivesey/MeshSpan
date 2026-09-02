@@ -377,6 +377,20 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             .handle_authority_target(handle_id, observed_at)
     }
 
+    pub(crate) fn set_handle_length(
+        &mut self,
+        request: crate::SetHandleLengthRequest,
+    ) -> Result<crate::FilesystemHandleLengthReceipt, crate::HandleIoError> {
+        crate::handle_io::set_length(&mut self.stages, &mut self.publications, request)
+    }
+
+    pub(crate) fn set_handle_disposition(
+        &mut self,
+        request: crate::SetHandleDispositionRequest,
+    ) -> Result<crate::HandleInformationReceipt, crate::HandleError> {
+        self.publications.set_handle_disposition(request)
+    }
+
     pub(crate) fn lock_range(
         &mut self,
         request: crate::LockRangeRequest,

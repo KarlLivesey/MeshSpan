@@ -4,6 +4,8 @@
 
 #[path = "handles/flush.rs"]
 mod flush;
+#[path = "handles/information.rs"]
+mod information;
 #[path = "handles/lease.rs"]
 mod lease;
 #[path = "handles/locks.rs"]
@@ -26,6 +28,10 @@ pub(crate) use flush::{
     advance_progress as advance_flush_progress, base_content as handle_base_content,
     committed_stage_sequence, prepare as prepare_flush,
 };
+pub use information::{
+    HandleInformationReceipt, SetHandleDispositionRequest, SetHandleLengthRequest,
+};
+pub(crate) use information::{set_disposition, set_length};
 pub use lease::{
     CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, HandleLeaseReceipt,
     HandleLeaseRequest,
@@ -296,6 +302,10 @@ pub struct HandleAuthorityTarget {
     pub authorization_revision: Revision,
     /// Operations originally admitted for the handle.
     pub desired_access: HandleAccess,
+    /// Exact private working length selected by ordered writes or an explicit size mutation.
+    pub working_logical_length: u64,
+    /// Whether final close currently requests logical deletion.
+    pub delete_on_close: bool,
     /// Exclusive handle lease deadline.
     pub lease_expires_at: UnixMicros,
 }
@@ -817,10 +827,11 @@ fn persist_open(
             opened_namespace_commit_id, object_id, object_revision_id, opened_version_id, principal_id,
             authorization_revision, gateway_node_id, opened_fence, handle_fence,
             desired_access, share_access, create_disposition, delete_on_close,
-            lease_expires_at, state, opened_at, closed_at, receipt_digest
+            lease_expires_at, state, opened_at, closed_at, receipt_digest,
+            working_logical_length
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 1,
-            ?13, ?14, ?15, ?16, ?17, 1, ?18, NULL, ?19
+            ?13, ?14, ?15, ?16, ?17, 1, ?18, NULL, ?19, ?20
          )",
         params![
             request.handle_id.as_bytes().as_slice(),
@@ -842,6 +853,11 @@ fn persist_open(
             request.lease_expires_at.get(),
             request.opened_at.get(),
             result_digest.as_slice(),
+            if request.create_disposition.truncates_existing() {
+                0
+            } else {
+                to_i64(resolved.logical_length)?
+            },
         ],
     )?;
     path::persist(transaction, request.handle_id, &actual_path)?;
@@ -1131,6 +1147,7 @@ fn reject_operation_collision(
              OR EXISTS(SELECT 1 FROM namespace_unlink_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM range_locks WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_mutation_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM handle_information_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_write_admissions WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM handle_flush_plans WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],

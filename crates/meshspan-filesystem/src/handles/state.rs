@@ -26,6 +26,7 @@ pub(super) struct ActiveHandle {
     pub fence: u64,
     pub desired_access: HandleAccess,
     pub delete_on_close: bool,
+    pub working_logical_length: u64,
     pub lease_expires_at: UnixMicros,
 }
 
@@ -43,6 +44,7 @@ struct StoredHandle {
     desired_access: i64,
     share_access: i64,
     delete_on_close: i64,
+    working_logical_length: i64,
     lease_expires_at: i64,
 }
 
@@ -56,7 +58,8 @@ pub(super) fn load_active(
             "SELECT branch_id, volume_id, opened_namespace_commit_id, object_id,
                     object_revision_id, opened_version_id, principal_id,
                     authorization_revision, gateway_node_id, handle_fence,
-                    desired_access, share_access, delete_on_close, lease_expires_at
+                    desired_access, share_access, delete_on_close, working_logical_length,
+                    lease_expires_at
              FROM open_handles
              WHERE handle_id = ?1 AND state = 1 AND lease_expires_at > ?2",
             params![handle.as_bytes().as_slice(), observed_at.get()],
@@ -75,7 +78,8 @@ pub(super) fn load_active(
                     desired_access: row.get(10)?,
                     share_access: row.get(11)?,
                     delete_on_close: row.get(12)?,
-                    lease_expires_at: row.get(13)?,
+                    working_logical_length: row.get(13)?,
+                    lease_expires_at: row.get(14)?,
                 })
             },
         )
@@ -115,6 +119,8 @@ pub(crate) fn authority_target(
         gateway_node_id: active.gateway,
         authorization_revision: active.authorization_revision,
         desired_access: active.desired_access,
+        working_logical_length: active.working_logical_length,
+        delete_on_close: active.delete_on_close,
         lease_expires_at: active.lease_expires_at,
     })
 }
@@ -137,6 +143,8 @@ fn decode(
     let desired_access = HandleAccess::from_bits(
         u8::try_from(stored.desired_access).map_err(|_| HandleError::Corrupt)?,
     )?;
+    let working_logical_length =
+        u64::try_from(stored.working_logical_length).map_err(|_| HandleError::Corrupt)?;
     HandleShare::from_bits(u8::try_from(stored.share_access).map_err(|_| HandleError::Corrupt)?)?;
     if authorization_revision == 0
         || fence == 0
@@ -167,6 +175,7 @@ fn decode(
         fence,
         desired_access,
         delete_on_close: stored.delete_on_close == 1,
+        working_logical_length,
         lease_expires_at: UnixMicros::new(stored.lease_expires_at),
     })
 }

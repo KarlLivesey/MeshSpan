@@ -11,20 +11,22 @@ use thiserror::Error;
 use crate::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
-    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
+    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest,
+    AdapterSetDispositionRequest, AdapterSetLengthRequest, AdapterStatRequest,
     AdapterUnlinkRequest, AdapterUnlockRequest, AdapterUploadAbortRequest,
     AdapterUploadBeginRequest, AdapterUploadCommitRequest, AdapterUploadRangePageRequest,
     AdapterUploadStatusRequest, AdapterUploadWriteRequest, AdapterWriteFileRequest,
     DirectoryPublication, DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy,
     FilesystemCommitError, FilesystemCommitService, FilesystemHandleCloseReceipt,
     FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest,
-    FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleReadReceipt,
-    FilesystemHandleReadRequest, FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest,
-    HandleAccess, HandleError, HandleIoError, HandleLeaseReceipt, HandleLeaseRequest,
-    HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
-    NamespacePublicationReceipt, NamespaceQueryError, NamespaceRenamePublication,
-    NamespaceRenameReceipt, NamespaceStatRequest, NamespaceUnlinkPublication,
-    NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, StageWrite,
+    FilesystemHandleFlushRequest, FilesystemHandleLengthReceipt, FilesystemHandleOpenRequest,
+    FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
+    FilesystemHandleWriteRequest, HandleAccess, HandleError, HandleInformationReceipt,
+    HandleIoError, HandleLeaseReceipt, HandleLeaseRequest, HandleReadError, LockRangeReceipt,
+    LockRangeRequest, NamespaceListRequest, NamespacePublicationReceipt, NamespaceQueryError,
+    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceStatRequest,
+    NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest,
+    RangeLockKind, SetHandleDispositionRequest, SetHandleLengthRequest, StageWrite,
     UnlockRangeReceipt, UnlockRangeRequest, UploadAbortRequest, UploadBeginRequest,
     UploadCommitReceipt, UploadCommitRequest, UploadRangePageReceipt, UploadRangePageRequest,
     UploadSession, UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt,
@@ -922,6 +924,48 @@ where
                 observed_at: request.observed_at,
             },
         )
+    }
+
+    pub(crate) fn adapter_set_length(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterSetLengthRequest,
+    ) -> Result<FilesystemHandleLengthReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let target = self.handle_target(request.handle_id, context.now)?;
+        self.authorise_handle(context, target, Rights::WRITE_DATA)?;
+        self.filesystem
+            .set_handle_length(SetHandleLengthRequest {
+                operation_id: request.operation_id,
+                handle_id: request.handle_id,
+                handle_fence: request.handle_fence,
+                principal_id: target.principal_id,
+                gateway_node_id: context.gateway_node_id,
+                logical_length: request.logical_length,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::HandleIo)
+    }
+
+    pub(crate) fn adapter_set_disposition(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterSetDispositionRequest,
+    ) -> Result<HandleInformationReceipt, AuthorisedFilesystemError<A::Error>> {
+        require_adapter_context(context, request.observed_at)?;
+        let target = self.handle_target(request.handle_id, context.now)?;
+        self.authorise_handle(context, target, Rights::DELETE)?;
+        self.filesystem
+            .set_handle_disposition(SetHandleDispositionRequest {
+                operation_id: request.operation_id,
+                handle_id: request.handle_id,
+                handle_fence: request.handle_fence,
+                principal_id: target.principal_id,
+                gateway_node_id: context.gateway_node_id,
+                delete_on_close: request.delete_on_close,
+                observed_at: request.observed_at,
+            })
+            .map_err(AuthorisedFilesystemError::Handle)
     }
 
     pub(crate) fn adapter_begin_upload(

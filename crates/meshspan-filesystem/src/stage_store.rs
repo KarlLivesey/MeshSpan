@@ -19,7 +19,7 @@ use crate::{Checkpoint, StageWrite, StageWriteOutcome};
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 type BaseLoader<'a> = dyn FnMut(&mut dyn Write) -> Result<(), StageStoreError> + 'a;
-const MIGRATIONS: [Migration; 5] = [
+const MIGRATIONS: [Migration; 6] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/stage/001_initial.sql"),
@@ -40,8 +40,12 @@ const MIGRATIONS: [Migration; 5] = [
         version: 5,
         sql: include_str!("../schema/stage/005_range_index.sql"),
     },
+    Migration {
+        version: 6,
+        sql: include_str!("../schema/stage/006_length_operations.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 const STAGE_DIRECTORY: &str = "stages";
 const DATABASE_FILE: &str = "filesystem-stages.sqlite3";
 const COPY_BUFFER_BYTES: usize = 64 * 1_024;
@@ -87,6 +91,44 @@ pub struct StageCompletionRequest {
     pub sparse: bool,
     /// Authoritative time used for expiry validation.
     pub observed_at: UnixMicros,
+}
+
+/// Exact idempotent private-stage logical-length transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageLengthRequest {
+    /// Stable operation identity shared with handle authority.
+    pub operation_id: OperationId,
+    /// Private stage derived from the writable handle.
+    pub stage_id: StageId,
+    /// Exact current handle/stage fence.
+    pub stage_fence: u64,
+    /// Exact new logical length.
+    pub logical_length: u64,
+    /// Authoritative mutation instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Durable proof of one private-stage logical-length transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageLengthReceipt {
+    /// Whether the exact transition was applied or replayed.
+    pub outcome: StageWriteOutcome,
+    /// Stable operation identity.
+    pub operation_id: OperationId,
+    /// Mutated private stage.
+    pub stage_id: StageId,
+    /// Exact request digest.
+    pub request_digest: [u8; 32],
+    /// Fence that admitted the transition.
+    pub stage_fence: u64,
+    /// Resulting ordered checkpoint sequence.
+    pub mutation_sequence: u64,
+    /// Resulting explicit logical length.
+    pub logical_length: u64,
+    /// Authoritative transition instant.
+    pub applied_at: UnixMicros,
+    /// Digest binding the complete durable result.
+    pub result_digest: [u8; 32],
 }
 
 /// Independently verified content identity produced by streaming stage completion.
@@ -349,7 +391,8 @@ impl DurableStageStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = transaction.execute(
-            "UPDATE stages SET mutation_sequence = 1, logical_extent = 0
+            "UPDATE stages
+             SET mutation_sequence = 1, logical_extent = 0, declared_logical_length = 0
              WHERE stage_id = ?1 AND state = 1 AND stage_fence = ?2
                AND mutation_sequence = 0 AND expires_at > ?3",
             params![
@@ -415,8 +458,98 @@ impl DurableStageStore {
         let ranges = ranges(&writes)?;
         Ok(Checkpoint {
             sequence: stage.sequence,
-            logical_extent: stage.logical_extent,
+            logical_extent: stage
+                .declared_logical_length
+                .unwrap_or(stage.logical_extent),
             initialised_ranges: ranges,
+        })
+    }
+
+    /// Validates one logical-length transition before handle authority is durably changed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, stale, conflicting or already-expired stage authority.
+    pub fn preflight_length(&self, request: StageLengthRequest) -> Result<(), StageStoreError> {
+        validate_length_request(request)?;
+        if let Some(receipt) = load_length_receipt(&self.connection, request.operation_id)? {
+            matching_length_replay(receipt, request, length_request_digest(request))?;
+            return Ok(());
+        }
+        reject_stage_operation_collision(&self.connection, request.operation_id)?;
+        let stage = load_stage(&self.connection, request.stage_id)?;
+        validate_live_length(stage, request)
+    }
+
+    /// Advances one private stage for an explicit logical-length change without fake byte IO.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, stale or conflicting input, corrupt receipts and persistence failure.
+    pub fn set_logical_length(
+        &mut self,
+        request: StageLengthRequest,
+    ) -> Result<StageLengthReceipt, StageStoreError> {
+        validate_length_request(request)?;
+        let request_digest = length_request_digest(request);
+        if let Some(receipt) = load_length_receipt(&self.connection, request.operation_id)? {
+            return matching_length_replay(receipt, request, request_digest);
+        }
+        reject_stage_operation_collision(&self.connection, request.operation_id)?;
+        let stage = load_stage(&self.connection, request.stage_id)?;
+        validate_live_length(stage, request)?;
+        let sequence = stage
+            .sequence
+            .checked_add(1)
+            .ok_or(StageStoreError::InvalidInput)?;
+        let result_digest = length_result_digest(request, request_digest, sequence);
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "UPDATE stages
+             SET mutation_sequence = ?1, declared_logical_length = ?2
+             WHERE stage_id = ?3 AND state = 1 AND stage_fence = ?4
+               AND mutation_sequence = ?5 AND expires_at > ?6",
+            params![
+                to_i64(sequence)?,
+                to_i64(request.logical_length)?,
+                request.stage_id.as_bytes().as_slice(),
+                to_i64(request.stage_fence)?,
+                to_i64(stage.sequence)?,
+                request.observed_at.get(),
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StageStoreError::Stale);
+        }
+        transaction.execute(
+            "INSERT INTO stage_length_operations(
+                operation_id, stage_id, stage_fence, mutation_sequence, logical_length,
+                applied_at, request_digest, receipt_digest
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                request.operation_id.as_bytes().as_slice(),
+                request.stage_id.as_bytes().as_slice(),
+                to_i64(request.stage_fence)?,
+                to_i64(sequence)?,
+                to_i64(request.logical_length)?,
+                request.observed_at.get(),
+                request_digest.as_slice(),
+                result_digest.as_slice(),
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(StageLengthReceipt {
+            outcome: StageWriteOutcome::Applied,
+            operation_id: request.operation_id,
+            stage_id: request.stage_id,
+            request_digest,
+            stage_fence: request.stage_fence,
+            mutation_sequence: sequence,
+            logical_length: request.logical_length,
+            applied_at: request.observed_at,
+            result_digest,
         })
     }
 
@@ -716,7 +849,9 @@ impl DurableStageStore {
         {
             return Err(StageStoreError::Stale);
         }
-        let logical_length = base_length.max(stage.logical_extent);
+        let logical_length = stage
+            .declared_logical_length
+            .unwrap_or_else(|| base_length.max(stage.logical_extent));
         let available = logical_length.saturating_sub(request.offset);
         let result_length = request.length.min(available);
         let result_size =
@@ -825,7 +960,12 @@ impl DurableStageStore {
         )?;
         let updated = transaction.execute(
             "UPDATE stages
-             SET mutation_sequence = ?1, logical_extent = MAX(logical_extent, ?2)
+             SET mutation_sequence = ?1,
+                 logical_extent = MAX(logical_extent, ?2),
+                 declared_logical_length = CASE
+                     WHEN declared_logical_length IS NULL THEN NULL
+                     ELSE MAX(declared_logical_length, ?2)
+                 END
              WHERE stage_id = ?3 AND state = 1 AND mutation_sequence = ?4",
             params![
                 to_i64(sequence)?,
@@ -850,6 +990,7 @@ struct StoredStage {
     state: u8,
     sequence: u64,
     logical_extent: u64,
+    declared_logical_length: Option<u64>,
     expires_at: UnixMicros,
 }
 
@@ -991,6 +1132,7 @@ fn reject_stage_operation_collision(
         "SELECT EXISTS(SELECT 1 FROM stage_writes WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM stage_lease_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM stage_truncation_operations WHERE operation_id = ?1)
+             OR EXISTS(SELECT 1 FROM stage_length_operations WHERE operation_id = ?1)
              OR EXISTS(SELECT 1 FROM stage_abort_operations WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
@@ -1000,6 +1142,135 @@ fn reject_stage_operation_collision(
     } else {
         Err(StageStoreError::OperationConflict)
     }
+}
+
+fn validate_length_request(request: StageLengthRequest) -> Result<(), StageStoreError> {
+    if request.stage_fence == 0 || request.logical_length > MAXIMUM_SQLITE_INTEGER {
+        Err(StageStoreError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_live_length(
+    stage: StoredStage,
+    request: StageLengthRequest,
+) -> Result<(), StageStoreError> {
+    if stage.state != 1
+        || stage.fence != request.stage_fence
+        || request.observed_at >= stage.expires_at
+    {
+        return Err(StageStoreError::Stale);
+    }
+    if request.logical_length > stage.maximum_bytes {
+        Err(StageStoreError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn load_length_receipt(
+    connection: &Connection,
+    operation_id: OperationId,
+) -> Result<Option<StageLengthReceipt>, StageStoreError> {
+    type Stored = (Vec<u8>, i64, i64, i64, i64, Vec<u8>, Vec<u8>);
+    let stored: Option<Stored> = connection
+        .query_row(
+            "SELECT stage_id, stage_fence, mutation_sequence, logical_length,
+                    applied_at, request_digest, receipt_digest
+             FROM stage_length_operations WHERE operation_id = ?1",
+            [operation_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    stored
+        .as_ref()
+        .map(|stored| decode_length_receipt(operation_id, stored))
+        .transpose()
+}
+
+fn decode_length_receipt(
+    operation_id: OperationId,
+    stored: &(Vec<u8>, i64, i64, i64, i64, Vec<u8>, Vec<u8>),
+) -> Result<StageLengthReceipt, StageStoreError> {
+    let stage_id = stage_identifier(&stored.0)?;
+    let stage_fence = from_i64(stored.1)?;
+    let mutation_sequence = from_i64(stored.2)?;
+    let logical_length = from_i64(stored.3)?;
+    let applied_at = UnixMicros::new(stored.4);
+    let request_digest = copy_digest(&stored.5)?;
+    let result_digest = copy_digest(&stored.6)?;
+    let request = StageLengthRequest {
+        operation_id,
+        stage_id,
+        stage_fence,
+        logical_length,
+        observed_at: applied_at,
+    };
+    if result_digest != length_result_digest(request, request_digest, mutation_sequence) {
+        return Err(StageStoreError::Corrupt);
+    }
+    Ok(StageLengthReceipt {
+        outcome: StageWriteOutcome::Replayed,
+        operation_id,
+        stage_id,
+        request_digest,
+        stage_fence,
+        mutation_sequence,
+        logical_length,
+        applied_at,
+        result_digest,
+    })
+}
+
+fn matching_length_replay(
+    receipt: StageLengthReceipt,
+    request: StageLengthRequest,
+    request_digest: [u8; 32],
+) -> Result<StageLengthReceipt, StageStoreError> {
+    if receipt.stage_id == request.stage_id && receipt.request_digest == request_digest {
+        Ok(receipt)
+    } else {
+        Err(StageStoreError::OperationConflict)
+    }
+}
+
+fn length_request_digest(request: StageLengthRequest) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.stage-length-request.v1\0");
+    digest.update(&request.operation_id.as_bytes());
+    digest.update(&request.stage_id.as_bytes());
+    digest.update(&request.stage_fence.to_be_bytes());
+    digest.update(&request.logical_length.to_be_bytes());
+    digest.update(&request.observed_at.get().to_be_bytes());
+    digest.finalize().into()
+}
+
+fn length_result_digest(
+    request: StageLengthRequest,
+    request_digest: [u8; 32],
+    sequence: u64,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.filesystem.stage-length-result.v1\0");
+    digest.update(&request.operation_id.as_bytes());
+    digest.update(&request.stage_id.as_bytes());
+    digest.update(&request_digest);
+    digest.update(&request.stage_fence.to_be_bytes());
+    digest.update(&sequence.to_be_bytes());
+    digest.update(&request.logical_length.to_be_bytes());
+    digest.update(&request.observed_at.get().to_be_bytes());
+    digest.finalize().into()
 }
 
 fn load_abort_receipt(
@@ -1261,7 +1532,11 @@ fn validate_completion(
     stage: StoredStage,
     request: StageCompletionRequest,
 ) -> Result<(), StageStoreError> {
-    if request.final_length > stage.maximum_bytes {
+    if request.final_length > stage.maximum_bytes
+        || stage
+            .declared_logical_length
+            .is_some_and(|length| length != request.final_length)
+    {
         return Err(StageStoreError::InvalidInput);
     }
     if stage.state != 1
@@ -1277,10 +1552,10 @@ fn validate_completion(
 
 fn load_stage(connection: &Connection, stage_id: StageId) -> Result<StoredStage, StageStoreError> {
     let identifier = stage_id.as_bytes();
-    let values: (i64, i64, u8, i64, i64, i64) = connection
+    let values: (i64, i64, u8, i64, i64, Option<i64>, i64) = connection
         .query_row(
             "SELECT stage_fence, maximum_bytes, state, mutation_sequence,
-                    logical_extent, expires_at
+                    logical_extent, declared_logical_length, expires_at
              FROM stages WHERE stage_id = ?1",
             [identifier.as_slice()],
             |row| {
@@ -1291,6 +1566,7 @@ fn load_stage(connection: &Connection, stage_id: StageId) -> Result<StoredStage,
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
                 ))
             },
         )
@@ -1302,7 +1578,8 @@ fn load_stage(connection: &Connection, stage_id: StageId) -> Result<StoredStage,
         state: values.2,
         sequence: from_i64(values.3)?,
         logical_extent: from_i64(values.4)?,
-        expires_at: UnixMicros::new(values.5),
+        declared_logical_length: values.5.map(from_i64).transpose()?,
+        expires_at: UnixMicros::new(values.6),
     })
 }
 
@@ -1673,8 +1950,8 @@ mod tests {
     use super::{
         CompletedStage, DATABASE_FILE, DurableStageStore, MAXIMUM_STAGE_READ_BYTES, MIGRATIONS,
         SCHEMA_VERSION, STAGE_DIRECTORY, StageAbortRequest, StageCompletionRequest,
-        StageLeaseRequest, StageRangePageRequest, StageRangeReadRequest, StageRegistration,
-        StageStoreError, configure, install_part,
+        StageLeaseRequest, StageLengthRequest, StageRangePageRequest, StageRangeReadRequest,
+        StageRegistration, StageStoreError, configure, install_part,
     };
     use crate::{StageWrite, StageWriteOutcome};
 
@@ -1862,6 +2139,49 @@ mod tests {
         assert!(matches!(
             reopened.initialise_truncation(stage_id, operation_id, 1, UnixMicros::new(2)),
             Err(StageStoreError::Corrupt)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_length_is_an_ordered_replayable_checkpoint()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let stage_id = StageId::from_bytes([11; 16])?;
+        let operation_id = OperationId::from_bytes([12; 16])?;
+        let mut store = DurableStageStore::open(directory.path(), UnixMicros::new(1))?;
+        store.register(registration(stage_id, 7, 100))?;
+        let request = StageLengthRequest {
+            operation_id,
+            stage_id,
+            stage_fence: 7,
+            logical_length: 42,
+            observed_at: UnixMicros::new(2),
+        };
+        store.preflight_length(request)?;
+        let applied = store.set_logical_length(request)?;
+        assert_eq!(applied.outcome, StageWriteOutcome::Applied);
+        assert_eq!(applied.mutation_sequence, 1);
+        assert_eq!(store.checkpoint(stage_id)?.logical_extent, 42);
+
+        store.write(stage_id, &write(13, 7, 10, b"abc")?, UnixMicros::new(3))?;
+        let checkpoint = store.checkpoint(stage_id)?;
+        assert_eq!(checkpoint.sequence, 2);
+        assert_eq!(checkpoint.logical_extent, 42);
+        store.write(stage_id, &write(14, 7, 50, b"xyz")?, UnixMicros::new(4))?;
+        assert_eq!(store.checkpoint(stage_id)?.logical_extent, 53);
+        drop(store);
+
+        let mut reopened = DurableStageStore::open(directory.path(), UnixMicros::new(5))?;
+        let replayed = reopened.set_logical_length(request)?;
+        assert_eq!(replayed.outcome, StageWriteOutcome::Replayed);
+        assert_eq!(replayed.mutation_sequence, 1);
+        assert!(matches!(
+            reopened.set_logical_length(StageLengthRequest {
+                logical_length: 41,
+                ..request
+            }),
+            Err(StageStoreError::OperationConflict)
         ));
         Ok(())
     }

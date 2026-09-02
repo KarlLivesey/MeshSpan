@@ -547,6 +547,63 @@ fn unlock_request(
     })
 }
 
+#[test]
+fn handle_information_mutations_are_fenced_durable_and_replayable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file = publication()?;
+    let mut open = open_request(120, 121, CreateDisposition::OpenExisting, 200)?;
+    open.desired_access = HandleAccess::new(true, true, true)?;
+    open.share_access = HandleShare::new(true, true, true);
+    let length = SetHandleLengthRequest {
+        operation_id: OperationId::from_bytes([122; 16])?,
+        handle_id: open.handle_id,
+        handle_fence: 1,
+        principal_id: open.principal_id,
+        gateway_node_id: open.gateway_node_id,
+        logical_length: 3,
+        observed_at: UnixMicros::new(20),
+    };
+    let disposition = SetHandleDispositionRequest {
+        operation_id: OperationId::from_bytes([123; 16])?,
+        handle_id: open.handle_id,
+        handle_fence: 1,
+        principal_id: open.principal_id,
+        gateway_node_id: open.gateway_node_id,
+        delete_on_close: true,
+        observed_at: UnixMicros::new(21),
+    };
+    {
+        let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+        store.publish_root_file(&file)?;
+        store.open_handle(&open)?;
+        let resized = store.set_handle_length(length)?;
+        assert_eq!(resized.working_logical_length, 3);
+        assert_eq!(
+            store.set_handle_length(length)?.disposition,
+            PublicationDisposition::Replayed
+        );
+        let marked = store.set_handle_disposition(disposition)?;
+        assert!(marked.delete_on_close);
+    }
+
+    let mut reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(22))?;
+    let target = reopened.handle_authority_target(open.handle_id, UnixMicros::new(22))?;
+    assert_eq!(target.working_logical_length, 3);
+    assert!(target.delete_on_close);
+    assert_eq!(
+        reopened.set_handle_disposition(disposition)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    let mut conflicting = length;
+    conflicting.logical_length = 4;
+    assert!(matches!(
+        reopened.set_handle_length(conflicting),
+        Err(HandleError::OperationConflict)
+    ));
+    Ok(())
+}
+
 fn close_request(
     operation: u8,
     open: &OpenHandleRequest,

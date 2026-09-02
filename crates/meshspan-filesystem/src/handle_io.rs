@@ -9,10 +9,11 @@ use meshspan_domain::{
 use thiserror::Error;
 
 use crate::{
-    ByteRange, Checkpoint, DurableStageStore, HandleError, HandleLeaseReceipt, HandleLeaseRequest,
-    HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest, OpenHandleReceipt, OpenHandleRequest,
-    RootFileCommitRequest, StageLeaseRequest, StageRegistration, StageStoreError, StageWrite,
-    StageWriteOutcome, VersionPublicationStore,
+    ByteRange, Checkpoint, DurableStageStore, HandleError, HandleInformationReceipt,
+    HandleLeaseReceipt, HandleLeaseRequest, HandleWriteAdmissionReceipt,
+    HandleWriteAdmissionRequest, OpenHandleReceipt, OpenHandleRequest, RootFileCommitRequest,
+    SetHandleLengthRequest, StageLeaseRequest, StageLengthReceipt, StageLengthRequest,
+    StageRegistration, StageStoreError, StageWrite, StageWriteOutcome, VersionPublicationStore,
 };
 
 /// Complete open intent including the private-stage bound required by a writable handle.
@@ -69,6 +70,17 @@ pub struct FilesystemHandleWriteReceipt {
     /// Whether immutable stage bytes were newly recorded or exactly replayed.
     pub stage_outcome: StageWriteOutcome,
     /// Exact durable checkpoint after the write.
+    pub checkpoint: Checkpoint,
+}
+
+/// Cross-database outcome of one exact private logical-length transition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilesystemHandleLengthReceipt {
+    /// Durable handle-authority transition, which may predate stage recovery.
+    pub authority: HandleInformationReceipt,
+    /// Matching private-stage checkpoint transition.
+    pub stage: StageLengthReceipt,
+    /// Exact durable checkpoint after the transition.
     pub checkpoint: Checkpoint,
 }
 
@@ -290,6 +302,38 @@ pub(crate) fn write(
     Ok(FilesystemHandleWriteReceipt {
         admission,
         stage_outcome,
+        checkpoint,
+    })
+}
+
+pub(crate) fn set_length(
+    stages: &mut DurableStageStore,
+    publications: &mut VersionPublicationStore,
+    request: SetHandleLengthRequest,
+) -> Result<FilesystemHandleLengthReceipt, HandleIoError> {
+    let stage_request = StageLengthRequest {
+        operation_id: request.operation_id,
+        stage_id: stage_id(request.handle_id)?,
+        stage_fence: request.handle_fence,
+        logical_length: request.logical_length,
+        observed_at: request.observed_at,
+    };
+    stages.preflight_length(stage_request)?;
+    let authority = publications.set_handle_length(request)?;
+    let stage = stages.set_logical_length(stage_request)?;
+    if stage.stage_fence != authority.handle_fence
+        || stage.logical_length != authority.working_logical_length
+    {
+        return Err(HandleIoError::Stage(StageStoreError::Corrupt));
+    }
+    let checkpoint = stages.checkpoint(stage_request.stage_id)?;
+    let current = publications.handle_authority_target(request.handle_id, request.observed_at)?;
+    if checkpoint.logical_extent != current.working_logical_length {
+        return Err(HandleIoError::Stage(StageStoreError::Corrupt));
+    }
+    Ok(FilesystemHandleLengthReceipt {
+        authority,
+        stage,
         checkpoint,
     })
 }

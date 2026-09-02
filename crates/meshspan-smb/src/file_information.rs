@@ -454,6 +454,9 @@ fn validate_values(values: &FileInformationValues) -> Result<(), SmbFileInformat
 }
 
 fn validate_name(name: &str) -> Result<(), SmbFileInformationError> {
+    if name == "\\" {
+        return Ok(());
+    }
     if !name.starts_with('\\')
         || name.chars().any(char::is_control)
         || name.contains('/')
@@ -600,6 +603,19 @@ mod tests {
             &0x0012_0089_u32.to_le_bytes()
         );
         assert_eq!(&response.packet[72 + 96..72 + 100], &24_u32.to_le_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn root_normalized_name_is_representable() -> Result<(), SmbFileInformationError> {
+        let request = QueryInfoRequest::parse(&query_packet(48, 4_096))?;
+        let mut root = values();
+        root.normalized_name = "\\".to_owned();
+        root.directory = true;
+        root.allocation_size = 0;
+        root.end_of_file = 0;
+        let response = QueryInfoResponse::encode(request, &root)?;
+        assert_eq!(&response.packet[76..], &[b'\\', 0]);
         Ok(())
     }
 

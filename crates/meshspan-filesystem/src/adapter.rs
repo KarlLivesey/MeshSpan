@@ -307,6 +307,36 @@ pub struct AdapterUnlockRequest {
     pub observed_at: UnixMicros,
 }
 
+/// Semantic exact working-length mutation supplied by an access connector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterSetLengthRequest {
+    /// Stable idempotency identity.
+    pub operation_id: OperationId,
+    /// Opaque live writable handle.
+    pub handle_id: HandleId,
+    /// Exact current handle fence.
+    pub handle_fence: u64,
+    /// Exact new logical length.
+    pub logical_length: u64,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
+/// Semantic delete-on-close mutation supplied by an access connector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterSetDispositionRequest {
+    /// Stable idempotency identity.
+    pub operation_id: OperationId,
+    /// Opaque live delete-capable handle.
+    pub handle_id: HandleId,
+    /// Exact current handle fence.
+    pub handle_fence: u64,
+    /// Whether final close requests logical deletion.
+    pub delete_on_close: bool,
+    /// Authoritative operation instant.
+    pub observed_at: UnixMicros,
+}
+
 /// File-handle service consumed by embedded or replaceable access connectors.
 ///
 /// The connector supplies semantic logical operations only. Branch selection, principal identity,
@@ -470,6 +500,28 @@ pub trait FilesystemFileAdapter {
         context: FilesystemAccessContext,
         request: AdapterUnlockRequest,
     ) -> Result<UnlockRangeReceipt, Self::Error>;
+
+    /// Sets one exact private working length under the live handle fence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, access, fence, bound or durability failure.
+    fn set_length(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterSetLengthRequest,
+    ) -> Result<crate::FilesystemHandleLengthReceipt, Self::Error>;
+
+    /// Sets or clears delete-on-close under the live handle fence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed authority, access, fence or durability failure.
+    fn set_disposition(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterSetDispositionRequest,
+    ) -> Result<crate::HandleInformationReceipt, Self::Error>;
 }
 
 /// Connector-neutral resumable-upload boundary with operation-time authority on every call.
@@ -697,6 +749,22 @@ where
         request: AdapterUnlockRequest,
     ) -> Result<UnlockRangeReceipt, Self::Error> {
         self.filesystem.adapter_unlock(context, request)
+    }
+
+    fn set_length(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterSetLengthRequest,
+    ) -> Result<crate::FilesystemHandleLengthReceipt, Self::Error> {
+        self.filesystem.adapter_set_length(context, request)
+    }
+
+    fn set_disposition(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: AdapterSetDispositionRequest,
+    ) -> Result<crate::HandleInformationReceipt, Self::Error> {
+        self.filesystem.adapter_set_disposition(context, request)
     }
 }
 

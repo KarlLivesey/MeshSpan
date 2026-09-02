@@ -3,20 +3,22 @@
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
     AssuranceLevel, AuthenticationService, FileVersionId, LockId, NamespaceCommitId, NodeId,
-    ObjectId, ObjectRevisionId, OperationId, UnixMicros, VolumeId,
+    ObjectId, ObjectRevisionId, OperationId, StageId, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
-    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
+    AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest,
+    AdapterSetDispositionRequest, AdapterSetLengthRequest, AdapterStatRequest,
     AdapterUnlinkRequest, AdapterUnlockRequest, AdapterWriteFileRequest, ByteRange,
     CloseHandleOutcome, CloseHandleReceipt, DirectoryPublicationReceipt, FilesystemAccessContext,
     FilesystemFileAdapter, FilesystemHandleCloseReceipt, FilesystemHandleCreateReceipt,
-    FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt, HandleLeaseReceipt,
-    HandleWriteAdmissionReceipt, LockRangeReceipt, NamespaceComponent, NamespaceListEntry,
-    NamespaceListPage, NamespaceObjectStat, NamespacePublicationReceipt, NamespaceRenameReceipt,
-    NamespaceUnlinkReceipt, OpenHandleReceipt, PublicationDisposition, RangeLockKind,
-    StageWriteOutcome, UnlockRangeReceipt,
+    FilesystemHandleLengthReceipt, FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt,
+    HandleInformationReceipt, HandleLeaseReceipt, HandleWriteAdmissionReceipt, LockRangeReceipt,
+    NamespaceComponent, NamespaceListEntry, NamespaceListPage, NamespaceObjectStat,
+    NamespacePublicationReceipt, NamespaceRenameReceipt, NamespaceUnlinkReceipt, OpenHandleReceipt,
+    PublicationDisposition, RangeLockKind, StageLengthReceipt, StageWriteOutcome,
+    UnlockRangeReceipt,
 };
 
 use super::{
@@ -54,6 +56,7 @@ enum Call {
     Flush {
         sequence: u64,
         final_length: u64,
+        sparse: bool,
     },
     Close {
         has_flush: bool,
@@ -69,6 +72,12 @@ enum Call {
     Rename {
         source: Vec<String>,
         target: Vec<String>,
+    },
+    SetLength {
+        logical_length: u64,
+    },
+    SetDisposition {
+        delete_pending: bool,
     },
 }
 
@@ -145,6 +154,7 @@ impl FilesystemFileAdapter for TestFilesystem {
         self.calls.push(Call::Flush {
             sequence: request.expected_stage_sequence,
             final_length: request.final_length,
+            sparse: request.sparse,
         });
         publication(request.operation_id)
     }
@@ -358,6 +368,67 @@ impl FilesystemFileAdapter for TestFilesystem {
             result_digest: [15; 32],
         })
     }
+
+    fn set_length(
+        &mut self,
+        _context: FilesystemAccessContext,
+        request: AdapterSetLengthRequest,
+    ) -> Result<FilesystemHandleLengthReceipt, Self::Error> {
+        self.calls.push(Call::SetLength {
+            logical_length: request.logical_length,
+        });
+        let stage_id = StageId::from_bytes(request.handle_id.as_bytes()).map_err(|_| TestError)?;
+        Ok(FilesystemHandleLengthReceipt {
+            authority: HandleInformationReceipt {
+                disposition: PublicationDisposition::Applied,
+                operation_id: request.operation_id,
+                handle_id: request.handle_id,
+                request_digest: [16; 32],
+                handle_fence: request.handle_fence,
+                working_logical_length: request.logical_length,
+                delete_on_close: false,
+                changed_at: request.observed_at,
+                result_digest: [17; 32],
+            },
+            stage: StageLengthReceipt {
+                outcome: StageWriteOutcome::Applied,
+                operation_id: request.operation_id,
+                stage_id,
+                request_digest: [18; 32],
+                stage_fence: request.handle_fence,
+                mutation_sequence: 2,
+                logical_length: request.logical_length,
+                applied_at: request.observed_at,
+                result_digest: [19; 32],
+            },
+            checkpoint: meshspan_filesystem::Checkpoint {
+                sequence: 2,
+                logical_extent: request.logical_length,
+                initialised_ranges: Vec::new(),
+            },
+        })
+    }
+
+    fn set_disposition(
+        &mut self,
+        _context: FilesystemAccessContext,
+        request: AdapterSetDispositionRequest,
+    ) -> Result<HandleInformationReceipt, Self::Error> {
+        self.calls.push(Call::SetDisposition {
+            delete_pending: request.delete_on_close,
+        });
+        Ok(HandleInformationReceipt {
+            disposition: PublicationDisposition::Applied,
+            operation_id: request.operation_id,
+            handle_id: request.handle_id,
+            request_digest: [20; 32],
+            handle_fence: request.handle_fence,
+            working_logical_length: 12,
+            delete_on_close: request.delete_on_close,
+            changed_at: request.observed_at,
+            result_digest: [21; 32],
+        })
+    }
 }
 
 #[test]
@@ -427,6 +498,7 @@ fn file_commands_use_one_authorised_copy_on_write_lifecycle()
             Call::Flush {
                 sequence: 1,
                 final_length: 12,
+                sparse: true,
             },
             Call::Close { has_flush: false },
         ]
@@ -616,6 +688,62 @@ fn query_and_rename_use_current_logical_open_state() -> Result<(), Box<dyn std::
                 "new.txt".to_owned(),
             ],
         })
+    );
+    Ok(())
+}
+
+#[test]
+fn length_and_disposition_mutate_the_common_handle_before_success()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut adapter = adapter(64)?;
+    let mut create = create_request(60, vec!["mutable.txt".to_owned()]);
+    create.desired_access.delete = true;
+    create.share_access.delete = true;
+    let opened = adapter.create(context()?, &create)?;
+
+    adapter.set_info(
+        context()?,
+        &SetInfoRequest {
+            header: header(Smb2Command::SetInfo, 61),
+            file_id: opened.file_id,
+            information: SetFileInformation::EndOfFile { length: 27 },
+        },
+    )?;
+    adapter.set_info(
+        context()?,
+        &SetInfoRequest {
+            header: header(Smb2Command::SetInfo, 62),
+            file_id: opened.file_id,
+            information: SetFileInformation::Disposition {
+                delete_pending: true,
+            },
+        },
+    )?;
+    adapter.flush_file(
+        context()?,
+        FlushRequest {
+            header: header(Smb2Command::Flush, 63),
+            file_id: opened.file_id,
+        },
+    )?;
+
+    assert_eq!(
+        adapter.into_inner().calls,
+        vec![
+            Call::Create {
+                components: vec!["shared".to_owned(), "mutable.txt".to_owned()],
+                maximum_stage_bytes: Some(64),
+            },
+            Call::SetLength { logical_length: 27 },
+            Call::SetDisposition {
+                delete_pending: true,
+            },
+            Call::Flush {
+                sequence: 2,
+                final_length: 27,
+                sparse: true,
+            },
+        ]
     );
     Ok(())
 }

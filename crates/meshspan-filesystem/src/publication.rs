@@ -37,7 +37,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 39] = [
+const MIGRATIONS: [Migration; 40] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -194,8 +194,12 @@ const MIGRATIONS: [Migration; 39] = [
         version: 39,
         sql: include_str!("../schema/branch/039_initial_directory_plans.sql"),
     },
+    Migration {
+        version: 40,
+        sql: include_str!("../schema/branch/040_handle_information_mutations.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 39;
+const SCHEMA_VERSION: u32 = 40;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -1767,6 +1771,32 @@ impl VersionPublicationStore {
         request: crate::HandleLeaseRequest,
     ) -> Result<crate::HandleLeaseReceipt, crate::HandleError> {
         crate::handles::renew(&mut self.connection, request)
+    }
+
+    /// Sets one exact private working length under the current fenced handle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/expired fences, principal or gateway substitution, missing write access,
+    /// conflicting retries, invalid lengths and persistence failure.
+    pub fn set_handle_length(
+        &mut self,
+        request: crate::SetHandleLengthRequest,
+    ) -> Result<crate::HandleInformationReceipt, crate::HandleError> {
+        crate::handles::set_length(&mut self.connection, request)
+    }
+
+    /// Sets or clears delete-on-close under the current fenced handle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale/expired fences, principal or gateway substitution, missing delete access,
+    /// conflicting retries and persistence failure.
+    pub fn set_handle_disposition(
+        &mut self,
+        request: crate::SetHandleDispositionRequest,
+    ) -> Result<crate::HandleInformationReceipt, crate::HandleError> {
+        crate::handles::set_disposition(&mut self.connection, request)
     }
 
     /// Closes one fenced handle, releases its locks and advances delete-on-close readiness.
