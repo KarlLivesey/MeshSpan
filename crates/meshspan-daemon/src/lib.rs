@@ -439,7 +439,7 @@ pub use setup_api::{
 pub use smb_authentication::{
     ProtectedSmbVerifierKeySource, SmbAuthenticatedIdentity, SmbAuthentication,
     SmbAuthenticationAuthority, SmbAuthenticationAuthorityError, SmbAuthenticationError,
-    SmbAuthenticationService, SmbCredentialEvidence, SmbVerifierKeySource,
+    SmbAuthenticationService, SmbCredentialEvidence, SmbSessionAuthority, SmbVerifierKeySource,
 };
 pub use smb_verifier_secret::{
     SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey, SmbVerifierMaterial,

@@ -10,7 +10,7 @@ use meshspan_metadata::{
 };
 use meshspan_smb::{
     EncryptionCipher, NtlmAuthenticate, NtlmChallenge, NtlmSessionBaseKey, Smb311PreauthHash,
-    Smb311SessionKeys,
+    Smb311SessionKeys, SmbSessionAuthenticator,
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -116,6 +116,26 @@ pub struct SmbAuthentication {
 /// its digest on drop.
 pub struct SmbCredentialEvidence {
     digest: Zeroizing<[u8; 32]>,
+}
+
+/// Common identity and live credential evidence retained by one established SMB session.
+pub struct SmbSessionAuthority {
+    identity: SmbAuthenticatedIdentity,
+    credential: SmbCredentialEvidence,
+}
+
+impl SmbSessionAuthority {
+    /// Returns the non-secret authenticated principal and revision evidence.
+    #[must_use]
+    pub const fn identity(&self) -> SmbAuthenticatedIdentity {
+        self.identity
+    }
+
+    /// Returns the credential digest for one short-lived common access context.
+    #[must_use]
+    pub fn credential_digest(&self) -> [u8; 32] {
+        self.credential.digest()
+    }
 }
 
 impl SmbCredentialEvidence {
@@ -235,6 +255,41 @@ where
         } else {
             SmbAuthenticationError::Denied
         })
+    }
+}
+
+impl<A, K> SmbSessionAuthenticator for SmbAuthenticationService<A, K>
+where
+    A: SmbAuthenticationAuthority,
+    K: SmbVerifierKeySource,
+{
+    type Identity = SmbSessionAuthority;
+    type Verified = SmbAuthentication;
+    type Error = SmbAuthenticationError;
+
+    fn verify(
+        &mut self,
+        authenticate: &NtlmAuthenticate<'_>,
+        challenge: &NtlmChallenge,
+        observed_at: UnixMicros,
+    ) -> Result<Self::Verified, Self::Error> {
+        self.authenticate(authenticate, challenge, observed_at)
+    }
+
+    fn establish(
+        &mut self,
+        verified: Self::Verified,
+        preauth: &Smb311PreauthHash,
+        cipher: EncryptionCipher,
+    ) -> Result<(Self::Identity, Smb311SessionKeys), Self::Error> {
+        let (identity, keys, credential) = verified.into_session_keys(preauth, cipher)?;
+        Ok((
+            SmbSessionAuthority {
+                identity,
+                credential,
+            },
+            keys,
+        ))
     }
 }
 
