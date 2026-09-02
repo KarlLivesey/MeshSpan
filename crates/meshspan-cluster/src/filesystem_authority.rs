@@ -300,6 +300,7 @@ mod tests {
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: direct_key_id,
                     key_digest: direct_digest,
+                    smb_verifier_ciphertext: None,
                     scopes: AuthenticationService::HeadlessApi.api_key_login_scope(),
                     valid_from: UnixMicros::new(100),
                 },
@@ -361,6 +362,7 @@ mod tests {
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: ApiKeyId::from_bytes([14; 16])?,
                     key_digest: [15; 32],
+                    smb_verifier_ciphertext: None,
                     scopes: AuthenticationService::Https.api_key_login_scope(),
                     valid_from: UnixMicros::new(100),
                 },

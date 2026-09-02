@@ -354,7 +354,8 @@ fn head_bootstrap(
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: ApiKeyId::from_bytes([223; 16])?,
                     key_digest: [224; 32],
-                    scopes: 1,
+                    smb_verifier_ciphertext: Some(vec![225; 65]),
+                    scopes: 7,
                     valid_from: UnixMicros::new(100),
                 },
             },

@@ -154,6 +154,7 @@ fn api_key(
             credential: NewAuthenticationCredential::ApiKey {
                 key_id: ApiKeyId::from_bytes([62; 16])?,
                 key_digest: [63; 32],
+                smb_verifier_ciphertext: Some(vec![64; 65]),
                 scopes: 0b101,
                 valid_from: UnixMicros::new(20),
             },

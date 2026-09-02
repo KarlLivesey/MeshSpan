@@ -653,8 +653,13 @@ fn fixture() -> Result<
     add_session_headers(&mut issuance_headers, &session, true)?;
     let authority = sessions.into_authority();
     let gateway = GatewaySessionIdentity::new(material.node_id, 1)?;
-    let mut issuance_service =
-        ApiKeyIssuanceService::new(authority, ApiKeyIssuanceKey::from_bytes([91; 32])?, gateway);
+    let mut issuance_service = ApiKeyIssuanceService::new(
+        authority,
+        ApiKeyIssuanceKey::from_bytes([91; 32])?,
+        crate::SmbVerifierEnvelopeKey::from_parts([92; 32], [93; 32])?,
+        1,
+        gateway,
+    )?;
     let issuance = decode_create_api_key_request(&serde_json::to_vec(&serde_json::json!({
         "operation_id": "00000000-0000-4000-8000-000000000046",
         "label": "Headless administration proof",

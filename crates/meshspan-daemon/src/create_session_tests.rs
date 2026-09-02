@@ -254,7 +254,8 @@ pub(super) fn bootstrap(
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: material.api_key.key_id(),
                     key_digest: material.api_key.secret_digest(),
-                    scopes: 1,
+                    smb_verifier_ciphertext: Some(vec![44; 65]),
+                    scopes: 7,
                     valid_from: UnixMicros::new(10),
                 },
             },

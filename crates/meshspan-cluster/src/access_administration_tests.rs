@@ -211,6 +211,7 @@ fn create_factors(
             credential: NewAuthenticationCredential::ApiKey {
                 key_id,
                 key_digest: [seed.wrapping_add(3); 32],
+                smb_verifier_ciphertext: None,
                 scopes: AuthenticationService::Https.api_key_login_scope(),
                 valid_from: UnixMicros::new(100),
             },

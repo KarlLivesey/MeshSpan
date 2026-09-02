@@ -291,7 +291,8 @@ pub(super) fn fixture(
                     credential: NewAuthenticationCredential::ApiKey {
                         key_id: ApiKeyId::from_bytes([10; 16])?,
                         key_digest: [11; 32],
-                        scopes: 1,
+                        smb_verifier_ciphertext: Some(vec![12; 65]),
+                        scopes: 7,
                         valid_from: UnixMicros::new(10),
                     },
                 },

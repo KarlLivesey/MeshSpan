@@ -62,7 +62,8 @@ pub(crate) fn protected_bootstrap(
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: ApiKeyId::from_bytes([206; 16])?,
                     key_digest: [207; 32],
-                    scopes: 1,
+                    smb_verifier_ciphertext: Some(vec![208; 65]),
+                    scopes: 7,
                     valid_from: UnixMicros::new(100),
                 },
             },

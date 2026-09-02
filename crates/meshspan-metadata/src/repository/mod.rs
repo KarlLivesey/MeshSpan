@@ -133,7 +133,7 @@ pub use access_query::{
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
-    RecoveryCodeVerificationMaterial, TotpVerificationMaterial,
+    RecoveryCodeVerificationMaterial, SmbVerificationMaterial, TotpVerificationMaterial,
 };
 pub use authentication_method_query::{
     AuthenticationMethodCursor, AuthenticationMethodRecord, AuthenticationMethodRecordDetails,
@@ -920,6 +920,26 @@ impl AuthoritativeRepository {
             service,
             required_scopes,
             required_assurance,
+            now,
+        )
+    }
+
+    /// Resolves current encrypted SMB verification materials for one validated user name.
+    ///
+    /// The result is bounded so an unauthenticated attempt cannot cause unbounded verifier work.
+    /// Absence and ordinary lifecycle rejection return an empty set.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed persisted state or an excessive active credential set.
+    pub fn smb_verification_materials(
+        &self,
+        user_name: &crate::RecordName,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Vec<SmbVerificationMaterial>, RepositoryError> {
+        authentication_method::smb_verification_materials(
+            self.database.connection(),
+            user_name.canonical(),
             now,
         )
     }

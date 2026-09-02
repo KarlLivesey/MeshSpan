@@ -56,8 +56,10 @@ fn owned_method_revocation_replays_and_immediately_fences_the_key_and_derived_se
     let mut issuance = ApiKeyIssuanceService::new(
         authority,
         ApiKeyIssuanceKey::from_bytes([21; 32])?,
+        crate::SmbVerifierEnvelopeKey::from_parts([22; 32], [23; 32])?,
+        1,
         GatewaySessionIdentity::new(material.node_id, 1)?,
-    );
+    )?;
     let api_key_response =
         issuance.issue(&issuance_request()?, &initial_headers, UnixMicros::new(30))?;
     let authority = issuance.into_authority();

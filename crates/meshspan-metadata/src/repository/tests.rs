@@ -70,7 +70,8 @@ pub(super) fn protected_bootstrap(
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: ApiKeyId::from_bytes([149; 16])?,
                     key_digest: [150; 32],
-                    scopes: 1,
+                    smb_verifier_ciphertext: Some(vec![151; 65]),
+                    scopes: 7,
                     valid_from: UnixMicros::new(1),
                 },
             },
@@ -891,7 +892,8 @@ fn join_bootstrap(
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: ApiKeyId::from_bytes([151; 16])?,
                     key_digest: [152; 32],
-                    scopes: 1,
+                    smb_verifier_ciphertext: Some(vec![153; 65]),
+                    scopes: 7,
                     valid_from: UnixMicros::new(100),
                 },
             },
@@ -2897,6 +2899,7 @@ fn create_test_session_factors(
             credential: NewAuthenticationCredential::ApiKey {
                 key_id,
                 key_digest: [seed.wrapping_add(3); 32],
+                smb_verifier_ciphertext: None,
                 scopes: AuthenticationService::Https.api_key_login_scope(),
                 valid_from: UnixMicros::new(now - 3),
             },

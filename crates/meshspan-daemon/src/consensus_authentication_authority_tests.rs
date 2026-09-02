@@ -556,8 +556,10 @@ fn api_key_creation(
         credential: NewAuthenticationCredential::ApiKey {
             key_id: api_key.key_id(),
             key_digest: api_key.secret_digest(),
+            smb_verifier_ciphertext: Some(vec![41; 65]),
             scopes: AuthenticationService::Https.api_key_login_scope()
-                | AuthenticationService::HeadlessApi.api_key_login_scope(),
+                | AuthenticationService::HeadlessApi.api_key_login_scope()
+                | AuthenticationService::Smb.api_key_login_scope(),
             valid_from: UnixMicros::new(30),
         },
     })
@@ -594,7 +596,10 @@ fn bootstrap_command(
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: api_key.key_id(),
                     key_digest: api_key.secret_digest(),
-                    scopes: AuthenticationService::Https.api_key_login_scope(),
+                    smb_verifier_ciphertext: Some(vec![42; 65]),
+                    scopes: AuthenticationService::Https.api_key_login_scope()
+                        | AuthenticationService::HeadlessApi.api_key_login_scope()
+                        | AuthenticationService::Smb.api_key_login_scope(),
                     valid_from: UnixMicros::new(10),
                 },
             },

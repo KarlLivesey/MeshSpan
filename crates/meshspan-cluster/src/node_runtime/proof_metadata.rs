@@ -179,7 +179,8 @@ fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
                 credential: NewAuthenticationCredential::ApiKey {
                     key_id: ApiKeyId::from_bytes([14; 16])?,
                     key_digest: [15; 32],
-                    scopes: 1,
+                    smb_verifier_ciphertext: Some(vec![16; 65]),
+                    scopes: 7,
                     valid_from: UnixMicros::new(1_001),
                 },
             },

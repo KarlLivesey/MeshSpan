@@ -24,12 +24,13 @@ use meshspan_recovery_bundle::{OfflineRecoveryIdentity, RecoveryBundleCode, Reco
 use meshspan_secret_envelope::{
     EncryptedSecret, RecipientKeyEnvelope, SecretContext, WrappingPublicKey, encrypt_secret,
 };
+use meshspan_smb::NtlmPasswordVerifier;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
     ClaimFile, ClaimFileError, PendingRecoveryBundle, PendingRecoveryBundleError,
-    SetupLifecycleError, SetupStateSnapshot,
+    SetupLifecycleError, SetupStateSnapshot, SmbVerifierBinding, SmbVerifierCipher,
 };
 
 const ALL_INITIAL_SERVICE_SCOPES: u8 = 1 | 2 | 4;
@@ -301,6 +302,7 @@ impl ValidatedSetupInput {
                 NODE_CERTIFICATE_LIFETIME_MICROS,
             ))
             .ok_or(CreateMeshSetupError::Certificate)?;
+        let smb_verifier_ciphertext = initial_smb_verifier_ciphertext(material)?;
         Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
             BootstrapAppliance {
                 mesh: BootstrapMesh {
@@ -324,6 +326,7 @@ impl ValidatedSetupInput {
                     credential: NewAuthenticationCredential::ApiKey {
                         key_id: material.api_key.key_id(),
                         key_digest: material.api_key.secret_digest(),
+                        smb_verifier_ciphertext: Some(smb_verifier_ciphertext),
                         scopes: ALL_INITIAL_LOGIN_SCOPES,
                         valid_from: inputs.occurred_at,
                     },
@@ -392,6 +395,37 @@ impl ValidatedSetupInput {
                 .expose_for_verification(),
         })
     }
+}
+
+fn initial_smb_verifier_ciphertext(
+    material: &InitialBootstrapMaterial,
+) -> Result<Vec<u8>, CreateMeshSetupError> {
+    let authentication_root = material.authentication_root_material().key();
+    let context = SecretContext::new(
+        AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+        material.mesh_id.as_bytes(),
+        1,
+    )?;
+    let envelope_key = crate::authentication_root_loading::derive_smb_verifier_envelope_key(
+        &authentication_root,
+        context,
+    )
+    .map_err(|_| CreateMeshSetupError::InitialAuthentication)?;
+    let verifier = NtlmPasswordVerifier::derive(material.api_key.expose_encoded().as_str())
+        .map_err(|_| CreateMeshSetupError::InitialAuthentication)?;
+    SmbVerifierCipher::new(envelope_key, 1)
+        .map_err(|_| CreateMeshSetupError::InitialAuthentication)?
+        .encrypt(
+            SmbVerifierBinding {
+                method_id: material.authentication_method_id,
+                principal_id: material.administrator_id,
+                key_id: material.api_key.key_id(),
+                service_scope: ALL_INITIAL_SERVICE_SCOPES,
+                scopes: ALL_INITIAL_LOGIN_SCOPES,
+            },
+            &verifier,
+        )
+        .map_err(|_| CreateMeshSetupError::InitialAuthentication)
 }
 
 fn private_node_certificate_name(node_id: meshspan_domain::NodeId) -> String {
@@ -542,6 +576,9 @@ pub enum CreateMeshSetupError {
     /// Restart-stable bootstrap material could not be derived.
     #[error("bootstrap material could not be derived")]
     Material(#[from] InitialBootstrapMaterialError),
+    /// Initial API-key SMB verifier protection failed closed.
+    #[error("initial authentication material could not be protected")]
+    InitialAuthentication,
     /// Recovery-code derivation failed closed.
     #[error("recovery code could not be derived")]
     RecoveryCode(#[from] RecoveryBundleError),

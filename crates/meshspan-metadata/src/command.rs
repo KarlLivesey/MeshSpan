@@ -1235,6 +1235,8 @@ pub enum NewAuthenticationCredential {
         key_id: ApiKeyId,
         /// Digest of the high-entropy secret key.
         key_digest: [u8; 32],
+        /// Authenticated-encryption envelope for SMB proof verification, when scoped for SMB.
+        smb_verifier_ciphertext: Option<Vec<u8>>,
         /// Non-empty, server-defined least-privilege capability bitset.
         scopes: u64,
         /// Inclusive first instant at which authentication is accepted.
@@ -1289,11 +1291,16 @@ impl fmt::Debug for NewAuthenticationCredential {
                 key_id,
                 scopes,
                 valid_from,
+                smb_verifier_ciphertext,
                 ..
             } => formatter
                 .debug_struct("ApiKey")
                 .field("key_id", key_id)
                 .field("key_digest", &"[REDACTED]")
+                .field(
+                    "smb_verifier_ciphertext",
+                    &smb_verifier_ciphertext.as_ref().map(Vec::len),
+                )
                 .field("scopes", scopes)
                 .field("valid_from", valid_from)
                 .finish(),
@@ -2482,12 +2489,20 @@ digest_simple_record!(
             NewAuthenticationCredential::ApiKey {
                 key_id,
                 key_digest,
+                smb_verifier_ciphertext,
                 scopes,
                 valid_from,
             } => {
                 digest.byte(4);
                 digest.identifier(key_id.as_bytes());
                 digest.bytes(key_digest);
+                match smb_verifier_ciphertext {
+                    Some(ciphertext) => {
+                        digest.byte(1);
+                        digest.bytes(ciphertext);
+                    }
+                    None => digest.byte(0),
+                }
                 digest.unsigned(*scopes);
                 digest.signed(valid_from.get());
             }

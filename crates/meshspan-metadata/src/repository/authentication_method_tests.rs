@@ -40,6 +40,7 @@ fn api_key_creation_is_atomic_restart_safe_and_exactly_replayable()
             changed.credential = NewAuthenticationCredential::ApiKey {
                 key_id: ApiKeyId::from_bytes([10; 16])?,
                 key_digest: [11; 32],
+                smb_verifier_ciphertext: Some(vec![12; 65]),
                 scopes: 0b111,
                 valid_from: UnixMicros::new(20),
             };
@@ -69,6 +70,7 @@ fn api_key_creation_is_atomic_restart_safe_and_exactly_replayable()
     invalid.credential = NewAuthenticationCredential::ApiKey {
         key_id: ApiKeyId::from_bytes([15; 16])?,
         key_digest: [0; 32],
+        smb_verifier_ciphertext: Some(vec![16; 65]),
         scopes: 0b101,
         valid_from: UnixMicros::new(20),
     };
@@ -508,6 +510,7 @@ fn api_key_command(
             credential: NewAuthenticationCredential::ApiKey {
                 key_id: ApiKeyId::from_bytes([10; 16])?,
                 key_digest: [11; 32],
+                smb_verifier_ciphertext: Some(vec![12; 65]),
                 scopes: 0b101,
                 valid_from: UnixMicros::new(20),
             },

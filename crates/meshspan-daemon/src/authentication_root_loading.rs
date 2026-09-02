@@ -13,8 +13,8 @@ use zeroize::Zeroizing;
 use crate::volume_key_loading::load_secret_generation;
 use crate::{
     SecretGenerationAuthority, SecretGenerationAuthorityError, SecretGenerationDecryptor,
-    SecretGenerationLoadingError, TotpEnvelopeKey, TotpFactorVerifier, TotpSessionError,
-    TotpSessionVerifier, VerifiedTotpFactor,
+    SecretGenerationLoadingError, SmbVerifierEnvelopeKey, TotpEnvelopeKey, TotpFactorVerifier,
+    TotpSessionError, TotpSessionVerifier, VerifiedTotpFactor,
 };
 
 const AUTHENTICATION_ROOT_BYTES: usize = 32;
@@ -22,6 +22,8 @@ const API_KEY_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.api-key-issuanc
 const JOIN_GRANT_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.join-grant-issuance.v1";
 const RECOVERY_CODE_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.recovery-code-issuance.v1";
 const TOTP_ENVELOPE_DOMAIN: &[u8] = b"meshspan.authentication.totp-envelope.v1";
+const SMB_VERIFIER_ENCRYPTION_DOMAIN: &[u8] = b"meshspan.authentication.smb-verifier-encryption.v1";
+const SMB_VERIFIER_NONCE_DOMAIN: &[u8] = b"meshspan.authentication.smb-verifier-nonce-key.v1";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -47,10 +49,12 @@ pub trait AuthenticationRootAuthority: SecretGenerationAuthority {
 
 /// Independently typed operational keys derived from one protected authentication root.
 pub struct AuthenticationRuntimeKeys {
+    generation: u64,
     api_key_issuance: ApiKeyIssuanceKey,
     join_grant_issuance: JoinGrantIssuanceKey,
     recovery_code_issuance: RecoveryCodeIssuanceKey,
     totp_envelope: TotpEnvelopeKey,
+    smb_verifier_envelope: SmbVerifierEnvelopeKey,
 }
 
 impl AuthenticationRuntimeKeys {
@@ -70,6 +74,16 @@ impl AuthenticationRuntimeKeys {
         self.api_key_issuance
     }
 
+    /// Transfers API-key issuance and SMB-verifier protection together.
+    #[must_use]
+    pub fn into_api_key_issuance_parts(self) -> (ApiKeyIssuanceKey, SmbVerifierEnvelopeKey, u64) {
+        (
+            self.api_key_issuance,
+            self.smb_verifier_envelope,
+            self.generation,
+        )
+    }
+
     /// Transfers only the node join-grant issuance capability into an issuance service.
     #[must_use]
     pub fn into_join_grant_issuance_key(self) -> JoinGrantIssuanceKey {
@@ -86,6 +100,12 @@ impl AuthenticationRuntimeKeys {
     #[must_use]
     pub fn into_totp_envelope_key(self) -> TotpEnvelopeKey {
         self.totp_envelope
+    }
+
+    /// Transfers only the SMB verifier-envelope capability into a session authenticator.
+    #[must_use]
+    pub fn into_smb_verifier_envelope_key(self) -> SmbVerifierEnvelopeKey {
+        self.smb_verifier_envelope
     }
 }
 
@@ -126,6 +146,34 @@ where
             .authority
             .latest_authentication_root_generation(mesh_id)?
             .ok_or(AuthenticationRootLoadingError::NotFound)?;
+        self.load(mesh_id, generation)
+    }
+
+    /// Loads and expands one exact historical generation named by authenticated ciphertext.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero generations, absent authority, a missing recipient, malformed plaintext and
+    /// invalid domain-separated key output.
+    pub fn load_generation(
+        &self,
+        generation: u64,
+    ) -> Result<AuthenticationRuntimeKeys, AuthenticationRootLoadingError> {
+        if generation == 0 {
+            return Err(AuthenticationRootLoadingError::InvalidInput);
+        }
+        let mesh_id = self
+            .authority
+            .local_mesh_id()?
+            .ok_or(AuthenticationRootLoadingError::NotFound)?;
+        self.load(mesh_id, generation)
+    }
+
+    fn load(
+        &self,
+        mesh_id: MeshId,
+        generation: u64,
+    ) -> Result<AuthenticationRuntimeKeys, AuthenticationRootLoadingError> {
         let context = SecretContext::new(
             AUTHENTICATION_ROOT_KEY_SECRET_KIND,
             mesh_id.as_bytes(),
@@ -279,12 +327,26 @@ fn derive_runtime_keys(
             .map_err(|_| AuthenticationRootLoadingError::Failed)?;
     let totp_envelope = TotpEnvelopeKey::from_bytes(derive(&root, context, TOTP_ENVELOPE_DOMAIN)?)
         .map_err(|_| AuthenticationRootLoadingError::Failed)?;
+    let smb_verifier_envelope = derive_smb_verifier_envelope_key(&root, context)?;
     Ok(AuthenticationRuntimeKeys {
+        generation: context.generation(),
         api_key_issuance,
         join_grant_issuance,
         recovery_code_issuance,
         totp_envelope,
+        smb_verifier_envelope,
     })
+}
+
+pub(crate) fn derive_smb_verifier_envelope_key(
+    root: &[u8; AUTHENTICATION_ROOT_BYTES],
+    context: SecretContext,
+) -> Result<SmbVerifierEnvelopeKey, AuthenticationRootLoadingError> {
+    SmbVerifierEnvelopeKey::from_parts(
+        derive(root, context, SMB_VERIFIER_ENCRYPTION_DOMAIN)?,
+        derive(root, context, SMB_VERIFIER_NONCE_DOMAIN)?,
+    )
+    .map_err(|_| AuthenticationRootLoadingError::Failed)
 }
 
 fn derive(

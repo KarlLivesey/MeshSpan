@@ -124,15 +124,19 @@ fn insert_credential(
         NewAuthenticationCredential::ApiKey {
             key_id,
             key_digest,
+            smb_verifier_ciphertext,
             scopes,
             valid_from,
         } => insert_api_key(
             transaction,
             command,
-            *key_id,
-            *key_digest,
-            *scopes,
-            *valid_from,
+            &ApiKeyInsertion {
+                key_id: *key_id,
+                key_digest: *key_digest,
+                smb_verifier_ciphertext: smb_verifier_ciphertext.as_deref(),
+                scopes: *scopes,
+                valid_from: *valid_from,
+            },
             revision,
         )?,
     }
@@ -241,36 +245,42 @@ fn insert_recovery_codes(
     Ok(())
 }
 
+struct ApiKeyInsertion<'a> {
+    key_id: meshspan_domain::ApiKeyId,
+    key_digest: [u8; 32],
+    smb_verifier_ciphertext: Option<&'a [u8]>,
+    scopes: u64,
+    valid_from: meshspan_domain::UnixMicros,
+}
+
 fn insert_api_key(
     transaction: &Transaction<'_>,
     command: &CreateAuthenticationMethod,
-    key_id: meshspan_domain::ApiKeyId,
-    key_digest: [u8; 32],
-    scopes: u64,
-    valid_from: meshspan_domain::UnixMicros,
+    material: &ApiKeyInsertion<'_>,
     revision: i64,
 ) -> Result<(), RepositoryError> {
     reject_existing_blob(
         transaction,
         "SELECT EXISTS(SELECT 1 FROM api_keys WHERE key_id = ?1)",
-        &key_id.as_bytes(),
+        &material.key_id.as_bytes(),
     )?;
     reject_existing_blob(
         transaction,
         "SELECT EXISTS(SELECT 1 FROM api_keys WHERE key_digest = ?1)",
-        &key_digest,
+        &material.key_digest,
     )?;
     transaction.execute(
         "INSERT INTO api_keys(
-            method_id, key_id, key_digest, scopes,
+            method_id, key_id, key_digest, smb_verifier_ciphertext, scopes,
             valid_from, valid_until, last_used_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8)",
         params![
             command.method_id.as_bytes().as_slice(),
-            key_id.as_bytes().as_slice(),
-            key_digest.as_slice(),
-            to_i64(scopes)?,
-            valid_from.get(),
+            material.key_id.as_bytes().as_slice(),
+            material.key_digest.as_slice(),
+            material.smb_verifier_ciphertext,
+            to_i64(material.scopes)?,
+            material.valid_from.get(),
             command.expires_at.map(meshspan_domain::UnixMicros::get),
             revision,
         ],
@@ -341,6 +351,7 @@ fn validate(
         }
         NewAuthenticationCredential::ApiKey {
             key_digest,
+            smb_verifier_ciphertext,
             scopes,
             valid_from,
             ..
@@ -348,6 +359,11 @@ fn validate(
             if *key_digest == [0; 32]
                 || *scopes == 0
                 || i64::try_from(*scopes).is_err()
+                || !valid_smb_verifier(
+                    command.service_scope,
+                    *scopes,
+                    smb_verifier_ciphertext.as_deref(),
+                )
                 || command.expires_at.is_some_and(|end| end <= *valid_from)
             {
                 return Err(RepositoryError::InvalidCommand);
@@ -355,6 +371,14 @@ fn validate(
             Ok(AuthenticationMethodKind::ApiKey as i64)
         }
     }
+}
+
+fn valid_smb_verifier(service_scope: u8, scopes: u64, ciphertext: Option<&[u8]>) -> bool {
+    (match (service_scope & SMB_SERVICE != 0, ciphertext) {
+        (true, Some(value)) => (65..=256).contains(&value.len()),
+        (false, None) => true,
+        _ => false,
+    }) && (service_scope & SMB_SERVICE == 0 || scopes & u64::from(SMB_SERVICE) != 0)
 }
 
 fn validate_recovery_codes(
