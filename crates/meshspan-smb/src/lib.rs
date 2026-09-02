@@ -11,6 +11,7 @@ mod header;
 mod negotiate;
 mod negotiate_response;
 mod ntlm_v2;
+mod session_keys;
 mod status;
 
 pub use direct_tcp::{
@@ -25,4 +26,5 @@ pub use negotiate_response::{
     NegotiateSelection, SigningAlgorithm,
 };
 pub use ntlm_v2::{NtlmPasswordVerifier, NtlmSessionBaseKey, NtlmVerificationError};
+pub use session_keys::{Smb311PreauthHash, Smb311SessionKeys, SmbSessionKeyError};
 pub use status::{ConnectorFailure, NtStatus};

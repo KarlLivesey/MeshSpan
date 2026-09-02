@@ -1316,6 +1316,7 @@ dependencies = [
  "hmac",
  "md-5",
  "md4",
+ "sha2",
  "subtle",
  "thiserror",
  "zeroize",
