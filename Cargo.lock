@@ -1339,6 +1339,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "cmac",
+ "getrandom 0.4.3",
  "hmac",
  "md-5",
  "md4",

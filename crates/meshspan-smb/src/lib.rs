@@ -14,6 +14,7 @@ mod ntlm_v2;
 mod session_keys;
 mod signing;
 mod status;
+mod transform;
 
 pub use direct_tcp::{
     DirectTcpFrame, DirectTcpFrameError, DirectTcpFrameHeader, encode_direct_tcp_header,
@@ -30,3 +31,4 @@ pub use ntlm_v2::{NtlmPasswordVerifier, NtlmSessionBaseKey, NtlmVerificationErro
 pub use session_keys::{Smb311PreauthHash, Smb311SessionKeys, SmbSessionKeyError};
 pub use signing::{SmbPacketSender, SmbSigningError, sign_smb311, verify_smb311};
 pub use status::{ConnectorFailure, NtStatus};
+pub use transform::{Smb311Transform, SmbTransformError};
