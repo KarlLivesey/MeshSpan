@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use meshspan_contracts::{ShardIdentity, ShardReceipt};
 use meshspan_domain::{
-    AuditEventId, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId,
-    UnixMicros, VolumeId, WorkId,
+    AuditEventId, ComponentInstanceId, ContentManifestId, HostId, MeshId, NodeId, OperationId,
+    PartitionId, PrincipalId, Revision, RoleId, TargetId, UnixMicros, VolumeId, WorkId,
 };
 use meshspan_work::{WorkBudget, WorkSignals, WorkSubject, WorkUsage};
+use sha2::{Digest, Sha256};
 
 use super::{
     AuthoritativeRepository, EntityKind, LogPosition, MaintenanceWorkState, RepositoryError,
 };
 use crate::{
-    AuthoritativeCommand, BootstrapMesh, ClaimMaintenanceWork, CommandContext,
-    CompleteMaintenanceWork, MaintenanceWorkCompletion, PartitionDatabase, QueueMaintenanceWork,
-    RecordName, RenewMaintenanceWork,
+    AuthoritativeCommand, BootstrapMesh, ClaimMaintenanceWork, CommandContext, CommitShardRepair,
+    CompleteMaintenanceWork, CreateComponent, MaintenanceWorkCompletion, PartitionDatabase,
+    QueueMaintenanceWork, RecordName, RegisterStorageTarget, RenewMaintenanceWork,
+    StorageUsageLimit,
 };
 
 #[test]
@@ -45,7 +48,7 @@ fn work_is_deduplicated_leased_retried_and_fenced() -> Result<(), Box<dyn std::e
 
     fixture.apply(
         4,
-        20,
+        60,
         &AuthoritativeCommand::ClaimMaintenanceWork(fixture.claim(work_id, 1, 101, 100)),
     )?;
     fixture.apply(
@@ -182,10 +185,119 @@ fn ready_work_is_priority_ordered_budgeted_and_keyset_paged()
     Ok(())
 }
 
+#[test]
+fn repair_effect_advances_one_cow_route_then_completes_exact_claim()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let source_target = TargetId::from_bytes([40; 16])?;
+    let replacement_target = TargetId::from_bytes([41; 16])?;
+    fixture.register_target(2, source_target, 50)?;
+    fixture.register_target(3, replacement_target, 51)?;
+    let work_id = WorkId::from_bytes([42; 16])?;
+    let manifest_id = ContentManifestId::from_bytes([43; 16])?;
+    let source = shard_receipt(44, source_target, 45)?;
+    let replacement = shard_receipt(46, replacement_target, 45)?;
+    fixture.apply(
+        4,
+        60,
+        &AuthoritativeCommand::QueueMaintenanceWork(fixture.repair_queue(
+            work_id,
+            manifest_id,
+            source.length,
+        )),
+    )?;
+    fixture.apply(
+        5,
+        61,
+        &AuthoritativeCommand::ClaimMaintenanceWork(fixture.claim(work_id, 1, 777, 100)),
+    )?;
+    let repair = CommitShardRepair {
+        work_id,
+        claim_generation: 1,
+        worker_node_id: fixture.node,
+        worker_incarnation: 1,
+        fence: 777,
+        volume_id: fixture.volume,
+        manifest_id,
+        source_layout_generation: 1,
+        source_receipt: source,
+        replacement_receipt: replacement,
+    };
+    let effect = fixture.apply(6, 62, &AuthoritativeCommand::CommitShardRepair(repair))?;
+    let stored = fixture
+        .repository
+        .shard_repair_effect(effect.operation_id)?
+        .ok_or("repair effect missing")?;
+    assert_eq!(stored.work_id, work_id);
+    assert_eq!(stored.source_receipt, source);
+    assert_eq!(stored.replacement_receipt, replacement);
+    assert_eq!(
+        (
+            stored.source_layout_generation,
+            stored.replacement_layout_generation
+        ),
+        (1, 2)
+    );
+
+    let stale = CommitShardRepair {
+        replacement_receipt: ShardReceipt {
+            operation_id: OperationId::from_bytes([47; 16])?,
+            ..replacement
+        },
+        ..repair
+    };
+    assert!(matches!(
+        fixture.apply(7, 63, &AuthoritativeCommand::CommitShardRepair(stale)),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    fixture.apply(
+        7,
+        64,
+        &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+            work_id,
+            claim_generation: 1,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 777,
+            outcome: MaintenanceWorkCompletion::Succeeded {
+                effect_operation_id: effect.operation_id,
+                effect_revision: effect.committed_revision,
+                effect_result_digest: effect.result_digest,
+            },
+        }),
+    )?;
+    assert_eq!(
+        fixture.record(work_id)?.state,
+        MaintenanceWorkState::Complete
+    );
+    Ok(())
+}
+
+fn shard_receipt(
+    operation: u8,
+    target_id: TargetId,
+    digest: u8,
+) -> Result<ShardReceipt, meshspan_domain::IdentifierError> {
+    Ok(ShardReceipt {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        shard: ShardIdentity {
+            manifest_digest: [48; 32],
+            stripe_index: 3,
+            shard_index: 1,
+            generation: 1,
+        },
+        length: 4_096,
+        digest: [digest; 32],
+        target_id,
+        target_generation: 1,
+    })
+}
+
 struct Fixture {
     repository: AuthoritativeRepository,
     administrator: PrincipalId,
     node: NodeId,
+    host: HostId,
     volume: VolumeId,
 }
 
@@ -193,6 +305,7 @@ impl Fixture {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let administrator = PrincipalId::from_bytes([2; 16])?;
         let node = NodeId::from_bytes([6; 16])?;
+        let host = HostId::from_bytes([5; 16])?;
         let volume = VolumeId::from_bytes([7; 16])?;
         let database = PartitionDatabase::open(
             std::path::Path::new(":memory:"),
@@ -203,6 +316,7 @@ impl Fixture {
             repository: AuthoritativeRepository::new(database),
             administrator,
             node,
+            host,
             volume,
         };
         fixture.apply(
@@ -214,7 +328,7 @@ impl Fixture {
                 administrator_id: administrator,
                 administrator_name: RecordName::new("Administrator")?,
                 administrator_role_id: RoleId::from_bytes([4; 16])?,
-                host_id: HostId::from_bytes([5; 16])?,
+                host_id: host,
                 host_name: RecordName::new("Host")?,
                 node_id: node,
                 node_name: RecordName::new("Node")?,
@@ -279,6 +393,72 @@ impl Fixture {
             },
             next_attempt_at: UnixMicros::new(10),
         }
+    }
+
+    fn repair_queue(
+        &self,
+        work_id: WorkId,
+        manifest_id: ContentManifestId,
+        in_flight_bytes: u64,
+    ) -> QueueMaintenanceWork {
+        QueueMaintenanceWork {
+            work_id,
+            deduplication_key: [work_id.as_bytes()[0]; 32],
+            subject: WorkSubject::Repair {
+                volume_id: self.volume,
+                manifest_id,
+                stripe_index: 3,
+                source_generation: 1,
+            },
+            signals: WorkSignals {
+                data_unavailable: false,
+                remaining_recovery_margin: 0,
+                protection_debt: 1,
+                locality_debt: 0,
+                instability: 0,
+                access_heat: 0,
+                created_at: UnixMicros::new(20),
+                due_at: None,
+            },
+            demand: meshspan_work::WorkDemand { in_flight_bytes },
+            next_attempt_at: UnixMicros::new(20),
+        }
+    }
+
+    fn register_target(
+        &mut self,
+        index: u64,
+        target_id: TargetId,
+        seed: u8,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let configuration = format!("{{\"target\":{seed}}}").into_bytes();
+        self.apply(
+            index,
+            i64::from(seed),
+            &AuthoritativeCommand::RegisterStorageTarget(RegisterStorageTarget {
+                target_id,
+                node_id: self.node,
+                host_id: self.host,
+                provider: CreateComponent {
+                    instance_id: ComponentInstanceId::from_bytes([seed; 16])?,
+                    component_kind: 1,
+                    name: RecordName::new(&format!("Provider {seed}"))?,
+                    implementation_id: "meshspan-folder".to_owned(),
+                    contract_major: 1,
+                    contract_minor: 0,
+                    schema_version: 1,
+                    configuration_digest: Sha256::digest(&configuration).into(),
+                    canonical_configuration: configuration,
+                },
+                name: RecordName::new(&format!("Target {seed}"))?,
+                generation: 1,
+                marker_fingerprint: [seed; 32],
+                backing_device_fingerprint: None,
+                filesystem_fingerprint: None,
+                usage_limit: StorageUsageLimit::Percent(95),
+            }),
+        )?;
+        Ok(())
     }
 
     const fn claim(

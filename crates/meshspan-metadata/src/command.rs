@@ -5,7 +5,7 @@
 use std::fmt;
 
 use meshspan_contracts::{
-    BoundedItems, ReclamationReceipt, RemovalPermit, ShardIdentity, TombstoneReceipt,
+    BoundedItems, ReclamationReceipt, RemovalPermit, ShardIdentity, ShardReceipt, TombstoneReceipt,
 };
 use meshspan_domain::{
     AcknowledgementPolicyId, ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel,
@@ -192,6 +192,8 @@ pub enum AuthoritativeCommand {
     RenewMaintenanceWork(RenewMaintenanceWork),
     /// Commits exact work evidence as terminal success or a bounded retry.
     CompleteMaintenanceWork(CompleteMaintenanceWork),
+    /// Advances one protected stripe to a provider-confirmed replacement shard location.
+    CommitShardRepair(CommitShardRepair),
     /// Publishes one volume or folder through explicitly selected SMB gateways.
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
@@ -358,6 +360,7 @@ impl AuthoritativeCommand {
             Self::ClaimMaintenanceWork(value) => value.update_digest(digest),
             Self::RenewMaintenanceWork(value) => value.update_digest(digest),
             Self::CompleteMaintenanceWork(value) => value.update_digest(digest),
+            Self::CommitShardRepair(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -2002,6 +2005,31 @@ pub enum MaintenanceWorkCompletion {
     },
 }
 
+/// One copy-on-write shard replacement committed under a live repair claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommitShardRepair {
+    /// Existing claimed repair job.
+    pub work_id: WorkId,
+    /// Exact current claim generation.
+    pub claim_generation: u64,
+    /// Worker owning the claim.
+    pub worker_node_id: NodeId,
+    /// Exact current worker incarnation.
+    pub worker_incarnation: u64,
+    /// Unchanged live claim fence.
+    pub fence: u64,
+    /// Volume bound into the repair subject.
+    pub volume_id: VolumeId,
+    /// Immutable manifest bound into the repair subject.
+    pub manifest_id: ContentManifestId,
+    /// Compare-and-swap generation of the active stripe-location catalogue.
+    pub source_layout_generation: u64,
+    /// Last durable receipt for the location being replaced.
+    pub source_receipt: ShardReceipt,
+    /// New provider-confirmed receipt for the same immutable shard bytes.
+    pub replacement_receipt: ShardReceipt,
+}
+
 /// Explicit gateway selection for one SMB export.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmbExportGatewaySelection {
@@ -3241,6 +3269,22 @@ digest_simple_record!(
         }
     }
 );
+digest_simple_record!(
+    CommitShardRepair,
+    b"commit-shard-repair",
+    |value, digest| {
+        digest.identifier(value.work_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.manifest_id.as_bytes());
+        digest.unsigned(value.source_layout_generation);
+        digest_shard_receipt(digest, value.source_receipt);
+        digest_shard_receipt(digest, value.replacement_receipt);
+    }
+);
 digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {
     digest.identifier(value.export_id.as_bytes());
     digest.identifier(value.volume_id.as_bytes());
@@ -3450,6 +3494,18 @@ fn assurance_code(value: AssuranceLevel) -> u8 {
         AssuranceLevel::MultiFactor => 2,
         AssuranceLevel::RecentStepUp => 3,
     }
+}
+
+fn digest_shard_receipt(digest: &mut CanonicalDigest, receipt: ShardReceipt) {
+    digest.identifier(receipt.operation_id.as_bytes());
+    digest.bytes(&receipt.shard.manifest_digest);
+    digest.unsigned(receipt.shard.stripe_index);
+    digest.unsigned(u64::from(receipt.shard.shard_index));
+    digest.unsigned(u64::from(receipt.shard.generation));
+    digest.unsigned(receipt.length);
+    digest.bytes(&receipt.digest);
+    digest.identifier(receipt.target_id.as_bytes());
+    digest.unsigned(receipt.target_generation);
 }
 
 pub(crate) struct CanonicalDigest(Sha256);

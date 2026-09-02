@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 63;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 65;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 11;
 
-const PARTITION_MIGRATIONS: [Migration; 63] = [
+const PARTITION_MIGRATIONS: [Migration; 65] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -263,8 +263,16 @@ const PARTITION_MIGRATIONS: [Migration; 63] = [
         sql: include_str!("../schema/partition/062_builtin_fault_classes.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 63,
         sql: include_str!("../schema/partition/063_maintenance_work.sql"),
+    },
+    Migration {
+        version: 64,
+        sql: include_str!("../schema/partition/064_maintenance_work_demand.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/065_shard_repair_effects.sql"),
     },
 ];
 

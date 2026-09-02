@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use meshspan_domain::{NodeId, UnixMicros, WorkId};
+use meshspan_contracts::{ShardIdentity, ShardReceipt};
+use meshspan_domain::{NodeId, OperationId, TargetId, UnixMicros, WorkId};
 use meshspan_work::{MAXIMUM_WORK_SUBJECT_BYTES, WorkDemand, WorkSignals, WorkSubject};
 
 use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
-    ClaimMaintenanceWork, CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork,
-    RenewMaintenanceWork,
+    ClaimMaintenanceWork, CommitShardRepair, CompleteMaintenanceWork, MaintenanceWorkCompletion,
+    QueueMaintenanceWork, RenewMaintenanceWork,
 };
 
 pub(super) const QUEUE_MAINTENANCE_WORK: u16 = 36;
 pub(super) const CLAIM_MAINTENANCE_WORK: u16 = 37;
 pub(super) const RENEW_MAINTENANCE_WORK: u16 = 38;
 pub(super) const COMPLETE_MAINTENANCE_WORK: u16 = 39;
+pub(super) const COMMIT_SHARD_REPAIR: u16 = 40;
 
 pub(super) fn encode_command(
     encoder: &mut Encoder,
@@ -33,6 +35,9 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::CompleteMaintenanceWork(value) => {
             encode_complete(encoder, *value)?;
         }
+        crate::AuthoritativeCommand::CommitShardRepair(value) => {
+            encode_repair(encoder, value)?;
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -45,6 +50,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | CLAIM_MAINTENANCE_WORK
             | RENEW_MAINTENANCE_WORK
             | COMPLETE_MAINTENANCE_WORK
+            | COMMIT_SHARD_REPAIR
     )
 }
 
@@ -64,6 +70,9 @@ pub(super) fn decode_command(
         }
         COMPLETE_MAINTENANCE_WORK => {
             decode_complete(decoder).map(crate::AuthoritativeCommand::CompleteMaintenanceWork)
+        }
+        COMMIT_SHARD_REPAIR => {
+            decode_repair(decoder).map(crate::AuthoritativeCommand::CommitShardRepair)
         }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
@@ -244,6 +253,99 @@ fn decode_complete(
         fence: identity.fence,
         outcome,
     })
+}
+
+fn encode_repair(
+    encoder: &mut Encoder,
+    value: &CommitShardRepair,
+) -> Result<(), MetadataCommandCodecError> {
+    encoder.u16(COMMIT_SHARD_REPAIR)?;
+    encode_claim_identity(
+        encoder,
+        value.work_id,
+        value.claim_generation,
+        value.worker_node_id,
+        value.worker_incarnation,
+        value.fence,
+    )?;
+    encoder.identifier(value.volume_id.as_bytes())?;
+    encoder.identifier(value.manifest_id.as_bytes())?;
+    encoder.u64(positive(value.source_layout_generation)?)?;
+    encode_shard_receipt(encoder, value.source_receipt)?;
+    encode_shard_receipt(encoder, value.replacement_receipt)
+}
+
+fn decode_repair(
+    decoder: &mut Decoder<'_>,
+) -> Result<CommitShardRepair, MetadataCommandCodecError> {
+    let identity = decode_claim_identity(decoder)?;
+    Ok(CommitShardRepair {
+        work_id: identity.work_id,
+        claim_generation: identity.claim_generation,
+        worker_node_id: identity.worker_node_id,
+        worker_incarnation: identity.worker_incarnation,
+        fence: identity.fence,
+        volume_id: meshspan_domain::VolumeId::from_bytes(decoder.identifier()?)?,
+        manifest_id: meshspan_domain::ContentManifestId::from_bytes(decoder.identifier()?)?,
+        source_layout_generation: positive(decoder.u64()?)?,
+        source_receipt: decode_shard_receipt(decoder)?,
+        replacement_receipt: decode_shard_receipt(decoder)?,
+    })
+}
+
+fn encode_shard_receipt(
+    encoder: &mut Encoder,
+    receipt: ShardReceipt,
+) -> Result<(), MetadataCommandCodecError> {
+    if !valid_shard_receipt(receipt) {
+        return Err(MetadataCommandCodecError::Invalid);
+    }
+    encoder.identifier(receipt.operation_id.as_bytes())?;
+    encoder.fixed(&receipt.shard.manifest_digest)?;
+    encoder.u64(receipt.shard.stripe_index)?;
+    encoder.u16(receipt.shard.shard_index)?;
+    encoder.u64(u64::from(receipt.shard.generation))?;
+    encoder.u64(receipt.length)?;
+    encoder.fixed(&receipt.digest)?;
+    encoder.identifier(receipt.target_id.as_bytes())?;
+    encoder.u64(receipt.target_generation)
+}
+
+fn decode_shard_receipt(
+    decoder: &mut Decoder<'_>,
+) -> Result<ShardReceipt, MetadataCommandCodecError> {
+    let operation_id = OperationId::from_bytes(decoder.identifier()?)?;
+    let manifest_digest = nonzero_digest(decoder.fixed()?)?;
+    let stripe_index = decoder.u64()?;
+    let shard_index = decoder.u16()?;
+    let generation =
+        u32::try_from(positive(decoder.u64()?)?).map_err(|_| MetadataCommandCodecError::Invalid)?;
+    let receipt = ShardReceipt {
+        operation_id,
+        shard: ShardIdentity {
+            manifest_digest,
+            stripe_index,
+            shard_index,
+            generation,
+        },
+        length: positive(decoder.u64()?)?,
+        digest: nonzero_digest(decoder.fixed()?)?,
+        target_id: TargetId::from_bytes(decoder.identifier()?)?,
+        target_generation: positive(decoder.u64()?)?,
+    };
+    if valid_shard_receipt(receipt) {
+        Ok(receipt)
+    } else {
+        Err(MetadataCommandCodecError::Invalid)
+    }
+}
+
+fn valid_shard_receipt(receipt: ShardReceipt) -> bool {
+    receipt.shard.manifest_digest != [0; 32]
+        && receipt.shard.generation > 0
+        && receipt.length > 0
+        && receipt.digest != [0; 32]
+        && receipt.target_generation > 0
 }
 
 fn positive(value: u64) -> Result<u64, MetadataCommandCodecError> {

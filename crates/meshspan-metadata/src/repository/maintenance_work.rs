@@ -2,16 +2,20 @@
 
 //! Authoritative durable maintenance jobs and short-lived fenced execution claims.
 
-use meshspan_domain::{NodeId, Revision, UnixMicros, WorkId};
+use meshspan_domain::{NodeId, OperationId, Revision, UnixMicros, WorkId};
 use meshspan_work::{WorkBudget, WorkDemand, WorkKind, WorkSignals, WorkSubject, WorkUsage};
 use rusqlite::{OptionalExtension, Row, Transaction, params};
 
 use super::apply::to_i64;
 use super::{AuthoritativeRepository, EntityKind, EntityReference, RepositoryError};
 use crate::{
-    ClaimMaintenanceWork, CommandContext, CompleteMaintenanceWork, MaintenanceWorkCompletion,
-    QueueMaintenanceWork, RenewMaintenanceWork,
+    ClaimMaintenanceWork, CommandContext, CommitShardRepair, CompleteMaintenanceWork,
+    MaintenanceWorkCompletion, QueueMaintenanceWork, RenewMaintenanceWork,
 };
+
+mod repair;
+
+pub use repair::ShardRepairEffectRecord;
 
 const JOB_QUEUED: i64 = 1;
 const JOB_CLAIMED: i64 = 2;
@@ -124,6 +128,18 @@ impl AuthoritativeRepository {
         limit: usize,
     ) -> Result<ReadyMaintenanceWorkPage, RepositoryError> {
         ready_page(self.database.connection(), now, budget, usage, after, limit)
+    }
+
+    /// Returns one committed shard-repair transition with both exact provider receipts.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when any persisted identity, digest, length or generation is malformed.
+    pub fn shard_repair_effect(
+        &self,
+        effect_operation_id: OperationId,
+    ) -> Result<Option<ShardRepairEffectRecord>, RepositoryError> {
+        repair::load(self.database.connection(), effect_operation_id)
     }
 }
 
@@ -456,7 +472,7 @@ pub(super) fn complete(
     )?;
     let subject = load_job_for_transition(transaction, value.work_id)?.subject;
     let (job_state, next_attempt_at, completed_at, job_result, claim_result, retry_at) =
-        completion_values(transaction, context, subject, value.outcome)?;
+        completion_values(transaction, context, value.work_id, subject, value.outcome)?;
     let changed = transaction.execute(
         "UPDATE maintenance_work_claims
          SET state = ?1, completed_at = ?2, result_digest = ?3, retry_at = ?4, revision = ?5
@@ -496,6 +512,15 @@ pub(super) fn complete(
     Ok(entity(value.work_id))
 }
 
+pub(super) fn commit_repair(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    value: &CommitShardRepair,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    repair::commit(transaction, context, value, revision)
+}
+
 type CompletionValues = (
     i64,
     i64,
@@ -508,6 +533,7 @@ type CompletionValues = (
 fn completion_values(
     transaction: &Transaction<'_>,
     context: CommandContext,
+    work_id: WorkId,
     subject: WorkSubject,
     outcome: MaintenanceWorkCompletion,
 ) -> Result<CompletionValues, RepositoryError> {
@@ -522,6 +548,7 @@ fn completion_values(
             }
             validate_effect(
                 transaction,
+                work_id,
                 subject.kind(),
                 effect_operation_id,
                 effect_revision,
@@ -557,6 +584,7 @@ fn completion_values(
 
 fn validate_effect(
     transaction: &Transaction<'_>,
+    work_id: WorkId,
     kind: WorkKind,
     operation_id: meshspan_domain::OperationId,
     revision: Revision,
@@ -582,15 +610,34 @@ fn validate_effect(
             },
         )
         .optional()?;
-    match stored {
+    let operation_matches = match stored {
         Some((stored_kind, stored_revision, stored_digest))
             if stored_kind == expected_kind
                 && stored_revision == to_i64(revision.get())?
                 && stored_digest.as_slice() == result_digest =>
         {
-            Ok(())
+            true
         }
-        Some(_) | None => Err(RepositoryError::InvalidCommand),
+        Some(_) | None => false,
+    };
+    let effect_matches = match kind {
+        WorkKind::Repair => {
+            transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM maintenance_repair_effects
+             WHERE effect_operation_id = ?1 AND work_id = ?2)",
+                params![
+                    operation_id.as_bytes().as_slice(),
+                    work_id.as_bytes().as_slice(),
+                ],
+                |row| row.get::<_, i64>(0),
+            )? == 1
+        }
+        WorkKind::Scrub | WorkKind::Drain | WorkKind::Rebalance | WorkKind::Reconcile => false,
+    };
+    if operation_matches && effect_matches {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
     }
 }
 
@@ -764,7 +811,7 @@ fn merge_signals(
             protection_debt = MAX(protection_debt, ?3),
             locality_debt = MAX(locality_debt, ?4),
             instability = MAX(instability, ?5), access_heat = MAX(access_heat, ?6),
-            in_flight_bytes = MAX(in_flight_bytes, ?7),
+            in_flight_bytes = COALESCE(MAX(in_flight_bytes, ?7), ?7),
             due_at = CASE
                 WHEN due_at IS NULL THEN ?8
                 WHEN ?8 IS NULL THEN due_at

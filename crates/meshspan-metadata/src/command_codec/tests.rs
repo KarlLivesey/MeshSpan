@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use meshspan_contracts::BoundedItems;
+use meshspan_contracts::{BoundedItems, ShardIdentity, ShardReceipt};
 use meshspan_domain::{
     AcknowledgementPolicyId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
     AuthenticationMethodId, AuthenticationService, AvailabilityCellId, ComponentInstanceId,
@@ -21,7 +21,7 @@ use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
     AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
     AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity, ClaimMaintenanceWork,
-    CommitConvergedVolumeHead, CommitSecretGeneration, CompleteMaintenanceWork,
+    CommitConvergedVolumeHead, CommitSecretGeneration, CommitShardRepair, CompleteMaintenanceWork,
     ConvergedHeadEvidence, CreateAcknowledgementPolicy, CreateActivationPolicy,
     CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
     CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
@@ -360,6 +360,18 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
                 effect_result_digest: [87; 32],
             },
         }),
+        AuthoritativeCommand::CommitShardRepair(CommitShardRepair {
+            work_id: identity.0,
+            claim_generation: identity.1,
+            worker_node_id: identity.2,
+            worker_incarnation: identity.3,
+            fence: identity.4,
+            volume_id: VolumeId::from_bytes([84; 16])?,
+            manifest_id: meshspan_domain::ContentManifestId::from_bytes([85; 16])?,
+            source_layout_generation: 7,
+            source_receipt: repair_receipt(89, 90)?,
+            replacement_receipt: repair_receipt(91, 92)?,
+        }),
         AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
             work_id: identity.0,
             claim_generation: identity.1,
@@ -376,6 +388,25 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
         assert_round_trip(context, command)?;
     }
     Ok(())
+}
+
+fn repair_receipt(
+    operation: u8,
+    target: u8,
+) -> Result<ShardReceipt, meshspan_domain::IdentifierError> {
+    Ok(ShardReceipt {
+        operation_id: OperationId::from_bytes([operation; 16])?,
+        shard: ShardIdentity {
+            manifest_digest: [93; 32],
+            stripe_index: 6,
+            shard_index: 2,
+            generation: 1,
+        },
+        length: 4_096,
+        digest: [94; 32],
+        target_id: TargetId::from_bytes([target; 16])?,
+        target_generation: 1,
+    })
 }
 
 #[test]
