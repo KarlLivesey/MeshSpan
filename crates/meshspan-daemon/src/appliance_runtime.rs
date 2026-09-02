@@ -80,8 +80,9 @@ use crate::{
     ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
     RecoveryCodeIssuanceApiError, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
-    SmbServer, SmbServerConfigurationError, SmbServerError, SmbServerLimits,
-    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageFolderAdministrationApiError,
+    SmbExportAdministrationApiError, SmbExportAdministrationService, SmbServer,
+    SmbServerConfigurationError, SmbServerError, SmbServerLimits, StepUpCurrentSessionApiError,
+    StepUpCurrentSessionService, StorageFolderAdministrationApiError,
     StorageFolderAdministrationService, StoragePermitLoadingService, StorageProviderOpeningError,
     StorageProviderOpeningService, StorageTargetRegistrationService,
     TopologyAdministrationApiError, TopologyAdministrationService, TotpRegistrationApiError,
@@ -96,9 +97,10 @@ use crate::{
     passkey_registration_api_router, permission_administration_api_router,
     public_contract_api_router, recovery_bundle_verification_api_router,
     recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
-    setup_api_router_with_mutations, step_up_current_session_api_router,
-    storage_folder_administration_api_router, topology_administration_api_router,
-    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
+    setup_api_router_with_mutations, smb_export_administration_api_router,
+    step_up_current_session_api_router, storage_folder_administration_api_router,
+    topology_administration_api_router, totp_registration_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
@@ -1106,6 +1108,26 @@ fn authenticated_administration_routes(
     private_network: &Arc<PrivateConsensusRuntime>,
     storage_targets: Arc<Mutex<StorageTargetRuntime>>,
 ) -> Result<Router, DaemonProcessError> {
+    let security =
+        security_administration_routes(local_state, authority, gateway, now, private_network)?;
+    let resources = resource_administration_routes(
+        local_state,
+        authority,
+        gateway,
+        now,
+        private_network,
+        storage_targets,
+    )?;
+    Ok(security.merge(resources))
+}
+
+fn security_administration_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    private_network: &Arc<PrivateConsensusRuntime>,
+) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
         .merge(identity_administration_api_router(
             IdentityAdministrationService::new(
@@ -1137,6 +1159,40 @@ fn authenticated_administration_routes(
                 local_state.https_certificate_fingerprint(),
             ),
         )?)
+        .merge(permission_administration_api_router(
+            PermissionAdministrationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+            ),
+        )?)
+        .merge(recovery_bundle_verification_api_router(
+            RecoveryBundleVerificationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+                local_state.pending_recovery_bundle_path(),
+            ),
+        )?))
+}
+
+fn resource_administration_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    private_network: &Arc<PrivateConsensusRuntime>,
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+) -> Result<Router, DaemonProcessError> {
+    Ok(Router::new()
         .merge(volume_administration_api_router(
             VolumeAdministrationService::new(
                 open_authentication_authority(
@@ -1149,8 +1205,8 @@ fn authenticated_administration_routes(
                 OperatingSystemRandom,
             ),
         )?)
-        .merge(permission_administration_api_router(
-            PermissionAdministrationService::new(
+        .merge(smb_export_administration_api_router(
+            SmbExportAdministrationService::new(
                 open_authentication_authority(
                     local_state,
                     authority,
@@ -1190,18 +1246,6 @@ fn authenticated_administration_routes(
                     now,
                 )?,
                 gateway,
-            ),
-        )?)
-        .merge(recovery_bundle_verification_api_router(
-            RecoveryBundleVerificationService::new(
-                open_authentication_authority(
-                    local_state,
-                    authority,
-                    Arc::clone(private_network),
-                    now,
-                )?,
-                gateway,
-                local_state.pending_recovery_bundle_path(),
             ),
         )?))
 }
@@ -2189,6 +2233,9 @@ pub enum DaemonProcessError {
     /// Manager-only volume-administration API construction failed.
     #[error("daemon volume-administration API failed")]
     VolumeAdministrationApi(#[from] VolumeAdministrationApiError),
+    /// Explicit SMB-export administration API construction failed.
+    #[error("daemon SMB-export administration API failed")]
+    SmbExportAdministrationApi(#[from] SmbExportAdministrationApiError),
     /// Manager-only permission-administration API construction failed.
     #[error("daemon permission-administration API failed")]
     PermissionAdministrationApi(#[from] PermissionAdministrationApiError),

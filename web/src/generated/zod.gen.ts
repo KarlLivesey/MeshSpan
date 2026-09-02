@@ -2951,6 +2951,101 @@ export const zOperationStatusResponse = z
   .strict();
 
 /**
+ * PublishSmbExportRequest
+ *
+ * Exact-retry request to publish one existing volume or folder explicitly.
+ */
+export const zPublishSmbExportRequest = z
+  .strictObject({
+    encryption_required: z.boolean(),
+    gateways: z.union([
+      z
+        .strictObject({
+          kind: z.literal("all_eligible"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          kind: z.literal("selected"),
+          node_ids: z.array(z.string()).min(1).max(1024),
+        })
+        .strict(),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    root_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    share_name: z
+      .string()
+      .min(1)
+      .max(240)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+  })
+  .strict();
+
+/**
+ * PublishSmbExportResponse
+ *
+ * Durable publication result.
+ */
+export const zPublishSmbExportResponse = z
+  .strictObject({
+    encryption_required: z.boolean(),
+    export_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    gateways: z.union([
+      z
+        .strictObject({
+          kind: z.literal("all_eligible"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          kind: z.literal("selected"),
+          node_ids: z.array(z.string()).min(1).max(1024),
+        })
+        .strict(),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revision: z.int().gte(1).lte(9007199254740991),
+    root_object_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    share_name: z
+      .string()
+      .min(1)
+      .max(240)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * RegisterStorageFolderRequest
  *
  * Exact-retry manager request to register one existing local folder.
@@ -3451,6 +3546,46 @@ export const zUploadStatusResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * WithdrawSmbExportRequest
+ *
+ * Exact-retry audited withdrawal request.
+ */
+export const zWithdrawSmbExportRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    reason: z.string().min(1).max(1024).regex(/\S/),
+  })
+  .strict();
+
+/**
+ * WithdrawSmbExportResponse
+ *
+ * Durable export-withdrawal result.
+ */
+export const zWithdrawSmbExportResponse = z
+  .strictObject({
+    export_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revision: z.int().gte(1).lte(9007199254740991),
   })
   .strict();
 
@@ -4114,6 +4249,36 @@ export const zConfirmRecoveryBundleSavedBody = zConfirmRecoveryBundleRequest;
 export const zConfirmRecoveryBundleSavedResponse =
   zConfirmRecoveryBundleResponse;
 
+/**
+ * Audited SMB export withdrawal
+ */
+export const zWithdrawSmbExportBody = zWithdrawSmbExportRequest;
+
+export const zWithdrawSmbExportHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zWithdrawSmbExportPath = z
+  .object({
+    export_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * SMB export durably withdrawn or exactly replayed
+ */
+export const zWithdrawSmbExportResponse2 = zWithdrawSmbExportResponse;
+
 export const zListStorageFoldersQuery = z
   .object({
     cursor: z
@@ -4417,6 +4582,36 @@ export const zRevokePermissionGrantPath = z
  * Grant durably revoked or exactly replayed
  */
 export const zRevokePermissionGrantResponse2 = zRevokePermissionGrantResponse;
+
+/**
+ * SMB export publication
+ */
+export const zPublishSmbExportBody = zPublishSmbExportRequest;
+
+export const zPublishSmbExportHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zPublishSmbExportPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * SMB export durably published or exactly replayed
+ */
+export const zPublishSmbExportResponse2 = zPublishSmbExportResponse;
 
 /**
  * Process readiness

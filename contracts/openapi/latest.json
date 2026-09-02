@@ -6128,6 +6128,195 @@
         "title": "OperationStatusResponse",
         "type": "object"
       },
+      "PublishSmbExportRequest": {
+        "additionalProperties": false,
+        "description": "Exact-retry request to publish one existing volume or folder explicitly.",
+        "properties": {
+          "encryption_required": {
+            "description": "Whether every packet after tree connection must be encrypted.",
+            "type": "boolean"
+          },
+          "gateways": {
+            "description": "Explicit gateway publication policy.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Every active gateway node publishes the share.",
+                "properties": {
+                  "kind": {
+                    "const": "all_eligible",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Only the explicitly selected active gateway nodes publish the share.",
+                "properties": {
+                  "kind": {
+                    "const": "selected",
+                    "type": "string"
+                  },
+                  "node_ids": {
+                    "description": "Non-empty unique canonical node UUIDs.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1024,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "node_ids"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "operation_id": {
+            "description": "Client-generated idempotency identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "root_object_id": {
+            "description": "Stable existing directory exposed as the share root.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "share_name": {
+            "description": "Chosen case-insensitive share name.",
+            "maxLength": 240,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "root_object_id",
+          "share_name",
+          "gateways",
+          "encryption_required"
+        ],
+        "title": "PublishSmbExportRequest",
+        "type": "object"
+      },
+      "PublishSmbExportResponse": {
+        "additionalProperties": false,
+        "description": "Durable publication result.",
+        "properties": {
+          "encryption_required": {
+            "description": "Committed tree-encryption policy.",
+            "type": "boolean"
+          },
+          "export_id": {
+            "description": "Stable export identity derived from that operation.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "gateways": {
+            "description": "Committed gateway policy.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Every active gateway node publishes the share.",
+                "properties": {
+                  "kind": {
+                    "const": "all_eligible",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Only the explicitly selected active gateway nodes publish the share.",
+                "properties": {
+                  "kind": {
+                    "const": "selected",
+                    "type": "string"
+                  },
+                  "node_ids": {
+                    "description": "Non-empty unique canonical node UUIDs.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1024,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "node_ids"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "operation_id": {
+            "description": "Exact operation whose committed result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Authoritative committed revision.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "root_object_id": {
+            "description": "Exact published directory.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "share_name": {
+            "description": "Case-preserved authoritative share name.",
+            "maxLength": 240,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x2f\\x7f\\\\]+$",
+            "type": "string"
+          },
+          "volume_id": {
+            "description": "Exact containing volume.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "export_id",
+          "volume_id",
+          "root_object_id",
+          "share_name",
+          "gateways",
+          "encryption_required",
+          "revision"
+        ],
+        "title": "PublishSmbExportResponse",
+        "type": "object"
+      },
       "RegisterStorageFolderRequest": {
         "additionalProperties": false,
         "description": "Exact-retry manager request to register one existing local folder.",
@@ -6986,6 +7175,65 @@
           "ranges_url"
         ],
         "title": "UploadStatusResponse",
+        "type": "object"
+      },
+      "WithdrawSmbExportRequest": {
+        "additionalProperties": false,
+        "description": "Exact-retry audited withdrawal request.",
+        "properties": {
+          "operation_id": {
+            "description": "Client-generated idempotency identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Non-blank human audit reason.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "reason"
+        ],
+        "title": "WithdrawSmbExportRequest",
+        "type": "object"
+      },
+      "WithdrawSmbExportResponse": {
+        "additionalProperties": false,
+        "description": "Durable export-withdrawal result.",
+        "properties": {
+          "export_id": {
+            "description": "Stable withdrawn export identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact operation whose committed result was resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Authoritative committed revision.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operation_id",
+          "export_id",
+          "revision"
+        ],
+        "title": "WithdrawSmbExportResponse",
         "type": "object"
       },
       "WriteUploadRangeResponse": {
@@ -8979,6 +9227,285 @@
         },
         "summary": "Verify that the exact offline recovery bundle and code were saved",
         "x-meshspan-access": "system-manager",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/smb-exports/{export_id}/withdrawals": {
+      "post": {
+        "operationId": "withdrawSmbExport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawSmbExportRequest"
+              }
+            }
+          },
+          "description": "Audited SMB export withdrawal",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawSmbExportResponse"
+                }
+              }
+            },
+            "description": "SMB export durably withdrawn or exactly replayed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid withdrawal request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Active SMB export not found",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Operation conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "SMB export authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Withdraw one explicitly published SMB export",
+        "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
     },
@@ -12140,6 +12667,285 @@
           }
         },
         "summary": "Revoke one exact active volume permission grant",
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/volumes/{volume_id}/smb-exports": {
+      "post": {
+        "operationId": "publishSmbExport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "volume_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishSmbExportRequest"
+              }
+            }
+          },
+          "description": "SMB export publication",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishSmbExportResponse"
+                }
+              }
+            },
+            "description": "SMB export durably published or exactly replayed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid export request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Volume, directory or gateway not found",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Share name or operation conflict",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "SMB export authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Explicitly publish one existing directory through embedded SMB",
         "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
