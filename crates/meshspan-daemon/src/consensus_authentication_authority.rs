@@ -84,16 +84,20 @@ impl ConsensusAuthenticationAuthority {
         {
             Err(MetadataAuthorityRequestError::NotLeader { leader_id }) => {
                 match self.network.as_ref() {
-                    Some(network) => {
-                        self.runtime
-                            .block_on(crate::metadata_forwarding::forward_to_authority(
-                                network,
-                                &self.reader,
-                                leader_id,
-                                context,
-                                command,
-                            ))
-                    }
+                    Some(network) => match self.runtime.block_on(
+                        crate::metadata_forwarding::forward_to_authority(
+                            network,
+                            &self.reader,
+                            leader_id,
+                            context,
+                            command,
+                        ),
+                    ) {
+                        Err(MetadataAuthorityRequestError::Unavailable) => self
+                            .runtime
+                            .block_on(self.authority.commit_or_resolve(context, command.clone())),
+                        outcome => outcome,
+                    },
                     None => Err(MetadataAuthorityRequestError::NotLeader { leader_id }),
                 }
             }

@@ -23,6 +23,9 @@ use crate::private_consensus_runtime::PrivateConsensusRuntime;
 
 const FORWARD_TIMEOUT_MICROS: i64 = 30 * 1_000_000;
 const LOCAL_APPLY_ATTEMPTS: usize = 200;
+const LEADER_HINT_GRACE: Duration = Duration::from_millis(250);
+const CANDIDATE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
+const LEADER_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) async fn forward_to_authority(
     runtime: &Arc<PrivateConsensusRuntime>,
@@ -71,18 +74,86 @@ pub(crate) async fn forward_to_authority(
             })),
         })),
     };
-    let mut committed_digest = None;
-    for candidate in candidates {
-        match request_durable_result(&network, candidate, &request).await {
-            Ok(digest) => {
-                committed_digest = Some(digest);
-                break;
-            }
-            Err(MetadataAuthorityRequestError::Unavailable) => {}
-            Err(error) => return Err(error),
+    let committed_digest =
+        discover_durable_result(&network, leader_hint, candidates, &request).await?;
+    resolve_local_receipt(reader, context, request_digest, committed_digest).await
+}
+
+async fn discover_durable_result(
+    network: &ConsensusNetwork,
+    leader_hint: Option<NodeId>,
+    candidates: Vec<NodeId>,
+    request: &ControlEnvelope,
+) -> Result<[u8; 32], MetadataAuthorityRequestError> {
+    let mut requests = tokio::task::JoinSet::new();
+    let hinted = leader_hint.filter(|node_id| *node_id != network.local_node_id());
+    let mut remaining = candidates.into_iter();
+    if let Some(hinted) = hinted {
+        let first = remaining.next();
+        if first != Some(hinted) {
+            return Err(MetadataAuthorityRequestError::Failed);
+        }
+        spawn_candidate_request(&mut requests, network, hinted, request);
+        if let Ok(Some(result)) =
+            tokio::time::timeout(LEADER_HINT_GRACE, requests.join_next()).await
+            && let Some(digest) = candidate_result(&result)?
+        {
+            return Ok(digest);
         }
     }
-    let committed_digest = committed_digest.ok_or(MetadataAuthorityRequestError::Unavailable)?;
+    for candidate in remaining {
+        spawn_candidate_request(&mut requests, network, candidate, request);
+    }
+    if requests.is_empty() {
+        return Err(MetadataAuthorityRequestError::Unavailable);
+    }
+    tokio::time::timeout(LEADER_DISCOVERY_TIMEOUT, async move {
+        while let Some(result) = requests.join_next().await {
+            if let Some(digest) = candidate_result(&result)? {
+                return Ok(digest);
+            }
+        }
+        Err(MetadataAuthorityRequestError::Unavailable)
+    })
+    .await
+    .unwrap_or(Err(MetadataAuthorityRequestError::Unavailable))
+}
+
+fn spawn_candidate_request(
+    requests: &mut tokio::task::JoinSet<Result<[u8; 32], MetadataAuthorityRequestError>>,
+    network: &ConsensusNetwork,
+    candidate: NodeId,
+    request: &ControlEnvelope,
+) {
+    let network = network.clone();
+    let request = request.clone();
+    requests.spawn(async move {
+        tokio::time::timeout(
+            CANDIDATE_RESPONSE_TIMEOUT,
+            request_durable_result(&network, candidate, &request),
+        )
+        .await
+        .unwrap_or(Err(MetadataAuthorityRequestError::Unavailable))
+    });
+}
+
+fn candidate_result(
+    result: &Result<Result<[u8; 32], MetadataAuthorityRequestError>, tokio::task::JoinError>,
+) -> Result<Option<[u8; 32]>, MetadataAuthorityRequestError> {
+    match result {
+        Ok(Ok(digest)) => Ok(Some(*digest)),
+        Ok(Err(MetadataAuthorityRequestError::Unavailable)) => Ok(None),
+        Ok(Err(error)) => Err(*error),
+        Err(_) => Err(MetadataAuthorityRequestError::Failed),
+    }
+}
+
+async fn resolve_local_receipt(
+    reader: &AuthoritativeRepository,
+    context: CommandContext,
+    request_digest: [u8; 32],
+    committed_digest: [u8; 32],
+) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
     for _ in 0..LOCAL_APPLY_ATTEMPTS {
         let receipt = reader
             .resolve_operation(context.operation_id)

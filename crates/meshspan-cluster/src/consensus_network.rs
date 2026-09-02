@@ -475,7 +475,9 @@ impl ConsensusNetwork {
         &self,
         to: NodeId,
     ) -> Result<quinn::Connection, ConsensusNetworkError> {
-        self.connect_peer(to).await
+        tokio::time::timeout(PEER_OPERATION_TIMEOUT, self.connect_peer(to))
+            .await
+            .map_err(|_| ConsensusNetworkError::AuthorityStopped)?
     }
 
     /// Returns the exact framing bounds negotiated by every private stream on this endpoint.
