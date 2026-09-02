@@ -14,6 +14,7 @@ mod ntlm_v2;
 mod session_keys;
 mod session_setup;
 mod signing;
+mod spnego;
 mod status;
 mod transform;
 
@@ -34,5 +35,9 @@ pub use session_setup::{
     SessionSetupRequest, SessionSetupResponse, SessionSetupResponseConfig, SmbSessionSetupError,
 };
 pub use signing::{SmbPacketSender, SmbSigningError, sign_smb311, verify_smb311};
+pub use spnego::{
+    NtlmTokenKind, SpnegoClientToken, SpnegoTokenError, encode_spnego_challenge,
+    encode_spnego_complete,
+};
 pub use status::{ConnectorFailure, NtStatus};
 pub use transform::{Smb311Transform, SmbTransformError};
