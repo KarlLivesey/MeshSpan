@@ -315,6 +315,7 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
                 volume_id: VolumeId::from_bytes([84; 16])?,
                 manifest_id: meshspan_domain::ContentManifestId::from_bytes([85; 16])?,
                 stripe_index: 6,
+                shard_index: 2,
                 source_generation: 7,
             },
             signals: WorkSignals {

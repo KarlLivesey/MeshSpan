@@ -93,6 +93,7 @@ fn validate_repair_subject(
         volume_id,
         manifest_id,
         stripe_index,
+        shard_index,
         source_generation,
     } = subject
     else {
@@ -107,6 +108,7 @@ fn validate_repair_subject(
         || value.manifest_id != manifest_id
         || source_generation != value.source_layout_generation
         || source.shard.stripe_index != stripe_index
+        || source.shard.shard_index != shard_index
         || source.operation_id == replacement.operation_id
         || (source.target_id == replacement.target_id
             && source.target_generation == replacement.target_generation)

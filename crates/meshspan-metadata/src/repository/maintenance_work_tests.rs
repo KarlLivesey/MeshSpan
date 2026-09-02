@@ -488,6 +488,7 @@ impl Fixture {
                 volume_id: self.volume,
                 manifest_id,
                 stripe_index: 3,
+                shard_index: 1,
                 source_generation: 1,
             },
             signals: WorkSignals {

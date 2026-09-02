@@ -43,6 +43,8 @@ pub enum WorkSubject {
         manifest_id: ContentManifestId,
         /// Zero-based stripe index inside the manifest.
         stripe_index: u64,
+        /// Exact shard position requiring reconstruction or relocation.
+        shard_index: u16,
         /// Exact immutable generation whose catalogue entry is the compare-and-swap base.
         source_generation: u64,
     },
@@ -94,12 +96,14 @@ impl WorkSubject {
                 volume_id,
                 manifest_id,
                 stripe_index,
+                shard_index,
                 source_generation,
             } => {
                 bytes.push(1);
                 bytes.extend_from_slice(&volume_id.as_bytes());
                 bytes.extend_from_slice(&manifest_id.as_bytes());
                 bytes.extend_from_slice(&stripe_index.to_be_bytes());
+                bytes.extend_from_slice(&shard_index.to_be_bytes());
                 bytes.extend_from_slice(&source_generation.to_be_bytes());
             }
             Self::Scrub {
@@ -142,6 +146,7 @@ impl WorkSubject {
                 volume_id: VolumeId::from_bytes(decoder.identifier()?)?,
                 manifest_id: ContentManifestId::from_bytes(decoder.identifier()?)?,
                 stripe_index: decoder.u64()?,
+                shard_index: decoder.u16()?,
                 source_generation: nonzero(decoder.u64()?)?,
             },
             2 => Self::Scrub {
@@ -233,6 +238,10 @@ impl<'a> SubjectDecoder<'a> {
 
     fn u64(&mut self) -> Result<u64, WorkSubjectError> {
         self.take().map(u64::from_be_bytes)
+    }
+
+    fn u16(&mut self) -> Result<u16, WorkSubjectError> {
+        self.take().map(u16::from_be_bytes)
     }
 
     fn take<const LENGTH: usize>(&mut self) -> Result<[u8; LENGTH], WorkSubjectError> {
@@ -540,7 +549,8 @@ mod tests {
                 volume_id: VolumeId::from_bytes([1; 16])?,
                 manifest_id: ContentManifestId::from_bytes([2; 16])?,
                 stripe_index: 3,
-                source_generation: 4,
+                shard_index: 4,
+                source_generation: 5,
             },
             WorkSubject::Scrub {
                 target_id: TargetId::from_bytes([5; 16])?,
