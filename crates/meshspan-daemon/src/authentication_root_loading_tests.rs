@@ -72,6 +72,47 @@ fn exact_gateway_envelope_expands_stable_distinct_operational_keys()
 }
 
 #[test]
+fn recipient_redistribution_preserves_operational_key_material()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let first = LocalWrappingKey::open_or_create(&directory.path().join("first.key"))?;
+    let second = LocalWrappingKey::open_or_create(&directory.path().join("second.key"))?;
+    let mesh_id = MeshId::from_bytes([31; 16])?;
+    let root = [32; 32];
+    let first_authority = FakeAuthority::record(generation_record_at(
+        mesh_id,
+        &root,
+        &[first.public_key()],
+        1,
+        33,
+    )?);
+    let second_authority = FakeAuthority::record(generation_record_at(
+        mesh_id,
+        &root,
+        &[second.public_key()],
+        2,
+        34,
+    )?);
+    let first_key = AuthenticationRootLoadingService::new(first_authority, &first)
+        .load_latest()?
+        .into_api_key_issuance_key();
+    let second_key = AuthenticationRootLoadingService::new(second_authority, &second)
+        .load_latest()?
+        .into_api_key_issuance_key();
+    let principal_id = PrincipalId::from_bytes([35; 16])?;
+    let operation_id = OperationId::from_bytes([36; 16])?;
+    let first_bundle = ApiKeyBundle::derive_issued(&first_key, principal_id, operation_id)?;
+    let second_bundle = ApiKeyBundle::derive_issued(&second_key, principal_id, operation_id)?;
+
+    assert_eq!(first_bundle.secret_digest(), second_bundle.secret_digest());
+    assert_eq!(
+        first_bundle.expose_encoded().as_str(),
+        second_bundle.expose_encoded().as_str()
+    );
+    Ok(())
+}
+
+#[test]
 fn absent_wrong_duplicate_and_malformed_authority_fail_closed()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
@@ -152,8 +193,22 @@ fn generation_record(
     recipients: &[WrappingPublicKey],
     random_seed: u8,
 ) -> Result<SecretGenerationRecord, Box<dyn std::error::Error>> {
+    generation_record_at(mesh_id, plaintext, recipients, 1, random_seed)
+}
+
+fn generation_record_at(
+    mesh_id: MeshId,
+    plaintext: &[u8],
+    recipients: &[WrappingPublicKey],
+    generation: u64,
+    random_seed: u8,
+) -> Result<SecretGenerationRecord, Box<dyn std::error::Error>> {
     let (secret, recipients) = encrypt_secret(
-        SecretContext::new(AUTHENTICATION_ROOT_KEY_SECRET_KIND, mesh_id.as_bytes(), 1)?,
+        SecretContext::new(
+            AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+            mesh_id.as_bytes(),
+            generation,
+        )?,
         plaintext,
         recipients,
         &mut FixedRandom(random_seed),

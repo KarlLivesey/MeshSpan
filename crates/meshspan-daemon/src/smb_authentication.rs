@@ -16,8 +16,8 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::{
-    AuthenticationRootAuthority, AuthenticationRootLoadingService, AuthenticationRuntimeKeys,
-    SecretGenerationDecryptor, SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey,
+    AuthenticationRootAuthority, AuthenticationRootLoadingService, SecretGenerationDecryptor,
+    SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey,
 };
 
 /// Current replicated SMB authentication-material query boundary.
@@ -72,8 +72,7 @@ where
         generation: u64,
     ) -> Result<SmbVerifierEnvelopeKey, SmbAuthenticationError> {
         self.loader
-            .load_generation(generation)
-            .map(AuthenticationRuntimeKeys::into_smb_verifier_envelope_key)
+            .load_smb_verifier_generation(generation)
             .map_err(|error| match error {
                 crate::AuthenticationRootLoadingError::NotFound
                 | crate::AuthenticationRootLoadingError::NotRecipient

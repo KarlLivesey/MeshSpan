@@ -19,7 +19,10 @@ use hmac::{Hmac, Mac};
 use meshspan_consensus::ActiveQuorumPlan;
 use meshspan_daemon::{ClaimFile, LocalNodeIdentity, LocalWrappingKey};
 use meshspan_domain::{InitialBootstrapMaterial, OperationId, PartitionId, UnixMicros};
-use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
+use meshspan_metadata::{
+    AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeRepository, PartitionDatabase,
+};
+use meshspan_secret_envelope::SecretContext;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use sha1::Sha1;
@@ -36,28 +39,148 @@ const SMB_CLIENT_IMAGE: &str = "meshspan-smbclient-test:bookworm";
 
 #[tokio::test]
 #[ignore = "requires the local pinned smbclient container image"]
-async fn real_smb311_client_round_trips_one_published_volume() -> Result<(), Box<dyn Error>> {
-    let fixture = ProcessFixture::new()?;
-    let mut processes = vec![fixture.start()?];
+async fn real_smb311_clients_round_trip_one_volume_through_three_gateways()
+-> Result<(), Box<dyn Error>> {
+    let root = ProcessFixture::new()?;
+    let second = ProcessFixture::new()?;
+    let third = ProcessFixture::new()?;
+    let mut processes = vec![root.start()?];
     let proof = async {
-        let claim = wait_for_claim(&fixture.claim_path).await?;
-        let client = wait_for_client(&fixture.identity_path).await?;
-        let administrator_id = bootstrap_administrator_id(&claim, &fixture.identity_path)?;
-        wait_for_status(fixture.address, &client, "claim_required").await?;
-        let created = create_process_mesh(&fixture, &client, &claim).await?;
+        let claim = wait_for_claim(&root.claim_path).await?;
+        let client = wait_for_client(&root.identity_path).await?;
+        let administrator_id = bootstrap_administrator_id(&claim, &root.identity_path)?;
+        wait_for_status(root.address, &client, "claim_required").await?;
+        let created = create_process_mesh(&root, &client, &claim).await?;
         let api_key = created["api_key"]
             .as_str()
             .ok_or("setup response omitted the API key")?;
-        save_and_verify_recovery_bundle(&fixture, &client, api_key, &created).await?;
+        save_and_verify_recovery_bundle(&root, &client, api_key, &created).await?;
+        let join_code = issue_join_code(&root, &client, api_key).await?;
+        processes.push(second.start_join(&join_code)?);
+        let second_client = wait_for_client(&second.identity_path).await?;
+        wait_for_status(second.address, &second_client, "configured").await?;
+        processes.push(third.start_join(&join_code)?);
+        let third_client = wait_for_client(&third.identity_path).await?;
+        wait_for_status(third.address, &third_client, "configured").await?;
+        wait_for_three_voters([&root, &second, &third], &root.identity_path).await?;
         let volume =
-            create_volume_details(fixture.address, &client, api_key, &administrator_id).await?;
-        publish_smb_export(fixture.address, &client, api_key, &volume).await?;
-        wait_for_smb_listener(fixture.smb_address).await?;
-        run_real_smb_client(fixture.smb_address.port(), api_key.to_owned()).await
+            create_volume_details(root.address, &client, api_key, &administrator_id).await?;
+        publish_smb_export(root.address, &client, api_key, &volume).await?;
+        wait_for_smb_export_visibility([&root, &second, &third], &root.identity_path).await?;
+        wait_for_authentication_root_access([&root, &second, &third], &root.identity_path).await?;
+        for (index, fixture) in [&root, &second, &third].into_iter().enumerate() {
+            wait_for_smb_listener(fixture.smb_address).await?;
+            run_real_smb_client(fixture.smb_address.port(), api_key.to_owned())
+                .await
+                .map_err(|error| format!("gateway {} SMB cycle failed: {error}", index + 1))?;
+        }
+        Ok(())
     }
     .await;
     stop_processes(&mut processes);
     proof
+}
+
+async fn wait_for_authentication_root_access(
+    fixtures: [&ProcessFixture; 3],
+    root_identity_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let root_identity = LocalNodeIdentity::open(root_identity_path, CERTIFICATE_NAME)?;
+    let root_node = InitialBootstrapMaterial::node_id(root_identity.public_key_fingerprint())?;
+    let partition_id = InitialBootstrapMaterial::root_partition_id(root_node)?;
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let all_accessible = fixtures
+            .iter()
+            .all(|fixture| has_authentication_root_access(fixture, partition_id).unwrap_or(false));
+        if all_accessible {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("authentication root did not become accessible to every gateway".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+fn has_authentication_root_access(
+    fixture: &ProcessFixture,
+    partition_id: PartitionId,
+) -> Result<bool, Box<dyn Error>> {
+    let database = PartitionDatabase::open(
+        &fixture.state_path.join("root-authority.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let repository = AuthoritativeRepository::new(database);
+    let Some(mesh_id) = repository.local_mesh_id()? else {
+        return Ok(false);
+    };
+    let Some(generation) = repository.latest_authentication_root_generation(mesh_id)? else {
+        return Ok(false);
+    };
+    let context = SecretContext::new(
+        AUTHENTICATION_ROOT_KEY_SECRET_KIND,
+        mesh_id.as_bytes(),
+        generation,
+    )?;
+    let Some(record) = repository.secret_generation(context)? else {
+        return Ok(false);
+    };
+    let wrapping_key =
+        LocalWrappingKey::open(&fixture.state_path.join("secrets/node-wrapping-key.x25519"))?;
+    let public_key = wrapping_key.public_key();
+    let Some(recipient) = record
+        .recipients
+        .iter()
+        .find(|recipient| recipient.recipient_public_key().ok() == Some(public_key))
+    else {
+        return Ok(false);
+    };
+    Ok(wrapping_key
+        .decrypt_secret(&record.secret, recipient)
+        .is_ok())
+}
+
+async fn wait_for_smb_export_visibility(
+    fixtures: [&ProcessFixture; 3],
+    root_identity_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let root_identity = LocalNodeIdentity::open(root_identity_path, CERTIFICATE_NAME)?;
+    let root_node = InitialBootstrapMaterial::node_id(root_identity.public_key_fingerprint())?;
+    let partition_id = InitialBootstrapMaterial::root_partition_id(root_node)?;
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let all_visible = fixtures.iter().all(|fixture| {
+            has_smb_export(&fixture.state_path, &fixture.identity_path, partition_id)
+                .unwrap_or(false)
+        });
+        if all_visible {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("published SMB export did not converge to every gateway".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+fn has_smb_export(
+    state_path: &Path,
+    identity_path: &Path,
+    partition_id: PartitionId,
+) -> Result<bool, Box<dyn Error>> {
+    let identity = LocalNodeIdentity::open(identity_path, CERTIFICATE_NAME)?;
+    let node_id = InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
+    let database = PartitionDatabase::open(
+        &state_path.join("root-authority.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let exports = AuthoritativeRepository::new(database).smb_exports_for_gateway(node_id)?;
+    Ok(exports
+        .iter()
+        .any(|export| export.display_name == "process-files"))
 }
 
 #[tokio::test]
