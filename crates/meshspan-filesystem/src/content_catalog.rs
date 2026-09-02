@@ -19,8 +19,8 @@ mod repository;
 mod transfer;
 
 pub use protection::{
-    PendingProtectedShardPage, PreparedProtectedShard, PreparedProtectedStripe,
-    ProtectedShardCursor,
+    CommittedProtectedStripe, PendingProtectedShardPage, PreparedProtectedShard,
+    PreparedProtectedStripe, ProtectedShardCursor,
 };
 pub use transfer::CommittedContentLayoutTransfer;
 
@@ -187,7 +187,14 @@ impl DurableContentCatalog {
     ) -> Result<(), ContentCatalogError> {
         validate_live_request(request)?;
         validate_exact_request(&self.connection, request)?;
-        if request.format_version != 1
+        let importing_protected_layout = request.format_version == 2
+            && self.connection.query_row(
+                "SELECT import_header_digest IS NOT NULL FROM content_publications
+                 WHERE operation_id = ?1",
+                [request.operation_id.as_bytes().as_slice()],
+                |row| row.get::<_, bool>(0),
+            )?;
+        if !(request.format_version == 1 || importing_protected_layout)
             || chunks.is_empty()
             || chunks.len() > MAXIMUM_PAGE_ITEMS
             || layout_is_sealed(&self.connection, request.operation_id)?

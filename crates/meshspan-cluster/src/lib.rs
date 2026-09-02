@@ -47,6 +47,7 @@ mod filesystem_convergence;
 mod membership;
 mod metadata_authority;
 mod native_gateway_wire;
+mod native_protected_wire;
 mod node_runtime;
 mod retention;
 mod status;
@@ -246,6 +247,7 @@ pub use native_gateway_wire::{
     version_native_content_layout_chunk, version_native_content_layout_header,
     version_native_shard_receipt,
 };
+pub use native_protected_wire::{decode_native_protected_stripe, version_native_protected_stripe};
 pub use node_runtime::{NodeRuntimeError, run_stage_three_node};
 pub use retention::version_retention_selection_policy;
 pub use status::{

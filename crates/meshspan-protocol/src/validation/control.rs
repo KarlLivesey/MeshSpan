@@ -221,19 +221,29 @@ fn namespace_replication(value: &Message, limits: WireLimits) -> Result<(), Wire
             valid_identifier(&value.manifest_id)?;
             valid_page_limit(value.limit, limits)
         }
-        Message::NativeContentLayoutPage(value) => {
-            validate_payload(value.header.as_ref(), limits)?;
-            validate_payloads(&value.chunks, limits, true)?;
-            validate_payloads(&value.receipts, limits, true)?;
-            if value.chunks.len() != value.receipts.len()
-                || (value.chunks.is_empty() && value.next_index.is_some())
-            {
-                Err(WireContractError::InvalidMessage)
-            } else {
-                Ok(())
-            }
-        }
+        Message::NativeContentLayoutPage(value) => native_content_layout_page(value, limits),
         _ => Err(WireContractError::InvalidMessage),
+    }
+}
+
+fn native_content_layout_page(
+    value: &crate::v1::NativeContentLayoutPage,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_payload(value.header.as_ref(), limits)?;
+    validate_payloads(&value.chunks, limits, true)?;
+    validate_payloads(&value.receipts, limits, true)?;
+    validate_payloads(&value.protected_stripes, limits, true)?;
+    let records_match = if value.chunks.is_empty() {
+        value.receipts.is_empty() && value.protected_stripes.is_empty()
+    } else {
+        (value.receipts.len() == value.chunks.len() && value.protected_stripes.is_empty())
+            || (value.protected_stripes.len() == value.chunks.len() && value.receipts.is_empty())
+    };
+    if records_match && !(value.chunks.is_empty() && value.next_index.is_some()) {
+        Ok(())
+    } else {
+        Err(WireContractError::InvalidMessage)
     }
 }
 

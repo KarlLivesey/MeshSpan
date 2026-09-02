@@ -381,6 +381,7 @@ message NativeContentLayoutPage {
   repeated VersionedPayload chunks = 2;
   repeated VersionedPayload receipts = 3;
   optional uint64 next_index = 4;
+  repeated VersionedPayload protected_stripes = 5;
 }
 
 message ClaimWork {

@@ -103,6 +103,97 @@ fn protected_stripe_plan_and_receipts_survive_restart_before_commit()
     Ok(())
 }
 
+#[test]
+fn protected_layout_import_replays_exact_pages_and_receipts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source_directory = tempdir()?;
+    let (request, stripe) = protected_fixture()?;
+    let mut source = DurableContentCatalog::open(source_directory.path(), UnixMicros::new(1))?;
+    source.begin(request)?;
+    source.append_protected_stripes(request, std::slice::from_ref(&stripe))?;
+    let manifest = source.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 2,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for (cursor, shard) in source
+        .pending_protected_shards(request, None, 10)?
+        .shards
+        .as_slice()
+    {
+        if shard.acknowledgement == ShardAcknowledgement::Required {
+            source.record_protected_receipt(
+                request,
+                protected_receipt(manifest.root_digest, *cursor, *shard),
+                UnixMicros::new(3),
+            )?;
+        }
+    }
+    source.finish(request, UnixMicros::new(4))?;
+    let committed = source.committed_protected_stripe(
+        PublishedContentReference {
+            publication_operation_id: request.operation_id,
+            manifest,
+        },
+        0,
+    )?;
+    let transfer = source.committed_layout_transfer(PublishedContentReference {
+        publication_operation_id: request.operation_id,
+        manifest,
+    })?;
+    let header = transfer.header();
+    let page = transfer.page(None, 1)?;
+
+    let receiver_directory = tempdir()?;
+    let import_request = ContentPublicationRequest {
+        observed_at: UnixMicros::new(5),
+        ..request
+    };
+    let mut receiver = DurableContentCatalog::open(receiver_directory.path(), UnixMicros::new(5))?;
+    receiver.begin_layout_import(import_request, header)?;
+    receiver.append_layout_import_page(import_request, header, &page)?;
+    receiver.append_layout_import_page(import_request, header, &page)?;
+    let mut imported_chunk = receiver.content_chunk(import_request, 0)?;
+    imported_chunk.storage_layout_digest = [0; 32];
+    let imported_stripe = PreparedProtectedStripe::from_untrusted(
+        import_request,
+        imported_chunk,
+        committed.stripe.coding_layout(),
+        committed.stripe.topology_revision(),
+        committed.stripe.capacity_revision(),
+        committed.stripe.policy_evidence().clone(),
+        committed.stripe.shards().to_vec(),
+    )?;
+    receiver.append_protected_layout_import_page(
+        import_request,
+        std::slice::from_ref(&imported_stripe),
+    )?;
+    receiver.append_protected_layout_import_page(
+        import_request,
+        std::slice::from_ref(&imported_stripe),
+    )?;
+    receiver.seal_layout_import(import_request, header)?;
+    for receipt in committed.receipts.as_slice() {
+        receiver.record_protected_receipt(import_request, *receipt, UnixMicros::new(6))?;
+        receiver.record_protected_receipt(import_request, *receipt, UnixMicros::new(7))?;
+    }
+    receiver.finish(import_request, UnixMicros::new(8))?;
+    let received_stripe = receiver.committed_protected_stripe(
+        PublishedContentReference {
+            publication_operation_id: import_request.operation_id,
+            manifest,
+        },
+        0,
+    )?;
+    assert_eq!(received_stripe.stripe, imported_stripe);
+    assert_eq!(received_stripe.receipts, committed.receipts);
+    Ok(())
+}
+
 fn protected_fixture()
 -> Result<(ContentPublicationRequest, PreparedProtectedStripe), Box<dyn std::error::Error>> {
     let request = ContentPublicationRequest {

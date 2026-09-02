@@ -12,8 +12,8 @@ use meshspan_contracts::{
     PlacementRequest, ShardAcknowledgement, VersionedPayload,
 };
 use meshspan_domain::{
-    FailureScenario, LifecycleState, ProtectionLayout, ProtectionProof, Revision, TargetId,
-    Topology, UnixMicros, prove_protection,
+    FailureScenario, LifecycleState, ProtectionError, ProtectionLayout, ProtectionProof, Revision,
+    TargetId, Topology, UnixMicros, prove_protection,
 };
 
 const CONTRACT_VERSIONS: &[ContractVersion] = &[ContractVersion::V1_0];
@@ -191,7 +191,7 @@ impl PlacementPolicy for FaultAwarePlacement {
                 );
             }
         }
-        Err(ContractError::ResourceExhausted)
+        build_best_effort_plan(request, &candidates)
     }
 
     fn evaluate(
@@ -203,6 +203,60 @@ impl PlacementPolicy for FaultAwarePlacement {
         self.require_active()?;
         prove_protection(topology, scenario, layout, MAXIMUM_PROOF_LOSS_SETS)
             .map_err(|_| ContractError::InvalidInput)
+    }
+}
+
+fn build_best_effort_plan(
+    request: PlacementRequest<'_>,
+    candidates: &[PlacementCandidate],
+) -> Result<PlacementPlan, ContractError> {
+    let slice_bytes = slice_bytes(request.logical_stripe_bytes, 1)?;
+    let targets = candidates
+        .iter()
+        .filter(|candidate| candidate.writable_bytes >= u64::from(slice_bytes))
+        .take(MAXIMUM_SLICES)
+        .map(|candidate| candidate.target_id)
+        .collect::<Vec<_>>();
+    if targets.is_empty()
+        || !targets.iter().any(|target| {
+            request.candidates.iter().any(|candidate| {
+                candidate.target_id == *target
+                    && candidate.acknowledgement == ShardAcknowledgement::Required
+            })
+        })
+    {
+        return Err(ContractError::ResourceExhausted);
+    }
+    let layout = CodingLayout::new(
+        1,
+        u16::try_from(targets.len().saturating_sub(1))
+            .map_err(|_| ContractError::InternalContract)?,
+        slice_bytes,
+    )
+    .map_err(|_| ContractError::InternalContract)?;
+    let protection_layout =
+        ProtectionLayout::new(1, targets.clone()).map_err(|_| ContractError::InternalContract)?;
+    let proofs = request
+        .scenarios
+        .iter()
+        .map(|scenario| best_effort_proof(request.topology, scenario, &protection_layout))
+        .collect::<Result<Vec<_>, _>>()?;
+    build_plan(request, layout, targets, proofs)
+}
+
+fn best_effort_proof(
+    topology: &Topology,
+    scenario: &FailureScenario,
+    layout: &ProtectionLayout,
+) -> Result<ProtectionProof, ContractError> {
+    match prove_protection(topology, scenario, layout, MAXIMUM_PROOF_LOSS_SETS) {
+        Ok(proof) => Ok(proof),
+        Err(ProtectionError::InsufficientTopology) => Ok(ProtectionProof {
+            survives: false,
+            evaluated_loss_sets: 0,
+            minimum_remaining_slices: 0,
+        }),
+        Err(_) => Err(ContractError::InvalidInput),
     }
 }
 
@@ -378,10 +432,7 @@ fn prove_all(
         .map_err(|_| ContractError::InvalidInput)?;
     let proofs = scenarios
         .iter()
-        .map(|scenario| {
-            prove_protection(topology, scenario, &layout, MAXIMUM_PROOF_LOSS_SETS)
-                .map_err(|_| ContractError::InvalidInput)
-        })
+        .map(|scenario| best_effort_proof(topology, scenario, &layout))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(proofs.iter().all(|proof| proof.survives).then_some(proofs))
 }
@@ -562,6 +613,28 @@ mod tests {
                 .contains(&candidates[0].target_id)
         );
         assert!(plan.protection_proofs.as_slice()[0].survives);
+        Ok(())
+    }
+
+    #[test]
+    fn undersized_mesh_writes_best_effort_and_records_protection_debt()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (topology, candidates) = independent_targets(1)?;
+        let scenario = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2)?,
+            failure_count: 2,
+        }])?;
+        let plan = FaultAwarePlacement::new().plan_write(request(
+            &topology,
+            &candidates,
+            std::slice::from_ref(&scenario),
+            512 * 1_024,
+        )?)?;
+
+        assert_eq!(plan.coding_layout.data_slices(), 1);
+        assert_eq!(plan.coding_layout.recovery_slices(), 0);
+        assert!(!plan.protection_proofs.as_slice()[0].survives);
+        assert_eq!(plan.protection_proofs.as_slice()[0].evaluated_loss_sets, 0);
         Ok(())
     }
 

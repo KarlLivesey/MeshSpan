@@ -49,7 +49,9 @@ impl From<PreparedContentChunk> for ContentLayoutChunk {
 }
 
 impl ContentLayoutChunk {
-    pub(crate) fn with_provider_operation(self, operation_id: OperationId) -> PreparedContentChunk {
+    /// Binds a transferred identity to the deterministic publication operation used by its plan.
+    #[must_use]
+    pub fn with_provider_operation(self, operation_id: OperationId) -> PreparedContentChunk {
         PreparedContentChunk {
             chunk_index: self.chunk_index,
             plaintext_length: self.plaintext_length,
@@ -62,7 +64,12 @@ impl ContentLayoutChunk {
     }
 }
 
-pub(crate) fn provider_operation_id(
+/// Derives the stable chunk-level operation identity shared by transfer participants.
+///
+/// # Errors
+///
+/// Rejects the cryptographically negligible nil identifier result.
+pub fn provider_operation_id(
     operation_id: OperationId,
     chunk_index: u64,
 ) -> Result<OperationId, ContentLayoutTransferError> {

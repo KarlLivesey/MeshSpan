@@ -55,6 +55,15 @@ pub struct PreparedProtectedStripe {
     shards: BoundedItems<PreparedProtectedShard>,
 }
 
+/// One committed protected stripe plus the exact durable receipts currently held for it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommittedProtectedStripe {
+    /// Immutable coding and placement record.
+    pub stripe: PreparedProtectedStripe,
+    /// Durable receipts for every required shard and any completed eventual shard.
+    pub receipts: BoundedItems<ShardReceipt>,
+}
+
 impl PreparedProtectedStripe {
     /// Validates untrusted placement output and binds it into the chunk manifest identity.
     ///
@@ -194,6 +203,124 @@ pub struct PendingProtectedShardPage {
 }
 
 impl DurableContentCatalog {
+    /// Loads one committed protected stripe and reconstitutes its exact recorded receipts.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an uncommitted/wrong-format manifest, unknown stripe or inconsistent receipt row.
+    pub fn committed_protected_stripe(
+        &self,
+        content: crate::PublishedContentReference,
+        chunk_index: u64,
+    ) -> Result<CommittedProtectedStripe, ContentCatalogError> {
+        let committed = self.committed_layout(content)?;
+        if committed.request.format_version != 2 {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        let stripe = load_protected_stripe(&self.connection, committed.request, chunk_index)?;
+        let mut statement = self.connection.prepare(
+            "SELECT shard_index FROM content_stripe_shards
+             WHERE operation_id = ?1 AND chunk_index = ?2 AND receipt_recorded_at IS NOT NULL
+             ORDER BY shard_index LIMIT ?3",
+        )?;
+        let indices = statement
+            .query_map(
+                params![
+                    committed.request.operation_id.as_bytes().as_slice(),
+                    to_i64(chunk_index)?,
+                    i64::try_from(MAXIMUM_STRIPE_SHARDS + 1)
+                        .map_err(|_| ContentCatalogError::Corrupt)?,
+                ],
+                |row| {
+                    u16::try_from(row.get::<_, i64>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let receipts = indices
+            .into_iter()
+            .map(|index| {
+                let shard = stripe
+                    .shards()
+                    .get(usize::from(index))
+                    .copied()
+                    .filter(|shard| shard.shard_index == index)
+                    .ok_or(ContentCatalogError::Corrupt)?;
+                Ok::<ShardReceipt, ContentCatalogError>(ShardReceipt {
+                    operation_id: shard.provider_operation_id,
+                    shard: meshspan_contracts::ShardIdentity {
+                        manifest_digest: content.manifest.root_digest,
+                        stripe_index: chunk_index,
+                        shard_index: index,
+                        generation: shard.shard_generation,
+                    },
+                    length: shard.expected_length,
+                    digest: shard.expected_digest,
+                    target_id: shard.target_id,
+                    target_generation: shard.target_generation,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(CommittedProtectedStripe {
+            stripe,
+            receipts: BoundedItems::new(receipts, MAXIMUM_STRIPE_SHARDS)
+                .map_err(|_| ContentCatalogError::Corrupt)?,
+        })
+    }
+
+    /// Installs source-authenticated protected plans beside already imported chunk identities.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing/different chunks, duplicate layouts, malformed placement or excess pages.
+    pub fn append_protected_layout_import_page(
+        &mut self,
+        request: ContentPublicationRequest,
+        stripes: &[PreparedProtectedStripe],
+    ) -> Result<(), ContentCatalogError> {
+        validate_live_request(request)?;
+        validate_exact_request(&self.connection, request)?;
+        if request.format_version != 2 || stripes.is_empty() || stripes.len() > MAXIMUM_PAGE_ITEMS {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for stripe in stripes {
+            let stored = super::repository::load_chunk(
+                &transaction,
+                request.operation_id,
+                stripe.chunk().chunk_index,
+            )?;
+            if stored != stripe.chunk()
+                || recompute_digest(request, stripe) != stripe.chunk().storage_layout_digest
+            {
+                return Err(ContentCatalogError::Conflict);
+            }
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM content_stripe_layouts
+                    WHERE operation_id = ?1 AND chunk_index = ?2
+                 )",
+                params![
+                    request.operation_id.as_bytes().as_slice(),
+                    to_i64(stripe.chunk().chunk_index)?,
+                ],
+                |row| row.get(0),
+            )?;
+            if exists {
+                if load_protected_stripe(&transaction, request, stripe.chunk().chunk_index)?
+                    == *stripe
+                {
+                    continue;
+                }
+                return Err(ContentCatalogError::Conflict);
+            }
+            insert_stripe_layout(&transaction, request.operation_id, stripe)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Appends contiguous protected stripes and all planned shard writes atomically.
     ///
     /// # Errors
@@ -472,6 +599,14 @@ fn insert_stripe(
             stripe.chunk.provider_operation_id.as_bytes().as_slice(),
         ],
     )?;
+    insert_stripe_layout(transaction, operation_id, stripe)
+}
+
+fn insert_stripe_layout(
+    transaction: &rusqlite::Transaction<'_>,
+    operation_id: OperationId,
+    stripe: &PreparedProtectedStripe,
+) -> Result<(), ContentCatalogError> {
     transaction.execute(
         "INSERT INTO content_stripe_layouts(
             operation_id, chunk_index, data_slices, recovery_slices, slice_bytes,

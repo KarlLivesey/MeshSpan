@@ -17,7 +17,7 @@ use meshspan_filesystem::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter,
     ContentChunkLimits, ContentPublicationError, FilesystemAdapterConfigurationError,
     FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
-    UnprotectedContentAccess, UnprotectedContentPublisher, VersionPublicationStore,
+    ProtectedContentAccess, ProtectedContentPublisher, VersionPublicationStore,
 };
 use meshspan_metadata::{
     AuthoritativeRepository, MetadataStoreError, PartitionDatabase, StorageTargetProviderContext,
@@ -25,7 +25,8 @@ use meshspan_metadata::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::cluster_storage_provider::ClusterStorageProvider;
+use crate::cluster_storage_provider::ClusterShardRouter;
+use crate::native_protection::protection_configuration;
 use crate::private_consensus_runtime::PrivateConsensusRuntime;
 use crate::{
     ConsensusAuthenticationAuthority, LocalFolderStorageProvider, LocalWrappingKey,
@@ -40,8 +41,10 @@ const HEAD_PUBLICATION_ATTEMPTS: usize = 32;
 const HEAD_PUBLICATION_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 pub(crate) const MAXIMUM_NATIVE_SHARD_BYTES: usize = CONTENT_CHUNK_BYTES + 16;
 
-type ProductionPublisher = UnprotectedContentPublisher<
-    ClusterStorageProvider,
+type ProductionPublisher = ProtectedContentPublisher<
+    ClusterShardRouter,
+    meshspan_coding::ReedSolomonCoding,
+    meshspan_placement::FaultAwarePlacement,
     OperatingSystemRandom,
     VolumeKeyLoadingService<ConsensusAuthenticationAuthority, LocalWrappingKey>,
 >;
@@ -65,12 +68,6 @@ impl NativeStorageTarget {
         provider: LocalFolderStorageProvider,
     ) -> Self {
         Self { context, provider }
-    }
-
-    /// Returns the stable target identity used for deterministic initial placement.
-    #[must_use]
-    pub(crate) const fn target_id(&self) -> meshspan_domain::TargetId {
-        self.context.target_id
     }
 
     /// Returns the committed storage route bound to this live provider incarnation.
@@ -124,7 +121,7 @@ impl NativeFilesystemRuntimeConfiguration {
             authority,
             network,
             runtime,
-            policy: FilesystemAdapterPolicy::new(true, 1, 1)?,
+            policy: FilesystemAdapterPolicy::new(true, 1, 2)?,
             chunk_limits: ContentChunkLimits::new(CONTENT_CHUNK_BYTES)
                 .map_err(|_| NativeFilesystemRuntimeConfigurationError::ChunkSize)?,
         })
@@ -156,31 +153,45 @@ impl NativeFilesystemRuntimeConfiguration {
 
     fn open(
         &self,
-        target: &NativeStorageTarget,
+        targets: &[NativeStorageTarget],
         now: UnixMicros,
     ) -> Result<ProductionFilesystem, NativeFilesystemOpeningError> {
+        let primary = targets
+            .first()
+            .ok_or(NativeFilesystemOpeningError::Unavailable)?;
+        if targets
+            .iter()
+            .any(|target| target.context.mesh_id != primary.context.mesh_id)
+        {
+            return Err(NativeFilesystemOpeningError::Unavailable);
+        }
+        let authority = self.repository(now)?;
+        let protection = protection_configuration(&authority, targets)?;
         let permit_key =
             StoragePermitLoadingService::new(self.authority(now)?, self.wrapping_key()?)
-                .load_latest(target.context.mesh_id)?;
-        let content_access = UnprotectedContentAccess::new(
-            target.context.mesh_id,
-            target.context.target_id,
-            target.context.generation,
-            permit_key,
-        )?;
+                .load_latest(primary.context.mesh_id)?;
+        let read_permit_key =
+            StoragePermitLoadingService::new(self.authority(now)?, self.wrapping_key()?)
+                .load_latest(primary.context.mesh_id)?;
+        let content_access = ProtectedContentAccess::new(primary.context.mesh_id, read_permit_key);
         let key_service = VolumeKeyLoadingService::new(self.authority(now)?, self.wrapping_key()?);
-        let provider = ClusterStorageProvider::new(
-            target.provider(),
-            target.context.target_id,
-            target.context.generation,
-            self.repository(now)?,
+        let router = ClusterShardRouter::new(
+            primary.context.mesh_id,
+            targets
+                .iter()
+                .map(|target| (target.context(), target.provider())),
+            permit_key,
+            authority,
             Arc::clone(&self.network),
             self.runtime.clone(),
         );
-        let publisher = UnprotectedContentPublisher::open(
+        let publisher = ProtectedContentPublisher::open(
             &self.filesystem_state_directory,
             now,
-            provider,
+            router,
+            meshspan_coding::ReedSolomonCoding::new(),
+            meshspan_placement::FaultAwarePlacement::new(),
+            protection,
             OperatingSystemRandom,
             key_service,
             self.chunk_limits,
@@ -199,7 +210,7 @@ impl NativeFilesystemRuntimeConfiguration {
 struct NativeFilesystemRuntimeState {
     configuration: NativeFilesystemRuntimeConfiguration,
     filesystem: Option<ProductionFilesystem>,
-    active_target: Option<StorageTargetProviderContext>,
+    active_targets: Vec<StorageTargetProviderContext>,
 }
 
 /// Cloneable connector boundary backed by exactly one production filesystem state machine.
@@ -216,7 +227,7 @@ impl NativeFilesystemRuntime {
             inner: Arc::new(Mutex::new(NativeFilesystemRuntimeState {
                 configuration,
                 filesystem: None,
-                active_target: None,
+                active_targets: Vec::new(),
             })),
         }
     }
@@ -227,16 +238,20 @@ impl NativeFilesystemRuntime {
     /// storage reconciler can retry without exposing a partly composed service.
     pub(crate) fn ensure_open(
         &self,
-        target: &NativeStorageTarget,
+        targets: &[NativeStorageTarget],
         now: UnixMicros,
     ) -> Result<(), NativeFilesystemOpeningError> {
         let mut state = self.lock_opening()?;
-        if state.filesystem.is_some() {
+        let contexts = targets
+            .iter()
+            .map(NativeStorageTarget::context)
+            .collect::<Vec<_>>();
+        if state.filesystem.is_some() && state.active_targets == contexts {
             return Ok(());
         }
-        let filesystem = state.configuration.open(target, now)?;
+        let filesystem = state.configuration.open(targets, now)?;
         state.filesystem = Some(filesystem);
-        state.active_target = Some(target.context());
+        state.active_targets = contexts;
         Ok(())
     }
 
@@ -291,7 +306,9 @@ impl NativeFilesystemRuntime {
             (
                 state.configuration.filesystem_state_directory.clone(),
                 state
-                    .active_target
+                    .active_targets
+                    .first()
+                    .copied()
                     .ok_or(NativeFilesystemRuntimeError::Unavailable)?,
                 Arc::clone(&state.configuration.network),
                 state.configuration.runtime.clone(),

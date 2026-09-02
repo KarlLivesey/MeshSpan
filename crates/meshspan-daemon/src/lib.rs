@@ -100,6 +100,7 @@ mod native_api_authentication;
 mod native_api_authentication_tests;
 mod native_filesystem_runtime;
 mod native_gateway_sync;
+mod native_protection;
 mod native_query;
 mod native_upload_api;
 #[cfg(test)]

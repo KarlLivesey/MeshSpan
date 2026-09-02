@@ -61,10 +61,10 @@ pub use commit_service::{
     FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
 };
 pub use content_catalog::{
-    CommittedContentLayoutTransfer, CommittedShardInventory, CommittedShardPage,
-    ContentCatalogError, DurableContentCatalog, PendingContentChunkPage, PendingProtectedShardPage,
-    PreparedContentChunk, PreparedContentLayout, PreparedProtectedShard, PreparedProtectedStripe,
-    ProtectedShardCursor,
+    CommittedContentLayoutTransfer, CommittedProtectedStripe, CommittedShardInventory,
+    CommittedShardPage, ContentCatalogError, DurableContentCatalog, PendingContentChunkPage,
+    PendingProtectedShardPage, PreparedContentChunk, PreparedContentLayout, PreparedProtectedShard,
+    PreparedProtectedStripe, ProtectedShardCursor,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,
@@ -86,7 +86,7 @@ pub use content_reader::{
 };
 pub use content_transfer::{
     ContentLayoutChunk, ContentLayoutTransferError, ContentLayoutTransferHeader,
-    ContentLayoutTransferPage, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS,
+    ContentLayoutTransferPage, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS, provider_operation_id,
 };
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
