@@ -172,10 +172,28 @@ impl<P: PartitionConsensusPersistence> PartitionConsensusDriver<P> {
         self.core.leader_id()
     }
 
+    /// Returns this driver's permanent local member identity.
+    #[must_use]
+    pub const fn local_node_id(&self) -> NodeId {
+        self.core.local_node_id()
+    }
+
+    /// Returns whether the active quorum phase permits this member to campaign.
+    #[must_use]
+    pub fn local_is_eligible_leader(&self) -> bool {
+        self.core.local_is_eligible_leader()
+    }
+
     /// Returns the highest committed log index.
     #[must_use]
     pub const fn commit_index(&self) -> u64 {
         self.core.commit_index()
+    }
+
+    /// Returns the current durable consensus term.
+    #[must_use]
+    pub const fn current_term(&self) -> u64 {
+        self.core.current_term()
     }
 
     /// Returns the highest state-machine-applied log index.

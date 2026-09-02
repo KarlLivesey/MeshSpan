@@ -16,6 +16,41 @@ use zeroize::Zeroizing;
 use super::*;
 use crate::{ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig};
 
+#[test]
+fn voters_receive_distinct_stable_election_slots() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let nodes = [
+        NodeId::from_bytes([41; 16])?,
+        NodeId::from_bytes([42; 16])?,
+        NodeId::from_bytes([43; 16])?,
+    ];
+    let plan = plan(&nodes)?;
+    let base = Duration::from_millis(1_200);
+    let delays = nodes
+        .into_iter()
+        .enumerate()
+        .map(|(index, node)| {
+            let driver = driver_with_plan(
+                &directory
+                    .path()
+                    .join(format!("election-slot-{index}.sqlite3")),
+                node,
+                &plan,
+            )?;
+            Ok(election_delay(&driver, base))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    assert_eq!(
+        delays,
+        [
+            Duration::from_millis(1_500),
+            Duration::from_millis(1_800),
+            Duration::from_millis(2_100),
+        ]
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn single_owner_returns_only_a_durable_exact_receipt()
 -> Result<(), Box<dyn std::error::Error>> {
