@@ -156,7 +156,9 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
             election_check_interval: Duration::from_millis(10),
             ..MetadataAuthorityConfig::default()
         };
-        authorities.push(spawn_metadata_authority(driver, transport, config)?);
+        authorities.push(spawn_replication_fixture_authority(
+            driver, transport, config,
+        )?);
     }
     {
         let mut registered = handles.lock().map_err(|_| "transport registry poisoned")?;
@@ -170,15 +172,17 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
         Duration::from_secs(5),
         commit_after_election(&authorities[0].0, context, &command),
     )
-    .await??;
+    .await
+    .map_err(|_| "leader commit timed out")??;
     assert_eq!(receipt.operation_id, context.operation_id);
 
-    for (authority, _) in &authorities {
+    for (index, (authority, _)) in authorities.iter().enumerate() {
         let replay = tokio::time::timeout(
             Duration::from_secs(5),
             resolve_after_replication(authority, context, &command),
         )
-        .await??;
+        .await
+        .map_err(|_| format!("replica {index} resolution timed out"))??;
         assert_eq!(replay.result_digest, receipt.result_digest);
     }
     for (authority, _) in &authorities {
@@ -348,7 +352,9 @@ fn start_authorities(
             )?;
             let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(network);
             let config = authority_config(index)?;
-            Ok(spawn_metadata_authority(driver, transport, config)?)
+            Ok(spawn_replication_fixture_authority(
+                driver, transport, config,
+            )?)
         })
         .collect()
 }
@@ -392,6 +398,16 @@ struct InMemoryTransport {
     peers: Arc<Mutex<BTreeMap<NodeId, MetadataAuthorityHandle>>>,
 }
 
+fn spawn_replication_fixture_authority(
+    driver: PartitionConsensusDriver<AuthoritativeRepository>,
+    transport: Arc<dyn ConsensusMessageTransport>,
+    config: MetadataAuthorityConfig,
+) -> Result<AuthorityTask, MetadataAuthorityStartError> {
+    // These fixtures start from an already formed three-voter plan so they can isolate replication
+    // and transport. Production authorities always coordinate membership from enrolled learners.
+    spawn_metadata_authority_runtime(driver, transport, config, false)
+}
+
 impl ConsensusMessageTransport for InMemoryTransport {
     fn send(&self, to: NodeId, message: CoreMessage) {
         let Ok(peers) = self.peers.lock() else {
@@ -417,8 +433,11 @@ async fn commit_after_election(
 ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
     loop {
         match authority.commit_or_resolve(context, command.clone()).await {
-            Err(MetadataAuthorityRequestError::NotLeader { .. }) => {
-                tokio::task::yield_now().await;
+            Err(
+                MetadataAuthorityRequestError::NotLeader { .. }
+                | MetadataAuthorityRequestError::Unavailable,
+            ) => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
             outcome => return outcome,
         }
@@ -432,8 +451,11 @@ async fn resolve_after_replication(
 ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
     loop {
         match authority.commit_or_resolve(context, command.clone()).await {
-            Err(MetadataAuthorityRequestError::NotLeader { .. }) => {
-                tokio::task::yield_now().await;
+            Err(
+                MetadataAuthorityRequestError::NotLeader { .. }
+                | MetadataAuthorityRequestError::Unavailable,
+            ) => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
             outcome => return outcome,
         }

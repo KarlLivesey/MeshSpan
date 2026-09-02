@@ -283,7 +283,7 @@ fn portable_layout_import_resumes_rewraps_and_collects_only_local_receipts()
                 .get::<_, u32>(
                 0
             ))?,
-        3
+        super::repository::SCHEMA_VERSION
     );
     Ok(())
 }
