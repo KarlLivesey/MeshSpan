@@ -24,8 +24,10 @@ use crate::{
 };
 
 mod repair;
+mod target_inventory;
 
 pub use repair::{ShardRepairCandidate, ShardRepairTransition};
+pub use target_inventory::{TargetShardCursor, TargetShardPage, TargetShardRoute};
 
 const LAYOUT_DOMAIN: &[u8] = b"meshspan.content.protected-stripe-layout.v1\0";
 const MAXIMUM_POLICY_BYTES: usize = 4_096;
@@ -213,6 +215,24 @@ pub struct PendingProtectedShardPage {
 }
 
 impl DurableContentCatalog {
+    /// Returns one bounded keyset page of exact current shard routes on a target generation.
+    ///
+    /// Original placement rows shadowed by a committed repair are excluded. Every returned route
+    /// is independently resolved through the same manifest and route checks used by scrub repair.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds and any malformed, incomplete or contradictory catalogue state.
+    pub fn current_target_shards(
+        &self,
+        target_id: TargetId,
+        target_generation: u64,
+        after: Option<TargetShardCursor>,
+        limit: usize,
+    ) -> Result<TargetShardPage, ContentCatalogError> {
+        target_inventory::page(&self.connection, target_id, target_generation, after, limit)
+    }
+
     /// Resolves one exact currently active shard route named by provider scrub evidence.
     ///
     /// # Errors
