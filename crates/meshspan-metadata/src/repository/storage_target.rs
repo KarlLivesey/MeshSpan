@@ -105,7 +105,7 @@ fn load_provider_context(
                AND h.state = 1 AND h.retired_at IS NULL
                AND (?4 = 1 OR NOT EXISTS(
                     SELECT 1 FROM storage_scope_drains d
-                    WHERE d.state < 3 AND (
+                    WHERE (
                         (d.scope_kind = 1 AND d.scope_id = st.node_id)
                         OR (d.scope_kind = 2 AND EXISTS(
                             SELECT 1 FROM host_fault_group_memberships hfg
@@ -285,7 +285,7 @@ fn reject_draining_scope(
     let blocked = transaction.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM storage_scope_drains d
-            WHERE d.state < 3 AND (
+            WHERE (
                 (d.scope_kind = 1 AND d.scope_id = ?1)
                 OR (d.scope_kind = 2 AND EXISTS(
                     SELECT 1 FROM host_fault_group_memberships hfg

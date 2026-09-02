@@ -127,6 +127,22 @@ fn fault_group_drain_fences_writes_and_composes_a_real_target_drain()
             .state,
         StorageScopeDrainState::SafeToDetach
     );
+    let replacement = RegisterStorageTarget {
+        target_id: TargetId::from_bytes([63; 16])?,
+        name: RecordName::new("Unexpected replacement")?,
+        marker_fingerprint: [64; 32],
+        backing_device_fingerprint: Some([65; 32]),
+        filesystem_fingerprint: Some([66; 32]),
+        ..target_value(&fixture, StorageUsageLimit::Percent(95))?
+    };
+    assert!(matches!(
+        fixture.repository.apply_committed(
+            LogPosition { index: 10, term: 1 },
+            context(67, fixture.administrator, 68, 100, Some(9))?,
+            &AuthoritativeCommand::RegisterStorageTarget(replacement),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
     Ok(())
 }
 

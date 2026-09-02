@@ -360,7 +360,7 @@ fn active_target_generation_exists(
               AND h.state = 1 AND h.retired_at IS NULL
               AND NOT EXISTS(
                 SELECT 1 FROM storage_scope_drains d
-                WHERE d.state < 3 AND (
+                WHERE (
                     (d.scope_kind = 1 AND d.scope_id = st.node_id)
                     OR (d.scope_kind = 2 AND EXISTS(
                         SELECT 1 FROM host_fault_group_memberships hfg

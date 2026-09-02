@@ -425,7 +425,7 @@ fn reject_overlapping_scope(
         DrainScope::Node { node_id, .. } => transaction.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM storage_scope_drains d
-                WHERE d.state < 3 AND (
+                WHERE (
                     (d.scope_kind = 1 AND d.scope_id = ?1)
                     OR (d.scope_kind = 2 AND EXISTS(
                         SELECT 1 FROM nodes n
@@ -438,7 +438,7 @@ fn reject_overlapping_scope(
         DrainScope::FaultGroup { fault_group_id } => transaction.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM storage_scope_drains d
-                WHERE d.state < 3 AND (
+                WHERE (
                     (d.scope_kind = 2 AND d.scope_id = ?1)
                     OR (d.scope_kind = 1 AND EXISTS(
                         SELECT 1 FROM nodes n
