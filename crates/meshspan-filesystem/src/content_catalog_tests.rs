@@ -11,7 +11,7 @@ use tempfile::tempdir;
 
 use super::{
     ContentCatalogError, DurableContentCatalog, PreparedContentChunk, PreparedProtectedShard,
-    PreparedProtectedStripe, ProtectedShardCursor, ShardRepairTransition,
+    PreparedProtectedStripe, ProtectedShardCursor, ShardRepairTransition, VolumeStripeCursor,
 };
 use crate::{
     CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementPolicy,
@@ -445,6 +445,48 @@ fn target_inventory_follows_current_routes_and_rejects_invalid_pages()
             None,
             0
         ),
+        Err(ContentCatalogError::InvalidInput)
+    ));
+    Ok(())
+}
+
+#[test]
+fn volume_stripe_inventory_is_bounded_volume_scoped_and_manifest_validated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let (catalogue, request, stripe, manifest) = committed_protected_catalog(directory.path())?;
+
+    let page = catalogue.current_volume_stripes(request.volume_id, None, 1)?;
+    assert_eq!(page.stripes.len(), 1);
+    assert_eq!(page.next, None);
+    let record = &page.stripes.as_slice()[0];
+    assert_eq!(
+        record.cursor,
+        VolumeStripeCursor {
+            publication_operation_id: request.operation_id,
+            stripe_index: 0,
+        }
+    );
+    assert_eq!(record.content.manifest, manifest);
+    assert_eq!(record.stripe.stripe, stripe);
+    assert_eq!(
+        record.stripe.receipts.len(),
+        usize::from(stripe.coding_layout().total_slices())
+    );
+    assert!(
+        catalogue
+            .current_volume_stripes(request.volume_id, Some(record.cursor), 1)?
+            .stripes
+            .is_empty()
+    );
+    assert!(
+        catalogue
+            .current_volume_stripes(VolumeId::from_bytes([99; 16])?, None, 1)?
+            .stripes
+            .is_empty()
+    );
+    assert!(matches!(
+        catalogue.current_volume_stripes(request.volume_id, None, 0),
         Err(ContentCatalogError::InvalidInput)
     ));
     Ok(())
