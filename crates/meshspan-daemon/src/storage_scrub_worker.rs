@@ -13,7 +13,7 @@ use meshspan_metadata::{
 };
 use thiserror::Error;
 
-use crate::ConsensusAuthenticationAuthority;
+use crate::{MaintenanceMetadataAuthority, ScrubFindingSchedulingError, ScrubFindingSink};
 
 /// Exact identities and execution bounds for one already-selected scrub job.
 pub struct StorageScrubExecution {
@@ -79,30 +79,9 @@ pub enum StorageScrubExecutionError {
     /// The pass exceeded its explicit page bound before reaching the end.
     #[error("storage scrub pass exceeded its configured page bound")]
     PassLimitExceeded,
-}
-
-/// Minimal consensus mutation boundary required by a storage-scrub worker.
-pub trait ScrubMetadataAuthority {
-    /// Commits or resolves one exact authoritative command.
-    ///
-    /// # Errors
-    ///
-    /// Returns only typed consensus/authority failures and never invents a durable receipt.
-    fn commit(
-        &self,
-        context: CommandContext,
-        command: &AuthoritativeCommand,
-    ) -> Result<CommandReceipt, MetadataAuthorityRequestError>;
-}
-
-impl ScrubMetadataAuthority for ConsensusAuthenticationAuthority {
-    fn commit(
-        &self,
-        context: CommandContext,
-        command: &AuthoritativeCommand,
-    ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
-        self.commit_authoritative(context, command)
-    }
+    /// A validated non-healthy observation could not be safely admitted for follow-up.
+    #[error("storage scrub finding could not be scheduled")]
+    Finding(#[from] ScrubFindingSchedulingError),
 }
 
 /// Replaceable physical page boundary used by scrub orchestration.
@@ -141,21 +120,23 @@ impl<Provider: StorageProvider> PhysicalStorageScrub for Provider {
 ///
 /// Rejects contradictory execution input, invalid provider evidence, a pass exceeding its
 /// explicit bound, provider failure, or a metadata transition that cannot be committed.
-pub fn execute_storage_scrub<Authority, Provider>(
+pub fn execute_storage_scrub<Authority, Provider, Findings>(
     authority: &Authority,
     provider: &mut Provider,
+    findings: &mut Findings,
     execution: &StorageScrubExecution,
 ) -> Result<StorageScrubExecutionReceipt, StorageScrubExecutionError>
 where
-    Authority: ScrubMetadataAuthority,
+    Authority: MaintenanceMetadataAuthority,
     Provider: PhysicalStorageScrub,
+    Findings: ScrubFindingSink,
 {
     validate_execution(execution)?;
     authority.commit(
         execution.claim_context,
         &AuthoritativeCommand::ClaimMaintenanceWork(execution.claim),
     )?;
-    let summary = scrub_all_pages(provider, execution)?;
+    let summary = scrub_all_pages(provider, findings, execution)?;
     let counts = summary.outcome_counts;
     let effect = authority.commit(
         execution.effect_context,
@@ -200,10 +181,15 @@ where
     })
 }
 
-fn scrub_all_pages<Provider: PhysicalStorageScrub>(
+fn scrub_all_pages<Provider, Findings>(
     provider: &mut Provider,
+    findings: &mut Findings,
     execution: &StorageScrubExecution,
-) -> Result<StorageScrubSummary, StorageScrubExecutionError> {
+) -> Result<StorageScrubSummary, StorageScrubExecutionError>
+where
+    Provider: PhysicalStorageScrub,
+    Findings: ScrubFindingSink,
+{
     let mut accumulator = ScrubAccumulator::new(execution.target_id, execution.target_generation);
     let mut cursor = None;
     for page_index in 0..execution.maximum_pages {
@@ -213,6 +199,16 @@ fn scrub_all_pages<Provider: PhysicalStorageScrub>(
             return Err(StorageScrubExecutionError::InvalidEvidence);
         }
         accumulator.add_page(page_index, page.observations.as_slice())?;
+        for observation in page.observations.as_slice() {
+            if observation.outcome != ScrubOutcome::Healthy {
+                findings.record(
+                    execution.target_id,
+                    execution.target_generation,
+                    *observation,
+                    execution.observed_at,
+                )?;
+            }
+        }
         match page.next_cursor {
             None => return Ok(accumulator.finish()),
             Some(next)
@@ -436,7 +432,9 @@ mod tests {
             )?),
             Ok(page(vec![missing(3)], None)?),
         ]);
-        let receipt = execute_storage_scrub(&authority, &mut provider, &execution(4)?)?;
+        let mut findings = RecordingFindings::default();
+        let receipt =
+            execute_storage_scrub(&authority, &mut provider, &mut findings, &execution(4)?)?;
         assert_eq!(receipt.summary.observation_count, 3);
         assert_eq!(receipt.summary.verified_bytes, 8_193);
         assert_eq!(receipt.summary.outcome_counts, [1, 1, 1, 0, 0, 0]);
@@ -464,6 +462,7 @@ mod tests {
             }
         );
         assert_eq!(provider.requested_cursors, vec![None, Some(vec![1])]);
+        assert_eq!(findings.observations.len(), 2);
         Ok(())
     }
 
@@ -474,12 +473,32 @@ mod tests {
         let mut invalid = healthy(1);
         invalid.observed_digest = Some([99; 32]);
         let mut provider = PageProvider::new([Ok(page(vec![invalid], None)?)]);
+        let mut findings = RecordingFindings::default();
         assert!(matches!(
-            execute_storage_scrub(&authority, &mut provider, &execution(2)?),
+            execute_storage_scrub(&authority, &mut provider, &mut findings, &execution(2)?),
             Err(StorageScrubExecutionError::InvalidEvidence)
         ));
         assert_eq!(authority.commands.borrow().len(), 1);
+        assert!(findings.observations.is_empty());
         Ok(())
+    }
+
+    #[derive(Default)]
+    struct RecordingFindings {
+        observations: Vec<ScrubObservation>,
+    }
+
+    impl ScrubFindingSink for RecordingFindings {
+        fn record(
+            &mut self,
+            _target_id: TargetId,
+            _target_generation: u64,
+            observation: ScrubObservation,
+            _observed_at: UnixMicros,
+        ) -> Result<(), ScrubFindingSchedulingError> {
+            self.observations.push(observation);
+            Ok(())
+        }
     }
 
     #[derive(Default)]
@@ -487,7 +506,7 @@ mod tests {
         commands: RefCell<Vec<AuthoritativeCommand>>,
     }
 
-    impl ScrubMetadataAuthority for RecordingAuthority {
+    impl MaintenanceMetadataAuthority for RecordingAuthority {
         fn commit(
             &self,
             context: CommandContext,

@@ -14,7 +14,7 @@ use meshspan_metadata::{
 };
 use thiserror::Error;
 
-use crate::ConsensusAuthenticationAuthority;
+use crate::MaintenanceMetadataAuthority;
 
 /// Exact metadata identities and physical plan for one already-selected repair job.
 pub struct ShardRepairExecution<'a> {
@@ -65,30 +65,6 @@ pub enum ShardRepairExecutionError {
     InvalidInput,
 }
 
-/// Minimal consensus mutation boundary required by a shard-repair worker.
-pub trait RepairMetadataAuthority {
-    /// Commits or resolves one exact authoritative command.
-    ///
-    /// # Errors
-    ///
-    /// Returns only typed consensus/authority failures and never invents a durable receipt.
-    fn commit(
-        &self,
-        context: CommandContext,
-        command: &AuthoritativeCommand,
-    ) -> Result<CommandReceipt, MetadataAuthorityRequestError>;
-}
-
-impl RepairMetadataAuthority for ConsensusAuthenticationAuthority {
-    fn commit(
-        &self,
-        context: CommandContext,
-        command: &AuthoritativeCommand,
-    ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
-        self.commit_authoritative(context, command)
-    }
-}
-
 /// Replaceable physical reconstruction boundary used by repair orchestration.
 pub trait PhysicalShardRepair {
     /// Reconstructs and durably stores exactly the source shard's immutable bytes.
@@ -132,7 +108,7 @@ pub fn execute_shard_repair<Authority, Repairer>(
     execution: &ShardRepairExecution<'_>,
 ) -> Result<ShardRepairExecutionReceipt, ShardRepairExecutionError>
 where
-    Authority: RepairMetadataAuthority,
+    Authority: MaintenanceMetadataAuthority,
     Repairer: PhysicalShardRepair,
 {
     validate_execution(execution)?;
@@ -309,7 +285,7 @@ mod tests {
         commands: RefCell<Vec<AuthoritativeCommand>>,
     }
 
-    impl RepairMetadataAuthority for RecordingAuthority {
+    impl MaintenanceMetadataAuthority for RecordingAuthority {
         fn commit(
             &self,
             context: CommandContext,

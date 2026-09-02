@@ -1188,6 +1188,7 @@ dependencies = [
  "meshspan-smb",
  "meshspan-storage",
  "meshspan-test-certificates",
+ "meshspan-work",
  "p256",
  "rustls",
  "serde_json",

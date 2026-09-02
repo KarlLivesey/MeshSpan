@@ -92,6 +92,7 @@ mod local_node_identity_tests;
 mod local_passkey_ceremony_key;
 mod local_totp_ceremony_key;
 mod local_wrapping_key;
+mod maintenance_authority;
 mod metadata_forwarding;
 mod multi_factor_session;
 mod namespace_mutation_api;
@@ -177,20 +178,25 @@ mod recovery_code_session_creation;
 mod recovery_code_session_creation_tests;
 mod revoke_session;
 mod revoke_session_api;
+mod scrub_finding_scheduler;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 mod shard_repair_worker;
 mod storage_scrub_worker;
 
+pub use maintenance_authority::MaintenanceMetadataAuthority;
+pub use scrub_finding_scheduler::{
+    AutomaticScrubFindingScheduler, RepairCandidateResolver, ScrubFindingSchedulingError,
+    ScrubFindingSink,
+};
 pub use shard_repair_worker::{
-    PhysicalShardRepair, RepairMetadataAuthority, ShardRepairExecution, ShardRepairExecutionError,
+    PhysicalShardRepair, ShardRepairExecution, ShardRepairExecutionError,
     ShardRepairExecutionReceipt, execute_shard_repair,
 };
 pub use storage_scrub_worker::{
-    PhysicalStorageScrub, ScrubMetadataAuthority, StorageScrubExecution,
-    StorageScrubExecutionError, StorageScrubExecutionReceipt, StorageScrubSummary,
-    execute_storage_scrub,
+    PhysicalStorageScrub, StorageScrubExecution, StorageScrubExecutionError,
+    StorageScrubExecutionReceipt, StorageScrubSummary, execute_storage_scrub,
 };
 mod smb_authentication;
 mod smb_connection;
