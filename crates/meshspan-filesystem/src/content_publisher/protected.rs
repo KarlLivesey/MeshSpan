@@ -9,9 +9,10 @@ use std::path::Path;
 use cap_std::fs::{Dir, OpenOptions};
 use meshspan_contracts::{
     BoundedBytes, BoundedItems, CodingScheme, ContractError, ContractVersion, PlacementCandidate,
-    PlacementPolicy, PlacementRequest, PutShardRequest, ReconstructionRequest, RequestContext,
-    ReservationClass, ReserveStorageRequest, ShardAcknowledgement, ShardIdentity, ShardReadPermit,
-    ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation, read_permit_mac,
+    PlacementCellRequirement, PlacementPolicy, PlacementRequest, PutShardRequest,
+    ReconstructionRequest, RequestContext, ReservationClass, ReserveStorageRequest,
+    ShardAcknowledgement, ShardIdentity, ShardReadPermit, ShardReceipt, StoragePermitMacKey,
+    StorageProvider, StorageReservation, read_permit_mac,
 };
 use meshspan_domain::{
     FailureScenario, MeshId, OperationId, RandomSource, Revision, Topology, VolumeId,
@@ -109,7 +110,11 @@ pub struct ProtectionConfiguration {
     topology_revision: Revision,
     capacity_revision: Revision,
     scenarios: Vec<FailureScenario>,
+    required_scenarios: Vec<FailureScenario>,
     candidates: Vec<PlacementCandidate>,
+    minimum_durable_targets: u16,
+    minimum_distinct_nodes: u16,
+    cells: Vec<PlacementCellRequirement>,
 }
 
 impl ProtectionConfiguration {
@@ -125,6 +130,40 @@ impl ProtectionConfiguration {
         scenarios: Vec<FailureScenario>,
         candidates: Vec<PlacementCandidate>,
     ) -> Result<Self, ContentPublicationError> {
+        Self::from_policy_snapshot(
+            topology,
+            topology_revision,
+            capacity_revision,
+            scenarios,
+            candidates,
+            Vec::new(),
+            1,
+            1,
+            Vec::new(),
+        )
+    }
+
+    /// Validates one bounded placement snapshot with explicit acknowledgement/locality predicates.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty/excessive inputs, impossible global thresholds, zero revisions and malformed
+    /// or duplicate targets.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fixed-revision policy snapshot keeps each independent input explicit"
+    )]
+    pub fn from_policy_snapshot(
+        topology: Topology,
+        topology_revision: Revision,
+        capacity_revision: Revision,
+        scenarios: Vec<FailureScenario>,
+        candidates: Vec<PlacementCandidate>,
+        required_scenarios: Vec<FailureScenario>,
+        minimum_durable_targets: u16,
+        minimum_distinct_nodes: u16,
+        cells: Vec<PlacementCellRequirement>,
+    ) -> Result<Self, ContentPublicationError> {
         let mut targets = BTreeSet::new();
         if topology_revision == Revision::ZERO
             || capacity_revision == Revision::ZERO
@@ -132,6 +171,9 @@ impl ProtectionConfiguration {
             || scenarios.len() > MAXIMUM_SCENARIOS
             || candidates.is_empty()
             || candidates.len() > MAXIMUM_CANDIDATES
+            || minimum_durable_targets == 0
+            || minimum_distinct_nodes == 0
+            || minimum_distinct_nodes > minimum_durable_targets
             || candidates.iter().any(|candidate| {
                 candidate.target_generation == 0
                     || candidate.writable_bytes == 0
@@ -146,7 +188,11 @@ impl ProtectionConfiguration {
             topology_revision,
             capacity_revision,
             scenarios,
+            required_scenarios,
             candidates,
+            minimum_durable_targets,
+            minimum_distinct_nodes,
+            cells,
         })
     }
 }
@@ -383,10 +429,14 @@ where
                 logical_stripe_bytes: u32::try_from(chunk.ciphertext_length)
                     .map_err(|_| ContentPublicationError::InvalidInput)?,
                 scenarios: &protection.scenarios,
+                required_scenarios: &protection.required_scenarios,
                 topology: &protection.topology,
                 topology_revision: protection.topology_revision,
                 capacity_revision: protection.capacity_revision,
                 candidates,
+                minimum_durable_targets: protection.minimum_durable_targets,
+                minimum_distinct_nodes: protection.minimum_distinct_nodes,
+                cells: &protection.cells,
             })
             .map_err(map_contract)
     }

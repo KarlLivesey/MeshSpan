@@ -38,6 +38,12 @@ pub struct Topology {
 }
 
 impl Topology {
+    /// Returns the authoritative host containing one registered target.
+    #[must_use]
+    pub fn target_host(&self, target_id: TargetId) -> Option<HostId> {
+        self.target_hosts.get(&target_id).copied()
+    }
+
     /// Registers a host identity.
     ///
     /// # Errors

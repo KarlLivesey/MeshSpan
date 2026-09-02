@@ -8,8 +8,9 @@ use std::collections::BTreeSet;
 use meshspan_contracts::{
     BoundedBytes, BoundedItems, CodingLayout, ComponentConfiguration, ComponentLifecycle,
     ComponentObservation, ComponentTransition, ContractError, ContractKind, ContractLimits,
-    ContractVersion, ImplementationDescriptor, PlacementCandidate, PlacementPlan, PlacementPolicy,
-    PlacementRequest, ShardAcknowledgement, VersionedPayload,
+    ContractVersion, ImplementationDescriptor, PlacementCandidate, PlacementCellRequirement,
+    PlacementCellRole, PlacementPlan, PlacementPolicy, PlacementRequest, ShardAcknowledgement,
+    VersionedPayload,
 };
 use meshspan_domain::{
     FailureScenario, LifecycleState, ProtectionError, ProtectionLayout, ProtectionProof, Revision,
@@ -21,6 +22,7 @@ const MAXIMUM_CONTROL_BYTES: usize = 4_096;
 const MAXIMUM_CANDIDATES: usize = 256;
 const MAXIMUM_SLICES: usize = 24;
 const MAXIMUM_SCENARIOS: usize = 16;
+const MAXIMUM_CELLS: usize = 256;
 const MAXIMUM_PROOF_LOSS_SETS: usize = 100_000;
 const EXACT_SEARCH_CANDIDATES: usize = 10;
 const DEFAULT_DATA_SLICES: u16 = 4;
@@ -42,6 +44,15 @@ struct GeometrySelection {
     layout: CodingLayout,
     targets: Vec<TargetId>,
     proofs: Vec<ProtectionProof>,
+}
+
+struct SelectionConstraints<'a> {
+    topology: &'a Topology,
+    scenarios: &'a [FailureScenario],
+    cells: &'a [PlacementCellRequirement],
+    enforce_eventual: bool,
+    data_slices: u16,
+    candidates: &'a [PlacementCandidate],
 }
 
 impl Default for FaultAwarePlacement {
@@ -160,7 +171,12 @@ impl PlacementPolicy for FaultAwarePlacement {
     fn plan_write(&self, request: PlacementRequest<'_>) -> Result<PlacementPlan, ContractError> {
         self.require_active()?;
         validate_request(request)?;
-        let mut candidates = request.candidates.to_vec();
+        let mut candidates = request
+            .candidates
+            .iter()
+            .filter(|candidate| !candidate_is_excluded(candidate, request.cells))
+            .cloned()
+            .collect::<Vec<_>>();
         candidates.sort_by_key(|candidate| {
             (
                 Reverse(candidate.performance_weight),
@@ -169,26 +185,30 @@ impl PlacementPolicy for FaultAwarePlacement {
             )
         });
 
-        for data_slices in (1..=preferred_data_slices(request.logical_stripe_bytes)).rev() {
-            let slice_bytes = slice_bytes(request.logical_stripe_bytes, data_slices)?;
-            let eligible = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| candidate.writable_bytes >= u64::from(slice_bytes))
-                .collect::<Vec<_>>();
-            if let Some(selection) = plan_geometry(
-                request.topology,
-                request.scenarios,
-                data_slices,
-                slice_bytes,
-                &eligible,
-            )? {
-                return build_plan(
-                    request,
-                    selection.layout,
-                    selection.targets,
-                    selection.proofs,
-                );
+        for enforce_eventual in [true, false] {
+            for data_slices in (1..=preferred_data_slices(request.logical_stripe_bytes)).rev() {
+                let slice_bytes = slice_bytes(request.logical_stripe_bytes, data_slices)?;
+                let eligible = candidates
+                    .iter()
+                    .filter(|candidate| candidate.writable_bytes >= u64::from(slice_bytes))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if let Some(selection) = plan_geometry(
+                    request.topology,
+                    request.scenarios,
+                    request.cells,
+                    enforce_eventual,
+                    data_slices,
+                    slice_bytes,
+                    &eligible,
+                )? {
+                    return build_plan(
+                        request,
+                        selection.layout,
+                        selection.targets,
+                        selection.proofs,
+                    );
+                }
             }
         }
         build_best_effort_plan(request, &candidates)
@@ -217,14 +237,17 @@ fn build_best_effort_plan(
         .take(MAXIMUM_SLICES)
         .map(|candidate| candidate.target_id)
         .collect::<Vec<_>>();
-    if targets.is_empty()
-        || !targets.iter().any(|target| {
-            request.candidates.iter().any(|candidate| {
-                candidate.target_id == *target
-                    && candidate.acknowledgement == ShardAcknowledgement::Required
-            })
-        })
-    {
+    if targets.is_empty() {
+        return Err(ContractError::ResourceExhausted);
+    }
+    if !cell_constraints_satisfied(
+        request.topology,
+        candidates,
+        &targets,
+        request.cells,
+        false,
+        1,
+    )? {
         return Err(ContractError::ResourceExhausted);
     }
     let layout = CodingLayout::new(
@@ -266,8 +289,17 @@ fn validate_request(request: PlacementRequest<'_>) -> Result<(), ContractError> 
         || request.logical_stripe_bytes == 0
         || request.scenarios.is_empty()
         || request.scenarios.len() > MAXIMUM_SCENARIOS
+        || request.required_scenarios.len() > MAXIMUM_SCENARIOS
+        || request
+            .required_scenarios
+            .iter()
+            .any(|required| !request.scenarios.contains(required))
         || request.candidates.is_empty()
         || request.candidates.len() > MAXIMUM_CANDIDATES
+        || request.cells.len() > MAXIMUM_CELLS
+        || request.minimum_durable_targets == 0
+        || request.minimum_distinct_nodes == 0
+        || request.minimum_distinct_nodes > request.minimum_durable_targets
         || request.topology_revision == Revision::ZERO
         || request.capacity_revision == Revision::ZERO
     {
@@ -278,11 +310,43 @@ fn validate_request(request: PlacementRequest<'_>) -> Result<(), ContractError> 
         candidate.target_generation == 0
             || candidate.writable_bytes == 0
             || candidate.performance_weight == 0
+            || candidate.availability_cells.len() > MAXIMUM_CELLS
+            || request.topology.target_host(candidate.target_id) != Some(candidate.host_id)
             || !targets.insert(candidate.target_id)
     }) {
         return Err(ContractError::InvalidInput);
     }
+    let mut cells = BTreeSet::new();
+    if request.cells.iter().any(|cell| {
+        !cells.insert(cell.cell_id)
+            || cell.minimum_durable_targets == Some(0)
+            || cell.minimum_distinct_nodes == Some(0)
+            || matches!(
+                (cell.minimum_durable_targets, cell.minimum_distinct_nodes),
+                (Some(targets), Some(nodes)) if nodes > targets
+            )
+            || (cell.role == PlacementCellRole::Excluded
+                && (cell.complete_local
+                    || cell.minimum_durable_targets.is_some()
+                    || cell.minimum_distinct_nodes.is_some()
+                    || !cell.local_scenarios.is_empty()))
+    }) {
+        return Err(ContractError::InvalidInput);
+    }
     Ok(())
+}
+
+fn candidate_is_excluded(
+    candidate: &PlacementCandidate,
+    cells: &[PlacementCellRequirement],
+) -> bool {
+    cells.iter().any(|requirement| {
+        requirement.role == PlacementCellRole::Excluded
+            && candidate
+                .availability_cells
+                .as_slice()
+                .contains(&requirement.cell_id)
+    })
 }
 
 const fn preferred_data_slices(logical_bytes: u32) -> u16 {
@@ -306,6 +370,8 @@ fn slice_bytes(logical_bytes: u32, data_slices: u16) -> Result<u32, ContractErro
 fn plan_geometry(
     topology: &Topology,
     scenarios: &[FailureScenario],
+    cells: &[PlacementCellRequirement],
+    enforce_eventual: bool,
     data_slices: u16,
     slice_bytes: u32,
     candidates: &[PlacementCandidate],
@@ -314,9 +380,23 @@ fn plan_geometry(
         return Ok(None);
     }
     let selection = if candidates.len() <= EXACT_SEARCH_CANDIDATES {
-        exact_selection(topology, scenarios, data_slices, candidates)?
+        exact_selection(
+            topology,
+            scenarios,
+            cells,
+            enforce_eventual,
+            data_slices,
+            candidates,
+        )?
     } else {
-        pruned_selection(topology, scenarios, data_slices, candidates)?
+        pruned_selection(
+            topology,
+            scenarios,
+            cells,
+            enforce_eventual,
+            data_slices,
+            candidates,
+        )?
     };
     let Some(selection) = selection else {
         return Ok(None);
@@ -337,20 +417,22 @@ fn plan_geometry(
 fn exact_selection(
     topology: &Topology,
     scenarios: &[FailureScenario],
+    cells: &[PlacementCellRequirement],
+    enforce_eventual: bool,
     data_slices: u16,
     candidates: &[PlacementCandidate],
 ) -> Result<Option<CandidateSelection>, ContractError> {
+    let constraints = SelectionConstraints {
+        topology,
+        scenarios,
+        cells,
+        enforce_eventual,
+        data_slices,
+        candidates,
+    };
     for count in usize::from(data_slices)..=candidates.len().min(MAXIMUM_SLICES) {
         let mut selected = Vec::with_capacity(count);
-        if let Some(plan) = choose_exact(
-            topology,
-            scenarios,
-            data_slices,
-            candidates,
-            count,
-            0,
-            &mut selected,
-        )? {
+        if let Some(plan) = choose_exact(&constraints, count, 0, &mut selected)? {
             return Ok(Some(plan));
         }
     }
@@ -358,37 +440,45 @@ fn exact_selection(
 }
 
 fn choose_exact(
-    topology: &Topology,
-    scenarios: &[FailureScenario],
-    data_slices: u16,
-    candidates: &[PlacementCandidate],
+    constraints: &SelectionConstraints<'_>,
     remaining: usize,
     start: usize,
     selected: &mut Vec<TargetId>,
 ) -> Result<Option<CandidateSelection>, ContractError> {
     if remaining == 0 {
-        return prove_all(topology, scenarios, data_slices, selected).map(|proofs| {
-            proofs.map(|proofs| CandidateSelection {
-                targets: selected.clone(),
-                proofs,
-            })
-        });
+        let proofs = prove_all(
+            constraints.topology,
+            constraints.scenarios,
+            constraints.data_slices,
+            selected,
+        )?;
+        return match proofs {
+            Some(proofs)
+                if cell_constraints_satisfied(
+                    constraints.topology,
+                    constraints.candidates,
+                    selected,
+                    constraints.cells,
+                    constraints.enforce_eventual,
+                    constraints.data_slices,
+                )? =>
+            {
+                Ok(Some(CandidateSelection {
+                    targets: selected.clone(),
+                    proofs,
+                }))
+            }
+            _ => Ok(None),
+        };
     }
-    let last_start = candidates
+    let last_start = constraints
+        .candidates
         .len()
         .checked_sub(remaining)
         .ok_or(ContractError::InternalContract)?;
     for index in start..=last_start {
-        selected.push(candidates[index].target_id);
-        if let Some(plan) = choose_exact(
-            topology,
-            scenarios,
-            data_slices,
-            candidates,
-            remaining - 1,
-            index + 1,
-            selected,
-        )? {
+        selected.push(constraints.candidates[index].target_id);
+        if let Some(plan) = choose_exact(constraints, remaining - 1, index + 1, selected)? {
             return Ok(Some(plan));
         }
         selected.pop();
@@ -399,6 +489,8 @@ fn choose_exact(
 fn pruned_selection(
     topology: &Topology,
     scenarios: &[FailureScenario],
+    cells: &[PlacementCellRequirement],
+    enforce_eventual: bool,
     data_slices: u16,
     candidates: &[PlacementCandidate],
 ) -> Result<Option<CandidateSelection>, ContractError> {
@@ -410,16 +502,95 @@ fn pruned_selection(
     let Some(mut proofs) = prove_all(topology, scenarios, data_slices, &targets)? else {
         return Ok(None);
     };
+    if !cell_constraints_satisfied(
+        topology,
+        candidates,
+        &targets,
+        cells,
+        enforce_eventual,
+        data_slices,
+    )? {
+        return Ok(None);
+    }
     let mut index = targets.len();
     while index != 0 && targets.len() > usize::from(data_slices) {
         index -= 1;
         let removed = targets.remove(index);
         match prove_all(topology, scenarios, data_slices, &targets)? {
-            Some(smaller) => proofs = smaller,
-            None => targets.insert(index, removed),
+            Some(smaller)
+                if cell_constraints_satisfied(
+                    topology,
+                    candidates,
+                    &targets,
+                    cells,
+                    enforce_eventual,
+                    data_slices,
+                )? =>
+            {
+                proofs = smaller;
+            }
+            None | Some(_) => {
+                targets.insert(index, removed);
+            }
         }
     }
     Ok(Some(CandidateSelection { targets, proofs }))
+}
+
+fn cell_constraints_satisfied(
+    topology: &Topology,
+    candidates: &[PlacementCandidate],
+    selected: &[TargetId],
+    cells: &[PlacementCellRequirement],
+    enforce_eventual: bool,
+    data_slices: u16,
+) -> Result<bool, ContractError> {
+    for requirement in cells.iter().filter(|requirement| {
+        requirement.role == PlacementCellRole::RequiredBeforeCommit
+            || (enforce_eventual && requirement.role == PlacementCellRole::Eventual)
+    }) {
+        let local = candidates
+            .iter()
+            .filter(|candidate| {
+                selected.contains(&candidate.target_id)
+                    && candidate
+                        .availability_cells
+                        .as_slice()
+                        .contains(&requirement.cell_id)
+            })
+            .collect::<Vec<_>>();
+        let minimum_targets = requirement
+            .minimum_durable_targets
+            .unwrap_or(u16::from(requirement.complete_local).saturating_mul(data_slices));
+        if local.len() < usize::from(minimum_targets) {
+            return Ok(false);
+        }
+        let distinct_hosts = local
+            .iter()
+            .map(|candidate| candidate.host_id)
+            .collect::<BTreeSet<_>>()
+            .len();
+        if distinct_hosts < usize::from(requirement.minimum_distinct_nodes.unwrap_or(1)) {
+            return Ok(false);
+        }
+        if requirement.complete_local || !requirement.local_scenarios.is_empty() {
+            let local_targets = local
+                .iter()
+                .map(|candidate| candidate.target_id)
+                .collect::<Vec<_>>();
+            if local_targets.len() < usize::from(data_slices) {
+                return Ok(false);
+            }
+            let layout = ProtectionLayout::new(data_slices, local_targets)
+                .map_err(|_| ContractError::InvalidInput)?;
+            for scenario in requirement.local_scenarios.as_slice() {
+                if !best_effort_proof(topology, scenario, &layout)?.survives {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn prove_all(
@@ -443,25 +614,15 @@ fn build_plan(
     targets: Vec<TargetId>,
     proofs: Vec<ProtectionProof>,
 ) -> Result<PlacementPlan, ContractError> {
-    let acknowledgement_roles = targets
-        .iter()
-        .map(|target| {
-            request
-                .candidates
-                .iter()
-                .find(|candidate| candidate.target_id == *target)
-                .map(|candidate| candidate.acknowledgement)
-                .ok_or(ContractError::InternalContract)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if acknowledgement_roles
-        .iter()
-        .filter(|role| **role == ShardAcknowledgement::Required)
-        .count()
-        < usize::from(coding_layout.data_slices())
-    {
-        return Err(ContractError::ResourceExhausted);
+    let layout = ProtectionLayout::new(coding_layout.data_slices(), targets.clone())
+        .map_err(|_| ContractError::InternalContract)?;
+    for required in request.required_scenarios {
+        if !best_effort_proof(request.topology, required, &layout)?.survives {
+            return Err(ContractError::ResourceExhausted);
+        }
     }
+    let acknowledgement_roles =
+        acknowledgement_roles(request, &targets, coding_layout.data_slices())?;
     let evidence = policy_evidence(
         request,
         coding_layout,
@@ -487,6 +648,74 @@ fn build_plan(
     })
 }
 
+fn acknowledgement_roles(
+    request: PlacementRequest<'_>,
+    targets: &[TargetId],
+    data_slices: u16,
+) -> Result<Vec<ShardAcknowledgement>, ContractError> {
+    let minimum_targets = request.minimum_durable_targets.max(data_slices);
+    let mut required = BTreeSet::new();
+    for requirement in request
+        .cells
+        .iter()
+        .filter(|cell| cell.role == PlacementCellRole::RequiredBeforeCommit)
+    {
+        required.extend(targets.iter().copied().filter(|target| {
+            request.candidates.iter().any(|candidate| {
+                candidate.target_id == *target
+                    && candidate
+                        .availability_cells
+                        .as_slice()
+                        .contains(&requirement.cell_id)
+            })
+        }));
+    }
+    for target in targets {
+        let distinct_hosts = required
+            .iter()
+            .filter_map(|required_target| {
+                request
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.target_id == *required_target)
+                    .map(|candidate| candidate.host_id)
+            })
+            .collect::<BTreeSet<_>>()
+            .len();
+        if required.len() >= usize::from(minimum_targets)
+            && distinct_hosts >= usize::from(request.minimum_distinct_nodes)
+        {
+            break;
+        }
+        required.insert(*target);
+    }
+    let required_hosts = required
+        .iter()
+        .filter_map(|target| {
+            request
+                .candidates
+                .iter()
+                .find(|candidate| candidate.target_id == *target)
+                .map(|candidate| candidate.host_id)
+        })
+        .collect::<BTreeSet<_>>();
+    if required.len() < usize::from(minimum_targets)
+        || required_hosts.len() < usize::from(request.minimum_distinct_nodes)
+    {
+        return Err(ContractError::ResourceExhausted);
+    }
+    Ok(targets
+        .iter()
+        .map(|target| {
+            if required.contains(target) {
+                ShardAcknowledgement::Required
+            } else {
+                ShardAcknowledgement::Eventual
+            }
+        })
+        .collect())
+}
+
 fn policy_evidence(
     request: PlacementRequest<'_>,
     layout: CodingLayout,
@@ -501,6 +730,27 @@ fn policy_evidence(
     digest.update(&layout.data_slices().to_be_bytes());
     digest.update(&layout.recovery_slices().to_be_bytes());
     digest.update(&layout.slice_bytes().to_be_bytes());
+    digest.update(&request.minimum_durable_targets.to_be_bytes());
+    digest.update(&request.minimum_distinct_nodes.to_be_bytes());
+    for scenario in request.required_scenarios {
+        hash_scenario(&mut digest, scenario);
+    }
+    let mut cells = request.cells.iter().collect::<Vec<_>>();
+    cells.sort_by_key(|cell| cell.cell_id);
+    for cell in cells {
+        digest.update(&cell.cell_id.as_bytes());
+        digest.update(&[match cell.role {
+            PlacementCellRole::RequiredBeforeCommit => 1,
+            PlacementCellRole::Eventual => 2,
+            PlacementCellRole::Excluded => 3,
+        }]);
+        digest.update(&[u8::from(cell.complete_local)]);
+        hash_optional_u16(&mut digest, cell.minimum_durable_targets);
+        hash_optional_u16(&mut digest, cell.minimum_distinct_nodes);
+        for scenario in cell.local_scenarios.as_slice() {
+            hash_scenario(&mut digest, scenario);
+        }
+    }
     for (target, acknowledgement) in targets.iter().zip(acknowledgement_roles) {
         digest.update(&target.as_bytes());
         digest.update(&[match acknowledgement {
@@ -524,14 +774,36 @@ fn policy_evidence(
     Ok(digest.finalize())
 }
 
+fn hash_scenario(digest: &mut blake3::Hasher, scenario: &FailureScenario) {
+    digest.update(
+        &u64::try_from(scenario.terms().len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for term in scenario.terms() {
+        digest.update(&term.class_id.as_bytes());
+        digest.update(&term.failure_count.to_be_bytes());
+    }
+}
+
+fn hash_optional_u16(digest: &mut blake3::Hasher, value: Option<u16>) {
+    if let Some(value) = value {
+        digest.update(&[1]);
+        digest.update(&value.to_be_bytes());
+    } else {
+        digest.update(&[0]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use meshspan_contracts::{
-        PlacementCandidate, PlacementPolicy, PlacementRequest, RequestContext, ShardAcknowledgement,
+        BoundedItems, PlacementCandidate, PlacementCellRequirement, PlacementCellRole,
+        PlacementPolicy, PlacementRequest, RequestContext,
     };
     use meshspan_domain::{
-        FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, FaultGroupMember, HostId,
-        OperationId, Revision, TargetId, Topology, UnixMicros,
+        AvailabilityCellId, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
+        FaultGroupMember, HostId, OperationId, Revision, TargetId, Topology, UnixMicros,
     };
 
     use super::FaultAwarePlacement;
@@ -638,6 +910,115 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn complete_local_cells_are_independently_decodable_and_only_required_cell_blocks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (topology, mut candidates) = independent_targets(4)?;
+        let required_cell = AvailabilityCellId::from_bytes([70; 16])?;
+        let eventual_cell = AvailabilityCellId::from_bytes([71; 16])?;
+        for (index, candidate) in candidates.iter_mut().enumerate() {
+            candidate.availability_cells = BoundedItems::new(
+                vec![if index < 2 {
+                    required_cell
+                } else {
+                    eventual_cell
+                }],
+                256,
+            )?;
+        }
+        let scenario = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2)?,
+            failure_count: 1,
+        }])?;
+        let cells = [
+            PlacementCellRequirement {
+                cell_id: required_cell,
+                role: PlacementCellRole::RequiredBeforeCommit,
+                complete_local: true,
+                minimum_durable_targets: None,
+                minimum_distinct_nodes: None,
+                local_scenarios: BoundedItems::new(Vec::new(), 16)?,
+            },
+            PlacementCellRequirement {
+                cell_id: eventual_cell,
+                role: PlacementCellRole::Eventual,
+                complete_local: true,
+                minimum_durable_targets: None,
+                minimum_distinct_nodes: None,
+                local_scenarios: BoundedItems::new(Vec::new(), 16)?,
+            },
+        ];
+        let mut placement = request(
+            &topology,
+            &candidates,
+            std::slice::from_ref(&scenario),
+            512 * 1_024,
+        )?;
+        placement.cells = &cells;
+        let plan = FaultAwarePlacement::new().plan_write(placement)?;
+        assert_eq!(plan.coding_layout.data_slices(), 2);
+        assert_eq!(plan.slice_targets.len(), 4);
+        for (target, role) in plan
+            .slice_targets
+            .as_slice()
+            .iter()
+            .zip(plan.acknowledgement_roles.as_slice())
+        {
+            let expected = if candidates
+                .iter()
+                .find(|candidate| candidate.target_id == *target)
+                .ok_or("selected unknown target")?
+                .availability_cells
+                .as_slice()
+                .contains(&required_cell)
+            {
+                meshspan_contracts::ShardAcknowledgement::Required
+            } else {
+                meshspan_contracts::ShardAcknowledgement::Eventual
+            };
+            assert_eq!(*role, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unreachable_eventual_cell_creates_debt_but_unreachable_required_cell_fails()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (topology, candidates) = independent_targets(2)?;
+        let missing_cell = AvailabilityCellId::from_bytes([72; 16])?;
+        let scenario = FailureScenario::new(vec![FailureTerm {
+            class_id: class(2)?,
+            failure_count: 1,
+        }])?;
+        let eventual = [PlacementCellRequirement {
+            cell_id: missing_cell,
+            role: PlacementCellRole::Eventual,
+            complete_local: true,
+            minimum_durable_targets: None,
+            minimum_distinct_nodes: None,
+            local_scenarios: BoundedItems::new(Vec::new(), 16)?,
+        }];
+        let mut placement = request(
+            &topology,
+            &candidates,
+            std::slice::from_ref(&scenario),
+            128 * 1_024,
+        )?;
+        placement.cells = &eventual;
+        assert!(FaultAwarePlacement::new().plan_write(placement).is_ok());
+
+        let required = [PlacementCellRequirement {
+            role: PlacementCellRole::RequiredBeforeCommit,
+            ..eventual[0].clone()
+        }];
+        placement.cells = &required;
+        assert_eq!(
+            FaultAwarePlacement::new().plan_write(placement),
+            Err(meshspan_contracts::ContractError::ResourceExhausted)
+        );
+        Ok(())
+    }
+
     fn six_machine_topology()
     -> Result<(Topology, Vec<PlacementCandidate>), Box<dyn std::error::Error>> {
         let mut topology = Topology::default();
@@ -655,7 +1036,7 @@ mod tests {
                 let device_group = group(value + 32)?;
                 topology.register_fault_group(device_group, class(2)?)?;
                 topology.add_fault_group_member(device_group, FaultGroupMember::Target(target))?;
-                candidates.push(candidate(target));
+                candidates.push(candidate(target, host)?);
             }
         }
         Ok((topology, candidates))
@@ -673,7 +1054,7 @@ mod tests {
             topology.register_target(target, host)?;
             topology.register_fault_group(group(value)?, class(2)?)?;
             topology.add_fault_group_member(group(value)?, FaultGroupMember::Target(target))?;
-            candidates.push(candidate(target));
+            candidates.push(candidate(target, host)?);
         }
         Ok((topology, candidates))
     }
@@ -693,21 +1074,29 @@ mod tests {
             },
             logical_stripe_bytes,
             scenarios,
+            required_scenarios: &[],
             topology,
             topology_revision: Revision::new(1),
             capacity_revision: Revision::new(1),
             candidates,
+            minimum_durable_targets: 1,
+            minimum_distinct_nodes: 1,
+            cells: &[],
         })
     }
 
-    const fn candidate(target_id: TargetId) -> PlacementCandidate {
-        PlacementCandidate {
+    fn candidate(
+        target_id: TargetId,
+        host_id: HostId,
+    ) -> Result<PlacementCandidate, Box<dyn std::error::Error>> {
+        Ok(PlacementCandidate {
             target_id,
+            host_id,
             target_generation: 1,
             writable_bytes: 8 * 1_024 * 1_024,
             performance_weight: 100,
-            acknowledgement: ShardAcknowledgement::Required,
-        }
+            availability_cells: BoundedItems::new(Vec::new(), 256)?,
+        })
     }
 
     fn host(value: u8) -> Result<HostId, meshspan_domain::IdentifierError> {

@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use meshspan_coding::ReedSolomonCoding;
 use meshspan_contracts::{
-    BoundedBytes, ContractError, PlacementCandidate, PutShardRequest, RequestContext,
-    ReserveStorageRequest, ShardAcknowledgement, ShardReadPermit, ShardReceipt,
-    StoragePermitMacKey, StorageProvider, StorageReservation,
+    BoundedBytes, BoundedItems, ContractError, PlacementCandidate, PutShardRequest, RequestContext,
+    ReserveStorageRequest, ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider,
+    StorageReservation,
 };
 use meshspan_domain::{
     ContentManifestId, EntropyError, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
@@ -39,54 +39,8 @@ fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses(
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
     let mesh_id = MeshId::from_bytes([1; 16])?;
-    let mut topology = Topology::default();
-    let mut candidates = Vec::new();
-    let mut providers = BTreeMap::new();
-    let device_class = FaultGroupClassId::from_bytes([2; 16])?;
-    let mut eventual_target = None;
-    let mut required_targets = Vec::new();
-
-    for index in 0_u8..4 {
-        let host_id = HostId::from_bytes([10 + index; 16])?;
-        let target_id = TargetId::from_bytes([20 + index; 16])?;
-        topology.register_host(host_id)?;
-        topology.register_target(target_id, host_id)?;
-        let group_id = FaultGroupId::from_bytes([30 + index; 16])?;
-        topology.register_fault_group(group_id, device_class)?;
-        topology.add_fault_group_member(group_id, FaultGroupMember::Target(target_id))?;
-        let acknowledgement = if index == 3 {
-            eventual_target = Some(target_id);
-            ShardAcknowledgement::Eventual
-        } else {
-            required_targets.push(target_id);
-            ShardAcknowledgement::Required
-        };
-        candidates.push(PlacementCandidate {
-            target_id,
-            target_generation: 1,
-            writable_bytes: 2 * 1_024 * 1_024,
-            performance_weight: 100,
-            acknowledgement,
-        });
-        providers.insert(
-            target_id,
-            open_provider(root.path(), mesh_id, target_id, index)?,
-        );
-    }
-
-    let router = TestRouter::new(providers);
-    let control = router.clone();
-    control.set_offline(eventual_target.ok_or("missing eventual target")?)?;
-    let protection = ProtectionConfiguration::from_untrusted(
-        topology,
-        Revision::new(1),
-        Revision::new(1),
-        vec![FailureScenario::new(vec![FailureTerm {
-            class_id: device_class,
-            failure_count: 2,
-        }])?],
-        candidates,
-    )?;
+    let fixture = protection_fixture(root.path(), mesh_id)?;
+    fixture.control.set_offline(fixture.eventual_target)?;
     let state = root.path().join("filesystem-state");
     let volume_id = VolumeId::from_bytes([3; 16])?;
     let request = publication_request(volume_id)?;
@@ -94,10 +48,10 @@ fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses(
     let mut publisher = ProtectedContentPublisher::open(
         &state,
         UnixMicros::new(1),
-        router,
+        fixture.router,
         ReedSolomonCoding::new(),
         FaultAwarePlacement::new(),
-        VolumeBoundProtection::new(volume_id, protection),
+        VolumeBoundProtection::new(volume_id, fixture.protection),
         FixedRandom,
         VolumeContentKeyring::new(volume_id, VolumeKeyEncryptionKey::from_bytes(1, [4; 32])?),
         ContentChunkLimits::new(350_000)?,
@@ -126,7 +80,7 @@ fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses(
         1
     );
 
-    control.set_offline(required_targets[0])?;
+    fixture.control.set_offline(fixture.required_targets[0])?;
     let content = PublishedContentReference {
         publication_operation_id: request.operation_id,
         manifest,
@@ -135,12 +89,80 @@ fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses(
     publisher.stream_range(read_request(content, 50)?, &mut recovered)?;
     assert_eq!(recovered, bytes);
 
-    control.set_offline(required_targets[1])?;
+    fixture.control.set_offline(fixture.required_targets[1])?;
     assert!(matches!(
         publisher.stream_range(read_request(content, 51)?, &mut Vec::new()),
         Err(ContentReadError::Unavailable)
     ));
     Ok(())
+}
+
+struct ProtectionFixture {
+    router: TestRouter,
+    control: TestRouter,
+    protection: ProtectionConfiguration,
+    eventual_target: TargetId,
+    required_targets: Vec<TargetId>,
+}
+
+fn protection_fixture(
+    root: &std::path::Path,
+    mesh_id: MeshId,
+) -> Result<ProtectionFixture, Box<dyn std::error::Error>> {
+    let mut topology = Topology::default();
+    let mut candidates = Vec::new();
+    let mut providers = BTreeMap::new();
+    let device_class = FaultGroupClassId::from_bytes([2; 16])?;
+    let mut eventual_target = None;
+    let mut required_targets = Vec::new();
+
+    for index in 0_u8..4 {
+        let host_id = HostId::from_bytes([10 + index; 16])?;
+        let target_id = TargetId::from_bytes([20 + index; 16])?;
+        topology.register_host(host_id)?;
+        topology.register_target(target_id, host_id)?;
+        let group_id = FaultGroupId::from_bytes([30 + index; 16])?;
+        topology.register_fault_group(group_id, device_class)?;
+        topology.add_fault_group_member(group_id, FaultGroupMember::Target(target_id))?;
+        if index == 3 {
+            eventual_target = Some(target_id);
+        } else {
+            required_targets.push(target_id);
+        }
+        candidates.push(PlacementCandidate {
+            target_id,
+            host_id,
+            target_generation: 1,
+            writable_bytes: 2 * 1_024 * 1_024,
+            performance_weight: 100,
+            availability_cells: BoundedItems::new(Vec::new(), 256)?,
+        });
+        providers.insert(target_id, open_provider(root, mesh_id, target_id, index)?);
+    }
+
+    let router = TestRouter::new(providers);
+    let control = router.clone();
+    let protection = ProtectionConfiguration::from_policy_snapshot(
+        topology,
+        Revision::new(1),
+        Revision::new(1),
+        vec![FailureScenario::new(vec![FailureTerm {
+            class_id: device_class,
+            failure_count: 2,
+        }])?],
+        candidates,
+        Vec::new(),
+        3,
+        3,
+        Vec::new(),
+    )?;
+    Ok(ProtectionFixture {
+        router,
+        control,
+        protection,
+        eventual_target: eventual_target.ok_or("missing eventual target")?,
+        required_targets,
+    })
 }
 
 struct VolumeBoundProtection {

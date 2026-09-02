@@ -2,21 +2,27 @@
 
 //! Production protection snapshot derived from current replicated topology and local capacity.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use meshspan_contracts::{PlacementCandidate, ShardAcknowledgement};
+use meshspan_contracts::{
+    BoundedItems, PlacementCandidate, PlacementCellRequirement, PlacementCellRole,
+};
 use meshspan_domain::{
-    FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, FaultGroupMember, HostId,
-    TargetId, Topology, VolumeId, machine_fault_class_id, storage_device_fault_class_id, uuid_v8,
+    AvailabilityCellId, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
+    FaultGroupMember, HostId, ProtectionPolicyId, ProtectionScenarioId, TargetId, Topology,
+    VolumeId, machine_fault_class_id, storage_device_fault_class_id, uuid_v8,
 };
 use meshspan_filesystem::{
     ContentPublicationError, ProtectionConfiguration, ProtectionPolicySource,
 };
 use meshspan_metadata::{
-    AuthoritativeRepository, PageLimit, StorageTargetProviderContext, StorageUsageLimit,
+    AcknowledgementCellRole, AcknowledgementPolicyRecord, AuthoritativeRepository, PageLimit,
+    ProtectionPolicyRecord, StorageTargetProviderContext, StorageUsageLimit,
 };
 
 const PAGE_ITEMS: usize = 1_000;
+const MAXIMUM_CELLS_PER_TARGET: usize = 256;
+const MAXIMUM_CELL_SCENARIOS: usize = 16;
 const PERCENT_CAPACITY_PLANNING_CEILING: u64 = 1_u64 << 50;
 
 /// Live authoritative protection resolver used once for each new content publication.
@@ -80,24 +86,198 @@ fn protection_configuration(
         )?;
     }
     register_administrator_fault_groups(authority, &mut topology, &registered_hosts)?;
-    let scenarios = authority
+    let protection_policy = authority
         .volume_protection_policy(volume_id)
-        .map_err(|_| ContentPublicationError::Unavailable)?
-        .map_or_else(
-            || default_scenarios(machine_class, device_class),
-            |policy| Ok(policy.scenarios),
-        )?;
+        .map_err(|_| ContentPublicationError::Unavailable)?;
+    let scenarios = protection_policy.as_ref().map_or_else(
+        || default_scenarios(machine_class, device_class),
+        |policy| Ok(policy.scenarios.clone()),
+    )?;
+    let acknowledgement = authority
+        .volume_acknowledgement_policy(volume_id)
+        .map_err(|_| ContentPublicationError::Unavailable)?;
+    let locality = authority
+        .volume_locality_policy(volume_id)
+        .map_err(|_| ContentPublicationError::Unavailable)?;
+    let cells = placement_cells(authority, locality.as_ref(), acknowledgement.as_ref())?;
+    let required_scenarios = acknowledgement.as_ref().map_or_else(
+        || Ok(Vec::new()),
+        |policy| acknowledgement_scenarios(authority, protection_policy.as_ref(), policy),
+    )?;
     let candidates = targets
         .iter()
-        .map(|(context, _)| PlacementCandidate {
-            target_id: context.target_id,
-            target_generation: context.generation,
-            writable_bytes: planning_ceiling(context.usage_limit),
-            performance_weight: 100,
-            acknowledgement: ShardAcknowledgement::Required,
+        .map(|(context, host_id)| {
+            let cells = authority
+                .target_availability_cells(context.target_id, *host_id)
+                .map_err(|_| ContentPublicationError::Unavailable)?;
+            Ok(PlacementCandidate {
+                target_id: context.target_id,
+                host_id: *host_id,
+                target_generation: context.generation,
+                writable_bytes: planning_ceiling(context.usage_limit),
+                performance_weight: 100,
+                availability_cells: BoundedItems::new(cells, MAXIMUM_CELLS_PER_TARGET)
+                    .map_err(|_| ContentPublicationError::InvalidInput)?,
+            })
         })
-        .collect();
-    ProtectionConfiguration::from_untrusted(topology, revision, revision, scenarios, candidates)
+        .collect::<Result<Vec<_>, ContentPublicationError>>()?;
+    let (minimum_targets, minimum_nodes) = acknowledgement.as_ref().map_or((1, 1), |policy| {
+        (
+            policy.minimum_durable_targets,
+            policy.minimum_distinct_nodes,
+        )
+    });
+    ProtectionConfiguration::from_policy_snapshot(
+        topology,
+        revision,
+        revision,
+        scenarios,
+        candidates,
+        required_scenarios,
+        minimum_targets,
+        minimum_nodes,
+        cells,
+    )
+}
+
+struct CellPolicyBuilder {
+    role: PlacementCellRole,
+    complete_local: bool,
+    minimum_durable_targets: Option<u16>,
+    minimum_distinct_nodes: Option<u16>,
+    local_protection_policies: BTreeSet<ProtectionPolicyId>,
+}
+
+fn placement_cells(
+    authority: &AuthoritativeRepository,
+    locality: Option<&meshspan_metadata::VolumeLocalityPolicy>,
+    acknowledgement: Option<&AcknowledgementPolicyRecord>,
+) -> Result<Vec<PlacementCellRequirement>, ContentPublicationError> {
+    let mut builders = BTreeMap::new();
+    if let Some(locality) = locality {
+        for requirement in &locality.requirements {
+            let builder = builders
+                .entry(requirement.cell_id)
+                .or_insert_with(default_cell_builder);
+            builder.complete_local = true;
+            if let Some(policy_id) = requirement.local_protection_policy_id {
+                builder.local_protection_policies.insert(policy_id);
+            }
+        }
+    }
+    if let Some(acknowledgement) = acknowledgement {
+        for requirement in &acknowledgement.cells {
+            let builder = builders
+                .entry(requirement.cell_id)
+                .or_insert_with(default_cell_builder);
+            builder.role = placement_cell_role(requirement.role);
+            builder.minimum_durable_targets = requirement.minimum_durable_targets;
+            builder.minimum_distinct_nodes = requirement.minimum_distinct_nodes;
+            if let Some(policy_id) = requirement.local_protection_policy_id {
+                builder.local_protection_policies.insert(policy_id);
+            }
+        }
+    }
+    builders
+        .into_iter()
+        .map(|(cell_id, builder)| build_cell_requirement(authority, cell_id, builder))
+        .collect()
+}
+
+fn default_cell_builder() -> CellPolicyBuilder {
+    CellPolicyBuilder {
+        role: PlacementCellRole::Eventual,
+        complete_local: false,
+        minimum_durable_targets: None,
+        minimum_distinct_nodes: None,
+        local_protection_policies: BTreeSet::new(),
+    }
+}
+
+fn build_cell_requirement(
+    authority: &AuthoritativeRepository,
+    cell_id: AvailabilityCellId,
+    builder: CellPolicyBuilder,
+) -> Result<PlacementCellRequirement, ContentPublicationError> {
+    let mut local_scenarios = Vec::new();
+    for policy_id in builder.local_protection_policies {
+        let policy = authority
+            .protection_policy(policy_id)
+            .map_err(|_| ContentPublicationError::Unavailable)?
+            .ok_or(ContentPublicationError::InvalidInput)?;
+        local_scenarios.extend(protection_scenarios(&policy)?);
+    }
+    local_scenarios.sort_by_key(|scenario| scenario.terms().first().map(|term| term.class_id));
+    local_scenarios.dedup();
+    Ok(PlacementCellRequirement {
+        cell_id,
+        role: builder.role,
+        complete_local: builder.complete_local,
+        minimum_durable_targets: builder.minimum_durable_targets,
+        minimum_distinct_nodes: builder.minimum_distinct_nodes,
+        local_scenarios: BoundedItems::new(local_scenarios, MAXIMUM_CELL_SCENARIOS)
+            .map_err(|_| ContentPublicationError::InvalidInput)?,
+    })
+}
+
+fn acknowledgement_scenarios(
+    authority: &AuthoritativeRepository,
+    selected: Option<&meshspan_metadata::VolumeProtectionPolicy>,
+    acknowledgement: &AcknowledgementPolicyRecord,
+) -> Result<Vec<FailureScenario>, ContentPublicationError> {
+    if acknowledgement.required_scenarios.is_empty() {
+        return Ok(Vec::new());
+    }
+    let selected = selected.ok_or(ContentPublicationError::InvalidInput)?;
+    let policy = authority
+        .protection_policy(selected.policy_id)
+        .map_err(|_| ContentPublicationError::Unavailable)?
+        .ok_or(ContentPublicationError::InvalidInput)?;
+    acknowledgement
+        .required_scenarios
+        .iter()
+        .map(|scenario_id| selected_scenario(&policy, *scenario_id))
+        .collect()
+}
+
+fn selected_scenario(
+    policy: &ProtectionPolicyRecord,
+    scenario_id: ProtectionScenarioId,
+) -> Result<FailureScenario, ContentPublicationError> {
+    let scenario = policy
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.scenario_id == scenario_id)
+        .ok_or(ContentPublicationError::InvalidInput)?;
+    FailureScenario::new(
+        scenario
+            .terms
+            .iter()
+            .map(|term| FailureTerm {
+                class_id: term.class_id,
+                failure_count: term.failure_count,
+            })
+            .collect(),
+    )
+    .map_err(|_| ContentPublicationError::InvalidInput)
+}
+
+fn protection_scenarios(
+    policy: &ProtectionPolicyRecord,
+) -> Result<Vec<FailureScenario>, ContentPublicationError> {
+    policy
+        .scenarios
+        .iter()
+        .map(|scenario| selected_scenario(policy, scenario.scenario_id))
+        .collect()
+}
+
+const fn placement_cell_role(role: AcknowledgementCellRole) -> PlacementCellRole {
+    match role {
+        AcknowledgementCellRole::RequiredBeforeCommit => PlacementCellRole::RequiredBeforeCommit,
+        AcknowledgementCellRole::Eventual => PlacementCellRole::Eventual,
+        AcknowledgementCellRole::Excluded => PlacementCellRole::Excluded,
+    }
 }
 
 fn default_scenarios(
