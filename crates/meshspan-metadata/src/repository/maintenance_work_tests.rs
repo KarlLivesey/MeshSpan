@@ -2,8 +2,9 @@
 
 use meshspan_contracts::{ShardIdentity, ShardReceipt};
 use meshspan_domain::{
-    AuditEventId, ComponentInstanceId, ContentManifestId, HostId, MeshId, NodeId, OperationId,
-    PartitionId, PrincipalId, Revision, RoleId, TargetId, UnixMicros, VolumeId, WorkId,
+    AuditEventId, ComponentInstanceId, ContentManifestId, DurationMicros, HostId, MeshId, NodeId,
+    OperationId, PartitionId, PrincipalId, Revision, RoleId, TargetId, UnixMicros, VolumeId,
+    WorkId,
 };
 use meshspan_work::{WorkBudget, WorkSignals, WorkSubject, WorkUsage};
 use sha2::{Digest, Sha256};
@@ -349,6 +350,86 @@ fn scrub_effect_requires_exact_classified_summary_then_completes_claim()
     assert_eq!(
         fixture.record(work_id)?.state,
         MaintenanceWorkState::Complete
+    );
+    Ok(())
+}
+
+#[test]
+fn periodic_scrub_candidates_are_due_paged_and_advanced_by_complete_effects()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let first_target = TargetId::from_bytes([10; 16])?;
+    let second_target = TargetId::from_bytes([20; 16])?;
+    let later_target = TargetId::from_bytes([60; 16])?;
+    fixture.register_target(2, first_target, 10)?;
+    fixture.register_target(3, second_target, 20)?;
+    fixture.register_target(4, later_target, 60)?;
+    let age = DurationMicros::new(50);
+
+    let first_page =
+        fixture
+            .repository
+            .due_storage_scrubs(fixture.node, UnixMicros::new(100), age, None, 1)?;
+    assert_eq!(first_page.targets.len(), 1);
+    assert_eq!(first_page.targets[0].target_id, first_target);
+    assert_eq!(first_page.targets[0].due_at, UnixMicros::new(60));
+    assert!(first_page.targets[0].last_completed_at.is_none());
+    let second_page = fixture.repository.due_storage_scrubs(
+        fixture.node,
+        UnixMicros::new(100),
+        age,
+        first_page.next,
+        2,
+    )?;
+    assert_eq!(second_page.targets.len(), 1);
+    assert_eq!(second_page.targets[0].target_id, second_target);
+    assert!(second_page.next.is_none());
+
+    let work_id = WorkId::from_bytes([70; 16])?;
+    fixture.apply(
+        5,
+        101,
+        &AuthoritativeCommand::QueueMaintenanceWork(Fixture::scrub_queue(work_id, first_target)),
+    )?;
+    fixture.apply(
+        6,
+        102,
+        &AuthoritativeCommand::ClaimMaintenanceWork(fixture.claim(work_id, 1, 900, 150)),
+    )?;
+    fixture.apply(
+        7,
+        103,
+        &AuthoritativeCommand::CommitScrubPass(CommitScrubPass {
+            work_id,
+            claim_generation: 1,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 900,
+            target_id: first_target,
+            target_generation: 1,
+            observation_count: 1,
+            verified_bytes: 1,
+            healthy_count: 1,
+            missing_count: 0,
+            corrupt_count: 0,
+            unreadable_count: 0,
+            unexpected_count: 0,
+            deferred_count: 0,
+            evidence_digest: [71; 32],
+        }),
+    )?;
+    let remaining =
+        fixture
+            .repository
+            .due_storage_scrubs(fixture.node, UnixMicros::new(120), age, None, 10)?;
+    assert_eq!(remaining.targets.len(), 2);
+    assert_eq!(remaining.targets[0].target_id, second_target);
+    assert_eq!(remaining.targets[1].target_id, later_target);
+    assert!(
+        remaining
+            .targets
+            .iter()
+            .all(|target| target.target_id != first_target)
     );
     Ok(())
 }

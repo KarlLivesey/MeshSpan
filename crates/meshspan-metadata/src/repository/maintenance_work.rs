@@ -15,9 +15,11 @@ use crate::{
 
 mod repair;
 mod scrub;
+mod scrub_schedule;
 
 pub use repair::ShardRepairEffectRecord;
 pub use scrub::ScrubPassEffectRecord;
+pub use scrub_schedule::{DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage};
 
 const JOB_QUEUED: i64 = 1;
 const JOB_CLAIMED: i64 = 2;
@@ -154,6 +156,34 @@ impl AuthoritativeRepository {
         effect_operation_id: OperationId,
     ) -> Result<Option<ScrubPassEffectRecord>, RepositoryError> {
         scrub::load(self.database.connection(), effect_operation_id)
+    }
+
+    /// Returns local active target generations whose last complete scrub is overdue.
+    ///
+    /// A never-scrubbed generation becomes due relative to its authoritative admission time.
+    /// The returned due instant is stable, allowing repeated planners to deduplicate the same
+    /// cycle until a complete scrub effect advances it.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero/excessive bounds, impossible time arithmetic, corrupt rows and SQLite
+    /// failures.
+    pub fn due_storage_scrubs(
+        &self,
+        node_id: NodeId,
+        now: UnixMicros,
+        maximum_verification_age: meshspan_domain::DurationMicros,
+        after: Option<DueStorageScrubCursor>,
+        limit: usize,
+    ) -> Result<DueStorageScrubPage, RepositoryError> {
+        scrub_schedule::due_page(
+            self.database.connection(),
+            node_id,
+            now,
+            maximum_verification_age,
+            after,
+            limit,
+        )
     }
 }
 

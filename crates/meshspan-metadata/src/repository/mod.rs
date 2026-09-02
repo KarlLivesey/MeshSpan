@@ -207,8 +207,9 @@ pub use locality_policy::{
     LocalityPolicyCursor, LocalityPolicyRecord, LocalityRequirementRecord, VolumeLocalityPolicy,
 };
 pub use maintenance_work::{
-    MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState,
-    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, ShardRepairEffectRecord,
+    DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, MaintenanceWorkClaim,
+    MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState, ReadyMaintenanceWork,
+    ReadyMaintenanceWorkPage, ShardRepairEffectRecord,
 };
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
