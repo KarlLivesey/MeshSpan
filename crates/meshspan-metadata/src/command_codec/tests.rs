@@ -21,14 +21,15 @@ use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
     AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
     AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageTargetDrain, BootstrapMesh,
-    BootstrapRecoveryIdentity, ClaimMaintenanceWork, CommitConvergedVolumeHead, CommitScrubPass,
-    CommitSecretGeneration, CommitShardRepair, CompleteMaintenanceWork, ConvergedHeadEvidence,
-    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
-    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
-    CreateProtectionPolicy, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
-    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
-    MaintenanceWorkCompletion, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
-    ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork, RecordName,
+    BootstrapRecoveryIdentity, ClaimMaintenanceWork, CommitConvergedVolumeHead,
+    CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration, CommitShardRepair,
+    CompleteMaintenanceWork, ConvergedHeadEvidence, CreateAcknowledgementPolicy,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent,
+    CreateFaultGroup, CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser,
+    CreateVolume, GrantInheritance, GrantPermission, GrantPermissionWithActivation,
+    IssueAuthenticationSession, LocalityRequirementConfiguration, MaintenanceWorkCompletion,
+    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
+    PublishSmbExport, QueueMaintenanceWork, RebalanceScanCursor, RecordName,
     RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewMaintenanceWork,
     RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAuthenticationFactor,
     SessionClientLabel, SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
@@ -400,6 +401,35 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
     for command in commands {
         assert_round_trip(context, command)?;
     }
+    Ok(())
+}
+
+#[test]
+fn rebalance_scan_page_round_trips_its_exact_keyset_progress()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let command = AuthoritativeCommand::CommitRebalanceScanPage(CommitRebalanceScanPage {
+        work_id: WorkId::from_bytes([81; 16])?,
+        claim_generation: 3,
+        worker_node_id: NodeId::from_bytes([82; 16])?,
+        worker_incarnation: 4,
+        fence: 5,
+        volume_id: VolumeId::from_bytes([84; 16])?,
+        topology_revision: Revision::new(7),
+        after: Some(RebalanceScanCursor {
+            publication_operation_id: OperationId::from_bytes([96; 16])?,
+            stripe_index: 8,
+        }),
+        next: Some(RebalanceScanCursor {
+            publication_operation_id: OperationId::from_bytes([97; 16])?,
+            stripe_index: 9,
+        }),
+        scanned_stripes: 2,
+        queued_repairs: 1,
+        superseded_by_revision: None,
+        page_digest: [98; 32],
+    });
+    assert_round_trip(context, command)?;
     Ok(())
 }
 

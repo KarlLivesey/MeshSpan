@@ -8,9 +8,9 @@ use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
-    AttestStorageTargetDrain, BeginStorageTargetDrain, ClaimMaintenanceWork, CommitScrubPass,
-    CommitShardRepair, CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork,
-    RenewMaintenanceWork,
+    AttestStorageTargetDrain, BeginStorageTargetDrain, ClaimMaintenanceWork,
+    CommitRebalanceScanPage, CommitScrubPass, CommitShardRepair, CompleteMaintenanceWork,
+    MaintenanceWorkCompletion, QueueMaintenanceWork, RebalanceScanCursor, RenewMaintenanceWork,
 };
 
 pub(super) const QUEUE_MAINTENANCE_WORK: u16 = 36;
@@ -21,6 +21,7 @@ pub(super) const COMMIT_SHARD_REPAIR: u16 = 40;
 pub(super) const COMMIT_SCRUB_PASS: u16 = 41;
 pub(super) const BEGIN_STORAGE_TARGET_DRAIN: u16 = 42;
 pub(super) const ATTEST_STORAGE_TARGET_DRAIN: u16 = 43;
+pub(super) const COMMIT_REBALANCE_SCAN_PAGE: u16 = 44;
 
 pub(super) fn encode_command(
     encoder: &mut Encoder,
@@ -51,6 +52,9 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::AttestStorageTargetDrain(value) => {
             encode_target_drain_attestation(encoder, *value)?;
         }
+        crate::AuthoritativeCommand::CommitRebalanceScanPage(value) => {
+            encode_rebalance_scan_page(encoder, *value)?;
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -67,6 +71,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | COMMIT_SCRUB_PASS
             | BEGIN_STORAGE_TARGET_DRAIN
             | ATTEST_STORAGE_TARGET_DRAIN
+            | COMMIT_REBALANCE_SCAN_PAGE
     )
 }
 
@@ -97,6 +102,8 @@ pub(super) fn decode_command(
             .map(crate::AuthoritativeCommand::BeginStorageTargetDrain),
         ATTEST_STORAGE_TARGET_DRAIN => decode_target_drain_attestation(decoder)
             .map(crate::AuthoritativeCommand::AttestStorageTargetDrain),
+        COMMIT_REBALANCE_SCAN_PAGE => decode_rebalance_scan_page(decoder)
+            .map(crate::AuthoritativeCommand::CommitRebalanceScanPage),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -224,6 +231,100 @@ fn decode_target_drain_attestation(
         observed_authority_revision: Revision::new(positive(decoder.u64()?)?),
         empty_catalogue_digest: nonzero_digest(decoder.fixed()?)?,
     })
+}
+
+fn encode_rebalance_scan_page(
+    encoder: &mut Encoder,
+    value: CommitRebalanceScanPage,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_rebalance_scan_page(value)?;
+    encoder.u16(COMMIT_REBALANCE_SCAN_PAGE)?;
+    encode_claim_identity(
+        encoder,
+        value.work_id,
+        value.claim_generation,
+        value.worker_node_id,
+        value.worker_incarnation,
+        value.fence,
+    )?;
+    encoder.identifier(value.volume_id.as_bytes())?;
+    encoder.u64(value.topology_revision.get())?;
+    encode_rebalance_cursor(encoder, value.after)?;
+    encode_rebalance_cursor(encoder, value.next)?;
+    encoder.u16(value.scanned_stripes)?;
+    encoder.u16(value.queued_repairs)?;
+    encoder.optional_u64(value.superseded_by_revision.map(Revision::get))?;
+    encoder.fixed(&value.page_digest)
+}
+
+fn decode_rebalance_scan_page(
+    decoder: &mut Decoder<'_>,
+) -> Result<CommitRebalanceScanPage, MetadataCommandCodecError> {
+    let identity = decode_claim_identity(decoder)?;
+    let value = CommitRebalanceScanPage {
+        work_id: identity.work_id,
+        claim_generation: identity.claim_generation,
+        worker_node_id: identity.worker_node_id,
+        worker_incarnation: identity.worker_incarnation,
+        fence: identity.fence,
+        volume_id: meshspan_domain::VolumeId::from_bytes(decoder.identifier()?)?,
+        topology_revision: Revision::new(positive(decoder.u64()?)?),
+        after: decode_rebalance_cursor(decoder)?,
+        next: decode_rebalance_cursor(decoder)?,
+        scanned_stripes: decoder.u16()?,
+        queued_repairs: decoder.u16()?,
+        superseded_by_revision: decoder.optional_u64()?.map(Revision::new),
+        page_digest: decoder.fixed()?,
+    };
+    validate_rebalance_scan_page(value)?;
+    Ok(value)
+}
+
+fn encode_rebalance_cursor(
+    encoder: &mut Encoder,
+    cursor: Option<RebalanceScanCursor>,
+) -> Result<(), MetadataCommandCodecError> {
+    encoder.bool(cursor.is_some())?;
+    if let Some(cursor) = cursor {
+        encoder.identifier(cursor.publication_operation_id.as_bytes())?;
+        encoder.u64(cursor.stripe_index)?;
+    }
+    Ok(())
+}
+
+fn decode_rebalance_cursor(
+    decoder: &mut Decoder<'_>,
+) -> Result<Option<RebalanceScanCursor>, MetadataCommandCodecError> {
+    if decoder.bool()? {
+        Ok(Some(RebalanceScanCursor {
+            publication_operation_id: OperationId::from_bytes(decoder.identifier()?)?,
+            stripe_index: decoder.u64()?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+fn validate_rebalance_scan_page(
+    value: CommitRebalanceScanPage,
+) -> Result<(), MetadataCommandCodecError> {
+    if value.topology_revision == Revision::ZERO
+        || value.page_digest == [0; 32]
+        || value.queued_repairs > value.scanned_stripes
+        || value.superseded_by_revision.is_some_and(|revision| {
+            revision <= value.topology_revision
+                || value.scanned_stripes != 0
+                || value.queued_repairs != 0
+                || value.next.is_some()
+        })
+        || value.next.is_some_and(|next| {
+            value.scanned_stripes == 0 || value.after.is_some_and(|after| next <= after)
+        })
+    {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
+    }
 }
 
 fn encode_claim(

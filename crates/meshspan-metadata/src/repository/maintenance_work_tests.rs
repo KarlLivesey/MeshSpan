@@ -13,10 +13,11 @@ use super::{
     AuthoritativeRepository, EntityKind, LogPosition, MaintenanceWorkState, RepositoryError,
 };
 use crate::{
-    AuthoritativeCommand, BootstrapMesh, ClaimMaintenanceWork, CommandContext, CommitScrubPass,
-    CommitShardRepair, CompleteMaintenanceWork, CreateComponent, MaintenanceWorkCompletion,
-    PartitionDatabase, QueueMaintenanceWork, RecordName, RegisterStorageTarget,
-    RenewMaintenanceWork, StorageUsageLimit,
+    AuthoritativeCommand, BootstrapMesh, ClaimMaintenanceWork, CommandContext,
+    CommitRebalanceScanPage, CommitScrubPass, CommitShardRepair, CompleteMaintenanceWork,
+    CreateComponent, MaintenanceWorkCompletion, PartitionDatabase, QueueMaintenanceWork,
+    RebalanceScanCursor, RecordName, RegisterStorageTarget, RenewMaintenanceWork,
+    StorageUsageLimit,
 };
 
 #[test]
@@ -363,6 +364,111 @@ fn scrub_effect_requires_exact_classified_summary_then_completes_claim()
 }
 
 #[test]
+fn rebalance_scan_checkpoints_pages_then_completes_from_exact_effect()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let work_id = WorkId::from_bytes([80; 16])?;
+    let cursor = RebalanceScanCursor {
+        publication_operation_id: OperationId::from_bytes([81; 16])?,
+        stripe_index: 3,
+    };
+    fixture.apply(
+        2,
+        10,
+        &AuthoritativeCommand::QueueMaintenanceWork(fixture.queue(work_id, 2, false)),
+    )?;
+    fixture.apply(
+        3,
+        11,
+        &AuthoritativeCommand::ClaimMaintenanceWork(fixture.claim(work_id, 1, 901, 100)),
+    )?;
+    fixture.apply(
+        4,
+        12,
+        &fixture.rebalance_page(
+            work_id,
+            RebalancePageSpec {
+                claim_generation: 1,
+                fence: 901,
+                after: None,
+                next: Some(cursor),
+                scanned_stripes: 2,
+                queued_repairs: 1,
+                page_digest: [82; 32],
+            },
+        ),
+    )?;
+    let first = fixture
+        .repository
+        .rebalance_scan_progress(work_id)?
+        .ok_or("rebalance progress missing")?;
+    assert_eq!(first.cursor, Some(cursor));
+    assert_eq!((first.scanned_stripes, first.queued_repairs), (2, 1));
+    assert!(!first.complete);
+
+    fixture.apply(
+        5,
+        13,
+        &AuthoritativeCommand::CompleteMaintenanceWork(fixture.continue_at(work_id, 1, 901, 20)),
+    )?;
+    fixture.apply(
+        6,
+        20,
+        &AuthoritativeCommand::ClaimMaintenanceWork(fixture.claim(work_id, 2, 902, 100)),
+    )?;
+    let effect = fixture.apply(
+        7,
+        21,
+        &fixture.rebalance_page(
+            work_id,
+            RebalancePageSpec {
+                claim_generation: 2,
+                fence: 902,
+                after: Some(cursor),
+                next: None,
+                scanned_stripes: 1,
+                queued_repairs: 0,
+                page_digest: [83; 32],
+            },
+        ),
+    )?;
+    let complete = fixture
+        .repository
+        .rebalance_scan_progress(work_id)?
+        .ok_or("complete rebalance progress missing")?;
+    assert!(complete.complete);
+    assert_eq!(complete.cursor, None);
+    assert_eq!((complete.scanned_stripes, complete.queued_repairs), (3, 1));
+    let reference = fixture
+        .repository
+        .maintenance_effect_reference(work_id)?
+        .ok_or("rebalance effect missing")?;
+    assert_eq!(reference.operation_id, effect.operation_id);
+
+    fixture.apply(
+        8,
+        22,
+        &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+            work_id,
+            claim_generation: 2,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 902,
+            outcome: MaintenanceWorkCompletion::Succeeded {
+                effect_operation_id: reference.operation_id,
+                effect_revision: reference.revision,
+                effect_result_digest: reference.result_digest,
+            },
+        }),
+    )?;
+    assert_eq!(
+        fixture.record(work_id)?.state,
+        MaintenanceWorkState::Complete
+    );
+    Ok(())
+}
+
+#[test]
 fn periodic_scrub_candidates_are_due_paged_and_advanced_by_complete_effects()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new()?;
@@ -468,6 +574,17 @@ struct Fixture {
     node: NodeId,
     host: HostId,
     volume: VolumeId,
+}
+
+#[derive(Clone, Copy)]
+struct RebalancePageSpec {
+    claim_generation: u64,
+    fence: u64,
+    after: Option<RebalanceScanCursor>,
+    next: Option<RebalanceScanCursor>,
+    scanned_stripes: u16,
+    queued_repairs: u16,
+    page_digest: [u8; 32],
 }
 
 impl Fixture {
@@ -593,6 +710,24 @@ impl Fixture {
             demand: meshspan_work::WorkDemand { in_flight_bytes },
             next_attempt_at: UnixMicros::new(20),
         }
+    }
+
+    fn rebalance_page(&self, work_id: WorkId, spec: RebalancePageSpec) -> AuthoritativeCommand {
+        AuthoritativeCommand::CommitRebalanceScanPage(CommitRebalanceScanPage {
+            work_id,
+            claim_generation: spec.claim_generation,
+            worker_node_id: self.node,
+            worker_incarnation: 1,
+            fence: spec.fence,
+            volume_id: self.volume,
+            topology_revision: Revision::new(1),
+            after: spec.after,
+            next: spec.next,
+            scanned_stripes: spec.scanned_stripes,
+            queued_repairs: spec.queued_repairs,
+            superseded_by_revision: None,
+            page_digest: spec.page_digest,
+        })
     }
 
     fn scrub_queue(work_id: WorkId, target_id: TargetId) -> QueueMaintenanceWork {

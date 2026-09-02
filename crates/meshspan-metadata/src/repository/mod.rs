@@ -209,7 +209,7 @@ pub use locality_policy::{
 pub use maintenance_work::{
     DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, MaintenanceEffectReference,
     MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState,
-    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, ShardRepairEffectRecord,
+    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress, ShardRepairEffectRecord,
     empty_target_drain_catalogue_digest,
 };
 pub use membership::AuthoritativeMembership;
