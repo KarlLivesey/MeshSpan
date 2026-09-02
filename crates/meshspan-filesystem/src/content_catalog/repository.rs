@@ -27,6 +27,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../schema/content/007_acknowledgement_evidence.sql"),
     include_str!("../../schema/content/008_strong_acknowledgement.sql"),
     include_str!("../../schema/content/009_shard_repair_routes.sql"),
+    include_str!("../../schema/content/010_manifest_digest_lookup.sql"),
 ];
 pub(super) const SCHEMA_VERSION: usize = MIGRATIONS.len();
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;

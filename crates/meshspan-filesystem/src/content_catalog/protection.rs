@@ -25,7 +25,7 @@ use crate::{
 
 mod repair;
 
-pub use repair::ShardRepairTransition;
+pub use repair::{ShardRepairCandidate, ShardRepairTransition};
 
 const LAYOUT_DOMAIN: &[u8] = b"meshspan.content.protected-stripe-layout.v1\0";
 const MAXIMUM_POLICY_BYTES: usize = 4_096;
@@ -213,6 +213,21 @@ pub struct PendingProtectedShardPage {
 }
 
 impl DurableContentCatalog {
+    /// Resolves one exact currently active shard route named by provider scrub evidence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed evidence and fails closed when committed manifest, layout or repair
+    /// projection state contradicts itself.
+    pub fn shard_repair_candidate(
+        &self,
+        target_id: TargetId,
+        target_generation: u64,
+        shard: meshspan_contracts::ShardIdentity,
+    ) -> Result<Option<ShardRepairCandidate>, ContentCatalogError> {
+        repair::candidate(&self.connection, target_id, target_generation, shard)
+    }
+
     /// Fixes the acknowledgement meaning before any protected stripe plan is persisted.
     ///
     /// # Errors

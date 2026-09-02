@@ -3,11 +3,13 @@
 //! Restart-safe projection of authoritative shard-repair route transitions.
 
 use meshspan_contracts::ShardReceipt;
-use meshspan_domain::{OperationId, Revision};
+use meshspan_domain::{ContentManifestId, OperationId, Revision, TargetId, VolumeId};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::{PreparedProtectedShard, load_protected_stripe};
-use crate::content_catalog::repository::{copy_array, decode_target, from_sql, to_i64};
+use crate::content_catalog::repository::{
+    copy_array, decode_target, from_sql, load_prepared_manifest, load_request, to_i64,
+};
 use crate::{ContentCatalogError, ContentPublicationRequest, PublishedContentReference};
 
 /// One authoritative copy-on-write location transition ready for local projection.
@@ -25,6 +27,74 @@ pub struct ShardRepairTransition {
     pub replacement_receipt: ShardReceipt,
     /// Authoritative metadata revision which committed the effect.
     pub committed_revision: Revision,
+}
+
+/// Current authoritative local-catalogue identity for one unhealthy shard route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShardRepairCandidate {
+    /// Volume whose current policy controls replacement placement.
+    pub volume_id: VolumeId,
+    /// Immutable manifest containing the stripe.
+    pub manifest_id: ContentManifestId,
+    /// Compare-and-swap generation of the current shard-location catalogue.
+    pub source_layout_generation: u64,
+    /// Exact current provider receipt named by scrub evidence.
+    pub source_receipt: ShardReceipt,
+}
+
+pub(super) fn candidate(
+    connection: &rusqlite::Connection,
+    target_id: TargetId,
+    target_generation: u64,
+    shard: meshspan_contracts::ShardIdentity,
+) -> Result<Option<ShardRepairCandidate>, ContentCatalogError> {
+    if target_generation == 0 || shard.manifest_digest == [0; 32] || shard.generation == 0 {
+        return Err(ContentCatalogError::InvalidInput);
+    }
+    let operation_id = connection
+        .query_row(
+            "SELECT operation_id FROM content_publications
+             WHERE root_digest = ?1 AND state = 2",
+            [shard.manifest_digest.as_slice()],
+            |row| decode_operation(&row.get::<_, Vec<u8>>(0)?),
+        )
+        .optional()?;
+    let Some(operation_id) = operation_id else {
+        return Ok(None);
+    };
+    let request = load_request(connection, operation_id)?.ok_or(ContentCatalogError::Corrupt)?;
+    if request.format_version != 2 {
+        return Ok(None);
+    }
+    let manifest = load_prepared_manifest(connection, request)?
+        .filter(|manifest| manifest.root_digest == shard.manifest_digest)
+        .ok_or(ContentCatalogError::Corrupt)?;
+    let content = PublishedContentReference {
+        publication_operation_id: operation_id,
+        manifest,
+    };
+    let stripe = load_protected_stripe(connection, request, shard.stripe_index)?;
+    let planned = stripe
+        .shards()
+        .get(usize::from(shard.shard_index))
+        .copied()
+        .filter(|planned| planned.shard_index == shard.shard_index)
+        .ok_or(ContentCatalogError::Corrupt)?;
+    let original = original_receipt(connection, content, shard.stripe_index, planned)?;
+    let (active, source_layout_generation) =
+        active_receipt(connection, operation_id, original)?.unwrap_or((original, 1));
+    if active.shard != shard
+        || active.target_id != target_id
+        || active.target_generation != target_generation
+    {
+        return Ok(None);
+    }
+    Ok(Some(ShardRepairCandidate {
+        volume_id: request.volume_id,
+        manifest_id: request.manifest_id,
+        source_layout_generation,
+        source_receipt: active,
+    }))
 }
 
 pub(super) fn install(
@@ -113,12 +183,12 @@ fn validate_transition(
 }
 
 fn original_receipt(
-    transaction: &rusqlite::Transaction<'_>,
+    connection: &rusqlite::Connection,
     content: PublishedContentReference,
     chunk_index: u64,
     shard: PreparedProtectedShard,
 ) -> Result<ShardReceipt, ContentCatalogError> {
-    let recorded = transaction.query_row(
+    let recorded = connection.query_row(
         "SELECT receipt_recorded_at FROM content_stripe_shards
          WHERE operation_id = ?1 AND chunk_index = ?2 AND shard_index = ?3",
         params![

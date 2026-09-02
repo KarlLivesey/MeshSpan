@@ -11,7 +11,7 @@ use tempfile::tempdir;
 
 use super::{
     ContentCatalogError, DurableContentCatalog, PreparedContentChunk, PreparedProtectedShard,
-    PreparedProtectedStripe, ProtectedShardCursor,
+    PreparedProtectedStripe, ProtectedShardCursor, ShardRepairTransition,
 };
 use crate::{
     CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementPolicy,
@@ -295,6 +295,97 @@ fn protected_layout_import_replays_exact_pages_and_receipts()
     )?;
     assert_eq!(received_stripe.stripe, imported_stripe);
     assert_eq!(received_stripe.receipts, committed.receipts);
+    Ok(())
+}
+
+#[test]
+fn scrub_identity_resolves_only_the_current_protected_shard_route()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let (request, stripe) = protected_fixture()?;
+    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+    catalog.begin(request)?;
+    catalog.append_protected_stripes(request, std::slice::from_ref(&stripe))?;
+    let manifest = catalog.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 2,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for (cursor, planned) in catalog
+        .pending_protected_shards(request, None, 10)?
+        .shards
+        .as_slice()
+    {
+        catalog.record_protected_receipt(
+            request,
+            protected_receipt(manifest.root_digest, *cursor, *planned),
+            UnixMicros::new(3),
+        )?;
+    }
+    catalog.finish(request, UnixMicros::new(4))?;
+
+    let source = protected_receipt(
+        manifest.root_digest,
+        ProtectedShardCursor {
+            chunk_index: 0,
+            shard_index: 1,
+        },
+        stripe.shards()[1],
+    );
+    let initial = catalog
+        .shard_repair_candidate(source.target_id, source.target_generation, source.shard)?
+        .ok_or("current source route was not resolved")?;
+    assert_eq!(initial.volume_id, request.volume_id);
+    assert_eq!(initial.manifest_id, request.manifest_id);
+    assert_eq!(initial.source_layout_generation, 1);
+    assert_eq!(initial.source_receipt, source);
+    assert_eq!(
+        catalog.shard_repair_candidate(
+            TargetId::from_bytes([99; 16])?,
+            source.target_generation,
+            source.shard,
+        )?,
+        None
+    );
+
+    let replacement = ShardReceipt {
+        operation_id: OperationId::from_bytes([98; 16])?,
+        target_id: TargetId::from_bytes([97; 16])?,
+        target_generation: 3,
+        ..source
+    };
+    let content = PublishedContentReference {
+        publication_operation_id: request.operation_id,
+        manifest,
+    };
+    catalog.install_shard_repair(
+        content,
+        &ShardRepairTransition {
+            effect_operation_id: OperationId::from_bytes([96; 16])?,
+            source_layout_generation: 1,
+            replacement_layout_generation: 2,
+            source_receipt: source,
+            replacement_receipt: replacement,
+            committed_revision: Revision::new(7),
+        },
+    )?;
+    assert_eq!(
+        catalog.shard_repair_candidate(source.target_id, source.target_generation, source.shard)?,
+        None
+    );
+    let current = catalog
+        .shard_repair_candidate(
+            replacement.target_id,
+            replacement.target_generation,
+            replacement.shard,
+        )?
+        .ok_or("replacement route was not resolved")?;
+    assert_eq!(current.source_layout_generation, 2);
+    assert_eq!(current.source_receipt, replacement);
     Ok(())
 }
 
