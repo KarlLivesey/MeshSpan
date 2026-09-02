@@ -93,6 +93,7 @@ mod local_passkey_ceremony_key;
 mod local_totp_ceremony_key;
 mod local_wrapping_key;
 mod maintenance_authority;
+mod maintenance_dispatcher;
 mod metadata_forwarding;
 mod multi_factor_session;
 mod namespace_mutation_api;
@@ -187,6 +188,10 @@ mod shard_repair_worker;
 mod storage_scrub_worker;
 
 pub use maintenance_authority::MaintenanceMetadataAuthority;
+pub use maintenance_dispatcher::{
+    MaintenanceDispatchAssignment, MaintenanceDispatchBatch, MaintenanceDispatchError,
+    MaintenanceDispatcher, MaintenanceWorkSource,
+};
 pub use periodic_scrub_scheduler::{
     PeriodicScrubAdmissionPage, PeriodicScrubAuthority, PeriodicScrubScheduler,
     PeriodicScrubSchedulingError,
