@@ -815,7 +815,7 @@ mod tests {
         UnixMicros,
     };
 
-    use super::FaultAwarePlacement;
+    use super::{FaultAwarePlacement, preferred_data_slices};
 
     #[test]
     fn automatically_proves_two_machine_and_three_extra_device_failures()
@@ -909,6 +909,107 @@ mod tests {
         assert_eq!(
             plan.protection_proofs.as_slice()[0].minimum_remaining_slices,
             2
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exhaustive_small_independent_topologies_match_the_minimum_layout_oracle()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for candidate_count in 1_u8..=8 {
+            let (topology, candidates) = independent_targets(candidate_count)?;
+            for failure_count in 1_u16..=3 {
+                for logical_bytes in [64 * 1_024, 512 * 1_024, 4 * 1_024 * 1_024] {
+                    let scenario = FailureScenario::new(vec![FailureTerm {
+                        class_id: class(2)?,
+                        failure_count,
+                    }])?;
+                    let plan = FaultAwarePlacement::new().plan_write(request(
+                        &topology,
+                        &candidates,
+                        std::slice::from_ref(&scenario),
+                        logical_bytes,
+                    )?)?;
+                    let available_after_loss =
+                        u16::from(candidate_count).saturating_sub(failure_count);
+                    if available_after_loss == 0 {
+                        assert!(!plan.protection_proofs.as_slice()[0].survives);
+                        assert_eq!(plan.slice_targets.len(), usize::from(candidate_count));
+                        continue;
+                    }
+                    let expected_data =
+                        preferred_data_slices(logical_bytes).min(available_after_loss);
+                    assert_eq!(plan.coding_layout.data_slices(), expected_data);
+                    assert_eq!(
+                        plan.slice_targets.len(),
+                        usize::from(expected_data + failure_count)
+                    );
+                    assert!(plan.protection_proofs.as_slice()[0].survives);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn one_machine_reports_device_only_protection_then_upgrades_with_another_host()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let machine_class = class(1)?;
+        let device_class = class(2)?;
+        let mut topology = Topology::default();
+        let first_host = host(1)?;
+        topology.register_host(first_host)?;
+        topology.register_fault_group(group(1)?, machine_class)?;
+        topology.add_fault_group_member(group(1)?, FaultGroupMember::Host(first_host))?;
+        let mut candidates = Vec::new();
+        for value in 1_u8..=3 {
+            let target_id = target(value)?;
+            topology.register_target(target_id, first_host)?;
+            topology.register_fault_group(group(32 + value)?, device_class)?;
+            topology
+                .add_fault_group_member(group(32 + value)?, FaultGroupMember::Target(target_id))?;
+            candidates.push(candidate(target_id, first_host)?);
+        }
+        let scenarios = [
+            FailureScenario::new(vec![FailureTerm {
+                class_id: machine_class,
+                failure_count: 1,
+            }])?,
+            FailureScenario::new(vec![FailureTerm {
+                class_id: device_class,
+                failure_count: 2,
+            }])?,
+        ];
+        let first = FaultAwarePlacement::new().plan_write(request(
+            &topology,
+            &candidates,
+            &scenarios,
+            64 * 1_024,
+        )?)?;
+        assert!(!first.protection_proofs.as_slice()[0].survives);
+        assert!(first.protection_proofs.as_slice()[1].survives);
+
+        let second_host = host(2)?;
+        let fourth_target = target(4)?;
+        topology.register_host(second_host)?;
+        topology.register_fault_group(group(2)?, machine_class)?;
+        topology.add_fault_group_member(group(2)?, FaultGroupMember::Host(second_host))?;
+        topology.register_target(fourth_target, second_host)?;
+        topology.register_fault_group(group(36)?, device_class)?;
+        topology.add_fault_group_member(group(36)?, FaultGroupMember::Target(fourth_target))?;
+        candidates.push(candidate(fourth_target, second_host)?);
+        let upgraded = FaultAwarePlacement::new().plan_write(request(
+            &topology,
+            &candidates,
+            &scenarios,
+            64 * 1_024,
+        )?)?;
+        assert!(
+            upgraded
+                .protection_proofs
+                .as_slice()
+                .iter()
+                .all(|proof| proof.survives)
         );
         Ok(())
     }
